@@ -5,8 +5,9 @@
  * the `restrictToDataLake` opt-in reach the search call untouched, and each refusal is an outcome.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import type { Request } from 'express';
-import { BadRequestError, CreditHolderType } from '@bike4mind/common';
+import { BadRequestError, CreditHolderType, getQuestErrorCode } from '@bike4mind/common';
 
 const {
   mockSemanticSearch,
@@ -43,7 +44,8 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys },
   scopedSettingsService: { scopeForCaller: () => ({ userId: 'u1' }) },
-  isOperationalBillingEnabled: mockBillingEnabled,
+  memoizeOperationalBillingCheck: (db: unknown, logger: unknown) => (holder?: unknown) =>
+    mockBillingEnabled(db, logger, holder),
   recordOperationalUsage: mockRecordOperationalUsage,
   organizationService: { isCurrentOrgMember: mockIsCurrentOrgMember },
   creditService: { isMemberCreditCapExceeded: () => false },
@@ -57,12 +59,15 @@ vi.mock('@bike4mind/services', () => ({
     openSearchChunkAdapter: undefined,
   },
 }));
+const mockCreateTokenizer = vi.hoisted(() => vi.fn(() => ({ countTokens: async () => 3 })));
 vi.mock('@bike4mind/utils', () => ({
-  createTokenizer: () => ({ countTokens: async () => 3 }),
+  createTokenizer: mockCreateTokenizer,
   getSettingsByNames: vi.fn(),
   normalizeId: (value: unknown) => (value == null ? undefined : String(value)),
 }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
+const activePlanResolver = vi.hoisted(() => ({ hasActivePlan: vi.fn() }));
+vi.mock('@server/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
 vi.mock('@bike4mind/server-utils/dataLakes/requestMembership', () => ({ getRequestMembershipOrgIds: async () => [] }));
 vi.mock('@bike4mind/server-utils/dataLakes/resolveAuditPrincipal', () => ({ resolveAuditPrincipal: () => ({}) }));
 
@@ -110,6 +115,12 @@ beforeEach(() => {
 });
 
 describe('runLakeSemanticSearch', () => {
+  it('builds the shared tokenizer with a neutral logger, not the request logger it would pin', async () => {
+    await runLakeSemanticSearch(req, input());
+    expect(mockCreateTokenizer).toHaveBeenCalledOnce();
+    expect(mockCreateTokenizer.mock.calls[0][0]).toEqual({ logger: expect.any(Logger) });
+  });
+
   it('hands the scope to the search and sets restrictToDataLake only when asked', async () => {
     await expect(runLakeSemanticSearch(req, input({ restrictToDataLake: true }))).resolves.toEqual({
       kind: 'ok',
@@ -188,6 +199,15 @@ describe('runLakeSemanticSearch billing owner and source', () => {
     expect(recorded()).toMatchObject({ organization: null, source: 'api' });
   });
 
+  it('records the authenticating key on the embedding charge, and none for a JWT caller', async () => {
+    await runLakeSemanticSearch(apiKeyReq({ keyId: 'key-1', billingOwnerType: CreditHolderType.User }), input());
+    expect(recorded()).toMatchObject({ apiKeyId: 'key-1' });
+
+    mockRecordOperationalUsage.mockClear();
+    await runLakeSemanticSearch(jwtReq, input());
+    expect(recorded().apiKeyId).toBeUndefined();
+  });
+
   it('bills the user for an org-billed key that carries no organization id', async () => {
     await runLakeSemanticSearch(apiKeyReq({ billingOwnerType: CreditHolderType.Organization }), input());
 
@@ -200,6 +220,33 @@ describe('runLakeSemanticSearch billing owner and source', () => {
 
     expect(mockFindAccessibleById).toHaveBeenCalledWith(jwtReq.user, 'seat-org');
     expect(recorded()).toMatchObject({ organization: SEAT_ORG, source: 'api' });
+  });
+
+  // The toggle alone is off; billing applies only once the helper sees this holder (free tier).
+  it('refuses a free-tier holder who cannot cover the query, asking with the holder and plan resolver', async () => {
+    const brokeUser = { ...USER, organizationId: undefined, currentCredits: 0 };
+    mockUserFindById.mockResolvedValue(brokeUser);
+    mockBillingEnabled.mockImplementation(async (_db: unknown, _logger: unknown, holder?: unknown) => !!holder);
+
+    const error = await runLakeSemanticSearch(apiKeyReq({ billingOwnerType: CreditHolderType.User }), input()).catch(
+      (err: unknown) => err
+    );
+
+    expect(getQuestErrorCode(error)).toBe('insufficient_credits');
+    expect(mockBillingEnabled).toHaveBeenCalledWith(expect.anything(), logger, {
+      user: brokeUser,
+      organization: null,
+      activePlans: activePlanResolver,
+    });
+    expect(mockSemanticSearch).not.toHaveBeenCalled();
+  });
+
+  it('settles with the plan resolver so the charge agrees with the pre-flight', async () => {
+    await runLakeSemanticSearch(apiKeyReq({ billingOwnerType: CreditHolderType.User }), input());
+
+    const adapters = mockRecordOperationalUsage.mock.calls[0][1];
+    expect(adapters.db.activePlans).toBe(activePlanResolver);
+    expect(adapters.billingCheck).toEqual(expect.any(Function));
   });
 
   it('refuses an org-billed key whose holder has left the org when billing is on', async () => {

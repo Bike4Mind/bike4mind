@@ -188,9 +188,28 @@ describe('per-entry view counting (#3255 step 2)', () => {
     const find = (token: string) => PublishedArtifact.findOne({ deletedAt: null, ...shareTokenFilter(token) }).lean();
 
     expect((await find('ARRAY-LIVE'))?.publicId).toBe(arrayed.publicId);
-    // The $elemMatch is what stops this one resolving on SIBLING-LIVE's strength - still the
-    // load-bearing part now that the filter is the $elemMatch alone (#3523).
+    // The $elemMatch is what stops this one resolving on SIBLING-LIVE's strength.
     expect(await find('ARRAY-DEAD')).toBeNull();
     expect(await find('SCALAR-ONLY')).toBeNull();
+  });
+
+  it('shareTokenFilter is answered from the shareTokens.token index, not a collection scan', async () => {
+    await make({ shareTokens: [{ token: 'INDEXED-LIVE' }] });
+    await make({ shareTokens: [] });
+
+    for (const [token, returned] of [['INDEXED-LIVE', 1], ['NO-SUCH-TOKEN', 0]] as const) {
+      const explained = (await PublishedArtifact.find({ deletedAt: null, ...shareTokenFilter(token) }).explain(
+        'executionStats'
+      )) as unknown as {
+        queryPlanner: { winningPlan: unknown };
+        executionStats: { totalDocsExamined: number; nReturned: number };
+      };
+      const plan = JSON.stringify(explained.queryPlanner.winningPlan);
+      expect(plan).toContain('"stage":"IXSCAN"');
+      expect(plan).toContain('"indexName":"shareTokens.token_1"');
+      expect(plan).not.toContain('COLLSCAN');
+      expect(explained.executionStats.totalDocsExamined).toBeLessThanOrEqual(1);
+      expect(explained.executionStats.nReturned).toBe(returned);
+    }
   });
 });

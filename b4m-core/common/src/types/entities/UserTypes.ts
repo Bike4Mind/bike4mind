@@ -4,9 +4,13 @@ import { IRegInviteDocument } from './RegistrationInviteType';
 import { IOrganizationDocument } from './OrganizationTypes';
 import { ICounters } from './CounterTypes';
 import { IMementoDocument } from './MementoTypes';
-import { ICreditHolder, ICreditHolderMethods } from './CreditHolderTypes';
+import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
 import { PaginatedResponse, UserReasoningEffort } from '../common';
 import type { AuthStrategy } from '../../schemas/user';
+import type { SignupRiskSignal } from '../../schemas/settings';
+import type { RiskEvidenceRecord, RiskEvidenceSummary, RiskEvidenceTrigger } from '../../schemas/riskEvidence';
+import type { SignupGrant, SignupGrantAssessment } from '../../signupGrant';
+import type { AdminPermissionId } from '../../adminPermissions';
 
 export enum CollectionType {
   NOTEBOOK = 'notebook',
@@ -44,10 +48,44 @@ export interface INetworkMeta {
   country: string | null;
   /** Whether the ASN is a hosting/datacenter network; null when the ASN is unknown. */
   isDatacenter: boolean | null;
+  ja4?: string | null;
+  /**
+   * WAF anonymous-IP label matched; null on self-host and when ORIGIN_VERIFY_SECRET is absent (no WAF attached).
+   * Only set to true on /api/otc/ paths -- the AnonymousIpList rule is scoped there;
+   * false on other deployed paths means unchecked, not "not anonymous".
+   */
+  wafAnonIp?: boolean | null;
+  /** WAF bot-control bot label matched; null on self-host and when ORIGIN_VERIFY_SECRET is absent (no WAF attached). */
+  wafBotSignal?: boolean | null;
 }
 
 export interface ISignupMeta extends INetworkMeta {
   capturedAt: Date;
+  /** Server-verified challenge proof; absent/null when skipped, unavailable, or a test secret was used. */
+  challengeVerified?: true | null;
+}
+
+/**
+ * Scoring can move none to pending. Pending holds AI access until an admin decides;
+ * recomputing never clears pending or changes an approved/banned ruling.
+ */
+export const SIGNUP_RISK_REVIEW_STATES = ['none', 'pending', 'approved', 'banned'] as const;
+export type SignupRiskReviewState = (typeof SIGNUP_RISK_REVIEW_STATES)[number];
+
+export interface RiskEvidenceCoverage {
+  accounts: number;
+  withSignupMeta: number;
+  withJa4: number;
+  /** WAF label forwarding was on: both WAF fields are booleans, not null. */
+  withWafSignals: number;
+}
+
+export interface ISignupRiskScore {
+  /** 0-100, from scoreSignupRisk (b4m-core/services/src/userService/signupRiskScore.ts). */
+  score: number;
+  signals: { signal: SignupRiskSignal; points: number; reason: string }[];
+  computedAt: Date;
+  reviewState: SignupRiskReviewState;
 }
 
 export interface ILoginRecord {
@@ -97,6 +135,11 @@ export interface IMFAConfig {
   backupCodes: string[];
   setupAt: Date;
   lastUsedAt?: Date;
+  /**
+   * Plaintext backup codes (comma-joined) for a setup not yet verified, so a repeat setup call
+   * can re-serve the codes the user already saved. Encrypted at rest; cleared on enable.
+   */
+  pendingBackupCodes?: string;
   // Server-side attempt tracking (can't be bypassed by refresh/cancel)
   failedAttempts?: number;
   lastFailedAttempt?: Date;
@@ -193,10 +236,19 @@ export interface IUserPreferences {
   showSplashCards?: boolean;
   /** Set once the user closes the "Try the desktop app" pill in the sidebar; it never shows again. */
   desktopPromoDismissed?: boolean;
+  /** Prompt-cache lifetime for web chats that haven't picked their own, on models that support both. Default: '5m'. */
+  promptCacheTtl?: '5m' | '1h';
 }
 
-/** Source of a moderation flag - which moderation backend produced the hit. */
-export type ModerationHitSource = 'openai' | 'bedrock';
+/**
+ * Which system produced a moderation hit.
+ * - 'openai': OpenAI Moderation API pre-send check.
+ * - 'bedrock': Bedrock Guardrails pre-send check.
+ * - 'provider': provider-side block (settled refusal/content_filter stop reason or a
+ *   classifier throw that no fallback model answered); no pre-call moderation service was involved and
+ *   no category labels are available from the provider.
+ */
+export type ModerationHitSource = 'openai' | 'bedrock' | 'provider';
 
 /**
  * Escalation state for a user's moderation record.
@@ -243,6 +295,95 @@ export interface IUserModeration {
   appealText?: string | null;
 }
 
+export const THROTTLE_TIERS = ['none', 'shadow'] as const;
+export type ThrottleTier = (typeof THROTTLE_TIERS)[number];
+export const THROTTLE_SOURCES = ['admin', 'signup_honeypot', 'signup_timing'] as const;
+export type ThrottleSource = (typeof THROTTLE_SOURCES)[number];
+export const USER_RISK_SIGNAL_TYPES = [
+  'signup_honeypot',
+  'signup_too_fast',
+  'signup_token_missing',
+  'signup_token_invalid',
+  'signup_token_expired',
+] as const;
+export type UserRiskSignalType = (typeof USER_RISK_SIGNAL_TYPES)[number];
+
+/** Per-user restricted tier. Absent is equivalent to tier 'none'. Written only by userService.setThrottleTier. */
+export interface IUserThrottle {
+  tier: ThrottleTier;
+  reason: string;
+  source: ThrottleSource;
+  changedAt: Date;
+  /** Admin user id; absent when set by the system. */
+  changedBy?: string;
+}
+
+export interface IUserRiskSignal {
+  type: UserRiskSignalType;
+  at: Date;
+}
+
+export const ACCOUNT_DELETION_SOURCES = ['self'] as const;
+export type AccountDeletionSource = (typeof ACCOUNT_DELETION_SOURCES)[number];
+
+/** Days between a deletion request and the purge; the user can cancel until then. */
+export const ACCOUNT_DELETION_GRACE_DAYS = 14;
+
+export interface AccountDeletionRetainedRecord {
+  category: string;
+  reason: string;
+  retention: string;
+}
+
+// The full list is owned by the personal-data inventory and must stay in sync with the privacy policy.
+/** What survives a completed deletion, as listed in the deletion-complete email. */
+export const ACCOUNT_DELETION_RETAINED_RECORDS: readonly AccountDeletionRetainedRecord[] = [
+  { category: 'Account security audit log', reason: 'Account security', retention: '12 months' },
+  { category: 'API key security audit log', reason: 'Account security', retention: 'Up to 90 days' },
+  {
+    category: "Hidden annotations on other owners' published pages",
+    reason: 'Existing annotation audit retention; annotations are hidden immediately',
+    retention: '90 days after deletion',
+  },
+  { category: 'Pseudonymized performance telemetry', reason: 'Service reliability', retention: 'Up to 90 days' },
+  {
+    category: 'Organization-owned content and independently owned copies',
+    reason: "Deleting your account does not delete another owner's data",
+    retention: "Their owners' existing retention periods",
+  },
+  {
+    category: 'Files held by moderation, including their contents and related records',
+    reason: 'Existing moderation restrictions preserve these files and their evidence',
+    retention: 'While the moderation restriction remains in place',
+  },
+  {
+    category: 'Minimal deletion markers',
+    reason: 'Preventing removed data from reappearing; the markers contain no deleted memory content',
+    retention: 'Indefinitely',
+  },
+];
+
+/** Error `code` (status 403) for every request a deletion-pending account may not make. */
+export const ACCOUNT_DELETION_PENDING_CODE = 'ACCOUNT_DELETION_PENDING';
+
+/** Error `code` (status 409) when a deletion request is refused because the user owns an organization. */
+export const ACCOUNT_DELETION_ORG_OWNER_CODE = 'ACCOUNT_DELETION_ORG_OWNER';
+
+/**
+ * A pending account deletion. While set the account is locked down to the cancel screen, and the
+ * purge job deletes it once `scheduledFor` passes. Cleared on cancel. Distinct from `deletedAt`,
+ * which existing queries read as "already deleted".
+ */
+export interface IUserDeletion {
+  requestedAt: Date;
+  scheduledFor: Date;
+  source: AccountDeletionSource;
+  /** Set once irreversible cleanup starts; cancellation is no longer allowed. */
+  purgeStartedAt?: Date;
+  purgeLeaseId?: string;
+  purgeLeaseExpiresAt?: Date;
+}
+
 export interface IUser extends ICreditHolder {
   id: string;
   username: string;
@@ -261,6 +402,7 @@ export interface IUser extends ICreditHolder {
   hasUsablePassword?: boolean;
   groups: Array<string> | null;
   isAdmin: boolean;
+  adminPermissions?: AdminPermissionId[];
   storageLimit: number /** Effective storage limit in decimal MB */;
   /** Manual or custom signup allocation; null means use plan/default. */
   storageLimitOverride?: number | null;
@@ -277,20 +419,46 @@ export interface IUser extends ICreditHolder {
    * `defaultFreeCredits` instead.
    */
   pendingCreditGrant?: number | null;
+  /** GrantPackage this account redeemed at signup; its grant claims the inbox like the default grant. */
+  grantPackageId?: string | null;
+  /**
+   * Canonical inbox (canonicalizeEmail) this account claimed its free-credit grant under. Unset
+   * until a grant is claimed; unique across users, so aliases of one inbox share a single grant.
+   */
+  freeCreditClaimEmail?: string | null;
+  /** Absent on accounts created before staged grants were enabled. */
+  signupGrant?: SignupGrant;
+  signupGrantAssessment?: SignupGrantAssessment;
+  /** Why free credits are being withheld; cleared when they are paid. */
+  signupGrantHeldReason?: 'budget_exhausted' | 'risk_review' | null;
+  /** When the signup tranche was last held for an exhausted daily budget. */
+  signupGrantHeldAt?: Date | null;
   level: UserLevelType;
   isBanned: boolean;
   isModerated: boolean;
+  /** Admin override that trusts the account for personal API keys (userApiKeyService/trust.ts). Absent on legacy docs. */
+  apiKeyTrustApproved?: boolean;
+  /** Admin override that exempts a young account from the new-account spend cap (creditService/newAccountSpendCap.ts). */
+  newAccountSpendCapLifted?: boolean;
   /**
    * Per-user moderation tracking + auto-throttle/suspend state.
    * Absent until the user's first moderation hit. Independent of `isModerated`, the admin's
    * AI-only block.
    */
   moderation?: IUserModeration;
+  /** Restricted-tier state; admin-only (see ADMIN_ONLY_USER_FIELDS). Distinct from `moderation.status`. */
+  throttle?: IUserThrottle;
+  /** Append-only signals recorded at signup; admin-only. */
+  riskSignals?: IUserRiskSignal[];
   /**
    * Set to true when a Stripe dispute (chargeback) is opened against this user.
    * Blocks chat completions and API key access until resolved by an admin.
    */
   disputePending?: boolean;
+  /** Set while a requested deletion is in its grace period (see IUserDeletion). */
+  deletion?: IUserDeletion | null;
+  /** Server-side lease preventing a data export from racing permanent account cleanup. */
+  accountDataExportLease?: { id: string; expiresAt: Date };
   /**
    * Marks a non-human system account (e.g., the Overwatch ingest user).
    * All auth surfaces must call requireNonSystemUser() - system accounts cannot log in.
@@ -439,6 +607,10 @@ export interface IUser extends ICreditHolder {
 
   numReferralsAvailable: number;
   regInvites: Array<IRegInviteDocument['id']>;
+  /** Sender of the referral invite this account redeemed; unset for accounts that signed up without one. */
+  referredByUserId?: string | null;
+  /** The invite this account signed up through; absent for uninvited and pre-existing accounts. */
+  signupInvite?: SignupInvite;
 
   /**
    * This field is used to store the current selected organization ID.
@@ -659,10 +831,34 @@ export interface IUser extends ICreditHolder {
   signupMeta?: ISignupMeta | null;
 
   /**
+   * Set at an OAuth signup whose post-login redirect named a notebook another account owns: that
+   * owner. Abuse evidence only (an invite link is a normal reason); written once, admin-only.
+   */
+  signupLanding?: { notebookOwnerId: string; capturedAt: Date } | null;
+
+  /** Abuse risk of a new account. Never shown to the user: the signals would say how to avoid them. */
+  riskScore?: ISignupRiskScore | null;
+
+  /**
+   * Behavioral evidence and its refresh state (b4m-core/common/src/schemas/riskEvidence.ts).
+   * Shadow-only: never feeds riskScore.reviewState. Admin-only, like riskScore.
+   */
+  riskEvidence?: RiskEvidenceRecord | null;
+
+  /**
    * A test persona or test-domain account, decided at signup. Funnel analytics skip or tag these so
    * synthetic traffic never reaches conversion metrics.
    */
   isSynthetic?: boolean;
+
+  /**
+   * An account of the team's own: set at signup for an email on a NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS
+   * domain (or an admin-created admin), by an admin through the user's internal toggle, and for
+   * existing accounts by a one-off backfill. Analytics only: the user's events are stamped
+   * `internal: true` (server-utils analytics/lane.ts) so they can be kept out of customer counts.
+   * Never an authorization source.
+   */
+  isInternal?: boolean;
 
   /** When the user first got a completed chat answer; set once, drives the first_value event. */
   firstValueAt?: Date | null;
@@ -675,9 +871,23 @@ export interface IUserAcquisitionTouch {
   content?: string;
 }
 
+/**
+ * The verified hop a signup followed (apps/client server/analytics/hops.ts): the product whose own
+ * server sent the visitor here, as that server proved with its ingest key, not as the browser
+ * claimed. Written only when the hop was redeemed in the same visit as the signup, with consent.
+ */
+export interface IUserVerifiedTouch {
+  /** The Overwatch product whose ingest key minted the hop. */
+  srcProductId: string;
+  hopId: string;
+  redeemedAt: Date;
+}
+
 export interface IUserAcquisition {
   firstTouch?: IUserAcquisitionTouch;
   lastTouch?: IUserAcquisitionTouch;
+  /** Absent for a signup that followed no verified hop. */
+  verifiedTouch?: IUserVerifiedTouch;
   /** How the account was created (`otc`, `google`, `github`, ...). */
   signupMethod: string;
   capturedAt: Date;
@@ -707,7 +917,19 @@ export interface IAuthProviders {
 
 export interface IUserDocument extends IUser, IMongoDocument {}
 
-export interface IUserRepository extends IBaseRepository<IUserDocument>, ICreditHolderMethods {
+export const SIGNUP_INVITE_SOURCES = ['referral', 'organization'] as const;
+export type SignupInviteSource = (typeof SIGNUP_INVITE_SOURCES)[number];
+
+export interface SignupInvite {
+  source: SignupInviteSource;
+  /** RegistrationInvite id for a referral, organization Invite id for an organization invite. */
+  inviteId: string;
+  organizationId?: string;
+  at: Date;
+}
+
+export interface IUserRepository
+  extends IBaseRepository<IUserDocument>, ICreditHolderMethods, ICreditHolderFlooredDebit {
   findByUsernameOrEmail: (username: string, email?: string | null) => Promise<IUserDocument | null>;
   findByEmail: (email: string) => Promise<IUserDocument | null>;
   /**
@@ -717,6 +939,11 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   existsOtherUserWithEmail: (email: string, excludeUserId?: string) => Promise<boolean>;
   /** Username counterpart of {@link IUserRepository.existsOtherUserWithEmail}. */
   existsOtherUserWithUsername: (username: string, excludeUserId?: string) => Promise<boolean>;
+  /**
+   * Whether a live, unbanned, non-system user whose email is on `domain` or a subdomain of it
+   * verified that email no later than `verifiedBefore`. An unindexed suffix scan: call it rarely and cache the answer.
+   */
+  existsVerifiedUserOnEmailDomain: (domain: string, verifiedBefore: Date) => Promise<boolean>;
   /**
    * Remove the given group ids from EVERY user's `groups[]` (org-wide blast radius; used when a
    * group type is revoked and its instances are soft-deleted). Named for the scope so a caller
@@ -764,6 +991,13 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   atomicClaimTotpStep: (userId: string, step: number) => Promise<boolean>;
   atomicConsumeBackupCode: (userId: string, codeHash: string) => Promise<boolean>;
   /**
+   * Claim the one free-credit grant allowed per inbox. True when this account holds the claim
+   * (now or from an earlier attempt), false when another account already does.
+   */
+  claimFreeCreditGrant: (userId: string) => Promise<boolean>;
+  /** Sets signupGrant.inviteBonusPaid only where it is unset; false when another write set it first. */
+  markInviteBonusPaid: (userId: string, credits: number) => Promise<boolean>;
+  /**
    * Enable MFA only while the stored secret is still `totpSecret` and MFA is still disabled.
    * Returns null when a concurrent setup replaced the secret, so a code verified against a
    * superseded secret never enables a secret the user's authenticator does not hold.
@@ -776,6 +1010,16 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   findByIds: (
     ids: string[]
   ) => Promise<Pick<IUserDocument, 'id' | 'name' | 'email' | 'username' | 'lastActiveAt' | 'isOnline' | 'photoUrl'>[]>;
+  /**
+   * Who each id is for an admin action on it: the admin flags an actor-outranks-target guard reads, plus the
+   * email or username an audit entry shows. Ids that are not ObjectId-shaped are dropped. Never return this
+   * to a client: it carries admin permissions.
+   */
+  findAdminTargetsByIds?: (
+    ids: string[]
+  ) => Promise<
+    Array<{ id: string; email?: string; username?: string; isAdmin?: boolean; adminPermissions?: string[] }>
+  >;
   /** Active (non-soft-deleted), emailed users among `ids` - for a notification addressee resolver. */
   findActiveEmailsByIds: (ids: string[]) => Promise<Array<{ id: string; email: string }>>;
   searchCollections: (
@@ -834,6 +1078,44 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
     status: UserModerationStatus,
     options?: { throttledUntil?: Date | null }
   ) => Promise<IUserDocument | null>;
+  /**
+   * Store a recomputed risk score. Preserve pending holds and approved/banned rulings in the
+   * same write, so rescoring cannot clear a hold or undo a concurrent admin decision.
+   */
+  setRiskScore: (userId: string, riskScore: ISignupRiskScore) => Promise<void>;
+  /**
+   * Ids of users created at or after `since` whose risk review is not settled (approved or banned),
+   * in id order; pass the last id back as `afterId` for the next page.
+   */
+  findRiskScoringCandidateIds: (since: Date, options: { afterId?: string; limit: number }) => Promise<string[]>;
+  /** Unbanned users whose risk review is pending, highest score first, at most `limit`. */
+  findPendingRiskReviews: (limit: number) => Promise<IUserDocument[]>;
+  /** Count of the users findPendingRiskReviews would return, without the limit. */
+  countPendingRiskReviews: () => Promise<number>;
+  /**
+   * Move a user's review from `from` to `to`, only if it is still `from`; false when it was not
+   * (already decided or no score). Used for admin approve and its undo.
+   */
+  setRiskReviewState: (userId: string, from: SignupRiskReviewState, to: SignupRiskReviewState) => Promise<boolean>;
+  /**
+   * Mark an evidence refresh queued, only if none is pending or the pending one is older than
+   * `staleBefore` (its message was lost). True when this call claimed it and should enqueue.
+   */
+  claimRiskEvidenceRefresh: (
+    userId: string,
+    options: { now: Date; staleBefore: Date; trigger: RiskEvidenceTrigger }
+  ) => Promise<boolean>;
+  /** Clear the pending marker as a refresh starts, so activity during the refresh queues another. */
+  releaseRiskEvidenceRefresh: (userId: string, claimedAt: Date) => Promise<void>;
+  /**
+   * Store a summary unless a newer one (by computedAt) is already stored; false when it lost that
+   * race. Clears lastFailure. Touches nothing outside riskEvidence.
+   */
+  setRiskEvidenceSummary: (userId: string, summary: RiskEvidenceSummary) => Promise<boolean>;
+  /** Record why a refresh failed, for the admin view. */
+  recordRiskEvidenceFailure: (userId: string, failure: { at: Date; error: string }) => Promise<void>;
+  /** Signup metadata coverage of accounts created at or after `since`, for the evidence baseline. */
+  riskEvidenceCoverage: (since: Date) => Promise<RiskEvidenceCoverage>;
   /**
    * Record a user's moderation appeal: stamps `moderation.appealedAt` and stores
    * the appeal text for admin review. Returns the updated user.

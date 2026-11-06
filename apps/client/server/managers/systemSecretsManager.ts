@@ -295,6 +295,22 @@ export const RESOLVABLE_SECRETS = {
     category: 'oauth' as SystemSecretCategory,
     description: 'GitHub OAuth client secret',
   },
+  APPLE_CLIENT_ID: {
+    category: 'oauth' as SystemSecretCategory,
+    description: 'Sign in with Apple Services ID',
+  },
+  APPLE_TEAM_ID: {
+    category: 'oauth' as SystemSecretCategory,
+    description: 'Sign in with Apple team ID',
+  },
+  APPLE_KEY_ID: {
+    category: 'oauth' as SystemSecretCategory,
+    description: 'Sign in with Apple private key ID',
+  },
+  APPLE_PRIVATE_KEY: {
+    category: 'oauth' as SystemSecretCategory,
+    description: 'Sign in with Apple private key (.p8 PEM)',
+  },
 
   // API Keys
   ANTHROPIC_API_KEY: {
@@ -326,6 +342,14 @@ export const RESOLVABLE_SECRETS = {
   SLACK_ERROR_REPORTING_WEBHOOK_URL: {
     category: 'slack' as SystemSecretCategory,
     description: 'Slack webhook URL for error reporting',
+  },
+  SLACK_ALARMS_WEBHOOK_URL: {
+    category: 'slack' as SystemSecretCategory,
+    description: 'Slack webhook URL for CloudWatch alarm notifications (falls back to error reporting)',
+  },
+  SLACK_COST_ALARMS_WEBHOOK_URL: {
+    category: 'slack' as SystemSecretCategory,
+    description: 'Slack webhook URL for cost and provider spend alarms (falls back to the alarms webhook)',
   },
 
   // Financial Data

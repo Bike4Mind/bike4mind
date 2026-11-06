@@ -13,7 +13,7 @@ test.describe('Projects - Navigation', () => {
   test('should navigate to projects', async ({ page, basePage }) => {
     // Projects is an earned-nav destination (Gears): the sidenav row is hidden until
     // the account has a project. Navigate directly, like a first-time user reaches it
-    // via the Gears "Create your first project" CTA (a navigate:/projects).
+    // via the Gears "Create a project" CTA (a navigate:/projects).
     await page.goto('/projects');
     await page.waitForLoadState('domcontentloaded');
     await basePage.dismissModals();

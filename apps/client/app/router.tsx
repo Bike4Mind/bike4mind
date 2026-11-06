@@ -1,9 +1,12 @@
 import { FC, lazy, LazyExoticComponent, Suspense, useState } from 'react';
 import { captureUtmParams } from '@client/app/utils/utmCapture';
+import { holdDiscoveryForCampaign } from '@client/lib/gears/discovery';
 import { beaconVisit } from '@client/app/utils/visitBeacon';
+import { beaconPage, startPageBeacon } from '@client/app/utils/pageBeacon';
 import type { GitHubLakeCallbackSearch } from '@client/app/utils/githubLakeCallbackStep';
 import { captureGitHubLakeCallbackSearch, GITHUB_LAKE_CALLBACK_PATH } from '@client/app/utils/githubLakeCallbackSearch';
 import { requireGitHubLakeCallbackSession } from '@client/app/utils/githubLakeCallbackGuard';
+import { captureMcpOAuthCallbackSearch, requireMcpOAuthCallbackSession } from '@client/app/utils/mcpOAuthCallback';
 import {
   createRouter,
   createRoute,
@@ -15,16 +18,19 @@ import {
 } from '@tanstack/react-router';
 import { TanStackRouterDevtools } from '@tanstack/router-devtools';
 import { CircularProgress, Box, Typography } from '@mui/joy';
+import AccountDeletionPendingGate from '@client/app/components/auth/AccountDeletionPendingGate';
 import NotebookLayout from '@client/app/components/layouts/Notebook';
 import { useUser } from '@client/app/contexts/UserContext';
 import { buildRedirectTo } from '@client/app/utils/authRedirect';
 import { billingLandingHref, parseBillingView } from '@client/app/utils/billingDeepLink';
 import { enforceConsentRedirect } from '@client/app/utils/consentGuard';
+import { takeTicket } from './routes/partners/bedrocknewsClaimTicket';
 import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 
 // Keep layout components as eager imports for optimal performance
 import RestrictedPage from './components/common/RestrictedPage';
+import { AdminLayoutRoute } from './components/admin/AdminLayout';
 import NotFound from './components/NotFound';
 import ExperimentalFeatureGate from './components/common/ExperimentalFeatureGate';
 import { ProviderBundle } from './contexts/ProviderBundle';
@@ -36,8 +42,14 @@ import { parseStudioModality } from './components/Studio/studioModality';
 import { parseQaStatusSearch } from './hooks/data/qaStatus';
 import { parseAdminSearch } from './components/admin/adminTabParams';
 import { legacyUserLinkRedirect, parseUserProfileSearch } from './components/admin/Users/Profile/userProfileSearch';
+import { parseSubscriptionDetailSearch } from './components/admin/Subscriptions/Detail/subscriptionDetailSearch';
 import { optionalStringSearchValue } from './utils/optionalStringSearchValue';
-import { isIntegrationsPageSource, type IntegrationsPageSource } from '@bike4mind/common';
+import {
+  isIntegrationsPageSource,
+  SUBSCRIBER_SOURCES,
+  type IntegrationsPageSource,
+  type SubscriberSource,
+} from '@bike4mind/common';
 
 // Lazy load all route components for code splitting
 // /new and /notebooks/$id render through one shell (see notebookShellRoute).
@@ -79,6 +91,7 @@ const AuthSuccessPage = lazy(() => import('./routes/auth/success'));
 const LoginPage = lazy(() => import('./routes/login'));
 const RegisterPage = lazy(() => import('./routes/register'));
 const AcceptPoliciesPage = lazy(() => import('./routes/accept-policies'));
+const AccountDataExportPage = lazy(() => import('./routes/account-data-export/$jobId'));
 const VerifyEmailPage = lazy(() => import('./routes/verify-email'));
 const VerifyEmailChangePage = lazy(() => import('./routes/verify-change'));
 const SubscribePage = lazy(() => import('./routes/subscribe'));
@@ -89,15 +102,22 @@ const GitHubLakeCallbackPage = lazy(() => import('./routes/data-lakes/github/cal
 const HomePage = lazy(() => import('./routes/index'));
 const Admin = lazy(() => import('./routes/admin'));
 const AdminUserProfilePage = lazy(() => import('./routes/admin/users/$userId'));
+const AdminSubscriptionDetailPage = lazy(() => import('./routes/admin/subscriptions/$subscriptionId'));
+const AdminSubscriptionByStripeIdPage = lazy(
+  () => import('./routes/admin/subscriptions/by-stripe/$stripeSubscriptionId')
+);
 const QuestsPage = lazy(() => import('./routes/quests'));
 const SlackInstallPage = lazy(() => import('./routes/integrations/slack/install'));
 const SlackSuccessPage = lazy(() => import('./routes/integrations/slack/success'));
 const SlackErrorPage = lazy(() => import('./routes/integrations/slack/error'));
 const EmailUnsubscribePage = lazy(() => import('./routes/email/unsubscribe'));
 const DesktopDownloadPage = lazy(() => import('./routes/desktop'));
+const ArenaPage = lazy(() => import('./routes/arena'));
+const McpOAuthCallbackPage = lazy(() => import('./routes/integrations/mcp-oauth-callback'));
 const AtlassianSelectSitePage = lazy(() => import('./routes/integrations/atlassian/select-site'));
 const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
+const BedrockNewsClaimPage = lazy(() => import('./routes/partners/bedrocknews-claim'));
 const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
 const StudioPage = lazy(() => import('./routes/studio/$modality'));
@@ -215,15 +235,24 @@ function RootComponent() {
   // NotebookLayout draws its own main beside the sidebar nav, so only pages outside it get one here.
   // display: contents keeps the page a direct child of the providers' grid.
   const inNotebookLayout = useRouterState({ select: s => s.matches.some(m => m.routeId === layoutRoute.id) });
+  // The data export download page stays reachable so an export requested before the deletion can
+  // still be collected during the grace period (the server gate allows its GET).
+  const onDataExportDownload = useRouterState({
+    select: s => s.matches.some(m => m.routeId === accountDataExportRoute.id),
+  });
+  // At the root so every route, including those outside ProviderBundle, shows only the cancel
+  // screen for a deletion-pending session.
   return (
     <>
-      {inNotebookLayout ? (
-        <Outlet />
-      ) : (
-        <Box component="main" sx={{ display: 'contents' }}>
+      <AccountDeletionPendingGate exempt={onDataExportDownload}>
+        {inNotebookLayout ? (
           <Outlet />
-        </Box>
-      )}
+        ) : (
+          <Box component="main" sx={{ display: 'contents' }}>
+            <Outlet />
+          </Box>
+        )}
+      </AccountDeletionPendingGate>
       {process.env.NEXT_PUBLIC_ENABLE_DEVTOOLS === 'true' && <TanStackRouterDevtools position="top-right" />}
     </>
   );
@@ -390,6 +419,17 @@ export const integrationsRoute = createRoute({
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <IntegrationsPage />
+    </Suspense>
+  ),
+});
+
+// Preference arena - verified users compare two blind answers and earn capped promotional credits.
+const arenaRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/arena',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <ArenaPage />
     </Suspense>
   ),
 });
@@ -915,6 +955,30 @@ const acceptPoliciesRoute = createRoute({
   },
 });
 
+// Download page linked from the data export email. A rootRoute child without the consent guard, and
+// exempt from AccountDeletionPendingGate in RootComponent, so an account pending deletion can still
+// collect an export it requested (the server's deletionPendingGate allows the GET).
+const accountDataExportRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/account-data-export/$jobId',
+  beforeLoad: async ({ location }) => {
+    await bootstrapSession();
+    if (!useUser.getState().currentUser) {
+      const redirectTo = buildRedirectTo(
+        location.pathname,
+        location.searchStr,
+        location.hash ? `#${location.hash}` : ''
+      );
+      throw redirect({ to: '/login', search: redirectTo ? { redirectTo } : undefined });
+    }
+  },
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <AccountDataExportPage />
+    </Suspense>
+  ),
+});
+
 // Verify email route (replaces /verify-email.tsx)
 const verifyEmailRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -974,6 +1038,18 @@ const googleDriveCallbackRoute = createRoute({
   },
 });
 
+// Where a custom MCP connector's authorization server redirects back; the page posts the one-time parameters to the API.
+const mcpOAuthCallbackRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/integrations/mcp-oauth-callback',
+  beforeLoad: ({ location }) => requireMcpOAuthCallbackSession(location),
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <McpOAuthCallbackPage />
+    </Suspense>
+  ),
+});
+
 // Data-lake GitHub App return: its OAuth Callback URL points here, and with OAuth-during-install on, the install return lands here too.
 const gitHubLakeCallbackRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1002,6 +1078,9 @@ const subscribeRoute = createRoute({
       <SubscribePage />
     </Suspense>
   ),
+  validateSearch: (search: Record<string, unknown>): { source?: SubscriberSource } => ({
+    source: SUBSCRIBER_SOURCES.find(source => source === search.source),
+  }),
 });
 
 // Artifacts demo route (replaces /artifacts-demo.tsx)
@@ -1171,47 +1250,54 @@ const activateRoute = createRoute({
   },
 });
 
-// Admin route (replaces /admin/index.tsx)
-export const adminRoute = createRoute({
+// Admin layout: every admin page renders inside it, so the guard, the providers and the sidebar
+// are wired once (AdminLayoutRoute) and no admin page can go full-screen. Pathless, so the
+// children keep their URLs and every `to: '/admin'` stays typed against the console's search.
+const adminLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
+  id: 'admin-layout',
+  beforeLoad: ({ location }) => enforceConsentRedirect(location),
+  component: () => <AdminLayoutRoute fallback={<RouteLoadingFallback />} />,
+});
+
+// The tabbed admin console (replaces /admin/index.tsx)
+export const adminRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
   path: '/admin',
-  beforeLoad: async ({ location, search }) => {
-    await enforceConsentRedirect(location);
+  beforeLoad: async ({ search }) => {
     // The user view used to be a modal held in `?userId=`; keep those shared links working.
     const legacyUserLink = legacyUserLinkRedirect(search);
     if (legacyUserLink) throw redirect(legacyUserLink);
   },
-  component: () => (
-    <RestrictedPage requireAdmin={true}>
-      {/* These providers are not usually needed in an unprotected page. This prevents unnecessary API fetch */}
-      <ProviderBundle>
-        <Suspense fallback={<RouteLoadingFallback />}>
-          <Admin />
-        </Suspense>
-      </ProviderBundle>
-    </RestrictedPage>
-  ),
+  component: Admin,
   // `tab` (a stable slug, never the positional AdminTab enum value - see common/utils/deepLinks)
   // makes the console addressable, and each tab's own params come from the registry in
   // adminTabParams.ts, which the tab-sync hook rebuilds the URL from too.
   validateSearch: parseAdminSearch,
 });
 
-// Admin user profile. Guarded exactly like adminRoute, which redirects its legacy `?userId=` here.
+// Admin user profile; adminRoute redirects its legacy `?userId=` here.
 export const adminUserProfileRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => adminLayoutRoute,
   path: '/admin/users/$userId',
-  beforeLoad: ({ location }) => enforceConsentRedirect(location),
-  component: () => (
-    <RestrictedPage requireAdmin={true}>
-      <ProviderBundle>
-        <Suspense fallback={<RouteLoadingFallback />}>
-          <AdminUserProfilePage />
-        </Suspense>
-      </ProviderBundle>
-    </RestrictedPage>
-  ),
+  component: AdminUserProfilePage,
   validateSearch: parseUserProfileSearch,
+});
+
+// Admin subscription detail, opened from the Subscriptions tab and the profile's subscription cards.
+export const adminSubscriptionDetailRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
+  path: '/admin/subscriptions/$subscriptionId',
+  component: AdminSubscriptionDetailPage,
+  validateSearch: parseSubscriptionDetailSearch,
+});
+
+// Resolves a Stripe `sub_...` id to the detail page. The static `by-stripe` segment outranks the
+// `$subscriptionId` param in TanStack's ranking, so the detail route never captures it.
+export const adminSubscriptionByStripeIdRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
+  path: '/admin/subscriptions/by-stripe/$stripeSubscriptionId',
+  component: AdminSubscriptionByStripeIdPage,
 });
 
 // Email unsubscribe route - public page for managing email preferences
@@ -1239,6 +1325,25 @@ const desktopDownloadRoute = createRoute({
       <DesktopDownloadPage />
     </Suspense>
   ),
+});
+
+// BedrockNews Headword credit claim - no layout; the page sends signed-out visitors to /login itself
+const bedrockNewsClaimRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/partners/bedrocknews/claim',
+  // The ticket is moved out of the URL first so a consent redirect never carries it in its return path.
+  beforeLoad: ({ location, search }) => {
+    takeTicket(search.ticket);
+    return enforceConsentRedirect({ pathname: location.pathname, searchStr: '', hash: '' });
+  },
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <BedrockNewsClaimPage />
+    </Suspense>
+  ),
+  validateSearch: (search: Record<string, unknown>): { ticket?: string } => ({
+    ticket: optionalStringParam(search, 'ticket'),
+  }),
 });
 
 // OAuth Authorization endpoint - no layout, public
@@ -1282,6 +1387,7 @@ const routeTree = rootRoute.addChildren([
     notebookShellRoute.addChildren([newRoute, notebookRoute]),
     gearsRoute,
     integrationsRoute,
+    arenaRoute,
     projectsRoute,
     projectRoute,
     profileRoute,
@@ -1328,15 +1434,21 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   registerRoute,
   acceptPoliciesRoute,
+  accountDataExportRoute,
   verifyEmailRoute,
   verifyEmailChangeRoute,
   adminEmergencyRoute,
   googleDriveCallbackRoute,
+  mcpOAuthCallbackRoute,
   gitHubLakeCallbackRoute,
   subscribeRoute,
   activateRoute,
-  adminRoute,
-  adminUserProfileRoute,
+  adminLayoutRoute.addChildren([
+    adminRoute,
+    adminUserProfileRoute,
+    adminSubscriptionDetailRoute,
+    adminSubscriptionByStripeIdRoute,
+  ]),
   ...builtStandalonePremiumRoutes,
   ...builtPublicPremiumRoutes,
   // Slack integration routes (no layout)
@@ -1349,6 +1461,7 @@ const routeTree = rootRoute.addChildren([
   atlassianSelectSiteRoute,
   // OAuth Authorization endpoint
   oauthAuthorizeRoute,
+  bedrockNewsClaimRoute,
 ]);
 
 // createBrowserHistory() monkey-patches window.history.pushState/replaceState to detect
@@ -1366,15 +1479,21 @@ function createNextCompatibleHistory() {
 
 // Capture campaign UTM params at module load - before the router resolves routes and the auth
 // guard redirects an unauthenticated landing to /login (which strips the query string). See
-// captureUtmParams() for why this cannot live in a React effect.
-captureUtmParams();
+// captureUtmParams() for why this cannot live in a React effect. A campaign landing also holds
+// the gears discovery modal, so it does not open over the visitor's first screen.
+if (captureUtmParams()) holdDiscoveryForCampaign(Date.now());
 
 // Same constraint for the data-lake GitHub App return: the router's first resolve rewrites its query.
 captureGitHubLakeCallbackSearch();
+captureMcpOAuthCallbackSearch();
 
 // Then tell the server a visit is happening. Order matters: the beacon is the request the
-// server reads the campaign cookie from, so it has to follow the line above.
+// server reads the campaign cookie from, so it has to follow the line above. It also takes a
+// verified-hop token off the URL, which has to happen before the router below rewrites it.
 beaconVisit();
+// After the visit beacon, which carries this load's page when consent allows; the page beacon
+// reports the pages after it, and needs to start before the router's first resolve.
+startPageBeacon();
 
 // Create the router
 export const router = createRouter({
@@ -1383,9 +1502,16 @@ export const router = createRouter({
   ...(typeof window !== 'undefined' && { history: createNextCompatibleHistory() }),
 });
 
+// Each page the router settles on; beaconPage() skips a page the server already has from this load.
+if (typeof window !== 'undefined') router.subscribe('onResolved', beaconPage);
+
 // Register the router instance for type safety
 declare module '@tanstack/react-router' {
   interface Register {
     router: typeof router;
+  }
+  interface HistoryState {
+    // Prefill for /subscribe; see useJoinWaitlist.
+    waitlistEmail?: string;
   }
 }

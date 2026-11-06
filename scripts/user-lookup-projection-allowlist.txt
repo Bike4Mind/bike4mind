@@ -9,7 +9,7 @@
 
 # Outer $project limits the joined owner to {_id,name,username,email}; consumed only by the
 # admin-only GET /api/subscriptions.
-apps/client/server/models/Subscription.ts
+packages/server-utils/src/models/Subscription.ts
 
 # Outer $project limits the joined user to {_id,name,username,email}; method is deprecated and
 # not called by any active API handler.

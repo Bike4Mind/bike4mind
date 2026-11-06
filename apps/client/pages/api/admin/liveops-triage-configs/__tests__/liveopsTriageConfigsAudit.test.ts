@@ -22,6 +22,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     const chain = Object.assign(
       (req: unknown, res: unknown) => routes[(req as { method?: string }).method ?? 'GET']?.(req, res),
       {
+        use: () => chain,
         get: (fn: Route) => ((routes.GET = fn), chain),
         post: (fn: Route) => ((routes.POST = fn), chain),
         put: (fn: Route) => ((routes.PUT = fn), chain),

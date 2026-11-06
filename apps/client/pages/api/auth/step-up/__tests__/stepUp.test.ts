@@ -29,7 +29,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: Handler) => fn }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: h.logAuthAudit }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publishEmail } } }));
 vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({ buildEmailLogoImg: () => '' }));

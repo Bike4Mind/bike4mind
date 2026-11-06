@@ -49,7 +49,9 @@ vi.mock('@bike4mind/common', () => ({
   MEMENTO_EMBEDDING_MODEL: 'text-embedding-3-small',
   toMementoVector: (v: number[]) => v,
   LAKE_MEMORY_EXTRACTION_LEASE_MS: 15 * 60_000,
-  getQuestErrorCode: (e: { additionalInfo?: { errorCode?: string } }) => e?.additionalInfo?.errorCode,
+  isTerminalCreditRefusal: (e: { additionalInfo?: { errorCode?: string } }) =>
+    e?.additionalInfo?.errorCode === 'insufficient_credits' ||
+    e?.additionalInfo?.errorCode === 'daily_free_limit_reached',
 }));
 vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: () => vi.fn() }));
 vi.mock('@bike4mind/services', () => ({

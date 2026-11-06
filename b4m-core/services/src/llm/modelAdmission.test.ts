@@ -1,8 +1,28 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { LLMModelConfig, ModelInfo } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
+import {
+  ChatModels,
+  ModelBackend,
+  MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+  PAID_PLAN_ENTITLEMENT_KEY,
+  ServiceUnavailableError,
+  type LLMModelConfig,
+  type ModelInfo,
+} from '@bike4mind/common';
+import { BadRequestError, ForbiddenError, getLlmWithFallback } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { createModelAdmission, isUnpricedTextModel, loadModelConfigurations } from './modelAdmission';
+import {
+  createModelAdmission,
+  isFreeTierModel,
+  isUnpricedTextModel,
+  loadFreeTierAllowedModels,
+  loadModelConfigurations,
+} from './modelAdmission';
+
+const { getSettingsMap } = vi.hoisted(() => ({ getSettingsMap: vi.fn() }));
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  getSettingsMap,
+}));
 
 const priced = {
   id: 'priced',
@@ -79,9 +99,61 @@ describe('createModelAdmission', () => {
     await expect(admission.admits('anything')).rejects.toBeInstanceOf(ForbiddenError);
   });
 
+  it.each([
+    ['banned', { isBanned: true }],
+    ['dispute-pending', { disputePending: true }],
+    ['suspended', { moderation: { status: 'suspended' as const } }],
+  ])('refuses every model for a %s user, even an admin, before resolving entitlements', async (_label, state) => {
+    const getEntitlements = vi.fn().mockResolvedValue([PAID_PLAN_ENTITLEMENT_KEY]);
+    const admission = createModelAdmission({ user: { isAdmin: true, ...state }, configs: [], getEntitlements });
+    await expect(admission.assert('anything')).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(admission.admits('anything')).rejects.toThrow('Please contact support');
+    expect(getEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('admits an active account with the block flags cleared', async () => {
+    const admission = createModelAdmission({
+      user: { isBanned: false, disputePending: false, moderation: { status: 'active' } },
+      configs: [],
+    });
+    await expect(admission.assert('anything')).resolves.toBeUndefined();
+  });
+
   it('admits as usual once moderation is lifted', async () => {
     const admission = createModelAdmission({ user: { isModerated: false }, configs: [] });
     await expect(admission.admits('anything')).resolves.toBe(true);
+  });
+
+  it.each([false, true])('holds all models pending signup review, with isAdmin=%s', async isAdmin => {
+    const getEntitlements = vi.fn().mockResolvedValue([PAID_PLAN_ENTITLEMENT_KEY]);
+    const admission = createModelAdmission({
+      user: { isAdmin, riskScore: { reviewState: 'pending' } },
+      configs: [],
+      models,
+      enforceCredits: false,
+      getEntitlements,
+    });
+    for (const model of models) {
+      await expect(admission.assert(model.id)).rejects.toBeInstanceOf(ForbiddenError);
+      await expect(admission.admits(model.id)).rejects.toThrow('awaits review');
+    }
+    expect(getEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('restores AI access on approval, reapplies the hold on undo, and keeps manual restrictions', async () => {
+    const user: Parameters<typeof createModelAdmission>[0]['user'] = {
+      isModerated: false,
+      riskScore: { reviewState: 'pending' },
+    };
+    const admission = createModelAdmission({ user, configs: [] });
+    await expect(admission.assert('free')).rejects.toThrow('awaits review');
+    user.riskScore = { reviewState: 'approved' };
+    await expect(admission.assert('free')).resolves.toBeUndefined();
+    user.riskScore = { reviewState: 'pending' };
+    await expect(admission.assert('free')).rejects.toThrow('awaits review');
+    user.riskScore = { reviewState: 'approved' };
+    user.isModerated = true;
+    await expect(admission.assert('free')).rejects.toThrow('disabled on your account by an administrator');
   });
 });
 
@@ -119,5 +191,243 @@ describe('loadModelConfigurations failure logging', () => {
     ).resolves.toEqual([]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('read failed'), failure);
     warn.mockRestore();
+  });
+});
+
+describe('free-tier model gate', () => {
+  const allowlist = new Set(['priced']);
+  const premium = { ...priced, id: 'premium' } as ModelInfo;
+  const catalog = [priced, premium, image];
+  const freeUser = (getEntitlements: () => Promise<string[]> = async () => ['base']) =>
+    createModelAdmission({
+      user: { tags: [] },
+      configs: [],
+      models: catalog,
+      freeTierAllowedModels: allowlist,
+      getEntitlements,
+    });
+
+  it('refuses a free account a text model outside the allowlist with model_requires_subscription', async () => {
+    const err = await freeUser()
+      .assert('premium')
+      .catch(e => e);
+    expect(err).toBeInstanceOf(ForbiddenError);
+    expect(err.additionalInfo).toEqual({ errorCode: MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE });
+    expect(err.message).toContain('paid plan');
+  });
+
+  it('reports a paid-only model as not admitted, without throwing, so a fallback skips it', async () => {
+    await expect(freeUser().admits('premium')).resolves.toBe(false);
+  });
+
+  it('admits a free account an allowlisted model', async () => {
+    const admission = freeUser();
+    await expect(admission.admits('priced')).resolves.toBe(true);
+    await expect(admission.admits('img')).resolves.toBe(false);
+  });
+
+  it('gates an id missing from the catalog', async () => {
+    await expect(freeUser().admits('not-in-catalog')).resolves.toBe(false);
+  });
+
+  it('admits a paid account every model', async () => {
+    await expect(freeUser(async () => ['base', PAID_PLAN_ENTITLEMENT_KEY]).admits('premium')).resolves.toBe(true);
+  });
+
+  it('exempts admins and developers without resolving entitlements', async () => {
+    const getEntitlements = vi.fn(async () => []);
+    for (const user of [{ isAdmin: true }, { tags: ['Developer'] }]) {
+      const admission = createModelAdmission({
+        user,
+        configs: [],
+        models: catalog,
+        freeTierAllowedModels: allowlist,
+        getEntitlements,
+      });
+      await expect(admission.admits('premium')).resolves.toBe(true);
+    }
+    expect(getEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when entitlements cannot be resolved', async () => {
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
+    await expect(freeUser(() => Promise.reject(new Error('db down'))).admits('premium')).resolves.toBe(false);
+    warn.mockRestore();
+  });
+
+  it('answers a failed entitlement read with a retryable 503, not the subscription refusal, and logs once', async () => {
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
+    const admission = freeUser(() => Promise.reject(new Error('db down')));
+    const err = await admission.assert('premium').catch(e => e);
+    expect(err).toBeInstanceOf(ServiceUnavailableError);
+    expect(err.additionalInfo?.errorCode).not.toBe(MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE);
+    expect(err.message).toContain('Please try again');
+    await expect(admission.admits('premium')).resolves.toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('still admits an allowlisted model when the entitlement read fails', async () => {
+    const getEntitlements = vi.fn(() => Promise.reject(new Error('db down')));
+    await expect(freeUser(getEntitlements).admits('priced')).resolves.toBe(true);
+    expect(getEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('lands a free user on an allowlisted fallback when the primary is paid-only', async () => {
+    const text = (id: string) =>
+      ({
+        id,
+        name: id,
+        type: 'text',
+        backend: ModelBackend.Anthropic,
+        pricing: { 200_000: { input: 1e-6, output: 2e-6 } },
+      }) as unknown as ModelInfo;
+    const paidOnly = text('paid-only');
+    const otherPaid = text('other-paid');
+    const allowlisted = text('allowlisted');
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;
+    const admission = createModelAdmission({
+      user: { tags: [] },
+      configs: [],
+      models: [paidOnly, otherPaid, allowlisted],
+      freeTierAllowedModels: new Set(['allowlisted']),
+      getEntitlements: async () => ['base'],
+    });
+
+    const result = await getLlmWithFallback(
+      paidOnly,
+      undefined,
+      [paidOnly, otherPaid, allowlisted],
+      { anthropic: 'valid-key' } as Record<string, string>,
+      logger,
+      { forceSwitch: true, isAdmitted: admission.admits }
+    );
+
+    expect(result?.model.id).toBe('allowlisted');
+  });
+
+  it('admits every model while the gate is off', async () => {
+    const admission = createModelAdmission({ user: { tags: [] }, configs: [], models: catalog });
+    await expect(admission.admits('premium')).resolves.toBe(true);
+  });
+
+  describe('with text models open', () => {
+    const textOpen = Object.assign(new Set(['priced']), { textModelsOpen: true as const });
+    const admission = () =>
+      createModelAdmission({
+        user: { tags: [] },
+        configs: [],
+        models: catalog,
+        freeTierAllowedModels: textOpen,
+        getEntitlements: async () => ['base'],
+      });
+
+    it('admits a free account an unlisted text model', async () => {
+      await expect(admission().assert('premium')).resolves.toBeUndefined();
+    });
+
+    it('still requires a paid plan for an unlisted media model', async () => {
+      await expect(admission().assert('img')).rejects.toMatchObject({
+        additionalInfo: { errorCode: MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE },
+      });
+    });
+
+    it('gates an id the catalog does not report as text', async () => {
+      await expect(admission().admits('not-in-catalog')).resolves.toBe(false);
+      await expect(
+        createModelAdmission({ user: { tags: [] }, configs: [], freeTierAllowedModels: textOpen }).admits('premium')
+      ).resolves.toBe(false);
+    });
+
+    it('still refuses an unpriced text model while credits are enforced', async () => {
+      const err = await createModelAdmission({
+        user: { tags: [] },
+        configs: [],
+        models: [unpriced],
+        enforceCredits: true,
+        freeTierAllowedModels: textOpen,
+      })
+        .assert('unpriced')
+        .catch(e => e);
+      expect(err).toBeInstanceOf(ForbiddenError);
+      expect(err.message).toContain('no price');
+    });
+  });
+});
+
+describe('free-tier media admission', () => {
+  it.each(['image', 'video', 'speech-to-text'] as const)(
+    'requires a paid plan for an unlisted %s model before any credits can be spent',
+    async type => {
+      const model = { ...image, id: `premium-${type}`, type } as ModelInfo;
+      const allowedModels = new Set(['priced']);
+      expect(isFreeTierModel(model.id, allowedModels)).toBe(false);
+      const admission = createModelAdmission({
+        user: {},
+        configs: [],
+        models: [model],
+        freeTierAllowedModels: allowedModels,
+        getEntitlements: async () => ['base'],
+      });
+      await expect(admission.admits(model.id)).resolves.toBe(false);
+      await expect(admission.assert(model.id)).rejects.toMatchObject({
+        additionalInfo: { errorCode: MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE },
+      });
+      expect(isFreeTierModel(model.id, new Set([model.id]))).toBe(true);
+      await expect(
+        createModelAdmission({
+          user: {},
+          configs: [],
+          models: [model],
+          freeTierAllowedModels: new Set([model.id]),
+        }).assert(model.id)
+      ).resolves.toBeUndefined();
+      await expect(
+        createModelAdmission({
+          user: {},
+          configs: [],
+          models: [model],
+          freeTierAllowedModels: allowedModels,
+          getEntitlements: async () => [PAID_PLAN_ENTITLEMENT_KEY],
+        }).assert(model.id)
+      ).resolves.toBeUndefined();
+    }
+  );
+});
+
+describe('loadFreeTierAllowedModels', () => {
+  const adminSettings = {} as Parameters<typeof loadFreeTierAllowedModels>[0];
+
+  it('is undefined while the gate is off', async () => {
+    getSettingsMap.mockResolvedValueOnce({ freeTierModelGateEnabled: 'false' });
+    await expect(loadFreeTierAllowedModels(adminSettings)).resolves.toBeUndefined();
+  });
+
+  it('returns only the allowlist while the gate is on, never the Default API Model', async () => {
+    getSettingsMap.mockResolvedValueOnce({
+      freeTierModelGateEnabled: 'true',
+      freeTierAllowedModels: JSON.stringify(['cheap']),
+      DefaultAPIModel: ChatModels.CLAUDE_5_5_OPUS,
+    });
+    await expect(loadFreeTierAllowedModels(adminSettings)).resolves.toEqual(new Set(['cheap']));
+  });
+
+  it('marks text models open only when the gate scope is media', async () => {
+    getSettingsMap.mockResolvedValueOnce({
+      freeTierModelGateEnabled: 'true',
+      freeTierModelGateScope: 'media',
+      freeTierAllowedModels: JSON.stringify(['cheap']),
+    });
+    const media = await loadFreeTierAllowedModels(adminSettings);
+    expect(media).toEqual(new Set(['cheap']));
+    expect(media?.textModelsOpen).toBe(true);
+
+    getSettingsMap.mockResolvedValueOnce({ freeTierModelGateEnabled: 'true', freeTierModelGateScope: 'all' });
+    expect((await loadFreeTierAllowedModels(adminSettings))?.textModelsOpen).toBeUndefined();
+  });
+
+  it('propagates a settings read failure instead of opening the gate', async () => {
+    getSettingsMap.mockRejectedValueOnce(new Error('db down'));
+    await expect(loadFreeTierAllowedModels(adminSettings)).rejects.toThrow('db down');
   });
 });

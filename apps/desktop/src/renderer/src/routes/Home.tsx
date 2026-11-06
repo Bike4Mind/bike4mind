@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Card from '@mui/joy/Card';
@@ -12,11 +12,26 @@ import { SignedInPanel } from '../auth/SignedInPanel';
 import { useAuthState } from '../auth/useAuthState';
 import { ChatShell } from '../chat/ChatShell';
 import { AppUpdateNotice } from '../chat/UpdateNotice';
+import { isLocalChatActive, setLocalChatActive } from './localChatMode';
+import { centeredScreenSx } from './centeredScreenSx';
 
 export function Home() {
   const state = useAuthState();
   const navigate = useNavigate();
-  const [localChat, setLocalChat] = useState(false);
+  const [localChat, setLocalChatState] = useState(isLocalChatActive);
+  const setLocalChat = (next: boolean) => {
+    setLocalChatActive(next);
+    setLocalChatState(next);
+  };
+  // An account can arrive without the local "Sign in" button; a later sign-out must still show the
+  // sign-in card, not the local session left behind it.
+  const signedIn = state?.status === 'signed-in';
+  useEffect(() => {
+    if (signedIn) {
+      setLocalChatActive(false);
+      setLocalChatState(false);
+    }
+  }, [signedIn]);
   const chatScope = useRef('device-local');
   if (state && state.status !== 'initializing' && !state.reauthRequired) {
     chatScope.current = `${state.environment.url}:${state.user?.id ?? 'device-local'}`;
@@ -31,6 +46,7 @@ export function Home() {
         <ChatShell
           key={chatScope.current}
           auth={state}
+          onOpenModelServers={() => void navigate({ to: '/settings', search: { section: 'servers' } })}
           account={status =>
             state?.status === 'signed-in' || state?.reauthRequired ? (
               <SignedInPanel state={state} status={status} />
@@ -57,7 +73,7 @@ export function Home() {
   }
 
   return (
-    <Box sx={{ minHeight: '100vh', display: 'grid', placeItems: 'center', bgcolor: 'background.body', p: 3 }}>
+    <Box sx={centeredScreenSx}>
       <Card variant="outlined" sx={{ width: 'min(520px, 100%)', gap: 2 }}>
         {!state || state.status === 'initializing' ? (
           <Stack direction="row" spacing={1.5} alignItems="center" data-testid="auth-loading-stack">

@@ -21,6 +21,7 @@ vi.mock('@bike4mind/observability', () => ({
       debug: vi.fn(),
     };
   }),
+  describeErrorCause: () => undefined,
 }));
 
 vi.mock('@bike4mind/database', () => ({

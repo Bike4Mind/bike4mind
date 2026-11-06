@@ -4,7 +4,7 @@ import { agentRepository, organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { validateEmbedBranding, validateEmbedKeyOrigins } from '@server/services/publish';
 import { gateEmbedBrandingWrite } from '@server/entitlements/embedKeyEntitlement';
-import { logEventSafe } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { IEmbedBranding, UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';

@@ -6,7 +6,10 @@
  */
 import { DeleteObjectCommand, HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
-import { getEffectiveApiKeyByBackend, OperationsModelService } from '@client/services/operationsModelService';
+import {
+  getEffectiveApiKeyByBackend,
+  OperationsModelService,
+} from '@bike4mind/server-utils/services/operationsModelService';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { MIME_TO_EXTENSION, TRANSCRIBE_UPLOAD_PREFIX } from '@server/utils/transcribeConstants';
@@ -104,12 +107,15 @@ export async function transcribeUpload({
   receivedAt,
   logger,
   mapProviderError,
+  apiKeyId,
 }: {
   user: IUserDocument;
   fileKey: string;
   receivedAt: Date;
   logger: ILogger;
   mapProviderError?: (err: unknown) => unknown;
+  /** The UserApiKey that authenticated the request, recorded on the ledger row. */
+  apiKeyId?: string;
 }): Promise<speechToTextService.TranscriptionResult> {
   assertAiAccessAllowed(user);
   const userId = user.id;
@@ -212,6 +218,7 @@ export async function transcribeUpload({
       backend: speechModelInfo.backend,
       contentLength,
       logger,
+      apiKeyId,
     });
 
     return results;
@@ -229,16 +236,25 @@ interface DeductArgs {
   backend: string;
   contentLength: number;
   logger: ILogger;
+  apiKeyId?: string;
 }
 
 // Settles the hold; a billing failure is logged inside hold.settle, never surfaced (transcription succeeded).
-async function deductTranscriptionCredits({ hold, userId, backend, contentLength, logger }: DeductArgs): Promise<void> {
+async function deductTranscriptionCredits({
+  hold,
+  userId,
+  backend,
+  contentLength,
+  logger,
+  apiKeyId,
+}: DeductArgs): Promise<void> {
   const { durationMinutes, costUsd } = estimateTranscriptionCost(contentLength, transcriptionUsdPerMinute(backend));
   const sessionId = `transcribe-${userId}-${Date.now()}`;
   const credits = await hold.settle(usdToCreditsStochastic(costUsd), {
     type: 'speech_to_text_usage',
     model: backend,
     sessionId,
+    apiKeyId,
   });
 
   // Dual-write usage event: analytics only, never billing.

@@ -123,7 +123,15 @@ const handler = baseApi()
               fabFileId: String(file._id),
               newSize: newBuffer.length,
               filter: { filePath: s3Key },
-              set: { filePath: newFilePath, versions, updatedAt: now, ...FAB_FILE_CONTENT_REWRITE_PATCH },
+              set: {
+                filePath: newFilePath,
+                versions,
+                updatedAt: now,
+                ...FAB_FILE_CONTENT_REWRITE_PATCH,
+                // The cached URL signs the old key, which deleteDroppedVersions may remove; force a re-sign.
+                fileUrl: null,
+                fileUrlExpireAt: null,
+              },
             },
             rewriteStorageDb
           );

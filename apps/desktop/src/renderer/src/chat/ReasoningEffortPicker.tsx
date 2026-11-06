@@ -8,27 +8,50 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import {
-  REASONING_EFFORT_SETTINGS,
+  findModelOption,
+  isLocalModel,
   THINKING_OFF_SETTING,
+  thinkingSwitchedOff,
   type ChatModelOption,
   type ReasoningEffortSetting,
 } from '@shared/chat';
+import { effortSent } from '@shared/generation';
+import type { ModelEffort } from '@shared/modelSettings';
 
-const LABELS: Record<ReasoningEffortSetting, string> = {
+export const EFFORT_LABELS: Readonly<Record<ReasoningEffortSetting, string>> = {
   default: 'Default',
+  none: 'None',
   minimal: 'Minimal',
   low: 'Low',
   medium: 'Medium',
   high: 'High',
+  xhigh: 'Extra high',
 };
 
 const DESCRIPTIONS: Record<ReasoningEffortSetting, string> = {
   default: 'Let the model decide how long to think.',
+  none: 'Do not think. Answer straight away.',
   minimal: 'Barely think. Fastest and cheapest.',
   low: 'A little thought before answering.',
   medium: 'A balance of speed and care.',
-  high: 'Think hardest. Slowest and most expensive.',
+  high: 'Think hard. Slower and more expensive.',
+  xhigh: 'Think hardest. Slowest and most expensive.',
 };
+
+/** What the menu offers while the catalog has not said what the model takes. */
+const UNLISTED_LEVELS: readonly ReasoningEffortSetting[] = ['minimal', 'low', 'medium', 'high'];
+
+/**
+ * The setting the next request acts on, which is what the button shows: a stored level this model
+ * does not list runs at the nearest one it does (reasoningEffortFor in main sends the same), and a
+ * template that cannot stop thinking runs Off at its lowest level.
+ */
+function shownEffort(
+  effort: ReasoningEffortSetting,
+  levels: readonly ReasoningEffortSetting[]
+): ReasoningEffortSetting {
+  return effortSent(effort, levels) ?? 'default';
+}
 
 /** The two faces of a `thinkingToggle` model's switch, in menu order. */
 const THINKING_CHOICES: readonly { setting: ReasoningEffortSetting; label: string; description: string }[] = [
@@ -41,13 +64,11 @@ const THINKING_CHOICES: readonly { setting: ReasoningEffortSetting; label: strin
  *
  * Only a model the loaded catalog actually carries gives an answer. A list that has not loaded,
  * or a model that has been retired from one that has, says nothing - and a control disabled on
- * a guess would be a worse lie than the one this picker exists to avoid.
+ * a guess would be a worse lie than the one this picker exists to avoid. A model with controls
+ * answers from them, as reasoningEffortFor in main does, even before Ollama has inspected it.
  */
-function supportState(
-  models: readonly ChatModelOption[],
-  modelId: string | null
-): { supported: boolean; known: boolean } {
-  const option = modelId ? models.find(model => model.id === modelId) : undefined;
+function supportState(option: ChatModelOption | undefined): { supported: boolean; known: boolean } {
+  if (option?.controls) return { supported: option.controls.effort !== undefined, known: true };
   if (!option || option.supportsReasoningEffort === undefined) return { supported: true, known: false };
   return { supported: option.supportsReasoningEffort, known: true };
 }
@@ -55,15 +76,17 @@ function supportState(
 /**
  * How hard this conversation's model thinks, beside the picker that chooses the model.
  *
- * The two belong together: which efforts mean anything is a property of the model, and only
- * the reasoning models accept one at all. On anything else the control is disabled and says
- * why, rather than quietly accepting a choice the next turn would drop on the floor. A local
- * model that can think (`thinkingToggle`) gets a thinking On/Off switch instead.
+ * The two belong together: which efforts mean anything is a property of the model, and the menu
+ * lists only the levels its `controls.effort` names. A hosted model that takes none shows the
+ * control disabled and says why, rather than quietly accepting a choice the next turn would drop
+ * on the floor; a local one shows nothing. A local model that can think but names no levels
+ * (`thinkingToggle`) gets a thinking On/Off switch instead.
  */
 export function ReasoningEffortPicker({
   models,
   modelId,
   effort,
+  defaultEffort,
   disabled,
   onSelect,
 }: {
@@ -71,16 +94,21 @@ export function ReasoningEffortPicker({
   models: readonly ChatModelOption[];
   modelId: string | null;
   effort: ReasoningEffortSetting;
+  /** The model's default level from the Models screen, which a Default chat runs at. */
+  defaultEffort?: ModelEffort | null;
   disabled?: boolean;
   onSelect: (effort: ReasoningEffortSetting) => void;
 }) {
-  const { supported, known } = supportState(models, modelId);
+  const option = findModelOption(models, modelId);
+  const { supported, known } = supportState(option);
   const unsupported = known && !supported;
   const sx = { fontWeight: 'normal', minWidth: 0 } as const;
+  const levels = option?.controls?.effort?.levels ?? UNLISTED_LEVELS;
 
-  // A local model's server takes no effort, only thinking on or off; any setting but Off thinks.
-  if (modelId && models.find(model => model.id === modelId)?.thinkingToggle) {
-    const thinkingOn = effort !== THINKING_OFF_SETTING;
+  // A local model whose server takes no effort, only thinking on or off; any setting but Off thinks.
+  if (option?.thinkingToggle && !option.controls?.effort) {
+    const alwaysOn = option.thinkingAlwaysOn === true;
+    const thinkingOn = alwaysOn || !thinkingSwitchedOff(effort, option);
     return (
       <Dropdown>
         <MenuButton
@@ -98,10 +126,12 @@ export function ReasoningEffortPicker({
         <Menu size="sm" placement="top-start" sx={{ minWidth: 240 }}>
           {THINKING_CHOICES.map(choice => {
             const selected = choice.setting === THINKING_OFF_SETTING ? !thinkingOn : thinkingOn;
+            const unavailable = alwaysOn && choice.setting === THINKING_OFF_SETTING;
             return (
               <MenuItem
                 key={choice.setting}
                 selected={selected}
+                disabled={unavailable}
                 onClick={() => onSelect(choice.setting)}
                 data-testid="effort-picker-option"
               >
@@ -111,7 +141,7 @@ export function ReasoningEffortPicker({
                     {choice.label}
                   </Typography>
                   <Typography level="body-xs" textColor="text.tertiary" noWrap>
-                    {choice.description}
+                    {unavailable ? 'This model always thinks.' : choice.description}
                   </Typography>
                 </Stack>
               </MenuItem>
@@ -122,6 +152,8 @@ export function ReasoningEffortPicker({
     );
   }
 
+  if (unsupported && option && isLocalModel(option.id)) return null;
+
   if (unsupported) {
     return (
       <Tooltip
@@ -129,7 +161,11 @@ export function ReasoningEffortPicker({
         variant="soft"
         size="sm"
         sx={{ maxWidth: 280 }}
-        title={`${modelId} does not take a reasoning effort. Only the OpenAI reasoning models do; Claude models have their own thinking settings.`}
+        title={
+          option?.controls?.thinkingBudgetTokens
+            ? `${modelId} thinks with a token budget instead of an effort. Set it under Params.`
+            : `${modelId} does not take a reasoning effort.`
+        }
       >
         {/* A disabled control fires no pointer events, so the tooltip needs something that does.
             A plain Button rather than a MenuButton: there is no Dropdown to belong to, because
@@ -152,6 +188,7 @@ export function ReasoningEffortPicker({
     );
   }
 
+  const shown = shownEffort(effort, levels);
   return (
     <Dropdown>
       <MenuButton
@@ -163,21 +200,23 @@ export function ReasoningEffortPicker({
         slotProps={{ root: { 'data-testid': 'effort-picker-btn' } }}
       >
         <Typography level="body-xs" noWrap textColor="inherit">
-          Effort: {LABELS[effort]}
+          Effort: {EFFORT_LABELS[shown]}
         </Typography>
       </MenuButton>
       <Menu size="sm" placement="top-start" sx={{ minWidth: 240 }}>
-        {REASONING_EFFORT_SETTINGS.map(setting => (
+        {(['default', ...levels] as const).map(setting => (
           <MenuItem
             key={setting}
-            selected={setting === effort}
+            selected={setting === shown}
             onClick={() => onSelect(setting)}
             data-testid="effort-picker-option"
           >
             <Stack sx={{ minWidth: 0 }}>
               <Typography level="body-sm" noWrap>
-                {setting === effort ? '\u2022 ' : ''}
-                {LABELS[setting]}
+                {setting === shown ? '\u2022 ' : ''}
+                {setting === 'default' && defaultEffort
+                  ? `Default (${EFFORT_LABELS[defaultEffort]})`
+                  : EFFORT_LABELS[setting]}
               </Typography>
               <Typography level="body-xs" textColor="text.tertiary" noWrap>
                 {DESCRIPTIONS[setting]}

@@ -30,7 +30,7 @@ import {
 } from '@bike4mind/common';
 import { SreAgentService } from '@bike4mind/services/sreAgentService';
 import { RATE_LIMITED_SENTINEL } from '@bike4mind/services/sreAgentService/tools';
-import { GitHubService, GitHubRateLimitError } from '@server/services/githubService';
+import { GitHubService, GitHubRateLimitError } from '@bike4mind/server-utils/services/githubService';
 import { apiKeyService } from '@bike4mind/services';
 import {
   postSreRevisionStartedMessage,

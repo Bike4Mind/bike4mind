@@ -7,16 +7,16 @@ import {
 } from '@bike4mind/database';
 import type { Ability } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
-import { isAiAccessRevoked } from '@bike4mind/services/userService/accountState';
+import { aiAccessDeniedMessage, type AiAccessStateFields } from '@bike4mind/services/userService/accountState';
 import type { Logger } from '@bike4mind/observability';
 import { NotFoundError, ProjectEvents, type ISessionDocument } from '@bike4mind/common';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { SessionEvents } from '@server/utils/eventBus';
 import { filterSessionIdsByOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
 import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@server/utils/sessionOperationCounts';
 
 export interface ProjectMutationContext {
-  user: { id: string; isModerated?: boolean | null };
+  user: { id: string } & AiAccessStateFields;
   ability?: Ability;
   logger?: Logger;
 }
@@ -69,12 +69,14 @@ export async function attachSessionsToProject(
   // this fan-out is already best-effort (Promise.allSettled). So a refusal skips the queueing
   // rather than failing the attach, and neither caller's response has room to report it, leaving
   // the warning log as where a skipped summary surfaces (#1852).
-  const summarizableSessionIds = await filterSessionIdsByOperationalCredits(sessions, {
-    payerId: ctx.user.id,
-    operationsPerSession: OPERATIONS_PER_SUMMARIZE_WITH_TAGGING,
-    operation: 'session summarization',
-    logger: ctx.logger,
-  });
+  const summarizableSessionIds = aiAccessDeniedMessage(ctx.user)
+    ? new Set<string>()
+    : await filterSessionIdsByOperationalCredits(sessions, {
+        payerId: ctx.user.id,
+        operationsPerSession: OPERATIONS_PER_SUMMARIZE_WITH_TAGGING,
+        operation: 'session summarization',
+        logger: ctx.logger,
+      });
 
   await Promise.allSettled(
     sessions.map(async session => {
@@ -91,7 +93,7 @@ export async function attachSessionsToProject(
         },
         { ability: ctx.ability }
       );
-      if (!summarizableSessionIds.has(session.id) || isAiAccessRevoked(ctx.user)) return;
+      if (!summarizableSessionIds.has(session.id)) return;
       await SessionEvents.Summarize.publish({
         sessionId: session.id,
         callTagging: true,

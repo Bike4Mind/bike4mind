@@ -1,4 +1,4 @@
-import { elevenLabsContentTypeForFormat } from '@bike4mind/common';
+import { DEFAULT_SOUND_MODEL_ID, elevenLabsContentTypeForFormat } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { parseRetryAfterMs, ProviderRateLimitError } from '../providerRateLimitError';
 import { GeneratedSound, SoundGenerationOptions, SoundGenerator } from './types';
@@ -62,6 +62,7 @@ export class ElevenLabsSoundGenerator implements SoundGenerator {
         'content-type': 'application/json',
       },
       body: JSON.stringify({
+        model_id: DEFAULT_SOUND_MODEL_ID,
         text,
         ...(options.durationSeconds !== undefined ? { duration_seconds: options.durationSeconds } : {}),
         ...(options.promptInfluence !== undefined ? { prompt_influence: options.promptInfluence } : {}),

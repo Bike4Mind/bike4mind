@@ -256,6 +256,34 @@ describe('createSecopsTriageService', () => {
     expect(channel).toBe('C12345');
   });
 
+  it('escapes the health assessment and issue link labels in the Slack summary', async () => {
+    const config: SecopsTriageConfig = {
+      ...baseConfig,
+      slackChannelId: 'C12345',
+      llmEnrichment: true,
+      modelId: 'claude-3-5-haiku-20241022',
+    };
+    mockLlmComplete.mockReset();
+    mockLlmComplete.mockImplementation(
+      async (_mid: string, _msgs: unknown, _opts: unknown, cb: (texts: string[]) => Promise<void>) => {
+        await cb([JSON.stringify({ whatThisMeans: 'm', howToFix: 'f', assessment: 'Ping <!channel> & friends' })]);
+      }
+    );
+
+    await service.run(
+      makePayload([makeHighFinding('xss-1', { title: 'a<b|c' })]),
+      mockGitHubService as never,
+      config,
+      'xoxb-fake-token'
+    );
+
+    const [{ blocks }] = mockSlackClient.sendMessage.mock.calls[0];
+    const posted = JSON.stringify(blocks);
+    expect(posted).toContain('Ping &lt;!channel&gt; &amp; friends');
+    expect(posted).not.toContain('<!channel>');
+    expect(posted).toContain('a&lt;b c>');
+  });
+
   it('does not post to Slack when slackChannelId is not configured', async () => {
     await service.run(
       makePayload([makeHighFinding('xss-1')]),

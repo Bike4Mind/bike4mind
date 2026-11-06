@@ -23,7 +23,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
 }));
 vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: vi.fn(async () => 'https://s3.test/put') }));
 vi.mock('@bike4mind/database/content', () => ({ AppFile: { create: vi.fn(async () => ({ id: 'file-1' })) } }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/utils/browserUploadUrl', () => ({
   resolveBrowserAppFileUploadUrl: (_id: string, url: string) => url,
 }));

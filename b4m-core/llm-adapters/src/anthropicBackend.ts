@@ -1,4 +1,5 @@
 import { Anthropic, RateLimitError } from '@anthropic-ai/sdk';
+import { providerFetchOptions } from './providerDispatcher';
 import type {
   MessageCreateParamsBase,
   ContentBlock,
@@ -26,7 +27,7 @@ import {
 } from '@bike4mind/common';
 import { federatedAnthropicCredentials } from './anthropicFederation';
 import { selectedWifTokenSource } from './wifTokenSource';
-import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
@@ -63,10 +64,12 @@ import {
 import {
   buildThinkingParams,
   effortForComplexity,
+  applyAnthropicOutputCeiling,
   isAdaptiveThinkingByDefault,
   planReasoningEffort,
   resolveAnthropicEffort,
   resolveOutputMaxTokens,
+  supportsAnthropicEffort,
   THINKING_ANSWER_HEADROOM_TOKENS,
   type AnthropicEffort,
   type ReasoningEffortPlan,
@@ -82,17 +85,21 @@ import {
 } from './llmTimeoutErrors';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import { acquireSlot, type SlotRelease } from './_anthropicSemaphore';
-import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
+import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
 import {
   appendSystemText,
   buildStructuredOutputFormat,
+  declaresOpenObject,
   buildToolUseInstruction,
   downgradeForcedToolChoice,
   hasCitationsEnabled,
+  isStrictSchemaRejection,
   markToolStrict,
+  withStrictOff,
 } from './forcedToolChoice';
 import { buildJsonSchemaInstruction } from './responseFormatHelpers';
 import { logToolRound, summarizeToolOutcomes } from './toolRoundTiming';
+import { isTransportError } from './transportRetry';
 import {
   createDegenerateStreamGuard,
   DEGENERATE_STREAM_STOP_REASON,
@@ -137,9 +144,17 @@ const REQUEST_TIMEOUT_MS = 60000; // 60s timeout for the initial API request bef
 const SLOW_MODEL_REQUEST_TIMEOUT_MS = 120000; // 120s for slow/opus-class models that need longer to begin streaming
 /**
  * Keepalive pings stretch the idle limit up to this multiple of it, measured from the last real
- * event, so a generation hung behind a live, still-pinging connection is still cut off.
+ * event, so a generation hung behind a live, still-pinging connection is still cut off. This is
+ * the whole ceiling before the first event and the floor once events flow, where the ceiling
+ * follows max_tokens at KEEPALIVE_MIN_TOKENS_PER_SECOND up to MAX_KEEPALIVE_CEILING_MS.
  */
 const KEEPALIVE_SILENCE_CEILING_FACTOR = 2;
+// Once events flow, the ceiling follows max_tokens at this floor rate: thinking is billed but can
+// stream only pings for minutes, so a fixed multiple of the idle limit kills live generations.
+const KEEPALIVE_MIN_TOKENS_PER_SECOND = 50;
+// Bounds the max_tokens stretch so a hung generation still reaches the fallback: a 128K request
+// would otherwise hold the user for over 40 minutes, and a 15-minute Lambda caller would die first.
+const MAX_KEEPALIVE_CEILING_MS = 15 * 60 * 1000;
 
 /**
  * Largest max_tokens the SDK will accept without streaming. It derives a projected
@@ -174,6 +189,7 @@ type AnthropicUsage =
       output_tokens?: number;
       cache_read_input_tokens?: number;
       cache_creation_input_tokens?: number;
+      cache_creation?: { ephemeral_5m_input_tokens?: number | null; ephemeral_1h_input_tokens?: number | null } | null;
     }
   | undefined;
 
@@ -181,15 +197,26 @@ type AnthropicUsage =
  * `prior` plus one API call's usage (see CompletionInfo.turnUsage). Anthropic's input_tokens
  * already exclude cache reads/writes, so the fields map across without a split.
  */
-const appendAnthropicTurn = (prior: readonly TurnUsage[] | undefined, usage: AnthropicUsage): TurnUsage[] => [
-  ...(prior ?? []),
-  {
-    inputTokens: usage?.input_tokens || 0,
-    outputTokens: usage?.output_tokens || 0,
-    ...(usage?.cache_read_input_tokens ? { cacheReadInputTokens: usage.cache_read_input_tokens } : {}),
-    ...(usage?.cache_creation_input_tokens ? { cacheCreationInputTokens: usage.cache_creation_input_tokens } : {}),
-  },
-];
+export const appendAnthropicTurn = (prior: readonly TurnUsage[] | undefined, usage: AnthropicUsage): TurnUsage[] => {
+  const oneHourWrites = usage?.cache_creation?.ephemeral_1h_input_tokens;
+  return [
+    ...(prior ?? []),
+    {
+      inputTokens: usage?.input_tokens || 0,
+      outputTokens: usage?.output_tokens || 0,
+      ...(usage?.cache_read_input_tokens ? { cacheReadInputTokens: usage.cache_read_input_tokens } : {}),
+      ...(usage?.cache_creation_input_tokens ? { cacheCreationInputTokens: usage.cache_creation_input_tokens } : {}),
+      // Kept even at 0 when reported, so a 5-minute-only turn is not later read as unsplit.
+      ...(usage?.cache_creation_input_tokens && typeof oneHourWrites === 'number'
+        ? { cacheWrite1hInputTokens: Math.min(oneHourWrites, usage.cache_creation_input_tokens) }
+        : {}),
+    },
+  ];
+};
+
+/** The cache_control every breakpoint on a request carries; the 1h TTL is spelled out, 5m is the default. */
+export const ephemeralCacheControl = (ttl: '5m' | '1h' | undefined): { type: 'ephemeral'; ttl?: '1h' } =>
+  ttl === '1h' ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' };
 
 /**
  * Associates a failed tool call's elapsed time with the thrown error object, so it survives
@@ -213,6 +240,20 @@ function tagToolDuration<E>(error: E, durationMs: number): E {
 function readToolDuration(error: unknown): number | undefined {
   if (!error || typeof error !== 'object') return undefined;
   return toolDurationsByError.get(error);
+}
+
+/**
+ * True when the array ends in tool results answering an assistant tool_use message that does not
+ * open with a thinking block - the one shape the API refuses while thinking is on.
+ */
+function continuesToolTurnWithoutThinking(messages: IMessage[]): boolean {
+  const last = messages.at(-1);
+  const previous = messages.at(-2);
+  if (last?.role !== 'user' || previous?.role !== 'assistant') return false;
+  if (!Array.isArray(last.content) || !last.content.some(block => block.type === 'tool_result')) return false;
+  if (!Array.isArray(previous.content) || !previous.content.some(block => block.type === 'tool_use')) return false;
+  const leadingType: unknown = previous.content[0]?.type;
+  return leadingType !== 'thinking' && leadingType !== 'redacted_thinking';
 }
 
 export class AnthropicBackend implements ICompletionBackend {
@@ -247,8 +288,7 @@ export class AnthropicBackend implements ICompletionBackend {
           return response;
         } catch (err) {
           const msg = err instanceof Error ? err.message : '';
-          const isTransportError = err instanceof TypeError && (msg === 'terminated' || msg === 'fetch failed');
-          if (!isTransportError || attempt === MAX_TRANSPORT_RETRIES) throw err;
+          if (!isTransportError(err) || attempt === MAX_TRANSPORT_RETRIES) throw err;
           this.logger.warn(
             `[AnthropicBackend] Transport error "${msg}", retry ${attempt + 1}/${MAX_TRANSPORT_RETRIES}`
           );
@@ -265,6 +305,7 @@ export class AnthropicBackend implements ICompletionBackend {
         : { apiKey: federated ? undefined : apiKey }),
       maxRetries: 5,
       fetch: retryFetch,
+      fetchOptions: providerFetchOptions(),
     });
     this.logger = logger ?? new Logger();
     this._endUserId = endUserId;
@@ -321,20 +362,24 @@ export class AnthropicBackend implements ICompletionBackend {
         region: process.env.AWS_REGION || 'us-east-2',
       });
 
+      const stage = process.env.SEED_STAGE_NAME || 'local';
+      const timestamp = new Date();
       const command = new PutMetricDataCommand({
         Namespace: 'Lumina5/LLMStreaming',
+        // CloudWatch cannot sum across a dimension, so the Stage-only series is what the alarm reads.
         MetricData: [
-          {
-            MetricName: 'StreamIdleTimeoutTriggered',
-            Value: 1,
-            Unit: StandardUnit.Count,
-            Timestamp: new Date(),
-            Dimensions: [
-              { Name: 'Model', Value: model },
-              { Name: 'Stage', Value: process.env.SEED_STAGE_NAME || 'local' },
-            ],
-          },
-        ],
+          [
+            { Name: 'Model', Value: model },
+            { Name: 'Stage', Value: stage },
+          ],
+          [{ Name: 'Stage', Value: stage }],
+        ].map(dimensions => ({
+          MetricName: 'StreamIdleTimeoutTriggered',
+          Value: 1,
+          Unit: StandardUnit.Count,
+          Timestamp: timestamp,
+          Dimensions: dimensions,
+        })),
       });
 
       await client.send(command);
@@ -1010,16 +1055,20 @@ export class AnthropicBackend implements ICompletionBackend {
       m => m.cache === true && m.role === 'system' && !isToolChangeMessage(m)
     );
     const anyMessageCacheControlled = anyUserOrAssistantCacheControlled || anySystemCacheControlled;
+    const flagCacheControl = ephemeralCacheControl(options.cacheStrategy?.cacheTTL);
+    // A tool round reads the newest flagged message the first call wrote; older flags (a lookback
+    // breakpoint) are spent and would take the slot this round's end-of-array anchor needs.
+    const newestFlagged = toolCallCount > 0 ? messages.findLastIndex(m => m.cache === true && m.role !== 'system') : -1;
 
     const cacheStampedMessages: IMessage[] = anyUserOrAssistantCacheControlled
-      ? messages.map(m => {
-          if (m.cache !== true || m.role === 'system') return m;
+      ? messages.map((m, index) => {
+          if (m.cache !== true || m.role === 'system' || index < newestFlagged) return m;
           const content = m.content;
           if (typeof content === 'string') {
             return {
               ...m,
               content: [
-                { type: 'text', text: content, cache_control: { type: 'ephemeral' } },
+                { type: 'text', text: content, cache_control: flagCacheControl },
               ] as unknown as IMessage['content'],
             };
           }
@@ -1028,7 +1077,7 @@ export class AnthropicBackend implements ICompletionBackend {
               i === content.length - 1
                 ? ({
                     ...(b as unknown as Record<string, unknown>),
-                    cache_control: { type: 'ephemeral' },
+                    cache_control: flagCacheControl,
                   } as unknown as typeof b)
                 : b
             );
@@ -1044,15 +1093,17 @@ export class AnthropicBackend implements ICompletionBackend {
     // append the model-identity reminder as a separate uncached block to keep
     // the cached prefix stable across requests (otherwise the suffix would
     // bust the cache key on every model identifier change).
-    // Omitted for callers whose contract is a bare completion (API promptMode raw) -
-    // with no system messages left either, the request then carries no system at all.
-    const identityReminder = options.omitIdentityReminder
+    // Omitted for a bare completion (API promptMode raw) or while current_model_details is on the
+    // request (see shouldOmitIdentityReminder) - with no system messages left either, the request
+    // then carries no system at all.
+    const identityReminder = shouldOmitIdentityReminder(options)
       ? null
-      : buildIdentityReminder(model, options.modelDisplayName);
-    let system: string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> | undefined;
+      : buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName);
+    type SystemBlock = { type: 'text'; text: string; cache_control?: ReturnType<typeof ephemeralCacheControl> };
+    let system: string | SystemBlock[] | undefined;
     if (anySystemCacheControlled) {
       const systemMessages = messages.filter(m => m.role === 'system' && !isToolChangeMessage(m));
-      const blocks: Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> = [];
+      const blocks: SystemBlock[] = [];
       for (const sm of systemMessages) {
         const text = systemContentToText(sm.content);
         // Anthropic rejects a text block with no non-whitespace content, and the public
@@ -1060,7 +1111,7 @@ export class AnthropicBackend implements ICompletionBackend {
         // (CompletionMessageSchema), so an empty one is reachable rather than theoretical.
         if (text.trim() === '') continue;
         if (sm.cache === true) {
-          blocks.push({ type: 'text', text, cache_control: { type: 'ephemeral' } });
+          blocks.push({ type: 'text', text, cache_control: flagCacheControl });
         } else {
           blocks.push({ type: 'text', text });
         }
@@ -1129,7 +1180,6 @@ export class AnthropicBackend implements ICompletionBackend {
           `[Pre-API #6181] Tool block mismatch! tool_use: ${toolUseCount}, tool_result: ${toolResultCount}. Attempting auto-repair...`
         );
 
-        // Re-run integrity check (catches adjacency issues missed on first pass)
         filteredMessages = ensureToolPairingIntegrity(filteredMessages, this.logger);
         ({ useCount: toolUseCount, resultCount: toolResultCount } = countToolBlocks(filteredMessages));
 
@@ -1209,24 +1259,49 @@ export class AnthropicBackend implements ICompletionBackend {
     // precedence; mixing forced-tool with executable tools can deadlock).
     const responseFormat = options.responseFormat;
     const wantsJsonSchema = responseFormat?.type === 'json_schema' && !hasCallerTools;
-    const usingResponseFormatToolUse = wantsJsonSchema && forcedToolChoiceSupported;
-    // A model without forced tool use gets native structured outputs instead of the synthesized tool,
-    // unless a document asks for citations (that pairing is a 400) or the schema is one structured
-    // outputs reject - then the schema goes in the prompt.
-    const citationsBlockFormat =
-      wantsJsonSchema && !forcedToolChoiceSupported && hasCitationsEnabled(apiParams.messages);
+    // Structured outputs close every object, so a schema that explicitly keeps one open skips them for the
+    // unconstrained forced tool, or the prompt on a model without forced tool use, where extra keys come through.
+    const schemaDeclaresOpenObject =
+      responseFormat?.type === 'json_schema' && declaresOpenObject(responseFormat.json_schema.schema);
+    // A caller's `strict: false` keeps the schema off native structured outputs and the strict tool alike.
+    const callerOptsOutOfStrict = responseFormat?.type === 'json_schema' && responseFormat.json_schema.strict === false;
+    // The forced tool cannot run alongside thinking, so a caller's own request for adaptive thinking
+    // (not a route default, and not `none`) moves json_schema to native structured outputs.
+    const callerWantsThinking =
+      options.explicitReasoning === true &&
+      !schemaDeclaresOpenObject &&
+      !callerOptsOutOfStrict &&
+      currentModelInfo?.can_think === true &&
+      supportsAnthropicEffort(model, currentModelInfo) &&
+      (options.thinking?.enabled === true ||
+        (options.reasoningEffort !== undefined &&
+          options.reasoningEffort !== 'none' &&
+          planReasoningEffort(model, currentModelInfo, options.reasoningEffort, apiParams.max_tokens).kind ===
+            'adaptive'));
+    const wantsNativeFormat = wantsJsonSchema && (!forcedToolChoiceSupported || callerWantsThinking);
+    // Native structured outputs replace the synthesized tool unless a document asks for citations (that
+    // pairing is a 400), the schema declares an open object, or it is one structured outputs reject. Then a
+    // model with forced tool use keeps the tool, and one without puts the schema in the prompt.
+    const citationsBlockFormat = wantsNativeFormat && hasCitationsEnabled(apiParams.messages);
     const nativeFormat =
-      wantsJsonSchema && !forcedToolChoiceSupported && !citationsBlockFormat && responseFormat.type === 'json_schema'
+      wantsNativeFormat &&
+      !citationsBlockFormat &&
+      !callerOptsOutOfStrict &&
+      !schemaDeclaresOpenObject &&
+      responseFormat.type === 'json_schema'
         ? buildStructuredOutputFormat(responseFormat.json_schema.schema)
         : null;
     const usingResponseFormatNative = nativeFormat !== null;
+    const usingResponseFormatToolUse = wantsJsonSchema && forcedToolChoiceSupported && !usingResponseFormatNative;
     const usingResponseFormatPrompt = wantsJsonSchema && !forcedToolChoiceSupported && !usingResponseFormatNative;
+    // Caller thinking moved this request off the forced tool; its max_tokens is kept as sent.
+    const thinkingMovedFormatNative = usingResponseFormatNative && forcedToolChoiceSupported;
     if (responseFormat) {
       this.logger.info(
         `[AnthropicBackend] response_format received: type=${responseFormat.type}, synthesizingToolUse=${usingResponseFormatToolUse}, nativeFormat=${usingResponseFormatNative}, callerTools=${options.tools?.length ?? 0}`
       );
     }
-    if (usingResponseFormatPrompt && !citationsBlockFormat) {
+    if (usingResponseFormatPrompt && !citationsBlockFormat && !callerOptsOutOfStrict) {
       this.logger.warn(
         '[AnthropicBackend] json_schema not expressible as structured outputs; using prompt instruction',
         {
@@ -1243,13 +1318,25 @@ export class AnthropicBackend implements ICompletionBackend {
       apiParams.system = appendSystemText(apiParams.system, schemaInstruction);
     }
     if (usingResponseFormatToolUse && responseFormat.type === 'json_schema') {
+      // Unconstrained, the model can emit a nested object as a JSON string. Strict mode needs the
+      // closed structured-outputs form of the schema; one that has none, that declares an open
+      // object, or whose caller set `strict: false`, goes as-is, unconstrained.
+      const strictFormat =
+        schemaDeclaresOpenObject || callerOptsOutOfStrict
+          ? null
+          : buildStructuredOutputFormat(responseFormat.json_schema.schema);
       const schemaTool: Tool = {
         name: responseFormat.json_schema.name,
         ...(responseFormat.json_schema.description ? { description: responseFormat.json_schema.description } : {}),
-        input_schema: responseFormat.json_schema.schema as Tool.InputSchema,
+        input_schema: (strictFormat?.schema ?? responseFormat.json_schema.schema) as Tool.InputSchema,
+        ...(strictFormat ? { strict: true } : {}),
       };
       apiParams.tools = [schemaTool];
-      apiParams.tool_choice = { type: 'tool', name: responseFormat.json_schema.name };
+      apiParams.tool_choice = {
+        type: 'tool',
+        name: responseFormat.json_schema.name,
+        disable_parallel_tool_use: true,
+      };
     }
 
     if (hasCallerTools) {
@@ -1257,8 +1344,10 @@ export class AnthropicBackend implements ICompletionBackend {
 
       if (downgradedToolChoice) {
         apiParams.tool_choice = { type: 'auto' };
-        if (downgradedToolChoice.toolName) {
-          apiParams.tools = markToolStrict(apiParams.tools, downgradedToolChoice.toolName);
+        const { toolName } = downgradedToolChoice;
+        const namedTool = options.tools?.find(tool => tool.toolSchema.name === toolName);
+        if (toolName && namedTool?.toolSchema.strict !== false) {
+          apiParams.tools = markToolStrict(apiParams.tools, toolName);
         }
         apiParams.system = appendSystemText(apiParams.system, buildToolUseInstruction(downgradedToolChoice));
       } else if (options.tool_choice) {
@@ -1290,7 +1379,23 @@ export class AnthropicBackend implements ICompletionBackend {
     // brings its own record, so a new Claude gets the right thinking shape
     // (buildThinkingParams reads thinkingStyle) instead of none at all.
     // `currentModelInfo` is resolved above, where max_tokens needs it too.
-    if (currentModelInfo?.can_think) {
+    // A history handed in mid tool turn by a fallback hop off another provider carries no signed
+    // thinking block, and the API rejects thinking on a tool turn whose assistant message does not
+    // open with one. Checked on the first round only, then carried: a round run without thinking
+    // pushes no thinking block either, but an own round where adaptive thinking chose not to think
+    // must keep thinking on.
+    const continuesForeignToolTurn =
+      options._internal?.thinkingSuppressed === true ||
+      (toolCallCount === 0 && continuesToolTurnWithoutThinking(filteredMessages));
+    if (continuesForeignToolTurn && !options._internal?.thinkingSuppressed) {
+      options = { ...options, _internal: { ...options._internal, thinkingSuppressed: true } };
+      if (currentModelInfo?.can_think) {
+        this.logger.warn('[AnthropicBackend] Thinking skipped: history continues a tool turn with no thinking block', {
+          model,
+        });
+      }
+    }
+    if (currentModelInfo?.can_think && !continuesForeignToolTurn) {
       // questMaster / thinking are Anthropic-specific extras layered onto the generic
       // completion options; view them through a typed lens rather than `any`.
       const thinkingOptions = options as Partial<ICompletionOptions> & {
@@ -1327,7 +1432,7 @@ export class AnthropicBackend implements ICompletionBackend {
           // Merged, not assigned: output_config may already carry the structured-output format.
           apiParams.output_config = { ...apiParams.output_config, ...result.thinkingConfig.output_config };
         }
-        apiParams.max_tokens = result.maxTokens;
+        if (!thinkingMovedFormatNative) apiParams.max_tokens = result.maxTokens;
 
         // Apply temperature/top_p constraints
         if (result.temperature === 'delete') {
@@ -1351,7 +1456,7 @@ export class AnthropicBackend implements ICompletionBackend {
         );
         // The synthesized response_format tool is forced via tool_choice, which the API rejects
         // alongside thinking - so only the off switch survives there. Native structured outputs
-        // (models without forced tool use) carry the format in output_config and keep any level.
+        // carry the format in output_config and keep any level.
         const plan: ReasoningEffortPlan =
           usingResponseFormatToolUse && (requested.kind === 'adaptive' || requested.kind === 'budget')
             ? { kind: 'default' }
@@ -1419,6 +1524,10 @@ export class AnthropicBackend implements ICompletionBackend {
         thinking.budget_tokens = maxThinkingBudget;
       }
     }
+    applyAnthropicOutputCeiling(apiParams, options.outputTokenCeiling);
+
+    // Set once the provider accepts this round's request; only an error before that can be a schema rejection.
+    let requestAccepted = false;
 
     // Setup the actual API call with API-specific options
     try {
@@ -1448,6 +1557,7 @@ export class AnthropicBackend implements ICompletionBackend {
             output_tokens?: number;
             cache_read_input_tokens?: number;
             cache_creation_input_tokens?: number;
+            cache_creation?: NonNullable<AnthropicUsage>['cache_creation'];
           }
         | undefined;
       // Chars this call streamed (text, thinking, tool arguments), read from the catch block too.
@@ -1502,6 +1612,28 @@ export class AnthropicBackend implements ICompletionBackend {
           let isIdleTimeout = false;
           let idleTimeoutMsForError = 0; // Store for error message
           let idleTimeoutKind: LlmStreamTimeoutKind = 'stream_idle';
+          let idleTimeoutKeepalive = false;
+          // The provider billed the prompt once message_start arrived, so the rejection carries it.
+          const streamTimeoutError = () => {
+            const turnUsage = accumTurnUsage?.length
+              ? streamingTurnUsage
+                ? appendAnthropicTurn(accumTurnUsage, { ...streamingTurnUsage, output_tokens: 0 })
+                : accumTurnUsage
+              : undefined;
+            const usage = {
+              inputTokens: accumInputTokens + (streamingTurnUsage?.input_tokens ?? 0),
+              cacheReadInputTokens: accumCacheReadTokens + (streamingTurnUsage?.cache_read_input_tokens ?? 0),
+              cacheCreationInputTokens: accumCacheWriteTokens + (streamingTurnUsage?.cache_creation_input_tokens ?? 0),
+              ...(accumOutputTokens > 0 ? { outputTokens: accumOutputTokens } : {}),
+              ...(turnUsage ? { turnUsage } : {}),
+            };
+            const hasUsage =
+              usage.inputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens + accumOutputTokens > 0;
+            return createAnthropicStreamTimeoutError(idleTimeoutKind, idleTimeoutMsForError, {
+              keepalive: idleTimeoutKeepalive,
+              usage: hasUsage ? usage : undefined,
+            });
+          };
 
           // Degeneration state, also read from the catch block. The idle timer
           // cannot cover this case - it resets on every stream event, and a
@@ -1570,6 +1702,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
                 }
               ).then(r => r.result);
+              requestAccepted = true;
 
               // Clear request timeout once stream is created (connection established)
               if (requestTimeout) clearTimeout(requestTimeout);
@@ -1638,25 +1771,40 @@ export class AnthropicBackend implements ICompletionBackend {
                 this.isThinkingEnabled || mayThinkSilently
                   ? THINKING_IDLE_TIMEOUT_MS
                   : (configuredIdleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS);
+              const firstEventCeilingMs = INITIAL_TIMEOUT_MS * KEEPALIVE_SILENCE_CEILING_FACTOR;
+              const generationCeilingMs = Math.max(
+                idleTimeoutMs * KEEPALIVE_SILENCE_CEILING_FACTOR,
+                Math.min(
+                  MAX_KEEPALIVE_CEILING_MS,
+                  Math.ceil(apiParams.max_tokens / KEEPALIVE_MIN_TOKENS_PER_SECOND) * 1000
+                )
+              );
 
               let idleTimer: ReturnType<typeof setTimeout> | undefined;
               let eventCount = 0;
               let lastEventType = '';
               let lastEventAt = Date.now();
+              let lastByteAt = lastEventAt;
 
               const resetIdleTimer = () => {
                 if (!enableIdleTimeout) return;
                 if (idleTimer) clearTimeout(idleTimer);
                 // Use shorter timeout for first event (initial connection)
                 const limitMs = eventCount === 0 ? INITIAL_TIMEOUT_MS : idleTimeoutMs;
-                const ceilingRemainingMs = limitMs * KEEPALIVE_SILENCE_CEILING_FACTOR - (Date.now() - lastEventAt);
+                const ceilingMs = eventCount === 0 ? firstEventCeilingMs : generationCeilingMs;
+                const ceilingRemainingMs = ceilingMs - (Date.now() - lastEventAt);
                 const timeoutMs = Math.max(0, Math.min(limitMs, ceilingRemainingMs));
                 idleTimer = setTimeout(() => {
                   // Mark idle timeout for catch block (must happen before abort)
                   isIdleTimeout = true;
+                  const now = Date.now();
                   // Silence since the last real event, which pings may have stretched past limitMs.
-                  idleTimeoutMsForError = Math.round((Date.now() - lastEventAt) / 1000) * 1000;
+                  idleTimeoutMsForError = Math.round((now - lastEventAt) / 1000) * 1000;
                   idleTimeoutKind = eventCount === 0 ? 'first_event' : 'stream_idle';
+                  const lastByteAgoMs = now - lastByteAt;
+                  // Bytes inside the idle limit mean pings were holding the timer off: the ceiling
+                  // fired on a model that was still generating, not on a dead connection.
+                  idleTimeoutKeepalive = eventCount > 0 && lastByteAgoMs < limitMs;
 
                   // WARN, not error: an idle/streaming timeout is expected and
                   // recoverable (user retries); error severity would page LiveOps
@@ -1667,6 +1815,8 @@ export class AnthropicBackend implements ICompletionBackend {
                     lastEventType,
                     limitMs,
                     silentMs: idleTimeoutMsForError,
+                    keepalive: idleTimeoutKeepalive,
+                    lastByteAgoMs,
                     toolCount: options.tools?.length || 0,
                     mcpToolCount: options.tools?.filter(t => (t as { _isMcpTool?: boolean })._isMcpTool).length || 0,
                   });
@@ -1680,7 +1830,10 @@ export class AnthropicBackend implements ICompletionBackend {
               // Start initial timeout. Raw body bytes also count as activity, so the keepalive pings
               // a silently thinking model sends hold the timer off, up to the silence ceiling.
               resetIdleTimer();
-              onStreamBytes = resetIdleTimer;
+              onStreamBytes = () => {
+                lastByteAt = Date.now();
+                resetIdleTimer();
+              };
 
               try {
                 for await (const event of stream as AsyncIterable<RawMessageStreamEvent>) {
@@ -1689,6 +1842,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   eventCount++;
                   lastEventType = event.type;
                   lastEventAt = Date.now();
+                  lastByteAt = lastEventAt;
                   resetIdleTimer();
                   const streamedText: string[] = [];
                   if (event.type === 'content_block_start') {
@@ -1715,8 +1869,9 @@ export class AnthropicBackend implements ICompletionBackend {
                         responseFormat?.type === 'json_schema' &&
                         toolBlock.name === responseFormat.json_schema.name
                       ) {
-                        // Mark this index so input_json_delta below streams as text.
-                        responseFormatToolIndices.add(event.index);
+                        // Mark this index so input_json_delta below streams as text. Only the
+                        // first block is the answer: a second would append another JSON object.
+                        if (responseFormatToolIndices.size === 0) responseFormatToolIndices.add(event.index);
                       } else {
                         func[event.index] ||= {};
                         func[event.index].name = toolBlock.name;
@@ -1880,6 +2035,7 @@ export class AnthropicBackend implements ICompletionBackend {
                         input_tokens: startUsage.input_tokens,
                         cache_read_input_tokens: startUsage.cache_read_input_tokens ?? undefined,
                         cache_creation_input_tokens: startUsage.cache_creation_input_tokens ?? undefined,
+                        cache_creation: startUsage.cache_creation ?? undefined,
                       };
                       streamingTurnUsage = usageInfo as typeof streamingTurnUsage;
                     }
@@ -1959,7 +2115,7 @@ export class AnthropicBackend implements ICompletionBackend {
                     funcEntries: func.filter(f => f?.name).length,
                   }
                 );
-                reject(createAnthropicStreamTimeoutError(idleTimeoutKind, idleTimeoutMsForError));
+                reject(streamTimeoutError());
                 return;
               }
 
@@ -2204,7 +2360,7 @@ export class AnthropicBackend implements ICompletionBackend {
                     toolCount: options.tools?.length || 0,
                     idleTimeoutMs: idleTimeoutMsForError,
                   });
-                  reject(createAnthropicStreamTimeoutError(idleTimeoutKind, idleTimeoutMsForError));
+                  reject(streamTimeoutError());
                 } else {
                   // User-initiated abort - resolve gracefully
                   this.logger.debug('Anthropic request was aborted (likely client disconnect)');
@@ -2439,7 +2595,7 @@ export class AnthropicBackend implements ICompletionBackend {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
 
                 const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
-                this.logger.error('[Tool Execution] Tool failed', {
+                this.logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed', {
                   model,
                   toolName: outcome.name,
                   error: errorMessage,
@@ -2607,6 +2763,7 @@ export class AnthropicBackend implements ICompletionBackend {
               onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
             }
           ).then(r => r.result);
+          requestAccepted = true;
         } finally {
           release?.();
         }
@@ -2615,6 +2772,7 @@ export class AnthropicBackend implements ICompletionBackend {
 
         if ('content' in response && Array.isArray(response.content)) {
           this.lastAssistantContent = response.content as ContentBlock[];
+          let responseFormatToolEmitted = false;
 
           for (let i = 0; i < response.content.length; i++) {
             const content = response.content[i] as ContentBlock;
@@ -2639,7 +2797,9 @@ export class AnthropicBackend implements ICompletionBackend {
                   responseFormat?.type === 'json_schema' &&
                   content.name === responseFormat.json_schema.name
                 ) {
-                  streamedText.push(JSON.stringify(content.input ?? {}));
+                  // Only the first block is the answer, as on the streaming path.
+                  if (!responseFormatToolEmitted) streamedText.push(JSON.stringify(content.input ?? {}));
+                  responseFormatToolEmitted = true;
                 } else {
                   // Handle tool use in non-streaming response
                   func[i] ||= {};
@@ -2918,7 +3078,7 @@ export class AnthropicBackend implements ICompletionBackend {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
 
                 const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
-                this.logger.error('[Tool Execution] Tool failed (non-streaming)', {
+                this.logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed (non-streaming)', {
                   model,
                   toolName: outcome.name,
                   error: errorMessage,
@@ -3052,6 +3212,31 @@ export class AnthropicBackend implements ICompletionBackend {
         }
       }
     } catch (error) {
+      // Strict mode can reject a schema the unconstrained path accepts. Retried once with strict off; the
+      // retry's own error surfaces as-is.
+      const sentStrictSchema =
+        !!apiParams.output_config?.format || !!apiParams.tools?.some(tool => 'strict' in tool && tool.strict === true);
+      if (
+        toolCallCount === 0 &&
+        !requestAccepted &&
+        !options._internal?.strictSchemaRetried &&
+        sentStrictSchema &&
+        isStrictSchemaRejection(error)
+      ) {
+        this.logger.warn('[AnthropicBackend] Schema rejected under strict mode; retrying once with strict off', {
+          model,
+          anthropicMessage: error instanceof Error ? error.message : undefined,
+        });
+        const relaxed = withStrictOff(options);
+        await this.complete(
+          model,
+          messages,
+          { ...relaxed, _internal: { ...relaxed._internal, strictSchemaRetried: true } },
+          cb,
+          toolsUsed
+        );
+        return;
+      }
       // Emit CloudWatch metric for rate limit errors (after SDK exhausts retries)
       if (error instanceof RateLimitError) {
         // Determine feature area and request type for ops visibility
@@ -3110,9 +3295,9 @@ export class AnthropicBackend implements ICompletionBackend {
   formatTools(tools: ICompletionOptionTools[] = [], providerTools: ToolSearchServerTool[] = []) {
     const customTools = sortToolsForStableCacheKey(tools).map(tool => {
       const { parameters, ...rest } = tool.toolSchema;
-      // `strict` is an OpenAI-only tool field. Anthropic rejects it with
-      // "tools.N.custom.strict: Extra inputs are not permitted", so strip it from the
-      // spread copy (e.g. a tool schema that sets strict: true for OpenAI structured tools).
+      // A caller's `strict` (usually an OpenAI flag) is dropped: Anthropic 400s strict on any object not
+      // closed with additionalProperties: false. markToolStrict re-adds it where the schema qualifies and
+      // the caller did not set it false.
       delete rest.strict;
       return {
         ...rest,

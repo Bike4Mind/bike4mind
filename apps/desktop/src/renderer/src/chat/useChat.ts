@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { PromptCacheTtl } from '@bike4mind/common';
 import type {
   BranchElsewhere,
   ChatApprovalAnswer,
@@ -10,21 +11,27 @@ import type {
   ChatSession,
   ChatSessionStatus,
   ChatSessionSummary,
+  ContextNoticeKind,
   CreateCodeSessionRequest,
   ModelPhase,
   ReasoningEffortSetting,
+  SessionSetupStep,
   UpdateProjectRequest,
 } from '@shared/chat';
+import { summarizeSession } from '@shared/agentOutcome';
 import { normalizeSessionTitle } from '@shared/chat';
 import { isUntouchedImport } from './grouping';
+import type { GenerationSettings } from '@shared/generation';
 import type { CreatedSession } from '@shared/ipc';
+import type { ModelRuntimeStatus } from '@shared/models';
 import type { SidebarSectionsState } from '@shared/sidebarSections';
 import { appendArrived, OPTIMISTIC_ID_PREFIX } from './arrivedMessage';
 import { addDirPath } from './commands';
+import { forgetSessionPrefs } from './orchestrator/orchestratorPrefs';
 import { describeReturn } from './queuedMessages';
 import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } from '@shared/liveReply';
 import { applyReplyDone } from './replyDone';
-import { applyStatusEvents } from './sessionStatus';
+import { applyPreparingEvents, applyStatusEvents } from './sessionStatus';
 import { EVENT_STAMP_RESOLUTION_MS, REASONING_TAIL_CHARS, totalTokens, type TurnProgress } from './statusLine';
 import { applyWorkspaceEvent, preparingOnSend, type WorkspaceProgress } from './workspaceProgress';
 import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
@@ -43,13 +50,17 @@ export interface SessionsController {
   creatingCode: boolean;
   codeError: string | null;
   clearCodeError: () => void;
-  remove: (sessionId: string) => Promise<void>;
+  remove: (sessionId: string, removeWorktree?: boolean) => Promise<void>;
   togglePin: (session: ChatSessionSummary) => Promise<void>;
   toggleArchived: (session: ChatSessionSummary) => Promise<void>;
   /** Rename any listed session, shown at once and rolled back (with `renameError`) if main refuses. */
   rename: (session: ChatSessionSummary, title: string) => Promise<void>;
   renameError: string | null;
   clearRenameError: () => void;
+  /** Save a conversation to a file the user picks; a failure sets `exportError`. */
+  exportSession: (session: ChatSessionSummary) => Promise<void>;
+  exportError: string | null;
+  clearExportError: () => void;
   /** Apply a summary main just returned, so the sidebar reorders without a full reload. */
   apply: (summary: ChatSessionSummary) => void;
 }
@@ -63,12 +74,34 @@ export interface SessionPlacement {
   failed: () => void;
 }
 
+/** Newest context notice of each kind per conversation that was not open when it arrived; shown when it opens. */
+const backgroundNotices = new Map<string, ContextNotice[]>();
+
+interface ContextNotice {
+  message: string;
+  kind?: ContextNoticeKind;
+}
+
+/** A notice replaces the earlier one of its kind; one without a kind replaces only an identical message. */
+function addNotice(current: ContextNotice[] | undefined, next: ContextNotice): ContextNotice[] {
+  const list = current ?? [];
+  const at = list.findIndex(item =>
+    next.kind ? item.kind === next.kind : !item.kind && item.message === next.message
+  );
+  if (at === -1) return [...list, next];
+  return list.map((item, index) => (index === at ? next : item));
+}
+
+const noticeText = (notices: ContextNotice[]): string | null =>
+  notices.length > 0 ? notices.map(item => item.message).join('\n') : null;
+
 export function useSessions(): SessionsController {
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [creatingCode, setCreatingCode] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const latestReload = useRef(0);
   const localEdits = useRef(0);
@@ -152,8 +185,10 @@ export function useSessions(): SessionsController {
     [list]
   );
 
-  const remove = useCallback(async (sessionId: string) => {
-    await window.b4m.chat.deleteSession(sessionId);
+  const remove = useCallback(async (sessionId: string, removeWorktree = false) => {
+    await window.b4m.chat.deleteSession(sessionId, removeWorktree);
+    backgroundNotices.delete(sessionId);
+    forgetSessionPrefs(sessionId);
     editSessions(current => current.filter(session => session.id !== sessionId));
   }, []);
 
@@ -206,6 +241,16 @@ export function useSessions(): SessionsController {
 
   const clearCodeError = useCallback(() => setCodeError(null), []);
   const clearRenameError = useCallback(() => setRenameError(null), []);
+  const clearExportError = useCallback(() => setExportError(null), []);
+
+  const exportSession = useCallback(async (session: ChatSessionSummary) => {
+    setExportError(null);
+    try {
+      await window.b4m.chat.exportSession(session.id);
+    } catch {
+      setExportError(`Could not download "${session.title}".`);
+    }
+  }, []);
 
   return {
     sessions,
@@ -222,6 +267,9 @@ export function useSessions(): SessionsController {
     rename,
     renameError,
     clearRenameError,
+    exportSession,
+    exportError,
+    clearExportError,
     apply,
   };
 }
@@ -236,7 +284,24 @@ export function useSessions(): SessionsController {
  * window happened to witness would draw it as idle.
  */
 export function useSessionStatuses(): ReadonlyMap<string, ChatSessionStatus> {
-  const [statuses, setStatuses] = useState<ReadonlyMap<string, ChatSessionStatus>>(() => new Map());
+  return useSessionStatusFeed().statuses;
+}
+
+export interface SessionStatusFeed {
+  statuses: ReadonlyMap<string, ChatSessionStatus>;
+  /** Busy sessions still being prepared, by setup step; a subset of the 'processing' ones in `statuses`. */
+  preparing: ReadonlyMap<string, SessionSetupStep>;
+  /** True once the first snapshot has been folded in, so `statuses` is a baseline rather than a gap. */
+  loaded: boolean;
+}
+
+/** `useSessionStatuses` plus whether the initial snapshot has arrived; see that hook for the model. */
+export function useSessionStatusFeed(): SessionStatusFeed {
+  const [feed, setFeed] = useState<SessionStatusFeed>(() => ({
+    statuses: new Map(),
+    preparing: new Map(),
+    loaded: false,
+  }));
 
   useEffect(() => {
     let live = true;
@@ -247,17 +312,23 @@ export function useSessionStatuses(): ReadonlyMap<string, ChatSessionStatus> {
 
     const unsubscribe = window.b4m.chat.onSessionStatus(event => {
       pushed.add(event.sessionId);
-      setStatuses(current => applyStatusEvents(current, [event]));
+      setFeed(current => {
+        const statuses = applyStatusEvents(current.statuses, [event]);
+        const preparing = applyPreparingEvents(current.preparing, [event]);
+        // Same object for a no-op push, so React skips re-rendering everything that reads the feed.
+        if (statuses === current.statuses && preparing === current.preparing) return current;
+        return { ...current, statuses, preparing };
+      });
     });
 
     void window.b4m.chat.getSessionStatuses().then(snapshot => {
       if (!live) return;
-      setStatuses(current =>
-        applyStatusEvents(
-          current,
-          snapshot.filter(entry => !pushed.has(entry.sessionId))
-        )
-      );
+      const unspoken = snapshot.filter(entry => !pushed.has(entry.sessionId));
+      setFeed(current => ({
+        loaded: true,
+        statuses: applyStatusEvents(current.statuses, unspoken),
+        preparing: applyPreparingEvents(current.preparing, unspoken),
+      }));
     });
 
     return () => {
@@ -266,7 +337,7 @@ export function useSessionStatuses(): ReadonlyMap<string, ChatSessionStatus> {
     };
   }, []);
 
-  return statuses;
+  return feed;
 }
 
 export interface ModelCatalogController {
@@ -276,7 +347,15 @@ export interface ModelCatalogController {
   error: string | null;
   /** Refetch, bypassing main's cache. */
   reload: () => Promise<void>;
+  /** Local mode only: whether Ollama answers, read with each list. Null until the first answer. */
+  runtime?: ModelRuntimeStatus | null;
 }
+
+/** How often local mode checks that Ollama still answers (one cheap request) while the window is visible. */
+export const LOCAL_STATUS_POLL_MS = 5_000;
+
+/** The least time between catalog reloads that window focus may start. */
+export const FOCUS_RELOAD_MIN_MS = 30_000;
 
 /**
  * The models this server offers, refetched when the environment changes.
@@ -284,19 +363,86 @@ export interface ModelCatalogController {
  * Auth state is the trigger rather than a timer: switching hosted -> self-host changes which
  * providers have keys, so the previous server's list is not just stale but wrong, and leaving
  * it on screen would offer models this deployment will reject.
+ *
+ * `local` (signed out, device models only) also polls Ollama's status, because it starting,
+ * stopping or gaining a model raises no event. The list is reread only when reachability changes
+ * or while it is empty.
+ *
+ * Window focus also reloads it (at most once per `FOCUS_RELOAD_MIN_MS`), since a model pulled
+ * outside Desktop raises no event.
  */
-export function useModelCatalog(): ModelCatalogController {
+export function useModelCatalog(local = false): ModelCatalogController {
   const [models, setModels] = useState<ChatModelOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [runtime, setRuntime] = useState<ModelRuntimeStatus | null>(null);
+  const latestLoad = useRef(0);
+  const forcedLoad = useRef<Promise<void> | null>(null);
+  const lastLoadAt = useRef(0);
+  const seen = useRef({ empty: true, reachable: null as boolean | null });
+  seen.current = { empty: models.length === 0, reachable: runtime?.reachable ?? null };
 
-  const load = useCallback(async (force: boolean) => {
-    setLoading(true);
-    const catalog = await window.b4m.chat.listModels(force);
-    setModels(catalog.models);
-    setError(catalog.error ?? null);
-    setLoading(false);
-  }, []);
+  const run = useCallback(
+    async (force: boolean | 'local', quiet: boolean) => {
+      const mine = ++latestLoad.current;
+      lastLoadAt.current = Date.now();
+      if (!quiet) setLoading(true);
+      try {
+        const [catalog, status] = await Promise.all([
+          window.b4m.chat.listModels(force),
+          local ? window.b4m.models.getStatus().catch(() => null) : null,
+        ]);
+        // A slower, older response must not overwrite a newer one.
+        if (mine !== latestLoad.current) return;
+        setModels(catalog.models);
+        setError(catalog.error ?? null);
+        setRuntime(status);
+        setLoading(false);
+      } catch (err) {
+        if (mine !== latestLoad.current) return;
+        setError(err instanceof Error ? err.message : 'Could not load the model list.');
+        setLoading(false);
+      }
+    },
+    [local]
+  );
+
+  const load = useCallback(
+    (force: boolean | 'local', quiet = false): Promise<void> => {
+      const promise = run(force, quiet);
+      if (!force) return promise;
+      forcedLoad.current = promise;
+      void promise.then(() => {
+        if (forcedLoad.current === promise) forcedLoad.current = null;
+      });
+      return promise;
+    },
+    [run]
+  );
+
+  // Models pulled outside Desktop (the CLI, Ollama itself) raise no event; coming back to the window is the cue.
+  useEffect(() => {
+    const check = async () => {
+      if (document.hidden) return;
+      const status = await window.b4m.models.getStatus().catch(() => null);
+      if (!status) return;
+      const { empty, reachable } = seen.current;
+      if (status.reachable !== reachable || (status.reachable && empty)) await load('local', true);
+    };
+    const onReturn = () => {
+      if (document.hidden) return;
+      if (Date.now() - lastLoadAt.current >= FOCUS_RELOAD_MIN_MS) void load('local', true);
+      else if (local) void check();
+    };
+    const timer = local ? setInterval(() => void check(), LOCAL_STATUS_POLL_MS) : undefined;
+    window.addEventListener('focus', onReturn);
+    document.addEventListener('visibilitychange', onReturn);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', onReturn);
+      document.removeEventListener('visibilitychange', onReturn);
+    };
+  }, [local, load]);
 
   useEffect(() => {
     void load(false);
@@ -312,9 +458,15 @@ export function useModelCatalog(): ModelCatalogController {
     });
   }, [load]);
 
-  const reload = useCallback(() => load(true), [load]);
+  // A model pulled or removed on the Models screen changes the local half of the list.
+  useEffect(() => window.b4m.models.onInstalledChanged(() => void load(true)), [load]);
+  // Main already dropped its device-side cache or rebuilt the hosted one with late effort levels, so an unforced
+  // read picks up the change and keeps the hosted half.
+  useEffect(() => window.b4m.chat.onModelsChanged(() => void load(false, true)), [load]);
 
-  return { models, loading, error, reload };
+  const reload = useCallback(() => forcedLoad.current ?? load(true), [load]);
+
+  return { models, loading, error, reload, runtime };
 }
 
 export interface ProjectBindingError {
@@ -361,7 +513,10 @@ export interface ConversationController {
   /** One-shot message about something main changed while accepting a turn. Not a failure. */
   notice: string | null;
   dismissNotice: () => void;
-  send: (text: string, attachments?: readonly ChatAttachment[]) => Promise<void>;
+  /** False when main refused the turn; the text is already back in the composer. */
+  send: (text: string, attachments?: readonly ChatAttachment[]) => Promise<boolean>;
+  /** Device-local: move a conversation whose model is not installed to the one a send would use. */
+  settleLocalModel: () => Promise<void>;
   stop: () => void;
   /** Resume the last reply if the agent loop's budget cut it short. */
   continueReply: () => Promise<void>;
@@ -397,15 +552,35 @@ export interface ConversationController {
   setModel: (model: string) => Promise<void>;
   /** How hard that model should think. Sent only on a model that accepts an effort. */
   setReasoningEffort: (effort: ReasoningEffortSetting) => Promise<void>;
+  /** How long the server keeps this conversation's prompt cache. Sent only on a model that takes the hour. */
+  setPromptCacheTtl: (ttl: PromptCacheTtl) => Promise<void>;
+  /**
+   * Replace this conversation's sampling and output overrides; `{}` returns every one to the model
+   * default. False, with a notice, when they were not saved.
+   */
+  setGeneration: (generation: GenerationSettings) => Promise<boolean>;
   /**
    * Set how much this conversation may do without asking. Driven by the composer pill, from a
    * click, and from nothing else: this is the only path to the mode in the renderer.
    */
   setApprovalMode: (mode: ChatApprovalMode) => Promise<void>;
+  /** Turn Orchestrate on or off for this conversation; see ChatSessionMeta.orchestrate. */
+  setOrchestrate: (orchestrate: boolean) => Promise<void>;
   /** Where this Code session is grounded, for the chip row. Inert on a Chat session. */
   project: ProjectBindingController;
+  /**
+   * Share `path`, or what main's picker returns, into the chat `target`, open or not. Once `target` is not open, a
+   * refusal throws and a warning is returned rather than shown; an IPC failure always throws.
+   */
+  addContextDirectoryTo: (target: string, path?: string) => Promise<string | undefined>;
   /** Answer a tool call waiting at the approval gate. Nothing has run until this is called. */
   respondToApproval: (approvalId: string, answer: ChatApprovalAnswer) => void;
+}
+
+/** A session read in flight, and whether main wrote a summary for that session while it was. */
+interface SessionRead {
+  sessionId: string;
+  stale: boolean;
 }
 
 /**
@@ -417,7 +592,8 @@ export interface ConversationController {
  */
 export function useConversation(
   sessionId: string | null,
-  onSummaryChanged: (summary: ChatSessionSummary) => void
+  onSummaryChanged: (summary: ChatSessionSummary) => void,
+  onShared?: (sessionId: string) => void
 ): ConversationController {
   const [session, setSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -426,7 +602,9 @@ export function useConversation(
   const [phase, setPhase] = useState<ModelPhase | null>(null);
   const [preparing, setPreparing] = useState<WorkspaceProgress | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notices, setNotices] = useState<ContextNotice[]>([]);
+  const notice = useMemo(() => noticeText(notices), [notices]);
+  const setNotice = useCallback((text: string | null) => setNotices(text ? [{ message: text }] : []), []);
   const [projectBusy, setProjectBusy] = useState(false);
   const [projectError, setProjectError] = useState<ProjectBindingError | null>(null);
   const [queued, setQueued] = useState<ChatQueuedMessage[]>([]);
@@ -447,6 +625,13 @@ export function useConversation(
   // change: a rebuild between 'start' and the first 'delta' would drop tokens.
   const activeSessionId = useRef<string | null>(sessionId);
   activeSessionId.current = sessionId;
+  const onSharedRef = useRef(onShared);
+  onSharedRef.current = onShared;
+
+  // The open chat's read in flight, done again if main writes that chat a summary meanwhile, as it may predate it.
+  const openRead = useRef<SessionRead | null>(null);
+  // The chat the reset below last ran for. A share result that lands before then would be wiped by it.
+  const resetFor = useRef<string | null>(null);
 
   /** Replies this window has seen end; see the session load, which must not reopen one. */
   const settledReplies = useRef(new Set<string>());
@@ -457,16 +642,20 @@ export function useConversation(
   const transcriptVersion = useRef(0);
   const workspaceVersion = useRef(0);
   const historyVersion = useRef(0);
+  // Each params save replaces the whole set, so only a chat's latest answer may land.
+  const generationVersions = useRef(new Map<string, number>());
 
   useEffect(() => {
     setSendError(null);
-    setNotice(null);
+    setNotices(backgroundNotices.get(sessionId ?? '') ?? []);
+    if (sessionId) backgroundNotices.delete(sessionId);
     setProjectError(null);
     setReturned(null);
     setQueued([]);
     setCommandProgress(null);
     setPreparing(null);
     setPhase(null);
+    resetFor.current = sessionId;
     if (!sessionId) {
       setSession(null);
       setMessages([]);
@@ -477,17 +666,21 @@ export function useConversation(
 
     let current = true;
     const load = (): void => {
+      const read: SessionRead = { sessionId, stale: false };
+      openRead.current = read;
       const preparationBeforeRead = workspaceVersion.current;
       const historyBeforeRead = historyVersion.current;
       void window.b4m.chat.getSession(sessionId).then(loaded => {
         if (!current) return;
         if (preparationBeforeRead !== workspaceVersion.current) return load();
         if (historyBeforeRead !== historyVersion.current) return load();
+        if (read.stale) return load();
         // A reply already running arrives as main's live copy, and the events from now on
         // extend it. One that settled while this read was in flight is stale: read again
         // rather than put back a turn the 'done' already closed.
         const live = loaded?.replyInFlight;
         if (live && settledReplies.current.has(live.messageId)) return load();
+        openRead.current = null;
         setSession(loaded);
         setMessages(loaded?.messages ?? []);
         // A started session opened while its worktree is still being cut: no event is coming
@@ -638,6 +831,7 @@ export function useConversation(
           const granted = event.sessionId;
           void window.b4m.chat.getSession(granted).then(loaded => {
             if (!loaded || activeSessionId.current !== granted) return;
+            onSharedRef.current?.(granted);
             setSession(current =>
               current?.id === granted
                 ? { ...current, project: loaded.project, grantedDirectories: loaded.grantedDirectories }
@@ -662,6 +856,13 @@ export function useConversation(
         // Counted before the session filter below, and deliberately: a reply running in a
         // background conversation spends from the same balance as this one.
         setSettledTurns(count => count + 1);
+      }
+      if (event.type === 'context-notice' && event.sessionId !== activeSessionId.current) {
+        backgroundNotices.set(
+          event.sessionId,
+          addNotice(backgroundNotices.get(event.sessionId), { message: event.message, kind: event.kind })
+        );
+        return;
       }
       if (event.sessionId !== activeSessionId.current) return;
 
@@ -736,6 +937,18 @@ export function useConversation(
         return;
       }
 
+      if (event.type === 'context-notice') {
+        setNotices(current => addNotice(current, { message: event.message, kind: event.kind }));
+        return;
+      }
+
+      if (event.type === 'context-trimmed') {
+        setNotice(
+          `This conversation no longer fits the model's context, so ${event.dropped === 1 ? 'its oldest message was' : `its ${event.dropped} oldest messages were`} left out of this reply. Your next message compacts it first, or run /compact now.`
+        );
+        return;
+      }
+
       // Only 'done' and 'error' end a reply. Stated rather than left to the fall-through,
       // because the background-process events arrive with no reply in flight at all, and
       // treating an unrecognised event as terminal would blank the streaming indicator.
@@ -753,7 +966,12 @@ export function useConversation(
         return base.map(message => {
           if (message.id !== event.messageId) return message;
           if (event.type === 'done') return applyReplyDone(message, event);
-          return { ...message, error: event.message, ...(event.stopReason ? { stopReason: event.stopReason } : {}) };
+          return {
+            ...message,
+            error: event.message,
+            contextSnapshot: event.contextSnapshot,
+            ...(event.stopReason ? { stopReason: event.stopReason } : {}),
+          };
         });
       });
     });
@@ -767,11 +985,11 @@ export function useConversation(
 
   const sessionProject = session?.project;
   const send = useCallback(
-    async (text: string, attachments: readonly ChatAttachment[] = []) => {
-      if (!sessionId) return;
+    async (text: string, attachments: readonly ChatAttachment[] = []): Promise<boolean> => {
+      if (!sessionId) return true;
       const prompt = text.trim();
       // An attachment on its own is a turn; only a turn with neither is not.
-      if (!prompt && attachments.length === 0) return;
+      if (!prompt && attachments.length === 0) return true;
 
       transcriptVersion.current++;
       setSendError(null);
@@ -820,12 +1038,18 @@ export function useConversation(
       if (!result.ok) {
         discardOptimistic();
         setSendError(result.error);
-        return;
+        // The box was cleared on send; a refused turn must not cost the user what they typed.
+        if (prompt)
+          setReturned({
+            id: ++returnBatch.current,
+            messages: [{ id: 'refused', sessionId, text: prompt, queuedAt: new Date().toISOString() }],
+          });
+        return false;
       }
       // It queued after all: the pending row above the composer is where it lives now.
       if (result.queued) {
         discardOptimistic();
-        return;
+        return true;
       }
       if (result.notice) setNotice(result.notice);
       // It went out although this window thought a reply was running - the turn that was
@@ -846,9 +1070,9 @@ export function useConversation(
       const summary = await window.b4m.chat.getSession(sessionId);
       if (summary) {
         setSession(summary);
-        const { messages: _messages, spawnSuggestions: _suggestions, ...rest } = summary;
-        onSummaryChanged({ ...rest, messageCount: summary.messages.length });
+        onSummaryChanged(summarizeSession(summary));
       }
+      return true;
     },
     [sessionId, streaming, preparing, sessionProject, onSummaryChanged]
   );
@@ -866,40 +1090,45 @@ export function useConversation(
     if (!result.ok) setSendError(result.error);
   }, [sessionId]);
 
-  // A summary main just wrote, folded into both the open conversation and the sidebar row.
+  // A summary main just wrote, folded into both the open conversation and the sidebar row. The
+  // open conversation only when it is that session: a share can return after the user moved on.
   const applySummary = useCallback(
     (updated: ChatSessionSummary) => {
+      const read = openRead.current;
+      if (read && read.sessionId === updated.id) read.stale = true;
       setSession(current =>
-        current ? { ...current, project: updated.project, grantedDirectories: updated.grantedDirectories } : current
+        current?.id === updated.id
+          ? { ...current, project: updated.project, grantedDirectories: updated.grantedDirectories }
+          : current
       );
       onSummaryChanged(updated);
     },
     [onSummaryChanged]
   );
 
-  /**
-   * The chip's picker when `path` is absent, `/add-dir <path>` when present. Both go through the
-   * one main-side share, so neither can grant what the other would refuse. A refusal lands in
-   * `sendError`; `confirm` adds a line for an addition the user typed, since a typed command has
-   * no button whose result they are already looking at.
-   */
+  // One main-side share for the chip's picker (no `path`), /add-dir and Add folder; `confirm` echoes a typed addition.
+  // Results show only while `target` is open; with `keep`, a refusal elsewhere throws and a warning is returned.
   const shareDirectory = useCallback(
-    async (path: string | undefined, confirm: boolean) => {
-      if (!sessionId) return;
-      const result = await window.b4m.chat.addContextDirectory(sessionId, path);
+    async (path: string | undefined, confirm: boolean, target = sessionId, keep = false) => {
+      if (!target) return;
+      const result = await window.b4m.chat.addContextDirectory(target, path);
       if (result.status === 'cancelled') return;
+      const stillOpen = activeSessionId.current === target && resetFor.current === target;
       if (result.status === 'refused') {
-        setSendError(result.error);
+        if (stillOpen) setSendError(result.error);
+        else if (keep) throw new Error(result.error);
         return;
       }
       if (result.status === 'already') {
-        setNotice(`${result.path} is already shared with this conversation.`);
+        if (stillOpen) setNotice(`${result.path} is already shared with this conversation.`);
         return;
       }
       applySummary(result.session);
-      if (confirm || result.warning) {
-        setNotice([`Shared ${result.path} with this conversation.`, result.warning].filter(Boolean).join(' '));
-      }
+      onSharedRef.current?.(target);
+      if (!confirm && !result.warning) return;
+      const said = [`Shared ${result.path} with this conversation.`, result.warning].filter(Boolean).join(' ');
+      if (stillOpen) setNotice(said);
+      else if (keep) return said;
     },
     [sessionId, applySummary]
   );
@@ -972,28 +1201,68 @@ export function useConversation(
 
   const clearReturned = useCallback(() => setReturned(null), []);
 
-  const rename = useCallback(
-    async (title: string) => {
+  // A save resolves after the user may have moved to another chat: the list always takes the
+  // result, the open chat only when it is still the one that was saved.
+  const saveSetting = useCallback(
+    async (
+      what: string,
+      save: (id: string) => Promise<ChatSessionSummary | null>,
+      apply: (updated: ChatSessionSummary) => Partial<ChatSession>,
+      clearsNotice = false
+    ) => {
       if (!sessionId) return;
-      const updated = await window.b4m.chat.renameSession(sessionId, title);
-      if (!updated) return;
-      setSession(current => (current ? { ...current, title: updated.title } : current));
-      onSummaryChanged(updated);
+      try {
+        const updated = await save(sessionId);
+        if (!updated) return;
+        if (clearsNotice && activeSessionId.current === sessionId) setNotice(null);
+        setSession(current => (current?.id === sessionId ? { ...current, ...apply(updated) } : current));
+        onSummaryChanged(updated);
+      } catch (error) {
+        if (activeSessionId.current === sessionId) {
+          setNotice(`Could not save ${what}. ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
     },
     [sessionId, onSummaryChanged]
   );
 
-  const setModel = useCallback(
-    async (model: string) => {
-      if (!sessionId) return;
-      const updated = await window.b4m.chat.setSessionModel(sessionId, model);
-      if (!updated) return;
-      setNotice(null);
-      setSession(current => (current ? { ...current, model: updated.model } : current));
-      onSummaryChanged(updated);
-    },
-    [sessionId, onSummaryChanged]
+  const rename = useCallback(
+    (title: string) =>
+      saveSetting(
+        'the title',
+        id => window.b4m.chat.renameSession(id, title),
+        updated => ({ title: updated.title })
+      ),
+    [sessionId, saveSetting]
   );
+
+  const setModel = useCallback(
+    (model: string) =>
+      saveSetting(
+        'the model',
+        id => window.b4m.chat.setSessionModel(id, model),
+        updated => ({ model: updated.model }),
+        true
+      ),
+    [sessionId, saveSetting]
+  );
+
+  const settleLocalModel = useCallback(async () => {
+    if (!sessionId) return;
+    let settled: Awaited<ReturnType<typeof window.b4m.chat.settleLocalModel>>;
+    try {
+      settled = await window.b4m.chat.settleLocalModel(sessionId);
+    } catch (error) {
+      if (activeSessionId.current === sessionId) {
+        setNotice(`Could not settle the local model. ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return;
+    }
+    if (!settled || activeSessionId.current !== sessionId) return;
+    if (settled.notice) setNotice(settled.notice);
+    setSession(current => (current?.id === sessionId ? { ...current, model: settled.session.model } : current));
+    onSummaryChanged(settled.session);
+  }, [sessionId, onSummaryChanged]);
 
   const setHistory = useCallback(
     async (enabled: boolean) => {
@@ -1007,29 +1276,90 @@ export function useConversation(
         );
         onSummaryChanged(updated);
       } catch (error) {
-        setNotice(`Could not update local history. ${error instanceof Error ? error.message : String(error)}`);
+        if (activeSessionId.current === sessionId) {
+          setNotice(`Could not update local history. ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     },
     [sessionId, session?.id, onSummaryChanged]
   );
 
   const setReasoningEffort = useCallback(
-    async (effort: ReasoningEffortSetting) => {
-      if (!sessionId) return;
-      const updated = await window.b4m.chat.setSessionReasoningEffort(sessionId, effort);
-      if (!updated) return;
-      setSession(current => (current ? { ...current, reasoningEffort: updated.reasoningEffort } : current));
-      onSummaryChanged(updated);
+    (effort: ReasoningEffortSetting) =>
+      saveSetting(
+        'the reasoning effort',
+        id => window.b4m.chat.setSessionReasoningEffort(id, effort),
+        updated => ({ reasoningEffort: updated.reasoningEffort })
+      ),
+    [sessionId, saveSetting]
+  );
+
+  const setPromptCacheTtl = useCallback(
+    (ttl: PromptCacheTtl) =>
+      saveSetting(
+        'the prompt cache setting',
+        id => window.b4m.chat.setSessionPromptCacheTtl(id, ttl),
+        updated => ({ promptCacheTtl: updated.promptCacheTtl })
+      ),
+    [sessionId, saveSetting]
+  );
+
+  const setGeneration = useCallback(
+    async (generation: GenerationSettings): Promise<boolean> => {
+      if (!sessionId || session?.id !== sessionId) return false;
+      const versions = generationVersions.current;
+      const version = (versions.get(sessionId) ?? 0) + 1;
+      versions.set(sessionId, version);
+      const latest = () => versions.get(sessionId) === version;
+      try {
+        const updated = await window.b4m.chat.setSessionGeneration(sessionId, generation);
+        if (!updated) throw new Error('The conversation could not be found.');
+        if (!latest()) return true;
+        setSession(current => (current?.id === sessionId ? { ...current, generation: updated.generation } : current));
+        onSummaryChanged(updated);
+        return true;
+      } catch (error) {
+        if (!latest()) return false;
+        if (activeSessionId.current === sessionId) {
+          setNotice(`Could not save this chat's params. ${error instanceof Error ? error.message : String(error)}`);
+        }
+        // An older save skipped as stale may still have landed, so show what main holds now.
+        const stored = await window.b4m.chat.getSession(sessionId).catch(() => null);
+        if (stored && latest()) {
+          setSession(current => (current?.id === sessionId ? { ...current, generation: stored.generation } : current));
+        }
+        return false;
+      }
     },
-    [sessionId, onSummaryChanged]
+    [sessionId, session?.id, onSummaryChanged]
   );
 
   const setApprovalMode = useCallback(
-    async (mode: ChatApprovalMode) => {
+    (mode: ChatApprovalMode) =>
+      saveSetting(
+        'the approval mode',
+        id => window.b4m.chat.setApprovalMode(id, mode),
+        updated => ({ approvalMode: updated.approvalMode })
+      ),
+    [sessionId, saveSetting]
+  );
+
+  const setOrchestrate = useCallback(
+    async (orchestrate: boolean) => {
       if (!sessionId) return;
-      const updated = await window.b4m.chat.setApprovalMode(sessionId, mode);
+      const updated = await window.b4m.chat.setSessionOrchestrate(sessionId, orchestrate).catch((error: unknown) => {
+        if (activeSessionId.current === sessionId) {
+          setNotice(`Could not change Orchestrate. ${error instanceof Error ? error.message : String(error)}`);
+        }
+        return null;
+      });
       if (!updated) return;
-      setSession(current => (current ? { ...current, approvalMode: updated.approvalMode } : current));
+      // The reply can land after a switch to another conversation, which must keep its own flag.
+      setSession(current => {
+        if (current?.id !== sessionId) return current;
+        const { orchestrate: _previous, ...rest } = current;
+        return updated.orchestrate ? { ...rest, orchestrate: true } : rest;
+      });
       onSummaryChanged(updated);
     },
     [sessionId, onSummaryChanged]
@@ -1130,6 +1460,19 @@ export function useConversation(
     await shareDirectory(undefined, false);
   }, [shareDirectory]);
 
+  // As addContextDirectory, for a chat named by id: it clears the open chat's messages only when that is the chat.
+  const addContextDirectoryTo = useCallback(
+    async (target: string, path?: string) => {
+      if (activeSessionId.current === target) {
+        setProjectError(null);
+        setSendError(null);
+        setNotice(null);
+      }
+      return await shareDirectory(path, false, target, true);
+    },
+    [shareDirectory]
+  );
+
   const removeContextDirectory = useCallback(
     async (directory: string) => {
       if (!sessionId) return;
@@ -1194,9 +1537,14 @@ export function useConversation(
     settledTurns,
     rename,
     setModel,
+    settleLocalModel,
     setReasoningEffort,
+    setPromptCacheTtl,
+    setGeneration,
     setApprovalMode,
+    setOrchestrate,
     project,
+    addContextDirectoryTo,
     respondToApproval,
   };
 }

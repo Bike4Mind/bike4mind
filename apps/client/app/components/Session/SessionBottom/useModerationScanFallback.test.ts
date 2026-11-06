@@ -11,6 +11,7 @@ vi.mock('@client/app/utils/filesAPICalls', () => ({ getFabFilesFromServerByIds }
 vi.mock('sonner', () => ({ toast: { info: toastInfo } }));
 
 import useSessionLayout, {
+  MODERATION_TIMEOUT_MESSAGE,
   getSendableMessageFileIds,
   hasBlockingPendingFiles,
   recordModerationStatus,
@@ -90,8 +91,8 @@ describe('useModerationScanFallback', () => {
     expect(files[0].status).toBe('error');
     expect(hasBlockingPendingFiles(files)).toBe(false);
     expect(getSendableMessageFileIds(files).ids).toEqual([]);
-    expect(toastInfo).toHaveBeenCalledTimes(1);
-    expect(toastInfo.mock.calls[0][0]).toMatch(/still checking/i);
+    expect(files[0].errorMessage).toBe(MODERATION_TIMEOUT_MESSAGE);
+    expect(toastInfo).not.toHaveBeenCalled();
   });
 
   it('times out even when the status poll itself keeps failing', async () => {

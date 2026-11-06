@@ -7,10 +7,11 @@ import {
   type WafTrafficRange,
   type WafRangeInput,
 } from '@/app/hooks/data/admin';
-import { isCustomRange } from '@/server/security/wafSharedHelpers';
+import { isCustomRange } from '@bike4mind/server-utils/security/wafSharedHelpers';
 import { WafTopRulesChart } from './WafTopRulesChart';
 import { WafTrafficGauge } from './WafTrafficGauge';
 import { WafLogsInsightsSection } from './WafLogsInsightsSection';
+import { LoadingState, UpdatingBar } from '../shared';
 
 /** Convert a Date to the value format expected by datetime-local inputs (YYYY-MM-DDTHH:mm). */
 function toDatetimeLocalValue(date: Date): string {
@@ -89,11 +90,7 @@ export const WafTrafficOverview = ({ isActive = true }: { isActive?: boolean }) 
             Traffic overview (Router WebACL)
           </Typography>
           <Typography level="title-md" sx={{ fontWeight: 700 }}>
-            {trafficQuery.data?.enabled === false
-              ? 'No WebACL attached for this stage'
-              : trafficQuery.isLoading
-                ? 'Loading traffic metrics…'
-                : 'Action totals'}
+            {trafficQuery.data?.enabled === false ? 'No WebACL attached for this stage' : 'Action totals'}
           </Typography>
         </Box>
 
@@ -151,6 +148,12 @@ export const WafTrafficOverview = ({ isActive = true }: { isActive?: boolean }) 
           </Button>
         </Stack>
       </Stack>
+
+      <Box sx={{ mt: 1.5 }}>
+        <UpdatingBar active={Boolean(trafficQuery.data) && trafficQuery.isFetching} testId="waf-traffic-updating" />
+      </Box>
+
+      {trafficQuery.isLoading && <LoadingState label="Loading firewall traffic" testId="waf-traffic-loading" />}
 
       {showCustomPicker && (
         <Sheet
@@ -245,6 +248,8 @@ export const WafTrafficOverview = ({ isActive = true }: { isActive?: boolean }) 
           blockedRequestsLoading={blockedRequestsQuery.isLoading}
           blockedRequestsError={blockedRequestsQuery.isError}
           blockedRequestsErrorDetail={blockedRequestsQuery.error}
+          onRetry={() => void logsInsightsQuery.refetch()}
+          onRetryBlockedRequests={() => void blockedRequestsQuery.refetch()}
         />
       )}
 

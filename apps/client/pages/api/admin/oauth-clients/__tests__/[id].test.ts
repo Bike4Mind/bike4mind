@@ -16,10 +16,19 @@ vi.mock('@server/middlewares/baseApi', () => ({
     configs[current] = config;
     const bucket: Record<string, (req: unknown, res: unknown) => unknown> = {};
     handlers[current] = bucket;
-    const chain: Record<string, (fn: (req: unknown, res: unknown) => unknown) => unknown> = {};
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
+    const chain: Record<string, unknown> = {
+      use: (middleware: (req: unknown, res: unknown, next: () => void) => void) => {
+        middlewares.push(middleware);
+        return chain;
+      },
+    };
     for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
       chain[method] = (fn: (req: unknown, res: unknown) => unknown) => {
-        bucket[method] = fn;
+        bucket[method] = async (req: unknown, res: unknown) => {
+          for (const middleware of middlewares) middleware(req, res, () => undefined);
+          return fn(req, res);
+        };
         return chain;
       };
     }
@@ -64,7 +73,7 @@ beforeEach(async () => {
 
 describe('route registration', () => {
   it.each(['update', 'rotate'])('%s requires the admin API-key scope', route => {
-    expect(configs[route]).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
+    expect(configs[route]).toEqual(expect.objectContaining({ requiredScopes: [ApiKeyScope.ADMIN] }));
   });
 });
 
@@ -91,9 +100,48 @@ describe('PATCH /api/admin/oauth-clients/[id]', () => {
         changes: [
           { field: 'redirectUris', before: ['https://app.example.test/cb'], after: uris },
           { field: 'isActive', before: true, after: true },
+          { field: 'allowedScopes', before: ['openid'], after: ['openid'] },
+          { field: 'federatedIdp', before: null, after: null },
         ],
       })
     );
+  });
+
+  it('audits allowedScopes and federatedIdp before/after', async () => {
+    const idp = {
+      issuer: 'https://b4m.example.test',
+      audience: 'b4m_my_app_0011aabb',
+      jwksUri: 'https://b4m.example.test/api/oauth/jwks',
+      subjectSource: 'sub' as const,
+    };
+    db.updateOAuthClient.mockResolvedValue({
+      before: view(),
+      after: view({ allowedScopes: ['openid', 'ai:generate'], federatedIdp: idp }),
+    });
+    const { req, res } = makeReqRes('PATCH', {
+      body: {
+        allowedScopes: ['openid', 'ai:generate'],
+        federatedIdp: { subjectSource: 'sub', issuer: idp.issuer, jwksUri: idp.jwksUri },
+      },
+    });
+    await handlers.update.patch(req, res);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'oauth_client.updated',
+        changes: expect.arrayContaining([
+          { field: 'allowedScopes', before: ['openid'], after: ['openid', 'ai:generate'] },
+          { field: 'federatedIdp', before: null, after: idp },
+        ]),
+      })
+    );
+  });
+
+  it('passes federatedIdp null through to remove the trust config', async () => {
+    db.updateOAuthClient.mockResolvedValue({ before: view(), after: view() });
+    const { req, res } = makeReqRes('PATCH', { body: { federatedIdp: null } });
+    await handlers.update.patch(req, res);
+    expect(db.updateOAuthClient).toHaveBeenCalledWith('c1', { federatedIdp: null });
   });
 
   it('audits a deactivation as its own event', async () => {

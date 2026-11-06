@@ -47,3 +47,42 @@ export function internalStaffEmailRegex(domains: string[]): RegExp | null {
   if (domains.length === 0) return null;
   return new RegExp(`@(${domains.map(escapeRegExp).join('|')})$`, 'i');
 }
+
+/**
+ * Whether an account is the team's own by what it is, for setting `User.isInternal`: an admin, or
+ * an email on one of `staffDomains`. The domain is matched whole and case-insensitively, as
+ * internalStaffEmailRegex matches it, so `x@notstaff.example` is not staff of `staff.example`.
+ * An empty domain list marks admins only.
+ */
+export function isInternalIdentity(
+  identity: { email?: string | null; isAdmin?: boolean | null },
+  staffDomains: readonly string[]
+): boolean {
+  if (identity.isAdmin === true) return true;
+  const staffRegex = internalStaffEmailRegex([...staffDomains]);
+  return !!staffRegex && typeof identity.email === 'string' && staffRegex.test(identity.email);
+}
+
+/**
+ * User flags that mark an account as staff, a service identity or a test fixture rather than a customer.
+ * Not `isInternal` yet: event marks read it (server-utils analytics/lane.ts), reports using this list do not.
+ */
+export const INTERNAL_ACCOUNT_FLAGS = ['isAdmin', 'isSystem', 'isSynthetic'] as const;
+
+/**
+ * Mongo match condition for "this joined user is staff or a test account": any of
+ * INTERNAL_ACCOUNT_FLAGS is true, or the email is on a staff domain. `userPath` is where the
+ * user document sits in the pipeline (e.g. `user` after a `$lookup ... as: 'user'`). A missing
+ * user matches nothing, so negating this (`$nor`) keeps orphaned or non-ObjectId ids.
+ *
+ * The analytics report and the User Activity grid both use this, so the two never disagree on
+ * who counts as internal.
+ */
+export function internalAccountCondition(userPath: string, staffRegex: RegExp | null): Record<string, unknown> {
+  return {
+    $or: [
+      ...INTERNAL_ACCOUNT_FLAGS.map(flag => ({ [`${userPath}.${flag}`]: true })),
+      ...(staffRegex ? [{ [`${userPath}.email`]: { $regex: staffRegex } }] : []),
+    ],
+  };
+}

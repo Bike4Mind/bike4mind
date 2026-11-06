@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { CATALOG_SCHEMA_VERSION, ModelCatalogRowInput } from '@bike4mind/common';
@@ -24,6 +25,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
+const mockAudit = vi.hoisted(() => vi.fn(async () => null));
 const mockRowsInForce = vi.fn();
 const mockAppend = vi.fn();
 const mockFindByModelId = vi.fn();
@@ -31,6 +33,12 @@ const mockPendingSuggestions = vi.fn();
 const mockResolveSuggestion = vi.fn();
 const mockPriceRowsInForce = vi.fn();
 vi.mock('@bike4mind/database', () => ({
+  whenCatalogSeeded: async () => true,
+  apiKeyRepository: {},
+  adminSettingsRepository: {
+    getSettingsValue: async (key: string) =>
+      key === 'orchestrationDefaults' ? { fallbackModels: [], intentClassifier: { enabled: false } } : '',
+  },
   modelCatalogRepository: {
     rowsInForce: (...a: unknown[]) => mockRowsInForce(...a),
     append: (...a: unknown[]) => mockAppend(...a),
@@ -56,7 +64,15 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
 vi.mock('@bike4mind/utils', () => ({
   FALLBACK_PREFERENCES: { 'gpt-live': ['gpt-sunset', 'gpt-live'] },
   DEFAULT_FALLBACK_CHAIN: ['gpt-live'],
+  getSettingsByNames: vi.fn(),
 }));
+
+vi.mock('@bike4mind/services', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/services')>()),
+  apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) },
+}));
+
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
 import handler from '../model-deprecation-status';
 
@@ -133,6 +149,19 @@ describe('GET /api/admin/model-deprecation-status', () => {
     ]);
   });
 
+  it('still serves the rest of the report when the stale reference report fails', async () => {
+    mockGetAvailableModels.mockResolvedValueOnce([LIVE_MODEL]).mockRejectedValueOnce(new Error('provider down'));
+    const { res, run } = call({ method: 'GET' });
+    await run();
+    const body = res._getJSONData();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(body.staleReferences).toBeNull();
+    expect(body.staleReferencesError).toEqual(expect.any(String));
+    expect(body).toMatchObject({ totalModels: 1 });
+    expect(body.queue).toHaveLength(1);
+  });
+
   it('populates the EXPIRED view from catalog lifecycle, which the picker filter hides', async () => {
     const { res, run } = call({ method: 'GET' });
     await run();
@@ -140,6 +169,21 @@ describe('GET /api/admin/model-deprecation-status', () => {
     // pre-catalog version of this endpoint could not report it.
     expect(res._getJSONData().expired).toEqual([
       expect.objectContaining({ modelId: 'gpt-sunset', status: 'deprecated', deprecationDate: '2026-01-01' }),
+    ]);
+  });
+
+  it('exposes legacy active dates for review even when the model list omits the model', async () => {
+    mockRowsInForce.mockResolvedValue([
+      catalogRow('future-active', { status: 'active', deprecationDate: '2099-01-01' }),
+      catalogRow('past-active', { status: 'active', deprecationDate: '2020-01-01' }),
+      catalogRow('retired', { status: 'retired', deprecationDate: '2019-01-01' }),
+      catalogRow('undated', { status: 'active' }),
+    ]);
+    const { res, run } = call({ method: 'GET' });
+    await run();
+    expect(res._getJSONData().activeModelDates).toEqual([
+      { modelId: 'past-active', deprecationDate: '2020-01-01' },
+      { modelId: 'future-active', deprecationDate: '2099-01-01' },
     ]);
   });
 
@@ -224,6 +268,26 @@ describe('POST /api/admin/model-deprecation-status', () => {
       deprecationDate: '2026-01-01',
       replacedBy: 'gpt-live',
     });
+  });
+
+  it('records only the date when accepting a date-only aggregator suggestion', async () => {
+    // The planner stamps 'active' on these; a status-less row would fall back to
+    // 'deprecated' and hide the model the moment the operator accepts.
+    mockFindByModelId.mockResolvedValue({
+      modelId: 'gpt-live',
+      suggestion: { status: 'active', deprecationDate: '2099-08-01', source: 'litellm', suggestedAt: new Date() },
+    });
+    const { run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-live', action: 'accept', note: 'litellm announced a sunset date' },
+    });
+    await run();
+
+    expect(mockAppend.mock.calls[0][0].patch.lifecycle).toMatchObject({
+      status: 'active',
+      deprecationDate: '2099-08-01',
+    });
+    expect(mockResolveSuggestion).toHaveBeenCalledWith('gpt-live', 'accepted');
   });
 
   it.each([true, false])(
@@ -451,5 +515,45 @@ describe('POST /api/admin/model-deprecation-status', () => {
     expect(mockResolveSuggestion).toHaveBeenCalledWith('gpt-sunset', 'dismissed');
     expect(mockAppend).not.toHaveBeenCalled();
     expect(res._getJSONData().state).toMatchObject({ modelId: 'gpt-sunset' });
+  });
+});
+
+describe('POST /api/admin/model-deprecation-status admin audit', () => {
+  it('records an accepted suggestion with the lifecycle it applied', async () => {
+    await call({
+      method: 'POST',
+      body: { modelId: 'gpt-sunset', action: 'accept', note: 'anthropic deprecation page 2026-07' },
+    }).run();
+
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.model_lifecycle.suggestion_resolved',
+      target: { kind: 'settings', id: 'gpt-sunset' },
+      details: { resolution: 'accept', status: 'deprecated', replacedBy: 'gpt-live' },
+    });
+    expect(mockResolveSuggestion.mock.invocationCallOrder[0]).toBeLessThan(mockAudit.mock.invocationCallOrder[0]);
+  });
+
+  it('records a dismissed suggestion', async () => {
+    await call({ method: 'POST', body: { modelId: 'gpt-sunset', action: 'dismiss' } }).run();
+
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.model_lifecycle.suggestion_resolved',
+      target: { kind: 'settings', id: 'gpt-sunset' },
+      details: { resolution: 'dismiss' },
+    });
+  });
+
+  it('does not audit a request that answers 409 with blockers', async () => {
+    mockPriceRowsInForce.mockResolvedValue([priceRow('gpt-sunset', 1e-6, 4e-6), priceRow('gpt-live', 9e-6, 9e-6)]);
+    const { res, run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-sunset', action: 'accept', note: 'n' },
+    });
+    await run();
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 });

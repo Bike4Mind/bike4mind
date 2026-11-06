@@ -4,7 +4,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { InternalServerError } from '@bike4mind/server-utils/utils/errors';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { issueStateNonce } from '@server/auth/oauthFlowCookie';
+import { issueStateNonce } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import jwt from 'jsonwebtoken';
 
 function getJwtSecret(): string {
@@ -54,7 +54,7 @@ const handler = baseApi().post(
     const params = new URLSearchParams({
       client_id: clientId,
       redirect_uri: `${baseUrl}/api/auth/github/mcp-callback`,
-      scope: 'repo,read:org,read:user,project',
+      scope: 'repo,read:org,read:user,user:email,project',
       state,
       allow_signup: 'false',
     });

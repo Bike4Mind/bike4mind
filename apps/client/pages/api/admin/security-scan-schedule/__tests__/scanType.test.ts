@@ -19,7 +19,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
@@ -28,7 +28,10 @@ const repo = vi.hoisted(() => ({
   updateById: vi.fn(),
   create: vi.fn(),
 }));
-vi.mock('@bike4mind/database', () => ({ securityScanScheduleRepository: repo }));
+vi.mock('@bike4mind/database', () => ({
+  securityScanScheduleRepository: repo,
+  SECURITY_SCAN_TYPES: ['web', 'cloud'] as const,
+}));
 vi.mock('@bike4mind/server-utils/security/resolveStage', () => ({ resolveStage: () => 'dev' }));
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';

@@ -46,13 +46,6 @@ export {
 } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 export { createDeepAgentToolMaterializer, type DeepAgentToolMaterializerConfig } from './toolMaterializer';
 export {
-  dispatch as deepAgentWakeDispatch,
-  processWake,
-  buildDefaultWakeDeps,
-  WakePayloadSchema,
-  type WakePayload,
-} from './wakeHandler';
-export {
   enrollDeepAgent,
   enrollDeepAgentWithDefaults,
   type EnrollDeepAgentInput,
@@ -74,7 +67,7 @@ export {
   loadLinkedAgentContext,
   type CreateMissionInput,
   type CreateMissionResult,
-} from './missions';
+} from '@bike4mind/server-utils/deepAgent/missions';
 export {
   bridgeWakeToSession,
   bridgeReviewToSession,

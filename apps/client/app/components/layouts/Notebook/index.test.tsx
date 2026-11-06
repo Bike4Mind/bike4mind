@@ -6,11 +6,13 @@ import { getThemeConfig } from '@client/app/utils/themes';
 const h = vi.hoisted(() => ({ pathname: '/new' }));
 
 vi.mock('@tanstack/react-router', () => ({ useLocation: () => ({ pathname: h.pathname }) }));
+vi.mock('@client/app/hooks/useSignupGrantHeartbeat', () => ({ useSignupGrantHeartbeat: () => {} }));
 vi.mock('./Sidenav', () => ({ default: () => <nav aria-label="Sidebar" data-testid="sidenav-marker" /> }));
 vi.mock('./Header', () => ({ default: () => <header data-testid="header-marker" /> }));
 vi.mock('../../Knowledge/KnowledgeModal', () => ({ default: () => null }));
 vi.mock('../../help', () => ({ HelpPanel: () => null, HelpSuggestionBanner: () => null }));
 vi.mock('../../DataLakeWizard/DataLakeUploadIndicator', () => ({ default: () => null }));
+vi.mock('@client/app/components/gears/GearsDiscoveryModal', () => ({ default: () => null }));
 vi.mock('../../Session/CollapseButton', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/useHelpKeyboardShortcut', () => ({ useHelpKeyboardShortcut: () => undefined }));
 vi.mock('@client/app/hooks/useCommandPaletteShortcut', () => ({ useCommandPaletteShortcut: () => undefined }));

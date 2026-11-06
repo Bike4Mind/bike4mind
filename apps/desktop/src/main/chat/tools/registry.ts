@@ -10,6 +10,8 @@ import {
   sessionList,
   sessionRead,
   sessionSend,
+  delegatedSpawnSchema,
+  questComplete,
   sessionSpawn,
   sessionSuggestionDismiss,
   sessionSuggestionUpdate,
@@ -25,9 +27,11 @@ import {
 } from './mediaTools';
 import { MCP_READ_TOOLS, MCP_TOOLS } from './mcpTools';
 import { memoryDelete, memoryRead, memoryWrite } from './memoryTools';
+import { setSessionPullRequest } from './pullRequestTool';
 import { requestDirectory } from './requestDirectoryTool';
 import { screenCapture } from './screenTools';
 import { bashExecute } from './shellTools';
+import { SIMULATOR_TOOLS } from './simulatorTools';
 import { skillTool } from './skillTool';
 import { todoWrite } from './todoTool';
 import { WEB_TOOLS } from './webTools';
@@ -141,12 +145,15 @@ const BY_NAME = new Map(
     generateVideoTool,
     ...HOST_TOOLS,
     ...SUGGESTION_TOOLS,
+    questComplete,
     ...BROWSER_TOOLS,
     screenCapture,
+    ...SIMULATOR_TOOLS,
     ...MEMORY_TOOLS,
     ...SKILL_TOOLS,
     askUser,
     requestDirectory,
+    setSessionPullRequest,
     ...MCP_TOOLS,
     ...WEB_TOOLS,
   ].map(tool => [tool.schema.name, tool])
@@ -154,6 +161,18 @@ const BY_NAME = new Map(
 
 export function findTool(name: string): ToolDefinition | undefined {
   return BY_NAME.get(name);
+}
+
+/**
+ * The generation tool names toolsForRequest declares for the same `media` and `video` inputs, for
+ * the blank chat's suggestions. Read off the same constants so the two cannot disagree.
+ */
+export function offeredMediaToolNames(options: { media: boolean; video?: readonly VideoModel[] }): string[] {
+  if (!options.media) return [];
+  return [
+    ...MEDIA_TOOLS.map(tool => tool.schema.name),
+    ...(options.video?.length ? [generateVideoTool.schema.name] : []),
+  ];
 }
 
 /**
@@ -198,6 +217,11 @@ export function toolsForRequest(options: {
    * the user's screen, which is gated per capture rather than by a grant.
    */
   screen?: boolean;
+  /**
+   * The iOS Simulator, on macOS only. Needs no folder or project to drive a device; building one
+   * resolves its project inside the granted roots and refuses without one.
+   */
+  simulator?: boolean;
   /** A resolved memory store. Needs a project, which is what the store is keyed on. */
   memory?: boolean;
   /** A skill catalog for this session. No folder grant needed; a global skill is the user's own file. */
@@ -217,6 +241,8 @@ export function toolsForRequest(options: {
    * when the user is typing in it. Defaults to `ask`.
    */
   suggestions?: boolean;
+  /** Orchestrate is in effect, so session_spawn starts rather than suggests; see HostContext.delegates. */
+  delegates?: boolean;
   /**
    * Schemas contributed by the user's connected MCP servers, already namespaced and framed
    * (see chat/mcp/names.ts). They are appended rather than merged into a family above because
@@ -229,6 +255,11 @@ export function toolsForRequest(options: {
    * whether or not anything is configured, so the tool list does not churn as servers come and go.
    */
   mcpServers?: boolean;
+  /**
+   * A Code session with a user present, who is the only one who may say which PR the session
+   * follows. Offers set_session_pull_request.
+   */
+  pullRequest?: boolean;
 }): { toolSchema: ToolSchema }[] {
   const available = [
     ...(options.roots.length > 0 ? localTools(usesApplyPatch(options.modelId)) : []),
@@ -236,17 +267,22 @@ export function toolsForRequest(options: {
     ...(options.media ? MEDIA_TOOLS : []),
     ...(options.host ? HOST_TOOLS : []),
     ...(options.host && (options.suggestions ?? options.ask) ? SUGGESTION_TOOLS : []),
+    ...(options.host && options.delegates ? [questComplete] : []),
     ...(options.browser ? BROWSER_TOOLS : []),
     ...(options.screen ? [screenCapture] : []),
+    ...(options.simulator ? SIMULATOR_TOOLS : []),
     ...(options.memory ? MEMORY_TOOLS : []),
     ...(options.skills ? SKILL_TOOLS : []),
     ...(options.web ? WEB_TOOLS : []),
     // Offered with no folder granted too: asking for one is exactly what that conversation needs.
     ...(options.ask ? [askUser, requestDirectory] : []),
+    ...(options.pullRequest && options.ask ? [setSessionPullRequest] : []),
     ...(options.mcpServers ? (options.ask ? MCP_TOOLS : MCP_READ_TOOLS) : []),
   ];
   return [
-    ...available.map(tool => ({ toolSchema: tool.schema })),
+    ...available.map(tool => ({
+      toolSchema: options.delegates && tool === sessionSpawn ? delegatedSpawnSchema : tool.schema,
+    })),
     ...(options.media && options.video?.length ? [{ toolSchema: generateVideoSchema(options.video) }] : []),
     ...(options.mcp ?? []).map(toolSchema => ({ toolSchema })),
   ];

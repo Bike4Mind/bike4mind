@@ -1,13 +1,17 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { ApiKeyTable } from '@bike4mind/llm-adapters';
-import { ChatModels, type ModelInfo } from '@bike4mind/common';
+import { ChatModels, type CompletionInfo, type ModelInfo } from '@bike4mind/common';
 
 // Fake backend whose `complete` streams whatever the test set, and reports whatever usage the test
 // set. Mirrors LakeMemoryExtractionService.test.ts.
 let nextResponse = '';
-let nextUsage: { inputTokens?: number; outputTokens?: number } | undefined;
+type JudgeUsage = Pick<
+  CompletionInfo,
+  'inputTokens' | 'outputTokens' | 'cacheReadInputTokens' | 'cacheCreationInputTokens'
+>;
+let nextUsage: JudgeUsage | undefined;
 /** Usage frames delivered one per callback, for the running-total case. */
-let usageFrames: Array<{ inputTokens?: number; outputTokens?: number }> | undefined;
+let usageFrames: JudgeUsage[] | undefined;
 let lastPrompt = '';
 let llmAvailable = true;
 let completeError: Error | undefined;
@@ -106,6 +110,10 @@ describe('RelevanceJudgeService.judge', () => {
       relevance: 0.82,
       rationale: 'Directly on topic.',
       costMicroUsd: 1_000,
+      inputTokens: 1_000,
+      outputTokens: 1_000,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
     });
   });
 
@@ -143,6 +151,25 @@ describe('RelevanceJudgeService.judge', () => {
     expect((await judge()).costMicroUsd).toBe(1_000);
   });
 
+  it.each(['judged', 'failed'] as const)(
+    'retains the final disjoint token buckets for a %s response',
+    async outcome => {
+      nextResponse = outcome === 'judged' ? JSON.stringify({ relevance: 0.9 }) : 'invalid json';
+      usageFrames = [
+        { inputTokens: 40, outputTokens: 10, cacheReadInputTokens: 5, cacheCreationInputTokens: 2 },
+        { inputTokens: 100, outputTokens: 30, cacheReadInputTokens: 20, cacheCreationInputTokens: 8 },
+      ];
+
+      expect(await judge()).toMatchObject({
+        outcome,
+        inputTokens: 100,
+        outputTokens: 30,
+        cacheReadInputTokens: 20,
+        cacheCreationInputTokens: 8,
+      });
+    }
+  );
+
   // Every failure is a `failed` outcome, never a score: a model that fails on every call must read
   // as judgeFailed on the run card, not as "N below the relevance floor".
   describe('fail-soft', () => {
@@ -166,6 +193,10 @@ describe('RelevanceJudgeService.judge', () => {
         outcome: 'failed',
         error: 'Invocation of model ID with on-demand throughput is not supported',
         costMicroUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
       });
     });
 

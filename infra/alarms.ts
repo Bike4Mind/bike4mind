@@ -12,14 +12,18 @@
  */
 
 import {
+  disposableDomainRefreshCron,
   modelDiscoveryCronEnabled,
   modelDiscoveryFunction,
   modelDiscoveryStalenessFunction,
+  signupDomainHoldTriageCron,
+  spendMonitor,
   voiceHoldSweepCron,
 } from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
 import { dlqAlarmTopic } from './dlqAlarms';
+import { websocketRouteLogGroup } from './websocketRouteLogGroup';
 import {
   isMonitoredStage as _isMonitoredStage,
   QUESTS_NAMESPACE,
@@ -116,8 +120,9 @@ if (isMonitoredStage) {
    * Alarm: Ungranted Credit Purchases
    *
    * Fires when the daily reconciliation finds a succeeded Stripe credit purchase with no
-   * purchase transaction, a transaction whose balance increment never applied, or a
-   * transaction whose owner no longer exists (see UngrantedReason in the cron). The Slack
+   * purchase transaction, or a transaction whose balance increment never applied (see
+   * UngrantedReason in the cron). A row whose owner was deleted after the grant is logged,
+   * not counted. The Slack
    * post from the cron is best-effort; this alarm is the signal that cannot fail quietly. The metric is emitted once a day (0 when clean), so
    * the period is one day.
    *
@@ -298,6 +303,37 @@ if (isMonitoredStage) {
     alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'AnthropicAPI',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: LLM Stream Idle Timeouts
+   *
+   * Our own stream idle watchdog cut a provider stream. Since the keepalive ceiling follows
+   * max_tokens, a steady count here means live generations are still being killed, and each one is
+   * billed by the provider and then retried or sent to a fallback model.
+   * Metric emitted by: b4m-core/llm-adapters/src/anthropicBackend.ts -> emitIdleTimeoutMetric. Reads
+   * its `{ Stage }`-only datum, which sums every model.
+   */
+  new aws.cloudwatch.MetricAlarm('streamIdleTimeouts', {
+    name: `${$app.name}-${$app.stage}-stream-idle-timeouts`,
+    alarmDescription:
+      'LLM streams are being cut by our own idle watchdog. Each cut attempt is billed by the provider and then retried or sent to a fallback model. See the ChatCompletion logs for "Stream idle timeout"; keepalive: true means the model was still generating.',
+    comparisonOperator: 'GreaterThanOrEqualToThreshold',
+    evaluationPeriods: 1,
+    metricName: 'StreamIdleTimeoutTriggered',
+    namespace: 'Lumina5/LLMStreaming',
+    period: 3600, // 1 hour
+    statistic: 'Sum',
+    threshold: 10,
+    treatMissingData: 'notBreaching',
+    dimensions: {
+      Stage: $app.stage,
+    },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'LLMStreaming',
       Severity: 'High',
     },
   });
@@ -755,12 +791,7 @@ if (isMonitoredStage) {
    * the same per-route attribution while remaining a valid PutMetricFilter call.
    */
   const oomLogGroupName = (route: typeof subscribeQueryRoute) =>
-    route.nodes.function
-      .apply(fn => fn.nodes.logGroup)
-      .apply(logGroup => {
-        if (!logGroup) throw new Error('WebSocket route function is missing its CloudWatch log group');
-        return logGroup.name;
-      });
+    websocketRouteLogGroup(route, 'WebSocket route').apply(logGroup => logGroup.name);
 
   for (const { key, metricName, route } of [
     { key: 'subscribe-query', metricName: 'SubscribeQueryOutOfMemory', route: subscribeQueryRoute },
@@ -873,6 +904,80 @@ if (isMonitoredStage) {
   });
 
   /**
+   * Alarm: disposable email domain list refresh failing two days running
+   *
+   * A failing source keeps its previous entries, so one bad day is tolerable; two means the
+   * signup gate is reading lists that are going stale.
+   *
+   * Metric emitted by: apps/workers/src/cron/disposableDomainRefresh.ts
+   * Namespace: Lumina5/DisposableDomains / SourceFailures
+   * MUST STAY IN SYNC with that handler's namespace, metric name and dimensions.
+   */
+  if (disposableDomainRefreshCron) {
+    new aws.cloudwatch.MetricAlarm('disposableDomainRefreshFailures', {
+      name: `${$app.name}-${$app.stage}-disposable-domain-refresh-failures`,
+      alarmDescription: 'Disposable email domain list refresh failed on two consecutive days',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 2,
+      metricName: 'SourceFailures',
+      namespace: 'Lumina5/DisposableDomains',
+      period: 86400, // 1 day, the run cadence
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: { Stage: $app.stage },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'SignupProtection',
+        Severity: 'Medium',
+      },
+    });
+
+    // A timeout, OOM or init crash never reaches the handler's emit, so SourceFailures stays silent.
+    new aws.cloudwatch.MetricAlarm('disposableDomainRefreshLambdaErrors', {
+      name: `${$app.name}-${$app.stage}-disposable-domain-refresh-lambda-errors`,
+      alarmDescription: 'Disposable email domain list refresh Lambda errored on two consecutive days',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 2,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 86400, // 1 day, the run cadence
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: disposableDomainRefreshCron.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'SignupProtection',
+        Severity: 'Medium',
+      },
+    });
+  }
+
+  // Metric source: apps/workers/src/cron/signupDomainHoldTriage.ts throws when any hold fails to
+  // confirm. Three failing runs in a row (30 minutes) means the rule has stopped working the queue.
+  if (signupDomainHoldTriageCron) {
+    new aws.cloudwatch.MetricAlarm('signupDomainHoldTriageLambdaErrors', {
+      name: `${$app.name}-${$app.stage}-signup-domain-hold-triage-lambda-errors`,
+      alarmDescription: 'Signup domain hold triage Lambda errored on three consecutive runs',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 3,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 600, // 10 minutes, the run cadence
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: signupDomainHoldTriageCron.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'SignupProtection',
+        Severity: 'Medium',
+      },
+    });
+  }
+
+  /**
    * Alarm: Model Discovery no successful run (dead-man's switch)
    *
    * An independent check reads the last completed hosted 'ok' run every 15
@@ -902,6 +1007,42 @@ if (isMonitoredStage) {
         Severity: 'High',
       },
     });
+
+    new aws.cloudwatch.MetricAlarm('unavailableModelReferences', {
+      name: `${$app.name}-${$app.stage}-unavailable-model-references`,
+      alarmDescription:
+        'Model pins are unavailable; model-reference-audit logs name the model, configuration path and cause. See admin model-deprecation-status for the report.',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 2,
+      datapointsToAlarm: 2,
+      metricName: 'UnavailableModelReferences',
+      namespace: 'Lumina5/ModelDiscovery',
+      period: 1800,
+      statistic: 'Maximum',
+      threshold: 0,
+      treatMissingData: 'breaching',
+      dimensions: modelDiscoveryDimensions,
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: { Application: 'ModelDiscovery', Severity: 'High' },
+    });
+
+    for (const metricName of ['ModelsDeprecated', 'LifecycleDateChanges'] as const) {
+      new aws.cloudwatch.MetricAlarm(`modelDiscovery-${metricName}`, {
+        name: `${$app.name}-${$app.stage}-model-discovery-${metricName}`,
+        alarmDescription: `Model discovery reports ${metricName}; review the model lifecycle operator queue and discovery logs`,
+        comparisonOperator: 'GreaterThanThreshold',
+        evaluationPeriods: 1,
+        metricName,
+        namespace: 'Lumina5/ModelDiscovery',
+        period: 21600,
+        statistic: 'Maximum',
+        threshold: 0,
+        treatMissingData: 'notBreaching',
+        dimensions: modelDiscoveryDimensions,
+        alarmActions: [dlqAlarmTopic.arn],
+        tags: { Application: 'ModelDiscovery', Severity: 'Medium' },
+      });
+    }
 
     new aws.cloudwatch.MetricAlarm('modelDiscoveryStalenessCheckErrors', {
       name: `${$app.name}-${$app.stage}-model-discovery-staleness-check-errors`,
@@ -1517,7 +1658,7 @@ if (isMonitoredStage) {
    * Slack-forwarding subscription rather than duplicating that wiring for a single alarm.
    *
    * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordFeedbackDeliveryFailure, wired
-   * from server/integrations/slack/slack.ts's postFeedbackToSlack and
+   * from packages/server-utils/src/integrations/slack/slack.ts's postFeedbackToSlack and
    * pages/api/feedback/index.ts's email path.
    * Namespace: Lumina5/FeedbackDelivery / DeliveryFailed. Reads the coarse `{ Stage }`-only
    * rollup entry (see buildFeedbackDeliveryFailureMetrics), the same pattern
@@ -1787,6 +1928,56 @@ if (isMonitoredStage) {
       alarmActions: [dlqAlarmTopic.arn],
       tags: {
         Application: 'Voice',
+        Severity: 'High',
+      },
+    });
+  }
+
+  /**
+   * Alarm: Spend monitor heartbeat
+   *
+   * The 5-minute cron is the only thing that rolls up and evaluates credit spend, so a silent stop
+   * means spikes go unreported. No invocations for 3 consecutive periods (15 minutes) breaches;
+   * missing data counts as breaching because a stopped schedule publishes no datapoints at all.
+   */
+  // The cron only exists on scheduled stages; an ENABLE_MONITORING preview has no Lambda to watch.
+  if (spendMonitor) {
+    new aws.cloudwatch.MetricAlarm('spendMonitorHeartbeat', {
+      name: `${$app.name}-${$app.stage}-spend-monitor-heartbeat`,
+      alarmDescription: 'The spend monitor cron has not run for 15 minutes; credit spend alerting is stalled',
+      comparisonOperator: 'LessThanThreshold',
+      evaluationPeriods: 3,
+      metricName: 'Invocations',
+      namespace: 'AWS/Lambda',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 1,
+      treatMissingData: 'breaching',
+      dimensions: { FunctionName: spendMonitor.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'SpendMonitor',
+        Severity: 'High',
+      },
+    });
+
+    // A failed invocation still counts as an Invocation, so the heartbeat stays green while every run
+    // throws (missing thresholds, DB or rollup errors). Three failing runs in a row filters a one-off retry.
+    new aws.cloudwatch.MetricAlarm('spendMonitorLambdaErrors', {
+      name: `${$app.name}-${$app.stage}-spend-monitor-lambda-errors`,
+      alarmDescription: 'The spend monitor cron is erroring; credit spend alerting is stalled',
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 3,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 300, // 5 minutes, the run cadence
+      statistic: 'Sum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: spendMonitor.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'SpendMonitor',
         Severity: 'High',
       },
     });

@@ -1,9 +1,10 @@
-import { useSettingsFromServer } from '@client/app/hooks/data/settings';
+import { useConfig, useSettingsFromServer } from '@client/app/hooks/data/settings';
 import {
   isBlankSettingValue,
   allSettingDefinitions,
   resolveSettingDefinition,
   settingsMap,
+  stageHiddenSettingKeys,
   SETTING_TABS,
   type SettingDefinition,
   API_SERVICE_GROUPS,
@@ -26,18 +27,18 @@ import {
   TabList,
   Tab,
   TabPanel,
-  Card,
-  CardContent,
-  CardOverflow,
+  Box,
   Divider,
   SvgIcon,
   type SvgIconProps,
   Tooltip,
 } from '@mui/joy';
 import React, { useCallback, useMemo, useState, type ComponentProps } from 'react';
+import AdminJsonSettingField from './AdminJsonSettingField';
 import AdminSettingInputField from './AdminSettingInputField';
 import AdminStringListSettingField from './AdminStringListSettingField';
 import { AdminOperationsModelSetting } from './AdminOperationsModelSetting';
+import { AdminTurnstileStatusNotice } from './AdminTurnstileStatusNotice';
 import { AdminGenerationModelsSetting } from './AdminGenerationModelsSetting';
 import { AdminRecommendedModelsSetting } from './AdminRecommendedModelsSetting';
 import { ScopedOverridesByScope } from './ScopedOverridesByScope';
@@ -46,6 +47,8 @@ import { useAdminModal } from './useAdminModal';
 
 import AdminLogoUpload from './AdminLogoUpload';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { SettingsDraftProvider } from './SettingsDraftProvider';
+import { AdminPageHeader, SettingsSection } from './shared';
 
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import PsychologyIcon from '@mui/icons-material/Psychology';
@@ -150,8 +153,7 @@ type SettingConfig = SettingDefinition<string>;
 type CoreSettingConfig = (typeof settingsMap)[keyof typeof settingsMap];
 
 // Edited only on the Growth and Pricing tab (GROWTH_PRICING_SECTIONS in AdminGrowthPricingTab); the
-// Credits System group links there instead. ReferralCreditsAmount is on that tab too but keeps its
-// Referrals editor here, so it is not listed.
+// Credits System group links there instead.
 export const GROWTH_PRICING_ONLY_KEYS: ReadonlySet<SettingKey> = new Set<SettingKey>([
   'allowOpenRegistration',
   'defaultFreeCredits',
@@ -162,16 +164,41 @@ export const GROWTH_PRICING_ONLY_KEYS: ReadonlySet<SettingKey> = new Set<Setting
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
   'teamPlanCreditsPerSeat',
+  'ReferralCreditsAmount',
+  'ReferralFirstAnswerCredits',
+  'ReferralFirstPaymentCredits',
+  'ReferralSecondPaymentCredits',
+  'ReferralHoldDays',
+  'ReferralInvitesPerUser',
+  'ReferralAlertRewardsPerDay',
 ]);
 
 // Settings whose value is a list of plain strings get the one-entry-per-line editor.
-const STRING_LIST_SETTING_KEYS = new Set<string>(['ImageModerationReviewerEmails', 'blockedEmailDomains']);
+const STRING_LIST_SETTING_KEYS = new Set<string>([
+  'ImageModerationReviewerEmails',
+  'blockedEmailDomains',
+  'freeTierAllowedModels',
+]);
+
+// Structured operator configs get a JSON editor; the server parses them with the setting's schema.
+const JSON_SETTING_KEYS = new Set<string>([
+  'abuseAssessmentConfig',
+  'autoContainmentConfig',
+  'usagePatternSignalsConfig',
+]);
 
 const AdminSettingsTab: React.FC = () => {
   const { section, setSection, searchTerm, setSearchTerm } = useAdminSettingsSearchParams();
   const [allTabs, setAllTabs] = useState<boolean>(false);
   const settingsFromServer = useSettingsFromServer();
   const setAdminTab = useAdminModal(s => s.setActiveTab);
+  const serverConfig = useConfig();
+
+  // Until the server reports this stage's list, hide every stage-gated setting rather than flash it.
+  const hiddenSettingKeys = useMemo(() => {
+    const keys = serverConfig.data?.hiddenAdminSettingKeys;
+    return new Set<string>(Array.isArray(keys) ? keys : stageHiddenSettingKeys(true));
+  }, [serverConfig.data]);
 
   // Index server values by setting name once, so the hot search/filter paths
   // don't re-scan the whole list per setting on every keystroke.
@@ -231,6 +258,8 @@ const AdminSettingsTab: React.FC = () => {
 
       if (!settingInfo) return false;
 
+      if (hiddenSettingKeys.has(settingConfig.key)) return false;
+
       if ((GROWTH_PRICING_ONLY_KEYS as ReadonlySet<string>).has(settingConfig.key)) return false;
 
       // Hide settings that have dedicated custom UI in other admin tabs
@@ -286,7 +315,7 @@ const AdminSettingsTab: React.FC = () => {
 
       return true;
     });
-  }, [searchTerm, settingValueByName, allTabs, matchesSearch]);
+  }, [searchTerm, settingValueByName, allTabs, matchesSearch, hiddenSettingKeys]);
 
   // Total settings matching the current search across ALL tabs - so the count is
   // visible even when the active tab happens to show none of them.
@@ -405,9 +434,9 @@ const AdminSettingsTab: React.FC = () => {
     }
 
     return (
-      <Card key={groupId || 'ungrouped'} variant="outlined" sx={{ mb: 2 }}>
+      <SettingsSection key={groupId || 'ungrouped'}>
         {groupName && (
-          <CardOverflow>
+          <Box>
             <Stack
               direction={{ xs: 'column', sm: 'row' }}
               alignItems={{ xs: 'flex-start', sm: 'center' }}
@@ -428,9 +457,9 @@ const AdminSettingsTab: React.FC = () => {
               )}
             </Stack>
             <Divider inset="none" />
-          </CardOverflow>
+          </Box>
         )}
-        <CardContent>
+        <Box>
           <Stack spacing={1}>
             {topLevelSettings.map((setting, index) => {
               const children = inlineChildrenByParent.get(setting.key);
@@ -446,6 +475,17 @@ const AdminSettingsTab: React.FC = () => {
                 const storedValue = settingValueByName.get(setting.key) ?? setting.defaultValue;
                 return (
                   <AdminStringListSettingField
+                    key={`${setting.key}-${JSON.stringify(storedValue)}`}
+                    index={index}
+                    setting={setting as CoreSettingConfig}
+                    storedValue={storedValue}
+                  />
+                );
+              }
+              if (setting.type === 'object' && JSON_SETTING_KEYS.has(setting.key)) {
+                const storedValue = settingValueByName.get(setting.key) ?? setting.defaultValue;
+                return (
+                  <AdminJsonSettingField
                     key={`${setting.key}-${JSON.stringify(storedValue)}`}
                     index={index}
                     setting={setting as CoreSettingConfig}
@@ -488,8 +528,8 @@ const AdminSettingsTab: React.FC = () => {
               .
             </Typography>
           )}
-        </CardContent>
-      </Card>
+        </Box>
+      </SettingsSection>
     );
   };
 
@@ -514,6 +554,10 @@ const AdminSettingsTab: React.FC = () => {
         {category === 'AI' && <AdminRecommendedModelsSetting />}
 
         {category === 'AI' && <AdminGenerationModelsSetting />}
+
+        {category === 'Users' && (
+          <AdminTurnstileStatusNotice enabled={String(settingValueByName.get('turnstileEnabled')) === 'true'} />
+        )}
 
         {/* The by-scope read of the override overlay. Category-scoped rather than group-scoped:
             seven of the nine scope-capable settings are AI, and the panel lists all nine wherever
@@ -560,16 +604,23 @@ const AdminSettingsTab: React.FC = () => {
             }}
           >
             <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: { xs: 1, md: 0 } }}>
-              <Typography level="h4">Admin Settings</Typography>
+              <AdminPageHeader title="Settings" description="Edit configuration, then save or discard your changes." />
               <ContextHelpButton helpId="admin/admin-settings" tooltipText="Admin Settings Help" />
             </Stack>
             <FormControl sx={{ width: { xs: '100%', md: '40vw' } }}>
               <Input
-                placeholder="Search by name, description, or non-sensitive value"
+                placeholder="Search by name, description, or non-sensitive value (/)"
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
                 fullWidth
-                slotProps={{ input: { 'data-testid': 'admin-settings-search-input' } }}
+                slotProps={{
+                  input: {
+                    'data-testid': 'admin-settings-search-input',
+                    'data-admin-search': true,
+                    'aria-label': 'Search settings',
+                    'aria-keyshortcuts': '/',
+                  },
+                }}
               />
             </FormControl>
             {searchTerm && (
@@ -686,4 +737,10 @@ const AdminSettingsTab: React.FC = () => {
 
 AdminSettingsTab.displayName = 'AdminSettingsTab';
 
-export default AdminSettingsTab;
+export default function AdminSettingsPage() {
+  return (
+    <SettingsDraftProvider>
+      <AdminSettingsTab />
+    </SettingsDraftProvider>
+  );
+}

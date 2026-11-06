@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 import { createHash } from 'node:crypto';
 import { PUBLISH_QUOTAS, TooManyRequestsError } from '@bike4mind/common';
+
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => undefined }),
+}));
 
 /**
  * Storage quota and the daily publish allowance on the two routes that rewrite a live page in place.
@@ -27,7 +35,7 @@ const m = vi.hoisted(() => ({
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};
-    Object.assign(chain, { use: () => chain, post: (fn: unknown) => fn });
+    Object.assign(chain, { use: () => chain, post: (...fns: unknown[]) => fns[fns.length - 1] });
     return chain;
   },
 }));
@@ -62,11 +70,25 @@ vi.mock('@server/services/publish', async () => {
     consumePublishAction: m.consume,
   };
 });
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: () => m.getModel(),
   },
 }));
+
+// Billing is covered in revise.metering.test.ts; here the meter always reserves, then the raw backend runs.
+vi.mock('@bike4mind/services', () => ({
+  meterCompletionBackend: (
+    llm: { complete: (...args: unknown[]) => unknown },
+    meter: (...args: unknown[]) => Promise<unknown>
+  ) => ({
+    complete: async (...args: unknown[]) => {
+      await meter();
+      return llm.complete(...args);
+    },
+  }),
+}));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: () => async () => ({}) }));
 
 import reviseHandler from '../revise';
 import restoreHandler from '../restore';

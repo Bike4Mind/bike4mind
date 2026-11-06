@@ -138,6 +138,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     lakeScopeExplicit: { type: Boolean, required: false },
     // No default: unset falls back to the lake selection (see effectiveIncludeLibraryFiles).
     includeLibraryFiles: { type: Boolean, required: false },
+    promptCacheTtl: { type: String, enum: ['5m', '1h'], required: false },
     // default: undefined (not []) - keeps "field present" a meaningful marker of manage-but-not-
     // member admission, distinct from an ordinary session that never went through it. Written ONLY
     // by pages/api/v1/sessions/index.ts, as a separate authorized write AFTER its own canManageLake
@@ -289,6 +290,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     // No default: $inc needs the field absent or numeric, never null.
     voiceBilledCredits: { type: Number, required: false },
     voiceHoldUserId: { type: String, required: false },
+    voiceHoldApiKeyId: { type: String, required: false },
     ...ShareableDocumentSchema,
   },
   {
@@ -797,25 +799,40 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
           voiceConnectedAt: null,
           voiceLastActivityAt: null,
         },
-        $unset: { voiceBilledCredits: '', voiceHoldUserId: '' },
+        $unset: { voiceBilledCredits: '', voiceHoldUserId: '', voiceHoldApiKeyId: '' },
       },
-      { new: false, projection: { voiceBilledCredits: 1, voiceHoldUserId: 1 } }
+      { new: false, projection: { voiceBilledCredits: 1, voiceHoldUserId: 1, voiceHoldApiKeyId: 1 } }
     );
     return before
-      ? { billedCredits: before.voiceBilledCredits ?? null, payerId: before.voiceHoldUserId ?? null }
+      ? {
+          billedCredits: before.voiceBilledCredits ?? null,
+          payerId: before.voiceHoldUserId ?? null,
+          apiKeyId: before.voiceHoldApiKeyId ?? null,
+        }
       : null;
   }
 
   async openVoiceHold(
     sessionId: string,
     priorStartedAt: Date | null,
-    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean; payerId: string }
+    hold: {
+      voiceReservedCredits: number | null;
+      voiceSessionStartedAt: Date;
+      realtime: boolean;
+      payerId: string;
+      apiKeyId?: string;
+    }
   ) {
     // Conditional on the hold the bootstrap read: once it is settled (null) or, if it held no reserve
     // and so was never claimed, still that start. A concurrent bootstrap that already wrote its own
     // hold makes this match nothing, so only one of them keeps a reserve. The prior start matches
     // only without a reserve: a reserved hold whose settlement failed still owes it (settleVoiceHold),
     // so it must not be overwritten.
+    // A JWT call must not inherit the key of an earlier key-opened call that was never claimed.
+    const unset = {
+      ...(hold.apiKeyId ? {} : { voiceHoldApiKeyId: '' }),
+      ...(hold.realtime ? {} : { voiceBilledCredits: '' }),
+    };
     const { matchedCount } = await this.sessionModel.updateOne(
       {
         _id: sessionId,
@@ -831,10 +848,11 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
           voiceConnectedAt: null,
           voiceLastActivityAt: null,
           voiceHoldUserId: hold.payerId,
+          ...(hold.apiKeyId ? { voiceHoldApiKeyId: hold.apiKeyId } : {}),
           // Realtime holds are billed per response against this marker (server/websocket/voiceSessionEnded.ts).
           ...(hold.realtime ? { voiceBilledCredits: 0 } : {}),
         },
-        ...(hold.realtime ? {} : { $unset: { voiceBilledCredits: '' } }),
+        ...(Object.keys(unset).length > 0 ? { $unset: unset } : {}),
       }
     );
     return matchedCount === 1;
@@ -990,6 +1008,22 @@ SessionSchema.index({ userId: 1, deletedAt: 1, name: 'text', updatedAt: -1 });
 // b4m-core/slack/src/handlers/notebook-manager.ts would collide with the deleted row on every
 // retry and the thread could never get a notebook again. A partial filter cannot exclude
 // soft-deleted rows. Migration 20251126202452 drops the index where an old build left it.
+
+// The Slack gear check (apps/client/server/services/gears/catalog.ts). Partial on the subdocument's
+// required channelId, so only Slack-born notebooks are indexed; the query must filter on that same
+// path for the planner to prove the filter is implied.
+export const SESSION_SLACK_NOTEBOOK_INDEX_NAME = 'userId_1_slackNotebook';
+SessionSchema.index(
+  { userId: 1 },
+  {
+    name: SESSION_SLACK_NOTEBOOK_INDEX_NAME,
+    partialFilterExpression: { 'slackMetadata.channelId': { $exists: true } },
+  }
+);
+
+// Sessions that reference a file (findAllWithKnowledgeId, pullKnowledgeIds), read on every file
+// delete, lake purge and lake ingest. Multikey; without it each call walks every session.
+SessionSchema.index({ knowledgeIds: 1, deletedAt: 1 });
 
 // Index for admin/cleanup queries on conversation context by user.
 // Feature queries use findById(sessionId), which hits the default _id index;

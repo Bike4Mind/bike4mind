@@ -6,6 +6,7 @@ import {
   IMessage,
   isUserInitiatedAbort,
   ModelBackend,
+  ollamaNumCtx,
   PermissionDeniedError,
   stripToolArtifactMarkup,
   type MessageContentObject,
@@ -23,6 +24,11 @@ import { Ollama, Message as OllamaMessage, Options as OllamaOptions, Tool, ToolC
 import { ILogger, Logger } from '@bike4mind/observability';
 import { Agent } from 'undici';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
+import {
+  appendIdentityReminderToMessages,
+  buildIdentityReminder,
+  shouldOmitIdentityReminder,
+} from './identityReminder';
 import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { attachFullToolResult, truncateToolResult } from './recordToolResult';
 import {
@@ -85,9 +91,12 @@ export class OllamaBackend implements ICompletionBackend {
   private _clientHost: string;
   private _clientHeaders: Record<string, string>;
   private _agent: Agent;
+  private _fetch?: typeof globalThis.fetch;
   public currentModel: string = '';
 
-  constructor(host?: string, logger?: ILogger) {
+  /** `options.fetch` replaces the default transport, for servers that need credentials the host URL cannot carry. */
+  constructor(host?: string, logger?: ILogger, options: { fetch?: typeof globalThis.fetch } = {}) {
+    this._fetch = options.fetch;
     this._logger = logger ?? new Logger();
     this._host = host ?? 'http://localhost:11434';
     const url = new URL(this._host);
@@ -116,10 +125,11 @@ export class OllamaBackend implements ICompletionBackend {
    * and the raised timeouts survive.
    */
   private createClient(signal?: AbortSignal): Ollama {
+    const custom = this._fetch;
     const fetchWithTimeout: typeof globalThis.fetch = (input, init) =>
-      (globalThis.fetch as (i: typeof input, o: object) => Promise<Response>)(input, {
+      ((custom ?? globalThis.fetch) as (i: typeof input, o: object) => Promise<Response>)(input, {
         ...init,
-        dispatcher: this._agent,
+        ...(!custom && { dispatcher: this._agent }),
         // Streaming requests already carry the client's own controller signal;
         // combine rather than replace so either source can cancel.
         ...(signal && { signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal }),
@@ -148,7 +158,7 @@ export class OllamaBackend implements ICompletionBackend {
         // model was trained for: callers size history against this number, so
         // publishing an uncapped 262K would have them build prompts Ollama
         // then truncates from the front.
-        const contextWindow = OllamaBackend.effectiveContextWindow(reportedContextWindow);
+        const contextWindow = ollamaNumCtx(reportedContextWindow);
         const modelInfo = {
           id: model.name,
           type: 'text',
@@ -190,14 +200,6 @@ export class OllamaBackend implements ICompletionBackend {
   private static readonly DEFAULT_CONTEXT_WINDOW = 8192;
 
   /**
-   * Ceiling on the num_ctx we ask Ollama to allocate. Models advertise windows
-   * far larger than a dev box can hold in KV cache (262K on qwen3.5), so the
-   * useful value is the model's window capped at something affordable rather
-   * than the advertised maximum. Override with OLLAMA_MAX_NUM_CTX.
-   */
-  private static readonly DEFAULT_MAX_NUM_CTX = 32768;
-
-  /**
    * Output ceiling we advertise for a local model. Half of what we allocate, because advertising
    * the whole window made the server's context - output - buffer negative and emptied the prompt.
    *
@@ -213,13 +215,6 @@ export class OllamaBackend implements ICompletionBackend {
   private static advertisedOutputCap(contextWindow: number): number {
     const halved = Math.floor(contextWindow / 2);
     return Math.max(1, Math.min(halved, contextWindow - CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS - 1));
-  }
-
-  /** A model's reported window clamped to what we are willing to allocate. */
-  private static effectiveContextWindow(reported: number): number {
-    const configuredCap = Number(process.env.OLLAMA_MAX_NUM_CTX);
-    const cap = Number.isFinite(configuredCap) && configuredCap > 0 ? configuredCap : OllamaBackend.DEFAULT_MAX_NUM_CTX;
-    return Math.min(reported, cap);
   }
 
   /** Per-model /api/show results, so the tool-call recursion shows once, not per round. */
@@ -259,8 +254,16 @@ export class OllamaBackend implements ICompletionBackend {
       return { capabilities, contextWindow };
     } catch (error) {
       this._logger.debug(`[OllamaBackend] Could not fetch details for ${model}:`, error);
+      this._detailsFailed.add(model);
       return { capabilities: [], contextWindow: OllamaBackend.DEFAULT_CONTEXT_WINDOW };
     }
+  }
+
+  private readonly _detailsFailed = new Set<string>();
+
+  /** True when /api/show failed for `model`, so its `supportsTools: false` is a fallback, not what Ollama said. */
+  toolSupportUnchecked(model: string): boolean {
+    return this._detailsFailed.has(model);
   }
 
   /**
@@ -277,7 +280,7 @@ export class OllamaBackend implements ICompletionBackend {
     options: Partial<ICompletionOptions>
   ): Promise<Partial<OllamaOptions>> {
     const { contextWindow } = await this.getModelDetailsCached(model);
-    const numCtx = OllamaBackend.effectiveContextWindow(contextWindow);
+    const numCtx = ollamaNumCtx(contextWindow);
 
     return {
       num_ctx: numCtx,
@@ -316,11 +319,20 @@ export class OllamaBackend implements ICompletionBackend {
     }
 
     const formattedTools = offerTools ? this.formatTools(options.tools ?? []) : [];
+    // Applied after the strip to what is actually sent, and on a copy: the tool round below
+    // recurses with the caller's `messages`, so mutating would stack a reminder per round.
+    const conversationMessages = offerTools ? messages : stripToolDependentMessages(messages);
+    const requestMessages = shouldOmitIdentityReminder({ ...options, tools: offerTools ? options.tools : undefined })
+      ? conversationMessages
+      : appendIdentityReminderToMessages(
+          conversationMessages,
+          buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName)
+        );
     const baseRequest = {
       model,
       // This backend withholds tools in place rather than recursing, so the strip has to track
       // `offerTools` here: prompts ordering the model to use a tool must not outlive the tools.
-      messages: this.buildMessages(offerTools ? messages : stripToolDependentMessages(messages)),
+      messages: this.buildMessages(requestMessages),
       options: await this.buildModelOptions(model, options),
       ...(formattedTools.length > 0 && { tools: formattedTools }),
       // Drive Ollama's reasoning from the Thinking toggle. Gated upstream by

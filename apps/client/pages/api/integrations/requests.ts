@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { PLANNED_INTEGRATION_IDS, isPlannedIntegrationId } from '@bike4mind/common';
 import { integrationRequestRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 /**
  * /api/integrations/requests - demand capture for the roadmap cards on /integrations.

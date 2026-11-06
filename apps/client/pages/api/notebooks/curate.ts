@@ -3,7 +3,8 @@ import { sessionRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { assertRequestCanAfford } from '@server/billing/meterPlatformCompletion';
-import { resolveRequestBillingOrgId } from '@server/billing/resolveRequestBillingOrgId';
+import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 import { NotebookCurateRequestSchema } from '../../../types/api';
 import { z } from 'zod';
@@ -38,7 +39,10 @@ const handler = baseApi().post(
 
     const { sessionIds, curationType, artifactTypes, exportFormat, customNotebookName } = validatedBody;
     // Only the executive summary calls an LLM (billed per call in the worker); refuse before enqueueing.
-    if (curationType === 'executive_summary') await assertRequestCanAfford(req);
+    if (curationType === 'executive_summary') {
+      await admitRequestCompletion(req, { holdSlot: false });
+      await assertRequestCanAfford(req);
+    }
 
     try {
       const batchJobId = uuidv4();

@@ -66,6 +66,7 @@ const SandboxConfigSchema = z
     network: SandboxNetworkSchema.default(DEFAULT_SANDBOX_CONFIG.network),
     excludedCommands: z.array(z.string()).default(DEFAULT_SANDBOX_CONFIG.excludedCommands),
     allowUnsandboxedCommands: z.boolean().default(true),
+    allowContainerSockets: z.boolean().default(false),
     platform: SandboxPlatformSchema.default(DEFAULT_SANDBOX_CONFIG.platform),
   })
   .refine(
@@ -102,6 +103,7 @@ const PartialSandboxConfigSchema = z
       .optional(),
     excludedCommands: z.array(z.string()).optional(),
     allowUnsandboxedCommands: z.boolean().optional(),
+    allowContainerSockets: z.boolean().optional(),
     platform: SandboxPlatformSchema.optional(),
   })
   .optional();
@@ -121,6 +123,7 @@ const AuthTokensSchema = z.object({
  */
 const ApiConfigSchema = z.object({
   customUrl: z.url().optional(),
+  endpointChosen: z.boolean().optional(),
 });
 
 /**
@@ -318,6 +321,9 @@ const CliConfigSchema = z.object({
   sandbox: SandboxConfigSchema.optional(),
   additionalDirectories: z.array(z.string()).prefault([]),
   fallbackModels: z.array(z.string()).optional(),
+  ollamaHost: z.string().optional(),
+  localDefaultModel: z.string().optional(),
+  modelServerCredentials: z.record(z.string(), z.object({ secret: z.string() })).optional(),
 });
 
 /**
@@ -654,7 +660,8 @@ function isWithin(root: string, target: string): boolean {
  * only ever TIGHTEN it, never loosen it. A repo layer may enable the sandbox,
  * raise the mode (disabled < auto-allow < permissions) but never select
  * auto-allow itself, add denied paths, narrow read paths / domains / excluded
- * commands, turn the network filter on, and force allowUnsandboxedCommands off.
+ * commands, turn the network filter on, and force allowUnsandboxedCommands and
+ * allowContainerSockets off.
  * Every loosening value is ignored with a warning. `platform` is ignored.
  */
 function tightenSandbox(base: SandboxConfig | undefined, repo: PartialSandboxConfig | undefined): SandboxConfig {
@@ -699,6 +706,9 @@ function tightenSandbox(base: SandboxConfig | undefined, repo: PartialSandboxCon
 
   if (repo.allowUnsandboxedCommands === false) result.allowUnsandboxedCommands = false;
   else if (repo.allowUnsandboxedCommands === true && !b.allowUnsandboxedCommands) warn('allowUnsandboxedCommands=true');
+
+  if (repo.allowContainerSockets === false) result.allowContainerSockets = false;
+  else if (repo.allowContainerSockets === true && !b.allowContainerSockets) warn('allowContainerSockets=true');
 
   // Keep enabled/mode consistent for the schema refine: an enabled sandbox needs
   // a non-disabled mode (default to the strictest), and a disabled one needs
@@ -952,7 +962,7 @@ export class ConfigStore {
           // pass still applies to the current session and the stamp simply stays behind, so
           // the migration retries on the next launch rather than being silently skipped.
           try {
-            await fs.writeFile(this.configPath, JSON.stringify(rawConfig, null, 2), 'utf-8');
+            await this.writeConfigFile(JSON.stringify(rawConfig, null, 2));
           } catch {
             // Intentionally ignored - see above.
           }
@@ -1315,6 +1325,114 @@ export class ConfigStore {
   }
 
   /**
+   * `b4m models` writes defaultModel, ollamaHost and localDefaultModel from its own process, so like features
+   * they are taken from disk unless this caller's patch sets them.
+   */
+  private async mergeModelFields(
+    next: CliConfig,
+    snapshot: CliConfig,
+    patch: GlobalConfigPatch | undefined
+  ): Promise<CliConfig> {
+    let disk: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(await fs.readFile(this.configPath, 'utf-8'));
+      const result = z.record(z.string(), z.unknown()).safeParse(parsed);
+      if (!result.success) return next;
+      disk = result.data;
+    } catch {
+      return next;
+    }
+    // A patch naming a key sets it; a whole config spread back (it carries `version`) only sets what it changed.
+    const wholeConfig = patch !== undefined && Object.prototype.hasOwnProperty.call(patch, 'version');
+    const changed = (key: 'defaultModel' | 'ollamaHost' | 'localDefaultModel') =>
+      patch !== undefined &&
+      Object.prototype.hasOwnProperty.call(patch, key) &&
+      (!wholeConfig || patch[key] !== snapshot[key]);
+    const optional = (key: 'ollamaHost' | 'localDefaultModel') =>
+      changed(key) || (disk[key] !== undefined && typeof disk[key] !== 'string')
+        ? next[key]
+        : (disk[key] as string | undefined);
+    const credentials = CliConfigSchema.shape.modelServerCredentials.safeParse(disk.modelServerCredentials);
+    return {
+      ...next,
+      defaultModel:
+        changed('defaultModel') || typeof disk.defaultModel !== 'string' ? next.defaultModel : disk.defaultModel,
+      ollamaHost: optional('ollamaHost'),
+      localDefaultModel: optional('localDefaultModel'),
+      modelServerCredentials:
+        patch !== undefined &&
+        Object.prototype.hasOwnProperty.call(patch, 'modelServerCredentials') &&
+        (!wholeConfig || patch.modelServerCredentials !== snapshot.modelServerCredentials)
+          ? next.modelServerCredentials
+          : credentials.success
+            ? credentials.data
+            : next.modelServerCredentials,
+    };
+  }
+
+  /** The saved credentials as the file has them now, not as this store loaded them. */
+  async readModelServerCredentials(): Promise<Record<string, { secret: string }>> {
+    try {
+      return await this.readModelServerCredentialsStrict();
+    } catch (error) {
+      logger.debug(
+        `Could not read model server credentials: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return {};
+    }
+  }
+
+  /** Throws when the file exists but cannot be read, so a write never replaces credentials it failed to read. */
+  private async readModelServerCredentialsStrict(): Promise<Record<string, { secret: string }>> {
+    let text: string;
+    try {
+      text = await fs.readFile(this.configPath, 'utf-8');
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return {};
+      throw error;
+    }
+    const raw: unknown = JSON.parse(text);
+    const parsed = z.object({ modelServerCredentials: CliConfigSchema.shape.modelServerCredentials }).safeParse(raw);
+    if (!parsed.success) throw new Error(`${this.configPath} has malformed model server credentials.`);
+    return parsed.data.modelServerCredentials ?? {};
+  }
+
+  /** Writes through a 0600 temp file and a rename, so a reader in another process never sees a half-written file. */
+  private async writeConfigFile(contents: string): Promise<void> {
+    // Rename onto the link's target, so a symlinked config stays a symlink.
+    const target = await fs.realpath(this.configPath).catch(() => this.configPath);
+    const temp = `${target}.${process.pid}.${uuidv4()}.tmp`;
+    try {
+      await fs.writeFile(temp, contents, { encoding: 'utf-8', mode: 0o600 });
+      await fs.rename(temp, target);
+    } catch (error) {
+      await fs.rm(temp, { force: true });
+      throw error;
+    }
+  }
+
+  /** Reloads from the file so the write below carries what other processes saved (a refreshed sign-in token). */
+  private async reloadFromDisk(): Promise<void> {
+    this.config = null;
+    this.globalConfig = null;
+    await this.load();
+  }
+
+  /** Read-modify-write against the file, so a login in another terminal is not undone. */
+  async setModelServerCredential(serverId: string, secret: string): Promise<void> {
+    await this.reloadFromDisk();
+    const current = await this.readModelServerCredentialsStrict();
+    await this.save({ modelServerCredentials: { ...current, [serverId]: { secret } } });
+  }
+
+  async clearModelServerCredential(serverId: string): Promise<void> {
+    await this.reloadFromDisk();
+    const { [serverId]: removed, ...rest } = await this.readModelServerCredentialsStrict();
+    void removed;
+    await this.save({ modelServerCredentials: rest });
+  }
+
+  /**
    * Save configuration to disk
    */
   async save(config?: GlobalConfigPatch, opts?: { clearFeatures?: boolean }): Promise<void> {
@@ -1382,10 +1500,13 @@ export class ConfigStore {
       // this is a reset, which intentionally wipes the feature map.
       this.globalConfig = { ...global, features: opts?.clearFeatures ? {} : await this.readDiskFeatures() };
     }
+    if (!opts?.clearFeatures) {
+      this.globalConfig = await this.mergeModelFields(this.globalConfig, global, config);
+    }
 
     try {
       // Persist ONLY the global layer, never the merged effective config.
-      await fs.writeFile(this.configPath, JSON.stringify(this.globalConfig, null, 2), 'utf-8');
+      await this.writeConfigFile(JSON.stringify(this.globalConfig, null, 2));
 
       // Set secure permissions (0600 - only owner can read/write)
       // This protects auth tokens and API keys from other users
@@ -1587,7 +1708,16 @@ export class ConfigStore {
   async setCustomApiUrl(url: string | null): Promise<void> {
     await this.load();
     // Reset to the build-time default service (null) or set a self-hosted URL.
-    this.globalConfig!.apiConfig = url === null ? undefined : { customUrl: url };
+    this.globalConfig!.apiConfig = url === null ? { endpointChosen: true } : { customUrl: url, endpointChosen: true };
+    await this.save();
+  }
+
+  /** Record that a backend was chosen, so the first-run picker is not shown again. */
+  async markEndpointChosen(): Promise<void> {
+    await this.load();
+    const g = this.globalConfig!;
+    if (g.apiConfig?.endpointChosen) return;
+    g.apiConfig = { ...g.apiConfig, endpointChosen: true };
     await this.save();
   }
 
@@ -1617,13 +1747,13 @@ export class ConfigStore {
     let newApiConfig: CliConfig['apiConfig'];
     if (target === 'prod') {
       newUrl = getDefaultApiUrl();
-      newApiConfig = undefined;
+      newApiConfig = { endpointChosen: true };
     } else if (target === 'dev') {
       newUrl = LOCAL_DEV_URL;
-      newApiConfig = { customUrl: LOCAL_DEV_URL };
+      newApiConfig = { customUrl: LOCAL_DEV_URL, endpointChosen: true };
     } else {
       newUrl = target.customUrl;
-      newApiConfig = { customUrl: target.customUrl };
+      newApiConfig = { customUrl: target.customUrl, endpointChosen: true };
     }
     const envName = getEnvironmentName(newApiConfig);
 
@@ -1631,6 +1761,10 @@ export class ConfigStore {
 
     // No-op when already pointed at the requested environment - leave auth alone.
     if (!swap.changed) {
+      if (!g.apiConfig?.endpointChosen) {
+        g.apiConfig = newApiConfig;
+        await this.save();
+      }
       return { url: newUrl, envName, changed: false, authenticated: isAuthTokenValid(g.auth) };
     }
 

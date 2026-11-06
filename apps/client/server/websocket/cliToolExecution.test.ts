@@ -12,7 +12,10 @@ vi.mock('@bike4mind/server-utils/cli/toolsHandler.shared', () => ({
   executeToolWithLogging: vi.fn().mockResolvedValue({ success: true, content: 'ok' }),
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+const webExecutors = vi.hoisted(() => ({ web_search: vi.fn(), web_fetch: vi.fn() }));
+vi.mock('@server/cli/webToolExecutors', () => ({ buildWebToolExecutors: vi.fn(() => webExecutors) }));
+
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
   ),
@@ -21,9 +24,10 @@ vi.mock('@server/websocket/utils', () => ({
 
 import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
 import { executeToolWithLogging } from '@bike4mind/server-utils/cli/toolsHandler.shared';
-import { sendToConnection } from '@server/websocket/utils';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
-import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { buildWebToolExecutors } from '@server/cli/webToolExecutors';
 import { func } from './cliToolExecution';
 
 const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
@@ -49,6 +53,7 @@ describe('cliToolExecution websocket handler', () => {
   it('rate-limits the JWT path on the ws bucket, apart from the completions counter', async () => {
     await run();
 
+    expect(verifyJwtToken).toHaveBeenCalledWith('jwt-token', { requireApiAccess: true });
     expect(checkRateLimit).toHaveBeenCalledWith('u1', undefined, { bucket: 'ws' });
     expect(executeToolWithLogging).toHaveBeenCalled();
   });
@@ -114,5 +119,66 @@ describe('cliToolExecution websocket handler - API-key check outcome', () => {
       })
     );
     expect(verifyJwtToken).toHaveBeenCalled();
+  });
+});
+
+it('relays an authenticated CLI access refusal without executing the tool', async () => {
+  vi.clearAllMocks();
+  vi.mocked(verifyJwtToken).mockRejectedValueOnce(
+    new ForbiddenError('CLI and desktop access requires an active paid subscription')
+  );
+  await run();
+  expect(executeToolWithLogging).not.toHaveBeenCalled();
+  expect(sendToConnection).toHaveBeenCalledWith(
+    'conn-1',
+    'https://example.test/test',
+    expect.objectContaining({
+      success: false,
+      error: 'CLI and desktop access requires an active paid subscription',
+    })
+  );
+});
+
+describe('cliToolExecution websocket handler - billed web tools', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('hands the billed web executors to the tool run, billing the user on the JWT path', async () => {
+    await run();
+
+    expect(buildWebToolExecutors).toHaveBeenCalledWith(logger, undefined);
+    expect(vi.mocked(executeToolWithLogging).mock.calls[0][1]).toMatchObject({ executors: webExecutors });
+  });
+
+  it('bills an API-key caller through the key, so an org-billed key charges its organization', async () => {
+    const keyInfo = { userId: 'u1', keyId: 'k1', billingOwnerType: 'organization', organizationId: 'org-1' };
+    vi.mocked(verifyApiKey).mockResolvedValueOnce(keyInfo as never);
+
+    await run();
+
+    expect(buildWebToolExecutors).toHaveBeenCalledWith(logger, keyInfo);
+    expect(verifyJwtToken).not.toHaveBeenCalled();
+  });
+
+  it('relays the insufficient_credits code so the CLI can tell the model the call did not run', async () => {
+    vi.mocked(executeToolWithLogging).mockResolvedValueOnce({
+      success: false,
+      error: 'You do not have enough credits for web search.',
+      errorCode: 'insufficient_credits',
+    });
+
+    await run();
+
+    expect(sendToConnection).toHaveBeenCalledWith(
+      'conn-1',
+      'https://example.test/test',
+      expect.objectContaining({
+        action: 'cli_tool_response',
+        success: false,
+        errorCode: 'insufficient_credits',
+        error: 'You do not have enough credits for web search.',
+      })
+    );
   });
 });

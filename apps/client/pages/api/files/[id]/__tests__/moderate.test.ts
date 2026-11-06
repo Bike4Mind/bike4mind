@@ -22,7 +22,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('node:timers/promises', () => ({ setTimeout: h.sleep }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: h.sendToClient }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
 vi.mock('@bike4mind/database', () => ({ FabFile: { findById: h.findById, updateOne: h.updateOne } }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
@@ -127,7 +127,7 @@ describe('POST /api/files/[id]/moderate', () => {
 
   it('reconciles the current version before claiming without rewriting its ETag', async () => {
     await handler(makeReq(), makeRes());
-    expect(h.reconcile).toHaveBeenCalledWith('oid1', 'masks/m.png');
+    expect(h.reconcile).toHaveBeenCalledWith('oid1', 'masks/m.png', expect.anything());
     expect(h.claim).toHaveBeenCalledWith('oid1', expect.any(Date));
     expect(h.reconcile.mock.invocationCallOrder[0]).toBeLessThan(h.claim.mock.invocationCallOrder[0]);
   });
@@ -281,6 +281,18 @@ describe('POST /api/files/[id]/moderate', () => {
     expect(h.writeVerdict).not.toHaveBeenCalled();
     expect(h.release).toHaveBeenCalledTimes(2);
     expect(h.release).toHaveBeenLastCalledWith('oid1', retryStamp);
+    expect(res.body).toEqual({ moderationStatus: 'pending' });
+  });
+
+  it('holds a file deferred by the moderation allowance pending, releasing the claim without counting an attempt', async () => {
+    h.scan.mockResolvedValue({ moderationStatus: 'pending', deferReason: 'moderation_budget' });
+    const res = makeRes();
+    await handler(makeReq(), res);
+
+    expect(h.scan).toHaveBeenCalledTimes(1);
+    expect(h.writeVerdict).not.toHaveBeenCalled();
+    expect(h.release).toHaveBeenCalledWith('oid1', h.claim.mock.calls[0][1], { countAttempt: false });
+    expect(h.sendToClient).not.toHaveBeenCalled();
     expect(res.body).toEqual({ moderationStatus: 'pending' });
   });
 

@@ -21,6 +21,7 @@ import {
   FriendshipEvents,
   adminUserProfilePath,
   toAbsoluteUrl,
+  escapeSlackLine,
   type CompletionSource,
 } from '@bike4mind/common';
 import dayjs from 'dayjs';
@@ -196,7 +197,7 @@ function formatAIInsights(insights: string | string[] | null): { sections: strin
 
     highlights.forEach((point, index) => {
       const emoji = index === 0 ? '🥇' : index === 1 ? '🥈' : '🥉';
-      sections.push(`${emoji} ${point}`);
+      sections.push(`${emoji} ${escapeSlackLine(point)}`);
     });
   }
 
@@ -213,7 +214,7 @@ function formatAIInsights(insights: string | string[] | null): { sections: strin
 
     concerns.forEach((point, index) => {
       const priority = index === 0 ? '🔴' : index === 1 ? '🟠' : '🟡';
-      sections.push(`${priority} ${point}`);
+      sections.push(`${priority} ${escapeSlackLine(point)}`);
     });
   }
 
@@ -229,7 +230,7 @@ function formatAIInsights(insights: string | string[] | null): { sections: strin
       .slice(0, 3);
 
     focusPoints.forEach((point, index) => {
-      sections.push(`${index + 1}. ${point}`);
+      sections.push(`${index + 1}. ${escapeSlackLine(point)}`);
     });
   }
 
@@ -416,7 +417,7 @@ export const formatCustomSlackMessage = (
       if (index === 2) medal = '🥉';
       const percentage = ((model.count / totalModelRequests) * 100).toFixed(1);
       const bar = generateProgressBar(model.count / totalModelRequests);
-      sections.push(`${medal} ${model.modelName}`);
+      sections.push(`${medal} ${escapeSlackLine(model.modelName)}`);
       sections.push(`     ${bar} ${model.count.toLocaleString()} requests (${percentage}%)`);
     });
   } else {
@@ -429,11 +430,8 @@ export const formatCustomSlackMessage = (
   sections.push('\n👥 *Most Active Users (Last 24H)*');
   if (userActivity.topUsers && userActivity.topUsers.length > 0) {
     const topUsers = userActivity.topUsers.slice(0, 10); // Show top 10 instead of 20 for better readability
-    // Rank by spend; a list where nobody spent (e.g. org-billed usage) falls back to events so
-    // the engagement markers still mean something.
-    const maxCredits = topUsers[0].creditsSpent ?? 0;
-    const engagementByCredits = maxCredits > 0;
-    const maxEngagement = engagementByCredits ? maxCredits : topUsers[0].interactions;
+    // Ranked by events (CounterLogRepository.rankDailyTopUsers), so engagement is relative to the leader's events.
+    const maxEngagement = topUsers[0].interactions;
 
     topUsers.forEach((user, index) => {
       let medal = '  •';
@@ -442,11 +440,9 @@ export const formatCustomSlackMessage = (
       if (index === 2) medal = '🥉';
 
       const displayName = user.email || `User ${user._id?.substring(0, 8)}`;
-      // Slack mrkdwn reserves & < > in both linked and plain text.
-      const label = displayName.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const label = escapeSlackLine(displayName);
       const name = appUrl && user._id ? `<${toAbsoluteUrl(appUrl, adminUserProfilePath(user._id))}|${label}>` : label;
-      const engagement = engagementByCredits ? (user.creditsSpent ?? 0) : user.interactions;
-      const engagementLevel = getEngagementLevel(engagement, maxEngagement);
+      const engagementLevel = getEngagementLevel(user.interactions, maxEngagement);
       const spend = `${(user.creditsSpent ?? 0).toLocaleString()} credits`;
       const tag = user.isNew ? ' 🆕' : '';
 
@@ -640,7 +636,9 @@ export function formatWeeklySlackMessage(appName: string, data: WeeklyReportData
       const rankChange = getRankChangeSymbol(org.rankChange);
       const lastWeekRank =
         typeof org.lastWeekRank === 'number' ? `#${org.lastWeekRank}` : org.lastWeekRank === 'new' ? 'New' : '>#10';
-      sections.push(`${medal} ${org.name}: ${org.events} events ${rankChange} (Last Week: ${lastWeekRank})`);
+      sections.push(
+        `${medal} ${escapeSlackLine(org.name)}: ${org.events} events ${rankChange} (Last Week: ${lastWeekRank})`
+      );
     });
     sections.push('───────────────────────────');
   }
@@ -657,7 +655,9 @@ export function formatWeeklySlackMessage(appName: string, data: WeeklyReportData
           : model.lastWeekRank === 'new'
             ? 'New'
             : '>#10';
-      sections.push(`${medal} ${model.modelName}: ${model.count} requests ${rankChange} (Last Week: ${lastWeekRank})`);
+      sections.push(
+        `${medal} ${escapeSlackLine(model.modelName)}: ${model.count} requests ${rankChange} (Last Week: ${lastWeekRank})`
+      );
     });
   }
   sections.push('───────────────────────────');
@@ -671,7 +671,9 @@ export function formatWeeklySlackMessage(appName: string, data: WeeklyReportData
       const lastWeekRank =
         typeof user.lastWeekRank === 'number' ? `#${user.lastWeekRank}` : user.lastWeekRank === 'new' ? 'New' : '>#20';
       const displayName = user.email || 'Unknown User';
-      sections.push(`${medal} ${displayName}: ${user.interactions} events ${rankChange} (Last Week: ${lastWeekRank})`);
+      sections.push(
+        `${medal} ${escapeSlackLine(displayName)}: ${user.interactions} events ${rankChange} (Last Week: ${lastWeekRank})`
+      );
     });
     sections.push('───────────────────────────');
   }

@@ -55,6 +55,7 @@ vi.mock('@bike4mind/observability', () => {
     Logger: vi.fn(function () {
       return logger;
     }),
+    describeErrorCause: () => undefined,
   };
 });
 

@@ -6,9 +6,8 @@ import {
   ModelBackend,
   PermissionDeniedError,
   FIXED_TEMPERATURE_MODELS,
-  REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS,
+  MIN_OUTPUT_TOKENS,
   RESPONSES_API_TOOL_MODELS,
-  REASONING_SUPPORTED_MODELS,
   SpeechToTextModels,
   type ModelInfo,
   type ReasoningEffort,
@@ -19,6 +18,7 @@ import { stripToolDependentMessages } from './toolPairingUtils';
 import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import OpenAI from 'openai';
+import { providerFetchOptions } from './providerDispatcher';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources/chat/completions';
 import type {
   Response as OpenAIResponse,
@@ -50,6 +50,7 @@ import {
   stripUnstreamedToolResult,
 } from './toolStreamingHelper';
 import { DispatchModel } from './dispatchModel';
+import { openAIEffortIncompatibleWithTools, supportsOpenAIReasoningEffort } from './openaiReasoning';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import {
@@ -62,7 +63,7 @@ import {
   ARTIFACT_REMOVED_PLACEHOLDER,
 } from '@bike4mind/common';
 import { normalizeOpenAIFinishReason, normalizeOpenAIResponsesStopReason } from './stopReason';
-import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
+import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
 import { selectedWifTokenSource, subjectTokenSource } from './wifTokenSource';
 
 // Type for the reasoning_effort parameter that can be added to ChatCompletionCreateParams
@@ -149,11 +150,15 @@ function federatedOpenAIClient(): OpenAI {
         serviceAccountId,
         provider: { tokenType: 'jwt', getToken: () => getSubjectToken(audience) },
       },
+      fetchOptions: providerFetchOptions(),
     });
     federatedOpenAIClients.set(cacheKey, client);
   }
   return client;
 }
+
+/** Silently raises a tiny budget to OpenAI's minimum on purpose; an unset (or 0) budget stays unset. */
+const floorOutputBudget = (maxTokens?: number) => (maxTokens ? Math.max(maxTokens, MIN_OUTPUT_TOKENS) : undefined);
 
 /**
  * A Responses stream closed with no terminal event and no abort (upstream cut the connection).
@@ -164,6 +169,16 @@ export class ResponsesStreamTruncatedError extends Error {
     super(`OpenAI Responses stream for ${model} ended without a terminal response event`);
     this.name = 'ResponsesStreamTruncatedError';
   }
+}
+
+// Tools return once after a first failed round so the model can retry or route around it; a second
+// failure drops them so a broken tool cannot loop to the cap. Capture `priorToolFailure` before the round runs.
+function keepToolsForNextRound(
+  anyMcpTool: boolean,
+  priorToolFailure: boolean,
+  toolsUsed: RecordableToolUse[]
+): boolean {
+  return anyMcpTool || (!priorToolFailure && toolsUsed.some(t => t.success === false));
 }
 
 export class OpenAIBackend implements ICompletionBackend {
@@ -178,7 +193,10 @@ export class OpenAIBackend implements ICompletionBackend {
   private readonly _dispatch = new DispatchModel();
 
   constructor(apiKey: string | typeof OPENAI_FEDERATED_KEY, logger?: Logger, endUserId?: string) {
-    this._api = apiKey === OPENAI_FEDERATED_KEY ? federatedOpenAIClient() : new OpenAI({ apiKey });
+    this._api =
+      apiKey === OPENAI_FEDERATED_KEY
+        ? federatedOpenAIClient()
+        : new OpenAI({ apiKey, fetchOptions: providerFetchOptions() });
     this.logger = logger ?? new Logger();
     this._endUserId = endUserId;
   }
@@ -1045,6 +1063,7 @@ export class OpenAIBackend implements ICompletionBackend {
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
+    const priorToolFailure = toolsUsed.some(t => t.success === false);
     this.currentModel = model;
     options = {
       temperature: 0.9,
@@ -1143,7 +1162,7 @@ export class OpenAIBackend implements ICompletionBackend {
     };
 
     // Add parameters conditionally based on model type
-    const supportsReasoning = REASONING_SUPPORTED_MODELS.has(model);
+    const supportsReasoning = supportsOpenAIReasoningEffort(this._dispatch.for(model), model);
     // A reasoning model that is only known through the catalog is not in
     // FIXED_TEMPERATURE_MODELS, and OpenAI rejects any temperature but 1 on one.
     // Losing temperature control on a model that would have accepted it is
@@ -1161,7 +1180,7 @@ export class OpenAIBackend implements ICompletionBackend {
         ...(requiresFixedTemp && { temperature: 1.0 }),
         stream: true,
         stream_options: { include_usage: true },
-        ...(options.maxTokens && { max_completion_tokens: options.maxTokens }),
+        ...(options.maxTokens && { max_completion_tokens: floorOutputBudget(options.maxTokens) }),
       });
 
       // Only add reasoning_effort for models that support it (o1-preview/o1-mini do not).
@@ -1170,7 +1189,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // /v1/responses, dropping reasoning_effort keeps tool calling functional.
       const toolsPresent = !!options.tools?.length;
       const reasoningEffortIncompatibleWithTools =
-        toolsPresent && REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS.has(model);
+        toolsPresent && openAIEffortIncompatibleWithTools(this._dispatch.for(model), model);
 
       if (supportsReasoning && !reasoningEffortIncompatibleWithTools) {
         // Determine reasoning effort: explicit setting takes precedence over auto-classification
@@ -1195,10 +1214,10 @@ export class OpenAIBackend implements ICompletionBackend {
         }
       } else if (supportsReasoning && reasoningEffortIncompatibleWithTools) {
         // `supportsReasoning` is re-checked here so the log only fires for models
-        // where `reasoning_effort` would otherwise have been set. Today the set
-        // invariant (REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS is a subset of
-        // REASONING_SUPPORTED_MODELS) makes the two checks equivalent, but the
-        // explicit conjunction prevents a noisy log if that invariant ever drifts.
+        // where `reasoning_effort` would otherwise have been set. The id sets keep
+        // incompatible a subset of supported, but a catalog row can state
+        // effortIncompatibleWithTools on a model it never marked reasoning, so the
+        // explicit conjunction is load-bearing.
         this.logger.debug(
           `Skipping reasoning_effort for ${model}: function tools present, ` +
             `OpenAI rejects this combination on /v1/chat/completions (requires /v1/responses).`
@@ -1218,7 +1237,7 @@ export class OpenAIBackend implements ICompletionBackend {
         presence_penalty: options.presencePenalty,
         frequency_penalty: options.frequencyPenalty,
         stream: useStreaming,
-        max_tokens: options.maxTokens,
+        max_tokens: floorOutputBudget(options.maxTokens),
         ...(useStreaming && { stream_options: { include_usage: true } }),
       });
     }
@@ -1515,19 +1534,17 @@ export class OpenAIBackend implements ICompletionBackend {
               return;
             }
 
-            // Keep tools available for MCP tools (enables chaining); remove for built-in tools
+            const keepTools = keepToolsForNextRound(anyMcpTool, priorToolFailure, toolsUsed);
             // Carry this turn's tokens forward so the terminal recursive call's
             // emits carry the full multi-turn billable total (each OpenAI API
             // call is billed independently - accumulating is required for
             // correct credit attribution).
             await this.complete(
               model,
-              // Tracks the tools decision on the next line: this branch keeps tools only for MCP
-              // chaining, so on the built-in-tool path the tool-dependent prompts have to go too.
-              anyMcpTool ? messages : stripToolDependentMessages(messages),
+              keepTools ? messages : stripToolDependentMessages(messages),
               {
                 ...options,
-                tools: anyMcpTool ? options.tools : undefined,
+                tools: keepTools ? options.tools : undefined,
                 // First-turn-only tool_choice: after tools run, let the model synthesize.
                 tool_choice: 'auto',
                 _internal: {
@@ -1986,16 +2003,16 @@ export class OpenAIBackend implements ICompletionBackend {
           return;
         }
 
-        // Keep tools available for MCP tools (enables chaining); remove for built-in tools.
+        const keepTools = keepToolsForNextRound(anyMcpTool, priorToolFailure, toolsUsed);
         // Carry this turn's tokens forward so the recursive call's emits carry the full
         // multi-turn billable total (each OpenAI API call is billed independently -
         // accumulating is required for correct credit attribution).
         await this.complete(
           model,
-          messages,
+          keepTools ? messages : stripToolDependentMessages(messages),
           {
             ...options,
-            tools: anyMcpTool ? options.tools : undefined,
+            tools: keepTools ? options.tools : undefined,
             // First-turn-only tool_choice: after tools run, let the model synthesize.
             tool_choice: 'auto',
             _internal: {
@@ -2063,10 +2080,14 @@ export class OpenAIBackend implements ICompletionBackend {
     // The only synthesized text is the shared identity reminder, placed last to mirror the
     // Anthropic adapters. Bare-completion contract (API promptMode raw): synthesize
     // nothing, so the lead message is exactly the caller's own system text, or absent
-    // entirely. Must stay in sync with the same flag in anthropicBackend / bedrockBackend.
-    const mergedContent = options.omitIdentityReminder
+    // entirely. Also omitted while current_model_details is on the request (see
+    // shouldOmitIdentityReminder). Must stay in sync with anthropicBackend / bedrockBackend.
+    const mergedContent = shouldOmitIdentityReminder(options)
       ? callerSystem
-      : appendIdentityReminder(callerSystem, buildIdentityReminder(model, options.modelDisplayName));
+      : appendIdentityReminder(
+          callerSystem,
+          buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName)
+        );
 
     const systemMessage: OpenAI.ChatCompletionSystemMessageParam = {
       role: 'system',
@@ -2222,6 +2243,7 @@ export class OpenAIBackend implements ICompletionBackend {
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
+    const priorToolFailure = toolsUsed.some(t => t.success === false);
     const toolCallCount = options._internal?.toolCallCount ?? 0;
     // Always set by complete() before it routes here.
     const requestStartedAt = options._internal?.requestStartedAt ?? Date.now();
@@ -2252,7 +2274,7 @@ export class OpenAIBackend implements ICompletionBackend {
             },
           }
         : {}),
-      ...(options.maxTokens ? { max_output_tokens: options.maxTokens } : {}),
+      ...(options.maxTokens ? { max_output_tokens: floorOutputBudget(options.maxTokens) } : {}),
       ...(mapToolChoiceForResponses(options.tool_choice) !== undefined
         ? { tool_choice: mapToolChoiceForResponses(options.tool_choice) }
         : {}),
@@ -2518,13 +2540,14 @@ export class OpenAIBackend implements ICompletionBackend {
 
     // Recurse. Tool results are now in `messages`; carry this turn's tokens forward so
     // the terminal emit reports the full multi-turn billable total. Drop tools for the
-    // synthesis turn (unless MCP, which chains) - mirrors the chat path.
+    // synthesis turn (unless MCP, which chains, or a first failure) - mirrors the chat path.
+    const keepTools = keepToolsForNextRound(anyMcpTool, priorToolFailure, toolsUsed);
     await this.complete(
       model,
-      messages,
+      keepTools ? messages : stripToolDependentMessages(messages),
       {
         ...options,
-        tools: anyMcpTool ? options.tools : undefined,
+        tools: keepTools ? options.tools : undefined,
         tool_choice: 'auto',
         _internal: {
           ...options._internal,

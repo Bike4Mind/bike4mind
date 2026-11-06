@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 const mocks = vi.hoisted(() => ({
-  findById: vi.fn(),
+  findByIdWithMfaSecrets: vi.fn(),
   setupMFA: vi.fn(),
 }));
 
@@ -13,8 +13,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => fn }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_q: any, _s: any, next: any) => next() }));
-vi.mock('@bike4mind/database', () => ({ userRepository: { findById: mocks.findById } }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_q: any, _s: any, next: any) => next(),
+}));
+vi.mock('@bike4mind/database', () => ({ userRepository: { findByIdWithMfaSecrets: mocks.findByIdWithMfaSecrets } }));
 vi.mock('@bike4mind/services', () => ({ mfaService: { setupMFA: mocks.setupMFA } }));
 vi.mock('@server/auth/signInSecondFactor', () => ({
   readSignInOrigin: (user: { mfaSignIn?: unknown } | undefined) => user?.mfaSignIn,
@@ -31,7 +33,7 @@ async function setupAs(user: Record<string, unknown>) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.findById.mockResolvedValue({ id: 'u1', mfa: { totpEnabled: false } });
+  mocks.findByIdWithMfaSecrets.mockResolvedValue({ id: 'u1', mfa: { totpEnabled: false } });
   mocks.setupMFA.mockResolvedValue({ secret: 's' });
 });
 
@@ -52,5 +54,15 @@ describe('POST /api/auth/mfa/setup - emergency sign-in', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.setupMFA).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands setup the user with its pending secret so a repeat call can re-serve it', async () => {
+    const pendingUser = { id: 'u1', mfa: { totpEnabled: false, totpSecret: 'PENDING', setupAt: new Date() } };
+    mocks.findByIdWithMfaSecrets.mockResolvedValue(pendingUser);
+
+    await setupAs({ id: 'u1' });
+
+    expect(mocks.findByIdWithMfaSecrets).toHaveBeenCalledWith('u1');
+    expect(mocks.setupMFA).toHaveBeenCalledWith(expect.objectContaining({ user: pendingUser }), expect.anything());
   });
 });

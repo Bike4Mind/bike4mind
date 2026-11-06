@@ -1,5 +1,7 @@
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
 import { randomUUID } from 'crypto';
 import {
+  DEFAULT_MUSIC_MODEL_ID,
   ApiKeyType,
   isSupportedElevenLabsFormat,
   UnprocessableEntityError,
@@ -14,7 +16,7 @@ import { aiMusicService, getSettingsMap, getSettingsValue } from '@bike4mind/uti
 import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { providerBusyHttpError } from '@server/utils/providerBusyHttpError';
-import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
+import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 
@@ -54,6 +56,8 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
   if (format !== undefined && !SUPPORTS_OUTPUT_FORMAT[provider](format)) {
     throw new UnprocessableEntityError(`The ${provider} provider does not support the '${format}' output format`);
   }
+
+  await (await createModelAdmission(req.user!)).assert(modelId ?? DEFAULT_MUSIC_MODEL_ID);
 
   const apiKey = await apiKeyService.getEffectiveApiKey(
     userId,
@@ -178,7 +182,21 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
             userId,
             bytes: audio,
             contentType,
-            generation: { generator: 'music', provider, modelId, prompt, durationSeconds: lengthMs / 1000 },
+            generation: {
+              generator: 'music',
+              provider,
+              modelId,
+              prompt,
+              durationSeconds: lengthMs / 1000,
+              request: {
+                provider,
+                prompt,
+                lengthMs,
+                ...(forceInstrumental !== undefined && { forceInstrumental }),
+                ...(modelId !== undefined && { modelId }),
+                ...(format !== undefined && { format }),
+              },
+            },
           },
           req.logger
         )

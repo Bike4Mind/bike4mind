@@ -36,6 +36,14 @@ export interface ResolvedShareTokenPath {
 }
 export type ResolvedPath = ResolvedBundlePath | ResolvedShortPath | ResolvedShareTokenPath;
 
+// Charset and an upper bound of what `generateShareToken` mints (43 base64url chars), so junk from
+// scanners 404s before it reaches the database. Not exact-length, to keep short test fixtures valid.
+const SHARE_TOKEN_SHAPE = /^[A-Za-z0-9_-]{1,64}$/;
+
+export function isWellFormedShareToken(token: string): boolean {
+  return SHARE_TOKEN_SHAPE.test(token);
+}
+
 export function parsePublishPath(segments: string[]): ResolvedPath | null {
   if (segments.length < 2) return null;
   const head = segments[0];
@@ -44,6 +52,7 @@ export function parsePublishPath(segments: string[]): ResolvedPath | null {
     return { kind: head === 'r' ? 'reply' : 'fabfile', publicId: segments[1] };
   }
   if (head === 'a') {
+    if (!isWellFormedShareToken(segments[1])) return null;
     return { kind: 'share', shareToken: segments[1], assetPath: segments.slice(2).join('/') || null };
   }
   const tier = TIER_BY_PREFIX[head];

@@ -35,7 +35,7 @@ import {
   verifyOrgMembership,
   verifyOrgMemberOrManager,
   resolveBillingOrgId,
-} from '../orgAccess';
+} from '@bike4mind/server-utils/utils/orgAccess';
 
 // Valid 24-hex ObjectId strings (pass Types.ObjectId round-trip validation).
 const ORG = '650000000000000000000abc';

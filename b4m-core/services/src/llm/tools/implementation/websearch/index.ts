@@ -191,6 +191,8 @@ function placeCitable(place: WebSearchPlace, imageUrlSigningSecret: string, canS
 interface WebSearchResult {
   formattedResults: string;
   citables: CitableSource[];
+  /** The provider whose answer this is. Absent when no provider ran: a cache hit, or none configured. */
+  servedBy?: WebSearchProvider['name'];
 }
 
 // The desktop web search tool matches these by their "Web search is ..." prefix (SERVER_NOTICE in
@@ -492,7 +494,7 @@ export async function performWebSearch(
       (withImages ? `\n${WEB_SEARCH_CARDS_PROMPT}` : '') +
       (withPlaces ? `\n${WEB_SEARCH_MAP_PROMPT}` : '');
 
-    return { formattedResults: formattedOutput, citables };
+    return { formattedResults: formattedOutput, citables, servedBy: cached ? undefined : servedBy.name };
   } catch (error) {
     Logger.globalInstance.error('❌ WebSearch Tool: Error during search:', error);
     throw error;
@@ -501,7 +503,8 @@ export async function performWebSearch(
 
 export const webSearchTool: ToolDefinition = {
   name: 'web_search',
-  implementation: (context: ToolContext, config?: WebSearchToolConfig) => {
+  implementation: (context: ToolContext, rawConfig: unknown) => {
+    const config = rawConfig as WebSearchToolConfig | undefined;
     let searchCallCount = 0;
     let providersPromise: Promise<[WebSearchProvider | null, WebSearchProvider | null]> | undefined;
     return {

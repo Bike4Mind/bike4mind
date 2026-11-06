@@ -1,0 +1,8 @@
+# Function URL handlers exempt from the contract rule (scan 4). Entries are only ever removed.
+#
+# Add an entry ONLY for a handler that predates this gate; each one MUST carry a
+# trailing '# reason'. A new Function URL handler is expected to use
+# defineLambdaRoute(contract, handler) instead.
+#
+# Nothing is exempt today: CliToolHandler passes because its handler reaches
+# defineLambdaRoute through its ./tools import.

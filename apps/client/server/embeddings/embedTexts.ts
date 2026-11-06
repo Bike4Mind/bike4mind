@@ -1,7 +1,6 @@
-import { truncateEmbedding } from '@bike4mind/common';
+import { truncateEmbedding, type EmbeddingDimensionPlan } from '@bike4mind/common';
 import type { EmbeddingService } from '@bike4mind/fab-pipeline';
 import pLimit from 'p-limit';
-import type { EmbeddingDimensionPlan } from './planEmbeddingDimensions';
 
 type ResolvedDimensionPlan = Exclude<EmbeddingDimensionPlan, { kind: 'unsupported' }>;
 

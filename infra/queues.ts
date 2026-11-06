@@ -12,7 +12,16 @@ import {
   TEST_GENERATION_PROVIDER_ENVIRONMENT,
 } from './constants';
 import { imageProcessor } from './imageProcessor';
+import {
+  buildQueuePair,
+  contributedQueuePairOptions,
+  describeDroppedContributions,
+  partitionContributedQueues,
+  reservedQueueNames,
+  type ContributedQueueSpec,
+} from '@bike4mind/infra';
 import { allSecrets } from './secrets';
+import * as generatedInfraResources from './premium-generated/infraResources.generated';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
@@ -60,6 +69,18 @@ const lakeMemoryQueue = new sst.aws.Queue('lakeMemoryQueue', {
   dlq: {
     queue: lakeMemoryQueueDLQ.arn,
     retry: 2,
+  },
+});
+
+// Account behavioral risk evidence. Fed by direct refresh sends (web/API function, the signupRiskSweep
+// cron) and by completion messages the app bus rule transforms from completion.completed events
+// (infra/eventBus.ts). Visibility timeout must exceed the 2-minute handler timeout below.
+const riskEvidenceQueueDLQ = new sst.aws.Queue('riskEvidenceQueueDLQ', {});
+const riskEvidenceQueue = new sst.aws.Queue('riskEvidenceQueue', {
+  visibilityTimeout: '3 minutes',
+  dlq: {
+    queue: riskEvidenceQueueDLQ.arn,
+    retry: 3,
   },
 });
 
@@ -765,6 +786,41 @@ const questExportQueueSubscription = questExportQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
+// Account Data Export Queue
+// Self-service "download all my data": builds a zip of the user's data under the fabFileBucket
+// exports/ prefix (expired by its lifecycle rule) and emails a link to the app download page.
+const accountDataExportQueueDLQ = new sst.aws.Queue('accountDataExportQueueDLQ', {});
+const accountDataExportQueue = new sst.aws.Queue('accountDataExportQueue', {
+  visibilityTimeout: '16 minutes',
+  dlq: {
+    queue: accountDataExportQueueDLQ.arn,
+    retry: 2,
+  },
+});
+const accountDataExportQueueSubscription = accountDataExportQueue.subscribe(
+  {
+    handler: 'apps/workers/src/queueHandlers/accountDataExport.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '15 minutes',
+    memory: '2048 MB',
+    // The zip is written to /tmp before upload; sized for MAX_FILE_BYTES in accountDataExport.ts.
+    storage: '5 GB',
+    vpc: lambdaVpc,
+    link: [...allSecrets, fabFileBucket, generatedImagesBucket, eventBus],
+    permissions: [
+      {
+        actions: ['s3:ListBucketVersions', 's3:DeleteObjectVersion'],
+        resources: [fabFileBucket.arn, $interpolate`${fabFileBucket.arn}/*`],
+      },
+    ],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
 // Publish Thumbnail Queue
 // Owner-only thumbnails of published bundles: one message per artifact version, enqueued by publish
 // finalize, restore and AI revise (enqueuePublishThumbnail in packages/server-utils). Hosted only -
@@ -800,6 +856,10 @@ const publishThumbnailRenderer = new sst.aws.Function('PublishThumbnailRenderer'
       external: ['@sparticuz/chromium', 'playwright-core', 'sharp'],
     },
   },
+  // @sparticuz/chromium ships only Open Sans, which has no arrows or symbols. Its fonts.conf already
+  // scans /var/task/fonts, so these fallback faces need no code; /var/task also outlives the
+  // per-render /tmp wipe (apps/workers/src/media/renderEnvironment.ts).
+  copyFiles: [{ from: 'apps/workers/src/media/fonts', to: 'fonts' }],
 });
 const publishThumbnailQueueDLQ = new sst.aws.Queue('publishThumbnailQueueDLQ', {});
 const publishThumbnailQueue = new sst.aws.Queue('publishThumbnailQueue', {
@@ -903,6 +963,28 @@ const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
     },
   },
   SINGLE_RECORD_BATCH
+);
+
+// Risk evidence subscription. partialResponses: the handler reports per-record failures so one bad
+// message retries (and DLQs) alone. Links itself because it re-enqueues completion messages as debounced refresh requests.
+const riskEvidenceQueueSubscription = riskEvidenceQueue.subscribe(
+  {
+    handler: 'apps/workers/src/queueHandlers/riskEvidence.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '2 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, riskEvidenceQueue],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+  },
+  { batch: { size: 10, partialResponses: true } }
 );
 
 // Model inconsistency detection subscription (#3057). 10 minutes, matching lake memory: the run makes
@@ -1234,7 +1316,7 @@ const tavernHeartbeatQueue = new sst.aws.Queue('tavernHeartbeatQueue', {
 
 // Deep Agent Wake Queue
 // One message → one wake cycle for one long-horizon agent (orient → act →
-// reflect → groom). See apps/client/server/deepAgent and
+// reflect → groom). See apps/workers/src/deepAgent/wakeHandler.ts and
 // docs/concepts/deep-agent-framework.md.
 const deepAgentWakeQueueDLQ = new sst.aws.Queue('deepAgentWakeQueueDLQ', {});
 const deepAgentWakeQueue = new sst.aws.Queue('deepAgentWakeQueue', {
@@ -1246,7 +1328,7 @@ const deepAgentWakeQueue = new sst.aws.Queue('deepAgentWakeQueue', {
 });
 const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe(
   {
-    handler: 'apps/client/server/deepAgent/wakeHandler.dispatch',
+    handler: 'apps/workers/src/deepAgent/wakeHandler.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -1625,6 +1707,14 @@ const bobRunQueueSubscription = bobRunQueue.subscribe(
       { actions: ['execute-api:ManageConnections'], resources: ['*'] },
       { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
     ],
+    nodejs: {
+      // playwright-core cannot be bundled, so external + install ships it. Pinned in apps/client to
+      // the remote Chromium's Playwright: a connect needs the same version on both ends.
+      install: ['playwright-core'],
+      esbuild: {
+        external: ['playwright-core'],
+      },
+    },
   },
   SINGLE_RECORD_BATCH
 );
@@ -1661,6 +1751,40 @@ const libreoncologyAudioRenderQueueSubscription = libreoncologyAudioRenderQueue.
   }
 );
 
+// Package-declared queue pairs. Core alarms the DLQ (dlqAlarms.ts) and links both URLs
+// (web.ts) but subscribes no consumer, and contributeInfra in sst.config.ts is not handed
+// these queues, so a pair has no consumer until that wiring exists. Without core names
+// nothing stops a pair from reusing a core logical name, so codegen without infra/ fails the
+// deploy here.
+const reservedContributedQueueNames = reservedQueueNames(generatedInfraResources);
+const { contributedInfraResources } = generatedInfraResources;
+if (reservedContributedQueueNames === null && contributedInfraResources.queues.length > 0) {
+  throw new Error(
+    '[infra] core resource names unknown (codegen ran without infra/); refusing to create contributed queues. ' +
+      'Re-run pnpm codegen with infra/ present.'
+  );
+}
+const contributedQueuePartition = partitionContributedQueues(
+  contributedInfraResources.queues,
+  reservedContributedQueueNames ?? { resourceNames: [], envNames: [], dlqLabels: [] }
+);
+for (const line of describeDroppedContributions('contributed queue', contributedQueuePartition)) {
+  console.warn(`[infra] ${line}`);
+}
+
+export const contributedQueues: Record<
+  string,
+  { spec: ContributedQueueSpec; queue: sst.aws.Queue; dlq: sst.aws.Queue }
+> = Object.fromEntries(
+  contributedQueuePartition.registered.map(spec => {
+    const pair = buildQueuePair<$util.Output<string>>(contributedQueuePairOptions(spec));
+    const dlq = new sst.aws.Queue(pair.dlqName, pair.dlqArgs);
+    // partitionContributedQueues only registers durations QueueArgs accepts, within the SQS 12-hour ceiling.
+    const queue = new sst.aws.Queue(pair.name, pair.queueArgs(dlq.arn) as sst.aws.QueueArgs);
+    return [spec.name, { spec, queue, dlq }];
+  })
+);
+
 export {
   // Queues
   fabFileChunkQueue,
@@ -1678,11 +1802,13 @@ export {
   githubWebhookQueue,
   webhookDeliveryQueue,
   questExportQueue,
+  accountDataExportQueue,
   publishThumbnailQueue,
   dataLakeCleanupQueue,
   dataLakeTaxonomyQueue,
   dataLakeResearchQueue,
   lakeMemoryQueue,
+  riskEvidenceQueue,
   lakeInconsistencyModelQueue,
   driveLakeIngestQueue,
   driveDisconnectPurgeQueue,
@@ -1715,11 +1841,13 @@ export {
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
   questExportQueueDLQ,
+  accountDataExportQueueDLQ,
   publishThumbnailQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
   dataLakeResearchQueueDLQ,
   lakeMemoryQueueDLQ,
+  riskEvidenceQueueDLQ,
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueueDLQ,
   driveDisconnectPurgeQueueDLQ,
@@ -1754,12 +1882,14 @@ export {
   githubWebhookQueueSubscription,
   webhookDeliveryQueueSubscription,
   questExportQueueSubscription,
+  accountDataExportQueueSubscription,
   publishThumbnailQueueSubscription,
   publishThumbnailRenderer,
   dataLakeCleanupQueueSubscription,
   dataLakeTaxonomyQueueSubscription,
   dataLakeResearchQueueSubscription,
   lakeMemoryQueueSubscription,
+  riskEvidenceQueueSubscription,
   lakeInconsistencyModelQueueSubscription,
   driveLakeIngestQueueSubscription,
   driveDisconnectPurgeQueueSubscription,

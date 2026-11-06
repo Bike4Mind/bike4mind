@@ -3,11 +3,11 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope, TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { sendToClient } from '@server/websocket/utils';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { resolveSubscriptionSource, setSeats } from '@server/services/organizationService';
-import { subscriptionRepository } from '@server/models/Subscription';
-import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { pickPrimarySubscription, resolveSubscriptionSource, setSeats } from '@server/services/organizationService';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
+import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { z } from 'zod';
 import { Resource } from 'sst';
 
@@ -30,6 +30,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).patch(
     if (!id) throw new BadRequestError('Organization id required');
 
     const { seats } = SeatsSchema.parse(req.body);
+    const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
     // Block admin seat changes on Stripe-billed orgs. The customer manages
     // their own seats via the Stripe billing portal (which is itself gated
@@ -49,12 +50,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).patch(
     }
 
     const organization = await setSeats(id, seats, { type: 'admin', userId: req.user!.id });
+    // The row setSeats resizes, so the subscription detail page's admin log picks this entry up.
+    const subscriptionId = pickPrimarySubscription(activeSubs)?.subscriptionId ?? null;
 
     await recordAdminActionFromRequest(req, {
       action: 'org.seats.changed',
       target: { kind: 'organization', id: organization.id, displayName: organization.name },
       summary: `set seats to ${organization.seats}`,
-      details: { seats: organization.seats, ownerId: organization.userId },
+      reason,
+      details: { seats: organization.seats, ownerId: organization.userId, subscriptionId },
     });
 
     await sendToClient(organization.userId, Resource.websocket.managementEndpoint, {

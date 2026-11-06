@@ -1,14 +1,15 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
-import { partnerSignupRuleRepository } from '@bike4mind/database';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { partnerSignupRuleRepository, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope, createPartnerSignupRuleSchema } from '@bike4mind/common';
 import {
   invalidatePartnerRuleCache,
   assertKnownEntitlements,
   assertKnownSubscriptionPlan,
 } from '@server/entitlements/partnerRules';
-import { assertOrganizationExists } from '@server/entitlements/assertOrganizationExists';
+import { assertGrantPackageExists, assertOrganizationExists } from '@server/entitlements/assertOrganizationExists';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
 const listQuerySchema = z.object({
@@ -25,10 +26,12 @@ function toBadRequest(error: unknown): never {
   throw error;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(
     asyncHandler(async (req, res) => {
-      ensureAdmin(req.user?.isAdmin);
       let query: z.infer<typeof listQuerySchema>;
       try {
         query = listQuerySchema.parse(req.query);
@@ -41,7 +44,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   )
   .post(
     asyncHandler(async (req, res) => {
-      ensureAdmin(req.user?.isAdmin);
       let data: ReturnType<typeof createPartnerSignupRuleSchema.parse>;
       try {
         data = createPartnerSignupRuleSchema.parse(req.body);
@@ -50,6 +52,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       }
       assertKnownEntitlements(data.entitlements);
       await assertOrganizationExists(data.organizationId);
+      await assertGrantPackageExists(data.grantPackageId, { requireActive: true });
       assertKnownSubscriptionPlan(data.subscription);
 
       // Fast, friendly duplicate check. This is a TOCTOU pre-check, not the guarantee - the
@@ -61,9 +64,25 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       let created;
       try {
-        created = await partnerSignupRuleRepository.create({
-          ...data,
-          createdBy: req.user.id,
+        created = await withTransaction(async () => {
+          const rule = await partnerSignupRuleRepository.create({
+            ...data,
+            createdBy: req.user.id,
+          });
+          await recordAdminActionFromRequest(req, {
+            action: 'org.partner_signup_rule.created',
+            target: { kind: 'settings', id: rule.id, displayName: rule.domain },
+            summary: `created partner signup rule for ${rule.domain}`,
+            details: {
+              domain: rule.domain,
+              organizationId: rule.organizationId ?? null,
+              grantPackageId: rule.grantPackageId ?? null,
+              entitlements: rule.entitlements,
+              signupCredits: rule.signupCredits ?? null,
+              enabled: rule.enabled,
+            },
+          });
+          return rule;
         });
       } catch (error) {
         // Race backstop: a concurrent create for the same domain slips past the pre-check

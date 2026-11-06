@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 const { mocks } = vi.hoisted(() => ({
@@ -21,6 +21,13 @@ const { mocks } = vi.hoisted(() => ({
     overridesByKey: vi.fn(),
     hearthHasAnyChannel: vi.fn(),
     withTransaction: vi.fn(),
+    userFindById: vi.fn(),
+    gearMinAgeSetting: vi.fn(),
+    heldFind: vi.fn(),
+    hold: vi.fn(),
+    rewardOutcome: vi.fn(),
+    buildAdapters: vi.fn(),
+    refundBudgetOnFailure: vi.fn(),
   },
 }));
 
@@ -50,7 +57,10 @@ vi.mock('@bike4mind/database', () => ({
   Artifact: { exists: (...a: unknown[]) => mocks.artifactExists(...a) },
   ApiKey: { exists: (...a: unknown[]) => mocks.apiKeyExists(...a) },
   UsageEvent: { distinct: (...a: unknown[]) => mocks.usageDistinct(...a) },
-  User: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
+  User: {
+    exists: (...a: unknown[]) => mocks.miscExists(...a),
+    findById: (...a: unknown[]) => mocks.userFindById(...a),
+  },
   Session: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
   Agent: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
   Memento: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
@@ -66,18 +76,45 @@ vi.mock('@bike4mind/database', () => ({
     stampedKeys: (...a: unknown[]) => mocks.stampedKeys(...a),
   },
   gearOverrideRepository: { byKey: (...a: unknown[]) => mocks.overridesByKey(...a) },
+  adminSettingsRepository: { getSettingsValue: (...a: unknown[]) => mocks.gearMinAgeSetting(...a) },
   hearthRepository: { hasAnyChannelForUser: (...a: unknown[]) => mocks.hearthHasAnyChannel(...a) },
   importHistoryJobRepository: { findOne: (...a: unknown[]) => mocks.importFindOne(...a) },
   rapidReplyAuditLogRepository: { findOne: (...a: unknown[]) => mocks.miscFindOne(...a) },
   researchDataRepository: { findOne: (...a: unknown[]) => mocks.miscFindOne(...a) },
-  userRepository: {},
+  heldCreditRewardRepository: { findByTransactionIds: (...a: unknown[]) => mocks.heldFind(...a) },
   withTransaction: (fn: () => Promise<unknown>) => mocks.withTransaction(fn),
 }));
+// Stand-in for creditService.payCreditReward: the ledger check, then the outcome the test picks
+// (default paid). Its real behavior is covered on a real DB in server/credits/creditReward.e2e.test.ts.
 vi.mock('@bike4mind/services', () => ({
-  creditService: { addCredits: (...a: unknown[]) => mocks.addCredits(...a) },
+  creditService: {
+    payCreditReward: async (reward: Record<string, unknown>) => {
+      if (await mocks.txFindOne({ transactionId: reward.transactionId })) return { outcome: 'duplicate' };
+      const outcome = (mocks.rewardOutcome() as string | undefined) ?? 'paid';
+      if (outcome === 'queued') mocks.hold(reward);
+      if (outcome !== 'paid') return { outcome };
+      await mocks.addCredits({
+        ownerId: reward.userId,
+        credits: reward.credits,
+        type: 'generic_add',
+        transactionId: reward.transactionId,
+        reason: reward.reason,
+        description: reward.description,
+        source: reward.source,
+      });
+      return { outcome: 'paid', creditTransactionId: 'tx1' };
+    },
+    // Stand-in for the payout gate catalog.evaluateGears mirrors (the real one is covered in creditReward.e2e).
+    isRewardRecipientBlocked: (party: {
+      isBanned?: boolean;
+      moderation?: { status?: string };
+      signupGrant?: { blocked?: unknown };
+    }) => !!party.isBanned || party.moderation?.status === 'suspend_pending' || !!party.signupGrant?.blocked,
+  },
+  userService: { refundBudgetOnFailure: (fn: () => Promise<unknown>) => mocks.refundBudgetOnFailure(fn) },
 }));
-vi.mock('@bike4mind/common', () => ({
-  CreditHolderType: { User: 'User' },
+vi.mock('@server/credits/creditRewardAdapters', () => ({
+  buildCreditRewardAdapters: (...a: unknown[]) => mocks.buildAdapters(...a),
 }));
 
 import handler from '../claim';
@@ -93,6 +130,12 @@ const claim = (body: unknown, user: { id: string } | null = { id: 'u1' }) => {
 
 const unlockProjects = () =>
   mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
+
+// An account that passes all trust checks (email verified, older than 7 days).
+const makeTrustedUser = () =>
+  mocks.userFindById.mockReturnValue({
+    lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: true }),
+  });
 
 const lockEverything = () => {
   mocks.projectExists.mockResolvedValue(null);
@@ -111,6 +154,9 @@ const lockEverything = () => {
   mocks.hearthHasAnyChannel.mockResolvedValue(false);
   mocks.txFind.mockResolvedValue([]);
   mocks.txFindOne.mockResolvedValue(null);
+  mocks.heldFind.mockResolvedValue([]);
+  // Default: trusted account so existing tests that expect payouts continue to pass.
+  makeTrustedUser();
 };
 
 beforeEach(() => {
@@ -118,9 +164,28 @@ beforeEach(() => {
   lockEverything();
   mocks.addCredits.mockResolvedValue({ currentCredits: 100 });
   mocks.withTransaction.mockImplementation((fn: () => Promise<unknown>) => fn());
+  mocks.buildAdapters.mockReturnValue({});
+  mocks.refundBudgetOnFailure.mockImplementation((fn: () => Promise<unknown>) => fn());
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('POST /api/gears/claim', () => {
+  it('propagates a failed trust lookup without starting a payout', async () => {
+    unlockProjects();
+    const lookupError = new Error('User lookup unavailable');
+    mocks.userFindById.mockReturnValue({ lean: () => Promise.reject(lookupError) });
+
+    const { res, promise } = claim({ key: 'projects' });
+
+    await expect(promise).rejects.toBe(lookupError);
+    expect(res._isEndCalled()).toBe(false);
+    expect(mocks.withTransaction).not.toHaveBeenCalled();
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
   it('401s without a user', async () => {
     const { res, promise } = claim({ key: 'projects' }, null);
     await promise;
@@ -141,13 +206,75 @@ describe('POST /api/gears/claim', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ key: 'projects', creditsAwarded: 1000 });
+    expect(mocks.userFindById).toHaveBeenCalledExactlyOnceWith('u1', {
+      createdAt: 1,
+      emailVerified: 1,
+      isBanned: 1,
+      disputePending: 1,
+      moderation: 1,
+      deletedAt: 1,
+      isSynthetic: 1,
+      'signupGrant.blocked': 1,
+    });
     expect(mocks.addCredits).toHaveBeenCalledTimes(1);
     expect(mocks.addCredits.mock.calls[0][0]).toMatchObject({
       ownerId: 'u1',
       credits: 1000,
       type: 'generic_add',
       transactionId: 'gear-unlock:u1:projects',
+      reason: 'gear unlock: projects',
+      description: 'Gear unlock reward: projects',
     });
+  });
+
+  it('pays inside a refund scope with adapters that throw on a duplicate and run in the caller transaction', async () => {
+    unlockProjects();
+    const { promise } = claim({ key: 'projects' });
+    await promise;
+
+    expect(mocks.refundBudgetOnFailure).toHaveBeenCalledTimes(1);
+    expect(mocks.buildAdapters).toHaveBeenCalledExactlyOnceWith({
+      duplicateTransactionId: 'throw',
+      inTransaction: true,
+    });
+  });
+
+  it('tags the payout with its reward source', async () => {
+    unlockProjects();
+    const { promise } = claim({ key: 'projects' });
+    await promise;
+    expect(mocks.addCredits.mock.calls[0][0]).toMatchObject({ source: 'gear' });
+  });
+
+  it('answers 202 queued without paying while the trickle pool is dry', async () => {
+    unlockProjects();
+    mocks.rewardOutcome.mockReturnValue('queued');
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(202);
+    expect(res._getJSONData()).toEqual({ key: 'projects', queued: true });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+    expect(mocks.hold).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a queued reward as claimed, so a second claim neither pays nor queues again', async () => {
+    unlockProjects();
+    mocks.heldFind.mockResolvedValue([{ transactionId: 'gear-unlock:u1:projects', status: 'held' }]);
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getJSONData()).toEqual({ key: 'projects', alreadyClaimed: true });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+    expect(mocks.hold).not.toHaveBeenCalled();
+  });
+
+  it('pays nothing and queues nothing for a blocked account', async () => {
+    unlockProjects();
+    mocks.rewardOutcome.mockReturnValue('blocked');
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+    expect(mocks.hold).not.toHaveBeenCalled();
   });
 
   it('writes the ledger row and the balance inside one transaction', async () => {
@@ -204,7 +331,26 @@ describe('POST /api/gears/claim', () => {
     const { res, promise } = claim({ key: 'published' });
     await promise;
     expect(res._getStatusCode()).toBe(409);
-    expect(res._getJSONData()).toEqual({ error: 'reward_pending' });
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'reward_check' });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { emailVerified: false, ageInDays: 8, reason: 'unverified' },
+    { emailVerified: true, ageInDays: 3, reason: 'too_new' },
+  ])('holds a viewed Published reward for a $reason account', async ({ emailVerified, ageInDays, reason }) => {
+    mocks.publishedExists.mockResolvedValue({ _id: 'a1' });
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - ageInDays * 24 * 60 * 60 * 1000), emailVerified }),
+    });
+
+    const { res, promise } = claim({ key: 'published' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason });
+    expect(mocks.publishedExists).toHaveBeenCalledExactlyOnceWith({ ownerId: 'u1', deletedAt: null });
+    expect(mocks.withTransaction).not.toHaveBeenCalled();
     expect(mocks.addCredits).not.toHaveBeenCalled();
   });
 
@@ -251,5 +397,179 @@ describe('POST /api/gears/claim', () => {
     await promise;
     expect(mocks.agentCount).not.toHaveBeenCalled();
     expect(mocks.apiKeyExists).not.toHaveBeenCalled();
+  });
+
+  it('blocks payout when the account is not email-verified', async () => {
+    unlockProjects();
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: false }),
+    });
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'unverified' });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('blocks payout when the account is younger than 7 days', async () => {
+    unlockProjects();
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000), emailVerified: true }),
+    });
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'too_new' });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('pays a 3-day-old account once gearRewardMinAccountAgeDays is lowered to 0', async () => {
+    unlockProjects();
+    mocks.gearMinAgeSetting.mockResolvedValue(0);
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000), emailVerified: true }),
+    });
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ key: 'projects', creditsAwarded: 1000 });
+  });
+
+  it('holds an 8-day-old account once gearRewardMinAccountAgeDays is raised to 10', async () => {
+    unlockProjects();
+    mocks.gearMinAgeSetting.mockResolvedValue(10);
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'too_new' });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('still requires a verified email when the age wait is 0', async () => {
+    unlockProjects();
+    mocks.gearMinAgeSetting.mockResolvedValue(0);
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(), emailVerified: false }),
+    });
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'unverified' });
+  });
+
+  it('blocks payout as unavailable when the user doc is missing', async () => {
+    unlockProjects();
+    mocks.userFindById.mockReturnValue({ lean: () => Promise.resolve(null) });
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'unavailable' });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('reports unverified ahead of too_new when both apply', async () => {
+    unlockProjects();
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000), emailVerified: false }),
+    });
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'unverified' });
+  });
+
+  it('still answers alreadyClaimed for a gear paid before the account became untrusted', async () => {
+    unlockProjects();
+    mocks.txFind.mockResolvedValue([{ transactionId: 'gear-unlock:u1:projects' }]);
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000), emailVerified: false }),
+    });
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ key: 'projects', alreadyClaimed: true });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { millisecondsUntilEligible: 1, statusCode: 409 },
+    { millisecondsUntilEligible: 0, statusCode: 200 },
+  ])(
+    'enforces the age boundary with $millisecondsUntilEligible ms remaining',
+    async ({ millisecondsUntilEligible, statusCode }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-10-27T00:00:00Z'));
+      unlockProjects();
+      mocks.userFindById.mockReturnValue({
+        lean: () =>
+          Promise.resolve({
+            createdAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000 + millisecondsUntilEligible),
+            emailVerified: true,
+          }),
+      });
+      const { res, promise } = claim({ key: 'projects' });
+      await promise;
+      expect(res._getStatusCode()).toBe(statusCode);
+      if (millisecondsUntilEligible > 0) {
+        expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'too_new' });
+        expect(mocks.addCredits).not.toHaveBeenCalled();
+      } else {
+        expect(res._getJSONData()).toEqual({ key: 'projects', creditsAwarded: 1000 });
+      }
+    }
+  );
+
+  it('pays a verified legacy account that has no createdAt but an old ObjectId', async () => {
+    unlockProjects();
+    mocks.userFindById.mockReturnValue({ lean: () => Promise.resolve({ emailVerified: true }) });
+    const { res, promise } = claim({ key: 'projects' }, { id: '507f1f77bcf86cd799439011' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ key: 'projects', creditsAwarded: 1000 });
+  });
+
+  it('holds the payout for an account with neither createdAt nor an ObjectId id', async () => {
+    unlockProjects();
+    mocks.userFindById.mockReturnValue({ lean: () => Promise.resolve({ emailVerified: true }) });
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(409);
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('pays a trusted account (email-verified and older than 7 days)', async () => {
+    unlockProjects();
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ key: 'projects', creditsAwarded: 1000 });
+  });
+
+  it('blocks apikey gear payout for an unverified account even with an active key', async () => {
+    mocks.apiKeyExists.mockResolvedValue({ _id: 'k1' });
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: false }),
+    });
+    const { res, promise } = claim({ key: 'apikey' });
+    await promise;
+    // Gear unlocks (active key exists), but trust gate blocks the payout.
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'unverified' });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('blocks apicall gear payout for an unverified account even with API usage', async () => {
+    mocks.usageDistinct.mockImplementation((field: string) =>
+      Promise.resolve(field === 'feature' ? ['completion_api'] : [])
+    );
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: false }),
+    });
+    const { res, promise } = claim({ key: 'apicall' });
+    await promise;
+    // Gear unlocks (usage event exists), but trust gate blocks the payout.
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'unverified' });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
   });
 });

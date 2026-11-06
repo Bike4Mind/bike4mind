@@ -1,5 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { useUser } from '@client/app/contexts/UserContext';
 import {
   createMemoryHistory,
   createRootRoute,
@@ -11,6 +13,8 @@ import {
 } from '@tanstack/react-router';
 import {
   adminRoute,
+  adminSubscriptionByStripeIdRoute,
+  adminSubscriptionDetailRoute,
   adminUserProfileRoute,
   billingRoute,
   feedbackRollupRoute,
@@ -29,6 +33,27 @@ import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 // adminRoute does after it, so it passes here.
 vi.mock('./utils/consentGuard', () => ({ enforceConsentRedirect: async () => undefined }));
 
+// Hoisted: router.tsx calls startPageBeacon() while it is being imported.
+const pageBeacon = vi.hoisted(() => ({ startPageBeacon: vi.fn(), beaconPage: vi.fn() }));
+vi.mock('./utils/pageBeacon', () => pageBeacon);
+
+describe('page beacon wiring', () => {
+  it('notes the landing at bootstrap, then reports each page the router settles on', () => {
+    expect(pageBeacon.startPageBeacon).toHaveBeenCalledOnce();
+    expect(pageBeacon.beaconPage).not.toHaveBeenCalled();
+
+    router.emit({
+      type: 'onResolved',
+      toLocation: router.latestLocation,
+      pathChanged: true,
+      hrefChanged: true,
+      hashChanged: false,
+    });
+
+    expect(pageBeacon.beaconPage).toHaveBeenCalledOnce();
+  });
+});
+
 describe('adminRoute validateSearch', () => {
   const validate = (search: Record<string, unknown>) => adminRoute.options.validateSearch(search);
 
@@ -37,18 +62,18 @@ describe('adminRoute validateSearch', () => {
       validate({
         emergency_access: 'true',
         tab: 'audit-log',
-        feedbackId: 'f1',
+        feedbackId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
         category: 'credits',
-        entryId: 'e1',
+        entryId: 'cccccccccccccccccccccccc',
         section: 'security',
         q: 'slack',
       })
     ).toEqual({
       emergency_access: 'true',
       tab: 'audit-log',
-      feedbackId: 'f1',
+      feedbackId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
       category: 'credits',
-      entryId: 'e1',
+      entryId: 'cccccccccccccccccccccccc',
       section: 'security',
       q: 'slack',
     });
@@ -244,6 +269,16 @@ describe('integrationsRoute validateSearch', () => {
   });
 });
 
+describe('admin layout', () => {
+  it('mounts the console and the user profile under one layout route', () => {
+    const consoleParent = adminRoute.options.getParentRoute();
+    expect(adminUserProfileRoute.options.getParentRoute()).toBe(consoleParent);
+    expect(consoleParent.id).toBe('/admin-layout');
+    expect(adminRoute.fullPath).toBe('/admin');
+    expect(adminUserProfileRoute.fullPath).toBe('/admin/users/$userId');
+  });
+});
+
 describe('admin user profile route', () => {
   const USER_ID = '0123456789abcdef01234567';
   const adminBeforeLoad = (search: Record<string, unknown>) =>
@@ -274,5 +309,63 @@ describe('admin user profile route', () => {
     const validate = (search: Record<string, unknown>) => adminUserProfileRoute.options.validateSearch(search);
     expect(validate({ tab: 'admin' })).toEqual({ tab: 'admin' });
     expect({ tab: 'nope', ...validate({ tab: 'nope' }) }.tab).toBeUndefined();
+  });
+});
+
+describe('admin subscription detail routes', () => {
+  it('mounts both under the admin layout', () => {
+    const layout = adminRoute.options.getParentRoute();
+    expect(adminSubscriptionDetailRoute.options.getParentRoute()).toBe(layout);
+    expect(adminSubscriptionByStripeIdRoute.options.getParentRoute()).toBe(layout);
+    expect(adminSubscriptionDetailRoute.fullPath).toBe('/admin/subscriptions/$subscriptionId');
+    expect(adminSubscriptionByStripeIdRoute.fullPath).toBe('/admin/subscriptions/by-stripe/$stripeSubscriptionId');
+  });
+
+  it('deep-links a tab through ?tab=', () => {
+    const validate = (search: Record<string, unknown>) => adminSubscriptionDetailRoute.options.validateSearch(search);
+    expect(validate({ tab: 'admin' })).toEqual({ tab: 'admin' });
+    expect(validate({ tab: 'overview' })).toEqual({ tab: undefined });
+    expect(validate({ tab: 'nope' })).toEqual({ tab: undefined });
+  });
+
+  it('matches the static by-stripe path before the $subscriptionId param', () => {
+    const match = (pathname: string) => router.getMatchedRoutes(pathname)[2]?.id;
+    expect(match('/admin/subscriptions/by-stripe/sub_123')).toBe(adminSubscriptionByStripeIdRoute.id);
+    expect(match('/admin/subscriptions/0123456789abcdef01234567')).toBe(adminSubscriptionDetailRoute.id);
+  });
+});
+
+describe('root route deletion-pending gate', () => {
+  // The app root's own component over a stub child, so the child stands in for any route outside ProviderBundle.
+  const mountAt = (path: string) => {
+    const root = createRootRoute({ component: router.routeTree.options.component });
+    const route = createRoute({ getParentRoute: () => root, path, component: () => <div data-testid="probe-page" /> });
+    const probe = createRouter({
+      routeTree: root.addChildren([route]),
+      history: createMemoryHistory({ initialEntries: [path] }),
+    });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <RouterProvider router={probe} />
+      </QueryClientProvider>
+    );
+  };
+
+  afterEach(() => useUser.setState({ currentUser: null }));
+
+  it('shows only the cancel screen on a root-level route for a deletion-pending user', async () => {
+    useUser.setState({ currentUser: { id: 'u1', deletion: { scheduledFor: '2030-01-01T00:00:00.000Z' } } as never });
+    mountAt('/accept-policies');
+
+    expect(await screen.findByTestId('account-deletion-pending-screen')).toBeInTheDocument();
+    expect(screen.queryByTestId('probe-page')).not.toBeInTheDocument();
+  });
+
+  it('renders the route for a user with no pending deletion', async () => {
+    useUser.setState({ currentUser: { id: 'u1' } as never });
+    mountAt('/accept-policies');
+
+    expect(await screen.findByTestId('probe-page')).toBeInTheDocument();
+    expect(screen.queryByTestId('account-deletion-pending-screen')).not.toBeInTheDocument();
   });
 });

@@ -1,4 +1,4 @@
-import '@client/lib/settings/registerContributedSettings';
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
@@ -38,6 +38,7 @@ import {
   lakeAccessEventRepository,
   scopedSettingsRepository,
 } from '@bike4mind/database';
+import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { NotFoundError, registerLambdaErrorHandlers } from '@bike4mind/utils';
@@ -47,19 +48,21 @@ import { Logger } from '@bike4mind/observability';
 registerLambdaErrorHandlers();
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { getUserEntitlements } from '@server/entitlements';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { operationalBillingAdapters } from '@server/billing/operationalBilling';
 import { z } from 'zod';
 import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services/llm';
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from '@bike4mind/server-utils/queueHandlers/latticeChatTools';
-import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
-import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
-import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { accessibleBy } from '@casl/mongoose';
-import { IUserDocument, Permission, stripSearchResultCardFences } from '@bike4mind/common';
+import { isTerminalCreditRefusal, IUserDocument, Permission, stripSearchResultCardFences } from '@bike4mind/common';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
 import { withEventContext } from '@workers/utils/eventContext';
@@ -74,10 +77,10 @@ import {
 import { cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
 import { buildPendingActionButtons } from '@bike4mind/server-utils/integrations/slack/pendingActionButtons';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '@server/utils/chatCompletionDefaults';
-import { recallMementosV2 } from '@server/memory/recallMementosV2';
-import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
-import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { recallMementosV2 } from '@bike4mind/server-utils/memory/recallMementosV2';
+import { recallLakeMemoryForSession } from '@bike4mind/server-utils/memory/lakeMemoryRecall';
+import { loadSystemPromptById } from '@bike4mind/server-utils/utils/sessionSystemPromptResolver';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
 import {
@@ -118,8 +121,10 @@ export const getStaticOptions = () => {
       projects: projectRepository,
       organizations: organizationRepository,
       mcpServers: mcpServerRepository,
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
       creditTransactions: creditTransactionRepository,
       usageEvents: usageEventRepository,
+      operationalBilling: operationalBillingAdapters,
       agents: agentRepository,
       skills: skillRepository,
       prompts: promptRepository,
@@ -177,6 +182,7 @@ export const getStaticOptions = () => {
       accessibleBy(defineAbilitiesFor(user), permission).ofType(mongoose.models[modelName]),
     // Entitlement-aware lake retrieval parity with questProcessor (see note there).
     getEntitlements: getUserEntitlements,
+    getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
     invokeCreateMemento: async (
       questId: string,
@@ -469,10 +475,14 @@ export const handler = withEventContext(async (event, logger) => {
       videoToolConfigResolver: getSlackVideoToolConfigResolver(params.questId, user.id),
     });
   } catch (processError) {
-    logger.error('[SLACK-NOTIFY] Chat processing failed before a reply was delivered', {
-      questId: params.questId,
-      error: processError,
-    });
+    // A credit refusal fails identically on every retry, so it is an expected outcome, not a fault.
+    const isCreditRefusal = isTerminalCreditRefusal(processError);
+    const failureLog = { questId: params.questId, error: processError };
+    if (isCreditRefusal) {
+      logger.warn('[SLACK-NOTIFY] Chat processing refused by billing before a reply was delivered', failureLog);
+    } else {
+      logger.error('[SLACK-NOTIFY] Chat processing failed before a reply was delivered', failureLog);
+    }
     try {
       await deliverSlackProcessingFailure(params.questId, logger);
     } catch (notifyError) {
@@ -481,6 +491,8 @@ export const handler = withEventContext(async (event, logger) => {
         error: notifyError,
       });
     }
+    // The notice already tells the user; consume the event rather than retrying into the DLQ.
+    if (isCreditRefusal) return;
     throw processError;
   }
 

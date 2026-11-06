@@ -17,20 +17,20 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { IAuthProviders } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { getOktaConfigWithFallback, exchangeCodeForTokens, fetchUserInfo } from '@server/auth/oktaOidcClient';
-import { verifyStateToken } from '@server/auth/jwtStateStore';
+import { verifyStateToken } from '@bike4mind/server-utils/auth/jwtStateStore';
 import {
   readStateNonceHash,
   clearStateNonce,
   readPkceVerifierCookie,
   clearPkceVerifierCookie,
-} from '@server/auth/oauthFlowCookie';
+} from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authSuccessRedirect';
 import { OKTA_STATE_AUDIENCE, OktaStatePayload } from '@server/auth/oktaConstants';
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { logSignInSuccess, resolveSecondFactor, type SecondFactorOutcome } from '@server/auth/signInSecondFactor';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { AuthEvents, AuthStrategy } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -54,7 +54,9 @@ import {
   emitSignupFunnelEvents,
   recordSignupAcquisition,
 } from '@server/analytics/funnel';
+import { readVisitId } from '@server/analytics/visitSession';
 import { recordSignupNetwork } from '@server/auth/networkMeta';
+import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -96,8 +98,11 @@ const handleOktaCallback = async (req: Request, res: Response) => {
 
     // Handle OAuth errors from Okta
     if (error) {
-      // Log full error details for debugging, but show sanitized message to user
-      Logger.error('[Okta Callback] OAuth error from Okta:', { error, errorDescription });
+      // Log full error details for debugging, but show sanitized message to user. access_denied is
+      // the IdP refusing this user (policy, cancelled consent), an expected outcome, so it does not
+      // log at error, the level the alert channel pages on.
+      const logOktaError = error === 'access_denied' ? Logger.warn : Logger.error;
+      logOktaError('[Okta Callback] OAuth error from Okta:', { error, errorDescription });
       await authFailLogRepository.create({
         strategy: 'okta',
         ip,
@@ -111,13 +116,14 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       return res.redirect(`/login?error=${encodeURIComponent(userMessage)}`);
     }
 
+    // warn: a code- or state-less hit on this public URL is caller input, not a server fault.
     if (!state) {
-      Logger.error('[Okta Callback] Missing state parameter');
+      Logger.warn('[Okta Callback] Missing state parameter');
       return res.redirect('/login?error=missing_state');
     }
 
     if (!code) {
-      Logger.error('[Okta Callback] Missing authorization code');
+      Logger.warn('[Okta Callback] Missing authorization code');
       return res.redirect('/login?error=missing_code');
     }
 
@@ -498,12 +504,15 @@ const handleOktaCallback = async (req: Request, res: Response) => {
 
     if (isNewUser) {
       await recordSignupNetwork({ req, userId: user.id, method: AuthStrategy.Okta });
+      // After recordSignupNetwork so the datacenter signal sees the stored signup network.
+      await refreshSignupRiskScore(user.id, Logger.globalInstance);
       const signupFunnel = await recordSignupAcquisition({ req, user, method: AuthStrategy.Okta });
       await emitSignupFunnelEvents({
         user: { id: user.id, ...signupFunnel },
         method: AuthStrategy.Okta,
         emailVerified: userInfo.email_verified === true,
         creditsGranted: signupCreditsGranted,
+        visitId: readVisitId(req.headers.cookie),
       });
     }
 

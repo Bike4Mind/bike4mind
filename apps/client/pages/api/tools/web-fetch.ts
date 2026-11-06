@@ -1,9 +1,11 @@
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, UrlBlockedError } from '@bike4mind/common';
 import { toolRoutesRateLimit } from '@server/middlewares/toolRoutesRateLimit';
 import { runAuditedTool } from '@server/cli/runAuditedTool';
-import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
-import { firecrawlFetch, webFetchBody } from '@bike4mind/services/llm/tools/implementation/webfetch';
+import { billedWebFetch } from '@server/billing/billedWebTools';
+import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
+import { RefusedFetchTargetError, webFetchBody } from '@bike4mind/services/llm/tools/implementation/webfetch';
 import { z } from 'zod';
 
 const WebFetchBodySchema = z.object({
@@ -14,26 +16,24 @@ const WebFetchBodySchema = z.object({
 });
 
 // One hourly budget shared across the three /api/tools/* routes (see toolRoutesRateLimit). Embed
-// (confined) keys hold neither scope, so they are refused.
+// (confined) keys hold neither scope, so they are refused. Each fetch is billed per call
+// (billedWebFetch): a 422 insufficient_credits before the provider is called when the payer is out.
 const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE] })
   .use(toolRoutesRateLimit())
-  .post(async (req, res) =>
+  .post(outboundActionGate(), async (req, res) =>
     runAuditedTool('web_fetch', req.user!.id, req.logger, async () => {
       const { url, offset } = WebFetchBodySchema.parse(req.body);
-
-      const dbAdapters = {
-        db: {
-          apiKeys: apiKeyRepository,
-          adminSettings: adminSettingsRepository,
-        },
-      };
 
       // Frontend Lambda has a 60s timeout. Cap Firecrawl below it AND reserve headroom for the
       // llms.txt probe (up to LLMS_TXT_PROBE_TIMEOUT_MS, awaited after the scrape on a truncated
       // first read) plus response serialization, so a slow-but-successful fetch cannot tip over 60s.
-      const result = await firecrawlFetch(dbAdapters, url, {
-        maxTimeoutMs: 52_000,
-        offset,
+      const result = await billedWebFetch(
+        { caller: req, source: resolveRequestUsageSource(req) },
+        { url, offset, maxTimeoutMs: 52_000 }
+      ).catch((error: unknown) => {
+        // A refused target is the caller's input, not a server fault: 400 (logged at warn).
+        if (error instanceof RefusedFetchTargetError) throw new UrlBlockedError(error.message);
+        throw error;
       });
 
       const body = webFetchBody(result);

@@ -9,6 +9,9 @@ vi.mock('bcryptjs', async () => {
   return bcryptMockFactory();
 });
 
+// Mints in these suites exercise other rules; the trust gate has its own suite (trust.test.ts).
+const TRUSTED = { status: 'trusted' } as const;
+
 // In-memory store wiring create -> revoke so we can assert the status flip.
 function makeSyncedRepo() {
   let stored: IUserApiKeyDocument | null = null;
@@ -38,6 +41,7 @@ describe('revokeUserApiKey', () => {
   it('disables an embed:chat key while leaving its embed fields intact', async () => {
     const { repo, getStored } = makeSyncedRepo();
     const adapters = {
+      trust: TRUSTED,
       db: {
         userApiKeys: repo as any,
         agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
@@ -67,6 +71,7 @@ describe('revokeUserApiKey', () => {
   it('records the revocation audit trail and returns the key name', async () => {
     const { repo, getStored } = makeSyncedRepo();
     const adapters = {
+      trust: TRUSTED,
       db: {
         userApiKeys: repo as any,
         agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
@@ -94,6 +99,7 @@ describe('revokeUserApiKey', () => {
     const { repo } = makeSyncedRepo();
     const endConnections = vi.fn().mockResolvedValue({ connectionIds: ['conn-1'] });
     const adapters = {
+      trust: TRUSTED,
       db: {
         userApiKeys: repo as any,
         agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
@@ -117,6 +123,7 @@ describe('revokeUserApiKey', () => {
   it('leaves revokedReason unset when no reason is supplied', async () => {
     const { repo, getStored } = makeSyncedRepo();
     const adapters = {
+      trust: TRUSTED,
       db: {
         userApiKeys: repo as any,
         agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
@@ -138,6 +145,7 @@ describe('revokeUserApiKey', () => {
   it('keeps the first revocation when an already-revoked key is revoked again', async () => {
     const { repo, getStored } = makeSyncedRepo();
     const adapters = {
+      trust: TRUSTED,
       db: {
         userApiKeys: repo as any,
         agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,

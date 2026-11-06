@@ -1,6 +1,7 @@
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { z } from 'zod';
 import type {
   ChatApprovalMode,
   ChatMessage,
@@ -13,8 +14,13 @@ import type {
   ReasoningEffortSetting,
 } from '@shared/chat';
 import { SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
+import type { WorkspaceOwner } from '@shared/worktreeRemoval';
+import { summarizeSession } from '@shared/agentOutcome';
 import { isImportedMessageId, normalizeImportOrigin } from '@shared/claudeImport';
+import { normalizeGeneration, type GenerationSettings } from '@shared/generation';
 import { storedReasoningEffortSetting } from './reasoningEffort';
+import { isPromptCacheTtl, type PromptCacheTtl } from '@bike4mind/common';
+import type { SessionWritesStore, StoredSessionWrites } from './tools/sessionScripts';
 import { assertScopeKey, migrateLegacySessions, sessionScopeKey, type SessionScope } from './sessionScope';
 
 /** Session ids are generated here, but arrive back from the renderer over IPC - see `filePath`. */
@@ -38,12 +44,14 @@ export function deriveTitle(prompt: string): string {
 }
 
 /**
- * A session file as it is stored, which carries one field the rest of the app never sees.
+ * A session file as it is stored, which carries two fields the rest of the app never sees.
  *
  * `approvalModeLaunch` stamps a 'full' approval mode with the run of the app that chose it.
  * A file written by an earlier run reads back as 'ask' - see `normalizeApprovalMode`.
+ * `orchestrateLaunch` does the same for `orchestrate`, which also lifts a gate (on spawning), so
+ * it lasts one run of the app as 'full' does and reads back as off after a relaunch.
  */
-type StoredSession = ChatSession & { approvalModeLaunch?: string };
+type StoredSession = ChatSession & { approvalModeLaunch?: string; orchestrateLaunch?: string };
 
 /**
  * The approval mode a stored session actually gets, which is not always the one on disk.
@@ -94,7 +102,10 @@ export interface CreateOptions {
  * `list` never mistakes it for a session.
  */
 const SUMMARY_INDEX = '.summary-index';
-const SUMMARY_INDEX_VERSION = 1;
+// Bump whenever summarizeSession derives a field differently, or cached summaries keep the old value.
+const SUMMARY_INDEX_VERSION = 4;
+/** Per-session write records (see tools/sessionScripts), in a folder `list` skips as it is not a `.json` name. */
+const SESSION_WRITES = '.session-writes';
 const LIST_READ_CONCURRENCY = 16;
 
 interface IndexedSummary {
@@ -110,7 +121,7 @@ interface SummaryIndexFile {
   entries: Record<string, IndexedSummary>;
 }
 
-/** Whether an import wrote its copy, preserved a continuation, or respected a concurrent deletion. */
+/** Whether an import wrote its copy, preserved a continuation, or respected conversation/workspace deletion. */
 export type PutImportedOutcome = 'written' | 'forked' | 'removed';
 
 /** The guarded removal result, decided while holding the session's write lock. */
@@ -129,9 +140,18 @@ export function isForkedImport(session: ChatSession): boolean {
   return !!session.importOrigin.forkedAt || session.messages.some(message => !isImportedMessageId(message.id));
 }
 
-function summarize(session: ChatSession): ChatSessionSummary {
-  const { messages, spawnSuggestions: _suggestions, ...summary } = session;
-  return { ...summary, messageCount: messages.length };
+/** Whether a binding's repository and checkout are both still directories; other errors surface. */
+async function projectOnDisk(project: ChatProject): Promise<boolean> {
+  for (const path of new Set([project.directory, project.workingDirectory])) {
+    try {
+      if (!(await stat(path)).isDirectory()) return false;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+      throw error;
+    }
+  }
+  return true;
 }
 
 /**
@@ -223,6 +243,12 @@ export interface ApprovalModeMemory {
   record(mode: ChatApprovalMode): Promise<void>;
 }
 
+/** The same for the prompt-cache lifetime; see PromptCacheTtlPreference. */
+export interface PromptCacheTtlMemory {
+  read(): Promise<PromptCacheTtl>;
+  record(ttl: PromptCacheTtl): Promise<void>;
+}
+
 /**
  * Conversations as one JSON file per session, mirroring the CLI's `~/.bike4mind/sessions`.
  *
@@ -234,7 +260,7 @@ export interface ApprovalModeMemory {
  * directly in `baseDirectory`, which is what a test that does not care builds and what every
  * install before this looked like on disk.
  */
-export class SessionStore {
+export class SessionStore implements SessionWritesStore {
   /** One preparation - the mkdir, and the legacy migration - per scope directory, not per call. */
   private readonly prepared = new Map<string, Promise<string>>();
 
@@ -247,6 +273,18 @@ export class SessionStore {
    * the reply is still appending is exactly that overlap.
    */
   private readonly writes = new Map<string, Promise<unknown>>();
+
+  /** Import bindings and service cleanup share a lease, always outside the per-session lock. */
+  private workspaceBindings: Promise<void> = Promise.resolve();
+
+  withWorkspaceBindings<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.workspaceBindings.then(operation);
+    this.workspaceBindings = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
 
   /** Per scope directory; see SUMMARY_INDEX. */
   private readonly summaryIndexes = new Map<string, Promise<Map<string, IndexedSummary>>>();
@@ -272,7 +310,9 @@ export class SessionStore {
      * every conversation written before the setting existed. Read once per launch from the
      * environment, so a benchmark can move every untouched session without a rebuild.
      */
-    private readonly defaultReasoningEffort: ReasoningEffortSetting = 'default'
+    private readonly defaultReasoningEffort: ReasoningEffortSetting = 'default',
+    /** Absent means new conversations start at '5m' and a pick is not remembered. */
+    private readonly promptCacheTtls?: PromptCacheTtlMemory
   ) {}
 
   /**
@@ -354,6 +394,7 @@ export class SessionStore {
     // A mode the caller named is a spawn inheriting its parent's, already clamped there. Only
     // a conversation the user started themselves reads the preference.
     const approvalMode = options.approvalMode ?? (await this.approvalModes?.read()) ?? 'auto';
+    const promptCacheTtl = await this.promptCacheTtls?.read();
     const now = new Date().toISOString();
     const session: ChatSession = {
       id: randomUUID(),
@@ -367,13 +408,14 @@ export class SessionStore {
       mode,
       approvalMode,
       reasoningEffort: this.defaultReasoningEffort,
+      ...(promptCacheTtl ? { promptCacheTtl } : {}),
       ...(project && mode === 'code' ? { project } : {}),
       ...(options.grantedDirectories?.length ? { grantedDirectories: [...options.grantedDirectories] } : {}),
       ...(origin ? { origin } : {}),
       messages: [],
     };
     await this.write(directory, session);
-    return summarize(session);
+    return summarizeSession(session);
   }
 
   /** Capture identity before an asynchronous operation that must not cross accounts. */
@@ -443,7 +485,7 @@ export class SessionStore {
           }
           const session = await this.read(directory, id);
           if (!session) continue;
-          const summary = summarize(session);
+          const summary = summarizeSession(session);
           index.set(id, { size: info.size, mtimeMs: info.mtimeMs, summary });
           changed = true;
           sessions[position] = summary;
@@ -468,6 +510,58 @@ export class SessionStore {
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
+  /** Only workspace bindings cross account scopes; conversation contents stay private. */
+  async workspaceProjectsExcept(sessionId: string): Promise<ChatProject[]> {
+    return (await this.workspaceOwnersExcept(sessionId)).flatMap(owner => (owner.project ? [owner.project] : []));
+  }
+
+  /** Folder references cross scopes for preservation; titles stay within the current scope. */
+  async workspaceOwnersExcept(sessionId: string): Promise<WorkspaceOwner[]> {
+    const currentDirectory = await this.directoryFor(false);
+    if (!currentDirectory) throw new Error('No conversation scope is available');
+    const entries = await readdir(this.baseDirectory, { withFileTypes: true });
+    if (entries.some(entry => entry.isSymbolicLink())) throw new Error('Cannot verify linked conversation storage');
+    const directories = [
+      this.baseDirectory,
+      ...entries
+        .filter(entry => entry.isDirectory())
+        .map(entry => join(this.baseDirectory, assertScopeKey(entry.name))),
+    ];
+    const owners: WorkspaceOwner[] = [];
+    const directorySchema = z.string().min(1).refine(isAbsolute);
+    const schema = z.object({
+      project: z
+        .object({ contextDirectories: z.array(directorySchema).optional() })
+        .passthrough()
+        .nullish(),
+      grantedDirectories: z.array(directorySchema).optional(),
+      title: z.unknown().optional(),
+    });
+    for (const directory of directories) {
+      for (const name of await readdir(directory)) {
+        if (!name.endsWith('.json')) continue;
+        if (directory === currentDirectory && name === `${sessionId}.json`) continue;
+        const record = schema.parse(JSON.parse(await readFile(join(directory, name), 'utf8')));
+        const project = record.project == null ? undefined : normalizeProject(record.project);
+        if (project === null) throw new Error('Cannot verify all conversation workspaces');
+        const directories = [
+          ...(project ? [project.directory, project.workingDirectory, ...project.contextDirectories] : []),
+          ...(record.grantedDirectories ?? []),
+        ];
+        if (directories.length === 0) continue;
+        owners.push({
+          ...(project ? { project } : {}),
+          directories: [...new Set(directories)],
+          title:
+            directory === currentDirectory
+              ? (typeof record.title === 'string' && record.title.trim()) || UNTITLED
+              : 'Another conversation',
+        });
+      }
+    }
+    return owners;
+  }
+
   private summaryIndex(directory: string): Promise<Map<string, IndexedSummary>> {
     let loading = this.summaryIndexes.get(directory);
     if (!loading) {
@@ -488,9 +582,9 @@ export class SessionStore {
       if (parsed.version !== SUMMARY_INDEX_VERSION || parsed.defaults !== this.summaryDefaults()) return index;
       for (const [id, entry] of Object.entries(parsed.entries ?? {})) {
         if (!isValidSessionId(id) || !entry?.summary || typeof entry.size !== 'number') continue;
-        // 'full' is scoped to the launch that chose it (see normalizeApprovalMode), so a summary
-        // carrying it from an earlier run is stale by definition.
-        if (entry.summary.approvalMode === 'full') continue;
+        // 'full' and orchestrate are scoped to the launch that chose them (see StoredSession), so
+        // a summary carrying either from an earlier run is stale by definition.
+        if (entry.summary.approvalMode === 'full' || entry.summary.orchestrate) continue;
         index.set(id, entry);
       }
     } catch {
@@ -602,6 +696,35 @@ export class SessionStore {
   }
 
   /**
+   * This conversation's sampling and output overrides, replaced whole. Kept as given across model
+   * switches: each turn sends only what its model's controls list (see requestGeneration). Leaves
+   * `updatedAt` alone, as setApprovalMode does.
+   */
+  async setGeneration(id: string, generation: GenerationSettings): Promise<ChatSessionSummary | null> {
+    const next = normalizeGeneration(generation);
+    return this.mutate(id, session => {
+      if (JSON.stringify(session.generation ?? null) === JSON.stringify(next ?? null)) return false;
+      if (next) session.generation = next;
+      else delete session.generation;
+      return true;
+    });
+  }
+
+  /**
+   * How long this conversation's prompt cache lives, remembered as the lifetime of the next new
+   * conversation. Leaves `updatedAt` alone, as setApprovalMode does.
+   */
+  async setPromptCacheTtl(id: string, ttl: PromptCacheTtl): Promise<ChatSessionSummary | null> {
+    const updated = await this.mutate(id, session => {
+      if (session.promptCacheTtl === ttl) return false;
+      session.promptCacheTtl = ttl;
+      return true;
+    });
+    if (updated) await this.promptCacheTtls?.record(ttl);
+    return updated;
+  }
+
+  /**
    * How much this conversation may do without asking.
    *
    * The ONLY writer of this field, and it is reached from exactly one place: the IPC channel
@@ -664,6 +787,15 @@ export class SessionStore {
     return this.mutate(id, session => {
       if (pinned) session.pinned = true;
       else delete session.pinned;
+      return true;
+    });
+  }
+
+  /** Turn Orchestrate on or off. Leaves `updatedAt` alone, as pinning does. */
+  async setOrchestrate(id: string, orchestrate: boolean): Promise<ChatSessionSummary | null> {
+    return this.mutate(id, session => {
+      if (orchestrate) session.orchestrate = true;
+      else delete session.orchestrate;
       return true;
     });
   }
@@ -783,85 +915,123 @@ export class SessionStore {
   }
 
   /** Grant one more folder to a Code session alone. No-op for a Chat session, which has no project. */
-  async addContextDirectory(id: string, directory: string): Promise<ChatSessionSummary | null> {
-    return this.mutate(id, session => {
-      if (!session.project) return null;
-      if (session.project.contextDirectories.includes(directory)) return false;
-      session.project.contextDirectories.push(directory);
-      return true;
-    });
+  async addContextDirectory(
+    id: string,
+    directory: string,
+    expectedScope = this.scopeKey()
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        if (!session.project) return null;
+        if (session.project.contextDirectories.includes(directory)) return false;
+        session.project.contextDirectories.push(directory);
+        return true;
+      },
+      expectedScope
+    );
   }
 
   /**
    * Grant a folder to this conversation alone, for a session with no project to hold it as a
    * context directory. Reached only from a folder the user shared: a `request_directory` card they clicked, the picker, or `/add-dir`.
    */
-  async addGrantedDirectory(id: string, directory: string): Promise<ChatSessionSummary | null> {
-    return this.mutate(id, session => {
-      const granted = session.grantedDirectories ?? [];
-      if (granted.includes(directory)) return false;
-      session.grantedDirectories = [...granted, directory];
-      return true;
-    });
+  async addGrantedDirectory(
+    id: string,
+    directory: string,
+    expectedScope = this.scopeKey()
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        const granted = session.grantedDirectories ?? [];
+        if (granted.includes(directory)) return false;
+        session.grantedDirectories = [...granted, directory];
+        return true;
+      },
+      expectedScope
+    );
   }
 
   /**
    * Take a folder back from this conversation, whichever list it was granted into: a session's
    * chips draw both, and one remove control must revoke either.
    */
-  async removeContextDirectory(id: string, directory: string): Promise<ChatSessionSummary | null> {
-    return this.mutate(id, session => {
-      const granted = session.grantedDirectories ?? [];
-      if (!session.project && !granted.includes(directory)) return null;
-      if (session.project) {
-        session.project.contextDirectories = session.project.contextDirectories.filter(entry => entry !== directory);
-      }
-      const kept = granted.filter(entry => entry !== directory);
-      if (kept.length > 0) session.grantedDirectories = kept;
-      else delete session.grantedDirectories;
-      return true;
-    });
+  async removeContextDirectory(
+    id: string,
+    directory: string,
+    expectedScope = this.scopeKey()
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        const granted = session.grantedDirectories ?? [];
+        if (!granted.includes(directory) && !session.project?.contextDirectories.includes(directory)) return null;
+        if (session.project) {
+          session.project.contextDirectories = session.project.contextDirectories.filter(entry => entry !== directory);
+        }
+        const kept = granted.filter(entry => entry !== directory);
+        if (kept.length > 0) session.grantedDirectories = kept;
+        else delete session.grantedDirectories;
+        return true;
+      },
+      expectedScope
+    );
   }
 
   /**
    * Create or replace a session the Claude importer built, unless the user has continued it
    * here - then it is left exactly as it is and marked forked, so a later sync can never
-   * overwrite a desktop turn. Under the same per-session lock as every other write.
+   * overwrite a desktop turn. Workspace deletion also wins over a binding derived before it.
    */
   async putImported(
     session: ChatSession,
     scopeKey?: string,
     options: { mustExist?: boolean } = {}
   ): Promise<PutImportedOutcome> {
-    return this.serialize(session.id, async () => {
-      const directory = await this.importDirectory(scopeKey);
-      const existing = await this.read(directory, session.id);
-      // A deletion while the importer was reading wins over its stale snapshot.
-      if (options.mustExist && !existing) return 'removed';
-      if (existing && (!existing.importOrigin || isForkedImport(existing))) {
-        if (existing.importOrigin && !existing.importOrigin.forkedAt) {
-          existing.importOrigin = { ...existing.importOrigin, forkedAt: new Date().toISOString() };
-          await this.write(directory, existing);
-        }
-        return 'forked';
-      }
-      // The user's own choices on the row outlive a re-sync of its content: anything the import
-      // does not set (granted folders, a remote link) rides along, and these it does set lose.
-      const kept: Partial<ChatSession> = existing
-        ? {
-            ...(existing.titleLocked ? { title: existing.title, titleLocked: true } : {}),
-            // Same repository only: a project the importer now derives differently is not the user's.
-            ...(existing.project && existing.project.directory === session.project?.directory
-              ? { project: existing.project }
-              : {}),
-            model: existing.model,
-            approvalMode: existing.approvalMode,
-            reasoningEffort: existing.reasoningEffort,
+    return this.withWorkspaceBindings(() =>
+      this.serialize(session.id, async () => {
+        const directory = await this.importDirectory(scopeKey);
+        const existing = await this.read(directory, session.id);
+        // A deletion while the importer was reading wins over its stale snapshot.
+        if (options.mustExist && !existing) return 'removed';
+        if (existing && (!existing.importOrigin || isForkedImport(existing))) {
+          if (existing.importOrigin && !existing.importOrigin.forkedAt) {
+            existing.importOrigin = { ...existing.importOrigin, forkedAt: new Date().toISOString() };
+            await this.write(directory, existing);
           }
-        : {};
-      await this.write(directory, { ...existing, ...session, ...kept });
-      return 'written';
-    });
+          return 'forked';
+        }
+        // The user's own choices on the row outlive a re-sync of its content: anything the import
+        // does not set (granted folders, a remote link) rides along, and these it does set lose.
+        const kept: Partial<ChatSession> = existing
+          ? {
+              ...(existing.titleLocked ? { title: existing.title, titleLocked: true } : {}),
+              // Same repository only: a project the importer now derives differently is not the user's.
+              ...(existing.project && existing.project.directory === session.project?.directory
+                ? { project: existing.project }
+                : {}),
+              model: existing.model,
+              approvalMode: existing.approvalMode,
+              reasoningEffort: existing.reasoningEffort,
+              ...(existing.promptCacheTtl ? { promptCacheTtl: existing.promptCacheTtl } : {}),
+              ...(existing.generation ? { generation: existing.generation } : {}),
+            }
+          : {};
+        const imported = { ...existing, ...session, ...kept };
+        // A carried-over binding whose checkout has since been removed (the normal end of a
+        // worktree) yields to the importer's fresh one, which projectFor already checked.
+        // Answering 'removed' here would freeze the copy for good: callers read it as deleted.
+        if (imported.project && imported.project !== session.project && !(await projectOnDisk(imported.project))) {
+          if (session.project) imported.project = session.project;
+          else delete imported.project;
+        }
+        // Only a fresh binding gone under the lease means workspace cleanup won the race.
+        if (imported.project && !(await projectOnDisk(imported.project))) return 'removed';
+        await this.write(directory, imported);
+        return 'written';
+      })
+    );
   }
 
   /** Recheck ownership and continuation at the delete sink, in the captured account directory. */
@@ -887,6 +1057,36 @@ export class SessionStore {
       if (!directory) return;
       await rm(this.filePath(directory, id), { force: true });
     });
+  }
+
+  async loadSessionWrites(id: string): Promise<unknown> {
+    const directory = await this.directoryFor(false);
+    if (!directory) return null;
+    try {
+      return JSON.parse(await readFile(this.sessionWritesPath(directory, id), 'utf8')) as unknown;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+
+  async saveSessionWrites(id: string, writes: StoredSessionWrites): Promise<void> {
+    const directory = await this.directoryFor(false);
+    if (!directory) return;
+    const path = this.sessionWritesPath(directory, id);
+    await mkdir(join(directory, SESSION_WRITES), { recursive: true });
+    const temporary = `${path}.tmp`;
+    await writeFile(temporary, JSON.stringify(writes), 'utf8');
+    await rename(temporary, path);
+  }
+
+  async deleteSessionWrites(id: string): Promise<void> {
+    const directory = await this.directoryFor(false);
+    if (directory) await rm(this.sessionWritesPath(directory, id), { force: true });
+  }
+
+  private sessionWritesPath(directory: string, id: string): string {
+    return join(directory, SESSION_WRITES, basename(this.filePath(directory, id)));
   }
 
   /**
@@ -973,7 +1173,7 @@ export class SessionStore {
       const outcome = change(session);
       if (outcome === null) return null;
       if (outcome) await this.write(directory, session);
-      return summarize(session);
+      return summarizeSession(session);
     });
   }
 
@@ -1007,6 +1207,7 @@ export class SessionStore {
     const origin = normalizeOrigin(parsed.origin);
     const importOrigin = normalizeImportOrigin(parsed.importOrigin);
     const suggestions = normalizeSuggestions(parsed.spawnSuggestions);
+    const generation = normalizeGeneration(parsed.generation);
     // Absolute only: a relative entry would resolve against wherever the app was launched from.
     const grantedDirectories = Array.isArray(parsed.grantedDirectories)
       ? parsed.grantedDirectories.filter((entry): entry is string => typeof entry === 'string' && isAbsolute(entry))
@@ -1031,10 +1232,15 @@ export class SessionStore {
       // A file with no stored effort keeps behaving the way it did before the picker existed:
       // it takes the launch default, which is the environment variable or nothing at all.
       reasoningEffort: storedReasoningEffortSetting(parsed.reasoningEffort) ?? this.defaultReasoningEffort,
+      ...(isPromptCacheTtl(parsed.promptCacheTtl) ? { promptCacheTtl: parsed.promptCacheTtl } : {}),
+      ...(generation ? { generation } : {}),
       ...(parsed.mode === 'code' && project ? { project } : {}),
       ...(grantedDirectories.length > 0 ? { grantedDirectories } : {}),
       ...(parsed.titleLocked ? { titleLocked: true } : {}),
       ...(parsed.pinned ? { pinned: true } : {}),
+      ...(parsed.orchestrate === true && (parsed as StoredSession).orchestrateLaunch === this.launchId
+        ? { orchestrate: true }
+        : {}),
       ...(parsed.archived ? { archived: true } : {}),
       ...(parsed.historyEnabled ? { historyEnabled: true } : {}),
       ...(origin ? { origin } : {}),
@@ -1053,6 +1259,7 @@ export class SessionStore {
     const record: StoredSession = {
       ...session,
       ...(session.approvalMode === 'full' ? { approvalModeLaunch: this.launchId } : {}),
+      ...(session.orchestrate ? { orchestrateLaunch: this.launchId } : {}),
     };
     await mkdir(directory, { recursive: true });
     // Write-then-rename, as the auth vault does: a crash mid-write would otherwise truncate a

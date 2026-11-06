@@ -3,8 +3,7 @@ import { IBaseRepository } from './BaseTypes';
 
 export interface ICacheDocument extends IMongoDocument {
   key: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  result: any;
+  result: unknown;
   expiresAt: Date;
 }
 

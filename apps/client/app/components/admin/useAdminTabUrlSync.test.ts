@@ -88,6 +88,41 @@ describe('useAdminTabUrlSync', () => {
     expect(routerMock.navigate).not.toHaveBeenCalled();
   });
 
+  it('replaces a legacy subscribers link with the waitlist slug', () => {
+    routerMock.search = { tab: 'subscribers' };
+
+    const { result } = renderHook(() => useHarness(AdminTab.Users));
+
+    expect(result.current.activeTab).toBe(AdminTab.Waitlist);
+    expect(routerMock.navigate).toHaveBeenCalledTimes(1);
+    const { replace, search } = lastNavigation();
+    expect(replace).toBe(true);
+    expect(search({ tab: 'subscribers' }).tab).toBe('waitlist');
+  });
+
+  it('keeps the invite section when rewriting a legacy subscribers link', () => {
+    routerMock.search = { tab: 'subscribers', inviteSection: 'pending' };
+
+    renderHook(() => useHarness(AdminTab.Users));
+
+    expect(lastNavigation().search({ tab: 'subscribers', inviteSection: 'pending' })).toMatchObject({
+      tab: 'waitlist',
+      inviteSection: 'pending',
+    });
+  });
+
+  it('drops the invite section when leaving the waitlist tab', () => {
+    routerMock.search = { tab: 'waitlist', inviteSection: 'pending' };
+    const { result } = renderHook(() => useHarness(AdminTab.Waitlist));
+    routerMock.navigate.mockClear();
+
+    act(() => result.current.setActiveTab(AdminTab.Users));
+
+    const search = lastNavigation().search({ tab: 'waitlist', inviteSection: 'pending' });
+    expect(search.tab).toBe('users');
+    expect(search.inviteSection).toBeUndefined();
+  });
+
   // Mount effects run twice in development; a first-run flag would let the store default
   // overwrite the deep link on the second pass.
   it('keeps a deep link on StrictMode double-run', () => {
@@ -116,8 +151,18 @@ describe('useAdminTabUrlSync', () => {
 
     act(() => result.current.setActiveTab(AdminTab.AuditLog));
 
-    const previous = { tab: 'admin-settings', section: 'security', q: 'slack', category: 'credits', entryId: 'e1' };
-    expect(lastNavigation().search(previous)).toEqual({ tab: 'audit-log', category: 'credits', entryId: 'e1' });
+    const previous = {
+      tab: 'admin-settings',
+      section: 'security',
+      q: 'slack',
+      category: 'credits',
+      entryId: 'cccccccccccccccccccccccc',
+    };
+    expect(lastNavigation().search(previous)).toEqual({
+      tab: 'audit-log',
+      category: 'credits',
+      entryId: 'cccccccccccccccccccccccc',
+    });
   });
 
   it('leaves an Audit Log deep link, filters included, untouched', () => {
@@ -130,15 +175,16 @@ describe('useAdminTabUrlSync', () => {
   });
 
   it('keeps feedbackId on the Feedback tab and drops it elsewhere', () => {
-    routerMock.search = { feedbackId: 'abc' };
+    const FEEDBACK_ID = 'abcabcabcabcabcabcabcabc';
+    routerMock.search = { feedbackId: FEEDBACK_ID };
     const { result } = renderHook(() => useHarness(AdminTab.Feedback));
 
-    expect(lastNavigation().search({ feedbackId: 'abc' })).toEqual({ tab: 'feedback', feedbackId: 'abc' });
+    expect(lastNavigation().search({ feedbackId: FEEDBACK_ID })).toEqual({ tab: 'feedback', feedbackId: FEEDBACK_ID });
 
     routerMock.navigate.mockClear();
     act(() => result.current.setActiveTab(AdminTab.Users));
 
-    expect(lastNavigation().search({ tab: 'feedback', feedbackId: 'abc' })).toEqual({ tab: 'users' });
+    expect(lastNavigation().search({ tab: 'feedback', feedbackId: FEEDBACK_ID })).toEqual({ tab: 'users' });
   });
 
   it('corrects a slug that names no known tab', () => {
@@ -206,6 +252,13 @@ describe('useAdminTabUrlSync', () => {
     expect(result.current.activeTab).toBe(AdminTab.Users);
     expect(seen).not.toContain(AdminTab.LiveOpsTriage);
     expect(lastNavigation().search({ tab: 'live-ops-triage' }).tab).toBe('users');
+  });
+
+  it("falls back to the first sidebar tab it can render when Users is not one (a delegated admin's console)", () => {
+    const { result } = renderHook(() => useHarness(AdminTab.Dashboard, tab => tab === AdminTab.Modals));
+
+    expect(result.current.activeTab).toBe(AdminTab.Modals);
+    expect(lastNavigation().search({}).tab).toBe('modals');
   });
 
   // The gate can resolve after a deep link has already selected the tab.

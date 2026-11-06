@@ -21,6 +21,7 @@ const result = (overrides: Partial<RunResult> = {}, metrics: Partial<RunResult['
     diff: [],
     droppedRecords: [],
     absence: { sighted: [], missed: [], frozenBackends: [], frozenProfileIds: [] },
+    lifecycle: { transitions: [], dateChanges: [], suggestions: [], wouldDeprecate: [] },
     ...overrides,
     metrics: {
       ModelsDiscovered: 3,
@@ -41,6 +42,24 @@ const result = (overrides: Partial<RunResult> = {}, metrics: Partial<RunResult['
 const byName = (data: ReturnType<typeof buildDiscoveryMetricData>, name: string) => data.filter(d => d.name === name);
 
 describe('buildDiscoveryMetricData', () => {
+  it('exposes date-only changes to alarms', () => {
+    const data = buildDiscoveryMetricData(
+      result({
+        lifecycle: {
+          transitions: [],
+          wouldDeprecate: [],
+          dateChanges: [{ modelId: 'model', status: 'active', signal: 'typed', deprecationDate: '2027-01-01' }],
+          suggestions: [{ modelId: 'model', source: 'litellm', detail: 'unconfirmed date' }],
+        },
+      }),
+      'production',
+      'hosted'
+    );
+    expect(byName(data, 'LifecycleDateChanges')).toEqual([
+      expect.objectContaining({ value: 1, dimensions: { Stage: 'production', Host: 'hosted' } }),
+    ]);
+  });
+
   it('maps every run counter to its sec 10 metric name', () => {
     const data = buildDiscoveryMetricData(result(), 'production', 'hosted');
     const values = Object.fromEntries(data.map(d => [d.name, d.value]));

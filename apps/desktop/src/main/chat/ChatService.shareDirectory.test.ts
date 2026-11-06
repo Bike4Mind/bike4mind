@@ -10,8 +10,10 @@ import { ChatService } from './ChatService';
 import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
-import type { WorkspaceResolution } from './project/workspace';
+import { appWorktreeRoot, type WorkspaceResolution } from './project/workspace';
+import { git } from './project/git';
 import { ApprovalGate } from './tools/ApprovalGate';
+import { CapabilityLedger } from './capabilities/CapabilityLedger';
 
 // A worktree cut that holds until a test releases it; every other call is the real resolver.
 const cut = vi.hoisted(() => ({ hold: null as Promise<WorkspaceResolution> | null }));
@@ -36,7 +38,7 @@ function harness(
   store: SessionStore,
   streams: PassThrough[],
   events: ChatStreamEvent[],
-  deps: { protectedPaths?: readonly string[] } = {}
+  deps: { protectedPaths?: readonly string[]; capabilities?: CapabilityLedger; access?: AccessStore } = {}
 ) {
   const post = vi.fn().mockImplementation(() => {
     const stream = new PassThrough();
@@ -128,6 +130,88 @@ describe('ChatService.shareDirectory', () => {
     expect((await store.get(id))?.grantedDirectories).toBeUndefined();
   });
 
+  it('tracks session folder grants, removals and conversation deletion in the ledger', async () => {
+    h.service.dispose();
+    const capabilities = new CapabilityLedger(join(base, 'capabilities.json'));
+    h = harness(store, streams, events, { capabilities });
+    const { id } = await h.service.createSession();
+    await h.service.shareDirectory(id, outside);
+    let grants = (await capabilities.state()).grants;
+    expect(grants).toHaveLength(1);
+    expect(grants[0]).toMatchObject({
+      subject: { kind: 'session', sessionId: id, scopeKey: store.scopeKey() },
+      capability: 'files',
+      scope: { kind: 'path', value: outside },
+    });
+    await h.service.removeContextDirectory(id, outside);
+    expect((await capabilities.state()).grants[0].revokedAt).toEqual(expect.any(String));
+    await h.service.shareDirectory(id, outside);
+    await h.service.deleteSession(id);
+    grants = (await capabilities.state()).grants;
+    expect(grants).toHaveLength(2);
+    expect(grants.every(grant => grant.revokedAt !== undefined)).toBe(true);
+  });
+
+  it("keeps another account's grant intact when removing or deleting the current conversation", async () => {
+    h.service.dispose();
+    const capabilities = new CapabilityLedger(join(base, 'capabilities.json'));
+    h = harness(store, streams, events, { capabilities });
+    const { id } = await h.service.createSession();
+    await h.service.shareDirectory(id, outside);
+    const otherAccountGrant = await capabilities.grant({
+      subject: { kind: 'session', sessionId: id, scopeKey: 'another-account' },
+      capability: 'files',
+      scope: { kind: 'path', value: outside },
+      source: 'approval',
+    });
+    await h.service.removeContextDirectory(id, outside);
+    await h.service.deleteSession(id);
+    const { grants } = await capabilities.state();
+    expect(grants.find(grant => grant.id === otherAccountGrant.id)?.revokedAt).toBeUndefined();
+    expect(
+      grants.find(grant => grant.subject.kind === 'session' && grant.subject.scopeKey === store.scopeKey())?.revokedAt
+    ).toEqual(expect.any(String));
+  });
+
+  it('refuses a folder grant when the account changes while its directory is inspected', async () => {
+    h.service.dispose();
+    const capabilities = new CapabilityLedger(join(base, 'capabilities.json'));
+    h = harness(store, streams, events, { capabilities });
+    const { id } = await h.service.createSession();
+    const originalGet = store.get.bind(store);
+    let scopeKey = 'original-account';
+    let reads = 0;
+    const scope = vi.spyOn(store, 'scopeKey').mockImplementation(() => scopeKey);
+    const get = vi.spyOn(store, 'get').mockImplementation(async sessionId => {
+      const session = await originalGet(sessionId);
+      if (++reads === 2) scopeKey = 'another-account';
+      return session;
+    });
+    try {
+      await expect(h.service.shareDirectory(id, outside)).resolves.toMatchObject({ status: 'refused' });
+      expect((await originalGet(id))?.grantedDirectories).toBeUndefined();
+      expect((await capabilities.state()).grants).toEqual([]);
+    } finally {
+      get.mockRestore();
+      scope.mockRestore();
+    }
+  });
+
+  it('returns a successful folder removal even when its audit write fails', async () => {
+    h.service.dispose();
+    const capabilities = new CapabilityLedger(join(base, 'capabilities.json'));
+    h = harness(store, streams, events, { capabilities });
+    const { id } = await h.service.createSession();
+    await h.service.shareDirectory(id, outside);
+    const revokeMatching = vi.spyOn(capabilities, 'revokeMatching').mockRejectedValue(new Error('disk unavailable'));
+    try {
+      await expect(h.service.removeContextDirectory(id, outside)).resolves.toMatchObject({ id });
+      expect((await store.get(id))?.grantedDirectories ?? []).not.toContain(outside);
+    } finally {
+      revokeMatching.mockRestore();
+    }
+  });
+
   it('gives a Chat session a granted folder instead', async () => {
     const chat = await h.service.createSession();
 
@@ -190,6 +274,23 @@ describe('ChatService.shareDirectory', () => {
     expect((await awaitSettled('read-1')).preview).toContain('outside notes');
     await h.awaitRound(2);
     expect(h.lastToolResult(1)).toContain(`now shared: ${outside}`);
+  });
+
+  it('drops a revoked global folder while a reply is streaming', async () => {
+    h.service.dispose();
+    let globalRoots = [outside];
+    h = harness(store, streams, events, { access: { list: async () => globalRoots } as unknown as AccessStore });
+    const { id } = await h.service.createSession();
+    await h.service.send(id, 'read the notes');
+    await h.awaitRound(1);
+    globalRoots = [];
+    h.service.refreshAccessScopes();
+    streams[0].write(toolTurn('revoked-read', 'file_read', { path: join(outside, 'NOTES.md') }));
+    streams[0].write(frame('[DONE]'));
+    const denied = await awaitSettled('revoked-read');
+    expect(denied.status).toBe('denied');
+    expect(denied.error).toContain('shared folders changed');
+    expect(denied.preview).toBeUndefined();
   });
 
   it('drops a folder removed mid-turn before the next round runs its calls', async () => {
@@ -287,6 +388,258 @@ describe('ChatService.shareDirectory', () => {
     expect(existsSync(join(second, 'ran.txt'))).toBe(false);
     await h.awaitRound(2);
     expect(h.lastToolResult(1)).toContain(`no longer shared: ${outside}`);
+  });
+  describe("an agent's worktree", () => {
+    /** The app's worktree root for `directory`, whose git dir lives in a container beside it as the app lays one out. */
+    async function containerRoot(directory: string, name: string): Promise<string> {
+      await mkdir(directory, { recursive: true });
+      await mkdir(join(base, name), { recursive: true });
+      await git(directory, ['init', '--quiet', `--separate-git-dir=${join(base, name, '.bare')}`]);
+      await git(directory, [
+        '-c',
+        'user.email=t@example.com',
+        '-c',
+        'user.name=T',
+        'commit',
+        '--quiet',
+        '--allow-empty',
+        '-m',
+        'first',
+      ]);
+      return appWorktreeRoot(join(base, name));
+    }
+
+    let worktrees: string;
+    beforeEach(async () => {
+      worktrees = await containerRoot(project, 'container');
+    });
+
+    async function agentSession(parentSessionId: string, folder: string, directory = project) {
+      await mkdir(folder, { recursive: true });
+      // The parent's record of starting it, which is what tells its scope to look for agents.
+      await store.appendMessage(parentSessionId, {
+        id: `spawn-${folder.split('/').pop()}`,
+        role: 'assistant',
+        content: '',
+        createdAt: new Date().toISOString(),
+        toolCalls: [{ id: 'spawn', name: 'session_spawn', input: { prompt: 'do a piece' }, status: 'done' }],
+      });
+      return store.create(undefined, {
+        mode: 'code',
+        project: {
+          directory,
+          name: 'project',
+          branch: '',
+          workspace: true,
+          workspaceBranch: `b4m/${folder.split('/').pop()}`,
+          workingDirectory: folder,
+          contextDirectories: [],
+        },
+        origin: { parentSessionId, depth: 1, seedPrompt: 'do a piece' },
+      });
+    }
+
+    it('is open to the parent that started it, without asking, until the agent is deleted', async () => {
+      const parent = await codeSession();
+      const worktree = join(worktrees, 'agent');
+      const agent = await agentSession(parent, worktree);
+      await writeFile(join(worktree, 'AGENT.md'), 'agent work', 'utf8');
+
+      expect(await h.service.shareDirectory(parent, worktree)).toMatchObject({ status: 'already' });
+      await h.service.send(parent, 'review the agent');
+      await h.awaitRound(1);
+      streams[0].write(toolTurn('agent-read', 'file_read', { path: join(worktree, 'AGENT.md') }));
+      streams[0].write(frame('[DONE]'));
+      expect((await awaitSettled('agent-read')).preview).toContain('agent work');
+      await h.awaitRound(2);
+      streams[1].write(frame({ type: 'content', text: 'Done.' }));
+      streams[1].write(frame('[DONE]'));
+      await vi.waitUntil(() => events.some(event => event.type === 'done'), { timeout: 5000, interval: 10 });
+
+      await h.service.deleteSession(agent.id);
+      expect(await h.service.shareDirectory(parent, worktree)).toMatchObject({ status: 'added' });
+    });
+
+    it('is not open to a session that did not start it', async () => {
+      const parent = await codeSession();
+      const other = await codeSession();
+      const worktree = join(worktrees, 'someone-else');
+      await agentSession(other, worktree);
+
+      expect(await h.service.shareDirectory(parent, worktree)).toMatchObject({ status: 'added' });
+      const roots = (await store.get(parent))?.project?.contextDirectories;
+      expect(roots).toEqual([worktree]);
+    });
+
+    it('is not open once the agent is re-pointed to another project', async () => {
+      const parent = await codeSession();
+      const agent = await agentSession(parent, join(worktrees, 'moved'));
+      expect(await h.service.shareDirectory(parent, join(worktrees, 'moved'))).toMatchObject({ status: 'already' });
+
+      const elsewhere = join(base, 'elsewhere');
+      const elsewhereWorktree = join(await containerRoot(elsewhere, 'elsewhere-container'), 'agent');
+      await mkdir(elsewhereWorktree, { recursive: true });
+      expect(await h.service.updateProject({ sessionId: agent.id, directory: elsewhere })).toMatchObject({ ok: true });
+      // What the agent's next turn records once it cuts its worktree in the new repository.
+      await store.updateProjectWorkspace(agent.id, {
+        workspaceBranch: 'b4m/agent',
+        workingDirectory: elsewhereWorktree,
+      });
+      const moved = (await store.get(agent.id))?.project;
+      expect(moved).toMatchObject({ directory: elsewhere, workingDirectory: elsewhereWorktree });
+
+      expect(await h.service.shareDirectory(parent, elsewhereWorktree)).toMatchObject({ status: 'added' });
+    });
+
+    it('is not open when its folder is not under the app worktree root', async () => {
+      const parent = await codeSession();
+      await agentSession(parent, outside);
+
+      expect(await h.service.shareDirectory(parent, outside)).toMatchObject({ status: 'added' });
+    });
+
+    it('is not open through a symlink under the root that leads outside it', async () => {
+      const parent = await codeSession();
+      const link = join(worktrees, 'link');
+      await mkdir(worktrees, { recursive: true });
+      await symlink(outside, link);
+      await agentSession(parent, link);
+
+      expect(await h.service.shareDirectory(parent, outside)).toMatchObject({ status: 'added' });
+    });
+  });
+});
+
+/** The composer's "Add folder" in a Chat session: the card's checks and grant, with no card. */
+describe('ChatService.shareDirectory in a Chat session', () => {
+  let base: string;
+  let store: SessionStore;
+  let events: ChatStreamEvent[];
+  let streams: PassThrough[];
+  let outside: string;
+  let h: ReturnType<typeof harness>;
+
+  const settled = (id: string): Promise<ChatToolCall> =>
+    vi.waitUntil(
+      () =>
+        events
+          .map(event => (event.type === 'tool-end' ? event.call : null))
+          .find((call): call is ChatToolCall => call !== null && call.id === id),
+      { timeout: 5000, interval: 10 }
+    );
+
+  beforeEach(async () => {
+    base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-share-chat-')));
+    outside = join(base, 'outside');
+    await mkdir(outside);
+    await writeFile(join(outside, 'NOTES.md'), 'outside notes', 'utf8');
+    await writeFile(join(base, 'file.txt'), 'not a folder', 'utf8');
+    store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-share-chat-sessions-')), 'test-model');
+    events = [];
+    streams = [];
+    h = harness(store, streams, events);
+  });
+
+  afterEach(() => {
+    h.service.dispose();
+    for (const stream of streams) stream.end();
+    vi.unstubAllEnvs();
+  });
+
+  it('reaches a new chat before its first message: the first turn lists it and its tools read it', async () => {
+    const chat = await h.service.createSession();
+    expect((await store.get(chat.id))?.messages).toEqual([]);
+
+    expect(await h.service.shareDirectory(chat.id, outside)).toMatchObject({
+      status: 'added',
+      path: outside,
+      session: { id: chat.id, grantedDirectories: [outside] },
+    });
+
+    await h.service.send(chat.id, 'read my notes');
+    await h.awaitRound(1);
+    expect(h.systemPrompt(0)).toContain(
+      `These folders are shared with you, including everything beneath them:\n  ${outside}`
+    );
+    expect(h.toolNames(0)).toContain('file_read');
+
+    streams[0].write(toolTurn('read-1', 'file_read', { path: join(outside, 'NOTES.md') }));
+    streams[0].write(frame('[DONE]'));
+    expect((await settled('read-1')).preview).toContain('outside notes');
+  });
+
+  it("is the model's grant too: request_directory for that folder returns without a card", async () => {
+    const chat = await h.service.createSession();
+    await h.service.shareDirectory(chat.id, outside);
+    await h.service.send(chat.id, 'edit my notes');
+    await h.awaitRound(1);
+
+    streams[0].write(toolTurn('ask-1', 'request_directory', { path: outside, reason: 'Edit the notes.' }));
+    streams[0].write(frame('[DONE]'));
+
+    const done = await settled('ask-1');
+    expect(done.input.outcome).toEqual({ status: 'already' });
+    expect(events.some(event => event.type === 'tool-start' && event.call.status === 'awaiting-approval')).toBe(false);
+  });
+
+  it.each([
+    ['a missing path', () => join(base, 'missing'), /not an existing folder/],
+    ['a file', () => join(base, 'file.txt'), /not an existing folder/],
+    ['the filesystem root', () => '/', /root cannot be shared/],
+    ['a relative path', () => 'outside', /absolute path/],
+  ])('refuses %s, and the first turn still has no folder', async (_name, path, message) => {
+    const chat = await h.service.createSession();
+
+    const result = await h.service.shareDirectory(chat.id, path());
+    expect(result.status).toBe('refused');
+    if (result.status === 'refused') expect(result.error).toMatch(message);
+    expect((await store.get(chat.id))?.grantedDirectories).toBeUndefined();
+
+    await h.service.send(chat.id, 'read my notes');
+    await h.awaitRound(1);
+    expect(h.toolNames(0)).not.toContain('file_read');
+    expect(h.systemPrompt(0)).toContain('You currently have NO access');
+  });
+
+  it("refuses the app's own folder, a folder inside it and a symlink to it", async () => {
+    h.service.dispose();
+    const guarded = join(base, 'app-data');
+    await mkdir(join(guarded, 'sessions'), { recursive: true });
+    const link = join(base, 'looks-harmless');
+    await symlink(guarded, link);
+    h = harness(store, streams, events, { protectedPaths: [guarded] });
+    const chat = await h.service.createSession();
+
+    for (const path of [guarded, join(guarded, 'sessions'), link]) {
+      const result = await h.service.shareDirectory(chat.id, path);
+      expect(result.status).toBe('refused');
+      if (result.status === 'refused') expect(result.error).toMatch(/belongs to this app/);
+    }
+    expect((await store.get(chat.id))?.grantedDirectories).toBeUndefined();
+  });
+
+  it('shares the home folder with the warning the card would show', async () => {
+    const home = join(base, 'home');
+    await mkdir(home);
+    vi.stubEnv('HOME', home);
+    const chat = await h.service.createSession();
+
+    expect(await h.service.shareDirectory(chat.id, '~')).toMatchObject({
+      status: 'added',
+      path: home,
+      warning: expect.stringMatching(/whole home folder/),
+    });
+  });
+
+  it('takes a folder back before the first message, so that turn never sees it', async () => {
+    const chat = await h.service.createSession();
+    await h.service.shareDirectory(chat.id, outside);
+    expect((await h.service.removeContextDirectory(chat.id, outside))?.grantedDirectories).toBeUndefined();
+
+    await h.service.send(chat.id, 'read my notes');
+    await h.awaitRound(1);
+    expect(h.systemPrompt(0)).not.toContain(outside);
+    expect(h.toolNames(0)).not.toContain('file_read');
   });
 });
 

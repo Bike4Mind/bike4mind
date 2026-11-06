@@ -21,6 +21,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => 
 const txEvents: string[] = [];
 vi.mock('@bike4mind/database', () => ({
   userRepository: {},
+  SupportAccess: { create: vi.fn().mockResolvedValue([]) },
   withTransaction: async (fn: () => Promise<unknown>) => {
     txEvents.push('tx:start');
     const result = await fn();

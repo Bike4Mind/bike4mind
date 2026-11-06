@@ -16,14 +16,20 @@ const { mockValidate, mockFindUser, mockRateLimit, mockCreateUpload, mockTranscr
   mockTranscribe: vi.fn(),
 }));
 
+vi.mock('@server/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({
   logEvent: vi.fn().mockResolvedValue(undefined),
   logEventSafe: vi.fn().mockResolvedValue(undefined),
 }));
@@ -125,6 +131,12 @@ describe('/api/v1/transcriptions scope enforcement (real middleware chain)', () 
     const res = await transcribe();
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ text: 'hello' });
+  });
+
+  it('hands the authenticating key to the transcription charge', async () => {
+    withScopes([ApiKeyScope.AI_GENERATE]);
+    expect((await transcribe())._getStatusCode()).toBe(200);
+    expect(mockTranscribe).toHaveBeenCalledWith(expect.objectContaining({ apiKeyId: 'k1' }));
   });
 
   it('a key without ai:generate is refused (403) and nothing is minted or transcribed', async () => {

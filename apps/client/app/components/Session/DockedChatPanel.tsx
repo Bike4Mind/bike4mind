@@ -5,6 +5,7 @@ import { Box, IconButton, Tooltip, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import ChatPanelControls, { chatHeaderToolButtonSx } from './ChatPanelControls';
+import { adminSurfaceExcludeProps } from '@client/app/utils/themes/customizations/adminSkin';
 
 interface DockedChatPanelProps {
   children: React.ReactNode;
@@ -31,6 +32,8 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
   return (
     <Box
       data-testid="docked-chat-panel"
+      // App-wide chrome: the admin skin stops here (adminSkin.ts).
+      {...adminSurfaceExcludeProps}
       sx={{
         display: 'flex',
         flexDirection: 'column',
@@ -53,7 +56,8 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
           // three top bars line up across the app chrome.
           height: '56px',
           padding: '0 16px',
-          backgroundColor: theme.palette.background.level1,
+          // The sidenav's own ground, so the header bars read as one with it.
+          backgroundColor: theme.palette.background.surface2,
           borderBottom: '1px solid',
           borderColor: theme.palette.divider,
           userSelect: 'none',

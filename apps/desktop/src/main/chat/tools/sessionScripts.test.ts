@@ -1,11 +1,12 @@
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   expectShellRun,
   forgetSessionWrites,
   gitRunsConfiguredProgram,
+  recordSessionTreeWrite,
   recordSessionWrite,
   sessionScriptRun,
   shellCommandRan,
@@ -30,6 +31,13 @@ const WRITTEN = [
   'Taskfile.yml',
   'cfg/custom.config.ts',
   'plugins/myplug.py',
+  'a.R',
+  'b.ps1',
+  'npx',
+  'npx.cmd',
+  'pnpm',
+  'sub/npx',
+  'uv.bat',
 ];
 
 describe('sessionScriptRun', () => {
@@ -76,11 +84,28 @@ describe('sessionScriptRun', () => {
     ['env A=1 python3 tools/go.py', 'tools/go.py'],
     ['cd tools && python go.py', 'go.py'],
     ['bash < setup.sh', 'setup.sh'],
+    ['Rscript a.R', 'a.R'],
+    ['cat a.R | Rscript -', 'a.R'],
     ['cat setup.sh | sh', 'setup.sh'],
     ['bash -lc "bash setup.sh"', 'setup.sh'],
     ['echo ok; (bash setup.sh)', 'setup.sh'],
     ['make build', 'Makefile'],
     ['npx tsx tools/x.ts', 'tools/x.ts'],
+    ['NPX tsx tools/x.ts', 'tools/x.ts'],
+    ['npx.exe tsx tools/x.ts', 'tools/x.ts'],
+    ['npx.cmd tsx tools/x.ts', 'tools/x.ts'],
+    ['/usr/bin/npx tsx tools/x.ts', 'tools/x.ts'],
+    ['./npx ls', './npx'],
+    ['./npx.cmd ls', './npx.cmd'],
+    ['./pnpm exec ls', './pnpm'],
+    ['sub/npx ls', 'sub/npx'],
+    ['ROOT/npx ls', 'ROOT/npx'],
+    ['./uv.bat run ls', './uv.bat'],
+    ['./npx tsx x.ts', './npx'],
+    ['uv.bat run python tools/go.py', 'tools/go.py'],
+    ['bash.bat setup.sh', 'setup.sh'],
+    ['PNPM exec tsx tools/x.ts', 'tools/x.ts'],
+    ['powershell.exe -File b.ps1', 'b.ps1'],
     ['bunx tsx tools/x.ts', 'tools/x.ts'],
     ['pnpm exec tsx tools/x.ts', 'tools/x.ts'],
     ['pnpm dlx tsx tools/x.ts', 'tools/x.ts'],
@@ -106,15 +131,44 @@ describe('sessionScriptRun', () => {
     ['bash -c "cd sub && ./y.sh"', './y.sh'],
     ['bash -c "cd sub; bash y.sh"', 'y.sh'],
     ['bash +ec "cd sub; bash y.sh"', 'y.sh'],
+    ['sudo -u bob bash -c "cd sub && ./y.sh"', './y.sh'],
+    ['timeout -s KILL 5 bash -c "cd sub && ./y.sh"', './y.sh'],
     ['echo "$(./run.sh)"', './run.sh'],
     ['echo "$(bash run.sh)"', 'run.sh'],
     ['bash <(cat run.sh)', 'run.sh'],
     ['cat run.sh | sudo bash', 'run.sh'],
     ['cat run.sh | env bash', 'run.sh'],
+    ['time FOO=1 make', 'Makefile'],
+    ['cat run.sh | time FOO=1 bash', 'run.sh'],
+    ['./run.sh; constructor', './run.sh'],
+    ['__proto__; ./run.sh', './run.sh'],
+    ['bash.exe setup.sh', 'setup.sh'],
+    ['BASH.EXE -c "bash setup.sh"', 'setup.sh'],
+    ['cat setup.sh | sh.exe', 'setup.sh'],
+    ['nice --adj 5 make', 'Makefile'],
+    ['cat run.sh | nice --adj 5 bash', 'run.sh'],
+    ["env -S './run.sh'", './run.sh'],
+    ["env -S 'bash run.sh'", 'run.sh'],
+    ['env -S make', 'Makefile'],
+    ['env -iS make build', 'Makefile'],
+    ['env --split-string=./run.sh', './run.sh'],
+    ['env -S \'bash -c "cd sub && ./y.sh"\'', './y.sh'],
+    ['cat run.sh | env -S bash', 'run.sh'],
     ["git -c alias.z='!sh run.sh' z", 'run.sh'],
     ['/usr/bin/git -c core.hooksPath=./run.sh commit', './run.sh'],
   ])('finds %s', async (command, name) => {
     expect(await runs(command.replace('ROOT', root))).toContain(name.replace('ROOT', root));
+  });
+
+  it('finds a launcher path spelled relative to the directory a cd moved into', async () => {
+    const id = 'launcher-after-cd';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'sub/npx'));
+    expect(await runs('cd sub && ./npx ls', id)).toContain('./npx');
+    expect(await runs('./npx ls', id)).toBeNull();
+  });
+
+  it('finds a path-spelled launcher behind another launcher', async () => {
+    expect(await runs('npx ./npx ls')).toContain('./npx');
   });
 
   it('matches a written file in the home folder given as ~', async () => {
@@ -153,6 +207,7 @@ describe('sessionScriptRun', () => {
     'echo "$(cat run.sh)"',
     'diff <(cat run.sh) data.txt',
     'cat run.sh | sudo tee out.txt',
+    'command -v ./run.sh',
   ])('ignores %s', async command => {
     expect(await runs(command)).toBeNull();
   });
@@ -177,6 +232,7 @@ describe('sessionScriptRun', () => {
     expect(run?.hooks.map(([repository]) => repository)).toEqual([repo]);
     expect(await sessionScriptRun('git status', root, id)).toBeNull();
     expect(await sessionScriptRun(`git -C ${repo} status`, root, id)).not.toBeNull();
+    expect(await sessionScriptRun('timeout -s KILL 5 git status', repo, id)).not.toBeNull();
 
     expectShellRun('key', id, run!.hooks);
     shellCommandRan({ sessionId: id, approvedKey: 'key' } as ToolContext);
@@ -224,11 +280,100 @@ describe('sessionScriptRun', () => {
     forgetSessionWrites(session);
   });
 
+  it('counts a file under a rewritten folder as written', async () => {
+    const id = 'session-scripts-tree';
+    await recordSessionTreeWrite({ sessionId: id } as ToolContext, join(root, 'tools'));
+    expect(await runs('python3 tools/go.py', id)).toEqual(['tools/go.py']);
+    expect(await runs('bash data.txt', id)).toBeNull();
+    expect(await runs('cd tools && ./missing.sh', id)).toBeNull();
+  });
+
+  it('flags git after a folder holding a repository is rewritten', async () => {
+    const id = 'session-scripts-tree-hooks';
+    await recordSessionTreeWrite({ sessionId: id } as ToolContext, join(root, 'repo'));
+    expect((await sessionScriptRun('git status', join(root, 'repo'), id))?.hooks).toHaveLength(1);
+  });
+
   it('forgets a closed session', async () => {
     const id = 'session-scripts-closed';
     await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'setup.sh'));
     forgetSessionWrites(id);
     expect(await sessionScriptRun('bash setup.sh', root, id)).toBeNull();
+  });
+
+  describe.each(['constructor', 'toString', '__proto__', 'valueOf', 'hasOwnProperty'])('a command named %s', name => {
+    const id = 'session-scripts-own-keys';
+    beforeAll(() => recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'run.sh')));
+
+    it('is not a project-file runner', async () => {
+      expect(await runs(`${name} x`, id)).toBeNull();
+      expect(await runs(`${name} -C sub x`, id)).toBeNull();
+      expect(await runs(`FOO=./run.sh ${name}`, id)).toBeNull();
+    });
+
+    it('does not hide a session script run in the same command', async () => {
+      expect(await runs(`./run.sh; ${name}`, id)).toEqual(['./run.sh']);
+      expect(await runs(`${name}; ./run.sh`, id)).toEqual(['./run.sh']);
+      expect(await runs(`${name} && npx ${name} && ./run.sh`, id)).toEqual(['./run.sh']);
+    });
+  });
+});
+
+describe('session writes across a restart', () => {
+  let root: string;
+  const saved = new Map<string, unknown>();
+  const store = {
+    loadSessionWrites: async (id: string) => saved.get(id) ?? null,
+    saveSessionWrites: async (id: string, writes: unknown) => void saved.set(id, structuredClone(writes)),
+    deleteSessionWrites: async (id: string) => void saved.delete(id),
+  };
+
+  /** A fresh copy of the module, as after an app restart, reading the same store. */
+  const relaunch = async () => {
+    vi.resetModules();
+    const fresh = await import('./sessionScripts');
+    fresh.keepSessionWritesIn(store);
+    return fresh;
+  };
+
+  beforeAll(async () => {
+    root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-session-restart-')));
+    await mkdir(join(root, 'out'));
+    await writeFile(join(root, 'setup.sh'), 'x\n', 'utf8');
+    await writeFile(join(root, 'out', 'run.sh'), 'x\n', 'utf8');
+  });
+
+  afterAll(() => rm(root, { recursive: true, force: true }));
+
+  it('still asks in a resumed session, with the same generation', async () => {
+    const before = await relaunch();
+    const context = { sessionId: 'restart' } as ToolContext;
+    await before.recordSessionWrite(context, join(root, 'setup.sh'));
+    await before.recordSessionTreeWrite(context, join(root, 'out'));
+    const first = await before.sessionScriptRun('bash setup.sh && bash out/run.sh', root, 'restart');
+
+    const after = await relaunch();
+    const resumed = await after.sessionScriptRun('bash setup.sh && bash out/run.sh', root, 'restart');
+    expect(resumed?.names).toEqual(['setup.sh', 'out/run.sh']);
+    expect(resumed?.generation).toBe(first?.generation);
+    expect(await after.sessionScriptRun('bash setup.sh', root, 'other')).toBeNull();
+
+    await after.recordSessionWrite(context, join(root, 'setup.sh'));
+    expect((await after.sessionScriptRun('bash setup.sh', root, 'restart'))?.generation).not.toBe(first?.generation);
+  });
+
+  it('asks before any script run when the stored record does not read back', async () => {
+    saved.set('corrupt', { files: 'nope' });
+    const after = await relaunch();
+    expect(await after.sessionScriptRun('bash setup.sh', root, 'corrupt')).toMatchObject({ untracked: true });
+  });
+
+  it('removes the stored record when the session is deleted', async () => {
+    const before = await relaunch();
+    await before.recordSessionWrite({ sessionId: 'deleted' } as ToolContext, join(root, 'setup.sh'));
+    await before.forgetSessionWrites('deleted');
+    expect(saved.has('deleted')).toBe(false);
+    expect(await (await relaunch()).sessionScriptRun('bash setup.sh', root, 'deleted')).toBeNull();
   });
 });
 

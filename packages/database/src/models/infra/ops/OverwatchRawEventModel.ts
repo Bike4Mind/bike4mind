@@ -2,6 +2,9 @@ import mongoose, { Model, Schema, model } from 'mongoose';
 
 const ModelName = 'OverwatchRawEvent';
 
+/** Name of the partial `{ productId, timestamp }` index over credited (`metadata.attribution: 'self-reported'`) events. */
+export const OVERWATCH_RAW_EVENT_CREDITED_INDEX = 'productId_1_timestamp_-1_attribution_self_reported';
+
 export interface IOverwatchRawEventDoc {
   _id: string;
   eventId: string;
@@ -58,6 +61,13 @@ OverwatchRawEventSchema.index({ productId: 1, timestamp: -1 });
 // event catalog, session counts, next steps and the newest-event seek name no event.
 // Pre-built by 20260921235977_ensure-overwatch-raw-event-explorer-index rather than left to autoIndex.
 OverwatchRawEventSchema.index({ productId: 1, event: 1, timestamp: -1 });
+// Seeking and counting credited events without walking every event the product sent. Holds only
+// credits, so a read must carry the `metadata.attribution: 'self-reported'` equality to use it (a `$ne`
+// cannot). Named so it does not clash with the unfiltered `productId_1_timestamp_-1` of the same key.
+OverwatchRawEventSchema.index(
+  { productId: 1, timestamp: -1 },
+  { name: OVERWATCH_RAW_EVENT_CREDITED_INDEX, partialFilterExpression: { 'metadata.attribution': 'self-reported' } }
+);
 // TTL: auto-delete raw events after 90 days
 OverwatchRawEventSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7776000 });
 

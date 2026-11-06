@@ -1,8 +1,10 @@
 import { IResearchTask, IResearchTaskJobs } from '@bike4mind/common';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
+
+export type DeepResearchIntoQuestJob = { questId: string; sessionId: string; userId: string; topic: string };
 
 class ResearchTaskJobs implements IResearchTaskJobs {
   async process(id: string, userId: string): Promise<void> {
@@ -38,6 +40,10 @@ class ResearchTaskJobs implements IResearchTaskJobs {
         userId,
       },
     });
+  }
+
+  async deepResearchIntoQuest(job: DeepResearchIntoQuestJob): Promise<void> {
+    await sendToQueue(getSourceQueueUrl('researchEngineQueue'), { action: 'deepResearchIntoQuest', payload: job });
   }
 
   async sendToClient(

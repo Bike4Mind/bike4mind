@@ -80,7 +80,7 @@ The Campaigns sub-tab shows all campaigns in a table with the following columns:
 | Column | Description |
 |--------|-------------|
 | **Name** | Campaign name, creation date, and a "TEST" badge if the campaign is in test mode. |
-| **Recipients** | The recipient targeting type (All Users, All Subscribers, Users & Subscribers, Specific, or test count). |
+| **Recipients** | The recipient targeting type (All users, Waitlist, All users and waitlist, Specific, or test count). |
 | **Status** | The overall campaign status: Draft, Sending, Complete, Partial, or Cancelled. Includes the last sent date and scheduled time if applicable. |
 | **Progress** | A progress bar showing sent/total count with failure count if any. |
 | **Open Rate** | Percentage of sent emails that have been opened. |
@@ -115,9 +115,9 @@ Select the target audience for the campaign:
 
 | Recipient Type | Description |
 |----------------|-------------|
-| **All Users** | All registered users with email addresses. |
-| **All Subscribers** | Newsletter subscribers (may not have accounts). |
-| **All Users & Subscribers** | Both groups, deduplicated by email. |
+| **All users** | All registered users with email addresses. |
+| **Waitlist** | People on the waitlist (may not have accounts). |
+| **All users and waitlist** | Both groups, deduplicated by email. |
 | **Specific Emails** | Manually entered email addresses, one per line or comma-separated. |
 
 After selecting a recipient type, a preview panel displays the total, eligible, and excluded recipient counts. An inline table shows the first several recipients, with a "View All" button to open a full paginated modal with search capabilities.
@@ -164,5 +164,5 @@ For existing campaigns, the bottom of the detail view includes:
 
 ## Related Articles
 
-- [Subscribers](./subscribers.md)
+- [Waitlist](./waitlist.md)
 - [Invite Codes](./invite-codes.md)

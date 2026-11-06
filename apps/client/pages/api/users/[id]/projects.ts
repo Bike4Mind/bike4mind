@@ -1,6 +1,8 @@
 import { projectRepository, userRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { respond } from '@server/utils/respond';
+import { projectListResponseSchema } from '@bike4mind/common';
 
 const handler = baseApi().get(async (req, res) => {
   const userId = req.query.id as string;
@@ -20,7 +22,7 @@ const handler = baseApi().get(async (req, res) => {
 
   // All projects the user has access to including own projects
   const projects = await projectRepository.shareable.findAllAccessible(user);
-  return res.status(200).json(projects || []);
+  return respond(res, projectListResponseSchema, projects || []);
 });
 
 export const config = {

@@ -24,6 +24,13 @@ import { canAccessTavern } from '@bike4mind/common';
  * than (and would add a staleness window on top of) the JWT/API-key lifetime
  * that already fixes the caller's identity, so caching authorization here would
  * trade correctness for a saving the access pattern does not need.
+ *
+ * Reads the stored admin role on purpose, without `withholdAdminRole`
+ * (server/auth/apiKeyAdminScope.ts), even though a bridge key never carries `admin:*`.
+ * A `cc-bridge` key is only minted by /api/cc-bridge/pair and /download, both behind
+ * `ensureTavernAccess`, and the scope is good for nothing but these gated actions, so the
+ * admin role buys it only the Tavern access it was minted for. Withholding it would lock
+ * out every admin without the 'tavern' tag. Demoting the owner still takes effect here.
  */
 export async function connectionUserCanAccessTavern(userId: string): Promise<boolean> {
   const user = await User.findById(userId, { isAdmin: 1, tags: 1 }).lean();

@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { z } from 'zod';
-import { ApiKeyScope } from '@bike4mind/common';
 
 // Capture the options baseApi() is constructed with so we can assert the scope
 // gate. Middleware is stripped so the raw handler runs directly (same pattern as
@@ -21,7 +20,10 @@ const mockGetCachedData = vi.fn();
 const mockRefineText = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   cacheService: { getCachedData: (...a: any[]) => mockGetCachedData(...a) },
+  // Metering is covered in server/ai/refineTextRequest.test.ts; here the backend passes through.
+  meterCompletionBackend: (llm: unknown) => llm,
 }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: vi.fn() }));
 vi.mock('@bike4mind/services/llm/refineText', () => ({
   refineText: (...a: any[]) => mockRefineText(...a),
   // Real schema so validation + ZodError behave exactly as in production.
@@ -30,25 +32,25 @@ vi.mock('@bike4mind/services/llm/refineText', () => ({
 vi.mock('@bike4mind/database', () => ({ cacheRepository: { findByKey: vi.fn(), createOrUpdate: vi.fn() } }));
 
 const mockGetOperationsModel = vi.fn();
-vi.mock('@client/services/operationsModelService', async orig => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', async orig => ({
   // Keep the real exports (the helper's typed unavailable error) and stub only the resolver.
-  ...(await orig<typeof import('@client/services/operationsModelService')>()),
+  ...(await orig<typeof import('@bike4mind/server-utils/services/operationsModelService')>()),
   OperationsModelService: { getOperationsModel: (...a: any[]) => mockGetOperationsModel(...a) },
 }));
 
 import handler from '@pages/api/ai/refineText';
 import errorHandler from '@server/middlewares/errorHandler';
 import { CacheKeys } from '@server/utils/cacheKeys';
-import { OperationsModelUnavailableError } from '@client/services/operationsModelService';
+import { OperationsModelUnavailableError } from '@bike4mind/server-utils/services/operationsModelService';
 
 describe('POST /api/ai/refineText', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('gates the route to the ai:generate scope', () => {
+  it('accepts a JWT only (API keys use POST /api/v1/text-refinements)', () => {
     // Populated at module-eval when baseApi({...}) runs.
-    expect(mockBaseApiArgs[0]).toEqual({ requiredScopes: [ApiKeyScope.AI_GENERATE] });
+    expect(mockBaseApiArgs[0]).toEqual({ auth: 'jwtOnly' });
   });
 
   it('rejects an invalid body with a 400 and never calls the LLM/cache', async () => {

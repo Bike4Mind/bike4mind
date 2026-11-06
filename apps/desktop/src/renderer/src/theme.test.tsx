@@ -29,6 +29,81 @@ describe('the desktop theme', () => {
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
+    localStorage.removeItem('tooltip-test-mode');
+  });
+
+  it.each(['light', 'dark'] as const)('gives neutral soft tooltips and arrows an opaque %s popup fill', async mode => {
+    await act(async () =>
+      root.render(
+        <CssVarsProvider theme={desktopTheme} defaultMode={mode} modeStorageKey="tooltip-test-mode">
+          <Tooltip
+            title="A floating explanation"
+            variant="soft"
+            open
+            arrow
+            slotProps={{
+              root: { open: true, 'data-testid': 'theme-tooltip-root' },
+              arrow: { 'data-testid': 'theme-tooltip-arrow' },
+            }}
+          >
+            <span>anchor</span>
+          </Tooltip>
+        </CssVarsProvider>
+      )
+    );
+
+    expect(document.documentElement.getAttribute('data-joy-color-scheme')).toBe(mode);
+    const popup = desktopTheme.colorSchemes[mode].palette.background.popup;
+    expect(popup).not.toMatch(/rgba|transparent/);
+    const palette = desktopTheme.colorSchemes[mode].palette;
+    expect(contrast(hexToRgb(palette.neutral.softColor), hexToRgb(popup))).toBeGreaterThanOrEqual(4.5);
+    const tooltip = document.querySelector('[data-testid="theme-tooltip-root"]') as HTMLElement;
+    expect(getComputedStyle(tooltip).backgroundColor).toBe('var(--joy-palette-background-popup)');
+    const arrow = document.querySelector('[data-testid="theme-tooltip-arrow"]') as HTMLElement;
+    const arrowStyles = Array.from(document.styleSheets).flatMap(sheet =>
+      Array.from(sheet.cssRules).filter(
+        (rule): rule is CSSStyleRule =>
+          rule instanceof CSSStyleRule &&
+          rule.selectorText.endsWith('::before') &&
+          arrow.matches(rule.selectorText.slice(0, -'::before'.length))
+      )
+    );
+    expect(arrowStyles.length).toBeGreaterThan(0);
+    for (const property of ['border-top-color', 'border-right-color']) {
+      expect(
+        arrowStyles
+          .map(rule => rule.style.getPropertyValue(property))
+          .filter(Boolean)
+          .at(-1)
+      ).toBe('var(--joy-palette-background-popup)');
+    }
+  });
+
+  it.each([
+    ['primary', 'soft'],
+    ['danger', 'soft'],
+    ['success', 'soft'],
+    ['warning', 'soft'],
+    ['neutral', 'solid'],
+  ] as const)('preserves the %s %s tooltip fill', async (color, variant) => {
+    await act(async () =>
+      root.render(
+        <CssVarsProvider theme={desktopTheme}>
+          <Tooltip
+            title="Semantic tooltip"
+            color={color}
+            variant={variant}
+            open
+            slotProps={{ root: { open: true, 'data-testid': 'theme-tooltip-root' } }}
+          >
+            <span>anchor</span>
+          </Tooltip>
+        </CssVarsProvider>
+      )
+    );
+
+    const tooltip = document.querySelector('[data-testid="theme-tooltip-root"]') as HTMLElement;
+    expect(getComputedStyle(tooltip).backgroundColor).toBe(desktopTheme.variants[variant][color].backgroundColor);
   });
 
   it('caps every tooltip at a width that wraps, however long its text', async () => {
@@ -45,6 +120,22 @@ describe('the desktop theme', () => {
     const style = getComputedStyle(document.body.querySelector('[role="tooltip"]') as HTMLElement);
     expect(style.maxWidth).toContain(`${TOOLTIP_MAX_WIDTH}px`);
     expect(style.overflowWrap).toBe('anywhere');
+  });
+
+  // An interactive tooltip held open by the pointer crossing it covered the control beneath.
+  it('lets the pointer through every tooltip to whatever it is drawn over', async () => {
+    await act(async () =>
+      root.render(
+        <CssVarsProvider theme={desktopTheme}>
+          <Tooltip title="/Users/someone/projects/a-long-folder" open>
+            <span>folder</span>
+          </Tooltip>
+        </CssVarsProvider>
+      )
+    );
+
+    const tooltip = document.body.querySelector('[role="tooltip"]') as HTMLElement;
+    expect(getComputedStyle(tooltip).pointerEvents).toBe('none');
   });
 
   it('runs every tooltip and menu through the modifier that keeps them off the browser page', async () => {
@@ -76,7 +167,10 @@ describe('the desktop theme', () => {
 type Rgb = [number, number, number];
 
 const hexToRgb = (hex: string): Rgb => {
-  const value = Number.parseInt(hex.slice(1), 16);
+  const resolved = hex.match(/#[\da-f]+/gi)?.at(-1);
+  if (!resolved) throw new Error(`Expected a hex color or CSS variable with a hex fallback: ${hex}`);
+  const digits = resolved.slice(1);
+  const value = Number.parseInt(digits.length === 3 ? [...digits].map(digit => digit.repeat(2)).join('') : digits, 16);
   return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
 };
 

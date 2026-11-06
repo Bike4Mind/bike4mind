@@ -4,7 +4,7 @@ import { Resource } from 'sst';
 import { stripChoicesFromReplies, visibleReplyText } from '@bike4mind/common';
 import { questRepository } from '@bike4mind/database';
 import { QuestStartBodySchema } from '@bike4mind/services/llm';
-import { Logger } from '@bike4mind/observability';
+import { Logger, describeErrorCause } from '@bike4mind/observability';
 import { processQuest } from '@server/queueHandlers/questProcessor';
 import { emitProcessingFailed } from '../processingFailedMetric';
 
@@ -101,7 +101,9 @@ export function registerInternalRoutes(app: Express, track: (p: Promise<void>) =
 
     const task = processQuest(params, logger).catch(async err => {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      logger.error('Quest processing failed', { error: errorMessage });
+      // `error`/`errorCause` stay flat strings for alert sinks that print each field with `${value}`;
+      // `err` carries the stack and the full cause chain into the structured log.
+      logger.error('Quest processing failed', { error: errorMessage, errorCause: describeErrorCause(err), err });
 
       // Operator-facing signal only - the quest's own reply to the user is handled separately
       // below. Without this, detection of a processing failure was "a user complains".
@@ -129,6 +131,8 @@ export function registerInternalRoutes(app: Express, track: (p: Promise<void>) =
       } catch (updateErr) {
         logger.error('Failed to mark quest stopped after processing error', {
           error: updateErr instanceof Error ? updateErr.message : String(updateErr),
+          errorCause: describeErrorCause(updateErr),
+          err: updateErr,
         });
       }
     });

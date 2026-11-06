@@ -10,9 +10,11 @@ import { setFunnelSyntheticUser } from '@client/app/utils/funnelEvents';
 import ExpiredSession from '../components/ExpiredSession';
 import { useSubscribeCollection } from '../utils/react-query';
 import { useGetIdentify } from '@client/app/hooks/data/user';
+import { setDeletionGuardUser } from '@client/app/utils/accountDeletionInterceptor';
 import { persist, PersistStorage, StorageValue } from 'zustand/middleware';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 
 /**
  * Decode the `tokenVersion` claim from a JWT access token without verifying
@@ -72,7 +74,9 @@ export interface UserContextProps {
   isDeveloper: boolean;
   isCustomer: boolean;
   setCurrentUser: (value: IUserDocument | null) => void;
-  refreshUser: () => Promise<void>;
+  /** Bumped by each `fresh` refresh so UI keyed on it re-requests an image whose first load failed. */
+  avatarVersion: number;
+  refreshUser: (options?: { fresh?: boolean }) => Promise<void>;
 }
 
 export interface UserProviderProps {
@@ -153,11 +157,13 @@ type PersistedUserFields = Pick<
   | 'username'
   | 'photoUrl'
   | 'isAdmin'
+  | 'adminPermissions'
   | 'level'
   | 'organizationId'
   | 'emailVerified'
   | 'showCreditsUsed'
   | 'currentCredits'
+  | 'signupGrant'
   | 'preferences'
   | 'tags'
   // Persisted so first-run UX (e.g. suppressing "What's New" for brand-new accounts) survives a
@@ -169,6 +175,9 @@ type PersistedUserFields = Pick<
   // this field being persisted still won't flash the /accept-policies interstitial on hard reload -
   // it waits for /api/identify to land the grandfathered value.
   | 'aupAcceptedVersion'
+  // Persisted so a reload knows the account is deletion-pending before any request fires, and so
+  // shows only the cancel screen instead of booting the app into the server's 403s.
+  | 'deletion'
 >;
 
 const pickPersistedFields = (user: IUserDocument | null): PersistedUserFields | null => {
@@ -180,15 +189,18 @@ const pickPersistedFields = (user: IUserDocument | null): PersistedUserFields | 
     username: user.username,
     photoUrl: user.photoUrl,
     isAdmin: user.isAdmin,
+    adminPermissions: user.adminPermissions,
     level: user.level,
     organizationId: user.organizationId,
     emailVerified: user.emailVerified,
     showCreditsUsed: user.showCreditsUsed,
     currentCredits: user.currentCredits,
+    signupGrant: user.signupGrant,
     preferences: user.preferences,
     tags: user.tags,
     createdAt: user.createdAt,
     aupAcceptedVersion: user.aupAcceptedVersion,
+    deletion: user.deletion,
   };
 };
 
@@ -238,7 +250,7 @@ let refreshUserInFlight: Promise<void> | null = null;
 
 export const useUser = create<UserContextProps>()(
   persist(
-    set => ({
+    (set, get) => ({
       currentUser: null,
       isHydrated: false,
       isAdmin: false,
@@ -246,6 +258,7 @@ export const useUser = create<UserContextProps>()(
       isModerated: false,
       isDeveloper: false,
       isCustomer: false,
+      avatarVersion: 0,
       setCurrentUser: (currentUser: IUserDocument | null) => {
         set({
           currentUser,
@@ -259,12 +272,19 @@ export const useUser = create<UserContextProps>()(
           isCustomer: userIsCustomer(currentUser),
         });
       },
-      refreshUser: async () => {
+      refreshUser: async options => {
         // Single-flight: unlike probeIdentity (sessionBootstrap.ts) this imperative
         // /api/identify call had no dedup, so an effect that re-runs each render could fire
         // one identify per render. Concurrent callers share the one in-flight request; the
         // guard clears on settle so a later, genuinely-new refresh still runs.
-        if (refreshUserInFlight) return refreshUserInFlight;
+        if (refreshUserInFlight) {
+          if (!options?.fresh) return refreshUserInFlight;
+          // A post-mutation refresh must start after any pre-mutation read settles.
+          await refreshUserInFlight;
+          await get().refreshUser();
+          set(state => ({ avatarVersion: state.avatarVersion + 1 }));
+          return;
+        }
         refreshUserInFlight = (async () => {
           try {
             // 10s bound matches the two sibling single-flight guards (refreshPromise in
@@ -280,6 +300,7 @@ export const useUser = create<UserContextProps>()(
               isModerated: !!response.data.user?.isModerated,
               isDeveloper: userIsDeveloper(response.data.user),
               isCustomer: userIsCustomer(response.data.user),
+              ...(options?.fresh ? { avatarVersion: get().avatarVersion + 1 } : {}),
             });
           } catch (error) {
             console.error('Error refreshing user:', error);
@@ -302,6 +323,10 @@ export const useUser = create<UserContextProps>()(
 
 // Keeps synthetic test personas out of client funnel events (funnelEvents.ts).
 useUser.subscribe(state => setFunnelSyntheticUser(!!state.currentUser?.isSynthetic));
+
+// The api request guard (accountDeletionInterceptor.ts) reads this; seeded from the rehydrated user.
+setDeletionGuardUser(useUser.getState().currentUser);
+useUser.subscribe(state => setDeletionGuardUser(state.currentUser));
 
 /**
  * Decide whether a real-time `users` update should force a graceful sign-out
@@ -399,6 +424,32 @@ export const shouldAdoptIdentifyToken = (heldToken: string | null | undefined): 
  */
 export const applyUserPush = (existing: IUserDocument | null, pushed: IUserDocument): IUserDocument =>
   ({ ...(existing ?? {}), ...pushed }) as IUserDocument;
+
+// The ref guard re-arms whenever the user briefly reads as not needing a reconnect (cleared, then
+// re-identified), so a fixed id makes a repeat replace the visible toast instead of stacking on it.
+export const ATLASSIAN_RECONNECT_TOAST_ID = 'atlassian-reconnect-required';
+
+export function useAtlassianReconnectToast(status: string | undefined, t: TFunction) {
+  const hasShownAtlassianReconnectToast = useRef(false);
+  useEffect(() => {
+    const needsReconnect = status === 'needs_reconnect';
+    if (needsReconnect && !hasShownAtlassianReconnectToast.current) {
+      hasShownAtlassianReconnectToast.current = true;
+      toast.error(t('integrations.atlassian.reconnect_required'), {
+        id: ATLASSIAN_RECONNECT_TOAST_ID,
+        duration: 10000,
+        action: {
+          label: 'Reconnect',
+          onClick: () => {
+            window.location.href = '/profile?tab=integrations';
+          },
+        },
+      });
+    } else if (!needsReconnect) {
+      hasShownAtlassianReconnectToast.current = false;
+    }
+  }, [status, t]);
+}
 
 /** Provides user data and operations to children via the zustand store. */
 export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
@@ -505,26 +556,8 @@ export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
     accessToken,
   ]);
 
-  // Check for Atlassian reconnect status and show toast if needed
   const currentUser = useUser(s => s.currentUser);
-  const hasShownAtlassianReconnectToast = useRef(false);
-  useEffect(() => {
-    const needsReconnect = currentUser?.atlassianConnect?.status === 'needs_reconnect';
-    if (needsReconnect && !hasShownAtlassianReconnectToast.current) {
-      hasShownAtlassianReconnectToast.current = true;
-      toast.error(t('integrations.atlassian.reconnect_required'), {
-        duration: 10000,
-        action: {
-          label: 'Reconnect',
-          onClick: () => {
-            window.location.href = '/profile?tab=integrations';
-          },
-        },
-      });
-    } else if (!needsReconnect) {
-      hasShownAtlassianReconnectToast.current = false;
-    }
-  }, [currentUser?.atlassianConnect?.status, t]);
+  useAtlassianReconnectToast(currentUser?.atlassianConnect?.status, t);
 
   // Render children immediately with cached user data from localStorage
   // Fresh data is fetched in background and updates seamlessly when available

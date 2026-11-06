@@ -3,11 +3,15 @@ import type { ServerToolExecutors } from '@bike4mind/services';
 import { buildDecideExecutor } from '@server/decisions/cliDecideExecutor';
 import { executeToolContract } from '@bike4mind/common';
 import { checkRateLimit } from '@server/cli/auth';
-import { executeToolWithLogging } from '@bike4mind/server-utils/cli/toolsHandler.shared';
+import { buildWebToolExecutors } from '@server/cli/webToolExecutors';
+import { executeToolWithLogging, toolResultStatus } from '@bike4mind/server-utils/cli/toolsHandler.shared';
 import { defineLambdaRoute } from '@workers/cli/defineLambdaRoute';
 
-/** The app-tier decision runner, billed to the calling CLI user - see cliDecideExecutor. */
-const buildExecutors = (logger: Logger): ServerToolExecutors => ({ decide: buildDecideExecutor(logger) });
+/** The app-tier tools, billed to the calling CLI user - see cliDecideExecutor and webToolExecutors. */
+const buildExecutors = (logger: Logger): ServerToolExecutors => ({
+  decide: buildDecideExecutor(logger),
+  ...buildWebToolExecutors(logger),
+});
 
 /**
  * Route logic for CLI server-side tool execution (production & preview). The Lambda
@@ -44,7 +48,7 @@ export const handleToolRequest = defineLambdaRoute(
 
     // Echo request_id in the body so it matches the X-Request-ID header on the
     // result path too (header/body parity).
-    return { statusCode: result.success ? 200 : 500, body: { ...result, request_id: requestId } };
+    return { statusCode: toolResultStatus(result), body: { ...result, request_id: requestId } };
   },
   // Per-user rate limit (100/hour) in its own bucket, so agent/CLI traffic on the
   // same account cannot spend it (tools.contract.ts documents it as dedicated).

@@ -24,19 +24,16 @@ export interface RateLimitInfo {
   usagePercent: number | null;
 }
 
-// Accept any header-like object: native Headers, Record<string, string>, or unknown
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type HeadersLike = any;
-
-function getHeader(headers: HeadersLike, name: string): string | null {
+function getHeader(headers: unknown, name: string): string | null {
   if (!headers || typeof headers !== 'object') return null;
-  if (typeof headers.get === 'function') {
+  const h = headers as { get?: (name: string) => unknown; [key: string]: unknown };
+  if (typeof h.get === 'function') {
     // Native Headers or Headers-like object
-    const val = headers.get(name);
+    const val = h.get(name);
     return typeof val === 'string' ? val : null;
   }
   // Plain object (Octokit response headers, Record<string, string>, etc.)
-  const value = headers[name] ?? headers[name.toLowerCase()];
+  const value = h[name] ?? h[name.toLowerCase()];
   return typeof value === 'string' ? value : null;
 }
 
@@ -55,7 +52,7 @@ function parseNumber(value: string | null): number | null {
  * - `X-RateLimit-Reset` - Unix epoch seconds when the window resets
  * - `Retry-After` - seconds to wait (on 429 responses), or an HTTP-date
  */
-export function parseRateLimitHeaders(headers: HeadersLike): RateLimitInfo {
+export function parseRateLimitHeaders(headers: unknown): RateLimitInfo {
   const limitStr = getHeader(headers, 'X-RateLimit-Limit') ?? getHeader(headers, 'x-ratelimit-limit');
   const remainingStr = getHeader(headers, 'X-RateLimit-Remaining') ?? getHeader(headers, 'x-ratelimit-remaining');
   const resetStr = getHeader(headers, 'X-RateLimit-Reset') ?? getHeader(headers, 'x-ratelimit-reset');

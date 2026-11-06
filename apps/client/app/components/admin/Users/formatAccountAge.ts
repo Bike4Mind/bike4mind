@@ -34,10 +34,19 @@ export function formatAccountAge(createdAt: string | Date | undefined | null, no
   return `${Math.floor(days / 365)}y ago`;
 }
 
+function formatTimestampTitle(label: string, value: string | Date | undefined | null): string | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  return `${label} ${date.toLocaleString()}`;
+}
+
 /** Full timestamp for the hover title; null when there is nothing to show. */
 export function formatAccountCreatedTitle(createdAt: string | Date | undefined | null): string | null {
-  if (!createdAt) return null;
-  const created = createdAt instanceof Date ? createdAt : new Date(createdAt);
-  if (!Number.isFinite(created.getTime())) return null;
-  return `Account created ${created.toLocaleString()}`;
+  return formatTimestampTitle('Account created', createdAt);
+}
+
+/** Full last-activity timestamp for the hover title; null when there is nothing to show. */
+export function formatLastActiveTitle(lastActiveAt: string | Date | undefined | null): string | null {
+  return formatTimestampTitle('Last active', lastActiveAt);
 }

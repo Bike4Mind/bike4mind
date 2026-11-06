@@ -10,10 +10,14 @@ const {
   mockCount,
   mockSessionEnded,
   mockRequireStepUp,
+  mockPropagateAccountRisk,
+  mockCancelAccountSubscriptions,
   mockRecord,
   mockDeny,
+  mockSetThrottleTier,
   txnState,
 } = vi.hoisted(() => ({
+  mockSetThrottleTier: vi.fn(),
   mockRecord: vi.fn(),
   mockDeny: vi.fn(),
   mockUserFindById: vi.fn(),
@@ -22,6 +26,8 @@ const {
   mockCount: vi.fn(),
   mockSessionEnded: vi.fn(),
   mockRequireStepUp: vi.fn(),
+  mockPropagateAccountRisk: vi.fn(),
+  mockCancelAccountSubscriptions: vi.fn(),
   // Records whether a findById read ran inside the change callback, so a test can pin the
   // session-end snapshot to the write's own transaction instead of a stale read before it.
   txnState: { changeRunning: false, snapshotReadInsideChange: undefined as boolean | undefined },
@@ -80,7 +86,10 @@ vi.mock('@bike4mind/services', async orig => ({
   userService: {
     // The real block-state rules, so a snapshot missing any block field is caught.
     entersBlockedState: (await orig<typeof import('@bike4mind/services')>()).userService.entersBlockedState,
+    accountBlockReasons: (await orig<typeof import('@bike4mind/services')>()).userService.accountBlockReasons,
+    entersSuspension: (await orig<typeof import('@bike4mind/services')>()).userService.entersSuspension,
     adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
+    setThrottleTier: (...a: unknown[]) => mockSetThrottleTier(...a),
     updateUser: (...a: unknown[]) => mockUpdateUser(...a),
     // Both stand-ins are real allowlists (not passthrough) so the discarded-field
     // detection under test actually exercises Zod's strip-unknown-keys behavior.
@@ -98,7 +107,11 @@ vi.mock('@bike4mind/services', async orig => ({
       password: z.string().nullable().optional(),
       email: z.string().optional(),
       isBanned: z.boolean().optional(),
+      isModerated: z.boolean().optional(),
+      statusChangeReason: z.string().optional(),
       moderationStatus: z.string().optional(),
+      throttleTier: z.enum(['none', 'shadow']).optional(),
+      throttleReason: z.string().optional(),
     }),
     updateUserSchema: z.object({
       name: z.string().optional(),
@@ -124,7 +137,7 @@ vi.mock('@bike4mind/database', () => ({
           const keep = fields.split(' ');
           // The session-end snapshot is the only read that asks for every block field; note
           // whether it happened inside the change callback (the transaction) or before it.
-          if (fields === 'isAdmin email isBanned disputePending moderation') {
+          if (fields === 'isAdmin email isBanned isModerated disputePending moderation') {
             txnState.snapshotReadInsideChange = txnState.changeRunning;
           }
           projected =
@@ -159,6 +172,12 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
 
 // The gate's own behaviour is covered in server/auth/stepUp.test.ts; here only where it applies.
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mockRequireStepUp }));
+vi.mock('@server/billing/linkedAccounts', () => ({ propagateAccountRisk: mockPropagateAccountRisk }));
+// The audit-entry builder stays real so the test pins what the admin log records.
+vi.mock('@server/billing/cancelAccountSubscriptions', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/billing/cancelAccountSubscriptions')>()),
+  cancelAccountSubscriptions: mockCancelAccountSubscriptions,
+}));
 
 import { adminSettingsRepository } from '@bike4mind/database';
 import handler from '../update';
@@ -194,11 +213,14 @@ beforeEach(() => {
     throw new ForbiddenError('Admins cannot perform this action on their own account.');
   });
   mockUpdateUser.mockReset().mockResolvedValue(undefined);
+  mockSetThrottleTier.mockReset().mockResolvedValue({ changed: true, before: 'none', after: 'shadow' });
   mockCount.mockReset().mockResolvedValue(2);
   mockSessionEnded.mockReset().mockResolvedValue(undefined);
   txnState.changeRunning = false;
   txnState.snapshotReadInsideChange = undefined;
   mockRequireStepUp.mockReset().mockResolvedValue(undefined);
+  mockPropagateAccountRisk.mockReset().mockResolvedValue({ locked: [], review: [] });
+  mockCancelAccountSubscriptions.mockReset().mockResolvedValue({ canceled: [], failed: [] });
 });
 
 describe('PUT /api/users/:id/update - changing your own password', () => {
@@ -354,7 +376,7 @@ describe("PUT /api/users/:id/update - an admin changing another user's credentia
 
   it.each([
     ['revoking the admin role', { isAdmin: false, roleChangeReason: 'Left the support team' }],
-    ['a ban', { isBanned: true }],
+    ['a ban', { isBanned: true, statusChangeReason: 'Repeated abuse reports' }],
     ['an unrelated field', { name: 'Renamed' }],
   ])('leaves %s ungated, including with an API key', async (_label, body) => {
     mockUserFindById.mockReturnValue({ id: 'other-user', isAdmin: true });
@@ -483,6 +505,41 @@ describe('PUT /api/users/:id/update - admin branch requires the admin scope', ()
     await promise;
 
     expect(mockAdminUpdateUser).toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/users/:id/update - setting a balance to zero', () => {
+  it('forwards currentCredits: 0 with its reason when the target holds credits', async () => {
+    mockUserFindById.mockReturnValue({ id: 'u1', currentCredits: 100 });
+    const { promise } = run({
+      user: ADMIN,
+      userId: 'u1',
+      body: { currentCredits: 0, creditReason: 'Zeroed after abuse review' },
+    });
+    await promise;
+
+    expect(mockAdminUpdateUser).toHaveBeenCalledWith(
+      ADMIN.id,
+      expect.objectContaining({ currentCredits: 0, creditReason: 'Zeroed after abuse review' }),
+      expect.anything()
+    );
+  });
+
+  it('drops currentCredits: 0 when the balance is already zero, so no reason is demanded', async () => {
+    mockUserFindById.mockReturnValue({ id: 'u1', currentCredits: 0 });
+    const { promise } = run({ user: ADMIN, userId: 'u1', body: { currentCredits: 0 } });
+    await promise;
+
+    const params = mockAdminUpdateUser.mock.calls[0][1] as Record<string, unknown>;
+    expect(params.currentCredits).toBeUndefined();
+  });
+
+  it('rejects a zero balance change without a reason', async () => {
+    mockUserFindById.mockReturnValue({ id: 'u1', currentCredits: 100 });
+    const { promise } = run({ user: ADMIN, userId: 'u1', body: { currentCredits: 0 } });
+
+    await expect(promise).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
   });
 });
 
@@ -694,7 +751,12 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
     ['sets their password', { password: 'n3w-Passw0rd!' }, BEFORE, 'password_changed'],
     ['sets an empty-string password', { password: '' }, BEFORE, 'password_changed'],
     ['changes their email', { email: 'new@example.com' }, { ...BEFORE, email: 'new@example.com' }, 'email_changed'],
-    ['bans them', { isBanned: true }, { ...BEFORE, isBanned: true }, 'account_blocked'],
+    [
+      'bans them',
+      { isBanned: true, statusChangeReason: 'Repeated abuse reports' },
+      { ...BEFORE, isBanned: true },
+      'account_blocked',
+    ],
     [
       'suspends them',
       { moderationStatus: 'suspended' },
@@ -714,10 +776,131 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
     // The reason has to see the state the write saw; a read before the write can be stale by the
     // time it commits (and stays stale across a transaction retry).
     adminEdit(BEFORE, { ...BEFORE, isBanned: true });
-    const { promise } = run({ user: ADMIN, userId: 'target', body: { isBanned: true } });
+    const { promise } = run({
+      user: ADMIN,
+      userId: 'target',
+      body: { isBanned: true, statusChangeReason: 'Repeated abuse reports' },
+    });
     await promise;
 
     expect(txnState.snapshotReadInsideChange).toBe(true);
+  });
+
+  it('acts on accounts linked to one an admin bans, and not on other edits', async () => {
+    adminEdit(BEFORE, { ...BEFORE, isBanned: true });
+    await run({
+      user: ADMIN,
+      userId: 'target',
+      body: { isBanned: true, statusChangeReason: 'Repeated abuse reports' },
+    }).promise;
+
+    expect(mockPropagateAccountRisk).toHaveBeenCalledTimes(1);
+    expect(mockPropagateAccountRisk).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceUserId: 'target', key: expect.stringMatching(/^admin-block:target:/) }),
+      expect.anything()
+    );
+
+    mockPropagateAccountRisk.mockClear();
+    adminEdit(BEFORE, { ...BEFORE, email: 'new@example.com' });
+    await run({ user: ADMIN, userId: 'target', body: { email: 'new@example.com' } }).promise;
+    expect(mockPropagateAccountRisk).not.toHaveBeenCalled();
+  });
+
+  it('cancels the Stripe subscriptions of an account an admin bans, and audits what Stripe did', async () => {
+    adminEdit(BEFORE, { ...BEFORE, isBanned: true });
+    mockCancelAccountSubscriptions.mockResolvedValue({
+      canceled: ['sub_a'],
+      failed: [{ customerId: 'cus_org', subscriptionId: 'sub_b', reason: 'stripe down' }],
+    });
+    const { res, promise } = run({
+      user: ADMIN,
+      userId: 'target',
+      body: { isBanned: true, statusChangeReason: 'Repeated abuse reports' },
+    });
+    await promise;
+
+    expect(mockCancelAccountSubscriptions).toHaveBeenCalledTimes(1);
+    expect(mockCancelAccountSubscriptions).toHaveBeenCalledWith(
+      { userId: 'target', reason: 'suspended', deadline: expect.any(Number) },
+      expect.anything()
+    );
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.subscriptions.canceled',
+        reason: 'Repeated abuse reports',
+        details: {
+          canceledSubscriptions: ['sub_a'],
+          failedSubscriptions: [{ customerId: 'cus_org', subscriptionId: 'sub_b', reason: 'stripe down' }],
+        },
+      })
+    );
+    // The ban itself still succeeds, and the admin is told what Stripe did.
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().subscriptionCancellation).toEqual({
+      canceled: ['sub_a'],
+      failed: [{ customerId: 'cus_org', subscriptionId: 'sub_b', reason: 'stripe down' }],
+    });
+  });
+
+  it('omits subscriptionCancellation when the cancel found nothing, and when no cancel ran', async () => {
+    adminEdit(BEFORE, { ...BEFORE, isBanned: true });
+    const banned = run({
+      user: ADMIN,
+      userId: 'target',
+      body: { isBanned: true, statusChangeReason: 'Repeated abuse reports' },
+    });
+    await banned.promise;
+    expect(mockCancelAccountSubscriptions).toHaveBeenCalledTimes(1);
+    expect(banned.res._getJSONData().subscriptionCancellation).toBeUndefined();
+
+    mockCancelAccountSubscriptions.mockClear();
+    adminEdit(BEFORE, { ...BEFORE });
+    const edited = run({ user: ADMIN, userId: 'target', body: { name: 'x' } });
+    await edited.promise;
+    expect(mockCancelAccountSubscriptions).not.toHaveBeenCalled();
+    expect(edited.res._getJSONData().subscriptionCancellation).toBeUndefined();
+  });
+
+  it('cancels on a moderation suspension, but not on a dispute flag alone', async () => {
+    adminEdit(BEFORE, { ...BEFORE, moderation: { status: 'suspended' } });
+    await run({ user: ADMIN, userId: 'target', body: { name: 'x' } }).promise;
+    expect(mockCancelAccountSubscriptions).toHaveBeenCalledTimes(1);
+
+    mockCancelAccountSubscriptions.mockClear();
+    mockPropagateAccountRisk.mockClear();
+    adminEdit(BEFORE, { ...BEFORE, disputePending: true });
+    await run({ user: ADMIN, userId: 'target', body: { name: 'x' } }).promise;
+    // The hold still reaches linked accounts; only the irreversible cancel is withheld.
+    expect(mockPropagateAccountRisk).toHaveBeenCalledTimes(1);
+    expect(mockCancelAccountSubscriptions).not.toHaveBeenCalled();
+  });
+
+  it('audits and reports the cancel of a moderation-only suspension sent without a status reason', async () => {
+    adminEdit(BEFORE, { ...BEFORE, moderation: { status: 'suspended' } });
+    mockCancelAccountSubscriptions.mockResolvedValue({ canceled: ['sub_a'], failed: [] });
+    const { res, promise } = run({ user: ADMIN, userId: 'target', body: { moderationStatus: 'suspended' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().subscriptionCancellation).toEqual({ canceled: ['sub_a'], failed: [] });
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'user.subscriptions.canceled', reason: undefined })
+    );
+  });
+
+  it('cancels no subscriptions for an edit that does not block the account', async () => {
+    adminEdit(BEFORE, { ...BEFORE, name: 'x' });
+    const { res, promise } = run({ user: ADMIN, userId: 'target', body: { name: 'x' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockCancelAccountSubscriptions).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'user.subscriptions.canceled' })
+    );
   });
 
   it('ends sessions once, under the account-block reason, when one admin edit does several', async () => {
@@ -725,7 +908,12 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
     const { promise } = run({
       user: ADMIN,
       userId: 'target',
-      body: { password: 'n3w-Passw0rd!', email: 'new@example.com', isBanned: true },
+      body: {
+        password: 'n3w-Passw0rd!',
+        email: 'new@example.com',
+        isBanned: true,
+        statusChangeReason: 'Repeated abuse reports',
+      },
     });
     await promise;
 
@@ -782,6 +970,15 @@ describe('PUT /api/users/:id/update - respond() boundary', () => {
     securityQuestions: [{ question: 'Pet name?', answer: 'Fluffy' }],
     userNotes: [{ note: 'admin note', timestamp: '2026-01-01', userName: 'admin' }],
     signupMeta: { ip: '203.0.113.7', asn: 16509, isDatacenter: true },
+    signupGrantAssessment: {
+      band: 'review',
+      credits: 0,
+      score: 3,
+      reasons: ['datacenter'],
+      missing: [],
+      policyVersion: 'test',
+      status: 'evaluated',
+    },
     notInSchema: 'x',
   };
 
@@ -796,6 +993,7 @@ describe('PUT /api/users/:id/update - respond() boundary', () => {
     expect(json.securityQuestions).toEqual([{ question: 'Pet name?', answer: '' }]);
     expect(json.userNotes).toEqual(profile.userNotes);
     expect(json.signupMeta).toEqual(profile.signupMeta);
+    expect(json.signupGrantAssessment).toEqual(profile.signupGrantAssessment);
     expect(json).not.toHaveProperty('notInSchema');
   });
 
@@ -814,6 +1012,7 @@ describe('PUT /api/users/:id/update - respond() boundary', () => {
     expect(json.securityQuestions).toEqual([{ question: 'Pet name?', answer: '' }]);
     expect(json).not.toHaveProperty('userNotes');
     expect(json).not.toHaveProperty('signupMeta');
+    expect(json).not.toHaveProperty('signupGrantAssessment');
     expect(json).not.toHaveProperty('notInSchema');
   });
 });
@@ -947,7 +1146,7 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
           action: 'user.credits.adjusted',
           target: expect.objectContaining({ kind: 'user', id: 'other-user' }),
           reason: CREDIT_REASON,
-          details: { credits },
+          details: { credits, selfGrant: false },
           changes: [{ field: 'currentCredits', before: 100, after: 100 + credits }],
           related: { creditTransactionId: 'ctx-1' },
         })
@@ -1017,36 +1216,39 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
       expect(mockAdminUpdateUser.mock.calls[1][1].currentCredits).toBeUndefined();
     });
 
-    it('denies a self credit change with a 403 and user.credits.denied', async () => {
+    it('allows a self credit change and flags it in the audit entry', async () => {
       mockUserFindById.mockReturnValue(target({ id: ADMIN.id }));
-      const { promise } = run({
+      mockAdminUpdateUser.mockResolvedValue({ user: target({ id: ADMIN.id }), creditAdjustment: adjustment(50) });
+      const { res, promise } = run({
         user: ADMIN,
         userId: ADMIN.id,
         body: { creditDelta: 50, creditReason: CREDIT_REASON },
       });
+      await promise;
 
-      await expect(promise).rejects.toMatchObject({ statusCode: 403 });
-      expect(mockDeny).toHaveBeenCalledWith(
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockDeny).not.toHaveBeenCalled();
+      expect(mockRecord).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ action: 'user.credits.denied', attempted: 'user.credits.adjusted' })
+        expect.objectContaining({ action: 'user.credits.adjusted', details: { credits: 50, selfGrant: true } })
       );
-      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
     });
 
-    it('denies an impersonating admin changing the credits of the account they impersonate from', async () => {
+    it('flags a credit change to the account an impersonating admin impersonates from', async () => {
       mockUserFindById.mockReturnValue(target({ id: 'A' }));
+      mockAdminUpdateUser.mockResolvedValue({ user: target({ id: 'A' }), creditAdjustment: adjustment(50) });
       const { promise } = run({
         user: { id: 'B', isAdmin: true, impersonatedBy: 'A' },
         userId: 'A',
         body: { creditDelta: 50, creditReason: CREDIT_REASON },
       });
+      await promise;
 
-      await expect(promise).rejects.toMatchObject({ statusCode: 403 });
-      expect(mockDeny).toHaveBeenCalledWith(
+      expect(mockDeny).not.toHaveBeenCalled();
+      expect(mockRecord).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ action: 'user.credits.denied', attempted: 'user.credits.adjusted' })
+        expect.objectContaining({ action: 'user.credits.adjusted', details: { credits: 50, selfGrant: true } })
       );
-      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
     });
 
     it('still lets an admin edit their own profile without a credit change', async () => {
@@ -1056,6 +1258,118 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
 
       expect(res._getStatusCode()).toBe(200);
       expect(mockDeny).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('status changes', () => {
+    const STATUS_REASON = 'Repeated abuse reports';
+    const flip = (flag: 'isBanned' | 'isModerated', before: boolean, after: boolean) => {
+      mockUserFindById.mockReturnValue(target({ [flag]: before }));
+      mockAdminUpdateUser.mockResolvedValue({ user: target({ [flag]: after }), creditAdjustment: undefined });
+    };
+
+    it.each([
+      ['suspends', 'isBanned', false, true, 'user.suspended'],
+      ['reinstates', 'isBanned', true, false, 'user.reinstated'],
+      ['restricts', 'isModerated', false, true, 'user.restricted'],
+      ['lifts the restriction on', 'isModerated', true, false, 'user.restriction_lifted'],
+    ] as const)('%s with the reason and a change row', async (_label, field, before, after, action) => {
+      flip(field, before, after);
+      const { res, promise } = run({
+        user: ADMIN,
+        userId: 'other-user',
+        body: { [field]: after, statusChangeReason: `  ${STATUS_REASON}  ` },
+      });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRecord).toHaveBeenCalledTimes(1);
+      expect(mockRecord).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action,
+          target: expect.objectContaining({ kind: 'user', id: 'other-user' }),
+          reason: STATUS_REASON,
+          changes: [{ field, before, after }],
+        })
+      );
+    });
+
+    it.each([
+      ['isBanned', { isBanned: true }],
+      ['isModerated', { isModerated: true }],
+    ])('answers 400 and writes nothing when %s flips without a statusChangeReason', async (_label, body) => {
+      mockUserFindById.mockReturnValue(target());
+      const { promise } = run({ user: ADMIN, userId: 'other-user', body });
+
+      await expect(promise).rejects.toMatchObject({ statusCode: 400 });
+      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
+
+    it('answers 400 for a statusChangeReason under five characters', async () => {
+      mockUserFindById.mockReturnValue(target());
+      const { promise } = run({
+        user: ADMIN,
+        userId: 'other-user',
+        body: { isBanned: true, statusChangeReason: 'abc' },
+      });
+
+      await expect(promise).rejects.toMatchObject({ statusCode: 400 });
+      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    });
+
+    // A concurrent reinstate lands between the pre-read and the transaction, so the pre-read sees no
+    // change while this write still flips the flag.
+    const staleSuspend = () => {
+      mockUserFindById.mockReturnValueOnce(target({ isBanned: true })).mockReturnValue(target({ isBanned: false }));
+      mockAdminUpdateUser.mockResolvedValue({ user: target({ isBanned: true }), creditAdjustment: undefined });
+    };
+
+    it('rejects a flip the stale pre-read missed when no reason was sent, so it rolls back', async () => {
+      staleSuspend();
+      const { promise } = run({ user: ADMIN, userId: 'other-user', body: { isBanned: true } });
+
+      await expect(promise).rejects.toMatchObject({ statusCode: 400 });
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
+
+    it('audits a flip the stale pre-read missed when a reason was sent', async () => {
+      staleSuspend();
+      const { res, promise } = run({
+        user: ADMIN,
+        userId: 'other-user',
+        body: { isBanned: true, statusChangeReason: STATUS_REASON },
+      });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRecord).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.suspended',
+          reason: STATUS_REASON,
+          changes: [{ field: 'isBanned', before: false, after: true }],
+        })
+      );
+    });
+
+    it('needs no reason and writes no status entry when a flag is sent with its stored value', async () => {
+      mockUserFindById.mockReturnValue(target({ isBanned: true, isModerated: false }));
+      mockAdminUpdateUser.mockResolvedValue({
+        user: target({ isBanned: true, isModerated: false }),
+        creditAdjustment: undefined,
+      });
+      const { res, promise } = run({
+        user: ADMIN,
+        userId: 'other-user',
+        body: { name: 'Renamed', isBanned: true, isModerated: false },
+      });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockAdminUpdateUser).toHaveBeenCalledTimes(1);
+      expect(mockRecord).not.toHaveBeenCalled();
     });
   });
 
@@ -1163,5 +1477,91 @@ describe('PUT /api/users/:id/update - user.profile.updated audit', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(profileCalls()).toHaveLength(1);
+  });
+});
+
+describe('PUT /api/users/:id/update - restricted tier', () => {
+  const REASON = 'Signed up in bulk';
+  const body = (overrides: Record<string, unknown> = {}) => ({
+    throttleTier: 'shadow',
+    throttleReason: REASON,
+    ...overrides,
+  });
+
+  it('sets the tier through the service and records one throttle audit, no profile audit', async () => {
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: body() });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockSetThrottleTier).toHaveBeenCalledWith(
+      'other-user',
+      'shadow',
+      { reason: REASON, source: 'admin', changedBy: 'admin1' },
+      expect.anything()
+    );
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.throttle_tier.changed',
+        target: expect.objectContaining({ kind: 'user', id: 'other-user' }),
+        changes: [{ field: 'throttle.tier', before: 'none', after: 'shadow' }],
+        summary: expect.stringContaining(REASON),
+      })
+    );
+    expect(mockRecord.mock.calls[0][1].summary).toContain('admin');
+    expect(mockRecord.mock.calls.some(([, input]) => input.action === 'user.profile.updated')).toBe(false);
+  });
+
+  it('records the clear with before shadow and after none', async () => {
+    mockSetThrottleTier.mockResolvedValue({ changed: true, before: 'shadow', after: 'none' });
+    await run({ user: ADMIN, userId: 'other-user', body: body({ throttleTier: 'none' }) }).promise;
+
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.throttle_tier.changed',
+        changes: [{ field: 'throttle.tier', before: 'shadow', after: 'none' }],
+      })
+    );
+  });
+
+  it('writes no audit when the tier is unchanged', async () => {
+    mockSetThrottleTier.mockResolvedValue({ changed: false, before: 'shadow', after: 'shadow' });
+    await run({ user: ADMIN, userId: 'other-user', body: body() }).promise;
+
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('records inside the commitWithSessionEnd transaction', async () => {
+    let changeRunningAtRecord: boolean | undefined;
+    mockRecord.mockImplementation(async () => {
+      changeRunningAtRecord = txnState.changeRunning;
+      return null;
+    });
+    await run({ user: ADMIN, userId: 'other-user', body: body() }).promise;
+
+    expect(changeRunningAtRecord).toBe(true);
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['blank', '   '],
+  ])('answers 400 and writes nothing when the reason is %s', async (_label, throttleReason) => {
+    const { promise } = run({ user: ADMIN, userId: 'other-user', body: body({ throttleReason }) });
+
+    await expect(promise).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockSetThrottleTier).not.toHaveBeenCalled();
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('does not apply the tier from a non-admin self update', async () => {
+    const { res, promise } = run({ user: { id: 'u1', isAdmin: false }, userId: 'u1', body: body() });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().ignoredFields).toContain('throttleTier');
+    expect(mockSetThrottleTier).not.toHaveBeenCalled();
   });
 });

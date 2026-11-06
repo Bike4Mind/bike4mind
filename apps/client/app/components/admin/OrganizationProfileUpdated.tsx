@@ -13,7 +13,7 @@ import {
   Typography,
   Input,
 } from '@mui/joy';
-import { IOrganization, IOrganizationDocument, WithId, isValidAdminActionReason } from '@bike4mind/common';
+import { IOrganization, IOrganizationDocument, WithId } from '@bike4mind/common';
 import { orgManagerNames } from './orgManagerNames';
 import GroupsIcon from '@mui/icons-material/Groups';
 import SportsMartialArtsIcon from '@mui/icons-material/SportsMartialArts';
@@ -27,7 +27,14 @@ import { useUpdateOrganization } from '@client/app/hooks/data/organizations';
 import OrganizationGroupTypesCard from './OrganizationGroupTypesCard';
 import OrganizationGroupMembersCard from './OrganizationGroupMembersCard';
 import OrganizationStorageLimitField, { parseStorageLimitInput } from './OrganizationStorageLimitField';
-import { AdminReasonField } from './shared/AdminReasonField';
+import { ReasonPicker } from './shared/ReasonPicker';
+import {
+  ADMIN_REASON_PRESETS,
+  type AdminReasonDraft,
+  EMPTY_ADMIN_REASON,
+  composeAdminReason,
+  isAdminReasonComplete,
+} from './shared/adminReason';
 
 export async function compressLogo(file: File, quality: number = 0.8): Promise<File | Blob> {
   return new Promise((resolve, reject) => {
@@ -58,7 +65,7 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
   // The modal stays open after Update and `org` is the caller's snapshot, so track what was last saved.
   const [savedStorageLimit, setSavedStorageLimit] = useState(org.storageLimit ?? null);
   const parsedStorageLimit = parseStorageLimitInput(storageLimitInput);
-  const [creditReason, setCreditReason] = useState('');
+  const [creditReason, setCreditReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
 
   const updateOrganizationMutation = useUpdateOrganization();
 
@@ -94,7 +101,7 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
   const editedCredits = rawCredits === '' ? NaN : Number(rawCredits);
   const creditsValid = Number.isFinite(editedCredits) && editedCredits >= 0;
   const creditsChanged = editedCredits !== (org.currentCredits ?? 0);
-  const canSave = !creditsChanged || (creditsValid && isValidAdminActionReason(creditReason));
+  const canSave = !creditsChanged || (creditsValid && isAdminReasonComplete(creditReason));
 
   const handleUpdate = async () => {
     if (!parsedStorageLimit.valid) return;
@@ -110,11 +117,11 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
           seats: editedOrg.seats,
           ...(storageLimitChanged && { storageLimit: parsedStorageLimit.storageLimit }),
           // Only a changed balance is sent: the server books the difference to the ledger.
-          ...(creditsChanged ? { currentCredits: editedCredits, creditReason: creditReason.trim() } : {}),
+          ...(creditsChanged ? { currentCredits: editedCredits, creditReason: composeAdminReason(creditReason) } : {}),
         },
       });
       setSavedStorageLimit(parsedStorageLimit.storageLimit);
-      setCreditReason('');
+      setCreditReason(EMPTY_ADMIN_REASON);
     } catch (error) {
       // Error is handled by the mutation hook
     }
@@ -173,8 +180,9 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
                   onChange={setStorageLimitInput}
                 />
                 {creditsChanged && (
-                  <AdminReasonField
+                  <ReasonPicker
                     label="Reason for the credit change"
+                    presets={ADMIN_REASON_PRESETS.creditAdjustment}
                     value={creditReason}
                     onChange={setCreditReason}
                     data-testid="org-profile-credit-reason-input"

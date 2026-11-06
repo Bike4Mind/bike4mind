@@ -7,10 +7,15 @@
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
+import {
+  organizationRepository,
+  orgSlackWorkspaceRepository,
+  slackChannelConfigRepository,
+} from '@bike4mind/database/infra';
 import { NotFoundError } from '@bike4mind/utils';
 import { IOrgSlackWorkspaceDocument, IOrgSlackWorkspaceResponse } from '@bike4mind/common';
-import { verifyOrgOwner } from '@server/utils/orgAccess';
+import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 function toResponse(
   doc: IOrgSlackWorkspaceDocument & { createdAt: Date; updatedAt: Date }
@@ -49,7 +54,7 @@ const handler = baseApi()
     })
   )
   .delete(
-    asyncHandler<{}, { success: boolean; message: string }, unknown, { id?: string }>(async (req, res) => {
+    asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const orgId = req.query.id!;
       const user = req.user!;
 
@@ -58,6 +63,20 @@ const handler = baseApi()
       const workspace = await orgSlackWorkspaceRepository.findByOrganizationId(orgId);
       if (!workspace) {
         throw new NotFoundError('No Slack workspace connected');
+      }
+
+      // API posting opt-ins belong to this connection; they end with it, before the workspace goes.
+      const clearedChannelIds = await slackChannelConfigRepository.clearApiPostingBySlackTeamId(workspace.slackTeamId);
+      if (clearedChannelIds.length > 0) {
+        const org = await organizationRepository.findById(orgId);
+        await recordAdminActionFromRequest(req, {
+          action: 'org.slack_channel_api_posting.updated',
+          actorScope: 'organization',
+          target: { kind: 'organization', id: orgId, displayName: org?.name ?? orgId },
+          summary: `disabled Slack API posting for ${clearedChannelIds.length} channel(s) on workspace disconnect`,
+          changes: [{ field: 'apiPostEnabled', before: true, after: false }],
+          details: { slackTeamId: workspace.slackTeamId, channelIds: clearedChannelIds },
+        });
       }
 
       await orgSlackWorkspaceRepository.delete(workspace.id);

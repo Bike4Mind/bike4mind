@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../../__test__/createMongoServer';
 import { UserApiKey, userApiKeyRepository } from '../UserApiKeyModel';
-import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
 
 let mongod: MongoMemoryServer;
 
@@ -121,7 +121,17 @@ describe('UserApiKeyRepository.countActiveByUserId - cap pools', () => {
     });
 
     await expect(userApiKeyRepository.countActiveByUserId(userId, 'standard')).resolves.toBe(1);
+    await expect(userApiKeyRepository.countActiveByUserId(userId, 'personal')).resolves.toBe(1);
     await expect(userApiKeyRepository.countActiveByUserId(userId, 'oauth-exchange')).resolves.toBe(0);
+  });
+
+  it('counts only user-billed standard keys in the personal pool', async () => {
+    await createKey({ userId, expiresAt: future() });
+    await createKey({ userId, billingOwnerType: CreditHolderType.Organization, organizationId: 'org-1' });
+    await createKey(exchange('client-a'));
+
+    await expect(userApiKeyRepository.countActiveByUserId(userId, 'standard')).resolves.toBe(2);
+    await expect(userApiKeyRepository.countActiveByUserId(userId, 'personal')).resolves.toBe(1);
   });
 });
 

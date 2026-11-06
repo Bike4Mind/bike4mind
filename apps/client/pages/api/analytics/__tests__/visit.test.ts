@@ -14,7 +14,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {},
@@ -22,18 +22,26 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 }));
 
 const mockEmitVisitEvent = vi.fn().mockResolvedValue(undefined);
+const mockEmitPageViewEvent = vi.fn().mockResolvedValue(undefined);
 const mockIsConfigured = vi.fn(() => true);
-vi.mock('@server/analytics/emitActiveEvent', async importOriginal => {
-  const original = await importOriginal<typeof import('@server/analytics/emitActiveEvent')>();
+vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', async importOriginal => {
+  const original = await importOriginal<typeof import('@bike4mind/server-utils/analytics/emitActiveEvent')>();
   return {
     ...original,
     isAnalyticsConfigured: () => mockIsConfigured(),
     emitVisitEvent: (...args: unknown[]) => mockEmitVisitEvent(...args),
+    emitPageViewEvent: (...args: unknown[]) => mockEmitPageViewEvent(...args),
   };
 });
 
+const mockRedeemHop = vi.fn();
+vi.mock('@server/analytics/hops', async importOriginal => {
+  const original = await importOriginal<typeof import('@server/analytics/hops')>();
+  return { ...original, redeemHop: (...args: unknown[]) => mockRedeemHop(...args) };
+});
+
 import handler from '../visit';
-import { VISIT_COOKIE, readVisitId } from '@server/analytics/visitSession';
+import { VISIT_COOKIE, VISIT_PENDING_COOKIE, readVisitId } from '@server/analytics/visitSession';
 
 const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36';
 
@@ -41,29 +49,44 @@ function call({
   cookie,
   userAgent = BROWSER_UA,
   referer,
-}: { cookie?: string; userAgent?: string; referer?: string } = {}) {
-  const { req, res } = createMocks({ method: 'POST' });
+  body,
+}: { cookie?: string; userAgent?: string; referer?: string; body?: unknown } = {}) {
+  const { req, res } = createMocks({ method: 'POST', ...(body !== undefined && { body: body as never }) });
   req.headers = {
     ...(cookie !== undefined && { cookie }),
     ...(userAgent !== undefined && { 'user-agent': userAgent }),
     ...(referer !== undefined && { referer }),
   } as never;
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  (req as unknown as { logger: unknown }).logger = logger;
   return {
     req: req as never,
     res: res as never,
+    logger,
     run: () => (handler as (r: unknown, s: unknown) => unknown)(req, res),
   };
 }
 
-function setCookieHeader(res: { getHeader: (name: string) => unknown }): string | undefined {
+function setCookies(res: { getHeader: (name: string) => unknown }): string[] {
   const value = res.getHeader('Set-Cookie');
-  return typeof value === 'string' ? value : undefined;
+  return Array.isArray(value) ? (value as string[]) : typeof value === 'string' ? [value] : [];
+}
+
+/** The visit cookie this response sets, if any. */
+function setCookieHeader(res: { getHeader: (name: string) => unknown }): string | undefined {
+  return setCookies(res).find(c => c.startsWith(`${VISIT_COOKIE}=`));
+}
+
+/** The pending mark this response sets or expires, if it touches it. */
+function pendingCookieHeader(res: { getHeader: (name: string) => unknown }): string | undefined {
+  return setCookies(res).find(c => c.startsWith(`${VISIT_PENDING_COOKIE}=`));
 }
 
 describe('POST /api/analytics/visit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsConfigured.mockReturnValue(true);
+    mockRedeemHop.mockResolvedValue({ redeemed: false, reason: 'refused' });
   });
 
   it('mints a visit, hands back the cookie, and emits exactly one event', async () => {
@@ -138,13 +161,26 @@ describe('POST /api/analytics/visit', () => {
     expect((res as unknown as { getHeader: (n: string) => unknown }).getHeader('Cache-Control')).toBe('no-store');
   });
 
-  it('records where the visit came from, with the referrer query string stripped', async () => {
-    const { run } = call({ referer: 'https://news.example.com/story?utm_source=email&secret=abc' });
+  it('records where the visit came from and where it landed, from the body, reduced to origin and path', async () => {
+    const { run } = call({
+      body: {
+        referrer: 'https://news.example.com/story?secret=abc',
+        landingPath: '/share/0f8fad5b-d9cb-469f-a165-70867728950e?x=1',
+      },
+    });
     await run();
 
     expect(mockEmitVisitEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ referrer: 'https://news.example.com/story' })
+      expect.objectContaining({ referrer: 'https://news.example.com', landingPath: '/share/:token' })
     );
+  });
+
+  it('never takes the source from the Referer header, which names the app page that sent the beacon', async () => {
+    const { run } = call({ referer: 'https://app.example.com/notebooks/65f1c0ffee0ddba11ad5eed1' });
+    await run();
+
+    expect(mockEmitVisitEvent).toHaveBeenCalledTimes(1);
+    expect(mockEmitVisitEvent.mock.calls[0][0]).toMatchObject({ referrer: undefined, landingPath: undefined });
   });
 
   it('attributes the visit to the campaign cookie captured on landing', async () => {
@@ -155,5 +191,274 @@ describe('POST /api/analytics/visit', () => {
     expect(mockEmitVisitEvent).toHaveBeenCalledWith(
       expect.objectContaining({ utm: { source: 'email', campaign: 'launch' } })
     );
+  });
+
+  it('sets no pending mark on a visit that is recorded at once', async () => {
+    const { res, run } = call();
+    await run();
+
+    expect(pendingCookieHeader(res as never)).toBeUndefined();
+  });
+
+  describe('a beacon that carries a verified-hop token', () => {
+    const TOKEN = `${'a'.repeat(32)}.1793707200.${'M'.repeat(43)}`;
+    const HOP_ID = 'c'.repeat(32);
+    const redeemed = { redeemed: true, hop: { hopId: HOP_ID, srcProductId: 'source-product', dest: 'bike4mind' } };
+    const hopCookie = (res: unknown) => setCookies(res as never).find(c => c.startsWith('b4m_hop='));
+
+    it('redeems it on the visit it starts, linked with consent, and hands back the hop cookie', async () => {
+      mockRedeemHop.mockResolvedValue(redeemed);
+      const { res, run } = call({ cookie: 'b4m_consent=granted', body: { landingPath: '/new', hop: TOKEN } });
+      await run();
+
+      const visitId = readVisitId(setCookieHeader(res as never)!.split(';')[0]);
+      expect(mockRedeemHop).toHaveBeenCalledWith({ token: TOKEN, visitId, linkVisit: true });
+      // The hop names the same visit as the visit event.
+      expect(mockEmitVisitEvent).toHaveBeenCalledWith(expect.objectContaining({ sessionId: visitId }));
+      expect(hopCookie(res)).toBe(`b4m_hop=${HOP_ID}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax; Secure`);
+    });
+
+    it('without consent, redeems it unlinked and sets no hop cookie', async () => {
+      mockRedeemHop.mockResolvedValue(redeemed);
+      for (const cookie of [undefined, 'b4m_consent=denied', 'b4m-consent-decision=denied']) {
+        mockRedeemHop.mockClear();
+        const { res, run } = call({ cookie, body: { hop: TOKEN } });
+        await run();
+        expect(mockRedeemHop.mock.calls[0][0], String(cookie)).toMatchObject({ token: TOKEN, linkVisit: false });
+        expect(hopCookie(res), String(cookie)).toBeUndefined();
+      }
+    });
+
+    it('sets no hop cookie when the redeem is refused', async () => {
+      const { res, run } = call({ cookie: 'b4m_consent=granted', body: { hop: TOKEN } });
+      await run();
+      expect(mockRedeemHop).toHaveBeenCalledOnce();
+      expect(hopCookie(res)).toBeUndefined();
+      // The visit itself is still recorded.
+      expect(mockEmitVisitEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('redeems it mid-visit, on the visit already running', async () => {
+      mockRedeemHop.mockResolvedValue(redeemed);
+      const visitId = 'b'.repeat(32);
+      const { res, run } = call({ cookie: `${VISIT_COOKIE}=${visitId}; b4m_consent=granted`, body: { hop: TOKEN } });
+      await run();
+
+      expect(mockRedeemHop).toHaveBeenCalledWith({ token: TOKEN, visitId, linkVisit: true });
+      expect(mockEmitVisitEvent).not.toHaveBeenCalled();
+      expect(hopCookie(res)).toContain(`b4m_hop=${HOP_ID}`);
+    });
+
+    it('never redeems on a beacon still awaiting consent', async () => {
+      const { run } = call({ cookie: 'b4m_consent=granted', body: { awaitingConsent: true, hop: TOKEN } });
+      await run();
+      expect(mockRedeemHop).not.toHaveBeenCalled();
+    });
+
+    it('never redeems for a non-human agent, or when analytics is off', async () => {
+      await call({ userAgent: 'Googlebot/2.1', body: { hop: TOKEN } }).run();
+      mockIsConfigured.mockReturnValue(false);
+      await call({ body: { hop: TOKEN } }).run();
+      expect(mockRedeemHop).not.toHaveBeenCalled();
+    });
+
+    it('never logs the token', async () => {
+      mockRedeemHop.mockResolvedValueOnce(redeemed);
+      const ok = call({ cookie: 'b4m_consent=granted', body: { hop: TOKEN } });
+      await ok.run();
+      const refused = call({ body: { hop: TOKEN } });
+      await refused.run();
+
+      expect(ok.logger.info).toHaveBeenCalledWith('analytics.hop.redeemed', { hopId: HOP_ID, linked: true });
+      expect(refused.logger.info).toHaveBeenCalledWith('analytics.hop.refused', { reason: 'refused' });
+      const logged = JSON.stringify([ok.logger, refused.logger].map(l => [l.info.mock.calls, l.warn.mock.calls]));
+      expect(logged).not.toContain(TOKEN);
+    });
+  });
+
+  // The first visit from search or a shared link usually lands on the consent banner, and its
+  // source can only go in the visit's one event. So that event waits for the answer.
+  describe('a visit that starts while the visitor is asked for consent', () => {
+    async function startHeld() {
+      const first = call({ body: { awaitingConsent: true } });
+      await first.run();
+      const minted = readVisitId(setCookieHeader(first.res as never)!.split(';')[0])!;
+      return { first, minted, cookie: `${VISIT_COOKIE}=${minted}; ${VISIT_PENDING_COOKIE}=1` };
+    }
+
+    it('starts the visit and marks it pending, emitting nothing yet', async () => {
+      const { first, minted } = await startHeld();
+
+      expect(minted).toMatch(/^[0-9a-f]{32}$/);
+      expect(mockEmitVisitEvent).not.toHaveBeenCalled();
+      const mark = pendingCookieHeader(first.res as never);
+      expect(mark).toContain(`${VISIT_PENDING_COOKIE}=1`);
+      expect(mark).toContain('Max-Age=1800');
+      expect(mark).toContain('HttpOnly');
+    });
+
+    it('emits the held visit once the answer arrives, with the source and campaign a grant allows', async () => {
+      const { minted, cookie } = await startHeld();
+      const utm = encodeURIComponent(JSON.stringify({ source: 'newsletter' }));
+
+      const release = call({
+        cookie: `${cookie}; b4m_utm=${utm}`,
+        body: { referrer: 'https://www.google.com/search?q=x', landingPath: '/pricing' },
+      });
+      await release.run();
+
+      expect(mockEmitVisitEvent).toHaveBeenCalledTimes(1);
+      expect(mockEmitVisitEvent).toHaveBeenCalledWith({
+        sessionId: minted,
+        referrer: 'https://www.google.com',
+        utm: { source: 'newsletter' },
+        landingPath: '/pricing',
+      });
+      // Recorded now, so the mark goes: a later beacon in this visit emits nothing.
+      expect(pendingCookieHeader(release.res as never)).toContain('Max-Age=0');
+      expect(setCookieHeader(release.res as never)).toContain(`${VISIT_COOKIE}=${minted}`);
+    });
+
+    it('emits the held visit with no source when the answer is a decline, or none', async () => {
+      const { minted, cookie } = await startHeld();
+
+      await call({ cookie, body: {} }).run();
+
+      expect(mockEmitVisitEvent).toHaveBeenCalledTimes(1);
+      expect(mockEmitVisitEvent.mock.calls[0][0]).toMatchObject({
+        sessionId: minted,
+        referrer: undefined,
+        landingPath: undefined,
+      });
+    });
+
+    it('keeps holding through a reload that is still awaiting consent', async () => {
+      const { minted, cookie } = await startHeld();
+
+      const reload = call({ cookie, body: { awaitingConsent: true } });
+      await reload.run();
+
+      expect(mockEmitVisitEvent).not.toHaveBeenCalled();
+      expect(setCookieHeader(reload.res as never)).toContain(`${VISIT_COOKIE}=${minted}`);
+      expect(pendingCookieHeader(reload.res as never)).toContain(`${VISIT_PENDING_COOKIE}=1`);
+    });
+
+    // A second tab's answer, or one given on a later page load: the visit has its event already.
+    it('takes no source for a visit already recorded, so a late answer adds only its page', async () => {
+      const { minted } = await startHeld();
+
+      const late = call({
+        cookie: `${VISIT_COOKIE}=${minted}`,
+        body: { referrer: 'https://www.google.com', landingPath: '/pricing' },
+      });
+      await late.run();
+
+      expect(mockEmitVisitEvent).not.toHaveBeenCalled();
+      expect(mockEmitPageViewEvent).toHaveBeenCalledExactlyOnceWith({ sessionId: minted, path: '/pricing' });
+      expect(pendingCookieHeader(late.res as never)).toBeUndefined();
+    });
+
+    it('does not hold a visit already recorded when a later page load awaits consent', async () => {
+      const first = call();
+      await first.run();
+      const minted = readVisitId(setCookieHeader(first.res as never)!.split(';')[0])!;
+      vi.clearAllMocks();
+
+      const later = call({ cookie: `${VISIT_COOKIE}=${minted}`, body: { awaitingConsent: true } });
+      await later.run();
+
+      expect(mockEmitVisitEvent).not.toHaveBeenCalled();
+      expect(pendingCookieHeader(later.res as never)).toBeUndefined();
+    });
+  });
+
+  // After its first, a visit's page loads (a new tab, a typed URL, a link, a reload) send no visit
+  // event, and the page beacon skips each load's landing, so this is the only place they are seen.
+  describe('a later page load of a recorded visit', () => {
+    const VISIT_ID = '0123456789abcdef0123456789abcdef';
+    const RECORDED = `${VISIT_COOKIE}=${VISIT_ID}`;
+
+    it('records the page it loaded as a page view, with only the visit id and the cleaned path', async () => {
+      const { res, run } = call({
+        cookie: RECORDED,
+        body: {
+          referrer: 'https://news.example.com/story',
+          landingPath: '/share/0f8fad5b-d9cb-469f-a165-70867728950e?x=1',
+        },
+      });
+      await run();
+
+      expect(mockEmitVisitEvent).not.toHaveBeenCalled();
+      // Exactly these two fields: the referrer and campaign belong to the visit's one event.
+      expect(mockEmitPageViewEvent).toHaveBeenCalledExactlyOnceWith({ sessionId: VISIT_ID, path: '/share/:token' });
+      expect(setCookieHeader(res as never)).toContain(RECORDED);
+      expect(pendingCookieHeader(res as never)).toBeUndefined();
+    });
+
+    // The server keeps no page state across loads, and the page beacon's repeat check is per load.
+    it('records a reload of the same page again', async () => {
+      await call({ cookie: RECORDED, body: { landingPath: '/pricing' } }).run();
+      await call({ cookie: RECORDED, body: { landingPath: '/pricing' } }).run();
+
+      expect(mockEmitPageViewEvent.mock.calls).toEqual([
+        [{ sessionId: VISIT_ID, path: '/pricing' }],
+        [{ sessionId: VISIT_ID, path: '/pricing' }],
+      ]);
+    });
+
+    it.each([
+      ['consent declined, which sends no path', {}],
+      ['no body', undefined],
+      ['consent not yet given', { awaitingConsent: true }],
+      ['a body still awaiting consent, whatever path it holds', { awaitingConsent: true, landingPath: '/pricing' }],
+      ['a path holding an address', { landingPath: '/users/someone@example.com' }],
+      ['something not a path', { landingPath: 'https://evil.example/x' }],
+    ])('records nothing for %s', async (_label, body) => {
+      const { res, run } = call({ cookie: RECORDED, body });
+      await run();
+
+      expect(mockEmitPageViewEvent).not.toHaveBeenCalled();
+      expect(mockEmitVisitEvent).not.toHaveBeenCalled();
+      // Still the same visit: the window slides whether or not a page is recorded.
+      expect(setCookieHeader(res as never)).toContain(RECORDED);
+    });
+
+    it('records nothing for a visit still held for the consent answer', async () => {
+      await call({
+        cookie: `${RECORDED}; ${VISIT_PENDING_COOKIE}=1`,
+        body: { awaitingConsent: true, landingPath: '/pricing' },
+      }).run();
+
+      expect(mockEmitPageViewEvent).not.toHaveBeenCalled();
+      expect(mockEmitVisitEvent).not.toHaveBeenCalled();
+    });
+
+    it('filters a non-human agent, and does nothing when analytics is not configured', async () => {
+      await call({
+        cookie: RECORDED,
+        userAgent: 'Googlebot/2.1 (+http://www.google.com/bot.html)',
+        body: { landingPath: '/pricing' },
+      }).run();
+      await call({ cookie: RECORDED, userAgent: 'HeadlessChrome/124', body: { landingPath: '/pricing' } }).run();
+      mockIsConfigured.mockReturnValue(false);
+      await call({ cookie: RECORDED, body: { landingPath: '/pricing' } }).run();
+
+      expect(mockEmitPageViewEvent).not.toHaveBeenCalled();
+      expect(mockEmitVisitEvent).not.toHaveBeenCalled();
+    });
+  });
+
+  // The landing is on the visit event, so a page view for it would count it twice.
+  describe("a visit's first page load", () => {
+    it.each([
+      ['starting a visit', undefined],
+      ['releasing one held for consent', `${VISIT_COOKIE}=0123456789abcdef0123456789abcdef; ${VISIT_PENDING_COOKIE}=1`],
+    ])('emits only the visit, with its landing, when %s', async (_label, cookie) => {
+      await call({ cookie, body: { landingPath: '/pricing' } }).run();
+
+      expect(mockEmitVisitEvent).toHaveBeenCalledTimes(1);
+      expect(mockEmitVisitEvent).toHaveBeenCalledWith(expect.objectContaining({ landingPath: '/pricing' }));
+      expect(mockEmitPageViewEvent).not.toHaveBeenCalled();
+    });
   });
 });

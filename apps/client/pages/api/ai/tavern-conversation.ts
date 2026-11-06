@@ -1,10 +1,13 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 import { ensureTavernAccess } from '@bike4mind/server-utils/utils/errors';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { agentRepository } from '@bike4mind/database';
-import { agentMemoryService } from '@bike4mind/services';
+import { agentMemoryService, meterCompletionBackend } from '@bike4mind/services';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { HTTPError } from '@bike4mind/common';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 /**
  * /api/ai/tavern-conversation - Two-mode endpoint for live NPC conversations.
@@ -115,10 +118,11 @@ Return ONLY valid JSON (no markdown fences):
 }
 
 // Handler
-const handler = baseApi()
+// SPA-only, so it stays off the API-key surface.
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
-      limit: process.env.NODE_ENV === 'development' ? 60 : 30,
+      limit: blockedAtZeroTierLimit(process.env.NODE_ENV === 'development' ? 60 : 30),
       windowMs: 60 * 1000,
     })
   )
@@ -130,7 +134,10 @@ const handler = baseApi()
     // agentIds: optional Record<string, string> mapping character id to agent database id
 
     try {
-      const { modelId, llm } = await OperationsModelService.getOperationsModel();
+      const operations = await OperationsModelService.getOperationsModel();
+      const { modelId } = operations;
+      const meter = createRequestCompletionMeter(req, 'tavern conversation', { systemModel: true });
+      const llm = meterCompletionBackend(operations.llm, meter, operations.modelInfo);
 
       // Mode 1: Generate Cast (no characters provided)
       if (!characters) {
@@ -230,7 +237,9 @@ const handler = baseApi()
       // Fire-and-forget: extract memories for agent characters
       if (agentIds && typeof agentIds === 'object' && Object.keys(agentIds).length > 0) {
         (async () => {
-          const { modelId: memModelId, llm: memLlm } = await OperationsModelService.getOperationsModel();
+          const memOps = await OperationsModelService.getOperationsModel();
+          const memModelId = memOps.modelId;
+          const memLlm = meterCompletionBackend(memOps.llm, meter, memOps.modelInfo);
 
           const llmComplete: agentMemoryService.LlmCompleteFn = async (msgs, opts) => {
             let result = '';
@@ -260,8 +269,10 @@ const handler = baseApi()
               for (const mem of newMemories) {
                 await agentRepository.appendMemory(agentId as string, mem);
               }
-            } catch {
-              // Memory extraction is non-fatal
+            } catch (err) {
+              // Non-fatal, but a credit refusal would repeat for every remaining agent
+              req.logger?.warn?.('Memory extraction failed (non-fatal):', err);
+              if (err instanceof HTTPError) break;
             }
           }
         })().catch(err => req.logger?.warn?.('Memory extraction failed (non-fatal):', err));
@@ -269,6 +280,8 @@ const handler = baseApi()
 
       return;
     } catch (error) {
+      // Credit and admission refusals keep their status (422) instead of the canned fallback.
+      if (error instanceof HTTPError) throw error;
       req.logger?.error?.('Tavern conversation error:', error);
 
       // Fallback for cast generation

@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import type { IUserDocument } from '@bike4mind/common';
-import { isMfaEnrollmentOwed } from '@server/auth/mfaEnforcement';
+import { isAccountDeletionPending } from '@bike4mind/server-utils/auth/deletionPendingGate';
+import { isMfaEnrollmentOwed } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { logOAuthError } from '@server/auth/oauthErrorLog';
 import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
 
@@ -63,13 +64,17 @@ export function oauthRouteGate(policy?: OAuthRoutePolicy) {
  * optional-auth shim must mirror those default-denies itself or it becomes a bypass: a pre-MFA
  * session or a relying-party OAuth token would otherwise act as a full user (read a subject user's
  * PRIVATE published artifacts, mint a passphrase gate-proof cookie, or create/edit annotations).
- * Returns false for both markers; such callers fall through to the same anonymous posture as an
- * un-credentialed viewer. The shims call admitsOptionalAuthSession below, which adds the enforceMFA
- * enrollment gate - keep this in sync with oauthRouteGate above.
+ * A deletion-pending account is refused too. Returns false for each marker; such callers fall
+ * through to the same anonymous posture as an un-credentialed viewer. The shims call
+ * admitsOptionalAuthSession below, which adds the enforceMFA enrollment gate - keep this in sync
+ * with oauthRouteGate above.
  */
 export function admitsOptionalAuthUser(user: unknown): user is Express.User {
-  const u = user as { mfaPending?: boolean; oauthGrant?: unknown } | null | undefined;
-  return !!u && !u.mfaPending && !u.oauthGrant;
+  const u = user as
+    | { mfaPending?: boolean; oauthGrant?: unknown; impersonatedBy?: string; deletion?: { scheduledFor: Date } | null }
+    | null
+    | undefined;
+  return !!u && !u.mfaPending && !u.oauthGrant && !u.impersonatedBy && !isAccountDeletionPending(u);
 }
 
 /**

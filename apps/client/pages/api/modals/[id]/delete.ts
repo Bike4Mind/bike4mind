@@ -1,6 +1,8 @@
 import { ModalModel } from '@bike4mind/database/social';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { modalAuditTitle } from '@client/server/tools/modalOperations';
+import { recordModalChanges } from '@client/server/tools/recordModalChanges';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 
@@ -19,6 +21,17 @@ const handler = baseApi().delete(
 
     const deletedModal = await ModalModel.findOneAndDelete({ _id: id });
     if (!deletedModal) throw new NotFoundError('Modal not found');
+    await recordModalChanges(
+      req,
+      [
+        {
+          kind: 'deleted',
+          id: String(deletedModal._id),
+          title: modalAuditTitle(deletedModal),
+        },
+      ],
+      'admin-modals'
+    );
 
     return res.status(200).json(deletedModal);
   })

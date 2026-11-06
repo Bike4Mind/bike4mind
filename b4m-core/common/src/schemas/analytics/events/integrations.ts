@@ -2,7 +2,7 @@ import { IBaseEvent } from '../../../types';
 
 /**
  * The integrations gallery at /integrations (apps/client/app/components/integrations/IntegrationsGallery.tsx).
- * Registered in ANALYTICS_EVENTS (apps/client/server/types/analytics/index.ts), whose families are
+ * Registered in ANALYTICS_EVENTS (packages/server-utils/src/types/analytics/index.ts), whose families are
  * merged by object spread: the enum KEYS carry an INTEGRATIONS_ prefix so none can overwrite
  * another family's key.
  */

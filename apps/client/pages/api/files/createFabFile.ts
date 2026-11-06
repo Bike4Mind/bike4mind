@@ -6,6 +6,8 @@ import {
   FileEvents,
   MODAL_MEDIA_PREFIX,
   Permission,
+  hasAdminPermission,
+  createdFabFileResponseSchema,
 } from '@bike4mind/common';
 import {
   adminSettingsRepository,
@@ -14,15 +16,19 @@ import {
   dataLakeAccessGrantRepository,
   scopedSettingsRepository,
   organizationRepository,
+  userRepository,
   FabFile,
   User,
   withTransaction,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
-import { getFileExtension } from '@bike4mind/utils';
-import { logEvent } from '@server/utils/analyticsLog';
+import { checkStorageLimitForOwner, getFileExtension } from '@bike4mind/utils';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
+import { admitPendingUploads, type PendingUploads } from '@server/files/pendingUploads';
+import { respond } from '@server/utils/respond';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -35,7 +41,7 @@ import {
 } from '@server/files/fileScopes';
 import { getS3Url } from '@client/app/utils/s3Url';
 import { Resource } from 'sst';
-import { persistedIsAdmin, requesterScopedUsers } from '@server/auth/apiKeyAdminScope';
+import { persistedIsAdmin, requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 // No caller-chosen `prefix`: the key namespace decides how the S3 upload hook treats an object,
 // and a prefix such as `tmp` lands in one it skips (`isUntrackedFabFileKey`), so the object
@@ -75,8 +81,10 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
       const parsed = createFabFileSchema.parse(req.body);
       const releaseNotesOnly = isReleaseNotesOnlyUpload(req);
       // A release-notes key arrives with the owner's admin role withheld; it still counts when the owner is an admin.
+      // settings:manage is what lets a delegated admin edit modals, so it covers their media too.
       const adminModalMedia =
-        (!!user.isAdmin || (releaseNotesOnly && persistedIsAdmin(user))) && parsed.purpose === 'modal-media';
+        (hasAdminPermission(user, 'settings:manage') || (releaseNotesOnly && persistedIsAdmin(user))) &&
+        parsed.purpose === 'modal-media';
       if (!adminModalMedia && releaseNotesOnly) {
         throw new ForbiddenError("This API key may only upload What's New media; files:write is required", {
           required_scopes: FILES_WRITE_SCOPES,
@@ -136,7 +144,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
         db: { dataLakes: dataLakeRepository },
       });
       const ctx = await toAccessContext(req);
-      await dataLakeService.assertCanWriteDataLakeTags(ctx, requestedTagNames, {
+      const targetLakes = await dataLakeService.assertCanWriteDataLakeTags(ctx, requestedTagNames, {
         db: {
           dataLakes: dataLakeRepository,
           dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -156,6 +164,25 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
           db: { batches: dataLakeBatchRepository },
         });
       }
+
+      // Without content the service presigns a PUT and leaves a pending client upload, so it is admitted
+      // like the presign doors, against the pool the service will bill (same owner rule, same lakes).
+      let pending: PendingUploads | undefined;
+      if (!('content' in params && params.content)) {
+        if (params.fileSize <= 0) throw new BadRequestError('File size must be positive');
+        const ownerOrganizationId = fabFilesService.pickOwnerOrganizationId(targetLakes);
+        pending = await admitPendingUploads(req, 1, [ownerOrganizationId]);
+        const quotaUser = ownerOrganizationId ? user : await userRepository.findById(user.id);
+        if (!quotaUser) throw new BadRequestError('User not found');
+        // Before consumeFileUploadBudget so a quota refusal costs no hourly allowance; the service re-checks at create.
+        await checkStorageLimitForOwner(
+          { user: quotaUser, organizationId: ownerOrganizationId, pendingBytes: pending.bytesFor(ownerOrganizationId) },
+          params.fileSize,
+          id => organizationRepository.findById(id)
+        );
+      }
+
+      await consumeFileUploadBudget(req, 1);
 
       const result = await withTransaction(async () => {
         return fabFilesService.createFabFile(user.id, params, {
@@ -200,6 +227,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
           // org rungs need the actor's administered-org set, which the service cannot read off a
           // user document.
           administeredOrgIds: ctx.administeredOrgIds,
+          ...(pending && { pendingUploadBytes: pending.bytesFor }),
           ...(adminModalMedia && isModalVideo(params) && { mimeTypePrecedence: 'claim-first' as const }),
         });
       });
@@ -218,7 +246,9 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
 
       const signed = await signBrowserFileResponse(result);
       // Same URL the admin form builds (AdminModalVideoFields), so API-key callers need no bucket name.
-      return res.json(
+      return respond(
+        res,
+        createdFabFileResponseSchema,
         adminModalMedia && result.filePath
           ? { ...signed, mediaUrl: getS3Url({ bucket: Resource.fabFileBucket.name, key: result.filePath }) }
           : signed

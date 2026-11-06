@@ -1,6 +1,7 @@
 import { AdminSettings } from '@bike4mind/database/infra';
 import {
   allSettingDefinitions,
+  isEnforceCreditsLocked,
   redactSettingSecrets,
   settingsMap,
   userReadableSettingKeys,
@@ -57,6 +58,13 @@ const handler = baseApi({ auth: true }).get(async (req, res) => {
         : setting;
     return redactSettingSecrets(decrypted as unknown as AdminSettingDoc);
   });
+
+  // Hosted always meters credits, even if a stored row says false.
+  if (isEnforceCreditsLocked()) {
+    for (const row of redacted) {
+      if (row.settingName === 'enforceCredits') row.settingValue = true;
+    }
+  }
 
   // defaultEmbeddingModel's default is env-dependent on self-host (a local Ollama embedder when
   // no cloud key, else the cloud default - see defaultEmbeddingModelForEnv). The client cannot

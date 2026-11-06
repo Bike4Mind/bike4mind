@@ -146,6 +146,8 @@ export const THINKING_ANSWER_HEADROOM_TOKENS = 1000;
  *
  * Direct Kimi K3 always reasons and spends it inside `max_completion_tokens` (see the
  * empty-turn guard in kimiBackend), but its row carries no dispatch profile to say so.
+ * Direct K2.7-code (thinking cannot be turned off) and K2.6 and K2.5 (think unless told otherwise,
+ * see kimiParams) are the same shape.
  */
 const REASONS_WITHIN_OUTPUT_BUDGET_IDS: ReadonlySet<string> = new Set<string>([
   ChatModels.KIMI_K2_THINKING_BEDROCK,
@@ -154,6 +156,10 @@ const REASONS_WITHIN_OUTPUT_BUDGET_IDS: ReadonlySet<string> = new Set<string>([
   ChatModels.DEEPSEEK_FLASH,
   ChatModels.DEEPSEEK_V4_PRO,
   ChatModels.KIMI_K3,
+  ChatModels.KIMI_K2_7_CODE,
+  ChatModels.KIMI_K2_7_CODE_HIGHSPEED,
+  ChatModels.KIMI_K2_6,
+  ChatModels.KIMI_K2_5,
 ]);
 
 /**
@@ -437,6 +443,30 @@ const LEGACY_EFFORT_BUDGET_TOKENS: Record<PlannedAnthropicEffort, number> = {
 
 /** The API rejects a legacy thinking budget below this. */
 export const LEGACY_THINKING_MIN_BUDGET_TOKENS = 1024;
+
+const isLegacyThinking = (thinking: unknown): thinking is { type: 'enabled'; budget_tokens: number } =>
+  typeof thinking === 'object' &&
+  thinking !== null &&
+  (thinking as { type?: unknown }).type === 'enabled' &&
+  typeof (thinking as { budget_tokens?: unknown }).budget_tokens === 'number';
+
+/**
+ * Lowers an Anthropic request body's max_tokens to `ceiling` (ICompletionOptions.outputTokenCeiling),
+ * after buildThinkingParams may have raised it. A legacy thinking budget comes down with it under the
+ * same answer headroom; one that no longer fits the API minimum turns thinking off rather than lifting
+ * the ceiling, since the ceiling is what the caller can pay for. Shared by the direct and Bedrock paths.
+ */
+export function applyAnthropicOutputCeiling(
+  body: { max_tokens?: unknown; thinking?: unknown },
+  ceiling: number | undefined
+): void {
+  if (ceiling === undefined || typeof body.max_tokens !== 'number' || body.max_tokens <= ceiling) return;
+  body.max_tokens = ceiling;
+  if (!isLegacyThinking(body.thinking)) return;
+  const budget = Math.min(body.thinking.budget_tokens, ceiling - THINKING_ANSWER_HEADROOM_TOKENS);
+  if (budget >= LEGACY_THINKING_MIN_BUDGET_TOKENS) body.thinking.budget_tokens = budget;
+  else delete body.thinking;
+}
 
 /**
  * What a caller's `reasoningEffort` does to an Anthropic request.

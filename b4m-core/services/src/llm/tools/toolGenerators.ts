@@ -23,6 +23,7 @@ import type { BaseStorage } from '@bike4mind/utils';
 import type { B4MLLMTools as LlmTools, IChatHistoryItemDocument } from '@bike4mind/common';
 import type { ToolContext, ToolDefinition } from './base/types';
 import type { IChatCompletionServiceOptions } from '../ChatCompletionFeatures';
+import { memoizeOperationalBillingCheck } from '../../billing/isOperationalBillingEnabled';
 
 export const generateTools = (
   userId: string,
@@ -34,6 +35,7 @@ export const generateTools = (
   // inputs should keep going here.
   {
     db,
+    getEntitlements,
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
@@ -53,9 +55,11 @@ export const generateTools = (
     slackDestination,
     numberCitables,
     decide,
+    toLedgerModel,
     getAbortSignal,
   }: {
     db: ToolContext['db'];
+    getEntitlements?: ToolContext['getEntitlements'];
     retrievalFilter?: ToolContext['retrievalFilter'];
     kbScope?: ToolContext['kbScope'];
     inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
@@ -76,15 +80,16 @@ export const generateTools = (
     slackDestination?: ToolContext['slackDestination'];
     numberCitables?: ToolContext['numberCitables'];
     decide?: ToolContext['decide'];
+    toLedgerModel?: ToolContext['toLedgerModel'];
     getAbortSignal?: ToolContext['getAbortSignal'];
   },
   storage: BaseStorage,
   imageGenerateStorage: BaseStorage,
   statusUpdate: (q: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>,
-  onStart: (toolName: string, data: any) => Promise<void>,
-  onFinish: (toolName: string, data: any) => Promise<void>,
+  onStart: (toolName: string, data: unknown) => Promise<void>,
+  onFinish: (toolName: string, data: unknown) => Promise<void>,
   llm: ICompletionBackend,
-  config: { [key in LlmTools]?: any },
+  config: { [key in LlmTools]?: unknown },
   model: string | undefined,
   imageProcessorLambdaName: string | undefined,
   // `tools` is required (no default): the previous `= b4mTools` default silently
@@ -97,7 +102,8 @@ export const generateTools = (
   sessionId?: string,
   codeMinifier?: ToolContext['codeMinifier'],
   availableModels?: import('@bike4mind/common').ModelInfo[],
-  onToolLlmUsage?: ToolContext['onToolLlmUsage']
+  onToolLlmUsage?: ToolContext['onToolLlmUsage'],
+  servingModel?: ToolContext['servingModel']
 ): Record<string, ICompletionOptionTools> => {
   assertAuthOriginMatchesApiKey(authOrigin, apiKeyId);
   const context: ToolContext = {
@@ -119,6 +125,7 @@ export const generateTools = (
     imageProcessorLambdaName,
     allowedDirectories,
     entitlementKeys,
+    getEntitlements,
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
@@ -136,9 +143,14 @@ export const generateTools = (
     codeMinifier,
     availableModels,
     onToolLlmUsage,
+    operationalBillingCheck: db.operationalBilling
+      ? memoizeOperationalBillingCheck({ adminSettings: db.adminSettings }, logger)
+      : undefined,
     decide,
+    toLedgerModel,
     getAbortSignal,
     numberCitables,
+    servingModel,
   };
 
   return Object.entries(tools).reduce(
@@ -238,6 +250,12 @@ export const generateMcpTools = async (
     if (errorName === 'AtlassianReconnectRequiredError') {
       Logger.globalInstance.warn(`Atlassian reconnection required during getTools for ${mcpData.serverName}`);
       // Return empty array - the real-time subscription will show toast to user
+      return [];
+    }
+    // From @bike4mind/mcp, matched by name as above: the server lacks a credential it needs to
+    // start, so this turn goes without its tools rather than failing.
+    if (errorName === 'McpServerConfigError') {
+      Logger.globalInstance.warn(`MCP server ${mcpData.serverName} is not configured: ${(error as Error).message}`);
       return [];
     }
     throw error;

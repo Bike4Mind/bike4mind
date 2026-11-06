@@ -46,6 +46,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
   loadModelConfigurations: async () => [],
+  loadFreeTierAllowedModels: async () => undefined,
   createModelAdmission: () => ({ admits: async () => true, assert: m.assertAdmission }),
 }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 0 }));
@@ -56,7 +57,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
     { id: 'mystery-image-model', type: 'image' },
   ],
 }));
-vi.mock('@client/services/operationsModelService', () => ({ OperationsModelService: {} }));
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({ OperationsModelService: {} }));
 vi.mock('@bike4mind/server-utils/utils/imageLogger', () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));

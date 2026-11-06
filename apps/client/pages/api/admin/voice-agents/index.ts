@@ -1,5 +1,5 @@
 import { adminSettingsRepository, agentRepository } from '@bike4mind/database';
-import { BadRequestError, ForbiddenError, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { BadRequestError, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import {
   createElevenLabsAgent,
   deleteElevenLabsAgent,
@@ -7,7 +7,8 @@ import {
   SILENCE_TURN_TIMEOUT_SECONDS,
 } from '@bike4mind/voice';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
 const DEFAULT_FIRST_MESSAGE = 'Hello! How can I help you today?';
@@ -30,19 +31,15 @@ function getCustomLlmUrl(req: { headers: { host?: string; 'x-forwarded-proto'?: 
   return `${proto}://${host}/api/voice/v2/llm-proxy`;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
     const agents = await agentRepository.listAllVoiceAgents();
     return res.status(200).json({ agents });
   })
   .post(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const body = CreateVoiceAgentBodySchema.parse(req.body);
 
     const settings = await getSettingsMap(
@@ -143,6 +140,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       }
       throw error;
     }
+
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.voice_agent.created',
+      target: { kind: 'settings', id: agent.id, displayName: body.name },
+      summary: `created voice agent ${body.name}`,
+      details: { elevenLabsAgentId, voiceId: body.voiceId, isDefault: isFirstVoiceAgent },
+    });
 
     return res.status(201).json({ agent });
   });

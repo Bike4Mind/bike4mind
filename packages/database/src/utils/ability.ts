@@ -14,7 +14,13 @@ import {
   Project,
   UserActivityCounter,
 } from '../models';
-import { InvitePermission, IUserDocument, Permission, hasDeveloperUserTag } from '@bike4mind/common';
+import {
+  InvitePermission,
+  IUserDocument,
+  Permission,
+  hasAdminPermission,
+  hasDeveloperUserTag,
+} from '@bike4mind/common';
 
 export type Ability = MongoAbility;
 
@@ -97,16 +103,18 @@ export function defineAbilitiesFor(user: IUserDocument | undefined) {
       allow('update', AdminSettings);
       allow('delete', AdminSettings);
 
-      allow('create', ModalModel);
-      allow('update', ModalModel);
-      allow('delete', ModalModel);
-
       allow('read', Organization);
       allow('update', Organization);
       allow('delete', Organization);
 
       allow('read', UserActivityCounter);
       allow('update', UserActivityCounter);
+    }
+
+    if (hasAdminPermission(user, 'settings:manage')) {
+      allow('create', ModalModel);
+      allow('update', ModalModel);
+      allow('delete', ModalModel);
     }
 
     allow('read', UserActivityCounter, ownDocumentPermission);
@@ -124,6 +132,8 @@ export function defineAbilitiesFor(user: IUserDocument | undefined) {
 
     // Additional permissions for specific resources:
     allow('export', Session, ownDocumentPermission);
+    // Mirrors the HTTP builder's FabFile export rule (apps/client/server/auth/ability.ts).
+    allow('export', FabFile, ownDocumentPermission);
     allow('clone', Session, ownDocumentPermission);
 
     // Accept and refuse invites

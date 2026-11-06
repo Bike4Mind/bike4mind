@@ -81,7 +81,7 @@ A bare positional argument seeds **and** submits the first turn while keeping th
 
 | Flag              | Effect                                                                                                                                                                                        |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--dev`           | Point the CLI at the local dev server (`http://localhost:3001`) and remember it. Aliases: `--local`, single-dash forms.                                                                       |
+| `--dev`           | Point the CLI at the local dev server (`http://localhost:3001`) and remember it. Aliases: `--local` (except after `b4m mcp serve`), single-dash forms.                                        |
 | `--prod`          | Point the CLI at Bike4Mind production and remember it. Alias: `--production`.                                                                                                                 |
 | `--api-url <url>` | Point the CLI at **any** instance — a self-hosted stack, an AWS deployment, `http://localhost:3000`, etc. Clears cached auth (bound to the old origin) and exits; run `b4m` again to sign in. |
 | `--reset-api`     | Reset the API URL to the built-in default and clear auth, then exit.                                                                                                                          |
@@ -143,7 +143,34 @@ b4m update                                # Check for and install CLI updates
 b4m doctor                                # Diagnose the CLI installation (Node, registry, ripgrep, native modules)
 b4m skills push <path>                    # Create a skill from a folder, SKILL.md, or commands/*.md
 b4m skills push <path> --update           # Update your skill with the same name without a prompt
+b4m models ls | search | show | curated | pull | rm | use   # Find, download and use local models (see below)
 ```
+
+### Local models
+
+`b4m models` manages models on a local Ollama and finds GGUF builds on Hugging Face.
+
+```bash
+b4m models ls --ollama-host http://127.0.0.1:11434   # list installed models; a host that answers is saved
+b4m models search qwen2.5 0.5b                       # Hugging Face GGUF repos: downloads, likes, license, gated
+b4m models show Qwen/Qwen2.5-0.5B-Instruct-GGUF      # builds with size, fit, quant and Ollama ref, license, gating
+b4m models curated                                   # Bike4Mind's picks for this computer, then every curated build
+b4m models pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M
+b4m models pull qwen2.5:0.5b                         # Ollama registry names (model[:tag], ollama.com/owner/model)
+b4m models pull <ref> --force                        # pull even when the fit check rates it too large
+b4m models use hf.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M   # default model for chat
+b4m models rm qwen2.5:0.5b
+```
+
+`search` hides abliterated and uncensored builds and prints how many it hid; `--include-abliterated` lists them last, labelled as not recommended.
+
+`show` rates each build `fits`, `tight` or `too large` for this machine, and `pull` prints the verdict with its reasoning before asking anything. It is a rough estimate using the shared memory-budget and compute-buffer calculations: the file size (plus any vision projector) and compute buffers against the memory a model can use here, at the context the CLI asks Ollama for (the model's trained length capped at 32K, or at `OLLAMA_MAX_NUM_CTX`). `pull` refuses a too-large build unless `--force`. The fit is `unknown`, and never blocks, when download sizes are unavailable, the hardware cannot be read, or the Ollama host is another machine. An Ollama reached through an SSH tunnel on localhost is rated as this machine, so use `--force` when the far host has the memory.
+
+`curated` prints the curated list Desktop uses: the list bundled with the CLI, or a newer signed one when this build has a list URL and a trusted key (the published CLI bakes both in once they are configured; otherwise it only has the bundled list). A newer list is checked for at most every 6 hours, for up to 3 seconds, verified against the shipped keys and cached under `~/.bike4mind/model-hub/curated/`; a list that fails verification is ignored and the last good one stays. `--refresh` checks now. `--offline` or `B4M_CURATED=off` uses the last verified cached list (else the bundled one) and makes no request; `pull` accepts `--offline` too. The output names where the list came from. It lists the picks for this computer's memory first, then every build with the ref to pull, its size, license and tags (including the Ollama version a build needs). It contacts no runtime and downloads nothing; pull a row with `b4m models pull <ref>`, which asks for the license as below but does not check the build against the reviewed one. Abliterated builds are never on it, and a license that is not permissive, the model's own or its base model's, is shown as `restricted: <license>` (with `(base: <license>)`) and must be accepted before `pull`. With a saved Ollama host on another machine, the picks still describe this computer.
+
+Nothing downloads without confirmation: `pull` prints the size and license first and asks (`--yes` skips the question). A license that is not a permissive open-source one (Apache-2.0, MIT, BSD and similar), or no declared license, is named with a link and must be accepted at a prompt or with `--accept-license`. For Ollama registry models the license is read from the model's own license texts, and only unmodified Apache-2.0 or MIT texts count as permissive. Refs naming any other registry are refused. A gated repo needs access granted on Hugging Face first, `HF_TOKEN` set to that account's token, and your Ollama public key added at https://huggingface.co/settings/keys. Ctrl-C cancels a pull without installing anything; pulling again resumes, and says how much was already downloaded. Without a saved host, `b4m models` uses the first local runtime it detects; a scheme-less host without a port uses 11434, and `--ollama-host ''` clears the saved host. `--output-format json` prints `ls`, `search`, `show` and `curated` as JSON. With a saved host, `b4m -p` fails instead of switching to another model when the model picked with `b4m models use` is not available, or Ollama does not answer.
+
+`b4m mcp serve` (stdio only) offers the same operations to MCP clients as `models_list`, `models_search`, `models_pull` and `models_remove`, with the same checks. Pull and remove act only on the user's own approval. A client that supports elicitation asks the user directly, showing the size and every license, with a separate tick for a license that is not all permissive. With any other client nothing changes: the tool returns the preview and the `b4m models pull` or `b4m models rm` command for the user to run in a terminal, where the CLI asks them. `models_pull` reports the same fit verdict in its preview and prompt, and refuses a too-large model before asking unless the caller passes `force: true`, which still leaves the download to the user's approval. `models_search` leaves abliterated and uncensored builds out unless `includeAbliterated` is true, and then lists them last, labelled `notRecommended`, as `b4m models search --include-abliterated` does. The host comes from `B4M_OLLAMA_HOST`, the saved host, or detection, as for `b4m models`. `b4m mcp serve --local` serves these four tools alone and needs no Bike4Mind backend.
 
 ### Pushing a local skill
 
@@ -302,6 +329,11 @@ Because that default is injected only at build time, the endpoint is resolved li
 4. Otherwise (a published, unbranded fork with no baked default), the first `b4m` **prompts you
    to choose a backend**.
 
+A build with a baked default also shows this picker on a fresh install, listing the default
+first and preselected, then the local dev server and a custom URL. Any choice (the picker,
+`--prod`, `--dev`, `--api-url`, `--reset-api`, `/set-api`, `/reset-api`) is remembered, so
+later launches go straight to sign-in.
+
 **Quick switch between local dev and production:** use the `b4m --dev` / `b4m --prod`
 launch flags (see [Switching environments](#switching-environments---dev----prod)).
 They persist your choice and cache auth per-environment. The `/set-api`, `/reset-api`,
@@ -454,7 +486,10 @@ The seven Bob tools read websites with Bob on an instance that serves it. `bob_r
 ```bash
 b4m mcp serve                        # stdio (default) - for local clients that spawn the process
 b4m mcp serve --http --port 7000     # stateless streamable HTTP at http://127.0.0.1:7000/mcp
+b4m mcp serve --local                # stdio, local model tools only; no backend needed
 ```
+
+`--local` serves only `models_list`, `models_search`, `models_pull` and `models_remove`, ignores any configured endpoint, and notes this in one stderr line. It is stdio only (`--http` with it is an error, as are `--dev` and `--prod`). Only after `b4m mcp serve` is `--local` serve's own flag and leaves the saved backend alone; before it, as in `b4m --local mcp serve`, it is the `--dev` alias. Without it, `mcp serve` exits with `No API endpoint configured` when no backend is set.
 
 Over stdio only, when the caller is entitled to OptiHashi and the key carries `optihashi:read` and `optihashi:compute`, the server also offers `optihashi_solvers` and `optihashi_solve` (a free, bounded classical solver race). With an API key, the CLI first checks the key's own scopes and offers them only when it holds both. The solve input schema comes from the server at startup, with a 5 second discovery budget; restart the session to pick up changed family ids, solver ids or limits. `optihashi_solvers` fetches the current roster on every call. With no entitlement, scopes or feature, they are simply not listed. No paid compute is exposed, and HTTP mode never offers them.
 

@@ -2,7 +2,8 @@ import type { Logger } from '@bike4mind/observability';
 import type { ImageModerationService } from '@bike4mind/utils/imageModeration';
 import type { ImageModerationIncident } from '@bike4mind/common';
 import { generateUploadConstraintFor } from '../files/generateUploadMarker';
-import type { moderateUploadedFile as ModerateUploadedFile } from './moderateUploadedFile';
+import type { ModerateUploadedFileArgs, moderateUploadedFile as ModerateUploadedFile } from './moderateUploadedFile';
+import { isNoSuchKeyError } from './noSuchKeyError';
 
 /**
  * Minimal FabFile row shape the moderation loop needs back from the atomic claim.
@@ -59,10 +60,10 @@ export interface ModerateImportedKnowledgeFilesArgs {
    * matched, for parity with `persist`; the caller does not currently act on a dropped release since
    * the successor already owns the row either way.
    */
-  release(_id: unknown, claimedAt: Date): Promise<boolean>;
+  release(_id: unknown, claimedAt: Date, options?: { countAttempt?: boolean }): Promise<boolean>;
   /**
    * When true, a scan that fails because the object does not exist in storage (NoSuchKey only, never
-   * a bare 404 - see isMissingObjectError) SOFT-DELETES the row (via `retireMissingObject`) instead
+   * a bare 404 - see isNoSuchKeyError) SOFT-DELETES the row (via `retireMissingObject`) instead
    * of releasing it back to `pending`. Only
    * the rescue sweep sets this, and it selects only imported-knowledge rows already past the staleness
    * age floor, where a never-created object is a permanent orphan (an import whose bytes never
@@ -89,21 +90,11 @@ export interface ModerateImportedKnowledgeFilesArgs {
   measureSize?(filePath: string): Promise<number>;
   downloadBytes(filePath: string): Promise<Buffer>;
   downloadPartialBytes(filePath: string, length: number): Promise<Buffer>;
-}
-
-/**
- * A storage read that failed because the OBJECT (not the bucket) does not exist (vs a transient
- * 5xx/throttle): S3's GetObject throws `NoSuchKey` for a key that was never written. Matched by the
- * error's `name`/`Code` only - deliberately NOT by a bare `$metadata.httpStatusCode === 404`, because
- * the AWS SDK maps `NoSuchBucket` to 404 identically, and a bucket misconfig (stage-name substitution
- * miss, a self-host `.env` typo) must be treated as transient, never as a permanent orphan to
- * soft-delete. Matches the AWS SDK v3 error shape structurally so this module needn't import the S3
- * client.
- */
-function isMissingObjectError(err: unknown): boolean {
-  if (!err || typeof err !== 'object') return false;
-  const e = err as { name?: string; Code?: string };
-  return e.name === 'NoSuchKey' || e.Code === 'NoSuchKey';
+  /**
+   * The uploader's moderation allowance and usage hooks for a claimed file. Only the rescue sweep
+   * passes it, for ordinary upload rows; a refused allowance holds the file 'pending' (`deferred`).
+   */
+  meterFor?(fabFileId: string): Pick<ModerateUploadedFileArgs, 'reserveModerationCalls' | 'recordModerationCalls'>;
 }
 
 /**
@@ -122,11 +113,11 @@ function isMissingObjectError(err: unknown): boolean {
  * (that path never writes the interim 'scanning' state). Never throws - a failed scan leaves the
  * file held. Returns the count of files resolved this run (scanned clean/blocked, or soft-deleted as
  * a missing-object orphan); files skipped (claim lost) or released (transient failure) are not
- * counted.
+ * counted. `deferred` counts files held by a refused allowance (see `meterFor`).
  */
 export async function moderateImportedKnowledgeFiles(
   args: ModerateImportedKnowledgeFilesArgs
-): Promise<{ scanned: number }> {
+): Promise<{ scanned: number; deferred: number }> {
   const {
     filePaths,
     userId,
@@ -144,9 +135,11 @@ export async function moderateImportedKnowledgeFiles(
     measureSize,
     downloadBytes,
     downloadPartialBytes,
+    meterFor,
   } = args;
 
   let scanned = 0;
+  let deferred = 0;
   for (const filePath of filePaths) {
     let claimed: ClaimedFabFile | null = null;
     try {
@@ -167,7 +160,15 @@ export async function moderateImportedKnowledgeFiles(
         downloadPartialBytes: length => downloadPartialBytes(filePath, length),
         moderateImageOrThrow,
         logger,
+        ...meterFor?.(claimed.id),
       });
+
+      if (result.moderationStatus === 'pending') {
+        // Deferred by the allowance, not failed: held 'pending' without counting an attempt.
+        await release(claimed._id, claimed.moderationClaimedAt, { countAttempt: false });
+        deferred++;
+        continue;
+      }
 
       const applied = await persist(
         claimed._id,
@@ -189,7 +190,7 @@ export async function moderateImportedKnowledgeFiles(
         logger.warn(`Moderation claim for ${filePath} was superseded mid-scan; discarding this run's verdict`);
       }
     } catch (err) {
-      if (claimed && terminalOnMissingObject && isMissingObjectError(err)) {
+      if (claimed && terminalOnMissingObject && isNoSuchKeyError(err)) {
         // The object was never written to storage - an import whose bytes never landed leaves a
         // 'pending' row whose filePath points at a key that will never exist. Releasing it back to
         // 'pending' would re-select the same orphan on every sweep (a poison batch that can starve
@@ -224,5 +225,5 @@ export async function moderateImportedKnowledgeFiles(
       );
     }
   }
-  return { scanned };
+  return { scanned, deferred };
 }

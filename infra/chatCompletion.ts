@@ -12,9 +12,9 @@ import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
 import { providerFederation } from './providerFederation';
 import { generationJobQueue } from './queues';
-import { cdnUrlForLambdaEnv, router, routePrefix } from './router';
+import { cdnUrlForLambdaEnv, originVerifySecret, router, routePrefix } from './router';
 import { searxngUrl } from './searxng';
-import { allSecrets, secrets } from './secrets';
+import { allSecrets, contributedSecretEnvironment, secrets } from './secrets';
 import { cluster, resolvedVpcId, vpc, vpcId } from './vpc';
 import { websocketApi } from './websocket';
 
@@ -166,6 +166,8 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     ...providerFederation.permissions,
   ],
   environment: {
+    // First, so a core variable of the same name always wins.
+    ...contributedSecretEnvironment(),
     ...DEFAULT_LAMBDA_ENVIRONMENT,
     ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
     NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
@@ -182,6 +184,10 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     // inside the VPC.
     ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
     ...providerFederation.environment,
+    // Same gate and kill switch as the frontend (infra/web.ts); not under `sst dev`.
+    ...(!$dev && process.env.DISABLE_ORIGIN_VERIFY !== 'true'
+      ? { ORIGIN_VERIFY_SECRET: originVerifySecret.result }
+      : {}),
   },
   logging: {
     // Long enough to investigate a model-fallback or billing report after the fact; these

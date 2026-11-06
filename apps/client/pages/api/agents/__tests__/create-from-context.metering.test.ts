@@ -5,7 +5,14 @@
  * The real meterPlatformCompletion + reserveRequestCredits run; only the credit store is faked.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 import { BadRequestError, ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
+
+const quotaAdmission = vi.hoisted(() => vi.fn().mockResolvedValue({ release: async () => {} }));
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quotaAdmission }));
 
 const m = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
@@ -152,4 +159,14 @@ describe('POST /api/agents/create-from-context metering', () => {
     expect(m.release).toHaveBeenCalledOnce();
     expect(m.settleHold).not.toHaveBeenCalled();
   });
+});
+
+it('enforces the API completion quota before invoking the model', async () => {
+  const refusal = new Error('completion quota exhausted');
+  quotaAdmission.mockRejectedValueOnce(refusal);
+  await expect(call()).rejects.toBe(refusal);
+  expect(quotaAdmission).toHaveBeenCalledWith(expect.objectContaining({ user: expect.any(Object) }), {
+    holdSlot: true,
+  });
+  expect(m.complete).not.toHaveBeenCalled();
 });

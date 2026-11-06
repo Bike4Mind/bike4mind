@@ -7,7 +7,7 @@ const { sendToQueueMock, sendToClientMock, getSourceQueueUrlMock } = vi.hoisted(
 }));
 
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: sendToQueueMock }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: sendToClientMock }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: sendToClientMock }));
 // Enqueue resolves the queue via getSourceQueueUrl - one mechanism, hosted + self-host
 // (the self-host Resource shim now backs sourceQueueUrls from env, see @bike4mind/resource).
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: getSourceQueueUrlMock }));
@@ -43,5 +43,11 @@ describe('researchTaskJobs enqueue', () => {
       action: 'downloadRelevantLinks',
       payload: { id: 'r1', userId: 'u1' },
     });
+  });
+
+  it('deepResearchIntoQuest() enqueues the job under its own action', async () => {
+    const job = { questId: 'q1', sessionId: 's1', userId: 'u1', topic: 'topic' };
+    await researchTaskJobs.deepResearchIntoQuest(job);
+    expect(sendToQueueMock).toHaveBeenCalledWith(QUEUE, { action: 'deepResearchIntoQuest', payload: job });
   });
 });

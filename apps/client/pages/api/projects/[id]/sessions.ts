@@ -9,7 +9,8 @@ import {
 } from '@server/projects/projectScopes';
 import { attachSessionsToProject } from '@server/projects/attachSessionsToProject';
 import { removeSessionsFromProject } from '@server/projects/projectContentMutations';
-import { redactSessionsForClient } from '@bike4mind/common';
+import { projectResponseSchema, redactSessionsForClient } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 import { z } from 'zod';
 
 // Shape stays loose (no hex check) for the reason recorded above ProjectFilesRequestSchema in
@@ -71,7 +72,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
         sessionIds
       );
 
-      return res.json(project);
+      return respond(res, projectResponseSchema, project);
     })
   );
 

@@ -4,19 +4,30 @@ import { createMocks } from 'node-mocks-http';
 // Same middleware-strip pattern as index.test.ts: capture the handlers registered on the
 // baseApi chain so PUT/DELETE can be invoked directly. Everything referenced inside a
 // vi.mock factory must live in vi.hoisted (mocks are hoisted above const initialization).
-const { handlers, repo, invalidatePartnerRuleCache } = vi.hoisted(() => ({
+const { handlers, repo, invalidatePartnerRuleCache, audit, findPackage } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => unknown>,
   repo: { update: vi.fn(), findById: vi.fn(), delete: vi.fn() },
   invalidatePartnerRuleCache: vi.fn(),
+  audit: vi.fn(),
+  findPackage: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const chain: Record<string, (fn: (req: unknown, res: unknown) => unknown) => unknown> = {};
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
+    const chain: Record<string, unknown> = {
+      use: (middleware: (req: unknown, res: unknown, next: () => void) => void) => {
+        middlewares.push(middleware);
+        return chain;
+      },
+    };
     for (const method of ['get', 'post', 'put', 'delete']) {
       chain[method] = (fn: (req: unknown, res: unknown) => unknown) => {
-        handlers[method] = fn;
+        handlers[method] = async (req: unknown, res: unknown) => {
+          for (const middleware of middlewares) middleware(req, res, () => undefined);
+          return fn(req, res);
+        };
         return chain;
       };
     }
@@ -24,7 +35,12 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@bike4mind/database', () => ({ partnerSignupRuleRepository: repo }));
+vi.mock('@bike4mind/database', () => ({
+  partnerSignupRuleRepository: repo,
+  grantPackageRepository: { findById: findPackage },
+  withTransaction: (fn: () => Promise<unknown>) => fn(),
+}));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit }));
 // Keep assertKnownEntitlements real (exercises the actual known-key validation); spy only on invalidate.
 vi.mock('@server/entitlements/partnerRules', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/entitlements/partnerRules')>()),
@@ -47,12 +63,13 @@ function makeReqRes(method: string, over: ReqOverrides = {}) {
 describe('/api/admin/partner-signup-rules/[id] — update (PUT)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    repo.findById.mockResolvedValue(null);
     repo.update.mockResolvedValue({ id: 'r1', domain: 'partner.com', entitlements: ['optihashi:pro'], enabled: true });
   });
 
   it('rejects a non-admin with 403 (ForbiddenError) and never writes', async () => {
     const { req, res } = makeReqRes('PUT', { user: { isAdmin: false }, body: { enabled: false } });
-    await expect(handlers.put(req, res)).rejects.toThrow(/admin access required/i);
+    await expect(handlers.put(req, res)).rejects.toThrow(/missing permission/i);
     expect(repo.update).not.toHaveBeenCalled();
   });
 
@@ -76,6 +93,43 @@ describe('/api/admin/partner-signup-rules/[id] — update (PUT)', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(repo.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'r1', enabled: false }));
     expect(invalidatePartnerRuleCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects linking an unknown grant package with a 400 and never writes', async () => {
+    findPackage.mockResolvedValue(null);
+    const { req, res } = makeReqRes('PUT', { body: { grantPackageId: 'pkg-missing' } });
+    await expect(handlers.put(req, res)).rejects.toThrow(/grant package pkg-missing not found/i);
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects changing the link to an inactive grant package and never writes', async () => {
+    repo.findById.mockResolvedValue({ id: 'r1', grantPackageId: 'pkg-1' });
+    findPackage.mockResolvedValue({ id: 'pkg-off', credits: 100, active: false });
+    const { req, res } = makeReqRes('PUT', { body: { grantPackageId: 'pkg-off' } });
+    await expect(handlers.put(req, res)).rejects.toThrow(/grant package is inactive/i);
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('keeps a rule editable when it re-sends the same, since-deactivated package id', async () => {
+    repo.findById.mockResolvedValue({ id: 'r1', grantPackageId: 'pkg-off' });
+    findPackage.mockResolvedValue({ id: 'pkg-off', credits: 100, active: false });
+    const { req, res } = makeReqRes('PUT', { body: { grantPackageId: 'pkg-off', enabled: false } });
+    await handlers.put(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(repo.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'r1', grantPackageId: 'pkg-off' }));
+  });
+
+  it('links an existing grant package and unlinks it with null', async () => {
+    findPackage.mockResolvedValue({ id: 'pkg-1', credits: 100, active: true });
+    const link = makeReqRes('PUT', { body: { grantPackageId: 'pkg-1' } });
+    await handlers.put(link.req, link.res);
+    expect(repo.update).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'r1', grantPackageId: 'pkg-1' }));
+
+    findPackage.mockClear();
+    const unlink = makeReqRes('PUT', { body: { grantPackageId: null } });
+    await handlers.put(unlink.req, unlink.res);
+    expect(repo.update).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'r1', grantPackageId: null }));
+    expect(findPackage).not.toHaveBeenCalled();
   });
 
   it('applies a valid entitlements update (200) and busts the cache', async () => {
@@ -138,5 +192,71 @@ describe('/api/admin/partner-signup-rules/[id] — update (PUT)', () => {
     const { req, res } = makeReqRes('PUT', { body: { enabled: true } });
     await expect(handlers.put(req, res)).rejects.toThrow(/not found/i);
     expect(invalidatePartnerRuleCache).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/admin/partner-signup-rules/[id] - admin audit', () => {
+  const stored = { id: 'r1', domain: 'partner.com', entitlements: ['optihashi:pro'], enabled: true };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    repo.findById.mockResolvedValue(stored);
+    repo.update.mockResolvedValue({ ...stored, enabled: false });
+    repo.delete.mockResolvedValue(undefined);
+    audit.mockResolvedValue(null);
+  });
+
+  it('records a strict .updated entry with the before/after diff of the sent fields', async () => {
+    const { req, res } = makeReqRes('PUT', { body: { enabled: false, entitlements: ['optihashi:pro'] } });
+    await handlers.put(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'org.partner_signup_rule.updated',
+        target: { kind: 'settings', id: 'r1', displayName: 'partner.com' },
+        changes: [{ field: 'enabled', before: true, after: false }],
+      })
+    );
+    expect(repo.update.mock.invocationCallOrder[0]).toBeLessThan(audit.mock.invocationCallOrder[0]);
+  });
+
+  it('does not report an update as success when the audit write rejects', async () => {
+    audit.mockRejectedValueOnce(new Error('audit down'));
+    const { req, res } = makeReqRes('PUT', { body: { enabled: false } });
+    await expect(handlers.put(req, res)).rejects.toThrow(/audit down/);
+    expect(res._isEndCalled()).toBe(false);
+    expect(invalidatePartnerRuleCache).not.toHaveBeenCalled();
+  });
+
+  it('records a strict .deleted entry after the delete', async () => {
+    const { req, res } = makeReqRes('DELETE');
+    await handlers.delete(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'org.partner_signup_rule.deleted',
+        target: { kind: 'settings', id: 'r1', displayName: 'partner.com' },
+      })
+    );
+    expect(repo.delete.mock.invocationCallOrder[0]).toBeLessThan(audit.mock.invocationCallOrder[0]);
+  });
+
+  it('does not report a delete as success when the audit write rejects', async () => {
+    audit.mockRejectedValueOnce(new Error('audit down'));
+    const { req, res } = makeReqRes('DELETE');
+    await expect(handlers.delete(req, res)).rejects.toThrow(/audit down/);
+    expect(res._isEndCalled()).toBe(false);
+    expect(invalidatePartnerRuleCache).not.toHaveBeenCalled();
+  });
+
+  it('does not audit a delete of a missing rule', async () => {
+    repo.findById.mockResolvedValue(null);
+    const { req, res } = makeReqRes('DELETE');
+    await expect(handlers.delete(req, res)).rejects.toThrow(/not found/i);
+    expect(audit).not.toHaveBeenCalled();
   });
 });

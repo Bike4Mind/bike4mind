@@ -10,8 +10,8 @@ import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
  *
  * The credential stays the security boundary: a non-browser caller can omit
  * Origin entirely and is already let through, so permitting our own origin adds
- * no attack surface. Must stay in lockstep across BOTH origin gates:
- * pages/api/embed/session.ts and server/chatCompletion/external/embedRoute.ts.
+ * no attack surface. Every embed origin gate decides through
+ * resolveEmbedOriginDecision below, so they cannot drift.
  *
  * EXACT host match only - deliberately NOT a subtree match on PUBLISH_HOST. The
  * widget page is served from exactly `app.<domain>`, so an exact match is all
@@ -42,11 +42,8 @@ export function isFirstPartyEmbedOrigin(
 }
 
 /**
- * The full embed origin decision, shared verbatim by the mint gate
- * (pages/api/embed/session.ts) and the chat gate (embedRoute.ts) so the two
- * can never drift: a present browser Origin passes when it is our own serving
- * origin OR on the key's allow-list. Callers handle the absent/null-Origin
- * case (credential-only) before calling this.
+ * A present, non-opaque browser Origin passes when it is our own serving origin
+ * OR on the key's allow-list. Only called through resolveEmbedOriginDecision.
  */
 export function isEmbedOriginAllowed(
   origin: string,
@@ -54,4 +51,18 @@ export function isEmbedOriginAllowed(
   requestHost: string | undefined
 ): boolean {
   return isFirstPartyEmbedOrigin(origin, requestHost) || isOriginPermitted(origin, allowedOrigins);
+}
+
+/**
+ * Absent Origin = non-browser caller, the credential decides. Opaque `null` never passes: a browser
+ * cannot omit Origin, so `null` is not a server-to-server signal, and it can match no allow-list.
+ */
+export function resolveEmbedOriginDecision(
+  rawOrigin: string | undefined,
+  allowedOrigins: string[] | undefined,
+  requestHost: string | undefined
+): boolean {
+  if (!rawOrigin) return true;
+  if (rawOrigin === 'null') return false;
+  return isEmbedOriginAllowed(rawOrigin, allowedOrigins, requestHost);
 }

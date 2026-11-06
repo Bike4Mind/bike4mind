@@ -8,24 +8,17 @@
  * persisted; only counts, usage and cost are.
  *
  * Takes a caller slice rather than an Express request, so an agent loop or CLI turn reaches the
- * same billing path with no HTTP request in hand.
+ * same billing path with no HTTP request in hand. This file is the user accounting policy over
+ * `executeDecision`, which owns validation, the provider call and normalization.
  */
 
-import { randomUUID } from 'node:crypto';
 import {
-  DecisionsRequestSchema,
-  decisionCostUsd,
-  decisionRequestHasImages,
   getDecisionModelCapabilities,
-  isDecisionModelId,
-  maxDecisionCostUsd,
-  normalizeDecisionAnswers,
   usdToCredits,
   usdToCreditsStochastic,
-  validateDecisionRequest,
   type CompletionSource,
-  type DecisionAnswer,
   type DecisionModelId,
+  type DecisionProviderId,
   type DecisionResponse,
   type DecisionsRequest,
   type IUserDocument,
@@ -34,21 +27,14 @@ import { adminSettingsRepository, usageEventRepository } from '@bike4mind/databa
 import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import {
-  DECISION_DEADLINE_MS,
-  DecisionOverloadedError,
-  DecisionProviderError,
-  decideWithRetry,
-  type DecideWithRetryResult,
-  type ResolvedDecisionInput,
-} from '@bike4mind/utils/decisionProviders';
 import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { DecisionRequestError } from '@server/decisions/decisionErrors';
+import { executeDecision, type DecisionAccounting } from '@server/decisions/executeDecision';
 import {
   getDecisionProviderRegistry,
   resolveCallableDecisionProviders,
   resolveDecisionProviderKey,
-} from '@server/decisions/providers';
+} from '@bike4mind/server-utils/decisions/providers';
 import { resolveDecisionInput } from '@server/decisions/resolveDecisionInput';
 import type { FabFileAccessRequest } from '@server/files/loadAccessibleFabFile';
 
@@ -70,22 +56,6 @@ export type DecisionCaller = {
 /** The request body, with `model` optional: a tool caller lets the deployment pick the first callable one. */
 export type DecisionRunBody = Omit<DecisionsRequest, 'model'> & { model?: string };
 
-const countByType = (answers: readonly DecisionAnswer[]) =>
-  answers.reduce<Record<string, number>>(
-    (counts, answer) => ({ ...counts, [answer.type]: (counts[answer.type] ?? 0) + 1 }),
-    {}
-  );
-
-// What failed, without the message: it can carry vendor text and caller-supplied choice values.
-const describeFailure = (error: unknown) => {
-  const providerError = error instanceof DecisionOverloadedError ? error.providerError : error;
-  return {
-    errorName: error instanceof Error ? error.name : typeof error,
-    providerErrorKind: providerError instanceof DecisionProviderError ? providerError.kind : undefined,
-    providerStatus: providerError instanceof DecisionProviderError ? providerError.details.status : undefined,
-  };
-};
-
 /** The first model this deployment serves whose provider the caller holds a usable key for. */
 const firstCallableDecisionModel = async (userId: string, logger: Logger): Promise<DecisionModelId> => {
   const models = getDecisionProviderRegistry().models();
@@ -103,6 +73,90 @@ const firstCallableDecisionModel = async (userId: string, logger: Logger): Promi
   return model;
 };
 
+/** The user policy: the caller's own effective keys, a credit hold on their balance, a usage event. */
+const userDecisionAccounting = (caller: DecisionCaller): DecisionAccounting => {
+  const { userId, user, logger, source, apiKeyId } = caller;
+  return {
+    resolveProviderKey: provider => resolveDecisionProviderKey(userId, provider, logger),
+    reserve: async ({ decisionId, maxCostUsd }) => {
+      const settings = await getSettingsMap(
+        { adminSettings: adminSettingsRepository },
+        { names: ['enforceCredits'], skipCache: true }
+      );
+      const reservation = await reserveRequestCredits({
+        req: { user, apiKeyInfo: caller.apiKeyInfo, logger },
+        requiredCredits: maxCostUsd > 0 ? usdToCredits(maxCostUsd) : 0,
+        enforceCredits: getSettingsValue('enforceCredits', settings),
+        featureLabel: 'decisions',
+        billingOrganizationId: caller.billingOrganizationId,
+      });
+      const startedAt = Date.now();
+      const recordUsage = (
+        status: 'ok' | 'error',
+        usage: {
+          provider: DecisionProviderId;
+          model: string;
+          inputTokens: number;
+          outputTokens: number;
+          costUsd: number;
+          creditsCharged: number;
+        }
+      ) =>
+        usageEventRepository
+          .record({
+            requestId: decisionId,
+            userId,
+            ownerId: reservation.ownerId,
+            ownerType: reservation.ownerType,
+            sessionId: decisionId,
+            feature: 'decision',
+            provider: usage.provider,
+            model: usage.model,
+            source,
+            apiKeyId,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            cachedInputTokens: 0,
+            cacheWriteTokens: 0,
+            settledBasis: 'provider',
+            costUsd: usage.costUsd,
+            creditsCharged: usage.creditsCharged,
+            latencyMs: Date.now() - startedAt,
+            status,
+          })
+          .catch(err => logger.warn('Failed to record decision usage event', { err }));
+
+      return {
+        refund: () => reservation.refund(),
+        fail: async ({ model, provider }) => {
+          await reservation.refund();
+          void recordUsage('error', {
+            provider,
+            model,
+            inputTokens: 0,
+            outputTokens: 0,
+            costUsd: 0,
+            creditsCharged: 0,
+          });
+        },
+        settle: async usage => {
+          const creditsCharged = await reservation.settle(usdToCreditsStochastic(usage.costUsd), {
+            type: 'decision_usage',
+            sessionId: usage.decisionId,
+            model: usage.model,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            apiKeyId,
+            source,
+          });
+          void recordUsage('ok', { ...usage, creditsCharged });
+          return creditsCharged;
+        },
+      };
+    },
+  };
+};
+
 /**
  * Answers one decision request and returns the wire response. Throws `DecisionRequestError` for a
  * caller-fixable refusal and the provider error classes for a vendor failure; everything else is
@@ -115,157 +169,16 @@ export async function runDecision({
   caller: DecisionCaller;
   body: DecisionRunBody;
 }): Promise<DecisionResponse> {
-  const { userId, user, logger, source, apiKeyId } = caller;
+  const { userId, user, logger } = caller;
   const model = body.model ?? (await firstCallableDecisionModel(userId, logger));
-
-  // Re-parse even on the route path (where the contract already did): a tool caller's arguments
-  // are model-authored JSON, and this is the gate that keeps a malformed question out of the
-  // provider. Values are identical on the route, so its behavior is unchanged.
-  const parsed = DecisionsRequestSchema.safeParse({ ...body, model });
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    throw new DecisionRequestError(
-      422,
-      'invalid_request',
-      issue?.path.join('.') || undefined,
-      issue?.message ?? 'Invalid decision request'
-    );
-  }
-  const request = parsed.data;
-
-  const provider = isDecisionModelId(model) ? getDecisionProviderRegistry().forModel(model) : undefined;
-  if (!provider || !isDecisionModelId(model)) {
-    throw new DecisionRequestError(422, 'model_unavailable', 'model', `${model} is not served by this deployment.`);
-  }
-  const caps = getDecisionModelCapabilities(model);
-  const validation = validateDecisionRequest(request, caps);
-  if (!validation.ok) {
-    throw new DecisionRequestError(422, validation.code, validation.param, validation.message);
-  }
-
-  const apiKey = await resolveDecisionProviderKey(userId, caps.provider, logger);
-  if (!apiKey) {
-    throw new DecisionRequestError(
-      503,
-      'provider_not_configured',
-      undefined,
-      `No ${caps.provider} credential is configured for decision model ${model}.`
-    );
-  }
-
   const fileRequest: FabFileAccessRequest = { user, apiKeyInfo: caller.apiKeyInfo, logger };
-
-  // The hold comes before image resolution, so a caller who cannot pay cannot make us download and decode files.
-  // The worst-case cost does not depend on the images.
-  const settings = await getSettingsMap(
-    { adminSettings: adminSettingsRepository },
-    { names: ['enforceCredits'], skipCache: true }
-  );
-  const maxCostUsd = maxDecisionCostUsd(caps);
-  const reservation = await reserveRequestCredits({
-    // Separate from `fileRequest`: billing reads the key's owner slice, file access its scopes.
-    req: { user, apiKeyInfo: caller.apiKeyInfo, logger },
-    requiredCredits: maxCostUsd > 0 ? usdToCredits(maxCostUsd) : 0,
-    enforceCredits: getSettingsValue('enforceCredits', settings),
-    featureLabel: 'decisions',
-    billingOrganizationId: caller.billingOrganizationId,
+  const { response } = await executeDecision({
+    model,
+    body,
+    logger,
+    accounting: userDecisionAccounting(caller),
+    resolveInput: (input, caps) => resolveDecisionInput(fileRequest, input, caps),
+    safetyIdentifier: body.safety_identifier ?? toProviderEndUserId(userId),
   });
-
-  const decisionId = `dec_${randomUUID().replace(/-/g, '')}`;
-  const startedAt = Date.now();
-  const recordUsage = (
-    status: 'ok' | 'error',
-    usage: { model: string; inputTokens: number; outputTokens: number; costUsd: number; creditsCharged: number }
-  ) =>
-    usageEventRepository
-      .record({
-        requestId: decisionId,
-        userId,
-        ownerId: reservation.ownerId,
-        ownerType: reservation.ownerType,
-        sessionId: decisionId,
-        feature: 'decision',
-        provider: caps.provider,
-        model: usage.model,
-        source,
-        apiKeyId,
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-        cachedInputTokens: 0,
-        cacheWriteTokens: 0,
-        settledBasis: 'provider',
-        costUsd: usage.costUsd,
-        creditsCharged: usage.creditsCharged,
-        latencyMs: Date.now() - startedAt,
-        status,
-      })
-      .catch(err => logger.warn('Failed to record decision usage event', { err }));
-
-  let input: ResolvedDecisionInput;
-  try {
-    input = await resolveDecisionInput(fileRequest, request.input, caps);
-  } catch (error) {
-    await reservation.refund();
-    throw error;
-  }
-
-  let outcome: DecideWithRetryResult;
-  let answers: DecisionAnswer[];
-  try {
-    outcome = await decideWithRetry({
-      provider,
-      request: {
-        model,
-        input,
-        questions: request.questions,
-        safetyIdentifier: request.safety_identifier ?? toProviderEndUserId(userId),
-      },
-      apiKey,
-      logger,
-      deadlineMs: decisionRequestHasImages(request) ? DECISION_DEADLINE_MS.images : DECISION_DEADLINE_MS.text,
-    });
-    answers = normalizeDecisionAnswers(request.questions, outcome.decision.answers);
-  } catch (error) {
-    await reservation.refund();
-    recordUsage('error', { model, inputTokens: 0, outputTokens: 0, costUsd: 0, creditsCharged: 0 });
-    logger.warn('Decision call failed', { decisionId, model, provider: caps.provider, ...describeFailure(error) });
-    throw error;
-  }
-
-  const { decision, retries } = outcome;
-  const costUsd = decisionCostUsd(caps, decision.usage);
-  const creditsCharged = await reservation.settle(usdToCreditsStochastic(costUsd), {
-    type: 'decision_usage',
-    sessionId: decisionId,
-    model: decision.model,
-    inputTokens: decision.usage.inputTokens,
-    outputTokens: decision.usage.outputTokens,
-    apiKeyId,
-    source,
-  });
-  recordUsage('ok', { model: decision.model, ...decision.usage, costUsd, creditsCharged });
-  logger.info('Decision answered', {
-    decisionId,
-    model: decision.model,
-    provider: caps.provider,
-    questionsByType: countByType(answers),
-    latencyMs: Date.now() - startedAt,
-    retries,
-    inputTokens: decision.usage.inputTokens,
-    outputTokens: decision.usage.outputTokens,
-    costUsd,
-    creditsCharged,
-  });
-
-  return {
-    id: decisionId,
-    object: 'decision',
-    model: decision.model,
-    answers,
-    usage: {
-      input_tokens: decision.usage.inputTokens,
-      output_tokens: decision.usage.outputTokens,
-      total_tokens: decision.usage.inputTokens + decision.usage.outputTokens,
-    },
-  };
+  return response;
 }

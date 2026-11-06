@@ -85,6 +85,20 @@ export const AgentExecutionStartRequestSchema = z.object({
    * iteration, and nothing on this transport renders an artifact back to a human.
    */
   enable_artifacts: z.boolean().optional(),
+  // Testing hook for the confidence gate. Capped like `max_iterations`: an entry past the
+  // iteration ceiling can never be read.
+  confidence_overrides: z
+    .array(z.number().min(0).max(1))
+    .min(1)
+    .max(100)
+    .optional()
+    .describe(
+      'Admin only. Scripted per-iteration confidence scores (0 to 1) that replace the real score at the ' +
+        'confidence gate: entry i scores iteration i + 1, and iterations past the end use the real score. ' +
+        'The gate pauses the run for review on a streak of consecutive evaluated iterations below its threshold ' +
+        '(currently 2), so script one low entry per iteration you want in the streak. Only iterations that ran ' +
+        'tools are evaluated, scripted or not, and a finished run never pauses. A non-admin caller gets 403.'
+    ),
 });
 
 export type AgentExecutionStartRequest = z.infer<typeof AgentExecutionStartRequestSchema>;

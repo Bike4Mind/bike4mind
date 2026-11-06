@@ -4,8 +4,18 @@
 // relies on that check.
 // @vitest-environment node
 import { describe, it, expect, vi } from 'vitest';
-import { ImageModerationBlockedError, UnsupportedImageFormatError } from '@bike4mind/utils/imageModeration';
-import { moderateUploadedFile, isTerminalModerationStatus } from './moderateUploadedFile';
+import {
+  ImageModerationBlockedError,
+  ModerationBudgetExceededError,
+  UnsupportedImageFormatError,
+  type CheckImageOptions,
+  type ImageModerationService,
+} from '@bike4mind/utils/imageModeration';
+import {
+  moderateUploadedFile,
+  isTerminalModerationStatus,
+  MODERATION_BUDGET_DEFER_REASON,
+} from './moderateUploadedFile';
 
 // Fakes for the injected deps - no AWS, no DB.
 const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), log: vi.fn(), debug: vi.fn() } as any;
@@ -26,6 +36,9 @@ const UNSNIFFABLE_BYTES = Buffer.from('just some plain text, not a real file');
 // when the OOXML marker entries sit past the sniffed window.
 const ZIP_SIGNATURE = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.alloc(60)]);
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+// An OLE compound file header - the container a legacy .xls (and .doc/.ppt) is stored in.
+const CFB_SIGNATURE = Buffer.concat([Buffer.from('d0cf11e0a1b11ae1', 'hex'), Buffer.alloc(504)]);
+const XLS_MIME = 'application/vnd.ms-excel';
 
 function deps(overrides: Partial<Parameters<typeof moderateUploadedFile>[0]> = {}) {
   return {
@@ -91,6 +104,19 @@ describe('moderateUploadedFile', () => {
     expect(d.downloadBytes).not.toHaveBeenCalled(); // zip is non-image, so no scan
   });
 
+  it('keeps a declared legacy .xls mimeType when the bytes sniff as the generic CFB container', async () => {
+    const d = deps({ mimeType: XLS_MIME, downloadPartialBytes: vi.fn(async () => CFB_SIGNATURE) });
+    const result = await moderateUploadedFile(d);
+    expect(result).toEqual({ moderationStatus: 'clean', correctedMimeType: undefined });
+    expect(d.downloadBytes).not.toHaveBeenCalled();
+  });
+
+  it('still corrects to application/x-cfb for any other declared type that sniffs as CFB', async () => {
+    const d = deps({ mimeType: 'application/pdf', downloadPartialBytes: vi.fn(async () => CFB_SIGNATURE) });
+    const result = await moderateUploadedFile(d);
+    expect(result.correctedMimeType).toBe('application/x-cfb');
+  });
+
   it('returns clean when an image scans clean', async () => {
     const d = deps();
     const result = await moderateUploadedFile(d);
@@ -107,7 +133,7 @@ describe('moderateUploadedFile', () => {
     });
     const result = await moderateUploadedFile(d);
     expect(result.moderationStatus).toBe('blocked');
-    expect(result.blockReason).toBeUndefined();
+    expect(result).not.toHaveProperty('blockReason');
   });
 
   it('rethrows (does not return blocked) when the scan throws a non-block, non-format transient error', async () => {
@@ -173,7 +199,7 @@ describe('moderateUploadedFile', () => {
       });
       const result = await moderateUploadedFile(d);
       expect(result.moderationStatus).toBe('blocked');
-      expect(result.blockReason).toBe('unsupported_format');
+      expect(result).toMatchObject({ blockReason: 'unsupported_format' });
     });
 
     it('still rethrows a genuine transient error rather than collapsing it into unsupported_format', async () => {
@@ -247,5 +273,113 @@ describe('moderateUploadedFile - ai:generate-only upload constraint', () => {
   it('leaves a file with no constraint alone', async () => {
     const d = deps({ downloadPartialBytes: vi.fn(async () => PDF_SIGNATURE), mimeType: 'application/pdf' });
     expect((await moderateUploadedFile(d)).moderationStatus).toBe('clean');
+  });
+});
+
+describe('moderateUploadedFile - moderation allowance and usage', () => {
+  // A detector fake that honours the reservation and reports `calls` detector calls.
+  const meteredService = (calls: number, outcome?: Error) => {
+    const checkImage = vi.fn(async (_bytes: Buffer, _mime: string, options?: CheckImageOptions) => {
+      if (options?.reserveDetectorCalls && !(await options.reserveDetectorCalls(calls))) {
+        throw new ModerationBudgetExceededError(calls);
+      }
+      for (let i = 0; i < calls; i++) options?.onDetectorCall?.();
+      if (outcome) throw outcome;
+    });
+    return { checkImage } satisfies ImageModerationService;
+  };
+  // Runs the real service call the way the production gate does.
+  const gate = vi.fn(
+    async ({ service, buffer, mimeType }: { service: ImageModerationService; buffer: Buffer; mimeType: string }) =>
+      service.checkImage(buffer, mimeType)
+  );
+
+  it('holds an image pending with no detector call when the allowance refuses it, without throwing', async () => {
+    const service = meteredService(10);
+    const reserveModerationCalls = vi.fn(async () => false);
+    const recordModerationCalls = vi.fn(async () => undefined);
+
+    const result = await moderateUploadedFile(
+      deps({
+        service,
+        moderateImageOrThrow: gate,
+        reserveModerationCalls,
+        recordModerationCalls,
+        mimeType: 'image/gif',
+      })
+    );
+
+    expect(result).toEqual({
+      moderationStatus: 'pending',
+      deferReason: MODERATION_BUDGET_DEFER_REASON,
+      correctedMimeType: 'image/png',
+    });
+    expect(reserveModerationCalls).toHaveBeenCalledWith(10);
+    expect(recordModerationCalls).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('held pending'));
+  });
+
+  it('scans within the allowance and records the calls made', async () => {
+    const reserveModerationCalls = vi.fn(async () => true);
+    const recordModerationCalls = vi.fn(async () => undefined);
+
+    const result = await moderateUploadedFile(
+      deps({ service: meteredService(7), moderateImageOrThrow: gate, reserveModerationCalls, recordModerationCalls })
+    );
+
+    expect(result.moderationStatus).toBe('clean');
+    expect(reserveModerationCalls).toHaveBeenCalledWith(7);
+    expect(recordModerationCalls).toHaveBeenCalledWith(7);
+  });
+
+  it.each([
+    ['blocked', new ImageModerationBlockedError([{ name: 'Explicit', parentName: '', confidence: 99 }])],
+    ['unsupported', new UnsupportedImageFormatError('nope')],
+  ])('records the calls a %s scan made', async (_what, error) => {
+    const recordModerationCalls = vi.fn(async () => undefined);
+
+    const result = await moderateUploadedFile(
+      deps({ service: meteredService(3, error), moderateImageOrThrow: gate, recordModerationCalls })
+    );
+
+    expect(result.moderationStatus).toBe('blocked');
+    expect(recordModerationCalls).toHaveBeenCalledWith(3);
+  });
+
+  it('records the calls made before a transient failure and still rethrows it', async () => {
+    const recordModerationCalls = vi.fn(async () => undefined);
+
+    await expect(
+      moderateUploadedFile(
+        deps({ service: meteredService(2, new Error('throttled')), moderateImageOrThrow: gate, recordModerationCalls })
+      )
+    ).rejects.toThrow('throttled');
+    expect(recordModerationCalls).toHaveBeenCalledWith(2);
+  });
+
+  it.each([
+    ['a non-image', { mimeType: 'application/pdf', downloadPartialBytes: vi.fn(async () => PDF_SIGNATURE) }],
+    ['disabled moderation', { enabled: false }],
+  ])('spends and records nothing for %s', async (_what, over) => {
+    const service = meteredService(1);
+    const reserveModerationCalls = vi.fn(async () => true);
+    const recordModerationCalls = vi.fn(async () => undefined);
+
+    const result = await moderateUploadedFile(
+      deps({ service, moderateImageOrThrow: gate, reserveModerationCalls, recordModerationCalls, ...over })
+    );
+
+    expect(result.moderationStatus).toBe('clean');
+    expect(service.checkImage).not.toHaveBeenCalled();
+    expect(reserveModerationCalls).not.toHaveBeenCalled();
+    expect(recordModerationCalls).not.toHaveBeenCalled();
+  });
+
+  it('records nothing when the gate makes no detector call', async () => {
+    const recordModerationCalls = vi.fn(async () => undefined);
+
+    await moderateUploadedFile(deps({ recordModerationCalls }));
+
+    expect(recordModerationCalls).not.toHaveBeenCalled();
   });
 });

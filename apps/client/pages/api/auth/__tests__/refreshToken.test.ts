@@ -1,3 +1,6 @@
+vi.mock('@server/auth/withAccountNotPurging', () => ({
+  withAccountNotPurging: async (_id: string, write: () => Promise<unknown>) => write(),
+}));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
@@ -27,11 +30,12 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/checkBlockedIP', () => ({ checkBlockedIP: vi.fn() }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
 vi.mock('@server/auth/sessionDevice', () => ({ buildSessionDevice: () => ({}) }));
 vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({
-  readRefreshCookieWithSource: () => ({ token: 'cookie-refresh-token', legacy: false }),
+  readRefreshCookie: () => 'cookie-refresh-token',
+  readAdminReturnCookie: () => null,
   setRefreshCookie: (...a: unknown[]) => mockSetCookie(...a),
 }));
 vi.mock('@server/auth/tokenGenerator', () => ({
@@ -194,7 +198,7 @@ describe('POST /api/auth/refreshToken - account state', () => {
 
     it.each([
       ['banned', { isBanned: true }, 'User not found or banned'],
-      ['dispute-suspended', { disputePending: true }, 'pending dispute'],
+      ['dispute-suspended', { disputePending: true }, 'payment review'],
       ['content-suspended', { moderation: { status: 'suspended' } }, 'content-policy'],
     ])('refuses a %s account, revokes the rotated session and hands back no token', async (_label, state, message) => {
       mockRotateSession.mockResolvedValue({

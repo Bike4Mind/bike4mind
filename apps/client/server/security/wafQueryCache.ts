@@ -21,6 +21,9 @@ export const WAF_CACHE_TTL = {
   logsInsights: 10 * 60 * 1000, // 10 minutes
   /** CloudWatch Metrics traffic overview. */
   traffic: 5 * 60 * 1000, // 5 minutes
+  /** Incident view signals; a response with a failed section is kept only as long as a failure. */
+  incident: 60 * 1000,
+  incidentDegraded: 30 * 1000,
 } as const;
 
 /** How long to suppress retries after a fetcher failure. */
@@ -49,7 +52,7 @@ class WafQueryCacheManager {
 
   /**
    * Returns the cached value for `key` if still fresh, otherwise calls `fetcher`,
-   * caches the result for `ttlMs` milliseconds, and returns it.
+   * caches the result for `ttlMs` milliseconds (or `ttlMs(result)`), and returns it.
    *
    * Concurrent calls with the same key share a single in-flight `fetcher` promise -
    * avoiding N simultaneous CloudWatch queries when multiple admins hit the endpoint
@@ -58,7 +61,11 @@ class WafQueryCacheManager {
    * Failed fetches are cached for ERROR_TTL_MS to prevent a retry storm when
    * CloudWatch is throttling or temporarily unavailable.
    */
-  public async getOrFetch<T>(key: string, ttlMs: number, fetcher: () => Promise<T>): Promise<T> {
+  public async getOrFetch<T>(
+    key: string,
+    ttlMs: number | ((value: T) => number),
+    fetcher: () => Promise<T>
+  ): Promise<T> {
     const hit = this.cache.get(key);
     if (hit && hit.expiresAt > Date.now()) {
       if (hit.isError) throw hit.value;
@@ -73,7 +80,8 @@ class WafQueryCacheManager {
     const promise = (async () => {
       try {
         const value = await fetcher();
-        this.cache.set(key, { value, expiresAt: Date.now() + ttlMs });
+        const ttl = typeof ttlMs === 'function' ? ttlMs(value) : ttlMs;
+        this.cache.set(key, { value, expiresAt: Date.now() + ttl });
         return value;
       } catch (err) {
         // Cache the error briefly to prevent a thundering herd on sustained failures.

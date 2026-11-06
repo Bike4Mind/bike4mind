@@ -1,6 +1,5 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { subscriberRepository } from '@bike4mind/database/auth';
 
 interface QueryParams {
@@ -9,10 +8,8 @@ interface QueryParams {
   search?: string;
 }
 
-const handler = baseApi().get(
+const handler = adminApi({ adminPermissions: { GET: 'credits:adjust' } }).get(
   asyncHandler<unknown, unknown, unknown, QueryParams>(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
-
     const page = Number(req.query.page) || 1;
     const limit = Number(req.query.limit) || 10;
     const search = req.query.search;

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { hostGitArgs } from '../../git/hostGitArgs';
+import { gitArgumentPath, gitCommand, gitCommandEnv, hostGitArgs, quickGitTimeout } from '../../git/hostGitArgs';
 import { parseRemoteLocation, type RemoteLocation, type RepositoryName } from '../../fleet/repository';
 
 /**
@@ -205,12 +205,16 @@ export function ghReadFiles(tokens: readonly string[]): string[] {
   return files.filter(file => file && file !== '-');
 }
 
-const runGit: GitReader = (cwd, args) =>
-  new Promise(resolve => {
-    execFile('git', hostGitArgs(['-C', cwd, ...args]), { timeout: 2000 }, (error, stdout) => {
+const runGit: GitReader = async (cwd, args) => {
+  const env = await gitCommandEnv(cwd);
+  const command = await gitCommand(cwd, hostGitArgs(['-C', gitArgumentPath(cwd, cwd), ...args], cwd));
+  if (!command) return null;
+  return new Promise(resolve => {
+    execFile(command.file, command.args, { env, timeout: quickGitTimeout(env), windowsHide: true }, (error, stdout) => {
       resolve(error ? null : stdout.trim() || null);
     });
   });
+};
 
 async function remoteLocation(git: GitReader, cwd: string, remote: string): Promise<RemoteLocation | null> {
   const url = await git(cwd, ['remote', 'get-url', '--push', remote]);

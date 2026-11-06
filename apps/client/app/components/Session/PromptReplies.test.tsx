@@ -1,5 +1,5 @@
 import React from 'react';
-import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -7,7 +7,7 @@ import { TRUNCATED_FINISH_REASON } from '@bike4mind/common';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { getThemeConfig } from '../../utils/themes';
-import { parseArtifactsWithFallback, type ParsedArtifact } from '../../utils/artifactParser';
+import { parseArtifactsWithFallback, type ParsedArtifact } from '@bike4mind/server-utils/app/utils/artifactParser';
 import { useStreamingArtifactPersistence } from '../../hooks/useStreamingArtifactPersistence';
 import {
   classifyGeneratedFiles,
@@ -16,6 +16,7 @@ import {
   ReplyCompleteContext,
 } from './PromptReplies';
 import PromptReplies from './PromptReplies';
+import type { ReactArtifactGroupRole } from '../../utils/reactArtifactGroup';
 
 const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
 
@@ -45,11 +46,25 @@ vi.mock('@client/app/hooks/useMessageEditMode', () => {
 // Stands in for the id resolver's no-row-yet path: the card shows the id it would mint from the
 // index it was handed, which is what has to match the row persistence writes.
 vi.mock('./artifacts/ArtifactRenderer', async () => {
-  const { generateCompleteArtifactId, getArtifactTimestamp } =
-    await vi.importActual<typeof import('../../utils/artifactParser')>('../../utils/artifactParser');
+  const { generateCompleteArtifactId, getArtifactTimestamp } = await vi.importActual<
+    typeof import('@bike4mind/server-utils/app/utils/artifactParser')
+  >('@bike4mind/server-utils/app/utils/artifactParser');
   return {
-    default: ({ artifact, index, messageId }: { artifact: ParsedArtifact; index: number; messageId: string }) => (
-      <div data-testid={`artifact-card-${artifact.identifier}`}>
+    default: ({
+      artifact,
+      index,
+      messageId,
+      reactGroup,
+    }: {
+      artifact: ParsedArtifact;
+      index: number;
+      messageId: string;
+      reactGroup?: ReactArtifactGroupRole;
+    }) => (
+      <div
+        data-testid={`artifact-card-${artifact.identifier}`}
+        data-sibling-files={reactGroup?.role === 'entry' ? Object.keys(reactGroup.files).join(',') : ''}
+      >
         {generateCompleteArtifactId(artifact.type, artifact.identifier ?? '', getArtifactTimestamp(messageId), index)}
       </div>
     ),
@@ -721,5 +736,106 @@ describe('artifact card ids agree with the rows persistence writes', () => {
     expect(screen.getByTestId('artifact-card-App')).toHaveTextContent(rows.App);
     expect(screen.getByTestId('artifact-card-Stopwatch')).toHaveTextContent(rows.Stopwatch);
     expect(midStreamId).not.toBe(rows.Stopwatch);
+  });
+
+  it.each(['', '\n\n', ' \t\n'])(
+    'keeps entry offsets stable through a sibling stream with leading whitespace %j',
+    prefix => {
+      const { rerender } = render(reply(`${prefix}${app}`, 'running'));
+      const entryCard = screen.getByTestId('artifact-card-App');
+      expect(entryCard).toHaveAttribute('data-sibling-files', '');
+
+      const partialSibling = '<artifact identifier="Stopwatch" type="application/vnd.ant.react" title="Stopwatch">';
+      rerender(reply(`${prefix}${app}\n\n${partialSibling}`, 'running'));
+      expect(screen.getByTestId('artifact-card-App')).toBe(entryCard);
+
+      rerender(reply(`${prefix}${app}\n\n${stopwatch}`, 'done'));
+      expect(screen.getByTestId('artifact-card-App')).toBe(entryCard);
+      expect(entryCard).toHaveAttribute('data-sibling-files', 'Stopwatch');
+    }
+  );
+
+  it('keeps an earlier entry mounted when a later opening tag is cut off at completion', () => {
+    const prefix = '\n\n';
+    const { rerender } = render(reply(`${prefix}${app}`, 'running'));
+    const entryCard = screen.getByTestId('artifact-card-App');
+    const partialReply = `${prefix}${app}\n\n<artifact identifier="Stopwatch"`;
+
+    rerender(reply(partialReply, 'running'));
+    expect(screen.getByTestId('artifact-card-App')).toBe(entryCard);
+    rerender(reply(partialReply, 'done'));
+    expect(screen.getByTestId('artifact-card-App')).toBe(entryCard);
+  });
+});
+
+describe('empty fences in a reply', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('draws and copies empty fences without the word undefined', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    const { container } = render(
+      <CssVarsProvider theme={appTheme}>
+        <ReplyCompleteContext.Provider value>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: createCodeComponent() }}>
+            {'```\n```\n\n```ts\n```'}
+          </ReactMarkdown>
+        </ReplyCompleteContext.Provider>
+      </CssVarsProvider>
+    );
+
+    const codes = container.querySelectorAll('pre code');
+    expect(codes).toHaveLength(2);
+    codes.forEach(code => expect(code.textContent).toBe(''));
+    expect(container.textContent).not.toContain('undefined');
+    screen.getAllByTestId('code-block-copy-btn').forEach(button => fireEvent.click(button));
+    await waitFor(() => expect(writeText.mock.calls).toEqual([[''], ['']]));
+  });
+});
+
+describe('deep research panel settle wiring in a rendered reply', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+  const deepResearchState = {
+    // The panel renders nothing without at least one activity or source.
+    activities: [
+      {
+        type: 'search',
+        status: 'pending',
+        message: 'Searching with Engine for: "magnets"',
+        timestamp: '2026-01-01T00:00:01.000Z',
+        depth: 0,
+      },
+    ],
+    sources: [],
+    completedSteps: 1,
+    totalExpectedSteps: 4,
+    completed: false,
+    startTime: Date.parse('2026-01-01T00:00:00.000Z'),
+  };
+
+  const renderStatus = (status: string) => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CssVarsProvider theme={appTheme}>
+          <PromptReplies
+            messageData={{ id: 'quest-1', questMasterReply: 'partial', status, deepResearchState } as never}
+            onSendMessage={async () => {}}
+          />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+    return screen.getByTestId('deep-research-status').textContent ?? '';
+  };
+
+  it('stops the running state once the user stops the turn', () => {
+    expect(renderStatus('stopped')).toMatch(/stopped/i);
+  });
+
+  it('keeps the running state while the turn is streaming', () => {
+    expect(renderStatus('running')).not.toMatch(/stopped|complete/i);
   });
 });

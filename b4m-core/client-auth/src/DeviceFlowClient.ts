@@ -4,7 +4,8 @@ export interface DeviceFlowResponse {
   device_code: string;
   user_code: string;
   verification_uri: string;
-  verification_uri_complete: string;
+  /** Optional in RFC 8628; never build one from verification_uri + user_code. */
+  verification_uri_complete?: string;
   expires_in: number;
   interval: number;
 }

@@ -14,6 +14,11 @@ describe('getLoginErrorMessage (surface SSO failures)', () => {
     expect(msg).toMatch(/unavailable|administrator/i);
   });
 
+  it('maps the OAuth start challenge codes to verification messages', () => {
+    expect(getLoginErrorMessage('challenge_failed')).toMatch(/verification failed/i);
+    expect(getLoginErrorMessage('challenge_unavailable')).toMatch(/temporarily unavailable/i);
+  });
+
   it('maps known SAML / flow codes to specific messages', () => {
     expect(getLoginErrorMessage('saml_auth_failed')).toMatch(/saml/i);
     expect(getLoginErrorMessage('email_required')).toMatch(/email/i);
@@ -55,5 +60,10 @@ describe('getLoginErrorMessage (surface SSO failures)', () => {
     expect(getLoginErrorMessage('some_new_code_we_dont_know')).toBe(
       'Sign-in failed. Please try again or use another method.'
     );
+  });
+
+  it('maps the OAuth guard codes to specific messages, not the generic fallback', () => {
+    expect(getLoginErrorMessage('oauth_rate_limited')).toMatch(/too many sign-in attempts/i);
+    expect(getLoginErrorMessage('ip_blocked')).toMatch(/temporarily blocked/i);
   });
 });

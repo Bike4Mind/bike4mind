@@ -6,7 +6,7 @@ import { mockClient } from 'aws-sdk-client-mock';
 import { CloudFrontClient, GetDistributionCommand } from '@aws-sdk/client-cloudfront';
 import { CloudWatchClient, GetMetricDataCommand, ListMetricsCommand } from '@aws-sdk/client-cloudwatch';
 import { resolveDefaultPeriod, getWafTrafficOverview, type WafTrafficRange } from '../wafTraffic';
-import type { WafCustomRange } from '../wafSharedHelpers';
+import type { WafCustomRange } from '@bike4mind/server-utils/security/wafSharedHelpers';
 import { wafQueryCache } from '../wafQueryCache';
 
 const cloudFrontMock = mockClient(CloudFrontClient);

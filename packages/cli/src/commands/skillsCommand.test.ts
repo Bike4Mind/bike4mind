@@ -6,6 +6,7 @@ import { toSkillMd } from '@bike4mind/common/utils/skillMd';
 import {
   buildSkillPayload,
   handleSkillsCommand,
+  publishToMarket,
   pushSkill,
   readSkillFile,
   type PushDeps,
@@ -17,6 +18,7 @@ const handlerMocks = vi.hoisted(() => ({
   clearAuthTokens: vi.fn(),
   clearCache: vi.fn(),
   answer: 'n',
+  apiClientArgs: [] as unknown[],
   api: {
     getCurrentUser: vi.fn().mockResolvedValue({ id: 'u1' }),
     get: vi.fn(),
@@ -34,7 +36,8 @@ vi.mock('../storage/ConfigStore.js', () => ({
 }));
 vi.mock('../auth/ApiClient.js', () => ({
   ApiClient: class {
-    constructor() {
+    constructor(...args: unknown[]) {
+      handlerMocks.apiClientArgs = args;
       return handlerMocks.api;
     }
   },
@@ -82,7 +85,7 @@ async function writeSkill(rel: string, content: string): Promise<string> {
 }
 
 describe('readSkillFile', () => {
-  it('reads <dir> and <dir>/SKILL.md the same way, dropping allowed-tools', async () => {
+  it('reads <dir> and <dir>/SKILL.md the same way, keeping allowed-tools out of allowedTools', async () => {
     const file = await writeSkill('my-skill/SKILL.md', SKILL);
     const fromDir = await readSkillFile(path.dirname(file));
     const fromFile = await readSkillFile(file);
@@ -92,10 +95,11 @@ describe('readSkillFile', () => {
       description: 'Does a thing',
       body: 'Body text',
       argumentHint: '<file>',
+      claudeCodeAllowedTools: ['Read', 'Bash'],
       disableModelInvocation: false,
     });
     expect(fromDir.payload).not.toHaveProperty('allowedTools');
-    expect(fromDir.dropped).toEqual(expect.arrayContaining(['allowed-tools', 'model']));
+    expect(fromDir.dropped).toEqual(['model']);
   });
 
   it('falls back to the folder name, trimmed and lowercased', async () => {
@@ -161,8 +165,15 @@ describe('buildSkillPayload', () => {
       name: 'x',
       description: 'b',
       body: 'b',
+      claudeCodeAllowedTools: [],
       disableModelInvocation: true,
     });
+  });
+
+  it("sends the file's allowed-tools as claudeCodeAllowedTools, never as allowedTools", () => {
+    const payload = buildSkillPayload({ name: 'commit', claudeCodeAllowedTools: ['Bash(git:*)', 'Read'] }, 'f');
+    expect(payload.claudeCodeAllowedTools).toEqual(['Bash(git:*)', 'Read']);
+    expect(payload).not.toHaveProperty('allowedTools');
   });
 
   it('falls back to the first body line, without heading marks, when there is no description', () => {
@@ -207,7 +218,7 @@ const noApiCalls = (api: ReturnType<typeof makeDeps>['api']) =>
   Object.values(api).forEach(fn => expect(fn).not.toHaveBeenCalled());
 
 const file = (extra: Partial<SkillFile> = {}): SkillFile => ({
-  payload: { name: 'my-skill', description: 'd', body: 'b', disableModelInvocation: false },
+  payload: { name: 'my-skill', description: 'd', body: 'b', claudeCodeAllowedTools: [], disableModelInvocation: false },
   dropped: [],
   extraFiles: [],
   ...extra,
@@ -219,7 +230,7 @@ describe('pushSkill', () => {
       { id: 's1', name: 'my-skill', userId: 'someone-else' },
       { id: 's2', name: 'my-skill-2', userId: 'u1' },
     ]);
-    expect(await pushSkill(file(), deps)).toBe('created');
+    expect(await pushSkill(file(), deps)).toMatchObject({ outcome: 'created' });
     expect(api.get).toHaveBeenCalledWith('/api/skills', { params: { query: 'my-skill', limit: 100, page: 1 } });
     expect(api.post).toHaveBeenCalledWith('/api/skills', file().payload);
     expect(api.put).not.toHaveBeenCalled();
@@ -243,14 +254,14 @@ describe('pushSkill', () => {
 
     it('--update sends a PUT', async () => {
       const { api, deps } = makeDeps({ update: true }, rows);
-      expect(await pushSkill(file(), deps)).toBe('updated');
+      expect(await pushSkill(file(), deps)).toMatchObject({ outcome: 'updated' });
       expect(api.put).toHaveBeenCalledWith('/api/skills/s1', { ...file().payload, argumentHint: '' });
       expect(api.post).not.toHaveBeenCalled();
     });
 
     it('TTY prompt yes sends a PUT', async () => {
       const { api, deps } = makeDeps({ isTTY: true, confirm: vi.fn().mockResolvedValue(true) }, rows);
-      expect(await pushSkill(file(), deps)).toBe('updated');
+      expect(await pushSkill(file(), deps)).toMatchObject({ outcome: 'updated' });
       expect(api.put).toHaveBeenCalled();
     });
 
@@ -266,7 +277,7 @@ describe('pushSkill', () => {
 
     it('TTY prompt no aborts without writing', async () => {
       const { api, deps } = makeDeps({ isTTY: true }, rows);
-      expect(await pushSkill(file(), deps)).toBe('aborted');
+      expect(await pushSkill(file(), deps)).toEqual({ outcome: 'aborted' });
       expect(api.put).not.toHaveBeenCalled();
       expect(api.post).not.toHaveBeenCalled();
     });
@@ -290,7 +301,7 @@ describe('pushSkill', () => {
 
     it('an own export prints the source notice and pushes', async () => {
       const { api, deps, lines } = makeDeps();
-      expect(await pushSkill(own, deps)).toBe('created');
+      expect(await pushSkill(own, deps)).toMatchObject({ outcome: 'created' });
       expect(lines).toContain('This skill came from Bike4Mind: https://app.example/skills/1');
       expect(api.post).toHaveBeenCalled();
     });
@@ -298,7 +309,7 @@ describe('pushSkill', () => {
     it('words a stamp from another origin as unverified', async () => {
       const { api, deps, lines } = makeDeps();
       const foreign = file({ source: { url: 'https://evil.example/x', thirdParty: false } });
-      expect(await pushSkill(foreign, deps)).toBe('created');
+      expect(await pushSkill(foreign, deps)).toMatchObject({ outcome: 'created' });
       expect(lines).toContain('This file has a Bike4Mind source stamp from another site: https://evil.example/x');
       expect(lines).not.toContain('This skill came from Bike4Mind: https://evil.example/x');
       expect(api.post).toHaveBeenCalled();
@@ -306,7 +317,7 @@ describe('pushSkill', () => {
 
     it('third-party in a TTY: no aborts with no API call', async () => {
       const { api, deps, lines } = makeDeps({ isTTY: true });
-      expect(await pushSkill(thirdParty, deps)).toBe('aborted');
+      expect(await pushSkill(thirdParty, deps)).toEqual({ outcome: 'aborted' });
       expect(deps.confirm).toHaveBeenCalledWith('Push it as your own skill anyway? [y/N] ');
       expect(lines.some(l => l.includes("another author's Skill Market skill"))).toBe(true);
       noApiCalls(api);
@@ -314,7 +325,7 @@ describe('pushSkill', () => {
 
     it('third-party in a TTY: yes pushes', async () => {
       const { api, deps } = makeDeps({ isTTY: true, confirm: vi.fn().mockResolvedValue(true) });
-      expect(await pushSkill(thirdParty, deps)).toBe('created');
+      expect(await pushSkill(thirdParty, deps)).toMatchObject({ outcome: 'created' });
       expect(api.post).toHaveBeenCalled();
     });
 
@@ -326,7 +337,7 @@ describe('pushSkill', () => {
 
     it('third-party with --yes pushes without prompting', async () => {
       const { api, deps } = makeDeps({ yes: true });
-      expect(await pushSkill(thirdParty, deps)).toBe('created');
+      expect(await pushSkill(thirdParty, deps)).toMatchObject({ outcome: 'created' });
       expect(deps.confirm).not.toHaveBeenCalled();
       expect(api.post).toHaveBeenCalled();
     });
@@ -394,7 +405,7 @@ describe('pushSkill', () => {
     api.get
       .mockResolvedValueOnce({ data: [{ id: 'x', name: 'other', userId: ME.id }], hasMore: true })
       .mockResolvedValueOnce({ data: [{ id: 'id1', name: 'my-skill', userId: ME.id }], hasMore: false });
-    await expect(pushSkill(file(), deps)).resolves.toBe('updated');
+    await expect(pushSkill(file(), deps)).resolves.toMatchObject({ outcome: 'updated' });
     expect(api.get).toHaveBeenLastCalledWith('/api/skills', { params: { query: 'my-skill', limit: 100, page: 2 } });
     expect(api.put).toHaveBeenCalledWith('/api/skills/id1', expect.anything());
     expect(api.post).not.toHaveBeenCalled();
@@ -406,6 +417,7 @@ describe('handleSkillsCommand', () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
+    vi.stubEnv('B4M_API_KEY', '');
     ARGS.path = path.dirname(await writeSkill('my-skill/SKILL.md', SKILL));
     handlerMocks.tokens = { expiresAt: new Date(Date.now() + 60_000).toISOString() };
     handlerMocks.api.get.mockResolvedValue({ data: [] });
@@ -413,7 +425,10 @@ describe('handleSkillsCommand', () => {
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
   });
 
-  afterEach(() => logSpy.mockRestore());
+  afterEach(() => {
+    logSpy.mockRestore();
+    vi.unstubAllEnvs();
+  });
 
   it('fails with the login hint and no API call when there are no tokens', async () => {
     handlerMocks.tokens = null;
@@ -481,5 +496,169 @@ describe('handleSkillsCommand', () => {
     expect(handlerMocks.api.put).not.toHaveBeenCalled();
     expect(handlerMocks.clearCache).not.toHaveBeenCalled();
     expect(logSpy).toHaveBeenCalledWith('Aborted');
+  });
+});
+
+describe('publishToMarket', () => {
+  const VERSION = { version: 2, scan_status: 'passed', review_status: 'auto_approved', risk_tier: 'clean' };
+  const listing = (status: string) => ({ id: 'l1', name: 'my-skill', status, visibility: 'organization' });
+
+  function api(mine: unknown[]) {
+    return {
+      get: vi.fn().mockResolvedValue({ data: mine, next_cursor: null }),
+      post: vi.fn().mockResolvedValue({ listing: listing('approved'), version: VERSION }),
+    };
+  }
+
+  it('publishes a new listing when the skill has none', async () => {
+    const a = api([]);
+    const lines: string[] = [];
+    await publishToMarket('s1', { visibility: 'organization', tags: ['ci'] }, a as never, l => lines.push(l));
+    expect(a.get).toHaveBeenCalledWith('/api/v1/skills/market/listings/mine', { params: { source_skill_id: 's1' } });
+    expect(a.post).toHaveBeenCalledWith('/api/v1/skills/market/listings', {
+      skill_id: 's1',
+      visibility: 'organization',
+      tags: ['ci'],
+    });
+    expect(lines).toEqual([
+      'Published listing "my-skill" (organization): scan passed, review auto_approved, risk clean',
+    ]);
+  });
+
+  it('sends --org as organization_id', async () => {
+    const a = api([]);
+    await publishToMarket('s1', { visibility: 'organization', org: 'o1' }, a as never, () => {});
+    expect(a.post.mock.calls[0][1]).toEqual({ skill_id: 's1', visibility: 'organization', organization_id: 'o1' });
+  });
+
+  it('submits a new version of the live listing', async () => {
+    const a = api([listing('approved')]);
+    a.post.mockResolvedValue({ listing: listing('approved'), version: { ...VERSION, review_status: 'pending' } });
+    const lines: string[] = [];
+    await publishToMarket('s1', { visibility: 'public' }, a as never, l => lines.push(l));
+    expect(a.post).toHaveBeenCalledWith('/api/v1/skills/market/listings/l1/versions', {});
+    expect(lines[0]).toBe(
+      'Submitted version 2 of listing "my-skill": scan passed, review pending, risk clean - it goes live once a reviewer approves it'
+    );
+  });
+
+  it('publishes afresh when the only listing was withdrawn', async () => {
+    const a = api([listing('withdrawn')]);
+    await publishToMarket('s1', { visibility: 'unlisted' }, a as never, () => {});
+    expect(a.post).toHaveBeenCalledWith('/api/v1/skills/market/listings', { skill_id: 's1', visibility: 'unlisted' });
+  });
+
+  it('reports an unchanged re-publish as up to date', async () => {
+    const a = api([listing('approved')]);
+    a.post.mockRejectedValue({
+      response: { status: 400, data: { error: 'This exact content is already live or waiting for review' } },
+    });
+    const lines: string[] = [];
+    await publishToMarket('s1', { visibility: 'public' }, a as never, l => lines.push(l));
+    expect(lines).toEqual(['Listing "my-skill" is already up to date']);
+  });
+
+  it('still fails on any other 400 from the versions endpoint', async () => {
+    const a = api([listing('approved')]);
+    a.post.mockRejectedValue({ response: { status: 400, data: { error: 'Skill has no content' } } });
+    await expect(publishToMarket('s1', { visibility: 'public' }, a as never, () => {})).rejects.toThrow(
+      'Publishing to the Skill Market failed: Skill has no content'
+    );
+  });
+
+  it("surfaces the server's refusal", async () => {
+    const a = api([]);
+    a.post.mockRejectedValue({ response: { status: 403, data: { error: 'The API key lacks skills:write' } } });
+    await expect(publishToMarket('s1', { visibility: 'public' }, a as never, () => {})).rejects.toThrow(
+      'Publishing to the Skill Market failed: The API key lacks skills:write'
+    );
+  });
+
+  it("names the scope a key's 403 asks for", async () => {
+    const a = api([]);
+    a.get.mockRejectedValue({
+      response: { status: 403, data: { error: 'Insufficient scope', required_scopes: ['skills:write'] } },
+    });
+    await expect(publishToMarket('s1', { visibility: 'public' }, a as never, () => {})).rejects.toThrow(
+      'Publishing to the Skill Market failed: Insufficient scope (the API key needs skills:write)'
+    );
+    expect(a.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleSkillsCommand with an API key', () => {
+  const ARGS = { _: ['skills', 'push'], path: '' };
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  const savedKey = process.env.B4M_API_KEY;
+
+  beforeEach(async () => {
+    ARGS.path = path.dirname(await writeSkill('my-skill/SKILL.md', SKILL));
+    handlerMocks.tokens = null;
+    vi.clearAllMocks();
+    process.env.B4M_API_KEY = 'b4m_live_env';
+    handlerMocks.api.get.mockImplementation(async (url: string) =>
+      url === '/api/v1/me' ? { id: 'u1' } : { data: [], next_cursor: null }
+    );
+    handlerMocks.api.post.mockImplementation(async (url: string) =>
+      url === '/api/skills'
+        ? { id: 'new-skill' }
+        : {
+            listing: { id: 'l1', name: 'my-skill', visibility: 'organization' },
+            version: { version: 1, scan_status: 'passed', review_status: 'auto_approved', risk_tier: 'clean' },
+          }
+    );
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    logSpy.mockRestore();
+    if (savedKey === undefined) delete process.env.B4M_API_KEY;
+    else process.env.B4M_API_KEY = savedKey;
+    handlerMocks.api.get.mockReset();
+    handlerMocks.api.post.mockReset().mockResolvedValue({});
+  });
+
+  it('authenticates with B4M_API_KEY and resolves the owner via /api/v1/me, not the stored login', async () => {
+    await handleSkillsCommand('push', ARGS);
+    expect(handlerMocks.apiClientArgs[2]).toBe('b4m_live_env');
+    expect(handlerMocks.api.get).toHaveBeenCalledWith('/api/v1/me');
+    expect(handlerMocks.api.getCurrentUser).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledWith('Created skill /my-skill');
+  });
+
+  it('prefers --api-key over B4M_API_KEY', async () => {
+    await handleSkillsCommand('push', { ...ARGS, 'api-key': 'b4m_live_flag' });
+    expect(handlerMocks.apiClientArgs[2]).toBe('b4m_live_flag');
+  });
+
+  it('explains the scopes a key needs when /api/v1/me refuses it', async () => {
+    handlerMocks.api.get.mockRejectedValue({ response: { status: 403, data: { error: 'Forbidden' } } });
+    await expect(handleSkillsCommand('push', ARGS)).rejects.toThrow('me:read and skills:write');
+    expect(handlerMocks.api.post).not.toHaveBeenCalled();
+  });
+
+  it("surfaces any other /api/v1/me failure as the server's message, without the scope hint", async () => {
+    handlerMocks.api.get.mockRejectedValue({ response: { status: 401, data: { error: 'Invalid API key' } } });
+    const failure = handleSkillsCommand('push', ARGS);
+    await expect(failure).rejects.toThrow('Invalid API key');
+    await expect(failure).rejects.not.toThrow('me:read');
+    expect(handlerMocks.api.post).not.toHaveBeenCalled();
+  });
+
+  it('pushes then publishes the created skill with --publish', async () => {
+    await handleSkillsCommand('push', { ...ARGS, publish: true, tags: 'ci, review,,' });
+    expect(handlerMocks.api.post).toHaveBeenNthCalledWith(2, '/api/v1/skills/market/listings', {
+      skill_id: 'new-skill',
+      visibility: 'organization',
+      tags: ['ci', 'review'],
+    });
+    expect(logSpy).toHaveBeenCalledWith(
+      'Published listing "my-skill" (organization): scan passed, review auto_approved, risk clean'
+    );
+  });
+
+  it('does not publish without --publish', async () => {
+    await handleSkillsCommand('push', ARGS);
+    expect(handlerMocks.api.post).toHaveBeenCalledTimes(1);
   });
 });

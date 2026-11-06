@@ -11,7 +11,7 @@ import { type MigrationFile } from './index';
  *
  * Migration rather than autoIndex, for the same reason as
  * 20260902000000_ensure-quest-retrieval-index / 20260826000000_ensure-quest-status-updatedat-index:
- * prod runs DocumentDB, where an index build takes a foreground collection lock. Left to autoIndex,
+ * autoIndex builds are fire-and-forget (a failure is silent). Left to autoIndex,
  * this one would build on whichever Lambda's cold boot first touches quests after deploy - a user's
  * serve/copy request, not a migration window.
  *

@@ -3,6 +3,7 @@ import { Resource } from 'sst';
 import crypto from 'crypto';
 import type { DataLakeOrigin } from '@bike4mind/common';
 import { getE2ETestId, getTestRunId } from './test-users';
+import { wafBypassHeaders } from './waf-bypass';
 
 interface LoginResponse {
   accessToken: string;
@@ -105,6 +106,9 @@ export async function apiCreateTestUser(
     // /accept-policies interstitial). Suppresses both the server-side stamp and the auto-accept
     // fallback below. Defaults to consented so ordinary setup isn't 403'd by the gate.
     acceptedPolicies?: boolean;
+    // Pass true for a user that must clear the new-account trust gate on outbound actions (e.g.
+    // sending invites). Defaults to untrusted, like a real signup.
+    apiKeyTrustApproved?: boolean;
     // Starting credit balance. Omit for the default effectively-unlimited grant; pass a small
     // value to mint a low-balance user for the credit-gate spec.
     initialCredits?: number;
@@ -218,7 +222,15 @@ export async function apiLoginViaOtc(
   const baseURL = process.env.API_URL || 'http://localhost:3000';
   const normalizedEmail = email.toLowerCase().trim();
 
-  const sendResponse = await request.post(`${baseURL}/api/otc/send`, { data: { email: normalizedEmail } });
+  const secret = process.env.E2E_CLEANUP_SECRET || Resource.E2E_CLEANUP_SECRET?.value;
+  if (!secret) {
+    throw new Error('E2E_CLEANUP_SECRET must be set in .env.e2e');
+  }
+  // The secret header lets a -e2e@test.com send skip the Turnstile challenge (see requireTurnstile).
+  const sendResponse = await request.post(`${baseURL}/api/otc/send`, {
+    data: { email: normalizedEmail },
+    headers: { ...wafBypassHeaders(), 'x-e2e-cleanup-secret': secret },
+  });
   if (!sendResponse.ok()) {
     throw new Error(`OTC send failed: ${sendResponse.status()} ${sendResponse.statusText()}`);
   }
@@ -228,6 +240,7 @@ export async function apiLoginViaOtc(
 
   const verifyResponse = await request.post(`${baseURL}/api/otc/verify`, {
     data: { email: normalizedEmail, code, pendingToken },
+    headers: wafBypassHeaders(),
   });
   if (!verifyResponse.ok()) {
     throw new Error(`OTC verify failed: ${verifyResponse.status()} ${verifyResponse.statusText()}`);

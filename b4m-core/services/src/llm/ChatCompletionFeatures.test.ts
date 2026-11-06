@@ -823,6 +823,105 @@ describe('KnowledgeRetrievalFeature retrieval exclusion (4th ctor arg)', () => {
     expect(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls[0][0]).toEqual(['fileA']);
   });
 
+  describe('chunk page read on a Mongo network timeout', () => {
+    const networkTimeout = () =>
+      Object.assign(new Error('connection 1 to 10.0.0.1:27017 timed out'), {
+        name: 'MongoNetworkTimeoutError',
+        errorLabelSet: new Set(['RetryableWriteError']),
+      });
+    const loggedText = (fn: unknown) => JSON.stringify((fn as { mock: { calls: unknown[][] } }).mock.calls);
+
+    it('retries the page once and still grounds the turn', async () => {
+      const ctx = makeCtx();
+      const realRead = ctx.db.fabfilechunks.findVectorsByFabFileIds;
+      ctx.db.fabfilechunks.findVectorsByFabFileIds = vi
+        .fn()
+        .mockRejectedValueOnce(networkTimeout())
+        .mockImplementation(realRead);
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      const quest = makeQuest();
+      const messages = await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'stage III NSCLC treatment'
+      );
+
+      expect(messages[0]?.content ?? '').toContain('(ID: fileA)');
+      expect(quest.promptMeta?.retrieval?.outcome).toBe('ok');
+      expect(ctx.db.fabfilechunks.findVectorsByFabFileIds).toHaveBeenCalledTimes(2);
+      // Same page both times: the retry must not advance the keyset cursor.
+      expect(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls[1]).toEqual(
+        ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls[0]
+      );
+      expect(loggedText(ctx.logger.warn)).toContain('MongoNetworkTimeoutError');
+      expect(ctx.logger.error).not.toHaveBeenCalled();
+    });
+
+    it('retries a later page with the same keyset cursor', async () => {
+      const ctx = makeCtx();
+      // One more chunk than a page consumes, so the scan needs a second page.
+      const chunks = Array.from({ length: 1001 }, (_, n) => ({
+        id: `c${String(n).padStart(4, '0')}`,
+        fabFileId: 'fileA',
+        text: `chunk ${n}`,
+        vector: [1, 0],
+      }));
+      const pagedRead = vi.fn((_ids: string[], opts: { limit: number; afterChunkId?: string }) =>
+        Promise.resolve(
+          chunks.filter(c => opts.afterChunkId === undefined || c.id > opts.afterChunkId).slice(0, opts.limit)
+        )
+      );
+      ctx.db.fabfilechunks.findVectorsByFabFileIds = vi
+        .fn()
+        .mockImplementationOnce(pagedRead)
+        .mockRejectedValueOnce(networkTimeout())
+        .mockImplementation(pagedRead);
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      const quest = makeQuest();
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'stage III NSCLC treatment'
+      );
+
+      const cursors = (
+        ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls as unknown as Array<
+          [string[], { afterChunkId?: string }]
+        >
+      ).map(call => call[1].afterChunkId);
+      // Page 1, then the failed read of page 2 and its retry - both from the last id of page 1.
+      expect(cursors.slice(0, 3)).toEqual([undefined, 'c0999', 'c0999']);
+      expect(quest.promptMeta?.retrieval?.outcome).toBe('ok');
+      expect(ctx.logger.error).not.toHaveBeenCalled();
+    });
+
+    it('abstains after a second timeout, logging at warn with the error name only', async () => {
+      const ctx = makeCtx();
+      ctx.db.fabfilechunks.findVectorsByFabFileIds = vi.fn().mockImplementation(() => Promise.reject(networkTimeout()));
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      const quest = makeQuest();
+      const messages = await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'stage III NSCLC treatment'
+      );
+
+      expect(messages).not.toEqual([]); // the abstention block
+      expect(quest.promptMeta?.retrieval?.outcome).toBe('failed');
+      expect(ctx.db.fabfilechunks.findVectorsByFabFileIds).toHaveBeenCalledTimes(2);
+      expect(ctx.logger.error).not.toHaveBeenCalled();
+      const warned = loggedText(ctx.logger.warn);
+      expect(warned).toContain('Forced retrieval failed: MongoNetworkTimeoutError');
+      expect(warned).not.toContain('10.0.0.1');
+    });
+  });
+
   it('no filter (default): both files are retrieved (opt-in only)', async () => {
     const ctx = makeCtx();
     const feature = new KnowledgeRetrievalFeature(
@@ -1166,6 +1265,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       };
     });
     const TARGET = 'f149';
+    const TARGET_INDEX = 149;
     // The query embeds to [1, 0]: the target's chunk scores 1, every other chunk 0 (below the floor).
     const rows = (ids: string[]) =>
       ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: id === TARGET ? [1, 0] : [0, 1] }));
@@ -1206,10 +1306,10 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       });
     };
 
-    const makeLargeScopeCtx = (opts: { vectorSearchEnabled: boolean }) => {
+    const makeLargeScopeCtx = (opts: { vectorSearchEnabled: boolean; rows?: (ids: string[]) => unknown[] }) => {
       const ctx = makeCtx({
         files: lakeFiles,
-        rows,
+        rows: opts.rows ?? rows,
         settings: { EnableDataLakeVectorSearch: opts.vectorSearchEnabled },
       });
       // The real listing honours `limit`; the fixture has to, or the cut under test never happens.
@@ -1323,6 +1423,79 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
         { selection: 'relevance', annPickMs: expect.any(Number) },
         expect.anything()
       );
+    });
+
+    // `freshFrom`.. are stamped seconds ago (inside the mongot lag); the first 110 files get ANN hits,
+    // so hits alone fill the cap and the rest are ready files the ANN ranked outside its pool.
+    const withFreshFiles = (freshFrom: number, chunkRows?: (ids: string[]) => unknown[]) => {
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true, rows: chunkRows });
+      const files = lakeFiles.map((f, i) =>
+        i >= freshFrom ? { ...f, chunkEmbeddingModelStampedAt: new Date(Date.now() - 10_000) } : f
+      );
+      ctx.db.fabfiles.search = vi.fn((_u, _q, _f, page: { limit: number }) =>
+        Promise.resolve({ data: files.slice(0, page.limit), hasMore: files.length > page.limit, total: files.length })
+      );
+      annDb.vectorSearch.mockResolvedValue(
+        lakeFiles.slice(0, 110).map((f, i) => ({ id: `ch-${f.id}`, fabFileId: f.id, text: '', score: 0.9 - i / 1000 }))
+      );
+      return { ctx, warn };
+    };
+
+    it('with vector search, still scores a file embedded seconds ago when ANN hits fill the cap', async () => {
+      const { ctx } = withFreshFiles(TARGET_INDEX);
+      const { quest, content } = await run(ctx);
+      expect(content).toContain(targetHeading);
+      const scanned = new Set(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]));
+      expect(scanned.has(TARGET)).toBe(true);
+      expect(scanned.size).toBe(100);
+      expect((quest.promptMeta as { retrievalCoverage?: unknown }).retrievalCoverage).toBeUndefined();
+    });
+
+    it('with vector search, scans a reserved fresh file before chunk-heavy hits spend the budget', async () => {
+      // 45 chunks per file: the 4000-chunk budget runs out before the 90th file.
+      const heavyRows = (ids: string[]) =>
+        ids.flatMap(id =>
+          Array.from({ length: 45 }, (_, i) => ({
+            id: `ch-${id}-${String(i).padStart(2, '0')}`,
+            fabFileId: id,
+            text: `text ${id}`,
+            vector: id === TARGET ? [1, 0] : [0, 1],
+          }))
+        );
+      const { ctx } = withFreshFiles(TARGET_INDEX, heavyRows);
+      const { content } = await run(ctx);
+      expect(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls[0][0]).toContain(TARGET);
+      expect(content).toContain(targetHeading);
+    });
+
+    it('with vector search, says so when more recently embedded files than the reserve are cut', async () => {
+      const { ctx, warn } = withFreshFiles(130);
+      const { quest } = await run(ctx);
+      const coverage = (quest.promptMeta as { retrievalCoverage?: { partial: boolean; reasons: string[] } })
+        .retrievalCoverage;
+      expect(coverage?.partial).toBe(true);
+      expect(coverage?.reasons.join(' ')).toContain('10 recently added document(s) are still being indexed');
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('recently added document(s) are not searchable yet'));
+      const scanned = new Set(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]));
+      const keptFresh = lakeFiles
+        .slice(130)
+        .map(f => f.id)
+        .filter(id => scanned.has(id));
+      expect(keptFresh).toEqual(lakeFiles.slice(130, 140).map(f => f.id));
+    });
+
+    it('with vector search, does not report never-stamped files the cap leaves out', async () => {
+      const { ctx, annDb } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      const files = lakeFiles.map((f, i) => (i >= 110 ? { ...f, chunkEmbeddingModelStampedAt: undefined } : f));
+      ctx.db.fabfiles.search = vi.fn((_u, _q, _f, page: { limit: number }) =>
+        Promise.resolve({ data: files.slice(0, page.limit), hasMore: files.length > page.limit, total: files.length })
+      );
+      annDb.vectorSearch.mockResolvedValue(
+        lakeFiles.slice(0, 110).map((f, i) => ({ id: `ch-${f.id}`, fabFileId: f.id, text: '', score: 0.9 - i / 1000 }))
+      );
+      const { quest } = await run(ctx);
+      expect((quest.promptMeta as { retrievalCoverage?: unknown }).retrievalCoverage).toBeUndefined();
     });
 
     it('falls back to the alphabetical pick, and says so, when the ANN query fails', async () => {

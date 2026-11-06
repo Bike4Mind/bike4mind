@@ -1,8 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { subscriptionRepository } from '@server/models/Subscription';
-import { getRequestEntitlements, getUserEntitlements, requestHasEntitlement, userHasEntitlement } from './index';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
+import {
+  getRequestEntitlements,
+  getUserEntitlements,
+  requestHasEntitlement,
+  toEntitlementUser,
+  userHasEntitlement,
+} from './index';
 import type { Request } from 'express';
-import { __registryRows } from '@client/lib/entitlements/registry';
+import type { IUserDocument } from '@bike4mind/common';
+import { __registryRows } from '@bike4mind/server-utils/lib/entitlements/registry';
 
 // Minimal req shim - only the fields the entitlement helpers touch.
 const makeReq = (user: {
@@ -13,7 +20,7 @@ const makeReq = (user: {
   emailVerified?: boolean | null;
 }) => ({ user }) as unknown as Request;
 
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findActiveUserSubscriptions: vi.fn(),
     findActiveSubscriptionsByOwners: vi.fn(async () => []),
@@ -25,11 +32,11 @@ vi.mock('@bike4mind/database', () => ({ organizationRepository: { findPlanHolder
 vi.mock('@bike4mind/observability', () => ({ Logger: { globalInstance: { warn: vi.fn() } } }));
 
 // Fixture registry: behavior of the real rows is covered by
-// lib/entitlements/registry.test.ts; here we test the resolver's wiring and
+// server-utils lib/entitlements/registry.test.ts; here we test the resolver's wiring and
 // gate semantics against controlled mappings (and avoid product literals).
-vi.mock('@client/lib/entitlements/registry', async () => {
-  const actual = await vi.importActual<typeof import('@client/lib/entitlements/registry')>(
-    '@client/lib/entitlements/registry'
+vi.mock('@bike4mind/server-utils/lib/entitlements/registry', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/server-utils/lib/entitlements/registry')>(
+    '@bike4mind/server-utils/lib/entitlements/registry'
   );
   return {
     ...actual,
@@ -52,6 +59,13 @@ vi.mock('@client/lib/entitlements/registry', async () => {
     },
   };
 });
+
+// Plan price ids are env-dependent, so the ladder read is a fixture; the real mapping is covered by
+// lib/userSubscriptions/utils.test.ts.
+vi.mock('@client/lib/userSubscriptions/utils', () => ({
+  getEntitlingPlanByPriceId: (priceId: string) =>
+    ({ price_ladder_pro: { tier: 2 }, price_ladder_basic: { tier: 1 }, price_standalone: {} })[priceId],
+}));
 
 // DB-backed partner rules (issue #293) are resolved through this server module. Mock it so
 // the resolver test stays a pure unit (no DB); the module's own behavior is covered by
@@ -98,6 +112,131 @@ describe('getUserEntitlements', () => {
 
     await expect(getUserEntitlements(user)).resolves.not.toContain('someproduct:pro');
     expect(findActiveByOwners).not.toHaveBeenCalled();
+  });
+
+  describe('questmaster:pro from subscription status', () => {
+    it.each(['price_ladder_basic', 'price_ladder_pro', 'price_standalone'])(
+      'is granted to an active subscriber on %s with no questmaster-pro tag',
+      async priceId => {
+        findActive.mockResolvedValue([{ priceId }]);
+
+        await expect(getUserEntitlements(user)).resolves.toContain('questmaster:pro');
+      }
+    );
+
+    it('is granted to a seat member through an org-owned paid plan row', async () => {
+      findActive.mockResolvedValue([]);
+      findPlanHolderOrgIds.mockResolvedValue(['org1']);
+      findActiveByOwners.mockResolvedValue([
+        { priceId: 'price_ladder_pro', ownerType: 'Organization', ownerId: 'org1' },
+      ]);
+
+      await expect(getUserEntitlements(user)).resolves.toContain('questmaster:pro');
+    });
+
+    it('is not held by a lapsed subscriber, who has no active row left', async () => {
+      findActive.mockResolvedValue([]);
+
+      await expect(getUserEntitlements(user)).resolves.not.toContain('questmaster:pro');
+    });
+
+    it('is not held by a user with no subscription', async () => {
+      findActive.mockResolvedValue([]);
+
+      await expect(getUserEntitlements({ id: 'u-none', tags: [] })).resolves.not.toContain('questmaster:pro');
+    });
+
+    it('is not conferred by the sticky credit-purchase stamp alone', async () => {
+      findActive.mockResolvedValue([]);
+
+      await expect(
+        getUserEntitlements({ ...user, lastCreditsPurchasedAt: new Date('2026-10-01T00:00:00Z') })
+      ).resolves.not.toContain('questmaster:pro');
+    });
+
+    it('is not duplicated when the questmaster-pro tag is also held', async () => {
+      findActive.mockResolvedValue([{ priceId: 'price_ladder_basic' }]);
+
+      const keys = await getUserEntitlements({ id: 'u-tag', tags: ['questmaster-pro'] });
+
+      expect(keys.filter(key => key === 'questmaster:pro')).toHaveLength(1);
+    });
+  });
+
+  describe('plan:paid', () => {
+    it.each(['price_ladder_basic', 'price_ladder_pro'])(
+      'is granted for an active ladder subscription (%s)',
+      async priceId => {
+        findActive.mockResolvedValue([{ priceId }]);
+
+        await expect(getUserEntitlements(user)).resolves.toContain('plan:paid');
+      }
+    );
+
+    // The fixture ladder price stands in for the Team price; the real mapping is lib/userSubscriptions/utils.test.ts.
+    it('is granted to a seat member through an org-owned Team subscription row', async () => {
+      findActive.mockResolvedValue([]);
+      findPlanHolderOrgIds.mockResolvedValue(['org1']);
+      findActiveByOwners.mockResolvedValue([
+        { priceId: 'price_ladder_pro', ownerType: 'Organization', ownerId: 'org1' },
+      ]);
+
+      await expect(getUserEntitlements(user)).resolves.toContain('plan:paid');
+    });
+
+    it('is granted for an admin_grant subscription row', async () => {
+      findActive.mockResolvedValue([{ priceId: 'price_ladder_pro', source: 'admin_grant' }]);
+
+      await expect(getUserEntitlements(user)).resolves.toContain('plan:paid');
+    });
+
+    it('is granted to a credit buyer without a subscription', async () => {
+      findActive.mockResolvedValue([]);
+
+      await expect(
+        getUserEntitlements({ ...user, lastCreditsPurchasedAt: new Date('2026-10-01T00:00:00Z') })
+      ).resolves.toContain('plan:paid');
+    });
+
+    it('is granted exactly once to a credit buyer who also subscribes', async () => {
+      findActive.mockResolvedValue([{ priceId: 'price_ladder_basic' }]);
+
+      const keys = await getUserEntitlements({ ...user, lastCreditsPurchasedAt: new Date('2026-10-01T00:00:00Z') });
+
+      expect(keys.filter(key => key === 'plan:paid')).toHaveLength(1);
+    });
+
+    it('is not granted when lastCreditsPurchasedAt is null', async () => {
+      findActive.mockResolvedValue([]);
+
+      await expect(getUserEntitlements({ ...user, lastCreditsPurchasedAt: null })).resolves.not.toContain('plan:paid');
+    });
+
+    it('is not granted without a subscription', async () => {
+      findActive.mockResolvedValue([]);
+
+      await expect(getUserEntitlements(user)).resolves.not.toContain('plan:paid');
+    });
+
+    it('is granted for a paid plan off the ladder', async () => {
+      findActive.mockResolvedValue([{ priceId: 'price_standalone' }]);
+
+      await expect(getUserEntitlements(user)).resolves.toContain('plan:paid');
+    });
+
+    it('is not granted by a passthrough tag', async () => {
+      findActive.mockResolvedValue([]);
+
+      await expect(getUserEntitlements({ id: 'u-tag', tags: ['plan:paid'] })).resolves.not.toContain('plan:paid');
+    });
+
+    it('is granted exactly once when a tag and a ladder subscription both name it', async () => {
+      findActive.mockResolvedValue([{ priceId: 'price_ladder_basic' }]);
+
+      const keys = await getUserEntitlements({ id: 'u-both', tags: ['plan:paid'] });
+
+      expect(keys.filter(key => key === 'plan:paid')).toHaveLength(1);
+    });
   });
 
   it('grants nothing from unmapped prices; tag passthrough (plus baseline) still applies', async () => {
@@ -320,5 +459,15 @@ describe('requestHasEntitlement', () => {
   it('denies (fail-closed) when the request has no authenticated user', async () => {
     await expect(requestHasEntitlement({} as unknown as Request, 'anything')).resolves.toBe(false);
     expect(findActive).not.toHaveBeenCalled();
+  });
+});
+
+describe('toEntitlementUser', () => {
+  // Callers that project the user (model picker, /api/v1/me) must not lose the purchase signal behind plan:paid.
+  it('keeps lastCreditsPurchasedAt', () => {
+    const purchasedAt = new Date('2026-10-01T00:00:00Z');
+    const user = { id: 'u1', tags: [], lastCreditsPurchasedAt: purchasedAt } as unknown as IUserDocument;
+
+    expect(toEntitlementUser(user).lastCreditsPurchasedAt).toBe(purchasedAt);
   });
 });

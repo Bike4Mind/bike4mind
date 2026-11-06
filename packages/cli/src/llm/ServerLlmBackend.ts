@@ -6,6 +6,7 @@ import { isAxiosError } from 'axios';
 import { htmlErrorTitle, htmlFirstH1 } from '../utils/htmlErrorTitle';
 import { logger } from '../utils/Logger';
 import { StreamLogger } from '../utils/StreamLogger';
+import { replayableThinkingBlocks } from './replayableThinkingBlocks';
 import { parseStreamEvent, type StreamEvent } from './streamEvents';
 import { runCompletion } from './runCompletion';
 import {
@@ -32,9 +33,17 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
   private readonly sdk: B4mClient;
   public currentModel: string;
   private readonly completionsEndpoint: string;
+  private readonly getSessionId?: () => string | undefined;
 
-  constructor(options: { apiClient: ApiClient; model: string; sseCompletionsUrl?: string }) {
+  constructor(options: {
+    apiClient: ApiClient;
+    model: string;
+    sseCompletionsUrl?: string;
+    /** Read per request, so the id follows /clear and resume; tags the server ledger row. */
+    getSessionId?: () => string | undefined;
+  }) {
     this.apiClient = options.apiClient;
+    this.getSessionId = options.getSessionId;
     // The ApiClient's fetch carries its auth, refresh-on-401 and timeout, so the SDK stream inherits them.
     this.sdk = createClient({
       baseUrl: options.apiClient.baseURL,
@@ -231,7 +240,7 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
     thinkingBlocks?: unknown[]
   ) {
     const assistantContent: MessageContentObject[] = [
-      ...((thinkingBlocks || []) as MessageContentObject[]),
+      ...replayableThinkingBlocks(thinkingBlocks),
       {
         type: 'tool_use' as const,
         id: tool.id,
@@ -331,9 +340,11 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
   }
 
   private requestBody(req: CompletionRequest): JsonBody<'createCompletion'> {
+    const sessionId = this.getSessionId?.();
     const requestBody = {
       model: req.model,
       messages: req.messages,
+      ...(sessionId ? { sessionId } : {}),
       options: {
         temperature: req.options.temperature,
         maxTokens: req.options.maxTokens,

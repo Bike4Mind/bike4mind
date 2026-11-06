@@ -54,6 +54,7 @@ const setup = (overrides: Partial<CreateMusicJobDeps> = {}) => {
   const commit = vi.spyOn(repository, 'commit');
   const queue: string[] = [];
   const deps: CreateMusicJobDeps = {
+    assertModelAdmission: vi.fn(async () => {}),
     repository,
     providers: createMusicProviderRegistry([new TestMusicProvider()]),
     getSettings: async () => ({ enforceCredits: true, musicGeneration: undefined }),
@@ -184,6 +185,17 @@ describe('music job end to end with the test provider', () => {
     );
   });
 
+  it('stores the validated request with the generation', async () => {
+    const t = setup();
+    await createMusicJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(
+      expect.objectContaining({
+        generation: expect.objectContaining({ request: expect.objectContaining({ model: expect.any(String) }) }),
+      })
+    );
+  });
+
   it('falls back to the requested duration when the audio cannot be measured', async () => {
     const t = setup({
       providers: createMusicProviderRegistry([
@@ -222,6 +234,7 @@ describe('music job end to end with the test provider', () => {
           prompt: 'a ballad',
           lyrics: 'la la la',
           durationSeconds: expect.closeTo(5, 1),
+          request: expect.objectContaining({ model: 'test-music', prompt: 'a ballad' }),
         },
       })
     );
@@ -535,6 +548,23 @@ describe('music job settlement', () => {
     expect(t.deps.recordUsage).toHaveBeenCalledWith(
       expect.objectContaining({ creditsCharged: charged, costUsd: 0.08, durationSeconds: 95, status: 'ok' })
     );
+  });
+
+  it('records the API key that created the job on its settlement row', async () => {
+    const t = setup({
+      providers: createMusicProviderRegistry([
+        stubProvider(async () => song(30, { reportedDurationSeconds: 95 }), 'gemini-lyria'),
+      ]),
+    });
+    const created = await createMusicJob(
+      { user, request: { model: 'lyria-3.5', prompt: 'x' }, source: 'api', apiKeyId: 'key-1' },
+      t.deps
+    );
+    await t.runToCompletion();
+
+    expect(t.jobOf(created).apiKeyId).toBe('key-1');
+    const [, , entry] = vi.mocked(settleCreditHold).mock.calls[0];
+    expect(entry).toMatchObject({ type: 'music_generation_usage', apiKeyId: 'key-1' });
   });
 
   it('charges a per-second model the seconds it delivered, capped at the hold', async () => {

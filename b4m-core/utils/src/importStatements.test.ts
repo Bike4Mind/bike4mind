@@ -11,7 +11,7 @@ import {
   moduleBaseName,
   scanImportStatements,
   stripTypeOnlyImports,
-  type ImportScanner,
+  type ModuleImportScanner as ImportScanner,
 } from './importStatements';
 
 /**

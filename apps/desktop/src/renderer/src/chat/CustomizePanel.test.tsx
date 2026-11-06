@@ -309,7 +309,11 @@ describe('the Customize screen', () => {
     expect(onOpenSkillMarket).toHaveBeenLastCalledWith({ id: 'l1' });
     act(() => byTestId('customize-skill-market-btn')?.click());
     expect(onOpenSkillMarket).toHaveBeenLastCalledWith();
-    act(() => mine?.querySelector<HTMLElement>('[data-testid="customize-skill-web-btn"]')?.click());
+    const webBtn = mine?.querySelector<HTMLElement>('[data-testid="customize-skill-web-btn"]');
+    expect(webBtn?.hasAttribute('title')).toBe(false);
+    expect(webBtn?.getAttribute('aria-label')).toBe('Open /web-summary on the web');
+    expect(mine?.querySelector('[title]')).toBeNull();
+    act(() => webBtn?.click());
     expect(market.openOnWeb).toHaveBeenCalledWith({ kind: 'skill', id: 'a1' });
   });
 

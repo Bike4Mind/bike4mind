@@ -74,6 +74,20 @@ describe('SkillUpdatePanel version guard', () => {
     );
   });
 
+  it('shows a change to the Claude Code tools before the update is applied', () => {
+    h.detail.data = {
+      version: {
+        ...latestDetail.version,
+        snapshot: { ...latestDetail.version.snapshot, claudeCodeAllowedTools: ['Bash'] },
+      },
+    };
+    renderPanel();
+    fireEvent.click(screen.getByTestId('skill-market-show-changes'));
+    expect(screen.getByTestId('skill-market-update-field-changes')).toHaveTextContent(
+      'Claude Code tools: (none) -> Bash'
+    );
+  });
+
   it('sends the loaded version id when saving as a new copy', async () => {
     h.detail.data = latestDetail;
     renderPanel();

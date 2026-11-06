@@ -10,7 +10,7 @@ import { MCP_TOOL_PREFIX } from '../mcp/names';
  *
  * `session_send` is deliberately NOT here, though the turn it starts does cost credits. The
  * cycle it could run away with is already bounded in code - MAX_MESSAGE_HOPS on the chain and
- * MAX_SENDS_PER_TURN on the fan, so a user turn caps out at 14 relayed turns whatever the
+ * MAX_SENDS_PER_TURN on the fan, so a user turn caps out at 62 relayed turns whatever the
  * agents do - and a per-send click on top of that bound only stops the autonomy the feature
  * exists for: a session that has finished its work sits waiting for a human purely to hand its
  * summary back. It rides the approval mode like any other tool instead, so 'ask' still asks
@@ -42,6 +42,9 @@ export function spendsCredits(toolName: string): boolean {
  * and text in an image steers a model as well as text does. A `file_read` of an image is not:
  * it is a file in a folder the user shared, judged like the text files beside it.
  *
+ * `simulator_screenshot` for the same reason: the app on the device can show a web page or any
+ * text its server sends.
+ *
  * `browser_*` and every server tool are matched by prefix, so a new one is covered as it ships.
  */
 const READS_UNTRUSTED: ReadonlySet<string> = new Set([
@@ -50,6 +53,7 @@ const READS_UNTRUSTED: ReadonlySet<string> = new Set([
   'skill',
   'session_read',
   'screen_capture',
+  'simulator_screenshot',
 ]);
 
 export function readsUntrusted(toolName: string): boolean {
@@ -68,6 +72,8 @@ const SENDS_OUT: ReadonlySet<string> = new Set([
   'browser_navigate',
   'browser_tabs',
   'session_send',
+  // A deep link or web page opened on the device can carry what the reply read in its URL.
+  'simulator_open_url',
 ]);
 
 export function sendsOut(toolName: string): boolean {

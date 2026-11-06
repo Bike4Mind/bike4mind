@@ -28,9 +28,12 @@ function allowRules(rules: readonly string[]): PermissionRuleSet {
   );
 }
 
-// A `gh` stub first on PATH, so the GitHub commands below run without the network or an account.
+// Tool stubs first on PATH, so the commands below run without the network or an account.
 const stub = vi.hoisted(() => ({ bin: '' }));
-vi.mock('./tools/userPath', () => ({ resolveUserPath: async () => `${stub.bin}:${process.env.PATH ?? ''}` }));
+vi.mock('./tools/userPath', async importOriginal => ({
+  ...(await importOriginal<typeof import('./tools/userPath')>()),
+  resolveUserPath: async () => `${stub.bin}:${process.env.PATH ?? ''}`,
+}));
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -81,7 +84,7 @@ describe('ChatService untrusted content in a reply', () => {
     stub.bin = await realpath(await mkdtemp(join(tmpdir(), 'b4m-taint-bin-')));
     await writeFile(join(stub.bin, 'gh'), '#!/bin/sh\necho \'[{"number":1,"title":"t"}]\'\n', 'utf8');
     await chmod(join(stub.bin, 'gh'), 0o755);
-    for (const tool of ['pnpm', 'npm', 'npx', 'make']) {
+    for (const tool of ['pnpm', 'npm', 'npx', 'make', 'curl']) {
       await writeFile(join(stub.bin, tool), '#!/bin/sh\necho ok\n', 'utf8');
       await chmod(join(stub.bin, tool), 0o755);
     }
@@ -196,7 +199,7 @@ describe('ChatService untrusted content in a reply', () => {
 
   it('asks before a background command once the reply is tainted', async () => {
     const id = await session('auto');
-    await reply(id, [fetch, ['bash_background', { command: 'sleep 30', cwd: root }]]);
+    await reply(id, [fetch, ['bash_background', { command: 'pnpm dev', cwd: root }]]);
 
     const asked = await awaitCall('bash_background', 'awaiting-approval');
     expect(asked.approvalDetail).toContain('read content from the web (web_fetch).');
@@ -208,6 +211,15 @@ describe('ChatService untrusted content in a reply', () => {
 
     await awaitCall('file_read', 'done');
     expect(calls('file_read', 'awaiting-approval')).toHaveLength(0);
+  });
+
+  it('runs a local text pipeline unasked in a tainted reply', async () => {
+    const id = await session('auto');
+    const command = "set -e; for f in notes.txt; do iconv -f latin1 -t utf-8 $f | sed -n '1,5p'; done; sleep 0";
+    await reply(id, [fetch, ['bash_execute', { command, cwd: root }]]);
+
+    await awaitCall('bash_execute', 'done');
+    expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
   });
 
   it('does not carry the taint into the next reply of the same conversation', async () => {
@@ -751,6 +763,22 @@ describe('ChatService untrusted content in a reply', () => {
         interval: 10,
       });
       expect(calls('session_send', 'awaiting-approval')).toHaveLength(0);
+    });
+
+    it('lists the conversations once for a send the user approved on its card', async () => {
+      const [from, to] = await twoSessions();
+      await service.setApprovalMode(from, 'ask');
+      const listed = vi.spyOn(store, 'list');
+      await reply(from, [['session_send', { session_id: to, message: 'once' }]]);
+      const card = await awaitCall('session_send', 'awaiting-approval');
+      approvals.resolve(card.approvalId!, { decision: 'once' });
+      const sent = await vi.waitUntil(() => calls('session_send', 'done')[0] ?? calls('session_send', 'error')[0], {
+        timeout: 5000,
+        interval: 10,
+      });
+      // No queue is wired here, so the send stops after resolving its target, which is the part measured.
+      expect(sent.error).toMatch(/cannot deliver messages/);
+      expect(listed).toHaveBeenCalledTimes(1);
     });
 
     it('still asks a tainted send that only has an answer from before the taint', async () => {

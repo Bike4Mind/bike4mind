@@ -17,6 +17,7 @@ import {
   RemoteMcpTimeoutError,
   type RemoteMcpErrorCode,
 } from '@bike4mind/mcp/remote';
+import { createInProcessRemoteMcpRunner } from '@bike4mind/server-utils/mcpConnections/remoteMcpRunner';
 // The c1 fixture server is test-only source, not part of the package's published surface.
 import {
   FIXTURE_RESOURCE_METADATA_URL,
@@ -38,9 +39,17 @@ const repo = vi.hoisted(() => ({
     return doc && doc.ownerKey === owner.ownerKey ? structuredClone(doc) : null;
   }),
   setStatus: vi.fn(
-    async (id: string, status: string, lastError?: Record<string, unknown>, expectedApiKeyValueEnc?: string | null) => {
+    async (
+      id: string,
+      status: string,
+      lastError?: Record<string, unknown>,
+      expectedApiKeyValueEnc?: string | null,
+      expectedAccessTokenEnc?: string | null
+    ) => {
       const doc = state.connections.get(id);
       const auth = doc?.auth as IMcpConnectionDocument['auth'] | undefined;
+      if (expectedAccessTokenEnc !== undefined && (auth?.oauth?.accessTokenEnc ?? null) !== expectedAccessTokenEnc)
+        return null;
       if (
         expectedApiKeyValueEnc !== undefined &&
         (auth?.kind !== 'api_key' || (auth.apiKey?.valueEnc ?? null) !== expectedApiKeyValueEnc)
@@ -50,11 +59,16 @@ const repo = vi.hoisted(() => ({
       return doc ?? null;
     }
   ),
-  setPendingAuth: vi.fn(async (id: string, challenge: Record<string, unknown>) => {
-    const doc = state.connections.get(id);
-    if (doc) Object.assign(doc, { status: 'pending_auth', authChallenge: challenge });
-    return doc ?? null;
-  }),
+  setPendingAuth: vi.fn(
+    async (id: string, challenge: Record<string, unknown>, expectedAccessTokenEnc?: string | null) => {
+      const doc = state.connections.get(id);
+      const auth = doc?.auth as IMcpConnectionDocument['auth'] | undefined;
+      if (expectedAccessTokenEnc !== undefined && (auth?.oauth?.accessTokenEnc ?? null) !== expectedAccessTokenEnc)
+        return null;
+      if (doc) Object.assign(doc, { status: 'pending_auth', authChallenge: challenge });
+      return doc ?? null;
+    }
+  ),
   markUsed: vi.fn(async (_id: string) => undefined),
   update: vi.fn(async (data: Record<string, unknown>) => {
     const doc = state.connections.get(String(data.id));
@@ -76,7 +90,18 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: { tryIncrementWithinLimitFixedWindow: tryIncrement },
 }));
 vi.mock('sst', () => ({ Resource: state.resource }));
-vi.mock('@server/security/tokenEncryption', () => ({
+const lambda = vi.hoisted(() => ({
+  send: vi.fn<(command: { input: Record<string, unknown> }) => Promise<unknown>>(),
+}));
+vi.mock('@aws-sdk/client-lambda', () => ({
+  LambdaClient: class {
+    send = lambda.send;
+  },
+  InvokeCommand: class {
+    constructor(public input: Record<string, unknown>) {}
+  },
+}));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: (value: string | null | undefined) => (value ? value.replace(/^enc:/, '') : null),
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
@@ -93,6 +118,19 @@ vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
     }),
   },
 }));
+const tokenManager = vi.hoisted(() => ({
+  getOAuthAccessToken: vi.fn(),
+  OAuthReconnectRequiredError: class extends Error {} as unknown as new () => Error,
+  OAuthRefreshUnavailableError: class extends Error {} as unknown as new (message: string) => Error,
+  OAuthGrantSupersededError: class extends Error {} as unknown as new () => Error,
+}));
+vi.mock('./oauth/tokenManager', async importOriginal => {
+  const actual = await importOriginal<typeof import('./oauth/tokenManager')>();
+  tokenManager.OAuthReconnectRequiredError = actual.OAuthReconnectRequiredError;
+  tokenManager.OAuthRefreshUnavailableError = actual.OAuthRefreshUnavailableError;
+  tokenManager.OAuthGrantSupersededError = actual.OAuthGrantSupersededError;
+  return { ...actual, getOAuthAccessToken: tokenManager.getOAuthAccessToken };
+});
 vi.mock('./customMcpAccess', async importOriginal => ({
   ...(await importOriginal<typeof import('./customMcpAccess')>()),
   resolveCustomMcpContext: vi.fn(async () => {
@@ -100,13 +138,8 @@ vi.mock('./customMcpAccess', async importOriginal => ({
   }),
 }));
 
-const {
-  CustomMcpPolicyBlockedError,
-  CustomMcpUnavailableError,
-  createInProcessRemoteMcpRunner,
-  invokeRemoteMcp,
-  resolveRemoteMcpRunner,
-} = await import('./invokeRemoteMcp');
+const { CustomMcpPolicyBlockedError, CustomMcpUnavailableError, invokeRemoteMcp, resolveRemoteMcpRunner } =
+  await import('./invokeRemoteMcp');
 const { recordCircuitBreakerRejection, recordCircuitBreakerTransition } =
   await import('@bike4mind/server-utils/utils/cloudwatch');
 
@@ -199,6 +232,7 @@ beforeEach(() => {
   for (const key of Object.keys(answers)) delete answers[key];
   for (const key of Object.keys(state.resource)) delete state.resource[key];
   vi.clearAllMocks();
+  lambda.send.mockReset();
   vi.spyOn(dns, 'lookup').mockImplementation(fakeLookup as unknown as typeof dns.lookup);
 });
 
@@ -278,11 +312,15 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
     );
     // The fixture advertises metadata on another domain, so only the scope is kept.
     expect(FIXTURE_RESOURCE_METADATA_URL).toMatch(/^https:\/\/auth\.fixture\.example\//);
-    expect(repo.setPendingAuth).toHaveBeenCalledWith(id, {
-      resourceMetadataUrl: undefined,
-      scope: 'tools.read',
-      message: 'The server requires sign-in',
-    });
+    expect(repo.setPendingAuth).toHaveBeenCalledWith(
+      id,
+      {
+        resourceMetadataUrl: undefined,
+        scope: 'tools.read',
+        message: 'The server requires sign-in',
+      },
+      null
+    );
     expect(state.audits[0]).toMatchObject({ outcome: 'failure', errorCode: 'auth_required' });
   });
 
@@ -368,7 +406,8 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
     );
     expect(repo.setPendingAuth).toHaveBeenCalledWith(
       pending,
-      expect.objectContaining({ scope: 'tools.read grant all' })
+      expect.objectContaining({ scope: 'tools.read grant all' }),
+      null
     );
 
     const keyed = seed('/mcp', {
@@ -414,23 +453,207 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
     );
   });
 
-  it('an OAuth connection reads as needing sign-in until the token manager exists', async () => {
-    const id = seed('/mcp', {
-      auth: {
-        kind: 'oauth',
-        oauth: { resource: 'r', issuer: 'i', authorizationServerUrl: 'a', scopes: [], clientMode: 'dcr' },
+  describe('OAuth connections', () => {
+    const oauthAuth = (hasAccessToken: boolean): IMcpConnectionDocument['auth'] => ({
+      kind: 'oauth',
+      oauth: {
+        resource: 'r',
+        issuer: 'i',
+        authorizationServerUrl: 'a',
+        scopes: [],
+        clientMode: 'dcr',
+        hasAccessToken,
       },
     });
-    await expectRemoteCode(
-      invokeRemoteMcp({ action: 'listTools', connectionId: id, userId: 'user-1' }, { runner, context: context() }),
-      'auth_required'
-    );
-    expect(fixture.requests).toHaveLength(0);
-    expect(repo.setStatus).toHaveBeenCalledWith(
-      id,
-      'needs_reconnect',
-      expect.objectContaining({ code: 'auth_required' })
-    );
+    const listed = {
+      action: 'listTools' as const,
+      result: { tools: [], dropped: [], detectedTransport: 'streamable-http' as const },
+    };
+
+    it('sends the token manager bearer token', async () => {
+      const id = seed('/mcp', { auth: oauthAuth(true) });
+      tokenManager.getOAuthAccessToken.mockResolvedValue('tok-1');
+      await invokeRemoteMcp(
+        { action: 'listTools', connectionId: id, userId: 'user-1' },
+        { runner, context: context() }
+      );
+      expect(fixture.requests.find(r => r.method === 'POST')?.authorization).toBe('Bearer tok-1');
+    });
+
+    it('forces one refresh and retries once when the server rejects the token', async () => {
+      const id = seed('/mcp', { auth: oauthAuth(true) });
+      tokenManager.getOAuthAccessToken.mockResolvedValueOnce('stale').mockResolvedValueOnce('fresh');
+      const seen: string[] = [];
+      const flaky = vi.fn(async (payload: { headers: Record<string, string> }) => {
+        seen.push(payload.headers.Authorization ?? '');
+        if (seen.length === 1) throw new RemoteMcpAuthRequiredError({});
+        return listed;
+      });
+      await invokeRemoteMcp(
+        { action: 'listTools', connectionId: id, userId: 'user-1' },
+        { runner: flaky, context: context() }
+      );
+      expect(seen).toEqual(['Bearer stale', 'Bearer fresh']);
+      expect(tokenManager.getOAuthAccessToken).toHaveBeenNthCalledWith(
+        1,
+        expect.anything(),
+        expect.objectContaining({ force: false })
+      );
+      expect(tokenManager.getOAuthAccessToken).toHaveBeenNthCalledWith(
+        2,
+        expect.anything(),
+        expect.objectContaining({ force: true })
+      );
+      expect(repo.setStatus).not.toHaveBeenCalled();
+    });
+
+    it('a refresh the authorization server cannot answer is a timeout that neither records a status nor trips the breaker', async () => {
+      const id = seed('/mcp', { auth: oauthAuth(true) });
+      tokenManager.getOAuthAccessToken.mockImplementation(async (_c: unknown, opts: { force?: boolean }) => {
+        if (opts.force) throw new tokenManager.OAuthRefreshUnavailableError('The authorization server did not answer');
+        return 'stale';
+      });
+      const rejecting = vi.fn(async () => {
+        throw new RemoteMcpAuthRequiredError({});
+      });
+      // Far past any breaker threshold: every call must still reach the token manager, never `circuit_open`.
+      for (let attempt = 0; attempt < 20; attempt++) {
+        await expectRemoteCode(
+          invokeRemoteMcp(
+            { action: 'listTools', connectionId: id, userId: 'user-1' },
+            { runner: rejecting, context: context() }
+          ),
+          'timeout'
+        );
+      }
+      expect(repo.setStatus).not.toHaveBeenCalled();
+      expect(repo.setPendingAuth).not.toHaveBeenCalled();
+    });
+
+    it('a refresh superseded by a disconnect or restart records no status', async () => {
+      const id = seed('/mcp', { auth: oauthAuth(true) });
+      tokenManager.getOAuthAccessToken.mockImplementation(async (_c: unknown, opts: { force?: boolean }) => {
+        if (opts.force) throw new tokenManager.OAuthGrantSupersededError();
+        return 'stale';
+      });
+      const rejecting = vi.fn(async () => {
+        throw new RemoteMcpAuthRequiredError({});
+      });
+      await expectRemoteCode(
+        invokeRemoteMcp(
+          { action: 'listTools', connectionId: id, userId: 'user-1' },
+          { runner: rejecting, context: context() }
+        ),
+        'auth_required'
+      );
+      expect(repo.setStatus).not.toHaveBeenCalled();
+      expect(repo.setPendingAuth).not.toHaveBeenCalled();
+    });
+
+    it('a second 401 after the refresh leaves the connection needing reconnect', async () => {
+      const id = seed('/mcp', { auth: oauthAuth(true) });
+      tokenManager.getOAuthAccessToken.mockImplementation(
+        async (_c: unknown, o: { onIssued?: (enc: string) => void }) => {
+          o.onIssued?.('enc:sent');
+          return 'tok';
+        }
+      );
+      const rejecting = vi.fn(async () => {
+        throw new RemoteMcpAuthRequiredError({});
+      });
+      await expectRemoteCode(
+        invokeRemoteMcp(
+          { action: 'listTools', connectionId: id, userId: 'user-1' },
+          { runner: rejecting, context: context() }
+        ),
+        'auth_required'
+      );
+      expect(rejecting).toHaveBeenCalledTimes(2);
+      expect(repo.setStatus).toHaveBeenCalledWith(
+        id,
+        'needs_reconnect',
+        expect.objectContaining({ code: 'auth_required' }),
+        undefined,
+        'enc:sent'
+      );
+    });
+
+    it('a 401 that lands after a reconnect does not overwrite the new sign-in', async () => {
+      const id = seed('/mcp', { auth: oauthAuth(true) });
+      tokenManager.getOAuthAccessToken.mockImplementation(
+        async (_c: unknown, o: { onIssued?: (enc: string) => void }) => {
+          o.onIssued?.('enc:sent');
+          return 'tok';
+        }
+      );
+      const reconnecting = vi.fn(async () => {
+        const doc = state.connections.get(id) as { auth: { oauth: Record<string, unknown> } };
+        doc.auth.oauth.accessTokenEnc = 'enc:fresh';
+        throw new RemoteMcpAuthRequiredError({});
+      });
+      await expectRemoteCode(
+        invokeRemoteMcp(
+          { action: 'listTools', connectionId: id, userId: 'user-1' },
+          { runner: reconnecting, context: context() }
+        ),
+        'auth_required'
+      );
+      expect(state.connections.get(id)).not.toMatchObject({ status: 'needs_reconnect' });
+    });
+
+    it('retries a 401 with the bearer that was sent as the rejected one', async () => {
+      const id = seed('/mcp', { auth: oauthAuth(true) });
+      tokenManager.getOAuthAccessToken.mockResolvedValue('tok');
+      const rejecting = vi.fn(async () => {
+        throw new RemoteMcpAuthRequiredError({});
+      });
+      await expectRemoteCode(
+        invokeRemoteMcp(
+          { action: 'listTools', connectionId: id, userId: 'user-1' },
+          { runner: rejecting, context: context() }
+        ),
+        'auth_required'
+      );
+      expect(tokenManager.getOAuthAccessToken).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.objectContaining({ force: true, rejectedToken: 'tok' })
+      );
+    });
+
+    it('sends no credentials before sign-in, so the 401 records the challenge', async () => {
+      const id = seed('/mcp', { auth: oauthAuth(false) });
+      tokenManager.getOAuthAccessToken.mockResolvedValue(undefined);
+      const challenged = vi.fn(async (payload: { headers: Record<string, string> }) => {
+        expect(payload.headers).toEqual({});
+        throw new RemoteMcpAuthRequiredError({
+          resourceMetadataUrl: 'https://auth.fixture.example/.well-known/oauth-protected-resource/mcp',
+        });
+      });
+      await expectRemoteCode(
+        invokeRemoteMcp(
+          { action: 'listTools', connectionId: id, userId: 'user-1' },
+          { runner: challenged, context: context() }
+        ),
+        'auth_required'
+      );
+      expect(challenged).toHaveBeenCalledTimes(1);
+      expect(repo.setPendingAuth).toHaveBeenCalledWith(
+        id,
+        expect.objectContaining({ message: 'The server requires sign-in' }),
+        null
+      );
+    });
+
+    it('keeps the reason the token manager stored when the grant is gone', async () => {
+      const id = seed('/mcp', { auth: oauthAuth(true) });
+      tokenManager.getOAuthAccessToken.mockRejectedValue(new tokenManager.OAuthReconnectRequiredError());
+      await expectRemoteCode(
+        invokeRemoteMcp({ action: 'listTools', connectionId: id, userId: 'user-1' }, { runner, context: context() }),
+        'auth_required'
+      );
+      expect(repo.setStatus).not.toHaveBeenCalled();
+      expect(fixture.requests).toHaveLength(0);
+    });
   });
 
   it('a timeout on a call leaves a connected connection connected; on a listTools it is an error', async () => {
@@ -458,10 +681,16 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
       ),
       'timeout'
     );
-    expect(repo.setStatus).toHaveBeenCalledWith(listId, 'error', {
-      code: 'timeout',
-      message: 'The server did not answer in time',
-    });
+    expect(repo.setStatus).toHaveBeenCalledWith(
+      listId,
+      'error',
+      {
+        code: 'timeout',
+        message: 'The server did not answer in time',
+      },
+      undefined,
+      null
+    );
   });
 
   it('on self-host, surfaces ssrf_blocked for a private address, and records it even on a call', async () => {
@@ -476,10 +705,16 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
       'ssrf_blocked'
     );
     expect(fixture.requests).toHaveLength(0);
-    expect(repo.setStatus).toHaveBeenCalledWith(id, 'error', {
-      code: 'ssrf_blocked',
-      message: 'The server address resolves to a private or blocked network',
-    });
+    expect(repo.setStatus).toHaveBeenCalledWith(
+      id,
+      'error',
+      {
+        code: 'ssrf_blocked',
+        message: 'The server address resolves to a private or blocked network',
+      },
+      undefined,
+      null
+    );
     expect(state.audits[0]).toMatchObject({ outcome: 'failure', errorCode: 'ssrf_blocked' });
   });
 
@@ -491,10 +726,16 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
       { runner, context: context() }
     ).catch((e: unknown) => e as RemoteMcpError);
     expect(error).toMatchObject({ code: 'protocol', message: 'The server did not respond as an MCP server' });
-    expect(repo.setStatus).toHaveBeenCalledWith(id, 'error', {
-      code: 'protocol',
-      message: 'The server did not respond as an MCP server',
-    });
+    expect(repo.setStatus).toHaveBeenCalledWith(
+      id,
+      'error',
+      {
+        code: 'protocol',
+        message: 'The server did not respond as an MCP server',
+      },
+      undefined,
+      null
+    );
     expect(state.audits[0]).toMatchObject({ outcome: 'failure', errorCode: 'ssrf_blocked' });
   });
 
@@ -629,6 +870,17 @@ describe('invokeRemoteMcp - checks before any network', () => {
     ).rejects.toMatchObject({ additionalInfo: { reason: 'presets_only' } });
     expect(fixture.requests).toHaveLength(0);
     expect(state.audits.map(a => a.errorCode)).toEqual(['policy_blocked', 'policy_blocked', 'policy_blocked']);
+  });
+
+  it('keeps presets_only closed for a stored preset id whose connection points at another host', async () => {
+    const id = seed('/mcp', { presetId: 'linear' });
+    await expect(
+      invokeRemoteMcp(
+        { action: 'listTools', connectionId: id, userId: 'user-1' },
+        { runner, context: context({ policies: [CustomMcpPolicySchema.parse({ mode: 'presets_only' })] }) }
+      )
+    ).rejects.toMatchObject({ additionalInfo: { code: 'policy_blocked', reason: 'presets_only' } });
+    expect(fixture.requests).toHaveLength(0);
   });
 
   it('fails closed with the typed reason when the platform blocklist is unusable', async () => {
@@ -768,10 +1020,120 @@ describe('invokeRemoteMcp - checks before any network', () => {
 });
 
 describe('resolveRemoteMcpRunner', () => {
-  it('runs in-process when no remote handler is linked, and fails closed when one is', () => {
-    expect(typeof resolveRemoteMcpRunner()).toBe('function');
+  const lambdaReply = (body: unknown) => async () => ({ Payload: new TextEncoder().encode(JSON.stringify(body)) });
+  const listPayload = {
+    url: 'https://mcp.example.com/mcp',
+    transport: 'auto' as const,
+    headers: {},
+    action: 'listTools' as const,
+    network: { ownHosts: [] },
+  };
+
+  it('uses the Lambda when linked, even on self-host', async () => {
     state.resource.remoteMcpHandler = { name: 'remote-mcp-fn' };
-    expect(() => resolveRemoteMcpRunner()).toThrow(/not implemented/);
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    const run = { action: 'listTools', result: { tools: [], dropped: [], detectedTransport: 'streamable-http' } };
+    lambda.send.mockImplementationOnce(lambdaReply({ ok: true, run }));
+    await expect(resolveRemoteMcpRunner()(listPayload)).resolves.toEqual(run);
+    expect(lambda.send).toHaveBeenCalledTimes(1);
+    expect(lambda.send.mock.calls[0][0].input).toMatchObject({
+      FunctionName: 'remote-mcp-fn',
+      InvocationType: 'RequestResponse',
+    });
+  });
+
+  // An IP-literal URL is rejected before any network call, so the in-process runner answers
+  // invalid_url while a Lambda runner would have called lambda.send.
+  const expectInProcess = async () => {
+    const runner = resolveRemoteMcpRunner();
+    expect(runner).toBe(resolveRemoteMcpRunner());
+    await expect(runner({ ...listPayload, url: 'https://127.0.0.1/mcp' })).rejects.toMatchObject({
+      code: 'invalid_url',
+    });
+    expect(lambda.send).not.toHaveBeenCalled();
+  };
+
+  it('runs in-process when unlinked on self-host', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    vi.stubEnv('NODE_ENV', 'production');
+    await expectInProcess();
+  });
+
+  it('runs in-process when unlinked in local development', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'false');
+    vi.stubEnv('IS_LOCAL', 'true');
+    vi.stubEnv('NODE_ENV', 'production');
+    await expectInProcess();
+  });
+
+  it('runs in-process when unlinked under NODE_ENV=development', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'false');
+    vi.stubEnv('IS_LOCAL', 'false');
+    vi.stubEnv('NODE_ENV', 'development');
+    await expectInProcess();
+  });
+
+  it.each(['production', 'test', '', undefined])(
+    'fails closed on a hosted runtime without the link (NODE_ENV=%j)',
+    env => {
+      vi.stubEnv('B4M_SELF_HOST', 'false');
+      vi.stubEnv('IS_LOCAL', 'false');
+      vi.stubEnv('NODE_ENV', env);
+      expect(() => resolveRemoteMcpRunner()).toThrow(/not linked/);
+    }
+  );
+
+  it('refuses an injected runner on a hosted runtime without the link', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'false');
+    vi.stubEnv('IS_LOCAL', 'false');
+    vi.stubEnv('NODE_ENV', 'production');
+    const id = seed('/mcp');
+    await expect(
+      invokeRemoteMcp({ action: 'listTools', connectionId: id, userId: 'user-1' }, { runner, context: context() })
+    ).rejects.toThrow(/not linked/);
+    expect(fixture.requests).toHaveLength(0);
+  });
+
+  it('a failed invoke surfaces as an error and never runs in-process', async () => {
+    state.resource.remoteMcpHandler = { name: 'remote-mcp-fn' };
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    lambda.send.mockRejectedValueOnce(new Error('ETIMEDOUT'));
+    const id = seed('/mcp');
+    await expect(
+      invokeRemoteMcp({ action: 'listTools', connectionId: id, userId: 'user-1' }, { context: context() })
+    ).rejects.toThrow('Remote MCP handler invocation failed');
+    expect(lambda.send).toHaveBeenCalledTimes(1);
+    expect(state.audits[0]).toMatchObject({ outcome: 'failure', errorCode: 'internal_error' });
+  });
+
+  it('a typed auth_failed from the Lambda keeps its class and does not trip the breaker', async () => {
+    state.resource.remoteMcpHandler = { name: 'remote-mcp-fn' };
+    const id = seed('/mcp');
+    const wire = { ok: false, error: { code: 'auth_failed', message: 'no', scope: 'tools.read' } };
+    for (let i = 0; i < 8; i++) {
+      lambda.send.mockImplementationOnce(lambdaReply(wire));
+      const error = await invokeRemoteMcp(
+        { action: 'listTools', connectionId: id, userId: 'user-1' },
+        { context: context() }
+      ).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(RemoteMcpAuthFailedError);
+      expect(error).toMatchObject({ scope: 'tools.read' });
+    }
+    expect(lambda.send).toHaveBeenCalledTimes(8);
+  });
+
+  it('a Lambda ssrf_blocked is still masked on hosted, with the real code audited', async () => {
+    state.resource.remoteMcpHandler = { name: 'remote-mcp-fn' };
+    const id = seed('/mcp');
+    lambda.send.mockImplementationOnce(
+      lambdaReply({ ok: false, error: { code: 'ssrf_blocked', message: 'resolves to 10.0.0.5' } })
+    );
+    const error = await invokeRemoteMcp(
+      { action: 'listTools', connectionId: id, userId: 'user-1' },
+      { context: context() }
+    ).catch((e: unknown) => e as RemoteMcpError);
+    expect(error).toMatchObject({ code: 'protocol', message: 'The server did not respond as an MCP server' });
+    expect(state.audits[0]).toMatchObject({ outcome: 'failure', errorCode: 'ssrf_blocked' });
   });
 });
 

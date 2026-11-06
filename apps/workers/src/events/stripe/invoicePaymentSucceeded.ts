@@ -1,6 +1,6 @@
 import { userRepository } from '@bike4mind/database';
-import { StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
-import { SubscriptionMetadata, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { StripeSubscriptionMetadataSchema } from '@bike4mind/server-utils/lib/subscriptions/schema';
+import { SubscriptionMetadata, SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import {
   handleUserSubscriptionInvoice,
   handleOrganizationSubscriptionInvoice,
@@ -10,8 +10,11 @@ import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { withEventContext } from '@workers/utils/eventContext';
-import { postNewSubscriptionToSlack } from '@server/integrations/slack/slack';
+import { postNewPaidSubscriptionToSlack } from '@server/integrations/slack/subscriptionLifecycle';
 import { emitPurchaseEvents } from '@server/analytics/signupEvents';
+import { subscriptionCheckoutVisitId, subscriptionPeriodEnd } from '@server/analytics/billingEventDetails';
+import { recordSubscriptionPaymentReward } from '@server/referrals/subscriptionReward';
+import { unlockSignupGrantFromSubscription } from '@server/credits/subscriptionUnlock';
 
 export const handler = withEventContext(async (event, logger) => {
   const { invoiceId, subscriptionId } = StripeEvents.InvoicePaymentSucceeded.schema.parse(event.properties);
@@ -71,25 +74,16 @@ export const handler = withEventContext(async (event, logger) => {
     ownerType: metadata.ownerType || 'User (legacy)',
   });
 
-  // Announce first charges only. `subscription_create` is Stripe's own marker for
+  // Announce first paid charges only. `subscription_create` is Stripe's own marker for
   // the invoice that opens a subscription; `subscription_cycle` is a renewal and
-  // would post monthly per customer. Placed after the work above so the message
-  // means the subscription and credits actually landed.
+  // would post monthly per customer. A $0 opening invoice (a full-discount coupon;
+  // checkout never sets a trial) is not a paid subscription. Placed after the work
+  // above so the message means the subscription and credits actually landed.
   //
-  // Awaited but non-throwing by construction (postNewSubscriptionToSlack swallows
-  // its own errors): this handler retrying would re-run credit granting, so a
-  // Slack outage must not be able to cause that.
-  if (invoice.billing_reason === 'subscription_create') {
-    const lineItem = invoice.lines?.data?.[0];
-    await postNewSubscriptionToSlack({
-      planName: lineItem?.description ?? 'Subscription',
-      // Stripe reports minor units; en-US currency formatting expects major.
-      amount: (invoice.amount_paid ?? 0) / 100,
-      currency: invoice.currency ?? 'usd',
-      invoiceId,
-      email: invoice.customer_email ?? undefined,
-      ownerType: metadata.ownerType,
-    });
+  // Awaited but non-throwing by construction: this handler retrying would re-run
+  // credit granting, so a Slack outage must not be able to cause that.
+  if (invoice.billing_reason === 'subscription_create' && invoice.amount_paid > 0) {
+    await postNewPaidSubscriptionToSlack(invoice, subscription);
   }
 
   // An organization subscription belongs to the organization, not the user who started checkout.
@@ -105,6 +99,26 @@ export const handler = withEventContext(async (event, logger) => {
         error,
       });
     }
+    // A $0 invoice (card verification, full-discount coupon) is not a paid subscription. Non-throwing:
+    // a retry of this handler would re-run credit granting.
+    if (invoice.amount_paid > 0) {
+      if (subscription.status !== 'active' && subscription.status !== 'trialing') {
+        logger.warn(`Signup grant not released: subscription is not active for invoice ${invoiceId}`, {
+          subscriptionId: subscription.id,
+          status: subscription.status,
+        });
+      } else {
+        try {
+          await unlockSignupGrantFromSubscription(metadata.userId, logger);
+        } catch (error) {
+          logger.error(`Signup grant not released for invoice ${invoiceId}`, { error });
+        }
+      }
+    }
+    // Only the opening invoice was paid in a visit: the buyer opened Checkout from the browser.
+    // A renewal or a seat change happened in none, so it is not looked up (one Stripe read).
+    const visitId =
+      invoice.billing_reason === 'subscription_create' ? await subscriptionCheckoutVisitId(subscription.id) : undefined;
     await emitPurchaseEvents({
       user: payer,
       paymentId: invoiceId,
@@ -112,6 +126,9 @@ export const handler = withEventContext(async (event, logger) => {
       amountMinor: invoice.amount_paid,
       currency: invoice.currency,
       billingReason: invoice.billing_reason,
+      visitId,
+      periodEnd: subscriptionPeriodEnd(invoice),
     });
+    await recordSubscriptionPaymentReward({ invoice, subscription, payerId: metadata.userId });
   }
 });

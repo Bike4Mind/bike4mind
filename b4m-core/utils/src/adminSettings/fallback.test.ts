@@ -6,6 +6,7 @@ import {
   getLlmWithFallback,
   findFallbackForMissingModel,
   isSafetyRefusalError,
+  isProviderSpendLimitError,
   getHttpStatus,
 } from './fallback';
 import { AxiosError } from 'axios';
@@ -16,6 +17,9 @@ import {
   LlmTimeoutError,
   createAnthropicRequestTimeoutError,
   createAnthropicStreamTimeoutError,
+  bedrockEmptyResponseMessage,
+  OutputBudgetExhaustedError,
+  StreamEndedWithoutFinishError,
 } from '@bike4mind/llm-adapters';
 
 // Helper to create mock Axios errors
@@ -48,6 +52,20 @@ function createAwsSdkError(name: string, httpStatusCode?: number, message?: stri
 }
 
 describe('shouldTriggerFallback', () => {
+  describe('empty reasoning turns', () => {
+    it('falls back on a stream that ended without a finish reason', () => {
+      expect(shouldTriggerFallback(new StreamEndedWithoutFinishError('DeepSeek', 'deepseek-flash'))).toBe(true);
+    });
+
+    it('does not fall back on an exhausted output budget, which fails the same way again', () => {
+      expect(shouldTriggerFallback(new OutputBudgetExhaustedError('DeepSeek', 'deepseek-flash'))).toBe(false);
+    });
+  });
+
+  it('returns true for a Bedrock empty stream that stalled without a terminal event', () => {
+    expect(shouldTriggerFallback(new Error(bedrockEmptyResponseMessage('m', 'r', true)))).toBe(true);
+  });
+
   describe('Anthropic API errors', () => {
     it('should return true for overloaded_error from Anthropic API', () => {
       const error = new Error(
@@ -190,6 +208,15 @@ describe('shouldTriggerFallback', () => {
       const error = new TypeError('terminated');
       expect(shouldTriggerFallback(error)).toBe(true);
     });
+
+    it('should return true for TypeError: fetch failed (undici/fetch)', () => {
+      const error = new TypeError('fetch failed', { cause: Object.assign(new Error('x'), { code: 'ECONNRESET' }) });
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should not treat a non-TypeError "fetch failed" as a transport failure', () => {
+      expect(shouldTriggerFallback(new Error('fetch failed'))).toBe(false);
+    });
   });
 
   describe('Model-specific error messages', () => {
@@ -271,6 +298,58 @@ describe('shouldTriggerFallback', () => {
       const error = createAxiosError(404);
       expect(shouldTriggerFallback(error)).toBe(false);
     });
+  });
+});
+
+describe('isProviderSpendLimitError', () => {
+  // The SDK error shape: a bare numeric `status` and the provider body in the message.
+  const providerError = (status: number, message: string) => Object.assign(new Error(message), { status });
+
+  const anthropicUsageLimit = providerError(
+    400,
+    '400 {"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC."}}'
+  );
+  const anthropicCreditBalance = providerError(
+    400,
+    '400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}'
+  );
+  const openaiQuota = providerError(
+    429,
+    '429 You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.'
+  );
+
+  it.each([
+    ['Anthropic usage limit', anthropicUsageLimit],
+    ['Anthropic credit balance', anthropicCreditBalance],
+    ['OpenAI insufficient_quota', openaiQuota],
+  ])('classifies the %s refusal as a spend limit that falls back', (_label, error) => {
+    expect(isProviderSpendLimitError(error)).toBe(true);
+    expect(shouldTriggerFallback(error)).toBe(true);
+  });
+
+  it('never classifies a spend limit as overload, so the same model is not retried with backoff', () => {
+    expect(isOverloadedError(anthropicUsageLimit)).toBe(false);
+    expect(isOverloadedError(openaiQuota)).toBe(false);
+  });
+
+  it('leaves an ordinary 400 and a plain rate limit alone', () => {
+    const badRequest = providerError(400, '400 messages: text content blocks must be non-empty');
+    expect(isProviderSpendLimitError(badRequest)).toBe(false);
+    expect(shouldTriggerFallback(badRequest)).toBe(false);
+
+    const rateLimited = providerError(
+      429,
+      '429 rate_limit_error: Number of request tokens has exceeded your rate limit'
+    );
+    expect(isProviderSpendLimitError(rateLimited)).toBe(false);
+    expect(isOverloadedError(rateLimited)).toBe(true);
+
+    const geminiRateLimited = providerError(
+      429,
+      '{"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. Please retry in 41s.","status":"RESOURCE_EXHAUSTED"}}'
+    );
+    expect(isProviderSpendLimitError(geminiRateLimited)).toBe(false);
+    expect(isOverloadedError(geminiRateLimited)).toBe(true);
   });
 });
 
@@ -586,6 +665,56 @@ describe('getLlmWithFallback - Bedrock cross-path fallback chains', () => {
     );
     expect(result).not.toBeNull();
     expect(result!.model.id).toBe('gpt-5');
+  });
+});
+
+describe('getLlmWithFallback - excludeBackends (provider spend limit)', () => {
+  const opus55 = createModelInfo({ id: 'claude-opus-5-5', backend: ModelBackend.Anthropic });
+  const opus5 = createModelInfo({ id: 'claude-opus-5', backend: ModelBackend.Anthropic });
+  const opus55Bedrock = createModelInfo({ id: 'global.anthropic.claude-opus-5-5', backend: ModelBackend.Bedrock });
+  const opus5Bedrock = createModelInfo({ id: 'global.anthropic.claude-opus-5', backend: ModelBackend.Bedrock });
+  const gpt5 = createModelInfo({ id: 'gpt-5', backend: ModelBackend.OpenAI });
+  const apiKeyTable = { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>;
+  const anthropicOut = new Set<string>([ModelBackend.Anthropic]);
+
+  const fallBack = (models: ModelInfo[], options: Parameters<typeof getLlmWithFallback>[5] = {}, frontend?: string) =>
+    getLlmWithFallback(opus55, frontend, models, apiKeyTable, mockLogger, {
+      excludeModelIds: new Set([opus55.id]),
+      excludeBackends: anthropicOut,
+      ...options,
+    });
+
+  it('moves the same model to its Bedrock route even though Bedrock has no key', async () => {
+    const result = await fallBack([opus55, opus5, opus5Bedrock, opus55Bedrock, gpt5]);
+    expect(result?.model.id).toBe(opus55Bedrock.id);
+    expect(result?.attempt).toBe(1);
+  });
+
+  it('skips every model on the exhausted backend when no Bedrock route is listed', async () => {
+    const result = await fallBack([opus55, opus5, gpt5]);
+    expect(result?.model.id).toBe('gpt-5');
+  });
+
+  it('drops a frontend fallback on the exhausted backend in favour of the Bedrock route', async () => {
+    const result = await fallBack([opus55, opus5, opus55Bedrock, gpt5], {}, opus5.id);
+    expect(result?.model.id).toBe(opus55Bedrock.id);
+  });
+
+  it('does not return to a Bedrock route that already failed this request', async () => {
+    const result = await fallBack([opus55, opus5, opus55Bedrock, gpt5], {
+      excludeModelIds: new Set([opus55.id, opus55Bedrock.id]),
+    });
+    expect(result?.model.id).toBe('gpt-5');
+  });
+
+  it('skips a disabled Bedrock route', async () => {
+    const result = await fallBack([opus55, { ...opus55Bedrock, disabled: true }, gpt5]);
+    expect(result?.model.id).toBe('gpt-5');
+  });
+
+  it('keeps the direct tier chain when nothing is excluded', async () => {
+    const result = await fallBack([opus55, opus5, opus55Bedrock, gpt5], { excludeBackends: new Set() });
+    expect(result?.model.id).toBe(opus5.id);
   });
 });
 

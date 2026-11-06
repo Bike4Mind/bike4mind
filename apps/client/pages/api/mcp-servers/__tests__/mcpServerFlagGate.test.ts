@@ -35,9 +35,9 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: spies.assertMcpServerEnabled }));
-vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: spies.invokeMcpHandler }));
+vi.mock('@bike4mind/server-utils/utils/invokeMcpHandler', () => ({ invokeMcpHandler: spies.invokeMcpHandler }));
 vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptEnvVariables: (value: unknown) => value,
   decryptEnvVariables: (value: unknown) => value,
 }));

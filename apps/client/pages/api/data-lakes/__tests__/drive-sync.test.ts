@@ -44,10 +44,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: (flag: string) => (h.gatedFlags.push(flag), () => {}),
 }));
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
 // common.ts reads Config at import (needs a real SST Resource), so importOriginal crashes: take the real
 // isTerminalDriveGrantError from its Config-free module instead.
-vi.mock('@server/integrations/google/drive/common', async () => ({
+vi.mock('@bike4mind/server-utils/integrations/google/drive/common', async () => ({
   getValidUserDriveAccessToken: h.getValidUserDriveAccessToken,
   isTerminalDriveGrantError: (
     await vi.importActual<typeof import('@bike4mind/server-utils/integrations/google/drive/driveGrantErrors')>(
@@ -65,7 +65,7 @@ vi.mock('@bike4mind/server-utils/integrations/google/drive/driveClient', async i
     probeConnectedFolder: h.probeConnectedFolder,
   };
 });
-vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: h.decryptToken }));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ decryptToken: h.decryptToken }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ isEncrypted: h.isEncrypted }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('sst', () => ({ Resource: { driveLakeIngestQueue: { url: 'queue-url' } } }));

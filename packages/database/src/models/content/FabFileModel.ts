@@ -19,6 +19,7 @@ import {
   type LakeSupersession,
   DocumentDateSource,
   FabFileSourceType,
+  GENERATED_ASSET_LINEAGE_ROLES,
   KnowledgeType,
   countTagPathsByTagSet,
   normalizeTagPrefix,
@@ -3516,7 +3517,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return fabFileIds;
   }
 
-  async hardDeleteWithChunks(fabFileId: string, chunkBatchSize = 1000): Promise<void> {
+  async hardDeleteWithChunks(
+    fabFileId: string,
+    chunkBatchSize = 1000,
+    beforeBatch?: () => Promise<void>
+  ): Promise<void> {
     if (!Number.isInteger(chunkBatchSize) || chunkBatchSize < 1 || chunkBatchSize > 1000) {
       throw new Error('Cleanup chunk batch size must be between 1 and 1000');
     }
@@ -3532,6 +3537,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       throw new LegalHoldError(`Cannot hard-delete FabFile ${fabFileId}: moderationStatus is 'blocked' (legal hold)`);
     }
     for (;;) {
+      await beforeBatch?.();
       const chunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
         .limit(chunkBatchSize + 1)
         .lean();
@@ -3543,6 +3549,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         continue;
       }
       const completed = await withTransaction(async () => {
+        await beforeBatch?.();
         // Include chunks committed between the candidate read and transaction start.
         const finalChunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
           .limit(chunkBatchSize + 1)
@@ -4027,6 +4034,7 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     moderationRevision: { type: Number, required: false },
     // See IFabFile.clientUpload and packages/server-utils/src/s3/uploadSizeGate.ts.
     clientUpload: { type: Boolean, required: false },
+    apiKeyId: { type: String, required: false },
     uploadRejectedAt: { type: Date, required: false },
     // Failed-attempt bookkeeping for the rescue sweep's fairness ordering and backoff - see
     // IFabFile.moderationAttempts / .moderationLastAttemptAt. Left unset (not defaulted to 0) so
@@ -4035,6 +4043,8 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     moderationLastAttemptAt: { type: Date, required: false },
     // See IFabFile.storageChargedAt and packages/server-utils/src/s3/storageCharge.ts.
     storageChargedAt: { type: Date, required: false },
+    // Server-stamped only; claimStorageCharge never charges an exempt row (see IFabFile.storageExempt).
+    storageExempt: { type: Boolean, required: false },
     error: { type: String, required: false },
     presignedUrl: { type: String },
     fileUrl: { type: String },
@@ -4042,10 +4052,8 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     sessionId: { type: String, required: false },
     notes: { type: String, default: '' },
     // The owner's note and the two pipeline markers are separate fields on purpose (#2016) - see
-    // IFabFile.notes. The enum documents the allowed values but does NOT enforce them at runtime:
-    // mongoose skips validators on update paths unless the caller passes `runValidators: true`, and
-    // no writer here does. TypeScript is what actually stops a typo producing a value
-    // `isChunkStalled` silently reads as "not stalled".
+    // IFabFile.notes. The enum is enforced on updates by rejectOutOfEnumStatusUpdate below, so a
+    // typo cannot store a value `isChunkStalled` silently reads as "not stalled".
     chunkStallReason: { type: String, enum: [...CHUNK_STALL_REASONS, null], default: null },
     noExtractableTextAt: { type: Date, default: null },
     contentHash: { type: String },
@@ -4064,6 +4072,20 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // per-source origin (for Slack: channel + message ts) that makes an ingested file auditable.
     sourceType: { type: String, enum: Object.values(FabFileSourceType), required: false },
     sourceMetadata: { type: Schema.Types.Mixed, required: false },
+    // Generated-asset lineage, see IFabFile.derivedFrom. `default: undefined` so files without it store nothing.
+    derivedFrom: {
+      type: [
+        new Schema(
+          {
+            fileId: { type: String, required: true },
+            jobId: { type: String },
+            role: { type: String, enum: GENERATED_ASSET_LINEAGE_ROLES, required: true },
+          },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
     // The document's own vintage plus where it came from (#3048) - see IFabFile's field docs. Both
     // stay unset unless a source actually offered one; there is deliberately no createdAt fallback.
     documentDate: { type: Date },
@@ -4123,6 +4145,49 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
 
 FabFileSchema.plugin(softDeletePlugin);
 
+// Mongoose runs schema enums on create/save only; update paths skip them unless the caller passes
+// `runValidators`. Gating these paths here instead covers every writer, including the repository's
+// generic update(). Not `runValidators` via this hook: that would also validate every other path
+// in the same update. Pipeline updates are checked for literal values only; an expression (`$cond`,
+// a `$field` reference) is computed server-side and cannot be checked before the write.
+const ENUM_GATED_UPDATE_PATHS = ['status', 'moderationStatus', 'chunkStallReason'] as const;
+
+function rejectOutOfEnumStatusUpdate(this: mongoose.Query<unknown, unknown>): void {
+  const update = this.getUpdate();
+  if (!update) return;
+  const containers: unknown[] = Array.isArray(update)
+    ? update.flatMap((stage: Record<string, unknown>) => [stage?.$set, stage?.$addFields])
+    : [update, update.$set, update.$setOnInsert];
+  const isPipeline = Array.isArray(update);
+  for (const container of containers) {
+    if (!container || typeof container !== 'object') continue;
+    for (const path of ENUM_GATED_UPDATE_PATHS) {
+      if (!Object.hasOwn(container, path)) continue;
+      const value: unknown = (container as Record<string, unknown>)[path];
+      if (value == null) continue;
+      if (isPipeline && (typeof value === 'object' || (typeof value === 'string' && value.startsWith('$')))) continue;
+      const allowed: readonly unknown[] = FabFileSchema.path(path).options.enum;
+      if (typeof value === 'string' && allowed.includes(value)) continue;
+      const error = new mongoose.Error.ValidationError();
+      error.addError(
+        path,
+        new mongoose.Error.ValidatorError({
+          path,
+          value,
+          type: 'enum',
+          message: `\`${String(value)}\` is not a valid enum value for path \`${path}\`.`,
+        })
+      );
+      throw error;
+    }
+  }
+}
+
+FabFileSchema.pre(
+  ['updateOne', 'updateMany', 'findOneAndUpdate', 'replaceOne', 'findOneAndReplace'],
+  rejectOutOfEnumStatusUpdate
+);
+
 // Add critical FabFiles indexes for performance optimization
 FabFileSchema.index({ isChunk: 1, userId: 1 });
 FabFileSchema.index({ deletedAt: 1, userId: 1, sessionId: 1, createdAt: 1 });
@@ -4174,8 +4239,8 @@ FabFileSchema.index({ userId: 1, 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 // the prefix arm both bound on it, and some callers filter on nothing else.
 //
 // Pre-built by 20260907000000_ensure-fabfile-tagname-filename-index rather than left to autoIndex:
-// prod runs DocumentDB, where the build takes a foreground lock, and autoIndex would take it lazily
-// on a cold boot of whichever Lambda touches this collection first.
+// autoIndex builds are fire-and-forget (a failure is silent) and would start lazily on a cold boot
+// of whichever Lambda touches this collection first.
 FabFileSchema.index({ 'tags.name': 1, fileName: 1, deletedAt: 1 });
 
 // Content hash deduplication lookups
@@ -4222,6 +4287,13 @@ FabFileSchema.index(
   { partialFilterExpression: { sourceType: FabFileSourceType.TOOL_GENERATED } }
 );
 
+// Reverse lineage lookup ("what was made from this file"). Partial like the sessionId index above.
+// Pre-built by 20260921235976_ensure-fabfile-derived-from-index.
+FabFileSchema.index(
+  { 'derivedFrom.fileId': 1, deletedAt: 1 },
+  { partialFilterExpression: { sourceType: FabFileSourceType.TOOL_GENERATED } }
+);
+
 // Moderation queue / audit lookups
 FabFileSchema.index({ userId: 1, moderationStatus: 1 });
 
@@ -4232,10 +4304,21 @@ FabFileSchema.index(
   { partialFilterExpression: { organizationId: { $type: 'string' } } }
 );
 
+// An org pool's recent client uploads (apps/client/server/files/pendingUploads.ts), including
+// completed rows whose charge transaction has not committed. Pre-built by
+// 20260921239800_ensure-fabfile-pending-upload-index.
+FabFileSchema.index(
+  { organizationId: 1, createdAt: 1 },
+  {
+    name: 'organizationId_1_createdAt_1_clientUpload',
+    partialFilterExpression: { organizationId: { $type: 'string' }, clientUpload: true },
+  }
+);
+
 // Public v1 file list (listOwnedBeforeId): equality on the owned/live/unarchived filter, then the
 // `_id` keyset (scanned in reverse for newest first), so each page streams in order instead of sorting the user's whole file set.
-// Pre-built by 20260921235994_ensure-fabfile-owned-keyset-index rather than left to autoIndex: prod
-// runs DocumentDB, where the build takes a foreground lock on a cold Lambda boot.
+// Pre-built by 20260921235994_ensure-fabfile-owned-keyset-index rather than left to autoIndex: the
+// build is fire-and-forget and would start on a cold Lambda boot, on a user request.
 FabFileSchema.index({ userId: 1, deletedAt: 1, archivedAt: 1, _id: 1 });
 
 // Serves both moderation rescue sweep queries (moderationRescueSweep.ts): the stale-'pending'

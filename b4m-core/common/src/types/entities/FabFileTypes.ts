@@ -1,3 +1,4 @@
+import type { GeneratedAssetLineageEntry } from '../../generatedAsset';
 import { type ChunkStallReason } from '../../constants/chunking';
 import type { MembershipArm } from '../../constants/lakeMembershipHealth';
 import { IBaseRepository, type IMongoDocument } from '.';
@@ -77,6 +78,12 @@ export enum FabFileSourceType {
    * remove (see generatedCopyKeyOf).
    */
   TOOL_GENERATED = 'tool_generated',
+  /**
+   * A markdown file converted from a legacy QuestMaster plan or graph. `sourceMetadata` is
+   * `{ sourceKind: 'quest-plan' | 'quest-graph', sourceId, sourceUpdatedAt }`; (userId, sourceId)
+   * keys the conversion's idempotency. Rows carry `storageExempt`.
+   */
+  QUESTMASTER_ARCHIVE = 'questmaster_archive',
 }
 
 /**
@@ -493,6 +500,12 @@ export interface IFabFile {
    */
   clientUpload?: boolean;
 
+  /**
+   * The UserApiKey that requested the upload (pages/api/v1/files). Its indexing charge is billed later
+   * in apps/workers/src/queueHandlers/fabFileVectorize.ts, which stamps this on the ledger row.
+   */
+  apiKeyId?: string;
+
   /** Keeps rejected upload tombstones discoverable for object cleanup on event redelivery. */
   uploadRejectedAt?: Date;
 
@@ -505,6 +518,13 @@ export interface IFabFile {
    * (common/src/storageCharge.ts), which also covers the pre-stamp legacy rows.
    */
   storageChargedAt?: Date;
+
+  /**
+   * The S3 upload claim (`claimStorageCharge`) never charges this row, so the bytes the server wrote
+   * stay uncharged. A later user rewrite (`commitContentRewrite`) still charges normally. Server-stamped
+   * only, via the `storageExempt` adapter of createFabFile; it is not a field of any request schema.
+   */
+  storageExempt?: boolean;
 
   /**
    * How many moderation scan attempts have been made on this row and failed without reaching a
@@ -546,6 +566,11 @@ export interface IFabFile {
    * body, or a caller could forge the audit trail this exists to provide.
    */
   sourceMetadata?: Record<string, unknown>;
+  /**
+   * For generated files: the FabFiles this one was made from, typed by role. Server-supplied only -
+   * never accepted from a request body - and only real FabFile ids.
+   */
+  derivedFrom?: GeneratedAssetLineageEntry[];
   /** Whether this file was automatically processed (vs manual upload) */
   automaticallyProcessed?: boolean;
   /** Metadata for data lake files */

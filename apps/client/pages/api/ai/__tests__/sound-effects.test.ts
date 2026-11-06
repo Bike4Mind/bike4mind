@@ -1,3 +1,12 @@
+import { ForbiddenError } from '@bike4mind/utils';
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: vi.fn(async () => ({
+    assert: vi.fn(async (_modelId: string) => {}),
+    admits: vi.fn(async (_modelId: string) => true),
+  })),
+}));
+
 import { CREDITS_PER_USD_COST, CreditHolderType, isZodError } from '@bike4mind/common';
 import { adminSettingsRepository, cacheRepository } from '@bike4mind/database';
 import { createMocks } from 'node-mocks-http';
@@ -142,6 +151,11 @@ vi.mock('@bike4mind/database', () => ({
     findById: (...a: unknown[]) => findById(...a),
     incrementCredits: (...a: unknown[]) => userIncrement(...a),
   },
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
 // Keep the real pure cap helper and the real membership predicate so org-billed tests exercise
 // the actual decisions the handler depends on; only the write (deductCreditsWithOrgSupport) is
@@ -174,7 +188,7 @@ vi.mock('@bike4mind/utils', async importActual => ({
   getSettingsValue: (...a: unknown[]) => getSettingsValue(...a),
   getSettingsMap: (...a: unknown[]) => getSettingsMap(...a),
 }));
-vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
+vi.mock('@bike4mind/server-utils/utils/saveGeneratedAssetToFiles', () => ({
   saveGeneratedAssetToFiles: (...a: unknown[]) => saveGeneratedAssetToFiles(...a),
 }));
 
@@ -249,6 +263,21 @@ beforeEach(() => {
 });
 
 describe('POST /api/ai/sound-effects', () => {
+  it('refuses an unlisted model before holding credits or calling the provider', async () => {
+    const refusal = new ForbiddenError('paid plan required', { errorCode: 'model_requires_subscription' });
+    const assertAdmission = vi.fn(async (_modelId: string) => {
+      throw refusal;
+    });
+    vi.mocked(createModelAdmission).mockResolvedValueOnce({ assert: assertAdmission, admits: async () => false });
+    const { promise, res } = run({ text: 'a sound' });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(createModelAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }));
+    expect(assertAdmission).toHaveBeenCalledWith('eleven_text_to_sound_v2');
+    expect(userIncrement).not.toHaveBeenCalled();
+    expect(generate).not.toHaveBeenCalled();
+  });
+
   it('passes skipCache for enforceCredits so an admin flip applies on the next request', async () => {
     getSettingsValue.mockReturnValue(true);
     estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
@@ -448,6 +477,7 @@ describe('POST /api/ai/sound-effects', () => {
           prompt: 'rain',
           durationSeconds: 3,
           promptInfluence: 0.6,
+          request: expect.objectContaining({ text: 'rain', durationSeconds: 3, promptInfluence: 0.6 }),
         },
       },
       expect.anything()

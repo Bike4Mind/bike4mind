@@ -1,5 +1,20 @@
 import { describe, it, expect } from 'vitest';
-import { accountBlockReasons, entersBlockedState, isAiAccessRevoked, type AccountStateFields } from './accountState';
+import {
+  ACCOUNT_BANNED_MESSAGE,
+  ACCOUNT_DISPUTE_PENDING_MESSAGE,
+  ACCOUNT_SUSPENDED_MESSAGE,
+  accountBlockReasons,
+  accountBlockedMessage,
+  aiAccessDeniedMessage,
+  AI_ACCESS_DELETION_PENDING_MESSAGE,
+  AI_ACCESS_PENDING_REVIEW_MESSAGE,
+  AI_ACCESS_REVOKED_MESSAGE,
+  entersBlockedState,
+  entersSuspension,
+  suspensionReasons,
+  isAiAccessRevoked,
+  type AccountStateFields,
+} from './accountState';
 
 const clean: AccountStateFields = {};
 
@@ -69,6 +84,34 @@ describe('entersBlockedState', () => {
   });
 });
 
+describe('suspensionReasons', () => {
+  it('omits the dispute hold', () => {
+    expect(suspensionReasons({ isBanned: true, disputePending: true })).toEqual(['banned']);
+    expect(suspensionReasons({ disputePending: true })).toEqual([]);
+  });
+});
+
+describe('entersSuspension', () => {
+  it.each([
+    ['ban', { isBanned: true }],
+    ['suspension', { moderation: { status: 'suspended' as const } }],
+  ])('is true when the account becomes %s', (_label, next) => {
+    expect(entersSuspension(clean, next)).toBe(true);
+  });
+
+  it('is true when a suspension lands on a disputed account', () => {
+    expect(entersSuspension({ disputePending: true }, { disputePending: true, isBanned: true })).toBe(true);
+  });
+
+  it.each([
+    ['a dispute flag alone', clean, { disputePending: true }],
+    ['re-banning a banned account', { isBanned: true }, { isBanned: true }],
+    ['unbanning', { isBanned: true }, { isBanned: false }],
+  ])('is false on %s', (_label, previous, next) => {
+    expect(entersSuspension(previous, next)).toBe(false);
+  });
+});
+
 describe('isAiAccessRevoked', () => {
   it('revokes AI access for a moderated user', () => {
     expect(isAiAccessRevoked({ isModerated: true })).toBe(true);
@@ -80,5 +123,64 @@ describe('isAiAccessRevoked', () => {
 
   it('is not an account block reason, so a moderated user can still sign in', () => {
     expect(accountBlockReasons({ isModerated: true } as AccountStateFields)).toEqual([]);
+  });
+});
+
+describe('accountBlockedMessage', () => {
+  it('names the first block reason and ignores AI-only restrictions', () => {
+    expect(accountBlockedMessage({ disputePending: true })).toBe(ACCOUNT_DISPUTE_PENDING_MESSAGE);
+    expect(accountBlockedMessage({ isModerated: true } as AccountStateFields)).toBeNull();
+    expect(accountBlockedMessage(clean)).toBeNull();
+  });
+});
+
+describe('aiAccessDeniedMessage', () => {
+  it('holds AI access during signup review without blocking sign-in or revoking manual access', () => {
+    const user = { isBanned: false, isModerated: false, riskScore: { reviewState: 'pending' as const } };
+    expect(aiAccessDeniedMessage(user)).toBe(AI_ACCESS_PENDING_REVIEW_MESSAGE);
+    expect(accountBlockReasons(user)).toEqual([]);
+    expect(isAiAccessRevoked(user)).toBe(false);
+  });
+
+  it.each(['none', 'approved'] as const)('allows AI access for review state %s', reviewState => {
+    expect(aiAccessDeniedMessage({ riskScore: { reviewState } })).toBeNull();
+  });
+
+  it.each([null, undefined])('allows existing accounts with riskScore %s', riskScore => {
+    expect(aiAccessDeniedMessage({ riskScore })).toBeNull();
+  });
+
+  it.each(['pending', 'approved'] as const)('preserves a manual restriction when review is %s', reviewState => {
+    expect(aiAccessDeniedMessage({ isModerated: true, riskScore: { reviewState } })).toBe(AI_ACCESS_REVOKED_MESSAGE);
+  });
+
+  it.each([
+    [{ isBanned: true }, ACCOUNT_BANNED_MESSAGE],
+    [{ disputePending: true }, ACCOUNT_DISPUTE_PENDING_MESSAGE],
+    [{ moderation: { status: 'suspended' as const } }, ACCOUNT_SUSPENDED_MESSAGE],
+  ])('denies AI access to a blocked account %o', (state, message) => {
+    expect(aiAccessDeniedMessage(state)).toBe(message);
+    expect(aiAccessDeniedMessage({ ...state, riskScore: { reviewState: 'approved' } })).toBe(message);
+  });
+
+  it('reports the block reason ahead of a manual restriction, in accountBlockReasons order', () => {
+    expect(aiAccessDeniedMessage({ isBanned: true, disputePending: true, isModerated: true })).toBe(
+      ACCOUNT_BANNED_MESSAGE
+    );
+  });
+
+  it.each(['suspend_pending', 'throttled'] as const)('does not deny AI access for moderation status %s', status => {
+    expect(aiAccessDeniedMessage({ moderation: { status } })).toBeNull();
+  });
+
+  it('allows a clean account', () => {
+    expect(aiAccessDeniedMessage({ isBanned: false, disputePending: false, isModerated: false })).toBeNull();
+  });
+
+  it('denies AI access while the account is scheduled for deletion, behind a block reason', () => {
+    const deletion = { scheduledFor: new Date('2026-11-17T00:00:00.000Z') };
+    expect(aiAccessDeniedMessage({ deletion })).toBe(AI_ACCESS_DELETION_PENDING_MESSAGE);
+    expect(aiAccessDeniedMessage({ deletion, isBanned: true })).toBe(ACCOUNT_BANNED_MESSAGE);
+    expect(aiAccessDeniedMessage({ deletion: null })).toBeNull();
   });
 });

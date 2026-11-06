@@ -20,7 +20,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   orgGitHubConnectionRepository: { findSystemDefault: h.findSystemDefault, update: h.update },
   withTransaction: (fn: () => Promise<unknown>) => fn(),

@@ -13,6 +13,7 @@ import { closeBrowsersOnScopeChange } from './chat/browser/browserScope';
 import { resolveUserPath } from './chat/tools/userPath';
 import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlog';
 import { registerFleet } from './fleet';
+import { registerModels } from './models';
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
 import { isExternallyOpenable } from '@shared/externalLinks';
@@ -20,6 +21,7 @@ import { persistConsoleWarnings } from './logFile';
 import { registerUpdates } from './update';
 import { registerTerminals } from './terminal';
 import { registerUsage } from './usage';
+import { registerAttention } from './attention';
 import { appWindows } from './windows';
 
 // electron-vite sets this in dev only; a packaged build loads the renderer off disk.
@@ -125,6 +127,7 @@ void app.whenReady().then(async () => {
   // After ready, not before: safeStorage is only usable once the app is ready, and the vault
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
+  registerAttention();
   registerAccount(auth);
   registerUsage(auth);
   const fleet = registerFleet();
@@ -133,13 +136,29 @@ void app.whenReady().then(async () => {
     background,
     mcp,
     browser,
+    simulatorView,
     pullRequests,
     claudeImport,
     spareWorktrees,
+    modelServers,
+    stopModelServers,
+    localContext,
+    modelSettings,
+    capabilityLedger,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
+    releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
     observeStream: event => fleet.observe(event),
+    cancelModelPull: key => models.stop(key),
+    pinnedProjectors: () => models.pinnedProjectors(),
+    catalogSampling: ({ name, modelBlob, parameters, hasAdapter }) =>
+      models.catalogSampling(name, modelBlob, parameters, hasAdapter),
   });
+  const models = registerModels(
+    modelServers,
+    { localContext: () => localContext.read(), modelSettings: modelId => modelSettings.get(modelId) },
+    capabilityLedger
+  );
   fleet.setDirectoryResolver(async sessionId => {
     const session = await chat.getSession(sessionId);
     return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;
@@ -218,7 +237,9 @@ void app.whenReady().then(async () => {
   app.once('will-quit', () => {
     auth.dispose();
     fleet.dispose();
+    models.dispose();
     chat.dispose();
+    stopModelServers();
     claudeImport.dispose();
     pullRequests.dispose();
     updates.dispose();
@@ -228,11 +249,11 @@ void app.whenReady().then(async () => {
     mcp.shutdownSync();
     terminals.shutdownSync();
     browser.closeAll();
+    simulatorView.dispose();
   });
 
-  // Ctrl-C in a dev terminal, or a `kill` of the app. Our children are detached into their own
-  // process groups precisely so one signal can reach a whole command tree - which also means a
-  // terminal interrupt never reaches them on its own.
+  // Ctrl-C in a dev terminal, or a `kill` of the app. Children other than WSL commands lead their own
+  // process groups, so a terminal interrupt does not reach them on its own (see `spawnsDetached`).
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
     process.on(signal, () => {
       background.shutdownSync();

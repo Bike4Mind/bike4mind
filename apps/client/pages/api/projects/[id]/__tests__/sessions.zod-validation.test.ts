@@ -51,7 +51,7 @@ vi.mock('@bike4mind/services', () => ({
     listSessions: vi.fn(),
   },
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/utils/eventBus', () => ({ SessionEvents: { Summarize: { publish: vi.fn() } } }));
 vi.mock('@server/utils/sessionOperationalCreditPreflight', () => ({
   filterSessionIdsByOperationalCredits: vi.fn(),

@@ -1,3 +1,4 @@
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
 import {
   adminSettingsRepository,
   agentRepository,
@@ -25,7 +26,7 @@ import {
   getSettingsValue,
   usdToCredits,
 } from '@bike4mind/utils';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { reserveVoiceHold, settlePriorVoiceHold } from '@bike4mind/server-utils/voice/settleVoiceHold';
 import {
@@ -39,6 +40,7 @@ import axios from 'axios';
 import { z } from 'zod';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
 
 const CreateSessionBodySchema = z.object({
   sessionId: z.string().optional(),
@@ -116,6 +118,7 @@ const handler = baseApi().post(async (req, res) => {
   const reservedCredits = usdToCredits(REALTIME_VOICE_RESERVE_USD);
 
   const realtimeModel = 'gpt-realtime-1.5';
+  await (await createModelAdmission(req.user!)).assert(realtimeModel);
 
   const openaiApiKey = await apiKeyService.getEffectiveApiKey(
     req.user?.id,
@@ -437,12 +440,14 @@ When you get the tool result back, summarize it conversationally for voice.`;
       userId: req.user.id,
       sessionId: session.id,
       priorStartedAt: priorHoldStartedAt,
+      apiKeyId: req.apiKeyInfo?.keyId,
       reservedCredits: enforceCredits ? reservedCredits : null,
       startedAt: new Date(),
       // Billed per response against this hold (server/websocket/voiceSessionEnded.ts).
       realtime: true,
       unaffordable: () =>
         new ForbiddenError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`),
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
     });
     if (!opened) {
       throw new ConflictError('Another voice call on this session started at the same time; retry');

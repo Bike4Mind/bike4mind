@@ -19,6 +19,7 @@ export default defineConfig({
     'src/imageResize.ts',
     'src/llm/backend.ts',
     'src/escapeRegex.ts',
+    'src/escapeHtml.ts',
     'src/safeObjectKey.ts',
     'src/globMatches.ts',
     // Own entry so the CLI can import scaleTokenEstimate without pulling the whole utils
@@ -44,6 +45,8 @@ export default defineConfig({
     'src/musicProviders/index.ts',
     // Decision provider interface, registry, retry policy and adapters. Same isolation as videoProviders.
     'src/decisionProviders/index.ts',
+    // Batch-first embedding provider interface, registry and adapters. Same isolation as videoProviders.
+    'src/embeddingProviders/index.ts',
   ],
   format: ['esm', 'cjs'],
   dts: true,

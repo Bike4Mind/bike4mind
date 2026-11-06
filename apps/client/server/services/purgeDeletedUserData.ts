@@ -4,11 +4,13 @@ import {
   embedConversationRepository,
   hideDeletedAuthorAnnotations,
   integrationRequestRepository,
+  shadowDetectionRepository,
 } from '@bike4mind/database';
 import type { IUserDocument } from '@bike4mind/common';
+import { retainDeletedSignupTraces } from '@server/auth/signupNetworkLimits';
 import { purgeUserPublishedArtifacts } from '@server/services/publish/purgeUserPublishedArtifacts';
-import { withdrawAuthorListings } from '@server/skillMarket/market';
-import { decryptStoredToken, revokeDriveGrant } from '@server/integrations/google/drive/common';
+import { withdrawAuthorListings } from '@bike4mind/server-utils/skillMarket/market';
+import { decryptStoredToken, revokeDriveGrant } from '@bike4mind/server-utils/integrations/google/drive/common';
 import { flagConnectionsStoppedByDisconnect } from '@server/integrations/google/drive/flagConnectionsStoppedByDisconnect';
 import { revokeAtlassianGrant } from '@server/integrations/jira/revokeAtlassianGrant';
 
@@ -28,6 +30,22 @@ export type UserIntegrationGrants = Pick<IUserDocument, 'googleDrive' | 'atlassi
 export async function readUserIntegrationGrants(userId: string): Promise<UserIntegrationGrants | null> {
   return User.findById(userId, 'googleDrive atlassianConnect').lean<UserIntegrationGrants>();
 }
+
+/** Self-serve completion summary; keep in sync with purgeAccountContent, purgeAccountFiles and the user delete. */
+export const PURGED_USER_DATA: readonly string[] = [
+  'Your account and profile',
+  'Personal notebooks and their messages',
+  'Personal files and generated media (except moderation-held content or copies still owned by others)',
+  'Personal projects, artifacts, skills and memories',
+  'Personal data lakes, agent records and connected-device credentials',
+  'API keys, including the AI provider keys you saved',
+  'Sign-in sessions and sign-in history',
+  'Google Drive and Atlassian connections',
+  'Published pages',
+  'Embedded chat conversations',
+  'Integration requests',
+  'Skill Market listings (copies others already imported stay with them)',
+];
 
 /**
  * Remove the data a deleted account leaves behind that nothing else would ever reach. Call it
@@ -81,12 +99,32 @@ export async function purgeDeletedUserData(
     logger.error(`Failed to hide annotations for deleted user ${userId}: ${String(err)}`);
   }
 
+  // Hashed first, so deleting accounts does not reset the per-network signup caps. A failure here
+  // still deletes the raw rows below: dropping the IPs outranks keeping the count.
+  // If the trace is kept but that delete fails, the account counts twice until its trace expires
+  // (an over-count, so the cap fails closed).
+  try {
+    const retained = await retainDeletedSignupTraces(userId);
+    if (retained) logger.info(`Kept ${retained} hashed signup trace(s) of deleted user ${userId}`);
+  } catch (err) {
+    logger.error(`Failed to keep signup traces for deleted user ${userId}: ${String(err)}`);
+  }
+
   // The signup/login network rows hold raw IPs: deleted with the account, not left to their TTL.
   try {
     const deleted = await authEventRepository.deleteAllForUser(userId);
     logger.info(`Deleted ${deleted} auth event(s) of deleted user ${userId}`);
   } catch (err) {
     logger.error(`Failed to delete auth events for deleted user ${userId}: ${String(err)}`);
+  }
+
+  // Shadow detections name the account (and a signup-burst one holds its raw IP): the user leaves every
+  // record, and a record left with no one to grade goes with them.
+  try {
+    const deleted = await shadowDetectionRepository.removeUser(userId);
+    logger.info(`Removed deleted user ${userId} from shadow detections (${deleted} record(s) deleted)`);
+  } catch (err) {
+    logger.error(`Failed to remove deleted user ${userId} from shadow detections: ${String(err)}`);
   }
 
   // Last: the revokes call out to the providers, and a slow provider must not cost the local steps above.
@@ -96,23 +134,25 @@ export async function purgeDeletedUserData(
 }
 
 /**
- * Our copy of the credentials died with the row, but the grants stay live at the provider until
+ * Our copy of the credentials is gone (or about to be), but the grants stay live at the provider until
  * revoked. Same policy as the profile disconnects: revoke, then flag the Drive connections that were
- * syncing on the grant (org ones copy the user's refresh token) so they stop visibly.
+ * syncing on the grant (org ones copy the user's refresh token) so they stop visibly. Best-effort.
+ * `subject` labels the user in the log lines.
  */
-async function revokeIntegrationGrants(
+export async function revokeIntegrationGrants(
   userId: string,
   { googleDrive, atlassianConnect }: UserIntegrationGrants,
-  logger: MinimalLogger
+  logger: MinimalLogger,
+  subject = 'deleted user'
 ): Promise<void> {
-  const context = `deleted user ${userId}`;
+  const context = `${subject} ${userId}`;
 
   try {
     // Both: Atlassian does not document whether revoking the refresh token also kills issued access tokens.
     await revokeAtlassianGrant(atlassianConnect?.refreshToken, context);
     await revokeAtlassianGrant(atlassianConnect?.accessToken, context);
   } catch (err) {
-    logger.error(`Failed to revoke the Atlassian grant for deleted user ${userId}: ${String(err)}`);
+    logger.error(`Failed to revoke the Atlassian grant for ${context}: ${String(err)}`);
   }
 
   if (googleDrive) {
@@ -121,12 +161,10 @@ async function revokeIntegrationGrants(
       await revokeDriveGrant(googleDrive.refreshToken || googleDrive.accessToken, context);
       const affected = await flagConnectionsStoppedByDisconnect(userId, decryptStoredToken(googleDrive.refreshToken));
       logger.info(
-        `Flagged ${affected.affectedOrgConnections} org and ${affected.affectedPersonalConnections} personal Drive connection(s) for deleted user ${userId}`
+        `Flagged ${affected.affectedOrgConnections} org and ${affected.affectedPersonalConnections} personal Drive connection(s) for ${context}`
       );
     } catch (err) {
-      logger.error(
-        `Failed to flag the Drive connections stopped by the revoke for deleted user ${userId}: ${String(err)}`
-      );
+      logger.error(`Failed to flag the Drive connections stopped by the revoke for ${context}: ${String(err)}`);
     }
   }
 }

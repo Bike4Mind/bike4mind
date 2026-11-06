@@ -12,6 +12,7 @@ import {
   resolveToolArtifactType,
   type IChatHistoryItemDocument,
   type ModelInfo,
+  type ThinkingVisibility,
 } from '@bike4mind/common';
 import { type BaseStorage } from '@bike4mind/utils';
 import {
@@ -23,6 +24,7 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import type { ServerAgentStore } from './agents/ServerAgentStore';
 import type {
+  ServerOrchestratorDeps,
   ServerSubagentTracker,
   SubagentHandoffSignal,
   SubagentToolPermissions,
@@ -42,6 +44,7 @@ import type { MinimalSessionRepository } from '../conversationContextService/typ
 import { notifyToolFinish } from './toolFinishObserver';
 import { extractMcpPendingAction, type McpPendingAction } from './mcpPendingAction';
 import { JIRA_LIST_ATTACHMENTS, CONFLUENCE_LIST_ATTACHMENTS } from '@bike4mind/mcp/atlassian/constants';
+import { CURRENT_MODEL_DETAILS_TOOL_NAME } from './tools/implementation/currentModelDetails';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -55,6 +58,8 @@ export interface ToolBuilderDeps {
   db: ToolContext['db'];
   /** Caller's resolved entitlement keys, forwarded to the tool context (see ToolContext). */
   entitlementKeys?: string[];
+  /** Resolve current plan access lazily; failures must reach model admission. */
+  getEntitlements?: () => Promise<string[]>;
   /** The turn's active organization, forwarded to the tool context (see ToolContext.organizationId). */
   organizationId?: ToolContext['organizationId'];
   /** How the turn was authenticated, forwarded to the tool context (see ToolContext.authOrigin). */
@@ -92,11 +97,15 @@ export interface ToolBuilderDeps {
   onToolLlmUsage?: ToolContext['onToolLlmUsage'];
   /** The `decide` tool's execution seam, forwarded to the tool context (see ToolContext.decide). */
   decide?: ToolContext['decide'];
+  /** Maps a restricted-tier substitute id to the id recorded in usage events (see ToolContext.toLedgerModel). */
+  toLedgerModel?: ToolContext['toLedgerModel'];
   storage: BaseStorage;
   imageGenerateStorage: BaseStorage;
   imageProcessorLambdaName?: string;
   llm: ICompletionBackend;
   model?: string;
+  /** See `ToolContext.servingModel`. */
+  servingModel?: ToolContext['servingModel'];
   precomputed?: {
     adminSettingsEnforceCredits: boolean;
     models: ModelInfo[];
@@ -108,8 +117,12 @@ export interface ToolBuilderDeps {
    * other model falls back to the parent's (see `ServerSubagentOrchestrator.resolveAgentRuntime`).
    */
   subagentModels?: ModelInfo[];
+  /** Set on a tier-substituted run so in-process subagents keep the requested model's identity; see `ServerOrchestratorDeps.substituteIdentity`. */
+  substituteIdentity?: ServerOrchestratorDeps['substituteIdentity'];
   apiKeyTable?: ApiKeyTable;
   thinking?: { enabled: boolean; budget_tokens: number };
+  /** Reasoning visibility for the caller, applied by every subagent this run spawns. */
+  thinkingVisibility?: ThinkingVisibility;
   agentStore?: ServerAgentStore;
   /** Session repository for entity extraction (optional - skipped if not provided) */
   sessionRepository?: MinimalSessionRepository;
@@ -208,12 +221,10 @@ export interface ToolBuilderCallbacks {
   onStatusUpdate: (changes: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>;
 
   /** Called before a tool executes (e.g., credit validation for image tools) */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  onToolStart: (toolName: string, data: any) => Promise<void>;
+  onToolStart: (toolName: string, data: unknown) => Promise<void>;
 
   /** Called after a tool finishes (e.g., deep research state, image paths) */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  onToolFinish: (toolName: string, data: any) => Promise<void>;
+  onToolFinish: (toolName: string, data: unknown) => Promise<void>;
 
   /** Called when navigate_view extracts navigation intents */
   onNavigationIntents?: (intents: unknown[]) => Promise<void>;
@@ -309,8 +320,7 @@ export interface BuildSharedToolsOptions {
    */
   sessionDisabledTools?: readonly string[];
   mcpToolsByServer?: Record<string, Array<{ name: string } & ICompletionOptionTools>>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  config?: { [key in LlmTools]?: any };
+  config?: { [key in LlmTools]?: unknown };
   agentOnlyMcpServers?: string[];
   getAbortSignal?: () => AbortSignal | undefined;
   externalTools?: Record<string, ToolDefinition>;
@@ -388,6 +398,7 @@ export function buildSharedTools(
     model,
     imageProcessorLambdaName,
     entitlementKeys,
+    getEntitlements,
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
@@ -413,6 +424,7 @@ export function buildSharedTools(
     logger,
     {
       db,
+      getEntitlements,
       retrievalFilter,
       kbScope,
       inlinedAttachmentIds,
@@ -432,6 +444,7 @@ export function buildSharedTools(
       slackDestination: callbacks.slackDestination,
       numberCitables: callbacks.numberCitables,
       decide: deps.decide,
+      toLedgerModel: deps.toLedgerModel,
       getAbortSignal,
     },
     storage,
@@ -442,6 +455,7 @@ export function buildSharedTools(
     llm,
     {
       deep_research: config.deep_research,
+      edit_file: config.edit_file,
       image_generation: config.image_generation,
       edit_image: config.image_generation,
       audio_generation: config.audio_generation,
@@ -457,7 +471,8 @@ export function buildSharedTools(
     callbacks.sessionId,
     undefined, // codeMinifier - CLI-only (web-tree-sitter); server path has no minifier
     deps.precomputed?.models,
-    deps.onToolLlmUsage
+    deps.onToolLlmUsage,
+    deps.servingModel
   );
 
   // The tool is inert without a usable config, so the config itself is the availability signal.
@@ -608,9 +623,11 @@ export function buildSharedTools(
   // delegate tool's closure below, so it never appears in the array this function returns and a
   // denylist applied to that array cannot reach it. Without this, a session-forbidden tool stays
   // callable by a dispatched subagent - the same loophole the delegate gate exists to close.
+  // current_model_details is bound to the parent's serving model, so a subagent on another model
+  // must not inherit it (its adapter keeps its own identity line).
   const childTools = [...tools, ...agentOnlyMcpTools];
   const parentTools = (options.wrapChildTools ? options.wrapChildTools(childTools) : childTools).filter(
-    tool => !deniedToolNames.has(tool.toolSchema.name)
+    tool => !deniedToolNames.has(tool.toolSchema.name) && tool.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME
   );
 
   const subagentModels = deps.subagentModels ?? deps.precomputed?.models;
@@ -633,6 +650,7 @@ export function buildSharedTools(
     getSignal: getAbortSignal,
     onCredits: callbacks.onSubagentCredits,
     availableModels: subagentModels,
+    substituteIdentity: deps.substituteIdentity,
     onStatusUpdate: callbacks.onSubagentStatusUpdate
       ? async (status: string) => callbacks.onSubagentStatusUpdate!(status)
       : undefined,
@@ -640,6 +658,7 @@ export function buildSharedTools(
       ? (telemetry: unknown) => callbacks.onSubagentTelemetry!(telemetry)
       : undefined,
     thinking: deps.thinking,
+    thinkingVisibility: deps.thinkingVisibility,
     agentStore: deps.agentStore,
     apiKeyTable: deps.apiKeyTable ?? undefined,
     tracker: callbacks.subagentTracker,
@@ -665,11 +684,13 @@ export function buildSharedTools(
       parentTools,
       getSignal: getAbortSignal,
       availableModels: subagentModels,
+      substituteIdentity: deps.substituteIdentity,
       onCredits: callbacks.onSubagentCredits,
       onStatusUpdate: callbacks.onSubagentStatusUpdate
         ? async (status: string) => callbacks.onSubagentStatusUpdate!(status)
         : undefined,
       thinking: deps.thinking,
+      thinkingVisibility: deps.thinkingVisibility,
       agentStore: deps.agentStore,
       apiKeyTable: deps.apiKeyTable ?? undefined,
       tracker: callbacks.subagentTracker,

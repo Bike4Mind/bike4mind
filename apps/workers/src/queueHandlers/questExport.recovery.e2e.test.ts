@@ -15,7 +15,7 @@ const h = vi.hoisted(() => ({
   models: vi.fn(),
   report: vi.fn(),
 }));
-vi.mock('@server/queueHandlers/utils', () => ({ dispatchWithLogger: (fn: unknown) => fn }));
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({ dispatchWithLogger: (fn: unknown) => fn }));
 vi.mock('sst', () => ({
   Resource: { appFilesBucket: { name: 'test' }, websocket: { managementEndpoint: 'http://test' } },
 }));
@@ -33,7 +33,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ download: async (key: string) => h.objects.get(key) }),
   getGeneratedImageStorage: () => ({ download: async (key: string) => h.objects.get(key) }),
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: h.progress }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: h.progress }));
 vi.mock('@bike4mind/services', () => ({ apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) } }));
 vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),

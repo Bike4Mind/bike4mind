@@ -2,12 +2,14 @@ import { Connection, User, wsConnectTicketRepository } from '@bike4mind/database
 import { ApiKeyScope, ApiKeyScopeValue } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
-import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
+import { assertNoPendingDeletion } from '@bike4mind/server-utils/auth/deletionPendingGate';
 import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/services';
 import { verifyApiKey } from '@server/cli/auth';
-import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
-import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
-import { withWebSocketContext } from '@server/websocket/utils';
+import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { ipBlockRefusal } from '@server/middlewares/checkBlockedIP';
+import { withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
 import { gatewayCapExpiry, assertRealtimeSessionActive } from '@server/websocket/realtimeSession';
 import { APIGatewayProxyEvent, APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import jwt from 'jsonwebtoken';
@@ -111,6 +113,9 @@ async function resolveIdentity(
     if (decoded?.mfaPending) {
       throw new UnauthorizedError('MFA verification required');
     }
+    if (decoded?.impersonatedBy) {
+      throw new UnauthorizedError('Impersonated sessions cannot use realtime credentials');
+    }
     // JWT connections are always version-gated. A legacy token issued before
     // this field existed carries no version and normalizes to 0, mirroring the
     // REST path (auth.ts) so the kill switch still fires for it once the user's
@@ -188,7 +193,19 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
       throw new UnauthorizedError('Session expired');
     }
     assertAccountStateUsable(user);
+    assertNoPendingDeletion(user);
     await assertRealtimeSessionActive(auth.sid);
+    // Completions and agent runs stream over this socket, so an admin's `all` IP block refuses the connection.
+    if (!user.isAdmin) {
+      // No CloudFront fronts the WebSocket API, so every forwarding header on the upgrade request is
+      // client-supplied: resolve the address from API Gateway's sourceIp alone.
+      const clientRequest = {
+        headers: {},
+        socket: { remoteAddress: event.requestContext.identity?.sourceIp },
+      };
+      const refusal = await ipBlockRefusal(clientRequest, 'app', logger);
+      if (refusal) throw new ForbiddenError(refusal.message);
+    }
 
     await Connection.create({
       connectionId: event.requestContext.connectionId,

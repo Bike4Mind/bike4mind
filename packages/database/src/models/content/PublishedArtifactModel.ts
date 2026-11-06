@@ -134,6 +134,8 @@ const SourceSubSchema = new Schema(
     sessionId: { type: String },
     messageId: { type: String },
     fabFileId: { type: String },
+    // Multi-file React publishes only; see PublishSourceSchema in @bike4mind/common.
+    reactSiblings: { type: [String], default: undefined },
   },
   { _id: false }
 );
@@ -362,7 +364,12 @@ export interface ShareTokenBearing {
  * Callers still add their own `deletedAt: null`, since this is only the token half.
  */
 export function shareTokenFilter(shareToken: string): Record<string, unknown> {
-  return { shareTokens: { $elemMatch: { token: shareToken, revokedAt: null } } };
+  return {
+    // Repeats the partial filter of the `shareTokens.token` index: the planner only uses a partial
+    // index when the query implies its filter, and neither the `$elemMatch` nor a bare equality does.
+    'shareTokens.token': { $type: 'string', $eq: shareToken },
+    shareTokens: { $elemMatch: { token: shareToken, revokedAt: null } },
+  };
 }
 
 /**
@@ -375,7 +382,7 @@ export function liveShareTokens(artifact: ShareTokenBearing): PublishedArtifactS
   return (artifact.shareTokens ?? []).filter(entry => !!entry?.token && !entry.revokedAt);
 }
 
-export const PublishedArtifact =
+export const PublishedArtifact: Model<IPublishedArtifactDocument> =
   (mongoose.models.PublishedArtifact as mongoose.Model<IPublishedArtifactDocument>) ||
   model<IPublishedArtifactDocument>('PublishedArtifact', PublishedArtifactSchema);
 

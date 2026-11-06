@@ -20,6 +20,7 @@
         "pages/api/premium-*/**",
         "server/premium-generated/**",
         "../../infra/premium-generated/**",
+        "../../packages/server-utils/src/premium-generated/**",
         "../../packages/scripts/migrate/migrations/premium.generated.ts"
       ]
     },
@@ -66,16 +67,14 @@
     },
     // migrations/index.test.ts statically imports the same premium.generated.ts stub - same
     // cross-package edge as the typecheck overrides above, for the same reason.
-    // checkSnapshotPublishPackages.test.ts reads .github/workflows/snapshot-publish.yaml and every
-    // workspace manifest under the diff roots, which sit outside the package: without them as
-    // inputs, an edit to one replays a cached pass for the very test meant to catch that drift.
+    // Several tests read workspace manifests under b4m-core/ and packages/, which sit outside the
+    // package: without them as inputs, an edit to one replays a cached pass.
     "@bike4mind/scripts#test": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": [
         "$TURBO_DEFAULT$",
         "../server-utils/**",
         "!../server-utils/node_modules/**",
-        "$TURBO_ROOT$/.github/workflows/snapshot-publish.yaml",
         "$TURBO_ROOT$/b4m-core/*/package.json",
         "$TURBO_ROOT$/packages/*/package.json"
       ]
@@ -89,6 +88,17 @@
       "dependsOn": ["^build"],
       "outputs": ["out/**"],
       "inputs": ["src/**", "electron.vite.config.ts", "tsconfig*.json", "package.json"]
+    },
+    // local-models bundles the Curated models list from catalog/model-hub, and its tests validate that file.
+    // Desktop and the CLI get it only through this build, so ^build carries a manifest change to them.
+    "@bike4mind/local-models#build": {
+      "dependsOn": ["codegen", "^build"],
+      "outputs": ["dist/**"],
+      "inputs": ["src/**", "tsconfig.json", "tsdown.config.ts", "package.json", "$TURBO_ROOT$/catalog/model-hub/**"]
+    },
+    "@bike4mind/local-models#test": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/catalog/model-hub/**"]
     },
     // @bike4mind/workers compiles and tests apps/client/server code through its interim path
     // alias (apps/workers/tsconfig.json), and some of that code imports the premium-generated
@@ -160,11 +170,26 @@
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", "../../packages/server-utils/**", "!../../packages/server-utils/node_modules/**"]
     },
+    // server-utils reads src/premium-generated/ (written by @bike4mind/client's codegen and
+    // gitignored, so outside $TURBO_DEFAULT$): same cross-package edge as @bike4mind/scripts.
+    "@bike4mind/server-utils#typecheck": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "src/premium-generated/**"]
+    },
+    "@bike4mind/server-utils#typecheck:native": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "src/premium-generated/**"]
+    },
+    "@bike4mind/server-utils#typecheck:fast": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "src/premium-generated/**"]
+    },
     // The wiring tests read app, infra and self-host files outside this package.
     "@bike4mind/server-utils#test": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": [
         "$TURBO_DEFAULT$",
+        "src/premium-generated/**",
         "../../apps/client/pages/**",
         "../../apps/client/server/**",
         "../../apps/workers/src/**",
@@ -185,7 +210,8 @@
         "../../apps/workers/src/**",
         "../../packages/server-utils/src/**",
         "../services/src/**",
-        "../slack/src/**"
+        "../slack/src/**",
+        "../../packages/server-utils/src/**"
       ]
     },
     "test": {

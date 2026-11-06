@@ -105,7 +105,7 @@ ArtifactVersionSchema.virtual('parentVersion', {
   justOne: true,
 });
 
-export const ArtifactVersion =
+export const ArtifactVersion: Model<IArtifactVersionDocument> =
   (mongoose.models.ArtifactVersion as mongoose.Model<IArtifactVersionDocument>) ||
   model<IArtifactVersionDocument>('ArtifactVersion', ArtifactVersionSchema);
 

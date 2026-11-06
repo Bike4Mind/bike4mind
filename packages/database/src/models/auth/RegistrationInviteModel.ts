@@ -2,6 +2,7 @@ import {
   IRegInviteDocument,
   IRegistrationInvite,
   IRegistrationInviteRepository,
+  RegInviteSource,
   RegInviteStatusType,
 } from '@bike4mind/common';
 import mongoose from 'mongoose';
@@ -20,6 +21,21 @@ export class RegistrationInviteRepository
 
   async findByCode(code: string) {
     return this.model.findOne({ code });
+  }
+
+  async claimUnused(inviteId: string, usedAt: Date): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: inviteId, used: null },
+      { $set: { used: usedAt, status: RegInviteStatusType.used } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  async releaseClaim(inviteId: string, usedAt: Date, status: RegInviteStatusType): Promise<void> {
+    await this.model.updateOne(
+      { _id: inviteId, used: usedAt, usedbyId: null },
+      { $unset: { used: 1 }, $set: { status } }
+    );
   }
   async createMany(invites: Omit<IRegInviteDocument, 'id'>[]) {
     return this.model.insertMany(invites);
@@ -49,6 +65,45 @@ export class RegistrationInviteRepository
     const updatedInvites = await this.find({ _id: { $in: ids } });
 
     return updatedInvites;
+  }
+
+  /**
+   * Per-package code counts for the grant packages admin list. A code is active while register()
+   * in b4m-core/services/src/userService/register.ts would still accept it: not past expiresAt,
+   * and no used date unless unlimited-use. status is not consulted there, so not here either.
+   * nextExpiry is the soonest expiry among active codes that carry one.
+   */
+  async usageByGrantPackage(ids: string[], now: Date = new Date()) {
+    const usage = new Map<string, { codes: number; activeCodes: number; nextExpiry: Date | null }>();
+    if (ids.length === 0) return usage;
+
+    const active = {
+      $and: [
+        { $or: [{ $eq: [{ $ifNull: ['$expiresAt', null] }, null] }, { $gte: ['$expiresAt', now] }] },
+        { $or: [{ $eq: [{ $ifNull: ['$used', null] }, null] }, { $eq: ['$unlimitedUse', true] }] },
+      ],
+    };
+    const rows = await this.model.aggregate<{
+      _id: string;
+      codes: number;
+      activeCodes: number;
+      nextExpiry: Date | null;
+    }>([
+      { $match: { grantPackageId: { $in: ids } } },
+      {
+        $group: {
+          _id: '$grantPackageId',
+          codes: { $sum: 1 },
+          activeCodes: { $sum: { $cond: [active, 1, 0] } },
+          // $min skips null, so codes without an expiry (or inactive ones) never win.
+          nextExpiry: { $min: { $cond: [active, { $ifNull: ['$expiresAt', null] }, null] } },
+        },
+      },
+    ]);
+    for (const row of rows) {
+      usage.set(row._id, { codes: row.codes, activeCodes: row.activeCodes, nextExpiry: row.nextExpiry ?? null });
+    }
+    return usage;
   }
 }
 
@@ -95,6 +150,11 @@ const RegistrationInviteSchema = new mongoose.Schema<IRegInviteDocument>(
       type: Date,
       required: false,
     },
+    source: {
+      type: String,
+      enum: Object.values(RegInviteSource),
+      required: false,
+    },
     unlimitedUse: {
       type: Boolean,
       required: false,
@@ -123,6 +183,10 @@ const RegistrationInviteSchema = new mongoose.Schema<IRegInviteDocument>(
       type: Number,
       required: false,
     },
+    grantPackageId: {
+      type: String,
+      required: false,
+    },
   },
   {
     timestamps: true,
@@ -137,6 +201,8 @@ const RegistrationInviteSchema = new mongoose.Schema<IRegInviteDocument>(
 
 // No index on email field - DocumentDB doesn't properly support sparse unique indexes.
 // The 'code' field ensures uniqueness for each invite.
+
+RegistrationInviteSchema.index({ grantPackageId: 1 });
 
 export const RegistrationInvite =
   (mongoose.models.RegistrationInvite as IRegistrationInviteModel) ??

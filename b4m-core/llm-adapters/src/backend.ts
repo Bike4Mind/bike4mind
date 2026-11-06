@@ -168,6 +168,13 @@ export interface TurnTelemetrySink {
 
 export interface ICompletionOptions {
   maxTokens?: number;
+  /**
+   * Hard ceiling on the output budget sent to the provider, applied after any backend-side
+   * sizing that can raise maxTokens (the adaptive-thinking floor, a legacy thinking budget,
+   * Gemini's thinking reserve). Billing sets it so a round never costs more than the holder
+   * can pay; see completionCreditBudget in @bike4mind/services.
+   */
+  outputTokenCeiling?: number;
   temperature?: number;
   topP?: number;
   topK?: number;
@@ -201,10 +208,18 @@ export interface ICompletionOptions {
    */
   omitIdentityReminder?: boolean;
   /**
+   * The current_model_details tool carries the model identity for this call, so the identity line
+   * is left out while `tools` is non-empty. Separate from `omitIdentityReminder` because adapter
+   * recursions that drop `tools` must bring the line back, whereas a raw turn never gets it.
+   */
+  identityViaTool?: boolean;
+  /**
    * Registry display name (ModelInfo.name) of the model serving THIS call, used in the identity
    * reminder. Set per hop so a fallback names the fallback model; unset keeps the raw-id wording.
    */
   modelDisplayName?: string;
+  /** Model id the identity reminder names in place of the serving model's, with modelDisplayName to match. */
+  modelIdentityId?: string;
   /**
    * Controls which tool the model should use.
    * - 'auto': Model decides whether to call a tool (default)
@@ -247,8 +262,16 @@ export interface ICompletionOptions {
    * `ReasoningEffort` is forwarded to OpenAI's `reasoning_effort` verbatim.
    */
   anthropicEffort?: AnthropicEffort;
+  /**
+   * Set when `reasoningEffort` / `thinking` came from the end caller rather than a route default.
+   * Anthropic direct only: a json_schema `responseFormat` then leaves the forced tool, which cannot
+   * run alongside thinking, for native structured outputs when the plan is adaptive thinking.
+   */
+  explicitReasoning?: boolean;
   _internal?: {
     toolCallCount?: number; // Internal counter for tracking recursive tool calls (do not set manually)
+    /** Set by anthropicBackend when a turn starts from another provider's tool history; keeps thinking off for its remaining rounds. */
+    thinkingSuppressed?: boolean;
     /** Epoch ms of the first round of this chat turn; set once, carried through recursive tool rounds (timing logs only). */
     requestStartedAt?: number;
     /** Per-request override for the recursive tool-call ceiling (defaults to DEFAULT_MAX_TOOL_CALLS).
@@ -315,12 +338,9 @@ export interface ICompletionOptions {
      * level calls `flush()`. Internal - do not set manually.
      */
     artifactGuard?: {
-      // info is `any` here (matching LooseCompletionCallback in toolStreamingHelper.ts) because
-      // the four backends' own completion-callback types differ in whether info is required
-      // (Anthropic, Gemini, OpenAI) or optional (Bedrock) - structurally incompatible with each
-      // other in both directions, so a single shared field type has to accept every one of them.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see comment above
-      callback: (text: (string | null | undefined)[], info: any) => Promise<void>;
+      // Method signature on purpose: bivariant params let a backend callback with required or
+      // optional `info` fit here and back (LooseCompletionCallback in toolStreamingHelper.ts reuses it).
+      callback(text: (string | null | undefined)[], info?: CompletionInfo): Promise<void>;
       emitArtifact: (results: string[], info: CompletionInfo) => Promise<void>;
       markDelivered: (markup: string) => void;
       flush: () => Promise<void>;
@@ -331,6 +351,8 @@ export interface ICompletionOptions {
      * Internal - do not set manually.
      */
     downgradedToolChoice?: DowngradedToolChoice;
+    /** Set on anthropicBackend's one retry after a strict schema rejection, so it never retries again. Internal. */
+    strictSchemaRetried?: boolean;
     /**
      * Per-turn timing sink, set by ChatCompletionProcess and threaded unchanged through recursive
      * tool rounds so every round's semaphore wait and transport retry lands on one turn record.
@@ -342,9 +364,10 @@ export interface ICompletionOptions {
   cacheStrategy?: ICacheStrategy;
   /**
    * Structured-output contract. When set to `{ type: 'json_schema', ... }`,
-   * native-mode providers (OpenAI, and Anthropic models without forced tool use) pass the
-   * schema through to the API; tool-mode providers (Anthropic) synthesize a single tool from
-   * the schema and force `tool_choice: { type: 'tool', name }`; best-effort providers (Bedrock, Gemini,
+   * native-mode providers (OpenAI, and Anthropic models without forced tool use or with an
+   * `explicitReasoning` adaptive-thinking request) pass the schema through to the API; tool-mode
+   * providers (Anthropic) synthesize a single tool from the schema and force
+   * `tool_choice: { type: 'tool', name }`; best-effort providers (Bedrock, Gemini,
    * xAI, Ollama) inject a "respond with JSON matching this schema" instruction.
    * The selected mode is reported back via `CompletionInfo.responseFormatMode`
    * so callers can decide whether to post-validate.
@@ -453,6 +476,8 @@ export type CompletionInfo = {
    */
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
+  /** The part of cacheCreationInputTokens written with the 1-hour TTL, when the adapter can tell. */
+  cacheWrite1hInputTokens?: number;
   /**
    * The same usage broken down per provider request (one entry per tool round-trip), in the
    * same disjoint convention; summing it reproduces the aggregate fields above. Settlement prices

@@ -31,6 +31,7 @@ describe('the untrusted-content and outbound axes', () => {
       'session_read',
       'browser_snapshot',
       'screen_capture',
+      'simulator_screenshot',
       'mcp__notion_search',
     ]) {
       expect(readsUntrusted(name), name).toBe(true);
@@ -48,11 +49,12 @@ describe('the untrusted-content and outbound axes', () => {
       'browser_navigate',
       'browser_tabs',
       'session_send',
+      'simulator_open_url',
       'mcp__notion_search',
     ]) {
       expect(sendsOut(name), name).toBe(true);
     }
-    for (const name of ['bash_output', 'bash_list', 'file_read', 'session_read', 'web_search']) {
+    for (const name of ['bash_output', 'bash_list', 'file_read', 'session_read', 'web_search', 'simulator_input']) {
       expect(sendsOut(name), name).toBe(false);
     }
   });
@@ -105,6 +107,8 @@ describe('the untrusted-content and outbound axes', () => {
     'memory_read',
     'memory_write',
     'memory_delete',
+    // What this app's PR bar shows; the read it causes is one a detected PR causes unasked.
+    'set_session_pull_request',
   ];
 
   it('classifies every tool the app can offer', () => {
@@ -121,6 +125,7 @@ describe('the untrusted-content and outbound axes', () => {
       web: true,
       ask: true,
       mcpServers: true,
+      pullRequest: true,
       mcp: [],
       modelId: 'claude-sonnet-5-5',
     }).map(entry => entry.toolSchema.name);

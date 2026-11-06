@@ -71,7 +71,20 @@ export function resolveFieldLimits(
   }: FieldLimitOptions
 ): Record<string, boolean> | undefined {
   if (collectionName === 'users') {
-    return { password: false, stripeCustomerId: false, resetPasswordToken: false };
+    // Keep admin-only fields in sync with USER_SECRET_FIELDS (toSafeUser.ts), which covers REST only. The dotted
+    // path withholds an admin's grant block without hiding the rest of signupGrant, which the credits UI reads.
+    return {
+      password: false,
+      'signupGrant.blocked': false,
+      stripeCustomerId: false,
+      resetPasswordToken: false,
+      signupGrantAssessment: false,
+      riskScore: false,
+      riskEvidence: false,
+      throttle: false,
+      riskSignals: false,
+      signupLanding: false,
+    };
   }
   if (collectionName === questCollectionName) {
     const excluded = [...(isQuestOwner ? [] : OWNER_ONLY_PROMPT_META_PROJECTION_PATHS), ...QUEST_SERVER_ONLY_FIELDS];

@@ -9,6 +9,7 @@ import type {
   ChatApprovalAnswer,
   ChatDiff,
   ChatMoveToBackgroundResult,
+  ChatToolApproval,
   ChatToolCall,
   ChatToolNotice,
   ChatToolStatus,
@@ -16,6 +17,7 @@ import type {
 import { REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
 import { isMcpConfigToolName, MCP_UPDATE_SERVER_TOOL_NAME, parseMcpServerRequest } from '@shared/mcp';
 import { ASK_USER_TOOL_NAME, parseOutcome, parseQuestions } from '@shared/questions';
+import { own } from '@shared/ownKeys';
 import { WEB_FETCH_TOOL_NAME } from '@shared/webSearch';
 import { ApprovalChoiceButtons } from './ApprovalChoice';
 import { describeApproval } from './approvalAttribution';
@@ -220,6 +222,7 @@ function ApprovalPrompt({
   // No undo behind it, so the card is red and offers no way to stop being asked. Answering
   // "always" would be a single click standing in for consent to a later, different deletion.
   const irreversible = call.approvalIrreversible === true;
+  const noAlways = irreversible || call.approvalOnceOnly === true;
   const choice = call.approvalChoice;
 
   return (
@@ -235,8 +238,8 @@ function ApprovalPrompt({
           ? diffs.length > 1
             ? `Apply this patch to ${diffs.length} files?`
             : APPROVAL_QUESTION[diff.operation]
-          : (HOST_QUESTION[call.name] ??
-            READ_QUESTION[call.name] ??
+          : (own(HOST_QUESTION, call.name) ??
+            own(READ_QUESTION, call.name) ??
             (isGeneration(call.name)
               ? 'Generate this? It costs credits.'
               : call.name === 'bash_background'
@@ -299,7 +302,7 @@ function ApprovalPrompt({
                     ? 'Generate it'
                     : 'Allow once'}
             </Button>
-            {!irreversible && (
+            {!noAlways && (
               <Button
                 size="sm"
                 variant="soft"
@@ -310,7 +313,7 @@ function ApprovalPrompt({
                 Allow in this chat
               </Button>
             )}
-            {!irreversible && call.approvalRules && call.approvalRules.length > 0 && (
+            {!noAlways && call.approvalRules && call.approvalRules.length > 0 && (
               <Button
                 size="sm"
                 variant="soft"
@@ -338,7 +341,7 @@ function ApprovalPrompt({
                     : "Don't run"}
             </Button>
           </Stack>
-          {!irreversible && <AlwaysScopeLine call={call} />}
+          {!noAlways && <AlwaysScopeLine call={call} />}
         </>
       )}
     </Sheet>
@@ -635,18 +638,20 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
 }
 
 /**
- * Who let the group's calls run, or stopped them, one muted line per distinct answer. A group of
- * seven commands "Approve for me" ran reads as one line, not seven of the same.
+ * Why the group's calls did not run, one muted line per distinct reason. A group of seven
+ * commands a reply stop closed reads as one line, not seven of the same.
  */
 function ApprovalAttribution({ calls }: { calls: readonly ChatToolCall[] }) {
-  const decisions = calls.flatMap(call =>
-    call.approval && call.status !== 'awaiting-approval' ? [call.approval] : []
-  );
-  const lines = [...new Map(decisions.map(approval => [describeApproval(approval), approval])).entries()];
-  if (lines.length === 0) return null;
+  const lines = new Map<string, ChatToolApproval>();
+  for (const call of calls) {
+    if (!call.approval || call.status === 'awaiting-approval') continue;
+    const text = describeApproval(call.approval);
+    if (text !== null) lines.set(text, call.approval);
+  }
+  if (lines.size === 0) return null;
   return (
     <>
-      {lines.map(([text, approval]) => (
+      {[...lines].map(([text, approval]) => (
         <Typography
           key={text}
           level="body-xs"

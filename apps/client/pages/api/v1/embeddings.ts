@@ -16,6 +16,7 @@ import {
   hasPublishedEmbeddingRate,
   MAX_EMBEDDING_REQUEST_TOKENS,
   MAX_EMBEDDING_RESPONSE_VALUES,
+  planEmbeddingDimensions,
   usdToCredits,
   usdToCreditsStochastic,
   type EmbeddingsResponse,
@@ -27,6 +28,7 @@ import {
   isEmbeddingAuthError,
   resolveEmbeddingConfig,
 } from '@bike4mind/fab-pipeline';
+import { Logger } from '@bike4mind/observability';
 import { apiKeyService } from '@bike4mind/services';
 import {
   createTokenizer,
@@ -37,10 +39,10 @@ import {
 } from '@bike4mind/utils';
 import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { embedTexts, encodeEmbeddingBase64 } from '@server/embeddings/embedTexts';
-import { planEmbeddingDimensions } from '@server/embeddings/planEmbeddingDimensions';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 
+// Cached per container, so it gets a neutral logger: a request's logger would pin that request's context.
 let sharedTokenizer: ITokenizer | undefined;
 
 // baseApi enforces its own 1 MB Content-Length cap ahead of Next's parser, so the 4 MB bodyParser limit below needs
@@ -93,7 +95,7 @@ const handler = nextRouteForContract(createEmbeddingsContract, { maxBodySize: 4 
       });
     }
 
-    sharedTokenizer ??= createTokenizer({ logger: req.logger });
+    sharedTokenizer ??= createTokenizer({ logger: new Logger({ metadata: { component: 'tokenizer' } }) });
     const tokenizer = sharedTokenizer;
     const tokenCounts = await Promise.all(texts.map(text => tokenizer.countTokens(text, model)));
     const oversizedIndex = tokenCounts.findIndex(count => count > maxInputTokens);

@@ -10,10 +10,16 @@
  * $inc. apps/client/server/billing/grantCreditPurchase.ts now wraps both in one transaction, but rows
  * written before that, or by any purchase grant that bypasses it, can hold no balance behind them.
  * The $inc stamps the user's lastCreditsPurchasedAt in the same update, so a stamp older than the
- * row (beyond a small tolerance) means the increment never ran. A later purchase or admin grant
- * overwrites the stamp, so this can miss a failed increment; it is tuned not to flag an applied one.
+ * row (beyond a small tolerance) means the increment never ran. A later purchase, or an admin grant to
+ * an account with a purchase row (adminUpdate.ts), overwrites the stamp, so this can miss a failed increment; it is tuned not to flag an applied one.
  * A row repaired by packages/scripts/src/auditPartialCreditPurchases.ts carries metadata.balanceBackfilledAt
- * (that script does not stamp the user), so it is treated as applied.
+ * (that script does not stamp the user), so it is treated as applied. A row marked reversedAt (full refund
+ * or lost dispute, apps/client/server/billing/purchaseReversal.ts) had its stamp revoked on purpose, so it
+ * is treated as applied too.
+ *
+ * A row whose owner no longer exists is not an ungranted purchase: the grant's balance increment
+ * throws when the user is missing, which aborts the transaction and the row with it, so the row
+ * proves the user existed and was credited before being deleted. It is logged, not alerted.
  *
  * Read-only against Stripe and the ledger: it never grants, so a rerun only repeats the alert, and
  * an unresolved purchase is reported on every run whose window still covers it.
@@ -33,7 +39,7 @@ import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { CreditHolderType } from '@bike4mind/common';
 import { connectDB, creditTransactionRepository, userRepository } from '@bike4mind/database';
 import { isStripeConfigured, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
-import { postMessageToSlack } from '@server/integrations/slack/slack';
+import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
@@ -60,13 +66,17 @@ const contextToLogs = (context: Context) => ({
   stage: Resource.App.stage,
 });
 
-export type UngrantedReason = 'no_transaction' | 'balance_not_applied' | 'owner_missing';
+export type UngrantedReason = 'no_transaction' | 'balance_not_applied';
 
-interface UngrantedFinding {
-  reason: UngrantedReason;
-  /** The ledger row's owner. The intent's metadata.userId can differ, so the alert prefers this. */
-  ownerId?: string;
-}
+type PurchaseCheck =
+  | { status: 'granted' }
+  | { status: 'owner_deleted'; ownerId: string }
+  | {
+      status: 'ungranted';
+      reason: UngrantedReason;
+      /** The ledger row's owner. The intent's metadata.userId can differ, so the alert prefers this. */
+      ownerId?: string;
+    };
 
 export interface UngrantedPurchase {
   paymentIntentId: string;
@@ -82,8 +92,12 @@ export interface UngrantedPurchase {
 export interface CreditPurchaseReconciliationResult {
   checked: number;
   ungranted: UngrantedPurchase[];
+  /** Granted purchases whose owner was deleted afterwards; logged, not alerted. */
+  ownerDeleted: number;
   /** True when MAX_PAGES was hit before Stripe ran out of intents in the window. */
   truncated: boolean;
+  /** True when Stripe is not configured; nothing was checked. */
+  skipped: boolean;
 }
 
 function isStageCreditPurchase(intent: PaymentIntent, stage: string): boolean {
@@ -95,7 +109,6 @@ function isStageCreditPurchase(intent: PaymentIntent, stage: string): boolean {
 const REASON_LABELS: Record<UngrantedReason, string> = {
   no_transaction: 'no purchase transaction',
   balance_not_applied: 'transaction recorded but balance never credited',
-  owner_missing: 'transaction recorded but owner user no longer exists',
 };
 
 // The webhook only grants purchases to users, so other owner types are not balance-checked.
@@ -103,16 +116,17 @@ const REASON_LABELS: Record<UngrantedReason, string> = {
 // (packages/scripts/src/auditPartialCreditPurchases.ts). This cron leans toward applied (60s skew, a
 // later stamp counts); the audit leans toward not repairing (it needs a pack lot and has a stamp
 // cutoff), so keep the audit at least as strict before it grants.
-async function findUngrantedReason(intentId: string): Promise<UngrantedFinding | null> {
+async function checkPurchase(intentId: string): Promise<PurchaseCheck> {
   const tx = await creditTransactionRepository.findByPaymentIntentId(intentId);
-  if (!tx) return { reason: 'no_transaction' };
-  if (tx.ownerType !== CreditHolderType.User) return null;
-  if (tx.metadata?.balanceBackfilledAt) return null;
+  if (!tx) return { status: 'ungranted', reason: 'no_transaction' };
+  if (tx.ownerType !== CreditHolderType.User) return { status: 'granted' };
+  if (tx.metadata?.balanceBackfilledAt) return { status: 'granted' };
+  if (tx.type === 'purchase' && tx.reversedAt) return { status: 'granted' };
   const owner = await userRepository.findById(tx.ownerId);
-  if (!owner) return { reason: 'owner_missing', ownerId: tx.ownerId };
+  if (!owner) return { status: 'owner_deleted', ownerId: tx.ownerId };
   const appliedAt = owner.lastCreditsPurchasedAt;
   const applied = appliedAt && appliedAt.getTime() >= tx.createdAt.getTime() - CLOCK_SKEW_TOLERANCE_MS;
-  return applied ? null : { reason: 'balance_not_applied', ownerId: tx.ownerId };
+  return applied ? { status: 'granted' } : { status: 'ungranted', reason: 'balance_not_applied', ownerId: tx.ownerId };
 }
 
 function formatAlert(stage: string, result: CreditPurchaseReconciliationResult): string {
@@ -144,23 +158,30 @@ function formatAlert(stage: string, result: CreditPurchaseReconciliationResult):
             'purchase (the row exists, so a redelivery will not grant).',
         ]
       : []),
-    ...(result.ungranted.some(p => p.reason === 'owner_missing')
-      ? ['Owner missing: the purchasing user was deleted; there is no balance to credit, so refund or review manually.']
-      : []),
   ].join('\n');
 }
 
 export async function runCreditPurchaseReconciliation(
   logger: Logger = new Logger(),
-  now: Date = new Date()
+  now: Date = new Date(),
+  { stage = Resource.App.stage, emitMetrics = true }: { stage?: string; emitMetrics?: boolean } = {}
 ): Promise<CreditPurchaseReconciliationResult> {
-  const stage = Resource.App.stage;
+  if (!isStripeConfigured()) {
+    logger.log('[CreditPurchaseReconciliation] Stripe not configured, skipping');
+    return { checked: 0, ungranted: [], ownerDeleted: 0, truncated: false, skipped: true };
+  }
   const created = {
     gte: Math.floor((now.getTime() - LOOKBACK_MS) / 1000),
     lte: Math.floor((now.getTime() - GRACE_MS) / 1000),
   };
 
-  const result: CreditPurchaseReconciliationResult = { checked: 0, ungranted: [], truncated: false };
+  const result: CreditPurchaseReconciliationResult = {
+    checked: 0,
+    ungranted: [],
+    ownerDeleted: 0,
+    truncated: false,
+    skipped: false,
+  };
   let startingAfter: string | undefined;
   for (let page = 0; ; page++) {
     if (page === MAX_PAGES) {
@@ -177,13 +198,21 @@ export async function runCreditPurchaseReconciliation(
     for (const intent of data) {
       if (!isStageCreditPurchase(intent, stage)) continue;
       result.checked++;
-      const finding = await findUngrantedReason(intent.id);
-      if (!finding) continue;
+      const check = await checkPurchase(intent.id);
+      if (check.status === 'granted') continue;
+      if (check.status === 'owner_deleted') {
+        result.ownerDeleted++;
+        logger.info('[CreditPurchaseReconciliation] Granted credit purchase whose owner was later deleted', {
+          paymentIntentId: intent.id,
+          userId: check.ownerId,
+        });
+        continue;
+      }
       result.ungranted.push({
         paymentIntentId: intent.id,
-        reason: finding.reason,
+        reason: check.reason,
         // The webhook credits the Stripe customer's user; metadata.userId is only its fallback.
-        userId: finding.ownerId ?? intent.metadata?.userId,
+        userId: check.ownerId ?? intent.metadata?.userId,
         amount: intent.amount,
         currency: intent.currency,
         credits: Number(intent.metadata.credits),
@@ -198,26 +227,30 @@ export async function runCreditPurchaseReconciliation(
   for (const purchase of result.ungranted) {
     logger.error('[CreditPurchaseReconciliation] Succeeded credit purchase has no grant', purchase);
   }
-  await emitMetric(
-    CLOUDWATCH_NAMESPACE,
-    'UngrantedPurchases',
-    result.ungranted.length,
-    { Stage: stage },
-    StandardUnit.Count
-  );
+  if (emitMetrics) {
+    await emitMetric(
+      CLOUDWATCH_NAMESPACE,
+      'UngrantedPurchases',
+      result.ungranted.length,
+      { Stage: stage },
+      StandardUnit.Count
+    );
+  }
   if (result.ungranted.length > 0) {
     await postMessageToSlack(formatAlert(stage, result));
   }
 
   logger.log(
     `[CreditPurchaseReconciliation] Checked ${result.checked} succeeded purchase(s): ` +
-      `${result.ungranted.length} ungranted${result.truncated ? ' (truncated)' : ''}`
+      `${result.ungranted.length} ungranted, ${result.ownerDeleted} granted to a since-deleted owner` +
+      `${result.truncated ? ' (truncated)' : ''}`
   );
   return result;
 }
 
 export async function handler(_event: unknown, context: Context) {
   const logger = new Logger().withMetadata(contextToLogs(context));
+  // Same check as the run's own skip, hoisted so an unconfigured deploy never opens a DB connection.
   if (!isStripeConfigured()) {
     logger.log('[CreditPurchaseReconciliation] Stripe not configured, skipping');
     return { statusCode: 200, body: JSON.stringify({ skipped: true }) };

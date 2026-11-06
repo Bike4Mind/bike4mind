@@ -1,170 +1,125 @@
-import React, { useState } from 'react';
-import {
-  Alert,
-  Box,
-  Chip,
-  CircularProgress,
-  IconButton,
-  Link,
-  Option,
-  Select,
-  Sheet,
-  Stack,
-  Table,
-  Typography,
-} from '@mui/joy';
-import RefreshIcon from '@mui/icons-material/Refresh';
+import React, { useEffect, useState } from 'react';
+import { Box, Button, Link, Stack } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import { adminAuditLogPath } from '@bike4mind/common';
-import SharedPaginationControls from '@client/app/components/admin/Subscriptions/components/PaginationControls';
-import { formatCredits, numberCell } from '../utils/format';
+import { AdminPageHeader, DataTable, FilterBar } from '../../shared';
+import { formatCredits } from '../utils/format';
 import { useCreditAdjustmentsLog } from '../hooks/useCreditAdjustmentsLog';
 
 const DAY_OPTIONS = [7, 30, 90, 365] as const;
 
-/** Opens the Audit Log tab with the credits filter; the URL selects the tab, which the Audit Log page reads. */
-const useOpenCreditsAuditLog = () => {
-  const navigate = useNavigate();
-  return () => {
-    const search = Object.fromEntries(new URL(adminAuditLogPath({ category: 'credits' }), 'http://local').searchParams);
-    navigate({ to: '/admin', search: search as never });
-  };
-};
-
-const formatWhen = (iso: string) =>
-  new Date(iso).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-
-/**
- * Global, paginated audit trail of admin credit adjustments across all users
- * (the generic_add / generic_deduct rows adminUpdateUser writes). Newest first;
- * `days` narrows to a trailing window, "All time" removes it. Reads
- * /api/admin/credit-adjustments.
- */
 export const CreditAdjustmentsLog: React.FC = () => {
-  const [days, setDays] = useState<number | 'all'>(90);
+  const [days, setDays] = useState('90');
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
-  const openAuditLog = useOpenCreditsAuditLog();
-
+  const navigate = useNavigate();
   const { data, isLoading, isFetching, error, refetch } = useCreditAdjustmentsLog({
     page,
     limit,
-    days: days === 'all' ? undefined : days,
+    days: days === 'all' ? undefined : Number(days),
   });
-
-  const rows = data?.rows ?? [];
+  useEffect(() => {
+    if (!isFetching && data && page > Math.max(1, data.totalPages)) setPage(Math.max(1, data.totalPages));
+  }, [data, isFetching, page]);
 
   return (
-    <Box sx={{ p: { xs: 1, sm: 2 } }} data-testid="credit-adjustments-log">
-      <Stack direction="row" justifyContent="flex-end" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-        <Link component="button" level="body-sm" onClick={openAuditLog} data-testid="credit-adjustments-audit-log-link">
-          View in Audit Log
-        </Link>
-        <Select<number | 'all'>
-          size="sm"
-          value={days}
-          onChange={(_, v) => {
-            setDays(v ?? 90);
-            setPage(1);
-          }}
-          sx={{ minWidth: 120 }}
-          data-testid="adjustments-days-select"
-        >
-          {DAY_OPTIONS.map(d => (
-            <Option key={d} value={d}>
-              {d}d
-            </Option>
-          ))}
-          <Option value="all">All time</Option>
-        </Select>
-        <IconButton size="sm" onClick={() => refetch()} disabled={isFetching} data-testid="adjustments-refresh-btn">
-          <RefreshIcon />
-        </IconButton>
-      </Stack>
-
-      <Alert color="neutral" size="sm" sx={{ mb: 2 }}>
-        Manual admin credit adjustments across all users, newest first. Each row records who made the change, on whom,
-        the delta, the resulting balance, and the reason.
-      </Alert>
-
-      {error && (
-        <Alert color="danger" sx={{ mb: 2 }} data-testid="adjustments-error">
-          {(error as Error)?.message || 'Failed to load adjustments'}
-        </Alert>
-      )}
-
-      {isLoading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
-          <CircularProgress />
-        </Box>
-      ) : (
-        <>
-          <Sheet sx={{ maxHeight: 520, overflow: 'auto', borderRadius: 'sm' }}>
-            <Table stickyHeader hoverRow size="sm" data-testid="adjustments-table">
-              <thead>
-                <tr>
-                  <th style={{ width: 150 }}>When</th>
-                  <th>User</th>
-                  <th>Admin</th>
-                  <th>Reason</th>
-                  <th style={{ textAlign: 'right', width: 100 }}>Delta</th>
-                  <th style={{ textAlign: 'right', width: 100 }}>Balance</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map(r => {
-                  const negative = r.credits < 0;
-                  return (
-                    <tr key={r.id}>
-                      <td>{formatWhen(r.createdAt)}</td>
-                      <td title={r.targetUserId}>{r.targetUserName ?? 'Unknown user'}</td>
-                      <td title={r.actorId}>{r.actorName ?? (r.actorId ? 'Unknown admin' : '—')}</td>
-                      <td>{r.description || '—'}</td>
-                      <td style={{ textAlign: 'right', ...numberCell }}>
-                        <Chip size="sm" variant="soft" color={negative ? 'danger' : 'success'}>
-                          {negative ? '-' : '+'}
-                          {formatCredits(Math.abs(r.credits))}
-                        </Chip>
-                      </td>
-                      <td style={{ textAlign: 'right', ...numberCell }}>
-                        {typeof r.resultingBalance === 'number' ? r.resultingBalance.toLocaleString() : '—'}
-                      </td>
-                    </tr>
-                  );
-                })}
-                {rows.length === 0 && (
-                  <tr>
-                    <td colSpan={6}>
-                      <Typography level="body-sm" color="neutral">
-                        No admin credit adjustments recorded in this window.
-                      </Typography>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </Table>
-          </Sheet>
-
-          <SharedPaginationControls
-            currentPage={data?.page ?? page}
-            totalPages={data?.totalPages ?? 1}
-            itemsPerPage={limit}
-            totalItems={data?.total ?? 0}
-            onPageChange={setPage}
-            onItemsPerPageChange={size => {
-              setLimit(size);
-              setPage(1);
+    <Stack gap={2} data-testid="credit-adjustments-log">
+      <AdminPageHeader
+        title="Credit adjustments"
+        count={data?.total}
+        description="Manual credit changes across all users, newest first. Each row records the actor, delta, resulting balance and reason."
+        actions={
+          <Link
+            component="button"
+            onClick={() => {
+              const search = Object.fromEntries(
+                new URL(adminAuditLogPath({ category: 'credits' }), 'http://local').searchParams
+              );
+              void navigate({ to: '/admin', search: search as never });
             }}
-            pageLimitOptions={[25, 50, 100]}
-          />
-        </>
-      )}
-    </Box>
+            data-testid="credit-adjustments-audit-log-link"
+          >
+            View in Audit Log
+          </Link>
+        }
+      />
+      <FilterBar
+        state={{ query: '', view: '', filters: { days } }}
+        search={false}
+        filters={[
+          {
+            id: 'days',
+            label: 'Window',
+            options: [
+              ...DAY_OPTIONS.map(value => ({ value: String(value), label: `${value} days` })),
+              { value: 'all', label: 'All time' },
+            ],
+          },
+        ]}
+        onChange={patch => {
+          if (patch.filters) {
+            setDays(patch.filters.days || 'all');
+            setPage(1);
+          }
+        }}
+      />
+      <Box>
+        <Button
+          variant="plain"
+          disabled={isFetching}
+          onClick={() => void refetch()}
+          data-testid="adjustments-refresh-btn"
+        >
+          Refresh adjustments
+        </Button>
+      </Box>
+      <DataTable
+        label="Credit adjustments"
+        testId="adjustments-table"
+        rows={data?.rows ?? []}
+        getRowId={row => row.id}
+        loading={isLoading || isFetching}
+        error={error ? (error instanceof Error ? error.message : 'Could not load credit adjustments.') : undefined}
+        onRetry={() => void refetch()}
+        pagination={{
+          page,
+          pageSize: limit,
+          total: data?.total ?? 0,
+          onPageChange: next => {
+            setPage(next);
+          },
+          onPageSizeChange: size => {
+            setLimit(size);
+            setPage(1);
+          },
+        }}
+        columns={[
+          { id: 'when', label: 'When', render: row => new Date(row.createdAt).toLocaleString() },
+          {
+            id: 'user',
+            label: 'User',
+            render: row => <span title={row.targetUserId}>{row.targetUserName ?? 'Unknown user'}</span>,
+          },
+          {
+            id: 'admin',
+            label: 'Admin',
+            render: row => <span title={row.actorId}>{row.actorName ?? (row.actorId ? 'Unknown admin' : '-')}</span>,
+          },
+          { id: 'reason', label: 'Reason', render: row => row.description || '-' },
+          {
+            id: 'delta',
+            label: 'Delta',
+            numeric: true,
+            render: row => `${row.credits < 0 ? '-' : '+'}${formatCredits(Math.abs(row.credits))}`,
+          },
+          {
+            id: 'balance',
+            label: 'Balance',
+            numeric: true,
+            render: row => (typeof row.resultingBalance === 'number' ? row.resultingBalance.toLocaleString() : '-'),
+          },
+        ]}
+      />
+    </Stack>
   );
 };

@@ -48,17 +48,17 @@ Building a module that runs inside a B4M deployment is not a third-party option;
 
 Fetch the discovery document from `https://<your-b4m-host>/.well-known/openid-configuration`. It advertises:
 
-| Field                                   | Value                         |
-| --------------------------------------- | ----------------------------- |
-| `issuer`                                | the B4M host URL              |
-| `authorization_endpoint`                | `{issuer}/oauth/authorize`    |
-| `token_endpoint`                        | `{issuer}/api/oauth/token`    |
-| `userinfo_endpoint`                     | `{issuer}/api/oauth/userinfo` |
-| `jwks_uri`                              | `{issuer}/api/oauth/jwks`     |
-| `scopes_supported`                      | `openid`, `email`, `profile`  |
-| `code_challenge_methods_supported`      | `S256`                        |
-| `token_endpoint_auth_methods_supported` | `client_secret_post`, `none`  |
-| `id_token_signing_alg_values_supported` | `RS256`                       |
+| Field                                   | Value                                          |
+| --------------------------------------- | ---------------------------------------------- |
+| `issuer`                                | the B4M host URL                               |
+| `authorization_endpoint`                | `{issuer}/oauth/authorize`                     |
+| `token_endpoint`                        | `{issuer}/api/oauth/token`                     |
+| `userinfo_endpoint`                     | `{issuer}/api/oauth/userinfo`                  |
+| `jwks_uri`                              | `{issuer}/api/oauth/jwks`                      |
+| `scopes_supported`                      | `openid`, `email`, `profile`, `offline_access` |
+| `code_challenge_methods_supported`      | `S256`                                         |
+| `token_endpoint_auth_methods_supported` | `client_secret_post`, `none`                   |
+| `id_token_signing_alg_values_supported` | `RS256`                                        |
 
 Use `jwks_uri` exactly as published. `/.well-known/jwks.json` also answers today, but it is an alias, not the advertised URL. Both documents are cached for an hour, so cache them on your side too.
 
@@ -66,7 +66,7 @@ Discovery does not list the `ai:generate` and `me:read` scopes because they are 
 
 ### The authorization request
 
-Use the authorization code flow with PKCE (`S256`), plus `state` and `nonce`. **Always send PKCE**, even though your client is confidential.
+Use the authorization code flow with PKCE (`S256`), plus `state` and `nonce`. **Always send PKCE**, even though your client is confidential. Note that this is advice, not a server guarantee: B4M requires `code_challenge` only from public clients, so a confidential client that omits it is not refused. Send it anyway.
 
 1. On your server, generate a random `state`, a random `nonce`, and a random `code_verifier`. Compute `code_challenge = BASE64URL(SHA256(code_verifier))`. Store all three in the user's pre-login session.
 2. Redirect the browser to `authorization_endpoint` with: `client_id`, `redirect_uri`, `response_type=code`, `scope=openid email profile ai:generate`, `state`, `nonce`, `code_challenge`, `code_challenge_method=S256`.
@@ -177,7 +177,7 @@ With that config, the client's `allowedScopes` are `openid email profile ai:gene
 
 The exchange verifies the ID token by fetching B4M's own JWKS over HTTPS from inside the `app` container. So it works only when B4M serves its public URL over HTTPS with a publicly trusted certificate (the Caddy setup in `SELF_HOST.md`, with `APP_URL=https://<your-domain>`). On a plain `http://` install, or with a self-signed certificate, every exchange fails with 401 `invalid_grant`.
 
-Operators register clients with the seed script. A stock install pulls images and has no Node toolchain, so on the host first install Node 24 and pnpm, then run `pnpm install --filter @bike4mind/scripts...` from the repository root. One pass registers the client with its trust config. The compose network's `mongo` hostname does not resolve from the host, so use the published port with `directConnection=true`. If you set `MONGO_HOST_PORT` in `.env.selfhost`, use that port instead of 27017:
+If the install has no admin user yet, register clients with the seed script. A stock install pulls images and has no Node toolchain, so on the host first install Node 24 and pnpm, then run `pnpm install --filter @bike4mind/scripts...` from the repository root. One pass registers the client with its trust config. The compose network's `mongo` hostname does not resolve from the host, so use the published port with `directConnection=true`. If you set `MONGO_HOST_PORT` in `.env.selfhost`, use that port instead of 27017:
 
 ```bash
 MONGODB_URI="mongodb://localhost:27017/bike4mind?replicaSet=rs0&directConnection=true" \
@@ -197,9 +197,13 @@ FEDERATED_JWKS_URI="https://<your-b4m-host>/api/oauth/jwks" \
 - The script is idempotent by name: if a client with that `CLIENT_NAME` exists, it changes nothing.
 - It always creates a confidential client. That is what you want: the AI-token exchange requires a client secret.
 
-Register the trust config in the same run. Adding `federatedIdp` to an existing client by hand leaves `allowedScopes` without `ai:generate` and `me:read`, and the exchange then fails with 403 `invalid_scope`.
+With the script, register the trust config in the same run. To add it to an existing client later, use the admin console, which lets you set the scopes in the same edit. A raw database edit that adds `federatedIdp` leaves `allowedScopes` without `ai:generate` and `me:read`, and the exchange then fails with 403 `invalid_scope`.
 
-An admin can also register, edit, deactivate and rotate clients from the admin console (Security > OAuth Clients), which applies the same rules as the script. The script remains for installs that have no admin user yet. Redirect URIs must be https (http only for localhost, 127.0.0.1 and [::1]); when you edit a client, URIs it already stores are kept even if they predate these rules, and only newly-added ones are checked.
+An admin can also register, edit, deactivate and rotate clients from the admin console (Trust and safety > OAuth clients), which applies the same rules as the script. Editing a client changes its redirect URIs, active state, allowed scopes and federated trust config. The opt-in `federated:admin-status` scope can be ticked only on a federated relying-party client. Turning federation on in the form ticks `ai:generate` and `me:read`. The script remains the fallback for installs that have no admin user yet.
+
+Removing a scope takes effect at once for every user of the client. An app that still requests a removed scope gets 400 `invalid_scope` at `/authorize`. Grants users already approved are kept, but `ai-token` and `federated-admin` calls that need a removed scope return 403 `invalid_scope`, because the client no longer has it. The admin console asks you to confirm before it removes a scope or turns federation off.
+
+Redirect URIs must be https (http only for localhost, 127.0.0.1 and [::1]); when you edit a client, URIs it already stores are kept even if they predate these rules, and only newly-added ones are checked.
 
 A stock self-hosted stack does not expose the completions API (`/api/ai/v1/completions`) on its public origin, so your app's completion calls return 404. Add this route inside the existing site block in `selfhost/caddy/Caddyfile`, before the catch-all `handle { reverse_proxy app:3000 }` (see [the sample in the Caddyfile](https://github.com/bike4mind/bike4mind/blob/main/selfhost/caddy/Caddyfile)):
 
@@ -250,11 +254,35 @@ A successful response is:
 
 The key currently lives 15 minutes; use `expires_in` rather than hard-coding 900. Send it as `Authorization: Bearer b4m_live_...` (the `x-api-key` header is accepted for older callers).
 
+#### With the SDK
+
+`@bike4mind/sdk` wraps the exchange. Run it on your server only, since it sends the client secret. It returns `{ apiKey, expiresAt, scope }` and throws `B4mApiError` on failure, with `errorCode` set to the OAuth `error` and `message` to its `error_description`:
+
+```ts
+import { B4mApiError, exchangeIdToken } from '@bike4mind/sdk';
+
+try {
+  const { apiKey, expiresAt } = await exchangeIdToken({
+    baseUrl: 'https://your-b4m-host',
+    clientId,
+    clientSecret,
+    idToken,
+    signal: AbortSignal.timeout(10_000),
+  });
+} catch (error) {
+  if (error instanceof B4mApiError) {
+    error.status; // 429: pause minting for error.retryAfterSeconds
+    error.errorCode; // e.g. 'invalid_grant': the user must sign in again
+  }
+}
+```
+
 The ID token must still be valid when you exchange it. Once it expires, re-authorize the user (section 3) before you can mint another key. A 403 `access_denied` for missing consent also needs re-authorization, and only helps if the new authorization request includes the API scopes you exchange for.
 
 | Response                      | Meaning                                                                                                                                      |
 | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | 401 `invalid_client`          | unknown `client_id` or wrong secret                                                                                                          |
+| 403 `subscription_required`   | the deployment limits API key access to paid plans and the user has no qualifying subscription                                               |
 | 403 `access_denied`           | the client has no trust config, the user has not consented to these scopes, or the user has not accepted the B4M terms                       |
 | 403 `invalid_scope`           | a requested scope is not `ai:generate` or `me:read`, or is not allowed for this client                                                       |
 | 401 `invalid_grant`           | the ID token is invalid or expired, or its subject is not a B4M user                                                                         |
@@ -277,7 +305,7 @@ Every successful exchange **revokes the previous key** minted for the same user 
 
 - **Expiry skew.** Re-mint shortly before `expires_in` runs out (for example 60 seconds early), not after a request fails.
 - **Default lifetime.** If `expires_in` is ever missing, assume the 900-second default rather than caching forever.
-- **Negative cache.** After a 400, 401 or 403 from the exchange, remember the failure for that ID token briefly instead of retrying on every request, and log the `error` and `error_description` to tell the cases apart. `invalid_grant`, and an `access_denied` for missing consent, mean the user must sign in again (with the API scopes included). `access_denied` with "Policy acceptance required" means the user must accept the B4M terms in B4M; re-authorizing does not help. `invalid_client`, `invalid_scope` or a missing trust config mean your client is misconfigured. A 400 `invalid_request` is a malformed request or the user's API-key cap. A 429 or 5xx is different. A 429 is client-wide, so pause every mint for its `Retry-After` seconds (or a default when it is absent). A 5xx is a B4M-side failure (a 503 affects only that user) and carries no `Retry-After`; retry that user after a short delay, and do not ask them to re-authorize.
+- **Negative cache.** After a 400, 401 or 403 from the exchange, remember the failure for that ID token briefly instead of retrying on every request, and log the `error` and `error_description` to tell the cases apart. `invalid_grant`, and an `access_denied` for missing consent, mean the user must sign in again (with the API scopes included). `access_denied` with "Policy acceptance required" means the user must accept the B4M terms in B4M; re-authorizing does not help. `invalid_client`, `invalid_scope` or a missing trust config mean your client is misconfigured. A 400 `invalid_request` is a malformed request or the user's API-key cap. `subscription_required` is a user state too: the user needs a qualifying plan, and re-authorizing does not help. A 429 or 5xx is different. A 429 is client-wide, so pause every mint for its `Retry-After` seconds (or a default when it is absent). A 5xx is a B4M-side failure (a 503 affects only that user) and carries no `Retry-After`; retry that user after a short delay, and do not ask them to re-authorize.
 - **Timeout.** Bound the exchange call with a timeout so a slow B4M does not hang your request path.
 - **One re-mint.** If B4M rejects a cached key, mint once and retry once. If that fails too, surface the error. Re-mint only if the rejected key is still the cached one: if another request already replaced it, use the replacement, or your re-mint revokes it.
 
@@ -293,21 +321,11 @@ Revoking your app's access in B4M stops new exchanges wherever the consent check
 
 `POST /api/ai/v1/completions` checks everything it can before it opens the stream: the JSON body, the key and its scopes, the rate limit, the model and the user's credits. Any of those failing returns a JSON error with a real HTTP status and no stream:
 
-| Status | Meaning | `errorCode` |
-|--------|---------|-------------|
-| 400 | Malformed JSON, or a `model` B4M does not know or cannot serve you. | - |
-| 400 | The model provider rejected your request. Change the request or choose another model; do not retry it unchanged. | `invalid_request` |
-| 401 | The key was rejected. Re-mint once (see "One re-mint" above). | - |
-| 403 | The key lacks a scope this endpoint needs; `required_scopes` names them. | - |
-| 405 | Wrong HTTP method; use `POST`. | - |
-| 413 | The body is over 25 MB. | - |
-| 422 | The user or their org is out of credits, or the org's per-member credit cap is reached. Prompt them to top up their B4M balance. | `insufficient_credits` |
-| 422 | The body failed validation; `error` names the failing fields. | - |
-| 429 | Rate limited. Wait `Retry-After` seconds, then retry. When called with an API key, `X-RateLimit-*` headers show the window state. | - |
-| 500 | Internal error. Retry, and log `request_id` if it persists. | - |
-| 503 | The database is unavailable, the model's provider is not configured on this deployment, or the self-hosted model server that lists the model (Ollama, local image) is unreachable. Retry later or pick another model. | `provider_not_configured` for the model cases |
+Every status code and its `errorCode` values are listed in the [in-app API reference](https://app.bike4mind.com/api/v1/docs). Branch on the status and `errorCode`, never on the `error` prose. A key missing a scope is a 403 and `required_scopes` names the scopes. Without it, the account may be suspended or under a dispute (contact support), or a JWT caller may need to enroll in MFA in the web app.
 
-The body is `{ "error": "...", "request_id": "...", "errorCode": "..." }` (`errorCode` only where the table shows one), and `request_id` also arrives as the `X-Request-ID` header. Branch on the status and `errorCode`, never on `error`, which is prose and can change. The public API never returns 402.
+Out of credits is a 422 with `errorCode: "insufficient_credits"` (never 402). A failure body also carries `request_id`, which arrives as the `X-Request-ID` header too.
+
+Retry summary: a 400 `invalid_request` must not be retried unchanged. A 429 is retried after the `Retry-After` seconds. A 503, including `provider_not_configured` (the model's provider is not configured here, or a self-hosted model server such as Ollama or local image is unreachable), is retried later or with another model.
 
 Once the stream opens the status is 200 and stays 200. A failure after that point arrives as one in-band event:
 
@@ -322,7 +340,7 @@ Once the stream opens the status is 200 and stays 200. A failure after that poin
 - `code: "provider_error"`: the model provider failed. Retry, or pick another model. The provider's own response body is never forwarded.
 - `code` absent, or any other `code`: show `message` and log `requestId`.
 
-The stream opens with keep-alive comments and a `{ "type": "meta", "requestId": "..." }` event; ignore both. Text arrives as `content` events with a `text` field. With a reasoning model, the text can contain `<think>...</think>` spans (possibly several) holding the model's reasoning; strip them before you show the reply, and never show or log a `thinking` field. A successful stream ends with `data: [DONE]`. An `error` event is terminal and is not followed by `[DONE]`; a stream that ends with neither is incomplete. A `stopReason` of `max_tokens` on the last event means the reply was cut off. Any other `stopReason` that is not a clean finish (`end_turn`, `stop`, `tool_use`, `stop_sequence`), such as `degenerate_repetition`, `refusal` or a provider-specific value, means the reply is not usable even though `[DONE]` still arrives.
+The stream opens with keep-alive comments and a `{ "type": "meta", "requestId": "..." }` event; ignore both. Text arrives as `content` events with a `text` field. With a reasoning model, the text can contain `<think>...</think>` spans (possibly several) holding the model's reasoning; strip them before you show the reply, and never show or log a `thinking` field. A successful stream ends with `data: [DONE]`. An `error` event is terminal and is not followed by `[DONE]`; a stream that ends with neither is incomplete. Check the terminal event's `stopReason` too: `max_tokens` means the reply was truncated, even when `[DONE]` follows. Handle other non-success reasons as an incomplete or unusable reply; see the [streaming guide](../api/completions/streaming.md).
 
 Branch on `code`, never on `message`, which is prose and can change. (The JSON, non-streaming B4M APIs report the credit condition the same way this endpoint does before the stream: HTTP 422 with `errorCode: "insufficient_credits"`.)
 
@@ -330,20 +348,21 @@ Branch on `code`, never on `message`, which is prose and can change. (The JSON, 
 
 A reasoning model spends tokens thinking before it writes the visible reply, and those thinking tokens count against `max_tokens`. With a small budget the model can use all of it on reasoning and the stream ends with no visible text.
 
-For a short streamed reply, set a small `maxTokens` and turn thinking off with `reasoningEffort: "none"`:
+For a short streamed reply, set a small `max_tokens` and turn thinking off with `reasoningEffort: "none"`:
 
 ```json
 {
   "model": "claude-sonnet-5",
   "messages": [{ "role": "user", "content": "Summarize this in one sentence: ..." }],
   "stream": true,
-  "options": { "maxTokens": 800, "reasoningEffort": "none" }
+  "max_tokens": 800,
+  "options": { "reasoningEffort": "none" }
 }
 ```
 
 Otherwise, omit `max_tokens` on reasoning models and let B4M size the ceiling.
 
-On a model that cannot turn thinking off, `none` falls back to the lowest effort, so the model still reasons a little and a very small `maxTokens` can still come back short. Adapters that do not support the field ignore it. See the `reasoningEffort` field of the completions request in the API reference (`https://<your-b4m-host>/api/v1/docs`, spec at `/api/v1/openapi.json`) for the allowed values (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`) and the per-adapter behavior.
+On a model that cannot turn thinking off, `none` falls back to the lowest effort, so the model still reasons a little and a very small `max_tokens` can still come back short. Adapters that do not support the field ignore it. See the `reasoningEffort` field of the completions request in the API reference (`https://<your-b4m-host>/api/v1/docs`, spec at `/api/v1/openapi.json`) for the allowed values (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`) and the per-adapter behavior.
 
 ## 7. Read the user's state
 
@@ -370,6 +389,22 @@ Request `me:read` at the exchange (`scope: "ai:generate me:read"`) and call `GET
 - `subscription` is `null` when the user has none, and can also be `null` for a paying user (for example `tier: "other"`, a subscriber on a retired price). Do not treat `null` as "not paying".
 - `credits.balance` is the user's personal balance, the same number as `GET /api/v1/credits`.
 
+### Is this user a B4M admin?
+
+A federated app that runs its own ops console can ask whether its signed-in user is a B4M admin, instead of keeping a separate admin list. `POST https://<your-b4m-host>/api/oauth/federated-admin` takes the same client auth and ID token as the exchange in section 5:
+
+| Field           | Value                                 |
+| --------------- | ------------------------------------- |
+| `client_id`     | your client id                        |
+| `client_secret` | your client secret (server-side only) |
+| `id_token`      | the ID token for your logged-in user  |
+
+The response is `{ "is_admin": boolean }`. Nothing is minted; a subject that resolves to no B4M user, or to a blocked account, is simply not an admin.
+
+This is gated on the opt-in `federated:admin-status` scope, which is **not** one of the scopes section 5 exchanges for. Two things must be true: an operator has added the scope to your client's `allowedScopes`, and the user's grant covers it, which means requesting it in the authorization request (section 3). The grant is enforced with no grace period, so users who consented before the scope existed must re-authorize before this endpoint answers for them. The scope is available only to relying-party clients; a first-party client is refused outright.
+
+Errors follow section 5: 400 `invalid_request` for a malformed body, 401 `invalid_client`, 401 `invalid_grant` for a bad or expired ID token, 403 `access_denied` when the client has no trust config or the user's grant does not cover `federated:admin-status` (re-authorize with the scope), 403 `invalid_scope` when the client is not registered for the scope or is not a relying party, 429 with `Retry-After` at 300 requests per minute per client, and 503 `temporarily_unavailable` when the grant cannot be read (retry; do not re-authorize). Cache the answer per user for a few minutes rather than asking on every request.
+
 ## 8. What not to do
 
 - Never send the client secret or a minted `b4m_live_` key to the browser. Both stay on your server.
@@ -378,15 +413,17 @@ Request `me:read` at the exchange (`scope: "ai:generate me:read"`) and call `GET
 - Never pay for users' work with a single "house" API key of your own. Use the exchange so each user is billed for their own usage.
 - Never match on error `message` text. Use `code` / `errorCode`.
 - Never skip `state`, `nonce` or PKCE.
+- Never send the OAuth access token to any B4M route other than `userinfo`. It is not an API credential. To call AI or account APIs, exchange the **ID token** at `/api/oauth/ai-token` (section 5) and use the `b4m_live_` key you get back. A relying-party client that sends the access token to completions is refused; a client still classified first-party receives a full session token from `/api/oauth/token`, which works but is a full-account credential and must not be used this way.
 
 ## 9. Worked example
 
-A minimal server-side flow in TypeScript, run as an ES module (`"type": "module"`, since it uses top-level `await`), using Node 18+ (`fetch`, `crypto`) and [`jose`](https://github.com/panva/jose) for ID-token verification. Session storage and the HTTP framework are left to you: `session` stands for your server-side session store.
+A minimal server-side flow in TypeScript, run as an ES module (`"type": "module"`, since it uses top-level `await`), using Node 18+ (`fetch`, `crypto`), [`@bike4mind/sdk`](https://www.npmjs.com/package/@bike4mind/sdk) for the key exchange and [`jose`](https://github.com/panva/jose) for ID-token verification. Session storage and the HTTP framework are left to you: `session` stands for your server-side session store.
 
 ### Setup
 
 ```ts
 import crypto from 'node:crypto';
+import { B4mApiError, exchangeIdToken } from '@bike4mind/sdk';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 const B4M = 'https://your-b4m-host';
@@ -466,7 +503,6 @@ const failures = new Map<string, { until: number; reason: 'rejected' | 'unavaila
 let clientBackoffUntil = 0; // a 429 from the exchange pauses minting for every user
 
 const SKEW_MS = 60_000;
-const DEFAULT_TTL_S = 900;
 const NEGATIVE_TTL_MS = 60_000;
 const RETRY_5XX_MS = 5_000;
 
@@ -499,25 +535,25 @@ async function mintKey(userId: string, idToken: string): Promise<string> {
   if (failure?.reason === 'rejected') throw new Error(`Exchange recently failed: ${failure.detail}`);
   if (failure) throw new Error('B4M temporarily unavailable; retry later');
 
-  const res = await fetch(`${B4M}/api/oauth/ai-token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      client_id: CLIENT_ID,
-      client_secret: CLIENT_SECRET,
-      id_token: idToken,
+  try {
+    const { apiKey, expiresAt } = await exchangeIdToken({
+      baseUrl: B4M,
+      clientId: CLIENT_ID,
+      clientSecret: CLIENT_SECRET,
+      idToken,
       scope: 'ai:generate',
-    }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!res.ok) {
-    const err: { error?: string; error_description?: string } = await res.json().catch(() => ({}));
+      signal: AbortSignal.timeout(10_000),
+    });
+    keys.set(userId, { key: apiKey, expiresAt: expiresAt.getTime() });
+    return apiKey;
+  } catch (error) {
+    if (!(error instanceof B4mApiError)) throw error;
     // Log this: it tells "re-authorize the user" apart from "fix your client config".
-    const detail = `${res.status} ${err.error ?? ''} ${err.error_description ?? ''}`.trim();
-    if (res.status === 429) {
-      const retryAfterS = Number(res.headers.get('Retry-After')) || NEGATIVE_TTL_MS / 1000;
+    const detail = `${error.status} ${error.errorCode ?? ''} ${error.message}`.trim();
+    if (error.status === 429) {
+      const retryAfterS = error.retryAfterSeconds ?? NEGATIVE_TTL_MS / 1000;
       clientBackoffUntil = Date.now() + retryAfterS * 1000;
-    } else if (res.status >= 500) {
+    } else if (error.status >= 500) {
       // A B4M-side failure (503: this user's consent lookup failed): retry them shortly, without
       // pausing everyone or asking them to re-authorize. 5xx responses carry no Retry-After.
       failures.set(idToken, { until: Date.now() + RETRY_5XX_MS, reason: 'unavailable', detail });
@@ -527,11 +563,6 @@ async function mintKey(userId: string, idToken: string): Promise<string> {
     }
     throw new Error(`ai-token exchange failed: ${detail}`);
   }
-
-  const body = await res.json();
-  const ttlSeconds = body.expires_in ?? DEFAULT_TTL_S;
-  keys.set(userId, { key: body.api_key, expiresAt: Date.now() + ttlSeconds * 1000 });
-  return body.api_key;
 }
 ```
 
@@ -544,17 +575,6 @@ class RateLimitedError extends Error {
     super(`Rate limited; retry in ${retryAfterS}s`);
   }
 }
-class TruncatedReplyError extends Error {
-  constructor(readonly partial: string) {
-    super('Reply was cut off at max_tokens');
-  }
-}
-class UnusableReplyError extends Error {
-  constructor(readonly stopReason: string) {
-    super(`Reply ended early: ${stopReason}`);
-  }
-}
-const CLEAN_STOP_REASONS = new Set(['end_turn', 'stop', 'tool_use', 'stop_sequence']);
 
 async function checkBalance(key: string): Promise<Response> {
   return fetch(`${B4M}/api/v1/credits`, { headers: { Authorization: `Bearer ${key}` } });
@@ -597,34 +617,43 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
   let buffer = '';
   const decoder = new TextDecoder();
   const reader = res.body.getReader();
-  for (let r = await reader.read(); !r.done; r = await reader.read()) {
-    buffer += decoder.decode(r.value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop()!;
-    for (const line of lines) {
-      if (!line.startsWith('data:')) continue;
-      const data = line.slice(5).trim();
-      // Reasoning models wrap their reasoning in <think> spans; never show it to users.
-      if (data === '[DONE]') {
-        const reply = text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-        if (stopReason === 'max_tokens') throw new TruncatedReplyError(reply);
-        if (stopReason && !CLEAN_STOP_REASONS.has(stopReason)) throw new UnusableReplyError(stopReason);
-        return reply;
+  try {
+    for (let r = await reader.read(); !r.done; r = await reader.read()) {
+      buffer += decoder.decode(r.value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop()!;
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        // Reasoning models wrap their reasoning in <think> spans; never show it to users.
+        if (data === '[DONE]') {
+          if (stopReason === 'max_tokens') throw new Error('Completion was truncated; increase max_tokens');
+          if (stopReason && !['end_turn', 'stop', 'stop_sequence'].includes(stopReason)) {
+            throw new Error(`Completion did not finish with an answer: ${stopReason}`);
+          }
+          return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        }
+        const event = JSON.parse(data);
+        if (event.type === 'error') {
+          if (event.code === 'insufficient_credits') throw new OutOfCreditsError(event.message);
+          throw new Error(`Completion failed (requestId ${event.requestId}): ${event.message}`);
+        }
+        if (typeof event.stopReason === 'string') stopReason = event.stopReason;
+        if (event.type === 'content') text += event.text;
       }
-      const event = JSON.parse(data);
-      if (event.type === 'error') {
-        if (event.code === 'insufficient_credits') throw new OutOfCreditsError(event.message);
-        throw new Error(`Completion failed (requestId ${event.requestId}): ${event.message}`);
-      }
-      if (event.stopReason) stopReason = event.stopReason;
-      if (event.type === 'content') text += event.text;
+    }
+    throw new Error('Completion stream ended without [DONE]');
+  } finally {
+    try {
+      await reader.cancel();
+    } finally {
+      reader.releaseLock();
     }
   }
-  throw new Error('Completion stream ended without [DONE]');
 }
 ```
 
-Catch `OutOfCreditsError` in your UI and send the user to top up their B4M balance. On `RateLimitedError`, wait `retryAfterS` seconds before retrying. On `TruncatedReplyError`, show `partial` marked as incomplete, or retry with a higher `max_tokens`. For a model that reasons inside its output budget, omitting `max_tokens` lets B4M size the ceiling. On `UnusableReplyError` (for example `degenerate_repetition` or `refusal`), do not show the text; retry or tell the user the reply failed.
+Catch `OutOfCreditsError` in your UI and send the user to top up their B4M balance. On `RateLimitedError`, wait `retryAfterS` seconds before retrying. For a model that reasons inside its output budget, omitting `max_tokens` lets B4M size the ceiling.
 
 ## Further reading
 

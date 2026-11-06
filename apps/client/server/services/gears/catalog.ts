@@ -1,4 +1,10 @@
-import { GEAR_KEYS, type GearKey, type GearKind } from '@client/lib/gears/keys';
+import {
+  GEAR_KEYS,
+  GEAR_TRUST_MIN_AGE_DAYS,
+  type GearKey,
+  type GearKind,
+  type GearPendingReason,
+} from '@client/lib/gears/keys';
 import {
   Project,
   FabFile,
@@ -14,7 +20,9 @@ import {
   McpServer,
   agentRepository,
   dataLakeRepository,
+  adminSettingsRepository,
   creditTransactionRepository,
+  heldCreditRewardRepository,
   gearStampRepository,
   gearOverrideRepository,
   hearthRepository,
@@ -22,6 +30,7 @@ import {
   rapidReplyAuditLogRepository,
   researchDataRepository,
 } from '@bike4mind/database';
+import { creditService } from '@bike4mind/services';
 
 /**
  * The gear catalog and its evaluation, shared by GET /api/gears/status, POST
@@ -38,7 +47,7 @@ import {
  */
 
 export { GEAR_KEYS };
-export type { GearKey, GearKind };
+export type { GearKey, GearKind, GearPendingReason };
 
 /**
  * One-time rewards per gear: destinations 1,000; skills 100-1,000 by
@@ -64,15 +73,45 @@ interface GearFacts {
   usageFeatures: Set<string>;
   chatModelCount: number;
   stamps: Set<string>;
+  accountAgeInDays: number;
+  emailVerified: boolean;
+  /** The payout gate creditService.payCreditReward applies; mirrored here so a refused account sees no Claim. */
+  rewardBlocked: boolean;
 }
 
 async function gatherFacts(userId: string): Promise<GearFacts> {
-  const [usageFeatures, chatModels, stamps] = await Promise.all([
+  const [usageFeatures, chatModels, stamps, user] = await Promise.all([
     UsageEvent.distinct('feature', { userId }) as Promise<string[]>,
     UsageEvent.distinct('model', { userId, feature: 'chat' }) as Promise<string[]>,
     gearStampRepository.stampedKeys(userId),
+    User.findById(userId, {
+      createdAt: 1,
+      emailVerified: 1,
+      isBanned: 1,
+      disputePending: 1,
+      moderation: 1,
+      deletedAt: 1,
+      isSynthetic: 1,
+      'signupGrant.blocked': 1,
+    }).lean() as Promise<({ createdAt?: Date; emailVerified?: boolean } & creditService.RewardPartyFields) | null>,
   ]);
-  return { userId, usageFeatures: new Set(usageFeatures), chatModelCount: chatModels.length, stamps };
+  // Mirrors accountCreatedMs in userApiKeyService/trust.ts.
+  const createdAtMs = user?.createdAt ? new Date(user.createdAt).getTime() : NaN;
+  const createdMs = Number.isFinite(createdAtMs)
+    ? createdAtMs
+    : /^[0-9a-f]{24}$/i.test(userId)
+      ? parseInt(userId.slice(0, 8), 16) * 1000
+      : NaN;
+  const accountAgeInDays = Number.isFinite(createdMs) ? (Date.now() - createdMs) / (1000 * 60 * 60 * 24) : 0;
+  return {
+    userId,
+    usageFeatures: new Set(usageFeatures),
+    chatModelCount: chatModels.length,
+    stamps,
+    accountAgeInDays,
+    emailVerified: user?.emailVerified ?? false,
+    rewardBlocked: !user || creditService.isRewardRecipientBlocked(user),
+  };
 }
 
 export interface GearDef {
@@ -230,11 +269,12 @@ const GEARS: GearDef[] = [
     check: async ({ userId }) => !!(await User.exists({ _id: userId, 'mfa.totpEnabled': true })),
   },
   {
-    // The partial index on slackMetadata exists for exactly this query shape.
+    // Filters on slackMetadata.channelId (required on the subdocument) rather than slackMetadata
+    // itself so the query implies the partial userId_1_slackNotebook index's filter.
     key: 'slack',
     credits: 1000,
     kind: 'skill',
-    check: async ({ userId }) => !!(await Session.exists({ userId, slackMetadata: { $exists: true, $ne: null } })),
+    check: async ({ userId }) => !!(await Session.exists({ userId, 'slackMetadata.channelId': { $exists: true } })),
   },
   {
     // Each imported history is its own reward (OpenAI and Claude count separately).
@@ -340,6 +380,16 @@ export interface GearEvaluation {
   /** The payout's own condition - `rewardCheck` where the gear has one. */
   rewardEligible: boolean;
   alreadyRewarded: boolean;
+  /** Claimed, but held for the trickle pool; alreadyRewarded is also true. */
+  rewardQueued: boolean;
+  /** Why rewardEligible is false for an unlocked, unpaid gear. */
+  pendingReason?: GearPendingReason;
+}
+
+/** The gearRewardMinAccountAgeDays admin setting, or the code default when unset or unreadable. */
+export async function loadGearMinAccountAgeDays(): Promise<number> {
+  const value = await adminSettingsRepository.getSettingsValue('gearRewardMinAccountAgeDays');
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : GEAR_TRUST_MIN_AGE_DAYS;
 }
 
 /**
@@ -353,10 +403,18 @@ export interface GearEvaluation {
 export async function evaluateGears(
   userId: string,
   onlyKeys?: GearKey[]
-): Promise<{ evaluations: GearEvaluation[]; overrides: Awaited<ReturnType<typeof gearOverrideRepository.byKey>> }> {
+): Promise<{
+  evaluations: GearEvaluation[];
+  overrides: Awaited<ReturnType<typeof gearOverrideRepository.byKey>>;
+  minAccountAgeDays: number;
+}> {
   // Admin overrides (Manage Gears) layer over the code defaults: disabled
   // gears vanish (no card, no payout).
-  const [facts, overrides] = await Promise.all([gatherFacts(userId), gearOverrideRepository.byKey()]);
+  const [facts, overrides, minAccountAgeDays] = await Promise.all([
+    gatherFacts(userId),
+    gearOverrideRepository.byKey(),
+    loadGearMinAccountAgeDays(),
+  ]);
   const activeGears = GEARS.filter(
     g => overrides.get(g.key)?.enabled !== false && (!onlyKeys || onlyKeys.includes(g.key))
   );
@@ -366,22 +424,54 @@ export async function evaluateGears(
   const txIds = activeGears.map(g => gearTxId(userId, g.key));
   const existing = await creditTransactionRepository.find({ transactionId: { $in: txIds } });
   const rewarded = new Set((existing as Array<{ transactionId?: string }>).map(t => t.transactionId).filter(Boolean));
+  const heldRows = await heldCreditRewardRepository.findByTransactionIds(txIds);
+  // A reward queued for the trickle pool is already claimed: it pays on release, not on a second claim.
+  // A ledger row wins: a losing concurrent claim can leave a held row until the release settles it.
+  const queued = new Set(
+    heldRows.filter(row => row.status === 'held' && !rewarded.has(row.transactionId)).map(row => row.transactionId)
+  );
+  for (const txId of queued) rewarded.add(txId);
+  // Voided at release (the account was refused then): payCreditReward refuses every later claim of it.
+  const voided = new Set(heldRows.filter(row => row.status === 'void').map(row => row.transactionId));
 
   const evaluations = await Promise.all(
     activeGears.map(async (def, i) => {
       const unlocked = unlockedFlags[i];
       const alreadyRewarded = rewarded.has(gearTxId(userId, def.key));
-      // The payout may lag the unlock behind a stricter condition (anti-farm
-      // friction); evaluate it only when it could change the outcome.
-      const rewardEligible = unlocked && !alreadyRewarded && def.rewardCheck ? await def.rewardCheck(facts) : unlocked;
+      const rewardQueued = queued.has(gearTxId(userId, def.key));
+      const credits = overrides.get(def.key)?.credits ?? creditsFor(def);
+
+      let rewardEligible: boolean;
+      let pendingReason: GearPendingReason | undefined;
+      // Payouts require email verification and age even when API-key access has
+      // an admin, purchase, plan or manual-approval exemption: access is not a reward.
+      if (!unlocked || alreadyRewarded) {
+        rewardEligible = unlocked;
+      } else if (facts.rewardBlocked || voided.has(gearTxId(userId, def.key))) {
+        rewardEligible = false;
+        pendingReason = 'unavailable';
+      } else if (!facts.emailVerified) {
+        rewardEligible = false;
+        pendingReason = 'unverified';
+      } else if (facts.accountAgeInDays < minAccountAgeDays) {
+        rewardEligible = false;
+        pendingReason = 'too_new';
+      } else {
+        const rewardCheckPassed = def.rewardCheck ? await def.rewardCheck(facts) : true;
+        rewardEligible = rewardCheckPassed;
+        if (!rewardCheckPassed) pendingReason = 'reward_check';
+      }
+
       return {
         def,
         unlocked,
-        credits: overrides.get(def.key)?.credits ?? creditsFor(def),
+        credits,
         rewardEligible,
         alreadyRewarded,
+        rewardQueued,
+        pendingReason,
       };
     })
   );
-  return { evaluations, overrides };
+  return { evaluations, overrides, minAccountAgeDays };
 }

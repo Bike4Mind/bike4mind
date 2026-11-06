@@ -5,19 +5,30 @@ import { createMocks } from 'node-mocks-http';
 // invoked directly (same middleware-strip pattern as pages/api/email/__tests__/verify.test.ts).
 // Everything referenced inside a vi.mock factory must live in vi.hoisted (mocks are hoisted
 // above top-level const initialization).
-const { handlers, repo, invalidatePartnerRuleCache } = vi.hoisted(() => ({
+const { handlers, repo, invalidatePartnerRuleCache, audit, findPackage } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => unknown>,
   repo: { listRules: vi.fn(), findByDomain: vi.fn(), create: vi.fn() },
   invalidatePartnerRuleCache: vi.fn(),
+  audit: vi.fn(),
+  findPackage: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const chain: Record<string, (fn: (req: unknown, res: unknown) => unknown) => unknown> = {};
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
+    const chain: Record<string, unknown> = {
+      use: (middleware: (req: unknown, res: unknown, next: () => void) => void) => {
+        middlewares.push(middleware);
+        return chain;
+      },
+    };
     for (const method of ['get', 'post', 'put', 'delete']) {
       chain[method] = (fn: (req: unknown, res: unknown) => unknown) => {
-        handlers[method] = fn;
+        handlers[method] = async (req: unknown, res: unknown) => {
+          for (const middleware of middlewares) middleware(req, res, () => undefined);
+          return fn(req, res);
+        };
         return chain;
       };
     }
@@ -25,7 +36,12 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@bike4mind/database', () => ({ partnerSignupRuleRepository: repo }));
+vi.mock('@bike4mind/database', () => ({
+  partnerSignupRuleRepository: repo,
+  grantPackageRepository: { findById: findPackage },
+  withTransaction: (fn: () => Promise<unknown>) => fn(),
+}));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit }));
 // Keep assertKnownEntitlements real (exercises the actual known-key validation); spy only on invalidate.
 vi.mock('@server/entitlements/partnerRules', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/entitlements/partnerRules')>()),
@@ -56,7 +72,7 @@ describe('/api/admin/partner-signup-rules — create (POST)', () => {
 
   it('rejects a non-admin with 403 (ForbiddenError) and never writes', async () => {
     const { req, res } = makeReqRes('POST', { user: { isAdmin: false }, body: validRule });
-    await expect(handlers.post(req, res)).rejects.toThrow(/admin access required/i);
+    await expect(handlers.post(req, res)).rejects.toThrow(/missing permission/i);
     expect(repo.create).not.toHaveBeenCalled();
   });
 
@@ -100,12 +116,74 @@ describe('/api/admin/partner-signup-rules — create (POST)', () => {
     await expect(handlers.post(req, res)).rejects.toThrow(/already exists/i);
   });
 
+  it('rejects an unknown grant package with a 400 and never writes', async () => {
+    findPackage.mockResolvedValue(null);
+    const { req, res } = makeReqRes('POST', { body: { ...validRule, grantPackageId: 'pkg-missing' } });
+    await expect(handlers.post(req, res)).rejects.toThrow(/grant package pkg-missing not found/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an empty grant package id with a 400', async () => {
+    const { req, res } = makeReqRes('POST', { body: { ...validRule, grantPackageId: ' ' } });
+    await expect(handlers.post(req, res)).rejects.toThrow(/grant package id is required/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an inactive grant package with a 400 and never writes', async () => {
+    findPackage.mockResolvedValue({ id: 'pkg-off', credits: 100, active: false });
+    const { req, res } = makeReqRes('POST', { body: { ...validRule, grantPackageId: 'pkg-off' } });
+    await expect(handlers.post(req, res)).rejects.toThrow(/grant package is inactive/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('records the linked grant package id in the create audit details', async () => {
+    findPackage.mockResolvedValue({ id: 'pkg-1', credits: 100, active: true });
+    repo.create.mockResolvedValue({ id: 'r1', ...validRule, grantPackageId: 'pkg-1', enabled: true });
+    const { req, res } = makeReqRes('POST', { body: { ...validRule, grantPackageId: 'pkg-1' } });
+    await handlers.post(req, res);
+    expect(audit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ details: expect.objectContaining({ grantPackageId: 'pkg-1' }) })
+    );
+  });
+
+  it('creates a rule linked to an existing grant package', async () => {
+    findPackage.mockResolvedValue({ id: 'pkg-1', credits: 100, active: true });
+    const { req, res } = makeReqRes('POST', { body: { ...validRule, grantPackageId: 'pkg-1' } });
+    await handlers.post(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ grantPackageId: 'pkg-1' }));
+  });
+
   it('creates the rule (201), stamps createdBy, and busts the cache', async () => {
     const { req, res } = makeReqRes('POST', { body: validRule });
     await handlers.post(req, res);
     expect(res._getStatusCode()).toBe(201);
     expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ domain: 'partner.com', createdBy: 'admin-1' }));
     expect(invalidatePartnerRuleCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('records a strict org.partner_signup_rule.created entry after the create', async () => {
+    const { req, res } = makeReqRes('POST', { body: validRule });
+    await handlers.post(req, res);
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'org.partner_signup_rule.created',
+        target: { kind: 'settings', id: 'r1', displayName: 'partner.com' },
+        details: expect.objectContaining({ grantPackageId: null }),
+      })
+    );
+    expect(repo.create.mock.invocationCallOrder[0]).toBeLessThan(audit.mock.invocationCallOrder[0]);
+  });
+
+  it('does not report success or bust the cache when the audit write rejects', async () => {
+    audit.mockRejectedValueOnce(new Error('audit down'));
+    const { req, res } = makeReqRes('POST', { body: validRule });
+    await expect(handlers.post(req, res)).rejects.toThrow(/audit down/);
+    expect(res._isEndCalled()).toBe(false);
+    expect(invalidatePartnerRuleCache).not.toHaveBeenCalled();
   });
 
   it('accepts a datalake:<slug> entitlement, unlisted but matching the registered key family (#1669)', async () => {
@@ -132,7 +210,7 @@ describe('/api/admin/partner-signup-rules — list (GET)', () => {
 
   it('rejects a non-admin', async () => {
     const { req, res } = makeReqRes('GET', { user: { isAdmin: false } });
-    await expect(handlers.get(req, res)).rejects.toThrow(/admin access required/i);
+    await expect(handlers.get(req, res)).rejects.toThrow(/missing permission/i);
     expect(repo.listRules).not.toHaveBeenCalled();
   });
 

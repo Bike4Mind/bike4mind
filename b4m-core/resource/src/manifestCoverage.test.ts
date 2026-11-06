@@ -166,6 +166,53 @@ const PENDING_SCOPE_DECISION: Record<string, string> = {
 };
 
 /**
+ * Registered (so ElasticMQ creates it and producers resolve a URL) but drained by nothing on
+ * self-host. Messages sent here sit until they expire, so each entry says who can reach it and
+ * what wiring it needs. Full reasons, and the disposition, live in the matching
+ * `queue:infra/...` entries of packages/scripts/src/selfhostParityPolicy.ts; keep the two in sync.
+ */
+const REGISTERED_WITHOUT_CONSUMER: Record<string, string> = {
+  emailIngestionQueue: 'filled only by the SES inbound-mail notification; nothing produces it locally',
+  emailAnalysisQueue: 'enqueued only by the inbound-email parser; wire with emailIngestionQueue',
+  emailJobQueue: 'admin email-job start/send routes enqueue; needs a consumer and a mail provider decision',
+  emailBatchQueue: 'fed only by the emailJobQueue consumer; wire with emailJobQueue',
+  agentProactiveMessageQueue: 'trigger-proactive-messages route enqueues; open-core handler, candidate to wire',
+  deepAgentWakeQueue: 'deep agent enrollment enqueues wakes; open-core handler, candidate to wire',
+  lakeInconsistencyModelQueue: 'optional, behind an off-by-default flag; the route refuses the run with no URL',
+  liveOpsTriageQueue: 'admin live-ops trigger route enqueues; handler uses the CloudWatch client',
+  sreFixQueue: 'SRE Slack approval path enqueues; decide together with sreJobQueue',
+};
+
+/**
+ * Where self-host queue consumers are registered, each passing its queue name as a `'<name>'` literal.
+ * Top-level files only: a consumer moved into a subfolder fails the coverage test, it is not missed.
+ */
+const SELF_HOST_CONSUMER_DIR = 'apps/workers/src/selfhost';
+
+/** Consumers outside the self-host worker that take their queue URL from an env var, not `Resource`. */
+const ENV_VAR_CONSUMERS: Record<string, { file: string; envVar: string }> = {
+  agentContinuationQueue: { file: 'apps/workers/src/agentExecutor/main.ts', envVar: 'AGENT_CONTINUATION_QUEUE' },
+};
+
+/**
+ * Queue names a self-host consumer registers, by `'<name>'` literal. `Resource.<name>` is not counted:
+ * producers in the same dir read their target queue that way too.
+ */
+const selfHostConsumedQueues = (): Set<string> => {
+  const consumed = new Set<string>();
+  const dir = join(REPO_ROOT, SELF_HOST_CONSUMER_DIR);
+  for (const entry of readdirSync(dir)) {
+    if (!/\.ts$/.test(entry) || /\.test\./.test(entry)) continue;
+    const content = readFileSync(join(dir, entry), 'utf8');
+    for (const m of content.matchAll(/'([A-Za-z][A-Za-z0-9]*Queue)'/g)) consumed.add(m[1]);
+  }
+  for (const [name, { file, envVar }] of Object.entries(ENV_VAR_CONSUMERS)) {
+    if (readFileSync(join(REPO_ROOT, file), 'utf8').includes(`process.env.${envVar}`)) consumed.add(name);
+  }
+  return consumed;
+};
+
+/**
  * Registered QUEUES, imported and filtered on kind rather than parsed out of the source text.
  * Text-matching every `  name:` line admitted all 88 manifest entries of every kind, so a queue
  * mistyped as `{ kind: 'secret' }` would satisfy this check AND drop out of the three consistency
@@ -213,5 +260,64 @@ describe('self-host resource manifest coverage', () => {
       k => !referenced.has(k)
     );
     expect(stale, `exempted but no longer read anywhere: ${stale.join(', ')}`).toEqual([]);
+  });
+
+  it('finds self-host consumers at all', () => {
+    // Parser sanity, as above: an empty set would flag every queue rather than pass vacuously,
+    // but a set missing the env-var consumer would hide a broken ENV_VAR_CONSUMERS entry.
+    const consumed = selfHostConsumedQueues();
+    expect(consumed).toContain('fabFileChunkQueue');
+    expect(consumed).toContain('lakeMemoryQueue');
+    expect(consumed).toContain('agentContinuationQueue');
+  });
+
+  it('consumes every registered queue on self-host, or says why not', () => {
+    const consumed = selfHostConsumedQueues();
+    const unconsumed = [...manifestKeys()].filter(k => !consumed.has(k) && !(k in REGISTERED_WITHOUT_CONSUMER));
+    expect(
+      unconsumed,
+      `registered queues with no self-host consumer and no reason in REGISTERED_WITHOUT_CONSUMER:\n  ${unconsumed.join('\n  ')}`
+    ).toEqual([]);
+  });
+
+  it('does not list a queue as unconsumed once it is consumed or unregistered', () => {
+    const consumed = selfHostConsumedQueues();
+    const declared = manifestKeys();
+    const stale = Object.keys(REGISTERED_WITHOUT_CONSUMER).filter(k => consumed.has(k) || !declared.has(k));
+    expect(
+      stale,
+      `listed as registered-without-consumer but now consumed or unregistered: ${stale.join(', ')}`
+    ).toEqual([]);
+  });
+
+  it('gives every registered-without-consumer queue a gapBecause entry in the parity policy', () => {
+    const policy = readFileSync(join(REPO_ROOT, 'packages/scripts/src/selfhostParityPolicy.ts'), 'utf8');
+    const withReason = new Set(
+      [...policy.matchAll(/gapBecause\(\s*'queue:infra\/[A-Za-z]+\.ts:([A-Za-z][A-Za-z0-9]*Queue)'/g)].map(m => m[1])
+    );
+    const missing = Object.keys(REGISTERED_WITHOUT_CONSUMER).filter(k => !withReason.has(k));
+    expect(missing, `no gapBecause entry in selfhostParityPolicy.ts: ${missing.join(', ')}`).toEqual([]);
+  });
+});
+
+// readOptionalSecret swallows the shim's "not registered" throw, so a missing manifest entry
+// silently disables the feature instead of failing loudly.
+describe('self-host secret manifest coverage', () => {
+  const optionalSecretNames = (): string[] => {
+    const content = readFileSync(join(REPO_ROOT, 'packages/server-utils/src/utils/config.ts'), 'utf8');
+    return [...content.matchAll(/readOptionalSecret\(\s*'([A-Z][A-Z0-9_]*)'/g)].map(m => m[1]);
+  };
+
+  it('finds readOptionalSecret references at all', () => {
+    const names = optionalSecretNames();
+    expect(names.length).toBeGreaterThanOrEqual(3);
+    expect(names).toContain('OAUTH_RSA_PRIVATE_KEY');
+  });
+
+  it('registers every secret Config reads through readOptionalSecret', () => {
+    const missing = optionalSecretNames().filter(
+      name => (DEFAULT_MANIFEST as Record<string, { kind: string }>)[name]?.kind !== 'secret'
+    );
+    expect(missing, `readOptionalSecret names absent from the manifest: ${missing.join(', ')}`).toEqual([]);
   });
 });

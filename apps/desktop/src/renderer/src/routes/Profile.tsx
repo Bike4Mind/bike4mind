@@ -8,10 +8,11 @@ import Typography from '@mui/joy/Typography';
 import { useNavigate } from '@tanstack/react-router';
 import { useAuthState } from '../auth/useAuthState';
 import { ProfileScreen } from '../profile/ProfileScreen';
+import { centeredScreenSx } from './centeredScreenSx';
 
 function Centered({ children }: { children: ReactNode }) {
   return (
-    <Box sx={{ minHeight: '100vh', display: 'grid', placeItems: 'center', bgcolor: 'background.body', p: 3 }}>
+    <Box sx={centeredScreenSx}>
       <Card variant="outlined" sx={{ width: 'min(520px, 100%)', gap: 2 }}>
         {children}
       </Card>

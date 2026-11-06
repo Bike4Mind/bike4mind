@@ -9,7 +9,7 @@ import {
   Tool,
 } from '@google/genai';
 import { DEFAULT_MAX_TOOL_CALLS, ICompletionBackend, type CompletionInfo, type ICompletionOptions } from './backend';
-import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import { Logger } from '@bike4mind/observability';
@@ -43,8 +43,10 @@ import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
 import { geminiThinkingOutputCap } from './thinkingParams';
 import { withAbortListener } from './withAbortListener';
+import { retryTransportErrors } from './transportRetry';
 import { DispatchModel } from './dispatchModel';
 import { normalizeGeminiFinishReason } from './stopReason';
+import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
 
 // Matches gemini-3-pro-preview, gemini-3.1-pro-preview, gemini-3.5-flash, but not a future gemini-30 family.
 const isGemini3 = (modelId: string) => /^gemini-3(\D|$)/.test(modelId);
@@ -664,7 +666,15 @@ export class GeminiBackend implements ICompletionBackend {
     const bestEffortFormat = isBestEffortJsonSchema(options.responseFormat);
 
     const systemMessages = messagesWithFormat.filter(message => message.role === 'system');
-    const systemInstruction = systemMessages.map(message => message.content).join('\n');
+    const callerSystemText = systemMessages.map(message => message.content).join('\n');
+    // Without the identity tool, the line tells the model which model it is.
+    // Empty text plus no reminder still leaves `systemInstruction: undefined` below.
+    const systemInstruction = shouldOmitIdentityReminder(options)
+      ? callerSystemText
+      : appendIdentityReminder(
+          callerSystemText,
+          buildIdentityReminder(options.modelIdentityId ?? modelName, options.modelDisplayName)
+        );
 
     const nonsystemMessages = messagesWithFormat.filter(message => message.role !== 'system');
     const contents = this.formatMessagesIntoGeminiContent(nonsystemMessages, liveToolUseIds);
@@ -740,10 +750,14 @@ export class GeminiBackend implements ICompletionBackend {
       try {
         // @google/genai ignores a signal that is already aborted, so the request would still go out.
         if (options.abortSignal?.aborted) throw new Error('Request aborted');
-        const result = await this._api.models.generateContentStream({
-          ...request,
-          config: { ...request.config, abortSignal: options.abortSignal },
-        });
+        const result = await retryTransportErrors(
+          () =>
+            this._api.models.generateContentStream({
+              ...request,
+              config: { ...request.config, abortSignal: options.abortSignal },
+            }),
+          { logger: this.logger, label: 'GeminiBackend', abortSignal: options.abortSignal }
+        );
 
         let lastChunk: any = null;
         for await (const chunk of result) {
@@ -972,7 +986,10 @@ export class GeminiBackend implements ICompletionBackend {
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
 
-                this.logger.error(`[Gemini] Error executing tool ${outcome.toolCall.name}:`, outcome.error);
+                this.logger[toolFailureLogLevel(outcome.error)](
+                  `[Gemini] Error executing tool ${outcome.toolCall.name}:`,
+                  outcome.error
+                );
                 // Strip too - matches the success path above (openaiBackend does the same for
                 // its error branch) so an error message can't carry echoable artifact markup.
                 const errorContent = JSON.stringify({
@@ -1096,7 +1113,11 @@ export class GeminiBackend implements ICompletionBackend {
         // request throws - removing it only on the success path leaked one
         // listener per failed call on a reused signal.
         const result = await withAbortListener(options.abortSignal, abortListener, () =>
-          this._api.models.generateContent(request)
+          retryTransportErrors(() => this._api.models.generateContent(request), {
+            logger: this.logger,
+            label: 'GeminiBackend',
+            abortSignal: options.abortSignal,
+          })
         );
         const r = result;
 
@@ -1269,7 +1290,10 @@ export class GeminiBackend implements ICompletionBackend {
             } as IMessage);
           } else {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
-            this.logger.error(`[Gemini] Error executing tool ${outcome.toolCall.name}:`, outcome.error);
+            this.logger[toolFailureLogLevel(outcome.error)](
+              `[Gemini] Error executing tool ${outcome.toolCall.name}:`,
+              outcome.error
+            );
             // Strip too - matches the success path above (openaiBackend does the same for its
             // error branch) so an error message can't carry echoable artifact markup.
             const errorContent = JSON.stringify({
@@ -1633,6 +1657,18 @@ export class GeminiBackend implements ICompletionBackend {
   }
 
   private getGenerationConfig(
+    model: ModelInfo,
+    options: Partial<ICompletionOptions>
+  ): Pick<GenerateContentConfig, 'temperature' | 'maxOutputTokens' | 'thinkingConfig'> {
+    const config = this.getUncappedGenerationConfig(model, options);
+    // The thinking reserve sits on top of the caller's cap; a billing ceiling bounds the sum.
+    const ceiling = options.outputTokenCeiling;
+    return ceiling !== undefined && (config.maxOutputTokens ?? Infinity) > ceiling
+      ? { ...config, maxOutputTokens: ceiling }
+      : config;
+  }
+
+  private getUncappedGenerationConfig(
     model: ModelInfo,
     options: Partial<ICompletionOptions>
   ): Pick<GenerateContentConfig, 'temperature' | 'maxOutputTokens' | 'thinkingConfig'> {

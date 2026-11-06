@@ -10,12 +10,18 @@ import {
   getTextModelCost,
   getTurnsCost,
   insufficientCreditsError,
+  isShadowTier,
   type IMessage,
   type IUserDocument,
   type ModelInfo,
   type ApiKeyCompletionSource,
 } from '@bike4mind/common';
-import { adminSettingsRepository, organizationRepository, usageEventRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  cacheRepository,
+  organizationRepository,
+  usageEventRepository,
+} from '@bike4mind/database';
 import { estimateInputTokens, estimateToolTokens } from '@bike4mind/services/cliCompletions';
 import {
   assertOwnerHasCredits,
@@ -27,11 +33,18 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import {
   createModelAdmission as createSharedModelAdmission,
+  loadFreeTierAllowedModels,
   loadModelConfigurations,
   type ModelAdmission,
 } from '@bike4mind/services/llm/modelAdmission';
+import {
+  loadShadowTierSettings,
+  recordShadowTokenUsage,
+  reserveShadowTokenBudget,
+} from '@bike4mind/services/llm/shadowTier';
 import { getSettingsMap, getSettingsValue, usdToCredits, usdToCreditsStochastic } from '@bike4mind/utils';
-import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
+import { assertApiKeyOrgMembership } from '@bike4mind/server-utils/billing/assertApiKeyOrgMembership';
+import { persistedIsAdmin } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { getUserEntitlements } from '@server/entitlements';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 import {
@@ -58,16 +71,17 @@ export type MeteredRequest = Parameters<typeof reserveRequestCredits>[0]['req'] 
  * b4m-core/services/src/llm/modelAdmission.ts (shared with ChatCompletionInvoke, the fallback chain,
  * executeCompletion and the agent executor). Pass the resolved catalog so a disabled model, or an
  * unpriced text model while credits are enforced, is refused too. `systemModel` skips the per-user
- * picker access rules for a model the platform chose (the operations model, a fixed default).
+ * picker access rules and the free-tier gate for a model the platform chose (the operations model, a fixed default).
  */
 export async function createModelAdmission(
   user: IUserDocument,
   models?: ModelInfo[],
   systemModel = false
 ): Promise<ModelAdmission> {
-  const [configs, enforceCredits] = await Promise.all([
+  const [configs, enforceCredits, freeTierAllowedModels] = await Promise.all([
     systemModel ? [] : loadModelConfigurations(adminSettingsRepository),
     isCreditsEnforced(),
+    systemModel ? undefined : loadFreeTierAllowedModels(adminSettingsRepository),
   ]);
   return createSharedModelAdmission({
     user,
@@ -75,6 +89,7 @@ export async function createModelAdmission(
     getEntitlements: () => getUserEntitlements(user),
     models,
     enforceCredits,
+    freeTierAllowedModels,
   });
 }
 
@@ -116,6 +131,17 @@ export async function isCreditsEnforced(): Promise<boolean> {
   return Boolean(getSettingsValue('enforceCredits', settings));
 }
 
+function throttleUser(req: MeteredRequest) {
+  return req.user
+    ? {
+        id: req.user.id,
+        isAdmin: persistedIsAdmin(req.user),
+        tags: req.user.tags,
+        throttle: req.user.throttle,
+      }
+    : undefined;
+}
+
 /** Reserve `usd` against the caller's billing owner; a no-op hold when enforceCredits is off. */
 export async function reserveCompletionCredits(
   req: MeteredRequest,
@@ -123,6 +149,21 @@ export async function reserveCompletionCredits(
   featureLabel: string,
   { organizationId, holdTtlMs }: { organizationId?: string | null; holdTtlMs?: number } = {}
 ): Promise<CreditReservation> {
+  // Restricted-tier daily token cap; refused like an empty balance.
+  const user = throttleUser(req);
+  if (user && isShadowTier(user)) {
+    const { dailyTokenCap } = await loadShadowTierSettings(adminSettingsRepository);
+    if (!(await reserveShadowTokenBudget(user, dailyTokenCap, { cache: cacheRepository }))) {
+      throw insufficientCreditsError(
+        creditService.holdInsufficientCreditsMessage(
+          featureLabel,
+          0,
+          Math.max(1, usdToCredits(usd)),
+          Boolean(resolveRequestBillingOrgId(req, organizationId))
+        )
+      );
+    }
+  }
   return reserveRequestCredits({
     req,
     // Positive requests keep the minimum one-credit reservation; an explicitly free call needs none.
@@ -166,8 +207,10 @@ export async function settleCompletion(
     cacheCreationInputTokens?: number;
     sessionId?: string;
     feature?: 'completion_api' | 'embedding';
+    apiKeyId?: string;
   }
 ): Promise<number> {
+  const apiKeyId = charge.apiKeyId ?? req.apiKeyInfo?.keyId;
   // Per call, never the session id: UsageEvent rollups group by requestId, so one id shared across a
   // session's calls would merge them.
   const requestId = randomUUID();
@@ -176,11 +219,13 @@ export async function settleCompletion(
     type: 'completion_api_usage',
     sessionId: charge.sessionId ?? requestId,
     model: charge.model,
-    apiKeyId: req.apiKeyInfo?.keyId,
+    apiKeyId,
     // Web JWT calls keep the ledger's 'web' default; resolveRequestUsageSource would label them 'api'.
     source,
     inputTokens: charge.inputTokens,
     outputTokens: charge.outputTokens,
+    cacheReadTokens: charge.cacheReadInputTokens,
+    cacheWriteTokens: charge.cacheCreationInputTokens,
   });
   await usageEventRepository
     .record({
@@ -201,13 +246,27 @@ export async function settleCompletion(
       creditsCharged,
       status: 'ok',
       source,
-      apiKeyId: req.apiKeyInfo?.keyId,
+      apiKeyId,
     })
     .catch(err => req.logger.warn('[meterPlatformCompletion] usage event failed', err));
+  await recordShadowTokenUsage(
+    throttleUser(req)!,
+    charge.inputTokens +
+      charge.outputTokens +
+      (charge.cacheReadInputTokens ?? 0) +
+      (charge.cacheCreationInputTokens ?? 0),
+    { cache: cacheRepository }
+  );
   return creditsCharged;
 }
 
-type CompletionMeterOptions = { sessionId?: string; organizationId?: string | null; systemModel?: boolean };
+type CompletionMeterOptions = {
+  sessionId?: string;
+  organizationId?: string | null;
+  systemModel?: boolean;
+  /** The UserApiKey behind queued work that has no request; ledger attribution only, never the billing owner. */
+  apiKeyId?: string;
+};
 
 /**
  * A CompletionMeter (b4m-core/services/src/billing/completionMeter.ts) for platform-key work with no
@@ -255,6 +314,7 @@ export function createRequestCompletionMeter(
           cacheReadInputTokens: usage.cacheReadInputTokens,
           cacheCreationInputTokens: usage.cacheCreationInputTokens,
           sessionId: opts.sessionId,
+          apiKeyId: opts.apiKeyId,
         }),
     };
   };

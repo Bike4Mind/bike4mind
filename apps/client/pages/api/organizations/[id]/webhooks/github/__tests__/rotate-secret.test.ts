@@ -32,7 +32,7 @@ vi.mock('@server/integrations/github/webhookUtils', () => ({
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   encryptSecret: (value: string) => `enc(${value})`,
 }));
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
 
 await import('../rotate-secret');

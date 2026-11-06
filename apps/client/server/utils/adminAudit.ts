@@ -100,21 +100,44 @@ export const loadCreditGrantPolicy = async (): Promise<adminAuditService.CreditG
 
 const writerAdapters = async (
   req: AuditRequest,
-  action: AdminAuditAction
+  action: AdminAuditAction,
+  preloadedPolicy?: () => Promise<adminAuditService.CreditGrantPolicy>
 ): Promise<adminAuditService.RecordAdminActionAdapters> => ({
   db: { adminAuditLog: adminAuditLogRepository },
-  creditGrantPolicy: ADMIN_AUDIT_CREDIT_GRANT_ACTIONS.includes(action) ? await loadCreditGrantPolicy() : undefined,
+  creditGrantPolicy: ADMIN_AUDIT_CREDIT_GRANT_ACTIONS.includes(action)
+    ? await (preloadedPolicy ?? loadCreditGrantPolicy)()
+    : undefined,
   logger: req.logger,
 });
 
+/**
+ * `options.creditGrantPolicy` lets a caller writing many entries (a bulk batch) read the AdminSettings
+ * thresholds once instead of once per entry.
+ */
 export const recordAdminActionFromRequest = async (
   req: AuditRequest,
-  { actorScope, ...input }: RecordAdminActionFromRequestInput
+  { actorScope, ...input }: RecordAdminActionFromRequestInput,
+  options: { creditGrantPolicy?: () => Promise<adminAuditService.CreditGrantPolicy> } = {}
 ): Promise<AuditEntry | null> =>
   adminAuditService.recordAdminAction(
     { ...input, actor: await resolveActor(req, actorScope ?? 'platform'), context: buildContext(req) },
-    await writerAdapters(req, input.action)
+    await writerAdapters(req, input.action, options.creditGrantPolicy)
   );
+
+/**
+ * Writes one admin audit entry for a caller that has already decided who the actor is. Lets shared
+ * admin operations (the bulk user actions, blockedEmailDomains) run from a request or from a job.
+ */
+export type AdminAuditWriter = (
+  input: RecordAdminActionFromRequestInput,
+  options?: { creditGrantPolicy?: () => Promise<adminAuditService.CreditGrantPolicy> }
+) => Promise<AuditEntry | null>;
+
+/** The writer for a request: the request's admin is the actor. */
+export const requestAuditWriter =
+  (req: AuditRequest): AdminAuditWriter =>
+  (input, options) =>
+    recordAdminActionFromRequest(req, input, options);
 
 /** For routes with no req.user (returnToAdmin authenticates by cookie): the caller names the actor. */
 export const recordAdminActionForActor = async (
@@ -141,6 +164,12 @@ export const parseAdminActionReason = (value: unknown): string => {
   const parsed = AdminActionReasonSchema.safeParse(value);
   if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'A reason is required');
   return parsed.data;
+};
+
+/** Non-throwing read of an optional reason, for audit writes made after the change has committed. */
+export const readAdminActionReason = (value: unknown): string | undefined => {
+  const parsed = AdminActionReasonSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 };
 
 export const definedKeys = (data: Record<string, unknown>): string[] =>
@@ -185,3 +214,9 @@ export const systemAuditActor = (name: string): AuditActor => ({
   name,
   wasAdmin: false,
 });
+
+/** Audit target for the account an admin action is taken against. */
+export const userAuditTarget = async (userId: string) => {
+  const user = await userRepository.findById(userId);
+  return { kind: 'user' as const, id: userId, displayName: user?.email ?? user?.username ?? userId };
+};

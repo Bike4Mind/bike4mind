@@ -82,14 +82,6 @@ export const CacheKeys = {
     return `userInvites:${userId}:${limit}:${page}`;
   },
 
-  securityBehavioralSummary: (userId: string) => {
-    return `security-behavioral-summary-v2:${userId}`;
-  },
-
-  securityDashboardAiAssessment: (stage: string, fingerprintHash: string) => {
-    return `security-dashboard-ai-assessment:${stage}:${fingerprintHash}`;
-  },
-
   modelList: (userId: string) => `model-list:${userId}`,
 
   refineText: (text: string, context?: string) => {

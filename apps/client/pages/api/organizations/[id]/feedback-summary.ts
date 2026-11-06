@@ -12,10 +12,10 @@ import {
 } from '@bike4mind/database';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { BadRequestError, ForbiddenError, InternalServerError } from '@bike4mind/server-utils/utils/errors';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { resolveInstantWindow } from '@server/utils/orgFeedbackWindow';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Request, Response } from 'express';

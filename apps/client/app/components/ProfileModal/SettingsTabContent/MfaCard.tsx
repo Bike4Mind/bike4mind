@@ -245,6 +245,7 @@ const MfaCard = () => {
           open={showMFAModal}
           onClose={() => setShowMFAModal(false)}
           onCancel={handleCancelSetup}
+          mode="setup"
           title="Set Up Multi-Factor Authentication"
           description="Scan the QR code with your authenticator app, then enter the verification code."
           qrCodeUrl={setupMFA.data?.qrCodeUrl}

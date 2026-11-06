@@ -1,3 +1,11 @@
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: vi.fn(async () => ({
+    assert: vi.fn(async (_modelId: string) => {}),
+    admits: vi.fn(async (_modelId: string) => true),
+  })),
+}));
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CreditHolderType } from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
@@ -88,7 +96,7 @@ vi.mock('@server/utils/creditPreflight', () => ({
 // Mock the persistence helper so this route test doesn't pull in the real
 // FabFile/services/database stack (which references @bike4mind/common exports
 // not provided by the partial mock above).
-vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
+vi.mock('@bike4mind/server-utils/utils/saveGeneratedAssetToFiles', () => ({
   saveGeneratedAssetToFiles: (...a: unknown[]) => mocks.saveGeneratedAssetToFiles(...a),
 }));
 
@@ -106,7 +114,9 @@ import handler from '../tts';
 
 const run = (
   body: Record<string, unknown>,
-  user: { id?: string; organizationId?: string | null; isAdmin?: boolean; isModerated?: boolean } | undefined = { id: 'u1' },
+  user: { id?: string; organizationId?: string | null; isAdmin?: boolean; isModerated?: boolean } | undefined = {
+    id: 'u1',
+  },
   apiKeyInfo?: unknown
 ) => {
   const { req, res } = createMocks({ method: 'POST', body });
@@ -162,6 +172,29 @@ beforeEach(() => {
 });
 
 describe('POST /api/ai/tts', () => {
+  it('refuses an unlisted voice model before the hold and synthesis', async () => {
+    const refusal = new Error('paid plan required');
+    const assertAdmission = vi.fn(async (_modelId: string) => {
+      throw refusal;
+    });
+    vi.mocked(createModelAdmission).mockResolvedValueOnce({ assert: assertAdmission, admits: async () => false });
+    const { promise } = run({ text: 'hi', model: 'tts-1-hd' });
+    await expect(promise).rejects.toBe(refusal);
+    expect(assertAdmission).toHaveBeenCalledWith('tts-1-hd');
+    expect(mocks.holdPreflightCredits).not.toHaveBeenCalled();
+    expect(mocks.synthesizeTts).not.toHaveBeenCalled();
+  });
+
+  it('excludes a paid-only fallback while allowing the primary voice', async () => {
+    mocks.hasTtsProviderKey.mockResolvedValue(true);
+    const admits = vi.fn(async (_modelId: string) => false);
+    vi.mocked(createModelAdmission).mockResolvedValueOnce({ assert: async () => {}, admits });
+    const { promise } = run({ text: 'hi', provider: 'openai' });
+    await promise;
+    expect(admits).toHaveBeenCalledWith('eleven_multilingual_v2');
+    expect(mocks.synthesizeTts).toHaveBeenCalledWith(expect.objectContaining({ candidates: ['openai'] }));
+  });
+
   it('rejects a moderated user with 403 before reserving credits or calling a provider', async () => {
     const { promise } = run({ text: 'hi' }, { id: 'u1', isModerated: true });
     await expect(promise).rejects.toMatchObject({ statusCode: 403, message: AI_ACCESS_REVOKED_MESSAGE });
@@ -511,7 +544,14 @@ describe('POST /api/ai/tts', () => {
         userId: 'u1',
         bytes: expect.any(Buffer),
         contentType: 'audio/mpeg',
-        generation: { generator: 'speech', provider: 'openai', modelId: 'tts-1', prompt: 'hello', format: 'mp3' },
+        generation: {
+          generator: 'speech',
+          provider: 'openai',
+          modelId: 'tts-1',
+          prompt: 'hello',
+          format: 'mp3',
+          request: expect.objectContaining({ provider: 'openai', text: 'hello' }),
+        },
       },
       expect.anything()
     );

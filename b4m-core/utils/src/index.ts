@@ -52,6 +52,9 @@ export * from './registrableDomain';
 // Also available via the lightweight `@bike4mind/utils/escapeRegex` subpath -
 // prefer that in server modules covered by client vitest suites.
 export * from './escapeRegex';
+// Also available via the lightweight `@bike4mind/utils/escapeHtml` subpath -
+// prefer that everywhere; the barrel is too heavy for the HTML/email builders.
+export * from './escapeHtml';
 // Also available via the lightweight `@bike4mind/utils/safeObjectKey` subpath.
 export * from './safeObjectKey';
 // Also available via the lightweight `@bike4mind/utils/globMatches` subpath.
@@ -63,6 +66,7 @@ export * from './toolEchoMatcher';
 export * from './retrievalExclusion';
 export * from './validation';
 export * from './slack';
+export * from './errorLogSlackMessage';
 export * from './cacheKeys';
 export * from './pagination';
 export * from './settings';
@@ -90,6 +94,7 @@ export * from './user';
 export * from './pricing';
 export * from './functionQueueRunner';
 export * from './fabfile';
+export * from './signedUrlExpiry';
 export * from './office/officeEdit';
 export * from './artifactParser';
 // NOT barrel-exported on purpose: `artifactElision` is reached only via the

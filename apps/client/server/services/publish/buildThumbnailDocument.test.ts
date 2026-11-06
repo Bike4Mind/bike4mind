@@ -45,8 +45,8 @@ describe('buildThumbnailDocument', () => {
     expect(doc?.srcdoc).toContain('color:#123456');
     expect(doc?.srcdoc).toContain('data:image/png;base64,');
     expect(doc?.srcdoc).not.toMatch(/href="style\.css"|src="logo\.png"/);
-    // The skipped video is reported like any other asset the render goes without.
-    expect(doc?.droppedAssets).toEqual(['clip.mp4']);
+    // The video is skipped on purpose, so it is not reported as a gap in the render.
+    expect(doc?.droppedAssets).toEqual({ missing: [], oversized: [], failed: [] });
   });
 
   it('never loads always-streamed media, which a still frame does not need', async () => {
@@ -108,7 +108,7 @@ describe('buildThumbnailDocument', () => {
     expect(doc?.srcdoc).toContain('#b4m-gate-dismiss:checked~#b4m-gate-panel{display:none!important}');
   });
 
-  it('reports assets it could not inline instead of failing the render', async () => {
+  it('reports a bundle file that failed to load instead of failing the render', async () => {
     const { 'logo.png': _missing, ...withoutLogo } = FILES;
     const doc = await buildThumbnailDocument({
       versionId: sha(INDEX),
@@ -116,6 +116,23 @@ describe('buildThumbnailDocument', () => {
       load: loader(withoutLogo),
       appOrigin: 'https://app.example.test',
     });
-    expect([...(doc?.droppedAssets ?? [])].sort()).toEqual(['clip.mp4', 'logo.png']);
+    expect(doc?.droppedAssets).toEqual({ missing: [], oversized: [], failed: ['logo.png'] });
+  });
+
+  it('reports refs to files the bundle does not contain, by bundle path and once each', async () => {
+    const page = Buffer.from(
+      '<!doctype html><html><head><link rel="stylesheet" href="./theme.css"></head>' +
+        '<body><img src="img/a.png"><img src="./img/a.png"><img src="logo.png"></body></html>'
+    );
+    const doc = await buildThumbnailDocument({
+      versionId: sha(page),
+      manifest: [
+        { path: 'index.html', mimeType: 'text/html' },
+        { path: 'logo.png', mimeType: 'image/png' },
+      ],
+      load: loader({ ...FILES, 'index.html': page }),
+      appOrigin: 'https://app.example.test',
+    });
+    expect(doc?.droppedAssets).toEqual({ missing: ['theme.css', 'img/a.png'], oversized: [], failed: [] });
   });
 });

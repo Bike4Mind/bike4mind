@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
@@ -26,6 +27,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
+const mockAudit = vi.hoisted(() => vi.fn(async () => null));
 const mockNewest = vi.fn();
 const mockAppend = vi.fn();
 vi.mock('@bike4mind/database', () => ({
@@ -34,6 +36,8 @@ vi.mock('@bike4mind/database', () => ({
     append: (...a: unknown[]) => mockAppend(...a),
   },
 }));
+
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
 import handler from '../provider-invoices';
 
@@ -114,5 +118,29 @@ describe('POST /api/admin/provider-invoices', () => {
     const { run } = call({ method: 'POST', body: { ...BODY, note: '  INV-1, Jun 1-30  ' } });
     await run();
     expect(mockAppend).toHaveBeenCalledWith({ ...BODY, enteredBy: 'admin-1' });
+  });
+});
+
+describe('POST /api/admin/provider-invoices admin audit', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('records a provider_invoice.recorded entry after the append', async () => {
+    mockAppend.mockResolvedValue({ ...BODY, enteredBy: 'admin-1' });
+    await call({ method: 'POST', body: BODY }).run();
+
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.provider_invoice.recorded',
+      target: { kind: 'settings', id: '2026-06:openai' },
+      details: { month: '2026-06', provider: 'openai', invoiceUsd: 412.3 },
+    });
+    expect(mockAppend.mock.invocationCallOrder[0]).toBeLessThan(mockAudit.mock.invocationCallOrder[0]);
+  });
+
+  it('does not audit a rejected request', async () => {
+    await expect(call({ method: 'POST', body: { ...BODY, month: 'June' } }).run()).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 });

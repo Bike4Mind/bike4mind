@@ -9,6 +9,7 @@ import {
 } from '@bike4mind/database';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
+import { activePlanResolver } from '@server/entitlements/activeSubscriptions';
 
 export interface RecordSessionOperationalUsageArgs {
   /** Owner of the session; attribution rolls up to their org when they have one. */
@@ -100,6 +101,7 @@ export async function recordSessionOperationalUsage(args: RecordSessionOperation
           creditTransactions: creditTransactionRepository,
           users: userRepository,
           organizations: organizationRepository,
+          activePlans: activePlanResolver,
         },
         logger,
       }

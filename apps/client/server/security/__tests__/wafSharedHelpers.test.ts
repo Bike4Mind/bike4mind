@@ -8,7 +8,7 @@ import {
   parseIsoTimestamp,
   parseLogGroupInfoFromArn,
   escapeInsightsStringLiteral,
-} from '../wafSharedHelpers';
+} from '@bike4mind/server-utils/security/wafSharedHelpers';
 
 describe('wafSharedHelpers', () => {
   describe('RANGE_MS constant', () => {

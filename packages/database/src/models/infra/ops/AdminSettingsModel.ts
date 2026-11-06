@@ -3,6 +3,7 @@ import {
   AdminSettingDoc,
   IAdminSettings,
   IAdminSettingsRepository,
+  isEnforceCreditsLocked,
   redactSettingSecrets,
   resolveSettingDefinition,
   SettingKey,
@@ -154,6 +155,7 @@ class AdminSettingsRepository extends BaseRepository<IAdminSettings> implements 
   }
 
   async getSettingsValue<K extends SettingKey>(settingName: K): Promise<SettingValue<K> | undefined> {
+    if (settingName === 'enforceCredits' && isEnforceCreditsLocked()) return true as SettingValue<K>;
     const setting = await this.findOne({ settingName }); // findOne already decrypts via lean path
     const definition = resolveSettingDefinition(settingName);
     if (!definition) return undefined;

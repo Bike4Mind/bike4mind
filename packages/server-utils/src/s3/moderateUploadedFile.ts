@@ -1,6 +1,10 @@
 import type { Logger } from '@bike4mind/observability';
 import type { ImageModerationService } from '@bike4mind/utils/imageModeration';
-import { ImageModerationBlockedError, UnsupportedImageFormatError } from '@bike4mind/utils/imageModeration';
+import {
+  ImageModerationBlockedError,
+  ModerationBudgetExceededError,
+  UnsupportedImageFormatError,
+} from '@bike4mind/utils/imageModeration';
 import type { ImageModerationIncident } from '@bike4mind/common';
 import { SupportedFabFileMimeTypes, UNSUPPORTED_FORMAT_BLOCK_REASON } from '@bike4mind/common';
 import { fileTypeFromBuffer } from 'file-type';
@@ -31,6 +35,9 @@ const OOXML_ZIP_MIMES = new Set<string>([
   SupportedFabFileMimeTypes.PPTX,
 ]);
 
+/** A legacy `.xls` is an OLE compound file, so its bytes sniff as the generic CFB container. */
+const CFB_MIME = 'application/x-cfb';
+
 /** Moderation status as stored on FabFile - see `IFabFileDocument.moderationStatus`. */
 export type ModerationStatus = 'pending' | 'scanning' | 'clean' | 'blocked' | undefined;
 
@@ -47,6 +54,9 @@ export type ModerationStatus = 'pending' | 'scanning' | 'clean' | 'blocked' | un
 export function isTerminalModerationStatus(status: ModerationStatus): status is 'clean' | 'blocked' {
   return status === 'clean' || status === 'blocked';
 }
+
+/** Marks a scan held 'pending' because the uploader's moderation allowance is spent. */
+export const MODERATION_BUDGET_DEFER_REASON = 'moderation_budget';
 
 export interface ModerateUploadedFileArgs {
   userId: string;
@@ -79,9 +89,16 @@ export interface ModerateUploadedFileArgs {
   logger: Logger;
   /** Set for an ai:generate-only upload: it must be a PNG within the size cap to resolve clean. */
   generateUpload?: GenerateUploadConstraint;
+  /**
+   * Spends the scan's detector calls from the uploader's allowance, all or nothing, once the bytes
+   * are known to be an image and before the first call. False defers the scan (see ModerationDeferral).
+   */
+  reserveModerationCalls?: (calls: number) => Promise<boolean>;
+  /** Records the detector calls the scan made, whatever its outcome. Must not throw. */
+  recordModerationCalls?: (calls: number) => Promise<void>;
 }
 
-export interface ModerateUploadedFileResult {
+export interface ModerationVerdict {
   moderationStatus: 'clean' | 'blocked';
   /**
    * Set when byte-sniffing determined the real mime type differs from the
@@ -99,10 +116,23 @@ export interface ModerateUploadedFileResult {
 }
 
 /**
+ * Not a verdict: the allowance refused the scan, so no detector call was made. The caller leaves the
+ * file 'pending' (unservable) and hands its claim back without counting a failed attempt.
+ */
+export interface ModerationDeferral {
+  moderationStatus: 'pending';
+  deferReason: typeof MODERATION_BUDGET_DEFER_REASON;
+  correctedMimeType?: string;
+}
+
+export type ModerateUploadedFileResult = ModerationVerdict | ModerationDeferral;
+
+/**
  * Decide the moderationStatus for a freshly-uploaded file. Non-images and
  * disabled moderation -> 'clean' (never held). Images -> download + scan; a CONFIRMED block ->
  * 'blocked' (the object is left in S3 for legal-preservation reasons — do not delete; the
  * caller must not serve it; the incident was already recorded by `moderateImageOrThrow`'s gate).
+ * An image the uploader's allowance cannot cover (`reserveModerationCalls`) -> a ModerationDeferral.
  *
  * Image-ness is decided from byte-sniffed magic numbers, not the caller-supplied `mimeType`
  * (anti-spoof) - see `downloadPartialBytes` above.
@@ -132,6 +162,8 @@ export async function moderateUploadedFile(args: ModerateUploadedFileArgs): Prom
     moderateImageOrThrow,
     logger,
     generateUpload,
+    reserveModerationCalls,
+    recordModerationCalls,
   } = args;
 
   // Runs before the `enabled` short-circuit: the constraint is not a content judgement, so turning
@@ -156,9 +188,11 @@ export async function moderateUploadedFile(args: ModerateUploadedFileArgs): Prom
   // that case since we have no independent signal to correct it with.
   const sniffSource = await downloadPartialBytes(SNIFF_BYTES);
   const sniffed = await fileTypeFromBuffer(sniffSource);
-  // Don't let a partial-buffer `application/zip` sniff clobber a declared OOXML subtype.
-  const sniffedMime =
-    sniffed?.mime === 'application/zip' && OOXML_ZIP_MIMES.has(mimeType ?? '') ? mimeType : sniffed?.mime;
+  // Don't let a generic container sniff clobber a declared subtype that lives in that container.
+  const isDeclaredContainer =
+    (sniffed?.mime === 'application/zip' && OOXML_ZIP_MIMES.has(mimeType ?? '')) ||
+    (sniffed?.mime === CFB_MIME && mimeType === SupportedFabFileMimeTypes.XLS);
+  const sniffedMime = isDeclaredContainer ? mimeType : sniffed?.mime;
   const effectiveMimeType = sniffedMime ?? mimeType;
   const correctedMimeType = sniffedMime && sniffedMime !== mimeType ? sniffedMime : undefined;
 
@@ -166,10 +200,22 @@ export async function moderateUploadedFile(args: ModerateUploadedFileArgs): Prom
     return { moderationStatus: 'clean', correctedMimeType };
   }
 
+  let detectorCalls = 0;
+  const meteredService: ImageModerationService = {
+    checkImage: (bytes, mime, options) =>
+      service.checkImage(bytes, mime, {
+        ...options,
+        reserveDetectorCalls: reserveModerationCalls,
+        onDetectorCall: () => {
+          detectorCalls++;
+        },
+      }),
+  };
+
   try {
     const buffer = await downloadBytes();
     await moderateImageOrThrow({
-      service,
+      service: meteredService,
       enabled,
       incidents,
       buffer,
@@ -179,6 +225,10 @@ export async function moderateUploadedFile(args: ModerateUploadedFileArgs): Prom
     });
     return { moderationStatus: 'clean', correctedMimeType };
   } catch (err) {
+    if (err instanceof ModerationBudgetExceededError) {
+      logger.info(`[Q2b] uploaded image ${fabFileId} held pending: moderation allowance spent (${err.calls} calls)`);
+      return { moderationStatus: 'pending', deferReason: MODERATION_BUDGET_DEFER_REASON, correctedMimeType };
+    }
     if (err instanceof ImageModerationBlockedError) {
       // Confirmed block - incident already recorded by moderateImageOrThrow. Permanent.
       logger.warn(`[Q2b] uploaded image ${fabFileId} blocked: ${err.message}`);
@@ -200,5 +250,7 @@ export async function moderateUploadedFile(args: ModerateUploadedFileArgs): Prom
     // claim and reports 'pending'.
     logger.warn(`[Q2b] uploaded image ${fabFileId} scan failed transiently, will retry: ${(err as Error).message}`);
     throw err;
+  } finally {
+    if (detectorCalls > 0) await recordModerationCalls?.(detectorCalls);
   }
 }

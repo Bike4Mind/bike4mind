@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import speakeasy from 'speakeasy';
-import { clearFailedAttempts, matchTOTPStep, userHasMFAConfigured } from './utils';
+import QRCode from 'qrcode';
+import { clearFailedAttempts, generateTOTPSetup, matchTOTPStep, userHasMFAConfigured } from './utils';
 import type { IMFAConfig, IUserDocument } from '@bike4mind/common';
 
 const user = (mfa: unknown) => ({ mfa }) as unknown as IUserDocument;
@@ -75,5 +76,20 @@ describe('matchTOTPStep', () => {
   it('fails closed on an empty secret (an undecryptable stored secret reads as empty)', () => {
     const emptyKeyCode = speakeasy.totp({ secret: '', encoding: 'base32', time: Math.floor(nowMs / 1000) });
     expect(matchTOTPStep('', emptyKeyCode, 1, nowMs)).toBeNull();
+  });
+});
+
+describe('generateTOTPSetup', () => {
+  it('encodes the same otpauth URI for a re-served secret as speakeasy does for a new one', async () => {
+    const label = 'Test App (a.b+c@example.com)';
+    const fresh = speakeasy.generateSecret({ name: label });
+    const toDataURL = vi.spyOn(QRCode, 'toDataURL');
+
+    const setup = await generateTOTPSetup('a.b+c@example.com', 'Test App', fresh.base32);
+
+    expect(setup.secret).toBe(fresh.base32);
+    expect(setup.manualEntryKey).toBe(fresh.base32);
+    expect(toDataURL).toHaveBeenCalledWith(fresh.otpauth_url);
+    toDataURL.mockRestore();
   });
 });

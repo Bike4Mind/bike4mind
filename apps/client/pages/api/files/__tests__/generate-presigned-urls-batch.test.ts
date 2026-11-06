@@ -5,6 +5,7 @@ import { settingsMap } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   createFabFile: vi.fn(),
+  findUser: vi.fn(),
   assertLakeWriteAccess: vi.fn(),
   assertLakeAdmission: vi.fn(),
   // Resolves the lakes it authorized; [] when the request carries no client meta-tag.
@@ -17,6 +18,9 @@ const h = vi.hoisted(() => ({
   batchFindById: vi.fn(),
   appendFiles: vi.fn(),
   orgFindById: vi.fn(),
+  consumeFileUploadBudget: vi.fn(async (_req: unknown, _fileCount: number) => undefined),
+  pendingBytes: new Map<string | undefined, number>(),
+  admitPendingUploads: vi.fn(),
   s3ClientConfigs: [] as unknown[],
   baseApiOptions: undefined as unknown,
 }));
@@ -34,6 +38,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
+
+vi.mock('@server/files/fileUploadBudget', () => ({ consumeFileUploadBudget: h.consumeFileUploadBudget }));
+vi.mock('@server/files/pendingUploads', () => ({ admitPendingUploads: h.admitPendingUploads }));
 
 // The global setup mocks `sst` without a fabFileBucket, and the route reads its name.
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-bucket' } } }));
@@ -57,6 +64,7 @@ vi.mock('@server/dataLakes/toAccessContext', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  userRepository: { findById: h.findUser },
   organizationRepository: { findById: (id: string) => h.orgFindById(id) },
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   // Scoped-override store the admission contract's lever (#1680) resolves through.
@@ -98,6 +106,15 @@ vi.mock('@bike4mind/utils', async importOriginal => {
 });
 
 import handler from '../generate-presigned-urls-batch';
+
+beforeEach(() => {
+  h.pendingBytes.clear();
+  h.findUser.mockResolvedValue({ id: 'u1', currentStorageSize: 0 });
+  h.admitPendingUploads.mockImplementation(async () => ({
+    count: 0,
+    bytesFor: (organizationId: string | undefined) => h.pendingBytes.get(organizationId) ?? 0,
+  }));
+});
 
 const LAKE = {
   id: 'lake-1',
@@ -152,6 +169,134 @@ describe('POST /api/files/generate-presigned-urls-batch - S3 client config', () 
 
   it('requires files:write at the baseApi route gate', () => {
     expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
+  });
+});
+
+describe('POST /api/files/generate-presigned-urls-batch - upload allowance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.createFabFile.mockImplementation(async () => ({ id: `f${h.createFabFile.mock.calls.length}` }));
+  });
+
+  it('spends one unit of the allowance per file in the batch, not one per request', async () => {
+    const { res } = makeRes();
+    await run({ files: [file(), file({ fileName: 'b.txt' }), file({ fileName: 'c.txt' })] }, res);
+
+    expect(h.consumeFileUploadBudget).toHaveBeenCalledTimes(1);
+    expect(h.consumeFileUploadBudget.mock.calls[0][1]).toBe(3);
+  });
+
+  it('creates no file and presigns nothing when the allowance refuses the batch', async () => {
+    h.consumeFileUploadBudget.mockRejectedValueOnce(new Error('Upload limit reached'));
+    const { res } = makeRes();
+
+    await expect(run({ files: [file()] }, res)).rejects.toThrow('Upload limit reached');
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(getSignedUrl).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/files/generate-presigned-urls-batch - in-flight uploads', () => {
+  const teamLake = { id: 'lake-2', datalakeTag: 'datalake:team', organizationId: 'org-2', createdAt: new Date() };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.createFabFile.mockImplementation(async () => ({ id: `f${h.createFabFile.mock.calls.length}` }));
+    h.getSettingsValue.mockResolvedValue(true);
+    h.lakeFind.mockResolvedValue([]);
+    h.assertCanWriteDataLakeTags.mockResolvedValue([teamLake]);
+    h.findByDatalakeTag.mockImplementation(async (tag: string) => (tag === teamLake.datalakeTag ? teamLake : null));
+    h.orgFindById.mockImplementation(async (id: string) => ({ id, storageLimit: 1, currentStorageSize: 0 }));
+  });
+
+  afterEach(() => {
+    h.assertCanWriteDataLakeTags.mockResolvedValue([]);
+  });
+
+  const mixedBatch = () => ({
+    files: [
+      file({ fileSize: 60, tags: [{ name: 'datalake:team', strength: 1 }] }),
+      file({ fileName: 'mine.txt', fileSize: 60 }),
+      file({ fileName: 'mine2.txt', fileSize: 60 }),
+    ],
+  });
+
+  it('admits every file in the batch against each pool it bills to', async () => {
+    const { res } = makeRes();
+    await run(mixedBatch(), res);
+
+    expect(h.admitPendingUploads).toHaveBeenCalledTimes(1);
+    const [, requested, owners] = h.admitPendingUploads.mock.calls[0] as [unknown, number, Iterable<string>];
+    expect(requested).toBe(3);
+    expect([...owners].sort()).toEqual(['org-2', undefined].sort());
+  });
+
+  it('refuses before spending the allowance or creating a file when the cap refuses', async () => {
+    h.admitPendingUploads.mockRejectedValueOnce(new Error('uploads in progress'));
+    const { res } = makeRes();
+
+    await expect(run(mixedBatch(), res)).rejects.toThrow('uploads in progress');
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it('reads personal usage after admission rather than using the auth snapshot', async () => {
+    h.admitPendingUploads.mockImplementationOnce(async () => {
+      h.findUser.mockResolvedValue({ id: 'u1', storageLimit: 1, currentStorageSize: 1_000_000 });
+      return { count: 0, bytesFor: () => 0 };
+    });
+
+    await expect(run(mixedBatch(), makeRes().res)).rejects.toMatchObject({
+      info: { errorCode: 'storage_limit_exceeded', used_bytes: 1_000_000 },
+    });
+    expect(h.findUser).toHaveBeenCalledWith('u1');
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it('propagates a failed personal usage read before spending the allowance', async () => {
+    h.findUser.mockRejectedValueOnce(new Error('usage unavailable'));
+    await expect(run(mixedBatch(), makeRes().res)).rejects.toThrow('usage unavailable');
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the personal owner disappeared after auth', async () => {
+    h.findUser.mockResolvedValueOnce(null);
+    await expect(run(mixedBatch(), makeRes().res)).rejects.toThrow('Sign in to upload files');
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+  });
+
+  it('rejects a negative declared size before admission or allowance consumption', async () => {
+    await expect(run({ files: [file({ fileSize: -1 })] }, makeRes().res)).rejects.toMatchObject({
+      issues: [{ code: 'too_small', path: ['files', 0, 'fileSize'] }],
+    });
+    expect(h.admitPendingUploads).not.toHaveBeenCalled();
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it("counts an org pool's in-flight bytes against that org's quota only", async () => {
+    // 1 MB org pool with 999_950 bytes already in flight: the 60-byte team file no longer fits.
+    h.pendingBytes.set('org-2', 999_950);
+    const { res } = makeRes();
+
+    await expect(run(mixedBatch(), res)).rejects.toMatchObject({
+      info: { errorCode: 'org_storage_limit_exceeded', used_bytes: 999_950, requested_bytes: 60 },
+    });
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it("counts the uploader's personal in-flight bytes against their own quota", async () => {
+    h.pendingBytes.set(undefined, 999_900);
+    h.findUser.mockResolvedValue({ id: 'u1', storageLimit: 1, currentStorageSize: 0 });
+    const { res } = makeRes();
+
+    await expect(
+      run(mixedBatch(), res, { user: { id: 'u1', isAdmin: false, tags: [], groups: [], storageLimit: 1 } })
+    ).rejects.toMatchObject({
+      info: { errorCode: 'storage_limit_exceeded', used_bytes: 999_900, requested_bytes: 120 },
+    });
   });
 });
 
@@ -224,6 +369,7 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
     });
 
     it("checks a personal lake's files against the uploader's quota and never reads an org", async () => {
+      h.findUser.mockResolvedValue(FULL_USER);
       const { res } = makeRes();
 
       await expect(run({ files: [file()], dataLakeSlug: 'acme-2026' }, res, { user: FULL_USER })).rejects.toMatchObject(
@@ -260,6 +406,7 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
       });
 
       it("admits a mixed batch when each pool holds exactly its own file's headroom", async () => {
+        h.findUser.mockResolvedValue({ id: 'u1', ...poolWithHeadroom(60) });
         const teamLake = { id: 'lake-2', datalakeTag: 'datalake:team', organizationId: 'org-2', createdAt: new Date() };
         h.assertCanWriteDataLakeTags.mockResolvedValue([teamLake]);
         h.findByDatalakeTag.mockImplementation(async (tag: string) => (tag === teamLake.datalakeTag ? teamLake : null));

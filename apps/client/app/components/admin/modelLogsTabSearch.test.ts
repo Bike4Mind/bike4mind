@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { MODEL_LOGS_MAX_PAGE } from '@client/shared/modelLogs';
+import { DEFAULT_PRESET_DAYS, getActivePreset } from './EventMetrics/UserActivity/dateRange';
 import {
   MODEL_LOGS_SEARCH_PARSERS,
   defaultModelLogsView,
@@ -21,6 +23,23 @@ describe('model logs params', () => {
   afterEach(() => {
     vi.useRealTimers();
   });
+
+  it.each([MODEL_LOGS_MAX_PAGE, String(MODEL_LOGS_MAX_PAGE)])('accepts the final allowed page %j', value => {
+    expect(parsers.modelLogsPage(value)).toBe(MODEL_LOGS_MAX_PAGE);
+    expect(modelLogsViewFromSearch({ modelLogsPage: value }).page).toBe(MODEL_LOGS_MAX_PAGE);
+    expect(modelLogsViewToSearch({ ...defaultModelLogsView(), page: MODEL_LOGS_MAX_PAGE }).modelLogsPage).toBe(
+      MODEL_LOGS_MAX_PAGE
+    );
+  });
+
+  it.each([MODEL_LOGS_MAX_PAGE + 1, String(MODEL_LOGS_MAX_PAGE + 1), Number.MAX_SAFE_INTEGER, '1e100'])(
+    'rejects an out-of-range page %j',
+    value => {
+      expect(parsers.modelLogsPage(value)).toBeUndefined();
+      expect(modelLogsViewFromSearch({ modelLogsPage: value }).page).toBe(1);
+      expect(modelLogsViewToSearch({ ...defaultModelLogsView(), page: Number(value) }).modelLogsPage).toBeUndefined();
+    }
+  );
 
   describe('dates', () => {
     it('accepts a calendar date', () => {
@@ -51,14 +70,18 @@ describe('model logs params', () => {
   });
 
   describe('modelLogsViewFromSearch', () => {
-    it('is the rolling last week for a bare URL', () => {
+    it('is the rolling last 7 days for a bare URL', () => {
       expect(modelLogsViewFromSearch({})).toEqual({
         page: 1,
         limit: 10,
-        startDate: '2026-10-14',
+        startDate: '2026-10-15',
         endDate: '2026-10-21',
         model: undefined,
       });
+    });
+
+    it('defaults to exactly the date filter default preset, so it shows as selected', () => {
+      expect(getActivePreset(defaultModelLogsView())).toBe(DEFAULT_PRESET_DAYS);
     });
 
     it('reads a linked range', () => {
@@ -84,7 +107,7 @@ describe('model logs params', () => {
 
     it('falls back to the default range when only an invalid date is given', () => {
       expect(modelLogsViewFromSearch({ modelLogsFrom: 'garbage', modelLogsTo: '2026-02-31' })).toMatchObject({
-        startDate: '2026-10-14',
+        startDate: '2026-10-15',
         endDate: '2026-10-21',
       });
     });

@@ -59,7 +59,7 @@ B4M_BOOTSTRAP_ADMIN_EMAIL=you@example.com
 
 > **Serving on anything other than `http://localhost:3000`?** Set `APP_URL` to the origin your browser actually hits - a remapped `APP_HOST_PORT`, a LAN hostname, a tailnet name, or the public `https` origin of a reverse proxy in front of the app. `APP_URL` is the CSRF origin allow-list, and it fails closed: every state-changing request (saving settings, generating an API key, uploading) returns a 403, with a different message per cause. Unset, it is `CSRF: APP_URL is not configured on this deployment.`; set to an origin you do not browse from, it is `Invalid request origin. CSRF protection triggered (expected <your APP_URL>).` Reads keep working either way, which makes both look like a permissions bug rather than a config one.
 
-**LLM keys** - set the ones you'll use; blank disables that provider. Only models for providers with a key appear in the model picker. You can also add or override keys per-user later, in the app under Settings > API Keys.
+**LLM keys** - set the ones you'll use; blank disables that provider. Only models for providers with a key appear in the model picker. You can also add or override keys per-user later, in the app under Profile menu -> More -> API Keys.
 
 ```bash
 ANTHROPIC_API_KEY=      # Claude
@@ -110,7 +110,7 @@ docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile ollam
 
 `--build` rebuilds the services that build from source - `app`, the `ws` gateway, `chatcompletion`, `worker`, MinIO, and its `mc` client - before starting; the pure-image backing services (Mongo, ElasticMQ, etc.) just restart. Drop `--profile ollama` if you are not running local models, and keep any `-f compose.ollama-*.yaml` overrides you normally pass (see [Local models with Ollama](#local-models-with-ollama-no-api-keys)). Thanks to the pnpm store cache mount and Docker layer caching, a warm rebuild (only app source changed, deps unchanged) takes about 1-2 minutes; a cold first build takes several.
 
-> **Upgrading: rebuild the `ws` gateway in lockstep with the app.** The `ws` gateway is built from source (there is no published image for it), while the app is pulled by default. The browser and the gateway share a connection contract (the browser sends its realtime credential as a `?ticket=` query the gateway must forward), so a version skew between them breaks realtime for every browser silently - the socket is simply rejected. A pull-only upgrade (`docker compose ... pull && ... up -d`) refreshes the published `app` image but leaves the already-built `ws` container at its old version. When you move to a new version, `git pull` your checkout and bring the stack up with `--build` (which rebuilds `ws` too), or rebuild the gateway explicitly with `docker compose -f compose.selfhost.yaml build ws`.
+> **Upgrading: rebuild the `ws` gateway in lockstep with the app.** The `ws` gateway is built from source (there is no published image for it), while the app is pulled by default. The browser and the gateway share a connection contract (the browser sends its realtime credential as a `?ticket=` query the gateway must forward), so a version skew between them breaks realtime for every browser silently - the socket is simply rejected. A pull-only upgrade (`docker compose ... pull && ... up -d`) refreshes the published `app` image but leaves the already-built `ws` container at its old version. When you move to a new version, `git pull` your checkout and bring the stack up with `--build` (which rebuilds `ws` too), or rebuild the gateway explicitly with `docker compose -f compose.selfhost.yaml build ws`. The gateway serves its management API on a separate internal port (`ws:3002`), so "connection refused" to `ws:3002` in the app, worker or fanout logs means the `ws` gateway was not rebuilt.
 
 Confirm it came up, then follow the logs:
 
@@ -198,7 +198,7 @@ For production use, point the `MAIL_*` variables at a real SMTP provider instead
 
 Everything you can do in the UI is also available over the HTTP API, authenticated with a scoped API key.
 
-1. **Create an API key**: in the app, open **Settings > API Keys** and create a key with the `ai:chat` scope. The key (starting `b4m_`) is shown once - copy it.
+1. **Create an API key**: in the app, open **Profile menu -> More -> API Keys** and create a key with the `ai:chat` scope. The key (starting `b4m_`) is shown once - copy it.
 
 2. **Send a chat message**:
 
@@ -211,7 +211,7 @@ curl -X POST http://localhost:3000/api/chat \
 
 `wait: true` processes the message synchronously and returns the reply in the response; omit it to get a `sessionId`/`questId` back immediately and let processing continue in the background. The model defaults to the admin `DefaultAPIModel` setting; pass `"model": "..."` to pick any model from `/api/models` (only providers you configured a key for are available).
 
-The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate limits are managed per-user in Settings > API Keys.
+The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate limits are managed per-user in Profile menu -> More -> API Keys.
 
 ### Structured tool output (`toolPayloads`)
 
@@ -499,7 +499,7 @@ There are two independent paths to an image, and they support different things:
 | The `/image` chat command (`POST /api/ai/generate-image`, `POST /api/ai/edit-image`) | queued to the `worker` service | provider models only                                             |
 
 The queued path needs a provider key set in **Admin > Settings** (or the user's own key under
-**Settings > API Keys**) - OpenAI, Gemini, BFL, or xAI. Text-to-image works on all four.
+**Profile menu -> More -> API Keys**) - OpenAI, Gemini, BFL, or xAI. Text-to-image works on all four.
 
 **Image edit is limited to Gemini and BFL here.** OpenAI's edit and image-to-image endpoints
 require the input image be re-encoded to PNG under a size cap, which the hosted stack does with
@@ -586,6 +586,10 @@ Self-host can embed and search your uploaded files fully offline, using a local 
 4. **Upload a file**, then watch its chunk/vector counts climb (the file card shows progress). Behind the scenes: MinIO notifies the app on upload -> the file is chunked -> chunks are embedded by the `worker` service.
 5. **Ask a knowledge-base question** in chat, or use file search - retrieval now runs against the local embeddings.
 
+### Verify the knowledge pipeline
+
+With the stack running, `B4M_API_KEY=b4m_... python3 scripts/verify_selfhost_chunk_pipeline.py` uploads a file and checks that it is chunked, embedded and found by search, that a file whose upload webhook was withheld is recovered by the rescue sweep, and that replaying a chunk message leaves the chunk count unchanged. It needs the admin settings **Enable Auto Chunk** and **Enable Data Lakes** on (Data Lakes is off by default; search only reaches data-lake files), and archives a throwaway `verify-*` lake each run. It asserts the default Mongo vector path (not OpenSearch); `--help` lists the prerequisites and the `--only` / `--timeout` flags.
+
 ### Choosing an embedder (quality vs hardware)
 
 `qwen3-embedding` leads retrieval benchmarks; the `0.6b` default fits any GPU or CPU. On a bigger card the `4b`/`8b` variants score higher. `nomic-embed-text` is the smallest, cheapest option. A self-host box often runs a chat model, an image model, and the embedder on ONE GPU, so size matters - see the embedder table in `.env.selfhost.example` for downloads, dimensions, and VRAM.
@@ -600,7 +604,7 @@ Notes:
 Prefer a hosted embedder over the local one? Set a real key in `.env.selfhost` and it takes priority over the local Ollama default:
 
 - `OPENAI_API_KEY` - enables OpenAI embeddings (`text-embedding-3-small` by default).
-- `VOYAGE_API_KEY` - enables Voyage embeddings. Voyage can also be set per-user under **Settings -> API Keys**.
+- `VOYAGE_API_KEY` - enables Voyage embeddings. Voyage can also be set per-user under **Profile menu -> More -> API Keys**.
 
 Then pick the cloud model under **Settings -> AI -> Default Embedding Model** and re-upload (or reprocess via **/api/files/reprocess**) so files embed with it.
 
@@ -650,7 +654,7 @@ Re-run it whenever you edit the shipped docs. The failure is quieter than it sou
 
 Without a key the command throws rather than skipping. Set `HELP_EMBEDDINGS_REQUIRED=false` to downgrade that to a logged skip, which is what a build pipeline that does not care about semantic help search wants.
 
-**You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Settings -> API Keys**) as well as at build time.
+**You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Profile menu -> More -> API Keys**) as well as at build time.
 
 This is also the one place OpenAI specifically is required: help vectors are always embedded with `text-embedding-3-small`, whatever **Default Embedding Model** you picked for your own files, because the corpus and the query have to share a vector space.
 
@@ -690,7 +694,7 @@ B4M_DISCOVERY_DRIVER=true
 
 The `worker` is the only service that runs discovery on a schedule, even though every service loads the same env file. It runs discovery once at boot (if no recent successful run exists) and then on the interval. The flag gates the admin "Run now" button too: without it the app answers 503 and starts nothing, so an install that never sets it stays offline however the run is asked for.
 
-Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Settings > API Keys) - there is nothing extra to configure, except for Bedrock (see [Amazon Bedrock](#amazon-bedrock-optional) below). Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
+Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Profile menu -> More -> API Keys) - there is nothing extra to configure, except for Bedrock (see [Amazon Bedrock](#amazon-bedrock-optional) below). Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
 
 ### Amazon Bedrock (optional)
 
@@ -808,7 +812,7 @@ The drill derives its broker image, configuration mount, and storage mounts from
 - **`apt-get install nvidia-container-toolkit` says "Unable to locate package"** - NVIDIA's apt repo isn't set up. Add it first (see "GPU acceleration"), then re-run `sudo apt-get update`.
 - **GPU override fails with "could not select device driver \"nvidia\" with capabilities: [[gpu]]"** - the NVIDIA Container Toolkit isn't installed or wired into Docker. Install it and run `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` (see "GPU acceleration"). Without a working GPU runtime, drop the `-f compose.ollama-gpu.yaml` and run CPU-only.
 - **`opensearch` container exits at boot with a "max virtual memory areas" error** - the OpenSearch JVM needs a higher `vm.max_map_count` than most Linux kernels default to. Run once on the HOST (not in the container): `sudo sysctl -w vm.max_map_count=262144`, then restart the `opensearch` service. Not needed on Docker Desktop (macOS/Windows) - its VM already sets this.
-- **Chat replies only appear after a refresh** - realtime isn't connecting. Check the `ws` gateway is up (`docker compose -f compose.selfhost.yaml ps ws`) and healthy, that `INTERNAL_WS_SECRET` is set and identical for the `app` and `ws` services, and that `WEBSOCKET_URL`/`WEBSOCKET_MANAGEMENT_ENDPOINT` point at the gateway. In the browser console you should see `ws connected`; a reconnect loop usually means the gateway can't reach the app (`docker compose -f compose.selfhost.yaml logs ws`).
+- **Chat replies only appear after a refresh** - realtime isn't connecting. Check the `ws` gateway is up (`docker compose -f compose.selfhost.yaml ps ws`) and healthy, that `INTERNAL_WS_SECRET` is set and identical for the `app` and `ws` services, and that `WEBSOCKET_URL` points at the gateway's browser port (3001) and `WEBSOCKET_MANAGEMENT_ENDPOINT` at its private management port (`http://ws:3002`, pinned in `compose.selfhost.yaml`). In the browser console you should see `ws connected`; a reconnect loop usually means the gateway can't reach the app (`docker compose -f compose.selfhost.yaml logs ws`).
 - **Changed `SECRET_ENCRYPTION_KEY` and now secrets fail to decrypt** - set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and leave it configured permanently, or restore the original key. Rotation is not automated, so dropping the previous key makes anything still encrypted under it unrecoverable.
 - **Notebook auto-naming / summaries / mementos never happen** - background enrichment runs on the `worker` service via the event queue. Check the worker is up (`docker compose -f compose.selfhost.yaml ps worker`) and that `SELF_HOST_EVENT_QUEUE` is set in `.env.selfhost` (the app warns and drops enrichment events when it's unset). Watch `docker compose -f compose.selfhost.yaml logs -f worker`.
 - **Image generation or image edit never completes (the quest stays "pending")** - both are queued to the `worker` service. Check `IMAGE_GENERATION_QUEUE` and `IMAGE_EDIT_QUEUE` are set in `.env.selfhost` (added after the initial release, so an upgraded install may be missing them), then confirm the worker picked them up: its boot line names every queue it polls, e.g. `[selfHostWorker] started: polling 6 queue(s) [researchEngineQueue, ..., imageGenerationQueue, imageEditQueue]`. An unset var is warned about by name and the consumer is skipped, leaving the rest of the worker running. Also make sure the queues exist in `elasticmq.conf` and that a provider key is configured (see "Image generation and image edit"). An OpenAI **edit** fails by design here - use Gemini or BFL.
@@ -835,6 +839,14 @@ docker compose -f compose.selfhost.yaml --env-file .env.selfhost logs -f minio a
 Confirm both registrations include the `put` event and webhook target. If one is missing, correct the bucket environment values and rerun `createbuckets` with the same Compose files and environment. During a fresh import through the UI, inspect MinIO delivery failures and the app's webhook/import logs. Check that `INTERNAL_S3_WEBHOOK_SECRET` agrees between MinIO and the app, and that MinIO can reach the configured endpoint. When using host-side `next dev`, repoint the webhook as described in [Frontend dev mode](#frontend-dev-mode-host-next-dev); delivery to the stopped Compose app cannot trigger imports.
 
 The FabFile safety-net filter in `apps/workers/src/s3/chunkScan.ts` (`buildFabFileChunkScanFilter`) scans FabFile records only. It does **not** recover history or notebook imports from missed notifications. A successful registration listing or notification delivered to a diagnostic sink proves configuration or delivery only. To prove a completed import, check its terminal application status and read the expected imported content after refreshing the app.
+
+To run that proof as one command, mint an API key (`b4m_live_...`) with the `notebooks:read` scope and run the history-import check. It uploads a small Claude-format export through the app's upload proxy, so MinIO's webhook starts the import exactly as a UI upload does. It then waits for the new import job to reach `completed` and reads the conversations back through `GET /api/v1/sessions` and `GET /api/v1/sessions/{id}/quests`. It passes only when the conversation count and every prompt and reply match the export:
+
+```sh
+BASE_URL=https://your-host B4M_API_KEY=b4m_live_... pnpm --filter @bike4mind/scripts smoke:selfhost-history-import
+```
+
+Set `BROKEN_EXPORT=bad-json` or `BROKEN_EXPORT=invalid-conversation` to upload a deliberately broken export; the check must then fail. `invalid-conversation` is the case a job status alone misses: the importer skips conversations that do not match the export schema and still marks the job `completed`. The check refuses to start while another import of the key owner is pending or processing, because the webhook drops a second upload. A timeout with no job means the upload landed but the webhook never reached the app; use the checks above. Optional: `RUN_TIMEOUT_MS` (default 300000), `POLL_INTERVAL_MS` (default 3000). Exit code 0 is pass, 1 is fail, 2 is bad configuration. Each passing run leaves two small conversations named after its run token in the key owner's history.
 
 ## Security notes
 
@@ -1110,6 +1122,14 @@ HTTP acceptance means the invocation was handed to `agentContinuationQueue`; the
 
 An explicit HTTP authentication or payload rejection restores a paused resume for retry. A network failure or server error is ambiguous: accepted work may still execute, so its execution ID and state remain intact. Check that ID before starting another run. Abandoned-execution reconciliation is a separate requirement for a dispatch that never reached the queue, and for a process killed after claiming work. A healthy service alone does not prove successful execution; verify the persisted execution reaches `completed` with the expected result.
 
+To verify the executor end to end, mint an API key (`b4m_live_...`) in the app with the `ai:generate` scope, or `ai:chat` plus `notebooks:write`, and run the check against your deployment. It starts an agent run, polls `GET /api/v1/agent-executions/{id}` for that execution ID, and passes only when the run reaches `completed` and its answer echoes a per-run token. A `failed` or `aborted` run fails the check and prints the run's `error`, even though a failed run also saves an error reply into the session:
+
+```sh
+BASE_URL=https://your-host B4M_API_KEY=b4m_live_... pnpm --filter @bike4mind/scripts smoke:selfhost-agent-run
+```
+
+It needs a working model provider credential (or local model) in `.env.selfhost`. Optional: `MODEL`, `RUN_TIMEOUT_MS` (default 300000), `POLL_INTERVAL_MS` (default 3000). `RUN_TIMEOUT_MS` bounds the whole check, including each request, and a failure after the run started prints its execution ID. Exit code 0 is pass, 1 is fail, 2 is bad configuration.
+
 Rollback requires draining the executor first. Do not switch the app back to Lambda until queued `selfhost_invoke` messages have drained: that envelope belongs to the container transport.
 
 ### Daily credit-lot expiry
@@ -1139,6 +1159,10 @@ Probes use global `fetch`. If proxy support is added to an integration client, t
 ### Storage counter drift check
 
 Every hour the worker compares each user's and organization's `currentStorageSize` counter with the bytes of the files charged to that owner, using the same sweep hosted deployments run. Self-host always runs it as a dry run: drift is recorded in MongoDB, and no counter is ever rewritten. One pass walks every owner across successive hourly ticks, completing when the last owner is visited (about a day on a typical install), and resumes from a cursor persisted in MongoDB, so a restarted worker continues the pass instead of starting it again. It sends no CloudWatch metrics, and the Slack drift alert posts only if a Slack webhook resolves: the LiveOps or default channel webhook in admin settings, or `SLACK_WEBHOOK_URL`. There is no run at startup.
+
+### Drive lake re-sync poll
+
+Every hour the worker enqueues each connected Google Drive folder that is due onto the Drive lake ingest queue, the same path the manual Re-sync button uses, so connected folders stay in sync without a click. A folder is due once it has not been polled for 6 hours, and each run enqueues at most 200, the longest-waiting first. It runs only while both the `EnableDataLakes` and `EnableDataLakeDrivePoll` admin settings are on, and does nothing otherwise. A connection that has not been fully re-walked in 24 hours is re-walked in full; the rest sync incrementally. There is no run at startup, and Drive push notifications are not used.
 
 ### Daily telemetry retention
 
@@ -1277,6 +1301,12 @@ Plain export artifacts use the requesting user, plan and export job ID as their 
 
 Docker-independent verification: `VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/queueHandlers/questExport.recovery.e2e.test.ts` uses disposable Mongo, actual ZIP serialization and access filtering, with storage, websocket and inference edges controlled. It checks permitted markdown/image bytes, excluded data, upload/notification recovery and organization-summary completion/replay. Unit tests cover enqueue rejection, metadata failures, midnight replay, redrive admission and ACK retention. Current live ElasticMQ/MinIO, selected Kubernetes deployment and external provider execution are not verified by these tests.
 
+### Account data exports
+
+`ACCOUNT_DATA_EXPORT_QUEUE` and `ACCOUNT_DATA_EXPORT_QUEUE_DLQ` enable the self-service "download your data" export offered in Settings. The worker writes a zip under the FabFile bucket's `exports/` prefix, so the same one-day MinIO lifecycle rule that expires notebook exports removes it, and emails the user a link to `APP_URL/account-data-export/<id>`. That page asks the API for a five-minute download link and refuses exports older than 24 hours. Without the queue variables the request endpoint answers 500 and nothing is queued; outgoing email must be configured for the link to arrive.
+
+The consumer uses the same redrive admission, one-at-a-time receive, 900-second visibility renewal and ten-minute cooperative budget as quest exports. The worker reads the generated-images bucket as well as the FabFile bucket, copying images generated in notebooks under `images/`. It stops building notebooks once two thirds of the time before the last five minutes is used, and file bytes, generated images and artifacts five minutes before it ends, listing what is left in `notebooks/index.json`, `files/index.json` and `artifacts/index.json` as omitted, so a very large account can receive a partial export. A redelivery after the upload only re-sends the email.
+
 ## Kubernetes evaluation package
 
 For an independent package using the current application and worker entrypoints, see [the Kubernetes self-host guide](selfhost/kubernetes/README.md). It runs on portable Kubernetes, including EKS, with retained database/object/queue volumes and explicit image references. It is an evaluation deployment; complete workflow parity and production readiness remain separate validation work.
@@ -1308,12 +1338,14 @@ Covered shapes (inventory kind in brackets):
 A Function that a covered trigger delivers to is inventoried under that trigger. A declaration
 built inside a named factory with a computed name (for example one log subscription per log
 group) is identified by its factory site; computed queue and schedule names fail, because
-local registrations are matched by that name.
+local registrations are matched by that name. The exception is the queue pairs packages declare
+in `b4mContributions.infraResources`: their constructors are listed by name expression in
+`DATA_NAMED_QUEUES` and skipped, since self-host does not provision contributed queues.
 
 Not covered: every other `sst.aws.*` / `aws.<ns>.*` constructor must be listed, with a one-line
 reason, in the `NOT_COVERED` constant in `packages/scripts/src/selfhostParityInventory.ts`
 (HTTP Functions, web/router/WebSocket surfaces, topics and buses whose subscriptions are
-covered, alarms, dashboards, IAM policies, deploy-time invocations, network and WAF plumbing,
+covered, alarms, dashboards, outbound SES metric destinations, IAM policies, deploy-time invocations, network and WAF plumbing,
 and infrastructure contributed by private overlays). A constructor that is neither covered nor
 listed fails the guard.
 

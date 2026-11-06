@@ -1,6 +1,15 @@
-import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 import {
+  THROTTLE_SOURCES,
+  ACCOUNT_DELETION_SOURCES,
+  THROTTLE_TIERS,
+  USER_RISK_SIGNAL_TYPES,
+  VERIFIED_SLACK_IDENTITY_FILTER,
+  canonicalizeEmail,
+} from '@bike4mind/common';
+import {
+  ADMIN_PERMISSIONS,
   AuthStrategy,
+  PENDING_FREE_CREDITS_TAG,
   CollectionType,
   IAuthProviders,
   ISecurityQuestion,
@@ -8,10 +17,25 @@ import {
   IUserRepository,
   IUserNote,
   IModerationHit,
+  ISignupRiskScore,
+  RISK_EVIDENCE_TRIGGERS,
+  type RiskEvidenceCoverage,
+  type RiskEvidenceSummary,
+  riskEvidenceSummarySchema,
+  type RiskEvidenceTrigger,
+  SIGNUP_RISK_REVIEW_STATES,
+  SIGNUP_RISK_SIGNALS,
+  type SignupRiskReviewState,
   UserModerationStatus,
   MFA_MAX_FAILED_ATTEMPTS,
   MFA_LOCKOUT_DURATION_MS,
   MFA_ATTEMPT_RESET_WINDOW_MS,
+  PAYMENT_UNLOCK_REASONS,
+  SIGNUP_GRANT_UNLOCK_REASONS,
+  SIGNUP_INVITE_SOURCES,
+  SIGNUP_UNLOCK_FORFEIT_CAUSES,
+  Collection,
+  PaginatedResponse,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
@@ -26,6 +50,10 @@ import { NETWORK_META_FIELDS } from './networkMetaFields';
 
 function escapeRegExp(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 11000;
 }
 
 export interface IUserObject extends IUserDocument, Omit<Document, 'id'> {}
@@ -79,6 +107,8 @@ const MFASchema = new Schema(
     totpSecret: { type: String, required: true, select: false },
     totpEnabled: { type: Boolean, default: false },
     backupCodes: { type: [String], default: [], select: false },
+    // Encrypted like totpSecret; only present between setup and enable.
+    pendingBackupCodes: { type: String, select: false },
     setupAt: { type: Date, required: true },
     lastUsedAt: { type: Date, default: null },
     // Server-side attempt tracking (can't be bypassed by refresh/cancel)
@@ -151,6 +181,7 @@ const UserPreferencesSchema = new Schema(
     showFunTools: { type: Boolean },
     showSplashCards: { type: Boolean },
     desktopPromoDismissed: { type: Boolean },
+    promptCacheTtl: { type: String, enum: ['5m', '1h'] },
   },
   { _id: false }
 );
@@ -226,7 +257,7 @@ const ModerationHitSchema = new Schema(
   {
     at: { type: Date, required: true },
     categories: { type: [String], default: [] },
-    source: { type: String, enum: ['openai', 'bedrock'], required: true },
+    source: { type: String, enum: ['openai', 'bedrock', 'provider'], required: true },
     questId: { type: String, required: false },
   },
   { _id: false }
@@ -249,6 +280,63 @@ const UserModerationSchema = new Schema(
   },
   { _id: false }
 );
+
+const UserThrottleSchema = new Schema(
+  {
+    tier: { type: String, enum: [...THROTTLE_TIERS], required: true },
+    reason: { type: String, required: true },
+    source: { type: String, enum: [...THROTTLE_SOURCES], required: true },
+    changedAt: { type: Date, required: true },
+    changedBy: { type: String, required: false },
+  },
+  { _id: false }
+);
+
+const UserDeletionSchema = new Schema(
+  {
+    requestedAt: { type: Date, required: true },
+    scheduledFor: { type: Date, required: true },
+    source: { type: String, enum: [...ACCOUNT_DELETION_SOURCES], required: true },
+    purgeStartedAt: { type: Date, required: false },
+    purgeLeaseId: { type: String, required: false },
+    purgeLeaseExpiresAt: { type: Date, required: false },
+  },
+  { _id: false }
+);
+
+const UserRiskSignalSchema = new Schema(
+  {
+    type: {
+      type: String,
+      enum: [...USER_RISK_SIGNAL_TYPES],
+      required: true,
+    },
+    at: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
+/** An account's signup facts as automated containment reads them (UserRepository.findSignupLinkFacts). */
+export type UserSignupLinkFacts = {
+  id: string;
+  createdAt: Date | null;
+  signupIp: string | null;
+  signupDatacenter: boolean | null;
+  /** `otc`, `google`, `github`, ...; `email` when nothing more is recorded. */
+  signupMethod: string;
+  landingNotebookOwnerId: string | null;
+};
+
+/** An account as the payment-risk linked-account checks read it; the blocked fields match accountBlockReasons. */
+export type UserLinkState = {
+  id: string;
+  name: string | null;
+  email: string | null;
+  createdAt: Date | null;
+  isBanned: boolean;
+  disputePending: boolean;
+  moderation: { status: UserModerationStatus } | null;
+};
 
 export class UserRepository extends BaseRepository<IUserDocument> implements IUserRepository {
   constructor(model: IUserModel) {
@@ -274,7 +362,19 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   /** Merge tags into one user's tags (idempotent via $addToSet). No-op on an empty list. */
   async addTagsToUser(userId: string, tags: string[]): Promise<void> {
     if (tags.length === 0) return;
+    // Legacy accounts can store null; $addToSet requires an array. The guard preserves concurrent tag additions.
+    await this.model.updateOne({ _id: userId, tags: null }, { $set: { tags: [] } });
     await this.model.updateOne({ _id: userId }, { $addToSet: { tags: { $each: tags } } });
+  }
+
+  async clearPendingFreeCreditGrant(userId: string): Promise<IUserDocument | null> {
+    await this.model.updateOne({ _id: userId, tags: null }, { $set: { tags: [] } });
+    const user = await this.model.findOneAndUpdate(
+      { _id: userId },
+      { $pull: { tags: PENDING_FREE_CREDITS_TAG }, $set: { pendingCreditGrant: null } },
+      { new: true }
+    );
+    return user?.toJSON() ?? null;
   }
 
   async pullSystemFilesForUsers(userIds: string[], fileIds: string[]): Promise<void> {
@@ -358,6 +458,22 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return this.existsOtherUserWithValue('username', username, excludeUserId);
   }
 
+  // A regex rather than .collation() for DocumentDB portability (see existsOtherUserWithValue).
+  // A null emailVerifiedAt is a legacy verified row from before the field was written.
+  async existsVerifiedUserOnEmailDomain(domain: string, verifiedBefore: Date): Promise<boolean> {
+    const normalized = domain.trim().toLowerCase();
+    if (!normalized) return false;
+    const filter = {
+      email: { $regex: `[@.]${escapeRegExp(normalized)}\\s*$`, $options: 'i' },
+      emailVerified: true,
+      $or: [{ emailVerifiedAt: { $lte: verifiedBefore } }, { emailVerifiedAt: null }],
+      isBanned: { $ne: true },
+      isSystem: { $ne: true },
+      deletedAt: { $exists: false },
+    };
+    return (await this.model.exists(filter)) !== null;
+  }
+
   // An anchored case-insensitive regex instead of .collation(): DocumentDB has no collation
   // support (see documentdb-compat.ts), so this is the one form that matches the same rows on
   // both engines. The \s* anchors also match legacy rows stored with surrounding whitespace. Soft-deleted rows count, because the unique index still covers them.
@@ -413,15 +529,20 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
 
   /**
    * Loads a user WITH the select:false MFA secrets - for server-side MFA verification only.
-   * `mfa.totpSecret` comes back decrypted; writing the snapshot back re-encrypts it (see
-   * encryptTotpSecretInUpdate), so snapshot writers never persist the plaintext.
+   * `mfa.totpSecret` and `mfa.pendingBackupCodes` come back decrypted; writing the snapshot back
+   * re-encrypts them (see encryptTotpSecretInUpdate), so snapshot writers never persist the plaintext.
    */
   async findByIdWithMfaSecrets(id: string): Promise<IUserDocument | null> {
-    const result = await this.model.findOne({ _id: id }).select('+mfa.totpSecret +mfa.backupCodes');
+    const result = await this.model
+      .findOne({ _id: id })
+      .select('+mfa.totpSecret +mfa.backupCodes +mfa.pendingBackupCodes');
     if (!result) return null;
     const user: IUserDocument = result.toJSON();
     if (user.mfa?.totpSecret) {
       user.mfa.totpSecret = decryptAtRest(user.mfa.totpSecret);
+    }
+    if (user.mfa?.pendingBackupCodes) {
+      user.mfa.pendingBackupCodes = decryptAtRest(user.mfa.pendingBackupCodes);
     }
     return user;
   }
@@ -469,6 +590,43 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return result.modifiedCount === 1;
   }
 
+  async markInviteBonusPaid(userId: string, credits: number): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, signupGrant: { $type: 'object' }, 'signupGrant.inviteBonusPaid': { $exists: false } },
+      { $set: { 'signupGrant.inviteBonusPaid': credits } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Claim the one free-credit grant allowed per inbox (canonicalizeEmail of the account's email).
+   * True when this account holds the claim, including from an earlier attempt, so a retried grant
+   * stays idempotent; false when another account already holds it. The unique
+   * freeCreditClaimEmail_1 index makes the claim atomic across concurrent signups; the pre-check
+   * covers a deployment whose index has not been built yet. An account without a usable email has
+   * nothing to dedupe on and is allowed.
+   */
+  async claimFreeCreditGrant(userId: string): Promise<boolean> {
+    const user = await this.model.findById(userId, { email: 1, freeCreditClaimEmail: 1 }).lean();
+    if (!user) return false;
+    if (user.freeCreditClaimEmail) return true;
+    const claimEmail = user.email ? canonicalizeEmail(user.email) : null;
+    if (!claimEmail) return true;
+
+    if (await this.model.exists({ freeCreditClaimEmail: claimEmail, _id: { $ne: userId } })) return false;
+    try {
+      const result = await this.model.updateOne(
+        { _id: userId, freeCreditClaimEmail: null },
+        { $set: { freeCreditClaimEmail: claimEmail } }
+      );
+      // A zero-match update means a concurrent call for this same account claimed first.
+      return result.modifiedCount === 1 || result.matchedCount === 0;
+    } catch (error) {
+      if (isDuplicateKeyError(error)) return false;
+      throw error;
+    }
+  }
+
   /**
    * Remove `codeHash` from the stored backup codes, only if it is still present. Returns true
    * exactly once per code, so a backup code cannot be consumed by two requests at once. A
@@ -510,7 +668,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
           'mfa.lastUsedAt': new Date(),
           updatedAt: new Date(),
         },
-        $unset: { 'mfa.lastFailedAttempt': 1, 'mfa.lockedUntil': 1 },
+        $unset: { 'mfa.lastFailedAttempt': 1, 'mfa.lockedUntil': 1, 'mfa.pendingBackupCodes': 1 },
       },
       { new: true }
     );
@@ -530,7 +688,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     if (validIds.length === 0) return [];
     return this.model
       .find({ _id: { $in: convertIds(validIds) } })
-      .select('name email username lastActiveAt isOnline photoUrl');
+      .select('name email emailVerified username lastActiveAt isOnline photoUrl');
   }
 
   /**
@@ -565,6 +723,22 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     }));
   }
 
+  async findAdminTargetsByIds(ids: string[]) {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } })
+      .select('email username isAdmin adminPermissions')
+      .lean();
+    return docs.map(d => ({
+      id: String(d._id),
+      email: d.email ?? undefined,
+      username: d.username ?? undefined,
+      isAdmin: d.isAdmin ?? undefined,
+      adminPermissions: d.adminPermissions ? [...d.adminPermissions] : undefined,
+    }));
+  }
+
   /**
    * Emailed users among `ids`, excluding any that carry `deletedAt` (mirrors the same guard
    * `findBySlackUserId` applies) - narrower than `findByIds` so a notification addressee
@@ -579,11 +753,83 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return docs.map(d => ({ id: String(d._id), email: String(d.email) }));
   }
 
+  /** Accounts whose self-serve deletion grace period ended at or before `now`, oldest first; served by user_deletion_scheduledFor. */
+  async findDeletionDueUserIds(now: Date, limit: number): Promise<string[]> {
+    const docs = await this.model
+      // $type repeats the partial index's filter, without which the planner cannot use it.
+      .find({ 'deletion.scheduledFor': { $type: 'date', $lte: now } })
+      .select('_id')
+      .sort({ 'deletion.scheduledFor': 1 })
+      .limit(limit)
+      .lean();
+    return docs.map(d => String(d._id));
+  }
+
+  /** Stamps IUser.signupLanding once; a later call never overwrites it. */
+  async recordSignupLanding(userId: string, notebookOwnerId: string, capturedAt: Date): Promise<void> {
+    await this.model.updateOne(
+      { _id: convertIds([userId])[0], signupLanding: null },
+      { $set: { signupLanding: { notebookOwnerId, capturedAt } } }
+    );
+  }
+
+  /** The signup facts automated containment reads per account; ids that are not users are absent. */
+  async findSignupLinkFacts(ids: string[]): Promise<UserSignupLinkFacts[]> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } })
+      .select(
+        'createdAt signupMeta.ip signupMeta.isDatacenter acquisition.signupMethod authProviders.strategy signupLanding'
+      )
+      .lean();
+    return docs.map(doc => ({
+      id: String(doc._id),
+      createdAt: doc.createdAt ?? null,
+      signupIp: doc.signupMeta?.ip ?? null,
+      signupDatacenter: doc.signupMeta?.isDatacenter ?? null,
+      // acquisition is consent-gated; the first auth provider is the durable fallback, as the users list reads it.
+      signupMethod: doc.acquisition?.signupMethod ?? doc.authProviders?.[0]?.strategy ?? 'email',
+      landingNotebookOwnerId: doc.signupLanding?.notebookOwnerId ?? null,
+    }));
+  }
+
+  /** Other accounts that signed up from this exact IP, newest first; served by user_signupMeta_ip. */
+  async findIdsBySignupIp(ip: string, excludeId: string, limit: number): Promise<string[]> {
+    const docs = await this.model
+      .find({ 'signupMeta.ip': ip, _id: { $ne: convertIds([excludeId])[0] } })
+      .select('_id')
+      .sort({ _id: -1 })
+      .limit(limit)
+      .maxTimeMS(2000)
+      .lean();
+    return docs.map(d => String(d._id));
+  }
+
+  /** Who `ids` are and whether each is blocked, for the payment-risk linked-account checks. */
+  async findLinkStatesByIds(ids: string[]): Promise<UserLinkState[]> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } })
+      .select('name email createdAt isBanned disputePending moderation.status')
+      .lean();
+    return docs.map(d => ({
+      id: String(d._id),
+      name: d.name ?? null,
+      email: d.email ?? null,
+      createdAt: d.createdAt ?? null,
+      isBanned: d.isBanned ?? false,
+      disputePending: d.disputePending ?? false,
+      moderation: d.moderation?.status ? { status: d.moderation.status } : null,
+    }));
+  }
+
   async searchCollections(
     userId: string,
     options: { page: number; limit: number; search: string; type?: CollectionType },
     deps: { findSessionIdsByUserId: (userId: string) => Promise<string[]> }
-  ) {
+  ): Promise<PaginatedResponse<Collection>> {
     const { page, limit, search, type } = options;
 
     const { pipeline, facetStages } = await buildCollectionSearchPipeline(
@@ -624,6 +870,18 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   /**
+   * Clears lastCreditsPurchasedAt only while it still equals `stamp`, so a purchase landing after the
+   * caller read it (which rewrites the stamp) survives. Resolves whether the stamp was cleared.
+   */
+  async clearPurchaseStampIfUnchanged(userId: string, stamp: Date): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, lastCreditsPurchasedAt: stamp },
+      { $set: { lastCreditsPurchasedAt: null } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
    * Debit up to `credits` without taking the balance below zero, in one atomic update: a balance
    * that cannot cover the whole debit is taken to zero (a negative one is left as is). Resolves the
    * credits actually debited, 0 for a missing user, so the caller can see and act on a shortfall.
@@ -643,6 +901,15 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     );
     if (!before) return 0;
     return Math.min(credits, Math.max(before.currentCredits ?? 0, 0));
+  }
+
+  /** Debits `credits` in one atomic update only when the balance covers all of it; false leaves it untouched. */
+  async decrementCreditsIfCovered(userId: string, credits: number): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, currentCredits: { $gte: credits } },
+      { $inc: { currentCredits: -credits } }
+    );
+    return result.modifiedCount === 1;
   }
 
   async incrementCurrentStorage(userId: string, count: number): Promise<void> {
@@ -787,6 +1054,172 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     );
   }
 
+  async setRiskScore(userId: string, riskScore: ISignupRiskScore): Promise<void> {
+    const preservedStates = ['pending', 'approved', 'banned'];
+    await this.model.updateOne({ _id: userId }, [
+      {
+        $set: {
+          riskScore: {
+            score: riskScore.score,
+            // $literal: a reason that happened to start with '$' would otherwise read as a field path.
+            signals: { $literal: riskScore.signals },
+            computedAt: riskScore.computedAt,
+            reviewState: {
+              $cond: [
+                { $in: [{ $ifNull: ['$riskScore.reviewState', 'none'] }, preservedStates] },
+                '$riskScore.reviewState',
+                riskScore.reviewState,
+              ],
+            },
+          },
+        },
+      },
+    ]);
+  }
+
+  async findRiskScoringCandidateIds(since: Date, options: { afterId?: string; limit: number }): Promise<string[]> {
+    const rows = await this.model
+      .find(
+        {
+          createdAt: { $gte: since },
+          'riskScore.reviewState': { $nin: ['approved', 'banned'] },
+          ...(options.afterId ? { _id: { $gt: new mongoose.Types.ObjectId(options.afterId) } } : {}),
+        },
+        { _id: 1 }
+      )
+      .sort({ _id: 1 })
+      .limit(options.limit)
+      .lean<{ _id: mongoose.Types.ObjectId }[]>()
+      .exec();
+    return rows.map(row => row._id.toString());
+  }
+
+  async findPendingRiskReviews(limit: number): Promise<IUserDocument[]> {
+    return this.model
+      .find(
+        { 'riskScore.reviewState': 'pending', isBanned: { $ne: true } },
+        { email: 1, username: 1, createdAt: 1, riskScore: 1, signupGrant: 1, signupGrantAssessment: 1 }
+      )
+      .sort({ 'riskScore.score': -1, _id: 1 })
+      .limit(limit)
+      .exec();
+  }
+
+  async countPendingRiskReviews(): Promise<number> {
+    return this.model.countDocuments({ 'riskScore.reviewState': 'pending', isBanned: { $ne: true } }).exec();
+  }
+
+  async setRiskReviewState(userId: string, from: SignupRiskReviewState, to: SignupRiskReviewState): Promise<boolean> {
+    const result = await this.model
+      .updateOne({ _id: userId, 'riskScore.reviewState': from }, { $set: { 'riskScore.reviewState': to } })
+      .exec();
+    return result.modifiedCount === 1;
+  }
+
+  async claimRiskEvidenceRefresh(
+    userId: string,
+    { now, staleBefore, trigger }: { now: Date; staleBefore: Date; trigger: RiskEvidenceTrigger }
+  ): Promise<boolean> {
+    const result = await this.model
+      .updateOne(
+        {
+          _id: userId,
+          $or: [
+            { 'riskEvidence.refresh.pendingSince': null },
+            { 'riskEvidence.refresh.pendingSince': { $lt: staleBefore } },
+          ],
+        },
+        { $set: { 'riskEvidence.refresh.pendingSince': now, 'riskEvidence.refresh.lastTrigger': trigger } }
+      )
+      .exec();
+    return result.modifiedCount === 1;
+  }
+
+  async releaseRiskEvidenceRefresh(userId: string, claimedAt: Date): Promise<void> {
+    // Matching on claimedAt so a stale refresh cannot drop a newer request's claim.
+    await this.model
+      .updateOne(
+        { _id: userId, 'riskEvidence.refresh.pendingSince': claimedAt },
+        { $set: { 'riskEvidence.refresh.pendingSince': null } }
+      )
+      .exec();
+  }
+
+  async setRiskEvidenceSummary(userId: string, summary: RiskEvidenceSummary): Promise<boolean> {
+    const result = await this.model
+      .updateOne(
+        {
+          _id: userId,
+          $or: [
+            { 'riskEvidence.summary.computedAt': null },
+            { 'riskEvidence.summary.computedAt': { $lt: summary.computedAt } },
+          ],
+        },
+        {
+          $set: {
+            'riskEvidence.summary': summary,
+            'riskEvidence.refresh.lastFailureAt': null,
+            'riskEvidence.refresh.lastFailure': null,
+          },
+        }
+      )
+      .exec();
+    return result.modifiedCount === 1;
+  }
+
+  async recordRiskEvidenceFailure(userId: string, failure: { at: Date; error: string }): Promise<void> {
+    await this.model
+      .updateOne(
+        { _id: userId },
+        {
+          $set: {
+            'riskEvidence.refresh.lastFailureAt': failure.at,
+            'riskEvidence.refresh.lastFailure': failure.error.slice(0, 200),
+          },
+        }
+      )
+      .exec();
+  }
+
+  /**
+   * The stored evidence summary and creation time of each id, and nothing else from the account:
+   * advisory abuse assessments read only this. Unparseable or absent summaries come back null.
+   */
+  async findRiskEvidenceSummaries(
+    ids: string[]
+  ): Promise<{ id: string; createdAt: Date | null; summary: RiskEvidenceSummary | null }[]> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } }, { createdAt: 1, 'riskEvidence.summary': 1 })
+      .lean<{ _id: mongoose.Types.ObjectId; createdAt?: Date; riskEvidence?: { summary?: unknown } }[]>();
+    return docs.map(doc => {
+      const parsed = riskEvidenceSummarySchema.safeParse(doc.riskEvidence?.summary);
+      return { id: doc._id.toString(), createdAt: doc.createdAt ?? null, summary: parsed.success ? parsed.data : null };
+    });
+  }
+
+  async riskEvidenceCoverage(since: Date): Promise<RiskEvidenceCoverage> {
+    const isType = (path: string, type: string) => ({ $eq: [{ $type: path }, type] });
+    const countIf = (condition: unknown) => ({ $sum: { $cond: [condition, 1, 0] } });
+    const [row] = await this.model.aggregate<RiskEvidenceCoverage>([
+      { $match: { createdAt: { $gte: since } } },
+      {
+        $group: {
+          _id: null,
+          accounts: { $sum: 1 },
+          withSignupMeta: countIf(isType('$signupMeta', 'object')),
+          withJa4: countIf(isType('$signupMeta.ja4', 'string')),
+          withWafSignals: countIf({
+            $and: [isType('$signupMeta.wafAnonIp', 'bool'), isType('$signupMeta.wafBotSignal', 'bool')],
+          }),
+        },
+      },
+      { $project: { _id: 0 } },
+    ]);
+    return row ?? { accounts: 0, withSignupMeta: 0, withJa4: 0, withWafSignals: 0 };
+  }
+
   /**
    * Record a user's moderation appeal: stamps `moderation.appealedAt` and stores the
    * appeal text so admins can review it alongside the user's escalation state. Returns the
@@ -824,10 +1257,21 @@ const AcquisitionTouchSchema = new Schema(
   { _id: false }
 );
 
+const VerifiedTouchSchema = new Schema(
+  {
+    srcProductId: { type: String, required: true },
+    hopId: { type: String, required: true },
+    redeemedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 const UserAcquisitionSchema = new Schema(
   {
     firstTouch: { type: AcquisitionTouchSchema, required: false },
     lastTouch: { type: AcquisitionTouchSchema, required: false },
+    // A verified hop the signup followed - see IUserAcquisition.verifiedTouch.
+    verifiedTouch: { type: VerifiedTouchSchema, required: false },
     signupMethod: { type: String, required: true },
     capturedAt: { type: Date, required: true },
   },
@@ -838,6 +1282,48 @@ const SignupMetaSchema = new Schema(
   {
     ...NETWORK_META_FIELDS,
     capturedAt: { type: Date, required: true },
+    challengeVerified: { type: Boolean, default: undefined },
+  },
+  { _id: false }
+);
+
+const RiskScoreSchema = new Schema(
+  {
+    score: { type: Number, required: true },
+    signals: [
+      new Schema(
+        {
+          signal: { type: String, required: true, enum: [...SIGNUP_RISK_SIGNALS] },
+          points: { type: Number, required: true },
+          reason: { type: String, required: true },
+        },
+        { _id: false }
+      ),
+    ],
+    computedAt: { type: Date, required: true },
+    reviewState: { type: String, required: true, enum: [...SIGNUP_RISK_REVIEW_STATES] },
+  },
+  { _id: false }
+);
+
+const RiskEvidenceSchema = new Schema(
+  {
+    // Shape owned by riskEvidenceSummarySchema (Zod): validated on write and on read, versioned, so
+    // an old summary is never misread after the shape changes.
+    summary: { type: Schema.Types.Mixed, required: false, default: undefined },
+    refresh: {
+      type: new Schema(
+        {
+          pendingSince: { type: Date, default: null },
+          lastTrigger: { type: String, enum: [...RISK_EVIDENCE_TRIGGERS], default: null },
+          lastFailureAt: { type: Date, default: null },
+          lastFailure: { type: String, default: null },
+        },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
+    },
   },
   { _id: false }
 );
@@ -858,6 +1344,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     hasUsablePassword: { type: Boolean, default: false },
     groups: { type: [String], default: [] },
     isAdmin: { type: Boolean, default: false },
+    adminPermissions: { type: [String], enum: ADMIN_PERMISSIONS, default: [] },
     storageLimit: { type: Number, default: 1000 }, // Decimal MB
     storageLimitOverride: { type: Number },
     planStorageLimit: { type: Number },
@@ -866,15 +1353,85 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Invite-resolved credits awaiting proof of email ownership; paired with
     // the pending-free-credits tag and nulled once granted.
     pendingCreditGrant: { type: Number, default: null },
+    grantPackageId: { type: String, default: null },
+    // Canonical inbox (canonicalizeEmail) this account claimed its free-credit grant under; unset
+    // until a grant is claimed. Unique, so one inbox earns one grant however many aliases sign up.
+    freeCreditClaimEmail: { type: String },
+    signupGrantAssessment: { type: Schema.Types.Mixed, default: undefined },
+    signupGrantHeldReason: { type: String, enum: ['budget_exhausted', 'risk_review', null], default: null },
+    // When the tranche was last held for an exhausted budget; the activity drip ignores older holds.
+    signupGrantHeldAt: { type: Date },
+    signupGrant: {
+      type: new Schema(
+        {
+          stage: { type: String, enum: ['pending_email', 'signup', 'unlocked'], required: true },
+          signupCredits: { type: Number, min: 0, required: true },
+          unlockCredits: { type: Number, min: 0, required: true },
+          creditsReleased: { type: Number, min: 0, required: true },
+          nextCondition: { type: String, enum: ['email_verification', 'verification', null], default: null },
+          unlockedBy: { type: String, enum: SIGNUP_GRANT_UNLOCK_REASONS },
+          unlockedOrgId: { type: String },
+          dripCredits: { type: Number, min: 0 },
+          lastDripDay: { type: String },
+          lastDripPeriod: { type: String },
+          inviteBonusPaid: { type: Number, min: 0 },
+          activity: {
+            type: new Schema({ day: String, ms: Number, lastAt: Date, period: String }, { _id: false }),
+            default: undefined,
+          },
+          heldUnlock: {
+            type: new Schema(
+              {
+                reason: { type: String, enum: PAYMENT_UNLOCK_REASONS, required: true },
+                heldAt: { type: Date, required: true },
+                releaseAt: { type: Date, required: true },
+              },
+              { _id: false }
+            ),
+            default: undefined,
+          },
+          unlockForfeited: {
+            type: new Schema(
+              {
+                cause: { type: String, enum: SIGNUP_UNLOCK_FORFEIT_CAUSES, required: true },
+                at: { type: Date, required: true },
+              },
+              { _id: false }
+            ),
+            default: undefined,
+          },
+          blocked: {
+            type: new Schema({ at: { type: Date, required: true } }, { _id: false }),
+            default: undefined,
+          },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     lastCreditsPurchasedAt: { type: Date, default: null },
     tags: { type: [String], default: [] },
     level: { type: String, default: 'DemoUser' },
     isBanned: { type: Boolean, default: false },
     isModerated: { type: Boolean, default: false },
+    apiKeyTrustApproved: { type: Boolean, default: false },
+    newAccountSpendCapLifted: { type: Boolean, default: false },
     // Per-user moderation tracking + auto-throttle/suspend state.
     // Lazily populated - undefined until the user's first moderation hit.
     moderation: { type: UserModerationSchema, required: false, default: undefined },
+    throttle: { type: UserThrottleSchema, required: false, default: undefined },
+    riskSignals: { type: [UserRiskSignalSchema], required: false, default: undefined },
     disputePending: { type: Boolean, required: false, default: false },
+    deletion: { type: UserDeletionSchema, required: false, default: undefined },
+    accountDataExportLease: {
+      type: new Schema(
+        { id: { type: String, required: true }, expiresAt: { type: Date, required: true } },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
+      select: false,
+    },
     // No pre-save hook required; enforcement is via requireNonSystemUser() helper, not document-level.
     // Queries for human users MUST use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
     isSystem: { type: Boolean, default: false },
@@ -896,6 +1453,19 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     userNotes: [UserNoteSchema],
     numReferralsAvailable: { type: Number, default: 0 },
     regInvites: [{ type: Schema.Types.ObjectId, ref: 'User' }],
+    referredByUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    signupInvite: {
+      type: new Schema(
+        {
+          source: { type: String, enum: SIGNUP_INVITE_SOURCES, required: true },
+          inviteId: { type: String, required: true },
+          organizationId: { type: String },
+          at: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     organizationId: { type: Schema.Types.ObjectId, ref: 'Organization' },
     loginRecords: [LoginRecordSchema],
     // reset password
@@ -1108,7 +1678,22 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     acquisition: { type: UserAcquisitionSchema, required: false, default: undefined },
     // Written once at signup - see IUser.signupMeta.
     signupMeta: { type: SignupMetaSchema, required: false, default: undefined },
+    // Written once at an OAuth signup that landed on another account's notebook - see IUser.signupLanding.
+    signupLanding: {
+      type: new Schema(
+        { notebookOwnerId: { type: String, required: true }, capturedAt: { type: Date, required: true } },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
+    },
+    // Recomputed by userService.refreshSignupRiskScore - see IUser.riskScore.
+    riskScore: { type: RiskScoreSchema, required: false, default: undefined },
+    // Written by userService.refreshRiskEvidence - see IUser.riskEvidence.
+    riskEvidence: { type: RiskEvidenceSchema, required: false, default: undefined },
     isSynthetic: { type: Boolean, required: false },
+    // See IUser.isInternal. No default, like isSynthetic: absent reads as "not marked".
+    isInternal: { type: Boolean, required: false },
     firstValueAt: { type: Date, required: false },
   },
   {
@@ -1155,6 +1740,9 @@ UserSchema.pre('save', function (next) {
   next();
 });
 
+// Stripe-customer resolution for business metrics.
+UserSchema.index({ stripeCustomerId: 1 }, { name: 'user_stripeCustomerId' });
+
 // This will support the $or queries in findByUsernameOrEmail efficiently
 UserSchema.index({
   username: 1,
@@ -1170,6 +1758,17 @@ UserSchema.index({
 UserSchema.index(
   { email: 1 },
   { unique: true, partialFilterExpression: { email: { $type: 'string' } }, name: 'email_1' }
+);
+
+// One free-credit grant per inbox: see claimFreeCreditGrant. Partial so unclaimed accounts are
+// not indexed. Existing deployments are backfilled and indexed by migration 20260921235965.
+UserSchema.index(
+  { freeCreditClaimEmail: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { freeCreditClaimEmail: { $type: 'string' } },
+    name: 'freeCreditClaimEmail_1',
+  }
 );
 
 // Case-insensitive email index for collation-based lookups (findByEmail).
@@ -1200,15 +1799,65 @@ UserSchema.index({ 'authProviders.strategy': 1, 'authProviders.id': 1 }, { name:
 // Without it both scan the full users collection. Explicit name so the migration and autoIndex
 // (mongo.ts) agree - see the authProviders_strategy_id note above.
 UserSchema.index({ groups: 1 }, { name: 'user_groups' });
+UserSchema.index({ createdAt: 1, 'signupMeta.ja4': 1 }, { name: 'user_signup_fingerprint_window' });
 // Serves the forward member lookup in OrganizationRepository.findMemberUserIds, which the org
 // feedback report and its drill-down routes call on every request. Without it that read scans the
 // full users collection. Explicit name so the migration and autoIndex (mongo.ts) agree - see the
 // authProviders_strategy_id note above.
 UserSchema.index({ organizationId: 1 }, { name: 'user_organizationId' });
+// Serves the per-organization lookup of accounts an org invite unlocked.
+// Sparse: only those accounts carry the field. Explicit name so the migration
+// 20260921235968 and autoIndex (mongo.ts) agree.
+UserSchema.index({ 'signupGrant.unlockedOrgId': 1 }, { sparse: true, name: 'signupGrant_unlockedOrgId' });
+UserSchema.index({ createdAt: 1 });
+// Serves the signupIpRetention cron's range scan for signups past the retention window. Sparse:
+// accounts created before signup network capture carry no signupMeta. Explicit name so migration
+// 20260921235973 and autoIndex agree - see the authProviders_strategy_id note above.
+UserSchema.index({ 'signupMeta.capturedAt': 1 }, { name: 'user_signupMeta_capturedAt', sparse: true });
+// Serves the linked-account lookup by signup IP (apps/client/server/billing/linkedAccounts.ts). Partial:
+// the signupIpRetention cron clears the IP, and older accounts never had one. Explicit name so migration
+// 20260921236600 and autoIndex agree.
+UserSchema.index(
+  { 'signupMeta.ip': 1 },
+  { name: 'user_signupMeta_ip', partialFilterExpression: { 'signupMeta.ip': { $type: 'string' } } }
+);
 UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });
 UserSchema.index({ 'notionConnect.status': 1 });
+// Admin users list: the Signed up, Last active and Credits sorts and the built-in view counts
+// (apps/client/server/admin/usersList/listAdminUsers.ts). The sort keys end in _id because
+// adminUsersSort adds an _id tiebreak, and a sort only uses an index whose key it prefixes; each
+// serves both directions. The flag and band indexes are partial/sparse so they stay small. Built
+// by the ensure-user-admin-list-indexes migration.
+UserSchema.index({ createdAt: -1, _id: -1 }, { name: 'user_createdAt_id' });
+UserSchema.index({ lastActiveAt: -1, _id: -1 }, { name: 'user_lastActiveAt_id' });
+UserSchema.index({ currentCredits: -1, _id: -1 }, { name: 'user_currentCredits_id' });
+UserSchema.index({ isBanned: 1 }, { partialFilterExpression: { isBanned: true }, name: 'user_isBanned_true' });
+UserSchema.index({ 'signupGrantAssessment.band': 1 }, { sparse: true, name: 'user_signupGrantAssessment_band' });
+// Serves findPendingRiskReviews (the signup risk review queue). Name and keys must match migration
+// 20260921235956 byte-for-byte.
+UserSchema.index({ 'riskScore.reviewState': 1, 'riskScore.score': -1 }, { name: 'user_riskScore_review' });
+// Serves the held-grants admin list and release sweep, and the activity drip held-tranche existence check.
+UserSchema.index(
+  { signupGrantHeldReason: 1, _id: 1 },
+  { partialFilterExpression: { signupGrantHeldReason: { $type: 'string' } }, name: 'user_signupGrantHeldReason' }
+);
+// Serves the held-release job's scan for payment unlocks whose settling window has passed.
+UserSchema.index(
+  { 'signupGrant.heldUnlock.releaseAt': 1, _id: 1 },
+  {
+    partialFilterExpression: { 'signupGrant.heldUnlock.releaseAt': { $type: 'date' } },
+    name: 'user_signupGrant_heldUnlock_releaseAt',
+  }
+);
+// Serves the inviter's referral counts (invited, active). Built by the ensure-referral-inviter-indexes migration.
+UserSchema.index({ referredByUserId: 1 }, { name: 'user_referredByUserId' });
+// Serves the account deletion purge job's scan for grace periods that have ended.
+UserSchema.index(
+  { 'deletion.scheduledFor': 1 },
+  { partialFilterExpression: { 'deletion.scheduledFor': { $type: 'date' } }, name: 'user_deletion_scheduledFor' }
+);
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 
 // Add text index for fast user search in admin panel
@@ -1313,28 +1962,32 @@ function stripSecretlessMfaFromUpdate(this: Query<unknown, IUserDocument>) {
 }
 
 /**
- * Encrypts `mfa.totpSecret` on every update that writes it, so a read-only DB or backup exposure
- * cannot mint second-factor codes. Covers the whole-subdocument forms (`{ mfa }`, `$set: { mfa }`)
+ * Encrypts `mfa.totpSecret` (and `mfa.pendingBackupCodes`) on every update that writes it, so a
+ * read-only DB or backup exposure cannot mint second-factor codes. Covers the whole-subdocument forms (`{ mfa }`, `$set: { mfa }`)
  * that setupMFA and the snapshot writers (passkey authenticate, regenerate-backup-codes) use, and the
  * dotted `mfa.totpSecret` form. encryptAtRest leaves ciphertext untouched, so re-writing an
  * already-encrypted value is a no-op. Must stay in sync with the decrypt in findByIdWithMfaSecrets.
  */
+const MFA_ENCRYPTED_FIELDS = ['totpSecret', 'pendingBackupCodes'] as const;
+
 function encryptTotpSecretInUpdate(this: Query<unknown, IUserDocument>) {
   const update = this.getUpdate() as Record<string, unknown> | null;
   if (!update || Array.isArray(update)) return;
 
+  const encrypt = (value: string) => (isEncrypted(value) ? value : encryptAtRest(value));
   const encryptIn = (container: Record<string, unknown> | undefined) => {
     if (!container) return;
-    const mfa = container.mfa as { totpSecret?: unknown } | null | undefined;
-    if (mfa && typeof mfa === 'object' && typeof mfa.totpSecret === 'string') {
-      container.mfa = {
-        ...mfa,
-        totpSecret: isEncrypted(mfa.totpSecret) ? mfa.totpSecret : encryptAtRest(mfa.totpSecret),
-      };
+    const mfa = container.mfa as Record<string, unknown> | null | undefined;
+    if (mfa && typeof mfa === 'object') {
+      const encrypted = { ...mfa };
+      for (const field of MFA_ENCRYPTED_FIELDS) {
+        if (typeof encrypted[field] === 'string') encrypted[field] = encrypt(encrypted[field]);
+      }
+      container.mfa = encrypted;
     }
-    const dotted = container['mfa.totpSecret'];
-    if (typeof dotted === 'string') {
-      container['mfa.totpSecret'] = isEncrypted(dotted) ? dotted : encryptAtRest(dotted);
+    for (const field of MFA_ENCRYPTED_FIELDS) {
+      const dotted = container[`mfa.${field}`];
+      if (typeof dotted === 'string') container[`mfa.${field}`] = encrypt(dotted);
     }
   };
 
@@ -1379,6 +2032,10 @@ UserSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], encryptTotpSecre
 UserSchema.pre('save', function (next) {
   if (this.mfa?.totpSecret && !isEncrypted(this.mfa.totpSecret) && this.isModified('mfa.totpSecret')) {
     this.mfa.totpSecret = encryptAtRest(this.mfa.totpSecret);
+  }
+  const pendingCodes = this.mfa?.pendingBackupCodes;
+  if (pendingCodes && !isEncrypted(pendingCodes) && this.isModified('mfa.pendingBackupCodes')) {
+    this.mfa!.pendingBackupCodes = encryptAtRest(pendingCodes);
   }
   next();
 });

@@ -85,9 +85,12 @@ export function useGetUsers(params: IGetUsersParams, options?: Partial<UseQueryO
   });
 }
 
+/** The key `useGetUser` caches a user under; the admin profile dialogs refetch it by this key. */
+export const userQueryKey = (id: string | null | undefined) => ['users', id] as const;
+
 export function useGetUser(id: string | null | undefined) {
   return useQuery({
-    queryKey: ['users', id],
+    queryKey: userQueryKey(id),
     queryFn: async () => {
       if (!id) return;
       const { data } = await api.get<WithOrgRef<IUserDocument>>(`/api/users/${id}`);
@@ -135,6 +138,11 @@ export function useUpdateUser(options: { onSuccess?: () => void; onSettled?: () 
       // invalidation, a profile name change stays stale in the switcher until a hard
       // refresh. Invalidating triggers a refetch that repopulates the context store.
       queryClient.invalidateQueries({ queryKey: ['identify'] });
+      // An admin editing through Edit profile: the timeline and other profile cards key under
+      // ['admin', 'users', id] (see useAdminUserUpdate). Product access keys separately and
+      // derives grants from the email domain. A no-op when no admin view is mounted.
+      queryClient.invalidateQueries({ queryKey: ['admin', 'users', id] });
+      queryClient.invalidateQueries({ queryKey: ['admin', 'user-entitlements', id] });
 
       if (onSuccess) onSuccess();
       // A partial write must not read as a clean save -- the whole point of the route
@@ -243,7 +251,7 @@ export function useUserRevokeSharing(
  * (components, query subscriptions, WebSocket) survives. The server-side revoke differs per path
  * and is done by the caller BEFORE this runs.
  */
-async function tearDownClientSession(opts: {
+export async function tearDownClientSession(opts: {
   setCurrentUser: (user: IUserDocument | null) => void;
   resetTokens: () => void;
   queryClient: QueryClient;
@@ -290,10 +298,41 @@ export function useUserLogout() {
   });
 }
 
-const ACTIVE_SESSIONS_KEY = ['users', 'me', 'sessions'] as const;
+/** Queues an export of the caller's account data; the download link arrives by email. Step-up gated, 1 per hour. */
+export function useRequestAccountDataExport() {
+  return useMutation({
+    mutationFn: async () => {
+      const res = await api.post<{ exportJobId: string }>('/api/users/me/data-export');
+      return res.data;
+    },
+  });
+}
+
+export interface AccountDataExportDownload {
+  url: string;
+  filename: string;
+  expiresAt: string;
+}
+
+/** A fresh short-lived download link for an export the caller requested. Never retried: 404/410 are answers. */
+export function useAccountDataExportDownload(jobId: string) {
+  return useQuery({
+    queryKey: ['users', 'me', 'data-export', jobId],
+    queryFn: async () => {
+      const res = await api.get<AccountDataExportDownload>(`/api/users/me/data-export/${encodeURIComponent(jobId)}`);
+      return res.data;
+    },
+    retry: false,
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export const ACTIVE_SESSIONS_KEY = ['users', 'me', 'sessions'] as const;
 
 /** The caller's own active auth sessions (devices), newest-active first. Powers the
- *  Active Sessions list in Settings -> Security. */
+ *  Active Sessions list in the profile Security tab. */
 export function useGetActiveSessions() {
   return useQuery({
     queryKey: ACTIVE_SESSIONS_KEY,

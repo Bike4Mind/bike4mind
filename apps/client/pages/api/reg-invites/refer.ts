@@ -1,7 +1,8 @@
-import { RegInviteEvents, requireEnv } from '@bike4mind/common';
-import { IRegistrationInvite, RegInviteStatusType } from '@bike4mind/common';
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
+import { RegInviteEvents, escapeSlackLine, escapeSlackText, inboxAliasKey, requireEnv } from '@bike4mind/common';
+import { IRegistrationInvite, RegInviteSource, RegInviteStatusType } from '@bike4mind/common';
 import { registrationInviteRepository, User, userRepository } from '@bike4mind/database';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { createRegInvite, generateCode } from '@server/managers/regInviteManager';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
@@ -9,7 +10,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
 import { getLogoUrl, buildEmailLogoImg } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
-import { postMessageToSlack } from '@server/integrations/slack/slack';
+import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { Request } from 'express';
 import { z } from 'zod';
 import { escape } from 'html-escaper';
@@ -30,12 +31,13 @@ const observeOperation = async (operation: Promise<unknown>): Promise<PromiseSet
 };
 
 const handler = baseApi().post(
+  outboundActionGate(),
   async (req: Request<unknown, unknown, z.infer<typeof CreateReferralRequestSchema>>, res) => {
     const newReferralData = CreateReferralRequestSchema.parse(req.body);
     const user = req.user;
     const { userName, emailTitle, emailBody } = newReferralData;
     // Dedup before reserveReferrals so a duplicated address is charged once.
-    const friendEmail = Array.from(new Set(newReferralData.friendEmail));
+    const friendEmail = Array.from(new Set(newReferralData.friendEmail.map(e => e.trim().toLowerCase())));
     const userId = user.id;
 
     // Minting credit-bearing invite codes requires proof the sender's own email
@@ -45,6 +47,14 @@ const handler = baseApi().post(
     const hasOAuthProvider = (user.authProviders?.length ?? 0) > 0;
     if (!user.emailVerified && !hasOAuthProvider) {
       throw new BadRequestError('Please verify your email address before sending referral invites');
+    }
+
+    // An alias of the sender's own inbox would let one person redeem their own invite for the
+    // inviter reward. Refused before reserveReferrals so nothing is charged.
+    // Emailless OAuth accounts have no inbox to alias.
+    const senderInbox = user.email ? inboxAliasKey(user.email) : null;
+    if (senderInbox && friendEmail.some(target => inboxAliasKey(target) === senderInbox)) {
+      throw new BadRequestError('You cannot invite your own email address');
     }
 
     // Pre-resolve which targets already have an account, so the loop below can skip sending
@@ -105,27 +115,36 @@ const handler = baseApi().post(
 
         let inviteCode: string;
 
-        const existingInvite = await registrationInviteRepository.findOne({ email: target });
-        if (!existingInvite) {
+        const invites = await registrationInviteRepository.find({ email: target });
+        const now = new Date();
+        const isLive = (invite: IRegistrationInvite) =>
+          invite.status === RegInviteStatusType.open && !invite.used && (!invite.expiresAt || invite.expiresAt > now);
+        const ownLive = invites.find(invite => invite.userId === userId && isLive(invite));
+        const otherLive = invites.find(invite => invite.userId !== userId && isLive(invite));
+        if (ownLive) {
+          hasUsableInvite = true;
+          inviteCode = ownLive.code;
+        } else if (otherLive) {
+          // Someone else already invited this address; reusing their code would credit them while
+          // this sender is charged. Skipped silently like an existing account, so the response
+          // does not reveal it and the reservation stays spent.
+          slackErrorMessages.push(`Email ${target} already has an invite from another sender. Skipping invite.`);
+          continue;
+        } else {
           inviteCode = generateCode();
           const newRegInvite: IRegistrationInvite = {
             userId,
             email: target,
             code: inviteCode,
             status: RegInviteStatusType.open,
+            source: RegInviteSource.referral,
           };
           const savedInvite = await createRegInvite(newRegInvite);
           hasUsableInvite = true;
           newInviteIds.push(savedInvite.id);
           user.regInvites.push(savedInvite.id);
-        } else {
-          hasUsableInvite = true;
-          inviteCode = existingInvite.code;
         }
 
-        // Passwordless registration has no invite-code field, so the email links to
-        // the bare /register page - no `?code=` (dead copy the form can't consume).
-        // The invite record + code are still minted for referral tracking below.
         const finalBody = `
             <!DOCTYPE html>
             <html>
@@ -152,6 +171,7 @@ const handler = baseApi().post(
               <div class="content">
                 ${buildEmailLogoImg(brand, logoUrl)}
                 <p>${escape(emailBody)}</p>
+                <p>Invite code: <strong>${escape(inviteCode)}</strong></p>
                 <p><a href="${escape(registrationLink)}">Click here to register</a></p>
               </div>
             </body>
@@ -160,13 +180,12 @@ const handler = baseApi().post(
 
         // Queue the Slack notification; sent in a batch after the loop.
         if (getSettingsValue('EnableReferralToSlack', settings)) {
-          const slackMsg = `Referral sent by user ${userName}:${userId} to ${target} with ${inviteCode} and body ${finalBody}`;
+          const slackMsg = `Referral sent by user ${escapeSlackLine(userName)}:${userId} to ${escapeSlackLine(target)} with ${inviteCode} and body ${escapeSlackText(finalBody)}`;
           notificationPromises.push(observeOperation(postMessageToSlack(slackMsg)));
         }
 
         // Queue the invite email; sent in a batch after the loop.
         if (getSettingsValue('EnableReferralToEmail', settings)) {
-          console.log(emailBody, 'QQQ: Sending email to', target, `with body ${finalBody}`);
           emailPromises.push({
             target,
             outcome: observeOperation(
@@ -225,7 +244,7 @@ const handler = baseApi().post(
 
     // Send accumulated error/skip messages to Slack as one batch.
     if (slackErrorMessages.length > 0) {
-      const slackMessage = slackErrorMessages.join('\n');
+      const slackMessage = escapeSlackText(slackErrorMessages.join('\n'));
       await postMessageToSlack(slackMessage);
     }
 

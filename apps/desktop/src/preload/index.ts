@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import type { AttentionNotice, AttentionOpenEvent } from '@shared/attention';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
+import type { PromptCacheTtl } from '@bike4mind/common';
 import type {
   ChatApprovalAnswer,
   ChatApprovalMode,
@@ -21,12 +23,22 @@ import type {
 import type { CookieImportRequest, CookieImportState } from '@shared/browserCookies';
 import type { ClaudeImportState } from '@shared/claudeImport';
 import type { DevLogRecord } from '@shared/devLog';
+import type { GenerationSettings } from '@shared/generation';
+import type { ModelSettings } from '@shared/modelSettings';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
+import type {
+  ModelServerAddInput,
+  ModelServerProbeInput,
+  ModelServerUpdateInput,
+  ModelServerView,
+} from '@shared/modelServers';
+import type { HfTokenStatus, HubSearchRequest, ModelPull, ModelPullRequest } from '@shared/models';
 import {
   IPC_CHANNELS,
   type BrowserFreezeFrameRequest,
   type BrowserGoRequest,
   type BrowserNavigateRequest,
+  type BrowserOpenArtifactRequest,
   type BrowserPageStateEvent,
   type BrowserPaneRequest,
   type BrowserTabRequest,
@@ -38,6 +50,7 @@ import type { TerminalCreateRequest, TerminalDataEvent, TerminalsChangedEvent } 
 import type { UpdateState } from '@shared/update';
 import type { UsageWindowId } from '@shared/usage';
 import type { FleetState } from '@shared/fleet';
+import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewState } from '@shared/simulator';
 
 // Written out one method per channel rather than a generic invoke(channel, ...args)
 // passthrough: a passthrough would let renderer code reach every handler main ever
@@ -54,6 +67,51 @@ const api: DesktopApi = {
       const handler = (_event: unknown, state: UpdateState) => listener(state);
       ipcRenderer.on(IPC_CHANNELS.updateStateChanged, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.updateStateChanged, handler);
+    },
+  },
+  models: {
+    getStatus: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetStatus, serverId),
+    listInstalled: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsListInstalled, serverId),
+    search: (request: HubSearchRequest) => ipcRenderer.invoke(IPC_CHANNELS.modelsSearch, request),
+    getDetail: (repo: string, serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetDetail, repo, serverId),
+    listCurated: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsListCurated, serverId),
+    getCuratedPull: (entryId: string, buildId: string, serverId?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.modelsGetCuratedPull, entryId, buildId, serverId),
+    checkCurated: (entryId: string, buildId: string, serverId?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.modelsCheckCurated, entryId, buildId, serverId),
+    checkCuratedList: () => ipcRenderer.invoke(IPC_CHANNELS.modelsCheckCuratedList),
+    getCuratedSettings: () => ipcRenderer.invoke(IPC_CHANNELS.modelsCuratedSettings),
+    setCuratedEnabled: (enabled: boolean) => ipcRenderer.invoke(IPC_CHANNELS.modelsCuratedSetEnabled, enabled),
+    onCuratedChanged: listener => {
+      const handler = () => listener();
+      ipcRenderer.on(IPC_CHANNELS.modelsCuratedChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.modelsCuratedChanged, handler);
+    },
+    listPulls: () => ipcRenderer.invoke(IPC_CHANNELS.modelsListPulls),
+    pull: (request: ModelPullRequest) => ipcRenderer.invoke(IPC_CHANNELS.modelsPull, request),
+    cancelPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsCancelPull, key),
+    resumePull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsResumePull, key),
+    dismissPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsDismissPull, key),
+    remove: (name: string, serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsRemove, name, serverId),
+    getStoreLocation: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetStoreLocation, serverId),
+    getLoadedState: (modelId: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetLoadedState, modelId),
+    getHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsGetHfAccess),
+    setHfToken: (token: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsSaveHfAccess, token),
+    clearHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsClearHfAccess),
+    onHfTokenChanged: listener => {
+      const handler = (_event: unknown, status: HfTokenStatus) => listener(status);
+      ipcRenderer.on(IPC_CHANNELS.modelsHfAccessChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.modelsHfAccessChanged, handler);
+    },
+    onPullsChanged: listener => {
+      const handler = (_event: unknown, pulls: ModelPull[]) => listener(pulls);
+      ipcRenderer.on(IPC_CHANNELS.modelsPullsChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.modelsPullsChanged, handler);
+    },
+    onInstalledChanged: listener => {
+      const handler = (_event: unknown, serverId: string) => listener(serverId);
+      ipcRenderer.on(IPC_CHANNELS.modelsInstalledChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.modelsInstalledChanged, handler);
     },
   },
   auth: {
@@ -92,10 +150,20 @@ const api: DesktopApi = {
     },
   },
   chat: {
-    listModels: (force?: boolean) => ipcRenderer.invoke(IPC_CHANNELS.chatListModels, force ?? false),
+    listModels: (force?: boolean | 'local') => ipcRenderer.invoke(IPC_CHANNELS.chatListModels, force ?? false),
+    onModelsChanged: listener => {
+      const handler = () => listener();
+      ipcRenderer.on(IPC_CHANNELS.chatModelsChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatModelsChanged, handler);
+    },
     listSuggestionModels: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSuggestionModels),
+    getLocalContext: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetLocalContext),
+    setLocalContext: setting => ipcRenderer.invoke(IPC_CHANNELS.chatSetLocalContext, setting),
+    getLocalContextFit: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetLocalContextFit),
+    listCreationTools: (model: string) => ipcRenderer.invoke(IPC_CHANNELS.chatListCreationTools, model),
     setSessionModel: (sessionId: string, model: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionModel, sessionId, model),
+    settleLocalModel: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatSettleLocalModel, sessionId),
     setSessionHistory: (sessionId: string, enabled: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionHistory, sessionId, enabled),
     searchHistory: (query: string) => ipcRenderer.invoke(IPC_CHANNELS.chatSearchHistory, query),
@@ -108,12 +176,24 @@ const api: DesktopApi = {
     },
     setSessionReasoningEffort: (sessionId: string, effort: ReasoningEffortSetting) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionReasoningEffort, sessionId, effort),
+    setSessionPromptCacheTtl: (sessionId: string, ttl: PromptCacheTtl) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPromptCacheTtl, sessionId, ttl),
+    setSessionGeneration: (sessionId: string, generation: GenerationSettings) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionGeneration, sessionId, generation),
+    getModelSettings: (modelId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetModelSettings, modelId),
+    setModelSettings: (modelId: string, settings: ModelSettings) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetModelSettings, modelId, settings),
+    getModelLoadOffer: (modelId: string, draftTokens?: number) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatGetModelLoadOffer, modelId, draftTokens),
     setSessionPinned: (sessionId: string, pinned: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPinned, sessionId, pinned),
+    setSessionOrchestrate: (sessionId: string, orchestrate: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionOrchestrate, sessionId, orchestrate),
     setApprovalMode: (sessionId: string, mode: ChatApprovalMode) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetApprovalMode, sessionId, mode),
     setSessionArchived: (sessionId: string, archived: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionArchived, sessionId, archived),
+    exportSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatExportSession, sessionId),
     listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSessions),
     createSession: (request?: CreateSessionRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatCreateSession, request),
     createCodeSession: (request: CreateCodeSessionRequest) =>
@@ -131,7 +211,15 @@ const api: DesktopApi = {
     getSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetSession, sessionId),
     renameSession: (sessionId: string, title: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatRenameSession, sessionId, title),
-    deleteSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatDeleteSession, sessionId),
+    deleteSession: (sessionId: string, removeWorktree?: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatDeleteSession, sessionId, removeWorktree),
+    inspectWorktreeRemoval: (sessionId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatInspectWorktreeRemoval, sessionId),
+    listWorktrees: (directory: string) => ipcRenderer.invoke(IPC_CHANNELS.chatListWorktrees, directory),
+    removeWorktrees: (directory: string, paths?: string[]) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatRemoveWorktrees, directory, paths),
+    revealWorktree: (directory: string, path: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatRevealWorktree, directory, path),
     sendMessage: (request: SendMessageRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatSendMessage, request),
     stopReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatStopReply, sessionId),
     continueReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatContinueReply, sessionId),
@@ -143,6 +231,9 @@ const api: DesktopApi = {
     getQueuedMessages: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetQueued, sessionId),
     cancelQueuedMessage: (sessionId: string, queuedId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatCancelQueued, sessionId, queuedId),
+    getHeldRelays: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetHeldRelays, sessionId),
+    resolveHeldRelay: (sessionId: string, heldId: string, deliver: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatResolveHeldRelay, sessionId, heldId, deliver === true),
     sendQueuedMessageNow: (sessionId: string, queuedId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSendQueuedNow, sessionId, queuedId),
     startSpawnSuggestion: (request: StartSpawnSuggestionRequest) =>
@@ -232,10 +323,29 @@ const api: DesktopApi = {
     copyShareLink: listingId => ipcRenderer.invoke(IPC_CHANNELS.skillMarketCopyShareLink, listingId),
     openSource: url => ipcRenderer.invoke(IPC_CHANNELS.skillMarketOpenSource, url),
   },
+  simulator: {
+    getState: () => ipcRenderer.invoke(IPC_CHANNELS.simulatorGetState),
+    listDevices: () => ipcRenderer.invoke(IPC_CHANNELS.simulatorListDevices),
+    attach: (udid: string) => ipcRenderer.invoke(IPC_CHANNELS.simulatorAttach, udid),
+    detach: () => ipcRenderer.invoke(IPC_CHANNELS.simulatorDetach),
+    input: (input: SimulatorPaneInput) => ipcRenderer.invoke(IPC_CHANNELS.simulatorInput, input),
+    onState: listener => {
+      const handler = (_event: unknown, state: SimulatorViewState) => listener(state);
+      ipcRenderer.on(IPC_CHANNELS.simulatorState, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.simulatorState, handler);
+    },
+    onFrame: listener => {
+      const handler = (_event: unknown, frame: SimulatorFrame) => listener(frame);
+      ipcRenderer.on(IPC_CHANNELS.simulatorFrame, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.simulatorFrame, handler);
+    },
+  },
   browser: {
     setPane: (request: BrowserPaneRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserSetPane, request),
     freezeFrame: (request: BrowserFreezeFrameRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserFreezeFrame, request),
     navigate: (request: BrowserNavigateRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserNavigate, request),
+    openArtifact: (request: BrowserOpenArtifactRequest) =>
+      ipcRenderer.invoke(IPC_CHANNELS.browserOpenArtifact, request),
     go: (request: BrowserGoRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserGo, request),
     tab: (request: BrowserTabRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserTab, request),
     onPageState: listener => {
@@ -293,6 +403,21 @@ const api: DesktopApi = {
       return () => ipcRenderer.removeListener(IPC_CHANNELS.mcpServersChanged, handler);
     },
   },
+  modelServers: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.modelServersList),
+    probe: (input: ModelServerProbeInput) => ipcRenderer.invoke(IPC_CHANNELS.modelServersProbe, input),
+    add: (input: ModelServerAddInput) => ipcRenderer.invoke(IPC_CHANNELS.modelServersAdd, input),
+    update: (id: string, input: ModelServerUpdateInput) =>
+      ipcRenderer.invoke(IPC_CHANNELS.modelServersUpdate, id, input),
+    remove: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.modelServersRemove, id),
+    check: (id?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelServersCheck, id),
+    probedHardware: () => ipcRenderer.invoke(IPC_CHANNELS.modelServersProbedHardware),
+    onChanged: listener => {
+      const handler = (_event: unknown, servers: ModelServerView[]) => listener(servers);
+      ipcRenderer.on(IPC_CHANNELS.modelServersChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.modelServersChanged, handler);
+    },
+  },
   tools: {
     getAccess: () => ipcRenderer.invoke(IPC_CHANNELS.toolsGetAccess),
     grantAccess: () => ipcRenderer.invoke(IPC_CHANNELS.toolsGrantAccess),
@@ -302,6 +427,11 @@ const api: DesktopApi = {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.permissionsGetState),
     setRules: (scope, lists) => ipcRenderer.invoke(IPC_CHANNELS.permissionsSetRules, scope, lists),
     setSharing: (share: boolean) => ipcRenderer.invoke(IPC_CHANNELS.permissionsSetSharing, share),
+    exportApprovalSummary: () => ipcRenderer.invoke(IPC_CHANNELS.permissionsExportApprovalSummary),
+  },
+  capabilities: {
+    getState: () => ipcRenderer.invoke(IPC_CHANNELS.capabilitiesGetState),
+    revoke: (grantId: string) => ipcRenderer.invoke(IPC_CHANNELS.capabilitiesRevoke, grantId),
   },
   claudeImport: {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.claudeImportGetState),
@@ -364,6 +494,16 @@ const api: DesktopApi = {
   },
   shell: {
     openExternal: (url: string) => ipcRenderer.invoke(IPC_CHANNELS.shellOpenExternal, url),
+  },
+  attention: {
+    notify: (notice: AttentionNotice) => ipcRenderer.invoke(IPC_CHANNELS.attentionNotify, notice),
+    claim: (sessionIds: string[]) => ipcRenderer.invoke(IPC_CHANNELS.attentionClaim, sessionIds),
+    setBadgeCount: (count: number) => ipcRenderer.invoke(IPC_CHANNELS.attentionSetBadge, count),
+    onOpen: listener => {
+      const handler = (_event: unknown, event: AttentionOpenEvent) => listener(event);
+      ipcRenderer.on(IPC_CHANNELS.attentionOpen, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.attentionOpen, handler);
+    },
   },
   devLog: {
     getSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.devLogGetSnapshot),

@@ -11,6 +11,7 @@ import { synthesizeSpeechContract } from './tts.contract';
 import { generateMusicContract } from './music.contract';
 import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
+import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
 import { getCreditBalanceContract } from './credits.contract';
 import { listModelsContract } from './models.contract';
 import { generateImageContract } from './imageGeneration.contract';
@@ -21,8 +22,13 @@ import {
   listFilesContract,
   updateFileContract,
   deleteFileContract,
+  chunkFileContract,
+  searchFilesContract,
+  getFilesByIdsContract,
+  bulkDeleteFilesContract,
 } from './files.contract';
 import { createEmbeddingsContract } from './embeddings.contract';
+import { postSlackMessageContract } from './slackMessages.contract';
 import { createTextRefinementContract } from './textRefinement.contract';
 import { createDecisionContract, listDecisionModelsContract } from './decisions.contract';
 import { getQuestContract, listQuestFilesContract } from './quest.contract';
@@ -38,6 +44,8 @@ import {
 import { createTranscriptionUploadContract, createTranscriptionContract } from './transcription.contract';
 import { createSessionContract } from './sessionCreate.contract';
 import { listSessionsContract } from './sessionList.contract';
+import { listSessionQuestsContract } from './sessionQuests.contract';
+import { listCreditTransactionsContract } from './creditTransactions.contract';
 import { getWhatsNewMediaContract, listWhatsNewContract } from './whatsNew.contract';
 import {
   listDataLakesContract,
@@ -83,8 +91,27 @@ import {
   createAgentContract,
   updateAgentContract,
   deleteAgentContract,
+  generateAgentAvatarContract,
+  generateAgentDescriptionContract,
+  generateAgentSystemPromptContract,
+  enhanceAgentFieldContract,
 } from './agents.contract';
-import { getClaudeMarketplaceContract, getClaudePluginZipContract } from './skillMarket.contract';
+import {
+  getClaudeBundleZipContract,
+  getClaudeMarketplaceContract,
+  getClaudePluginZipContract,
+} from './skillMarket.contract';
+import {
+  listSkillMarketListingsContract,
+  getSkillMarketListingContract,
+  publishSkillMarketListingContract,
+  listMySkillMarketListingsContract,
+  withdrawSkillMarketListingContract,
+  submitSkillMarketListingVersionContract,
+  importSkillMarketListingContract,
+  rescanSkillMarketVersionContract,
+} from './skillMarketWrite.contract';
+import { listSkillMarketReviewQueueContract, reviewSkillMarketVersionContract } from './skillMarketReview.contract';
 
 /**
  * Every public endpoint, as a contract. The OpenAPI generator registers each of
@@ -106,6 +133,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   generateMusicContract,
   generateSoundEffectContract,
   getMeContract,
+  registerPushTokenContract,
+  unregisterPushTokenContract,
   getCreditBalanceContract,
   listModelsContract,
   generateImageContract,
@@ -115,6 +144,10 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listFilesContract,
   updateFileContract,
   deleteFileContract,
+  chunkFileContract,
+  searchFilesContract,
+  getFilesByIdsContract,
+  bulkDeleteFilesContract,
   createEmbeddingsContract,
   createTextRefinementContract,
   createDecisionContract,
@@ -123,6 +156,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listQuestFilesContract,
   createSessionContract,
   listSessionsContract,
+  listSessionQuestsContract,
+  listCreditTransactionsContract,
   listDataLakesContract,
   getDataLakeContract,
   getDataLakeFileContract,
@@ -169,6 +204,22 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createAgentContract,
   updateAgentContract,
   deleteAgentContract,
+  generateAgentAvatarContract,
+  generateAgentDescriptionContract,
+  generateAgentSystemPromptContract,
+  enhanceAgentFieldContract,
   getClaudeMarketplaceContract,
   getClaudePluginZipContract,
+  getClaudeBundleZipContract,
+  listSkillMarketListingsContract,
+  getSkillMarketListingContract,
+  publishSkillMarketListingContract,
+  listMySkillMarketListingsContract,
+  withdrawSkillMarketListingContract,
+  submitSkillMarketListingVersionContract,
+  importSkillMarketListingContract,
+  rescanSkillMarketVersionContract,
+  listSkillMarketReviewQueueContract,
+  reviewSkillMarketVersionContract,
+  postSlackMessageContract,
 ];

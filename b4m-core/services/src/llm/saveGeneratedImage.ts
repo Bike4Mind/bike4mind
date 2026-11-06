@@ -4,7 +4,7 @@ import type { SaveGeneratedAssetParams, SaveGeneratedAssetResult } from '../gene
 /** saveGeneratedAsset bound to the files bucket; injected by the app so these services stay storage-agnostic. */
 export type SaveGeneratedAssetFn = (
   params: SaveGeneratedAssetParams,
-  logger: Pick<Logger, 'info' | 'error'>
+  logger: Pick<Logger, 'info' | 'warn' | 'error'>
 ) => Promise<SaveGeneratedAssetResult>;
 
 /**

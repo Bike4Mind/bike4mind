@@ -99,7 +99,7 @@ it.each(['list', 'search', 'session', 'quest'] as const)(
     adapter.storage.signedUrlCache = undefined;
     const server = await invoke();
     expect(server.find(file => file.id === 'clean')!.fileUrl).toBe(privateUrl);
-    expect(fetchMock).toHaveBeenCalledWith(privateUrl, { method: 'GET' });
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(signer).toHaveBeenCalledTimes(1);
     expect(update).not.toHaveBeenCalled();
     expect(files).toEqual(originals);

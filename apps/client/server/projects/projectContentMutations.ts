@@ -11,7 +11,7 @@ import type { IUserDocument } from '@bike4mind/common';
 import { ProjectEvents } from '@bike4mind/common';
 import { projectService } from '@bike4mind/services';
 import { ActivityType } from '@bike4mind/server-utils/config/activityType';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import type { ProjectMutationContext } from './attachSessionsToProject';
 
 /**

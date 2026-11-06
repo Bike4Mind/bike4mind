@@ -1,9 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { z } from 'zod';
-import { CreditHolderType } from '@bike4mind/common';
-import { creditService } from '@bike4mind/services';
-import { creditTransactionRepository, userRepository, withTransaction } from '@bike4mind/database';
+import { creditService, userService } from '@bike4mind/services';
+import { withTransaction } from '@bike4mind/database';
+import { buildCreditRewardAdapters } from '@server/credits/creditRewardAdapters';
 import { GEAR_DEFAULTS, evaluateGears, gearTxId, type GearKey } from '@server/services/gears/catalog';
 
 /**
@@ -16,9 +16,11 @@ import { GEAR_DEFAULTS, evaluateGears, gearTxId, type GearKey } from '@server/se
  * Safe to repeat: the ledger's unique transactionId means a second claim, or a
  * concurrent one, never pays twice. It answers `alreadyClaimed` instead.
  *
- * The ledger row and the balance are written in one transaction. addCredits commits
- * them as two writes, and a ledger row with no balance behind it would read as paid
- * here forever - every retry would answer alreadyClaimed and the reward would be lost.
+ * Pays from the trickle pool via creditService.payCreditReward. A dry pool queues the
+ * reward (202 `queued`) for the hourly release, and the queued row counts as claimed.
+ *
+ * The ledger row and the balance are written in one transaction: a ledger row with no
+ * balance behind it would read as paid here forever and the reward would be lost.
  */
 const BodySchema = z.object({
   key: z.enum(GEAR_DEFAULTS.map(g => g.key) as [GearKey, ...GearKey[]]),
@@ -41,31 +43,29 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     if (!gear) return res.status(404).json({ error: 'Gear not found' });
     if (gear.alreadyRewarded) return res.status(200).json({ key, alreadyClaimed: true });
     if (!gear.unlocked) return res.status(409).json({ error: 'not_unlocked' });
-    if (!gear.rewardEligible) return res.status(409).json({ error: 'reward_pending' });
+    if (!gear.rewardEligible) return res.status(409).json({ error: 'reward_pending', reason: gear.pendingReason });
     if (gear.credits <= 0) return res.status(409).json({ error: 'no_reward' });
 
     const transactionId = gearTxId(String(userId), key);
-    let paid: boolean;
+    let result: creditService.PayCreditRewardOutcome;
     try {
-      paid = await withTransaction(async () => {
-        // Read inside the transaction, before writing. A concurrent claim that committed
-        // first shows up here on the retry, and this attempt stops without a write. Left to
-        // addCredits, the insert would hit the duplicate key, which aborts the transaction,
-        // and every retry would hit it again until the driver gave up.
-        if (await creditTransactionRepository.findOne({ transactionId })) return false;
-        await creditService.addCredits(
-          {
-            ownerId: String(userId),
-            ownerType: CreditHolderType.User,
-            credits: gear.credits,
-            type: 'generic_add',
-            transactionId,
-            reason: `gear unlock: ${key}`,
-          },
-          { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
-        );
-        return true;
-      });
+      // The budget draw commits outside the transaction, so a rollback hands it back.
+      result = await userService.refundBudgetOnFailure(() =>
+        withTransaction(() =>
+          creditService.payCreditReward(
+            {
+              transactionId,
+              userId: String(userId),
+              credits: gear.credits,
+              source: 'gear',
+              reason: `gear unlock: ${key}`,
+              description: `Gear unlock reward: ${key}`,
+            },
+            // A duplicate insert has already aborted the transaction; throw out of it rather than retry.
+            buildCreditRewardAdapters({ duplicateTransactionId: 'throw', inTransaction: true })
+          )
+        )
+      );
     } catch (err) {
       // Anything that got this far rolled back whole, so nothing is recorded as paid and a
       // retry pays. The one exception worth answering is a claim that won in the meantime.
@@ -75,11 +75,11 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       if (after?.alreadyRewarded) return res.status(200).json({ key, alreadyClaimed: true });
       throw err;
     }
-    // The transaction decides which request paid: only the one that wrote the ledger row
-    // reports the payout, so two quick clicks do not each announce it.
-    return paid
-      ? res.status(200).json({ key, creditsAwarded: gear.credits })
-      : res.status(200).json({ key, alreadyClaimed: true });
+    // Only the request that wrote the ledger row reports the payout, so two quick clicks do not each announce it.
+    if (result.outcome === 'paid') return res.status(200).json({ key, creditsAwarded: gear.credits });
+    if (result.outcome === 'queued') return res.status(202).json({ key, queued: true });
+    if (result.outcome === 'blocked') return res.status(403).json({ error: 'account_blocked' });
+    return res.status(200).json({ key, alreadyClaimed: true });
   })
 );
 

@@ -1,4 +1,4 @@
-import type { AgentStep } from '@bike4mind/agents';
+import { usableEvidenceConfidence, type AgentStep, type ScoredToolCall } from '@bike4mind/agents';
 
 /**
  * Consecutive low-confidence iterations before the gate pauses. One weak tool result
@@ -15,28 +15,44 @@ export interface ConfidenceGateInput {
   threshold: number;
   /** `IterationResult.allSteps` for the iteration being evaluated. */
   iterationSteps: AgentStep[];
+  /** The execution's scripted scores (`IAgentExecution.confidenceOverrides`); see `confidenceOverrideFor`. */
+  confidenceOverrides?: readonly number[];
 }
 
 export interface ConfidenceGateEvaluation {
   /** Agent-reported (1-indexed) iteration. */
   iteration: number;
-  /** The confidence the decision was made on; record this as telemetry. */
+  /** The confidence the decision was made on (see `usableEvidenceConfidence`); record as telemetry unless `overridden`. */
   confidence: number;
   /** Advances the persisted low-confidence streak when true, resets it when false. */
   belowThreshold: boolean;
   /** False for a completed or iteration-capped run, which has nothing left to pause. */
   pausable: boolean;
+  /** True when `confidence` is a scripted override rather than a real signal. */
+  overridden: boolean;
+}
+
+/**
+ * The scripted score for the agent's 1-indexed `iteration`: entry `i` scores iteration `i + 1`,
+ * and undefined (keep the real score) when the run has no script or the script is shorter.
+ *
+ * Shared by both gate sites - `evaluateConfidenceGate` and `gateReplayConfidence` - so the two
+ * cannot index the script differently. Each applies it only to an iteration it would evaluate
+ * anyway: a script replaces a score, it never makes the gate evaluate a skipped iteration.
+ */
+export function confidenceOverrideFor(overrides: readonly number[] | undefined, iteration: number): number | undefined {
+  return overrides?.[iteration - 1];
 }
 
 /**
  * Evaluate the confidence gate for one iteration. Returns null when the gate has
  * nothing to evaluate: no tools ran, or every tool call failed.
  *
- * Failed tool calls (`metadata.toolFailed`, set by ReActAgent only where a call
- * threw or could not run) are left out of the average. The model already sees the
- * error and can retry, switch tools, or report it, while a human answering the
- * gate cannot fix a broken tool - pausing on one only parks the run in `paused`,
- * which counts against the per-user concurrency cap.
+ * The iteration is below threshold only when it produced no usable evidence: every
+ * call that ran scored below it (`usableEvidenceConfidence`). Failed tool calls
+ * (`metadata.toolFailed`) never count - a human answering the gate cannot fix a
+ * broken tool, and pausing on one only parks the run in `paused`, which counts
+ * against the per-user concurrency cap.
  */
 export function evaluateConfidenceGate({
   gate,
@@ -44,39 +60,39 @@ export function evaluateConfidenceGate({
   reachedMaxIterations,
   threshold,
   iterationSteps,
+  confidenceOverrides,
 }: ConfidenceGateInput): ConfidenceGateEvaluation | null {
   if (gate === null) return null;
 
-  let total = 0;
-  let count = 0;
-  let scoredTotal = 0;
-  let scoredCount = 0;
+  const calls: ScoredToolCall[] = [];
   for (const step of iterationSteps) {
     if (step.type !== 'observation') continue;
-    const confidence = step.metadata?.confidence ?? 0;
-    total += confidence;
-    count++;
-    if (!step.metadata?.toolFailed) {
-      scoredTotal += confidence;
-      scoredCount++;
-    }
+    calls.push({ confidence: step.metadata?.confidence ?? 0, toolFailed: step.metadata?.toolFailed });
   }
 
-  // The agent averages its own per-call scores, which can include observations
-  // outside `allSteps` (e.g. a checkpoint restored mid-iteration). Only re-derive
-  // the value when the steps reproduce the agent's average; otherwise keep it.
-  const stepsMatchGate = count > 0 && Math.abs(total / count - gate.confidence) < 1e-9;
-  let confidence = gate.confidence;
-  if (stepsMatchGate && scoredCount < count) {
-    if (scoredCount === 0) return null;
-    confidence = scoredTotal / scoredCount;
+  // `gate.confidence` is the agent's mean over every call it scored this iteration. When the
+  // steps reproduce that mean they cover the iteration; the else arm below is defensive only.
+  const allCallsMean = calls.reduce((sum, call) => sum + call.confidence, 0) / calls.length;
+  const stepsCoverIteration = calls.length > 0 && Math.abs(allCallsMean - gate.confidence) < 1e-9;
+  const visibleEvidence = usableEvidenceConfidence(calls);
+  let evidenceConfidence: number;
+  if (stepsCoverIteration) {
+    if (visibleEvidence === null) return null;
+    evidenceConfidence = visibleEvidence;
+  } else {
+    // Partial view: a visible good call still proves usable evidence, and a mean at or
+    // above threshold implies some call was; otherwise keep the agent's own value.
+    evidenceConfidence = Math.max(gate.confidence, visibleEvidence ?? 0);
   }
 
+  const override = confidenceOverrideFor(confidenceOverrides, gate.iteration);
+  const confidence = override ?? evidenceConfidence;
   return {
     iteration: gate.iteration,
     confidence,
     belowThreshold: confidence < threshold,
     pausable: !isComplete && !reachedMaxIterations,
+    overridden: override !== undefined,
   };
 }
 
@@ -85,17 +101,25 @@ export function isPausingLowConfidenceStreak(lowConfidenceStreak: number): boole
   return lowConfidenceStreak >= LOW_CONFIDENCE_STREAK_TO_PAUSE;
 }
 
+/** `AgentExecutionRepository.recordIterationConfidence` bound to one execution; returns the updated streak. */
+export type RecordIterationConfidence = (
+  confidence: number,
+  options: { belowThreshold: boolean; recordTelemetry: boolean }
+) => Promise<number>;
+
 /**
  * Persist one evaluated iteration (telemetry + streak, in one write) and decide whether
  * it pauses the run. Iterations the gate skipped (`evaluateConfidenceGate` returned null)
- * never reach here, so they neither extend nor break the streak.
+ * never reach here, so they neither extend nor break the streak. A scripted (`overridden`)
+ * score advances the streak like a real one but stays out of the telemetry counters.
  */
 export async function recordAndDecideConfidencePause(
   evaluation: ConfidenceGateEvaluation,
-  recordIterationConfidence: (confidence: number, options: { belowThreshold: boolean }) => Promise<number>
+  recordIterationConfidence: RecordIterationConfidence
 ): Promise<{ pause: boolean; lowConfidenceStreak: number }> {
   const lowConfidenceStreak = await recordIterationConfidence(evaluation.confidence, {
     belowThreshold: evaluation.belowThreshold,
+    recordTelemetry: !evaluation.overridden,
   });
   return { pause: evaluation.pausable && isPausingLowConfidenceStreak(lowConfidenceStreak), lowConfidenceStreak };
 }
@@ -103,7 +127,7 @@ export async function recordAndDecideConfidencePause(
 /** Per-iteration gate site: a skipped iteration (null evaluation) is not recorded, so it neither extends nor breaks the streak. */
 export async function decideIterationConfidencePause(
   evaluation: ConfidenceGateEvaluation | null,
-  recordIterationConfidence: (confidence: number, options: { belowThreshold: boolean }) => Promise<number>
+  recordIterationConfidence: RecordIterationConfidence
 ): Promise<{ pause: boolean; lowConfidenceStreak: number } | null> {
   return evaluation === null ? null : recordAndDecideConfidencePause(evaluation, recordIterationConfidence);
 }

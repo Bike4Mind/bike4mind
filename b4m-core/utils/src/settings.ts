@@ -2,6 +2,7 @@ import {
   IAdminSettings,
   IAdminSettingsRepository,
   IScopedSettingsRepository,
+  isEnforceCreditsLocked,
   ScopeRef,
   SettingKey,
   settingsMap,
@@ -87,6 +88,8 @@ export function getSettingsValue<K extends SettingKey>(
   settings: Record<string, string>,
   defaultValue?: z.output<(typeof settingsMap)[K]['schema']>
 ): z.output<(typeof settingsMap)[K]['schema']> | undefined {
+  if (key === 'enforceCredits' && isEnforceCreditsLocked()) return true as z.output<(typeof settingsMap)[K]['schema']>;
+
   const settingConfig = resolveSettingDefinition(key);
   if (!settingConfig) {
     // Log warning but don't break existing code

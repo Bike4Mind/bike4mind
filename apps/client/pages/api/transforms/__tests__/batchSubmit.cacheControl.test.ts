@@ -17,6 +17,10 @@ const mockRefs = vi.hoisted(() => ({
   submitted: null as any,
 }));
 
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: async () => ({ release: async () => {} }),
+}));
+
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
     post: (fn: any) => {

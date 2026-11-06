@@ -25,14 +25,14 @@ const limiter = vi.hoisted(() => ({
   // any: node-mocks-http req/res aren't structurally the Express types this seam is typed for.
   handle: (_req: any, _res: any, next: any) => next(),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: { limit: number; windowMs: number }) => {
     limiter.built.push(options);
     // any: as above.
     return (req: any, res: any, next: any) => limiter.handle(req, res, next);
   },
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
@@ -55,11 +55,11 @@ vi.mock('@bike4mind/utils', async orig => ({
   getSettingsMap: (...a: unknown[]) => mockGetSettingsMap(...a),
 }));
 
-vi.mock('@server/integrations/google/drive/common', () => ({
+vi.mock('@bike4mind/server-utils/integrations/google/drive/common', () => ({
   getValidUserDriveAccessToken: (...a: unknown[]) => mockGetToken(...a),
 }));
 
-vi.mock('@server/integrations/google/drive/driveContent', () => ({
+vi.mock('@bike4mind/server-utils/integrations/google/drive/driveContent', () => ({
   estimateFolder: (...a: unknown[]) => mockEstimate(...a),
 }));
 

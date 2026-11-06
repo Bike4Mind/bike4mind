@@ -1012,3 +1012,78 @@ describe('resolveWebSearchProviders lead and backup', () => {
     await expect(resolveWebSearchProviders(adapters)).resolves.toEqual([null, null]);
   });
 });
+
+describe('supplementary SerpAPI lookup failure logging', () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+    warnSpy = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it('warns, not errors, when our own timeout aborts the image search', async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation(neverSettlingFetch());
+
+    const pending = createSerpApiProvider(adapters).searchImages!('q');
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(pending).resolves.toEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      'WebSearch Tool: SerpAPI image search request failed:',
+      expect.objectContaining({ timedOut: true })
+    );
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('warns on a transient image search status (429/5xx)', async () => {
+    fetchMock.mockResolvedValue(jsonRes({}, false, 503));
+
+    await expect(createSerpApiProvider(adapters).searchImages!('q')).resolves.toEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith('WebSearch Tool: SerpAPI image search failed', { status: 503 });
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  // No retry or later request fixes a revoked key, so it keeps paging.
+  it('keeps a non-transient image search status at error', async () => {
+    fetchMock.mockResolvedValue(jsonRes({}, false, 401));
+
+    await expect(createSerpApiProvider(adapters).searchImages!('q')).resolves.toEqual([]);
+    expect(errorSpy).toHaveBeenCalledWith('WebSearch Tool: SerpAPI image search failed', { status: 401 });
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('degrades a null body to no images or places without logging a failure', async () => {
+    fetchMock.mockResolvedValue(jsonRes(null));
+
+    await expect(createSerpApiProvider(adapters).searchImages!('q')).resolves.toEqual([]);
+    await expect(createSerpApiProvider(adapters).searchPlaces!('tivoli')).resolves.toEqual([]);
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('warns on a network failure of the place search but keeps an unexpected error at error', async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError('fetch failed'));
+    await expect(createSerpApiProvider(adapters).searchPlaces!('tivoli')).resolves.toEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      'WebSearch Tool: SerpAPI place search request failed:',
+      expect.objectContaining({ timedOut: false, error: 'fetch failed' })
+    );
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    fetchMock.mockRejectedValueOnce(new Error('unexpected'));
+    await expect(createSerpApiProvider(adapters).searchPlaces!('tivoli')).resolves.toEqual([]);
+    expect(errorSpy).toHaveBeenCalledWith(
+      'WebSearch Tool: SerpAPI place search request failed:',
+      expect.objectContaining({ error: 'unexpected' })
+    );
+  });
+});

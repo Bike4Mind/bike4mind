@@ -5,6 +5,10 @@ import {
   type MessageContent,
   type ICacheStrategy,
   type TurnUsage,
+  type ReasoningWithholder,
+  createReasoningWithholder,
+  reasoningChannelOf,
+  withholdsReasoning,
 } from '@bike4mind/common';
 import type { ICompletionOptionTools, CompletionInfo, ToolResultScore } from '@bike4mind/llm-adapters';
 import { isContextLimitError } from './errors';
@@ -34,6 +38,7 @@ import {
   type ToolUseInfo,
 } from './toolParallelizer';
 import { RepeatedCallGuard, repeatedCallWarning, repeatedCallBlockedObservation } from './repeatedCallGuard';
+import { usableEvidenceConfidence } from './iterationConfidence';
 
 /**
  * Placeholder tool_result content for a tool_use that never ran because the run
@@ -247,6 +252,15 @@ function isAbortError(error: unknown, signal?: AbortSignal): boolean {
 }
 
 /**
+ * True for an error its thrower marks as a routine outcome (`expected: true`), such as the agent
+ * executor's UnaffordableRoundError (apps/workers agentExecutor.roundOutputCap.ts). Logged at warn
+ * like an abort; it still propagates.
+ */
+function isExpectedError(error: unknown): boolean {
+  return error instanceof Error && (error as { expected?: unknown }).expected === true;
+}
+
+/**
  * ReAct (Reasoning and Acting) Agent
  *
  * This agent uses the ReAct pattern to solve problems by:
@@ -377,6 +391,14 @@ export class ReActAgent extends EventEmitter {
     this.context.systemPrompt = systemPrompt;
   }
 
+  private identityOptions() {
+    const { modelIdentityId, modelDisplayName } = this.context;
+    return {
+      ...(modelIdentityId ? { modelIdentityId } : {}),
+      ...(modelDisplayName ? { modelDisplayName } : {}),
+    };
+  }
+
   /**
    * One-shot, non-reentrant text completion: a single non-streaming LLM call
    * with no tools, isolated from `run()`'s instance state (steps, messages,
@@ -405,6 +427,7 @@ export class ReActAgent extends EventEmitter {
         temperature,
         abortSignal: options.signal,
         executeTools: false,
+        ...(options.model ? {} : this.identityOptions()),
       },
       async texts => {
         for (const chunk of texts) {
@@ -537,6 +560,7 @@ export class ReActAgent extends EventEmitter {
         const processedToolIds = new Set<string>(); // Track which tool calls we've already processed
         let hadToolCalls = false; // Track if this iteration had any tool calls
         let thoughtEmitted = false; // Dedupe per-iteration thought step across multi-frame streaming
+        const reasoningWithholder = this.createReasoningWithholder();
 
         // Drop the previous iteration's workflow reminder BEFORE trimming so
         // it is never counted as an iteration boundary and never stacks; a
@@ -594,10 +618,12 @@ export class ReActAgent extends EventEmitter {
               executeTools: false,
               thinking: this.context.thinking,
               cacheStrategy,
+              ...this.identityOptions(),
             },
             async (texts, completionInfo) => {
               // Collect text chunks and emit deltas for live token streaming
-              for (const text of texts) {
+              for (const rawText of texts) {
+                const text = this.visibleText(reasoningWithholder, rawText, completionInfo?.channel);
                 if (text) {
                   currentText += text;
                   this.emit('text_delta', { delta: text, iteration: iterationIndex });
@@ -759,6 +785,7 @@ export class ReActAgent extends EventEmitter {
               }
             }
           );
+          currentText += this.flushHeldText(reasoningWithholder, iterationIndex);
         } catch (completionError) {
           if (!reactiveCompactionAttempted && options.onContextLimit && isContextLimitError(completionError)) {
             reactiveCompactionAttempted = true;
@@ -992,6 +1019,8 @@ export class ReActAgent extends EventEmitter {
       if (isAbortError(error, options.signal)) {
         // Keep the error for stack/message context - only the severity is downgraded.
         this.context.logger.warn('[ReActAgent] Execution aborted (user cancel or timeout):', error);
+      } else if (isExpectedError(error)) {
+        this.context.logger.warn('[ReActAgent] Execution stopped:', error);
       } else {
         this.context.logger.error('[ReActAgent] Error during execution:', error);
       }
@@ -1053,6 +1082,33 @@ BEHAVIOR GUIDELINES:
 - Only ask for clarification after exhausting reasonable attempts
 
 Remember: You are an autonomous AGENT. Act independently and solve problems proactively.`;
+  }
+
+  /** One filter per provider call, or null when the caller may see all of this model's reasoning. */
+  private createReasoningWithholder(): ReasoningWithholder | null {
+    return withholdsReasoning(this.context.thinkingVisibility ?? 'raw', this.context.model)
+      ? createReasoningWithholder(
+          reasoningChannelOf({
+            id: this.context.model,
+            backend: this.context.modelBackend,
+            adapterFamily: this.context.modelAdapterFamily,
+          })
+        )
+      : null;
+  }
+
+  private visibleText(
+    withholder: ReasoningWithholder | null,
+    text: string | null | undefined,
+    channel: CompletionInfo['channel']
+  ): string | null | undefined {
+    return withholder && text ? withholder.visible(text, channel) : text;
+  }
+
+  private flushHeldText(withholder: ReasoningWithholder | null, iteration: number): string {
+    const held = withholder?.flush() ?? '';
+    if (held) this.emit('text_delta', { delta: held, iteration });
+    return held;
   }
 
   /** Live text is requested only for a listening view; without one, the backend keeps full retry. */
@@ -1433,6 +1489,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       const gatedToolCalls: GatedToolCall[] = [];
       let hadToolCalls = false;
       let thoughtEmitted = false; // Dedupe per-iteration thought step across multi-frame streaming
+      const reasoningWithholder = this.createReasoningWithholder();
       const iterStartInputTokens = this.totalInputTokens;
       const iterStartOutputTokens = this.totalOutputTokens;
       // Pre-call baselines for the assign-not-add fold in the stream callback below.
@@ -1461,9 +1518,11 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
           executeTools: false,
           thinking: this.context.thinking,
           cacheStrategy,
+          ...this.identityOptions(),
         },
         async (texts, completionInfo) => {
-          for (const text of texts) {
+          for (const rawText of texts) {
+            const text = this.visibleText(reasoningWithholder, rawText, completionInfo?.channel);
             if (text) {
               currentText += text;
               this.emit('text_delta', { delta: text, iteration: iterationIndex });
@@ -1632,6 +1691,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
           }
         }
       );
+      currentText += this.flushHeldText(reasoningWithholder, iterationIndex);
 
       // Final-answer decision deferred from the streaming callback. See the
       // matching comment in `run()` for full rationale.
@@ -1831,6 +1891,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       if (isAbortError(error, options.signal)) {
         // Keep the error for stack/message context - only the severity is downgraded.
         this.context.logger.warn('[ReActAgent] Iteration aborted (user cancel or timeout):', error);
+      } else if (isExpectedError(error)) {
+        this.context.logger.warn('[ReActAgent] Iteration stopped:', error);
       } else {
         this.context.logger.error('[ReActAgent] Error during runIteration:', error);
       }
@@ -2036,9 +2098,9 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
   }
 
   /**
-   * Read and clear the average confidence of every observation pushed since the
+   * Read and clear the iteration confidence of the observations pushed since the
    * last call (or the last `runIteration()`, whichever is more recent) - `null`
-   * if nothing has been scored yet.
+   * if nothing has been scored yet or every scored call failed.
    *
    * Exists for the approval-replay path: `executeGatedToolCall` pushes onto
    * `iterationConfidences` the same way an ordinary tool call does, but that
@@ -2051,15 +2113,17 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
    * have gotten - resetting `iterationConfidences` here is a no-op for the next
    * `runIteration()`, which resets it again anyway.
    *
-   * Scores from calls that failed to run (`toolFailed`) are left out, matching the
-   * web executor's iteration gate (`evaluateConfidenceGate`); `null` when every
-   * scored call failed.
+   * Aggregated by `usableEvidenceConfidence`, the rule the web executor's iteration
+   * gate (`evaluateConfidenceGate`) also uses: the strongest score among calls that
+   * ran; `null` when every scored call failed.
    */
   takeIterationConfidence(): number | null {
-    const scores = this.iterationConfidences.filter((_, i) => !this.iterationToolFailed[i]);
+    const calls = this.iterationConfidences.map((confidence, i) => ({
+      confidence,
+      toolFailed: this.iterationToolFailed[i],
+    }));
     this.resetIterationConfidences();
-    if (scores.length === 0) return null;
-    return scores.reduce((a, b) => a + b, 0) / scores.length;
+    return usableEvidenceConfidence(calls);
   }
 
   private resetIterationConfidences(): void {

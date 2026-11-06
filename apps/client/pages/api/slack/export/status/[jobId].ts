@@ -1,4 +1,4 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError, BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { slackExportJobRepository } from '@bike4mind/database';
@@ -11,12 +11,6 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
  * GET /api/slack/export/status/[jobId] - Get export job status
  * DELETE /api/slack/export/status/[jobId] - Cancel export job
  */
-
-const ensureAdmin = (isAdmin?: boolean | null) => {
-  if (!isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-};
 
 const PRESIGNED_URL_EXPIRY = 3600; // 1 hour
 
@@ -37,10 +31,8 @@ async function refreshDownloadUrl(s3Bucket: string, s3Key: string): Promise<{ ur
   return { url, expiresAt };
 }
 
-const handler = baseApi()
+const handler = adminApi({ adminPermissions: { GET: 'settings:manage', DELETE: 'settings:manage' } })
   .get(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
-
     const userId = req.user?.id;
     if (!userId) {
       throw new ForbiddenError('User ID not found');
@@ -107,8 +99,6 @@ const handler = baseApi()
   })
   .delete(async (req, res) => {
     // Cancel an export job
-    ensureAdmin(req.user?.isAdmin);
-
     const userId = req.user?.id;
     if (!userId) {
       throw new ForbiddenError('User ID not found');

@@ -18,6 +18,7 @@ import TuneIcon from '@mui/icons-material/Tune';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
+import { EVENT_CATEGORIES } from '@server/admin/categorizeEvent';
 import type { EventMetric } from '../types';
 
 interface ControlPanelProps {
@@ -40,21 +41,6 @@ interface ControlPanelProps {
   isFetching: boolean;
   hideCategoryFilter?: boolean;
 }
-
-const EVENT_CATEGORIES = [
-  'Session',
-  'File',
-  'Curation',
-  'Project',
-  'Auth',
-  'Modal',
-  'Feedback',
-  'Invite',
-  'Organization',
-  'AI',
-  'LLM',
-  'Other',
-];
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
   metrics,

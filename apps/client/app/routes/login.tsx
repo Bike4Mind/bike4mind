@@ -40,6 +40,7 @@ const LoginPage = () => {
       enableSocials
       enableGithubAuth
       enableOktaAuth
+      enableAppleAuth={publicConfig?.appleSignInEnabled ?? false}
     />
   );
 };

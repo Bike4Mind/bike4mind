@@ -10,6 +10,8 @@ const {
   flagConnectionsMock,
   withdrawListingsMock,
   deleteAuthEventsMock,
+  retainTracesMock,
+  removeFromDetectionsMock,
 } = vi.hoisted(() => ({
   deleteEmbedMock: vi.fn(),
   deleteRequestsMock: vi.fn(),
@@ -20,6 +22,8 @@ const {
   flagConnectionsMock: vi.fn(),
   withdrawListingsMock: vi.fn(),
   deleteAuthEventsMock: vi.fn(),
+  retainTracesMock: vi.fn(),
+  removeFromDetectionsMock: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -28,12 +32,14 @@ vi.mock('@bike4mind/database', () => ({
   embedConversationRepository: { deleteAllForUser: deleteEmbedMock },
   integrationRequestRepository: { deleteAllForUser: deleteRequestsMock },
   hideDeletedAuthorAnnotations: hideAnnotationsMock,
+  shadowDetectionRepository: { removeUser: removeFromDetectionsMock },
 }));
+vi.mock('@server/auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: retainTracesMock }));
 vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
   purgeUserPublishedArtifacts: purgePublishedMock,
 }));
-vi.mock('@server/skillMarket/market', () => ({ withdrawAuthorListings: withdrawListingsMock }));
-vi.mock('@server/integrations/google/drive/common', () => ({
+vi.mock('@bike4mind/server-utils/skillMarket/market', () => ({ withdrawAuthorListings: withdrawListingsMock }));
+vi.mock('@bike4mind/server-utils/integrations/google/drive/common', () => ({
   revokeDriveGrant: revokeDriveMock,
   decryptStoredToken: (v: string | undefined) => (v ? `plain-${v}` : null),
 }));
@@ -53,6 +59,8 @@ beforeEach(() => {
   hideAnnotationsMock.mockReset().mockResolvedValue(0);
   withdrawListingsMock.mockReset().mockResolvedValue(0);
   deleteAuthEventsMock.mockReset().mockResolvedValue(0);
+  removeFromDetectionsMock.mockReset().mockResolvedValue(0);
+  retainTracesMock.mockReset().mockResolvedValue(0);
   revokeDriveMock.mockReset().mockResolvedValue('revoked');
   revokeAtlassianMock.mockReset().mockResolvedValue('revoked');
   flagConnectionsMock.mockReset().mockResolvedValue({ affectedOrgConnections: 0, affectedPersonalConnections: 0 });
@@ -69,7 +77,18 @@ describe('purgeDeletedUserData', () => {
     expect(hideAnnotationsMock).toHaveBeenCalledWith('u1');
     expect(withdrawListingsMock).toHaveBeenCalledWith('u1');
     expect(deleteAuthEventsMock).toHaveBeenCalledWith('u1');
+    expect(removeFromDetectionsMock).toHaveBeenCalledWith('u1');
     expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('logs instead of throwing when removing the user from shadow detections fails', async () => {
+    removeFromDetectionsMock.mockRejectedValue(new Error('detections down'));
+
+    await expect(
+      purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants: null })
+    ).resolves.toBeUndefined();
+
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('shadow detections'));
   });
 
   it('logs instead of throwing when deleting auth events fails', async () => {
@@ -80,6 +99,29 @@ describe('purgeDeletedUserData', () => {
     ).resolves.toBeUndefined();
 
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('delete auth events'));
+  });
+
+  it('keeps the hashed signup traces before deleting the auth events', async () => {
+    retainTracesMock.mockImplementation(async () => {
+      expect(deleteAuthEventsMock).not.toHaveBeenCalled();
+      return 1;
+    });
+
+    await purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants: null });
+
+    expect(retainTracesMock).toHaveBeenCalledWith('u1');
+    expect(deleteAuthEventsMock).toHaveBeenCalledWith('u1');
+  });
+
+  it('still deletes the auth events when keeping the traces fails', async () => {
+    retainTracesMock.mockRejectedValue(new Error('traces down'));
+
+    await expect(
+      purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants: null })
+    ).resolves.toBeUndefined();
+
+    expect(deleteAuthEventsMock).toHaveBeenCalledWith('u1');
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('signup traces'));
   });
 
   it('still hides annotations when withdrawing Skill Market listings fails, and never throws', async () => {

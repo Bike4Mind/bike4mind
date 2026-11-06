@@ -1,11 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiKeyScope, BadRequestError, CliCompletionChunkAction } from '@bike4mind/common';
+import { ApiKeyScope, BadRequestError, CliCompletionChunkAction, CreditHolderType } from '@bike4mind/common';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 
 const mockExecuteCompletion = vi.fn();
 const mockLogCompletionAnalytics = vi.fn();
+const { mockAdmitCompletion, mockQuotaRelease } = vi.hoisted(() => {
+  const release = vi.fn().mockResolvedValue(undefined);
+  return { mockAdmitCompletion: vi.fn().mockResolvedValue({ release }), mockQuotaRelease: release };
+});
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitApiKeyCompletion: mockAdmitCompletion,
+  NO_COMPLETION_QUOTA: { release: async () => {} },
+}));
 
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
+const mockCheckFreeTierDailySpendCap = vi.hoisted(() => vi.fn());
+vi.mock('@server/billing/freeTierDailyCapGate', () => ({
+  checkFreeTierDailySpendCap: mockCheckFreeTierDailySpendCap,
+}));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({
   executeCompletion: (...args: unknown[]) => mockExecuteCompletion(...args),
 }));
@@ -15,9 +29,10 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   creditTransactionRepository: {},
   usageEventRepository: {},
-  userRepository: {},
+  userRepository: { findById: vi.fn().mockResolvedValue(null) },
   userApiKeyRepository: { findById: vi.fn() },
   organizationRepository: {},
+  cacheRepository: {},
 }));
 
 vi.mock('@server/cli/auth', () => ({
@@ -31,7 +46,7 @@ vi.mock('@server/utils/logCompletionAnalytics', () => ({
   logCompletionAnalytics: (...args: unknown[]) => mockLogCompletionAnalytics(...args),
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
   ),
@@ -39,9 +54,9 @@ vi.mock('@server/websocket/utils', () => ({
 }));
 
 import { checkApiKeyRateLimitOrThrow, checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
-import { TooManyRequestsError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
-import { sendToConnection } from '@server/websocket/utils';
+import { ForbiddenError, TooManyRequestsError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
+import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { func } from './cliCompletion';
 
 const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
@@ -71,9 +86,18 @@ describe('cliCompletion websocket handler', () => {
     expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', source: 'cli' }));
   });
 
+  it('resolves thinking visibility for the caller', async () => {
+    await run();
+
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ getThinkingVisibility: resolveThinkingVisibility })
+    );
+  });
+
   it('rate-limits the JWT path at the cli source, not the default cap', async () => {
     await run();
 
+    expect(verifyJwtToken).toHaveBeenCalledWith('jwt-token', { requireApiAccess: true });
     expect(checkRateLimit).toHaveBeenCalledWith('u1', 'cli');
   });
 
@@ -233,6 +257,7 @@ describe('cliCompletion websocket handler', () => {
       requestId: '7f0c3f0e-5b1a-4c58-9a57-2f1e8f6f3a11',
       error: 'Model does not support tool search.',
       errorCode: 'tool_search_unsupported',
+      status: 400,
     });
   });
 
@@ -321,5 +346,127 @@ describe('cliCompletion websocket handler - admin role on the reloaded owner', (
   it('keeps the role for a JWT session', async () => {
     await run();
     expect(scopeActorOfCall()).toBeUndefined();
+  });
+});
+
+it('relays a live CLI access refusal without starting a completion', async () => {
+  vi.clearAllMocks();
+  vi.mocked(verifyJwtToken).mockRejectedValueOnce(
+    new ForbiddenError('CLI and desktop access requires an active paid subscription')
+  );
+  await run();
+  expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  expect(sendToConnection).toHaveBeenCalledWith(
+    'conn-1',
+    'https://example.test/test',
+    expect.objectContaining({
+      error: 'CLI and desktop access requires an active paid subscription',
+    })
+  );
+});
+
+describe('daily cap billing target', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecuteCompletion.mockResolvedValue(undefined);
+  });
+
+  it.each([undefined, 'team-org'])('uses the completion billing target %s', async organizationId => {
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({
+      userId: 'u1',
+      keyId: 'k1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      organizationId,
+    } as never);
+
+    await run();
+
+    expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u1', billingOrganizationId: organizationId })
+    );
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOrganizationId: organizationId })
+    );
+  });
+});
+
+describe('cliCompletion websocket handler - untrusted completion quotas', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(sendToConnection).mockResolvedValue(undefined);
+    mockExecuteCompletion.mockResolvedValue(undefined);
+    mockAdmitCompletion.mockResolvedValue({ release: mockQuotaRelease });
+  });
+
+  const authenticateKey = (ownerUntrusted = true) =>
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({
+      userId: 'u1',
+      keyId: 'k1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      ownerUntrusted,
+      billingOwnerType: CreditHolderType.User,
+    } as never);
+
+  it.each([true, false])('forwards the owner trust judgment %s and releases after completion', async ownerUntrusted => {
+    authenticateKey(ownerUntrusted);
+    await run();
+    expect(mockAdmitCompletion).toHaveBeenCalledWith({
+      owner: 'u1',
+      ownerUntrusted,
+      billingOwnerType: CreditHolderType.User,
+      holdSlot: true,
+    });
+    expect(mockQuotaRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a quota refusal with its code and retry delay before starting work', async () => {
+    authenticateKey();
+    mockAdmitCompletion.mockRejectedValueOnce(
+      new TooManyRequestsError('Token rate limit exceeded', { errorCode: 'token_rate_limit_exceeded', retryAfter: 12 })
+    );
+    await run();
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockCheckFreeTierDailySpendCap).not.toHaveBeenCalled();
+    expect(mockQuotaRelease).not.toHaveBeenCalled();
+    expect(sendToConnection).toHaveBeenCalledWith(
+      'conn-1',
+      'https://example.test/test',
+      expect.objectContaining({
+        action: 'cli_completion_error',
+        errorCode: 'token_rate_limit_exceeded',
+        retryAfter: 12,
+      })
+    );
+  });
+
+  it('releases the slot after a provider failure', async () => {
+    authenticateKey();
+    mockExecuteCompletion.mockRejectedValueOnce(new Error('provider down'));
+    await run();
+    expect(mockQuotaRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains the slot while disconnected-client work continues and releases when it settles', async () => {
+    authenticateKey();
+    let settle: () => void = () => {};
+    mockExecuteCompletion.mockImplementationOnce(
+      () =>
+        new Promise<void>(resolve => {
+          settle = resolve;
+        })
+    );
+    const pending = run();
+    await vi.waitFor(() => expect(mockExecuteCompletion).toHaveBeenCalled());
+    vi.mocked(sendToConnection).mockRejectedValue(new Error('connection gone'));
+    expect(mockQuotaRelease).not.toHaveBeenCalled();
+    settle();
+    await expect(pending).rejects.toThrow('connection gone');
+    expect(mockQuotaRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves JWT completions exempt', async () => {
+    await run();
+    expect(mockAdmitCompletion).not.toHaveBeenCalled();
+    expect(mockQuotaRelease).not.toHaveBeenCalled();
   });
 });

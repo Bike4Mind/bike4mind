@@ -1,5 +1,15 @@
+// @vitest-environment node
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+
+const mockConfig = vi.hoisted(() => ({
+  TURNSTILE_SECRET_KEY: 'configured-test-secret',
+  SUPPORT_EMAIL: undefined as string | undefined,
+}));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: mockConfig,
+  isDeployedStage: () => false,
+}));
 
 // Mock only the repositories; settingsMap (zod parsing) stays real so the
 // boolean/string/missing setting-value handling is exercised for real.
@@ -51,8 +61,17 @@ describe('/api/settings/serverConfigPublic — self-host first-user bootstrap', 
   const run = async () => {
     const { req, res } = createMocks({ method: 'GET', headers: { host: 'localhost:3000' } });
     await handler(req, res);
-    return JSON.parse(res._getData()) as { allowOpenRegistration: boolean };
+    return JSON.parse(res._getData()) as { allowOpenRegistration: boolean; supportEmail: string };
   };
+
+  it('propagates a Turnstile settings lookup failure instead of advertising protection as disabled', async () => {
+    delete process.env.B4M_SELF_HOST;
+    mockFindBySettingName.mockImplementation(async (name: string) => {
+      if (name === 'turnstileEnabled') throw new Error('settings unavailable');
+      return null;
+    });
+    await expect(run()).rejects.toThrow('settings unavailable');
+  });
 
   it('reports closed registration outside self-host even with zero users', async () => {
     delete process.env.B4M_SELF_HOST;
@@ -63,6 +82,19 @@ describe('/api/settings/serverConfigPublic — self-host first-user bootstrap', 
     expect(body.allowOpenRegistration).toBe(false);
     // The user count must not even be consulted outside self-host.
     expect(mockUserCount).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['help@example.com', 'help@example.com'],
+    ['not-configured', ''],
+    [undefined, ''],
+  ])('serves SUPPORT_EMAIL %j as supportEmail %j', async (configured, served) => {
+    mockConfig.SUPPORT_EMAIL = configured;
+    try {
+      expect((await run()).supportEmail).toBe(served);
+    } finally {
+      mockConfig.SUPPORT_EMAIL = undefined;
+    }
   });
 
   it('opens the bootstrap window on a fresh self-host install (zero users)', async () => {
@@ -85,7 +117,9 @@ describe('/api/settings/serverConfigPublic — self-host first-user bootstrap', 
 
   it('honors an explicitly enabled allowOpenRegistration setting without counting users', async () => {
     process.env.B4M_SELF_HOST = 'true';
-    mockFindBySettingName.mockResolvedValue({ settingValue: true });
+    mockFindBySettingName.mockImplementation(async (name: string) =>
+      name === 'allowOpenRegistration' ? { settingValue: true } : null
+    );
 
     const body = await run();
 

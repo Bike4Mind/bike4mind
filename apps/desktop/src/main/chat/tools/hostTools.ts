@@ -8,6 +8,7 @@ import {
   type SpawnSuggestionHost,
   type ToolContext,
   type ToolDefinition,
+  type ToolSchema,
 } from './types';
 
 /**
@@ -51,6 +52,7 @@ function optionalText(input: Record<string, unknown>, key: string): string | und
 /** One row of the listing, as the model reads it. */
 function formatSession(view: HostSessionView, callerId: string | undefined): string {
   const parts = [`${view.id}  ${view.title}`];
+  parts.push(`project=${view.project ?? '(none)'}`);
   parts.push(`status=${view.status}`, `messages=${view.messageCount}`, `updated=${view.updatedAt}`);
   if (view.archived) parts.push('archived');
   if (view.id === callerId) parts.push('this conversation');
@@ -63,9 +65,11 @@ export const sessionList: ToolDefinition = {
   schema: {
     name: 'session_list',
     description:
-      'List the conversations in this project, newest first. Returns each one id, title, how ' +
+      'List conversations, newest first: this project only by default, or every conversation ' +
+      'the user has with scope "all". Returns each one id, title, project, how ' +
       'many messages it holds, when it was last updated, and whether it is running, waiting on ' +
-      'the user, idle or archived. Use it to find a session id before reading or changing one.',
+      'the user, idle or archived. Use it to find a session id before reading, messaging or ' +
+      'changing one.',
     parameters: {
       type: 'object',
       properties: {
@@ -73,14 +77,20 @@ export const sessionList: ToolDefinition = {
           type: 'boolean',
           description: 'Include archived conversations. Defaults to false.',
         },
+        scope: {
+          type: 'string',
+          enum: ['project', 'all'],
+          description: '"project" (default) for this project, "all" for every project and none.',
+        },
       },
       additionalProperties: false,
     },
   },
   async run(input, context) {
     const host = requireHost(context);
-    const sessions = await host.listSessions({ includeArchived: input.include_archived === true });
-    if (sessions.length === 0) return 'No conversations in this project.';
+    const scope = input.scope === 'all' ? 'all' : 'project';
+    const sessions = await host.listSessions({ includeArchived: input.include_archived === true, scope });
+    if (sessions.length === 0) return scope === 'all' ? 'No conversations.' : 'No conversations in this project.';
     return sessions.map(view => formatSession(view, context.sessionId)).join('\n');
   },
 };
@@ -89,13 +99,17 @@ export const sessionRead: ToolDefinition = {
   schema: {
     name: 'session_read',
     description:
-      'Read one conversation in this project as plain text: every turn, in order, with the ' +
-      'tools each turn ran. Use it to pick up what a session you started concluded. Ids come ' +
-      'from session_list or from session_spawn.',
+      'Read one conversation as plain text: every turn, in order, with the tools each turn ran. ' +
+      'Use it to pick up what a session you started or messaged concluded. Any conversation in ' +
+      'this project; in another project, only one the user @-mentioned here or one that ' +
+      'messaged you.',
     parameters: {
       type: 'object',
       properties: {
-        session_id: { type: 'string', description: 'The conversation to read.' },
+        session_id: {
+          type: 'string',
+          description: 'The conversation: its id, a unique id prefix of at least 6 characters, or its exact title.',
+        },
       },
       required: ['session_id'],
       additionalProperties: false,
@@ -103,9 +117,7 @@ export const sessionRead: ToolDefinition = {
   },
   async run(input, context) {
     const host = requireHost(context);
-    const transcript = await host.readSession(requireString(input, 'session_id'));
-    if (transcript === null) return 'No conversation with that id in this project.';
-    return transcript;
+    return host.readSession(requireString(input, 'session_id'));
   },
 };
 
@@ -125,9 +137,25 @@ const RUN_HERE_NOTE =
   'The user chose to run this task here, in this conversation, instead of starting a session. ' +
   'Nothing was started. Do the work yourself now, in this turn, and do not call session_spawn for it again.';
 
+/**
+ * Set by the approval card and by nothing else - none of these properties is in the schema
+ * below, so a model cannot send one. Absent means no gate was configured at all, and the answer
+ * there is the placement that touches nothing: creating a checkout nobody asked for is the worse
+ * of the two ways to be wrong.
+ */
+async function cardPlacement(input: Record<string, unknown>, host: HostContext): Promise<SpawnPlacement> {
+  const branch = typeof input.branch === 'string' ? input.branch.trim() : '';
+  if (input.placement !== 'worktree' || branch === '') return { kind: 'local' };
+  // Only empty when no card ran to resolve it, and then resolved the same way the card would.
+  const carried = typeof input.base === 'string' ? input.base.trim() : '';
+  return { kind: 'worktree', branch, base: carried || (await host.spawnBase()) };
+}
+
+export const SESSION_SPAWN_TOOL_NAME = 'session_spawn';
+
 export const sessionSpawn: ToolDefinition = {
   schema: {
-    name: 'session_spawn',
+    name: SESSION_SPAWN_TOOL_NAME,
     description:
       'Hand a self-contained piece of work to a NEW conversation in this project. With the user ' +
       'present this only SUGGESTS it: a card appears beside their composer where they can edit ' +
@@ -164,7 +192,7 @@ export const sessionSpawn: ToolDefinition = {
     },
   },
   // A suggestion starts nothing, so there is nothing to approve; the gate is for the start itself.
-  needsApproval: (_input, context) => !context.host?.suggestions,
+  needsApproval: (_input, context) => !context.host?.suggestions && !context.host?.delegates,
   async approval(input, context) {
     // Resolved here, once, and carried to `run` in the option's input: the base the card names
     // is then the base the child is cut from, with no second resolution to disagree with it.
@@ -237,31 +265,79 @@ export const sessionSpawn: ToolDefinition = {
       ].join('\n');
     }
 
-    // Set by the approval card and by nothing else - none of these properties is in the schema
-    // above, so a model cannot send one. Absent means no gate was configured at all, and the
-    // answer there is the placement that touches nothing: creating a checkout nobody asked for is
-    // the worse of the two ways to be wrong.
-    const branch = typeof input.branch === 'string' ? input.branch.trim() : '';
-    const worktree = input.placement === 'worktree' && branch !== '';
-    // Only empty when no card ran to resolve it, and then resolved the same way the card would.
-    const carried = typeof input.base === 'string' ? input.base.trim() : '';
-    const base = worktree ? carried || (await host.spawnBase()) : '';
-    const placement: SpawnPlacement = worktree ? { kind: 'worktree', branch, base } : { kind: 'local' };
+    const placement = host.delegates ? await host.delegates.placement(title, prompt) : await cardPlacement(input, host);
 
     context.beginWrite?.();
     if (placement.kind === 'worktree') context.report?.progress(`Creating branch ${placement.branch} and worktree...`);
+    // A worktree that could not be made fails the spawn. Falling back to this working directory
+    // would run the agent un-isolated, editing the parent's files, while it was told otherwise.
     const outcome = await host.spawn(prompt, title, placement);
     if (!outcome.ok) throw new Error(outcome.message);
     context.report?.label(`Started a session: ${outcome.session.title}`);
+    const who = host.delegates ? 'It has' : 'The user gave it';
     return [
       `Started session ${outcome.session.id} ("${outcome.session.title}").`,
       placement.kind === 'worktree'
-        ? `The user gave it its own worktree on ${placement.branch}, cut from ${placement.base}, so it is NOT editing the files here and its dependencies are installing there now.`
-        : 'The user had it share this working directory, so it is editing the same files you are.',
+        ? `${who} its own worktree on ${placement.branch}, cut from ${placement.base}, so it is NOT editing the files here and its dependencies are installing there now.`
+        : host.delegates
+          ? 'It shares this working directory, so it is editing the same files you are.'
+          : 'The user had it share this working directory, so it is editing the same files you are.',
       'It is running now. You will be told in this conversation WHEN it finishes, but not what',
       'it said - read it with session_read then if you need that. Do not wait for it in this',
       'turn, and do not start another one for the same work.',
     ].join('\n');
+  },
+};
+
+/** session_spawn as declared to a session with Orchestrate in effect; same parameters, other contract. */
+export const delegatedSpawnSchema: ToolSchema = {
+  ...sessionSpawn.schema,
+  description:
+    'Hand a self-contained piece of work to a NEW conversation in this project. The user turned ' +
+    'on Orchestrate here, so this STARTS it at once: no card, nothing to approve. It runs in its ' +
+    'own git worktree on a new branch cut from the branch this conversation is on when the ' +
+    'project is a repository, and in this working directory otherwise; the result says which. ' +
+    'A started session runs on its own, does not report into your turn, and tells this ' +
+    'conversation when it finishes. It cannot see anything said here, so the prompt has to ' +
+    'carry the whole task. Each one costs credits: never start several variations of one task.',
+};
+
+export const QUEST_COMPLETE_TOOL_NAME = 'quest_complete';
+
+/**
+ * Marks the reply that calls it as the orchestrated job's final summary, which is what the app's
+ * finale reads. Explicit because an interim reply ("waiting on X") looks just like a final one.
+ */
+export const questComplete: ToolDefinition = {
+  schema: {
+    name: QUEST_COMPLETE_TOOL_NAME,
+    description:
+      'Declare the whole orchestrated job finished and mark THIS reply as its final summary for ' +
+      'the user. Call it once, after every agent you started has finished and their work is ' +
+      'combined, in the same reply as that summary. Never call it for an interim update. It is ' +
+      'refused while an agent is still working or waiting on approval, or while a background ' +
+      'process you started is still running.',
+    parameters: {
+      type: 'object',
+      properties: {
+        summary: {
+          type: 'string',
+          description: 'One or two sentences on what the job achieved; the full report is your reply.',
+        },
+      },
+      required: ['summary'],
+      additionalProperties: false,
+    },
+  },
+  async run(input, context) {
+    const quest = requireHost(context).quest;
+    if (!quest) throw new Error('quest_complete is only available in a conversation with Orchestrate on.');
+    requireString(input, 'summary');
+    const readiness = await quest.readiness();
+    if (!readiness.ready) throw new Error(readiness.reason);
+    const marked =
+      'Marked this reply as the final summary of the job. Do not call quest_complete again unless more work is done.';
+    return readiness.note ? `${marked} ${readiness.note}` : marked;
   },
 };
 
@@ -335,19 +411,32 @@ export const sessionSend: ToolDefinition = {
   schema: {
     name: 'session_send',
     description:
-      'Send a message to a conversation that ALREADY EXISTS in this project, and have it run ' +
-      'that message as a turn. Ids come from session_list. Use it to answer a session that has ' +
+      'Send a message to a conversation that ALREADY EXISTS - in this project or, found with ' +
+      'session_list scope "all", any other - and have it run that message as a turn. Use it ' +
+      'to answer a session that has ' +
       'asked you something, to correct one you started, or to give a running one more detail - ' +
       'anything where starting a fresh conversation would throw away what that one has already ' +
-      'worked out. If it is mid-reply your message runs as its next turn instead. It does NOT ' +
+      'worked out. If it is mid-reply it reads your message once its current step finishes. It does NOT ' +
       'reply to you in this turn: finish your answer without waiting for it, and use ' +
-      'session_read on its id later if you need what it said. It spends the user credits in ' +
+      'session_read on its id later, or set notify_when_done to be told when it has finished. ' +
+      'A conversation in another project, or one allowed to do more without asking than this ' +
+      'one, gets your message only once ITS user lets it in. It spends the user credits in ' +
       'that conversation and one turn may only send a couple of messages, so send one message ' +
       'saying the whole thing rather than several.',
     parameters: {
       type: 'object',
       properties: {
-        session_id: { type: 'string', description: 'The existing conversation to send to.' },
+        session_id: {
+          type: 'string',
+          description:
+            'The existing conversation: its id, a unique id prefix of at least 6 characters, or its exact title.',
+        },
+        notify_when_done: {
+          type: 'boolean',
+          description:
+            'Start a turn here when the turn your message runs in over there ends, with a note ' +
+            'saying so. Only when you need its answer to carry on. Defaults to false.',
+        },
         message: {
           type: 'string',
           description:
@@ -362,7 +451,7 @@ export const sessionSend: ToolDefinition = {
   async approval(input, context) {
     const sessionId = requireString(input, 'session_id');
     const message = requireString(input, 'message');
-    const name = (await requireHost(context).describeSession(sessionId)) ?? sessionId;
+    const name = (await requireHost(context).describeSession(sessionId, { scope: 'all' })) ?? sessionId;
     return {
       detail: [`Send this to "${name}", and let it run?`, '', message].join('\n'),
       // Only 'ask' reaches this card, but the key still has to be exact there: approving one
@@ -376,20 +465,31 @@ export const sessionSend: ToolDefinition = {
     const sessionId = requireString(input, 'session_id');
     const message = requireString(input, 'message');
 
+    const notify = input.notify_when_done === true;
+
     context.beginWrite?.();
-    const outcome = await host.sendTo(sessionId, message);
+    const outcome = await host.sendTo(sessionId, message, { notify });
     if (!outcome.ok) throw new Error(outcome.message);
 
     // The row has to name the conversation, and the id the model passed is a uuid: this call is
     // the only place the title is known.
-    context.report?.label(`Messaged @${outcome.title}: ${message}`);
+    context.report?.label(`${outcome.held ? 'Asked to message' : 'Messaged'} @${outcome.title}: ${message}`);
+    if (outcome.held) {
+      return [
+        `Your message to ${outcome.sessionId} ("${outcome.title}") is waiting for that conversation's`,
+        'user to let it in, because it could do things there that this conversation cannot. Nothing',
+        'runs until they do, and they may decline - you are usually told if they do. Carry on without it.',
+      ].join('\n');
+    }
     return [
       `Delivered your message to ${outcome.sessionId} ("${outcome.title}").`,
       outcome.queued
-        ? 'It is mid-reply, so your message runs as its next turn once that reply finishes.'
+        ? 'It is mid-reply, so it reads your message once its current step finishes, or as its next turn.'
         : 'It is running your message now.',
       'It does NOT answer into this turn. Carry on without it, and use session_read on that id',
-      'later if you need what it said. Do not send the same thing again because no reply came.',
+      notify
+        ? 'later if you need what it said; you will also get a turn when it has finished.'
+        : 'later if you need what it said. Do not send the same thing again because no reply came.',
     ].join('\n');
   },
 };

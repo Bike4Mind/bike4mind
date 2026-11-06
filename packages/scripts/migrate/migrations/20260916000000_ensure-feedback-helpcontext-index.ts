@@ -10,8 +10,8 @@ import { type MigrationFile } from './index';
  * succeed and the user's comment lands on a permanent report twice, with a text sibling each.
  *
  * Migration rather than autoIndex, for the same reason as
- * 20260902000000_ensure-quest-retrieval-index: prod runs DocumentDB, where an index build takes a
- * foreground collection lock. A partial filter narrows what the index *stores*, not what the build
+ * 20260902000000_ensure-quest-retrieval-index: autoIndex builds are fire-and-forget (a
+ * failure is silent). A partial filter narrows what the index *stores*, not what the build
  * *scans*, so "the filter matches nothing on the deploy that ships it" does not make the build
  * free on a collection this size. Left to autoIndex it would build on whichever Lambda cold-boots
  * onto feedback first after deploy, and `connectMongo` only awaits the connection, so a failed

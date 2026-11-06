@@ -96,13 +96,28 @@ export const desktopTheme = extendTheme({
       defaultProps: { modifiers: avoidPage },
     },
     JoyTooltip: {
-      defaultProps: { modifiers: avoidPage },
+      // Not interactive: a tooltip is only ever text here, and an interactive one stays up while
+      // the pointer crosses it, covering - and taking the click from - whatever it was drawn over.
+      defaultProps: { modifiers: avoidPage, disableInteractive: true },
       styleOverrides: {
-        root: {
+        root: ({ theme, ownerState }) => ({
           maxWidth: `min(${TOOLTIP_MAX_WIDTH}px, calc(100vw - 32px))`,
           // A path has no spaces to wrap at.
           overflowWrap: 'anywhere',
-        },
+          ...(ownerState.color === 'neutral' &&
+            ownerState.variant === 'soft' && {
+              backgroundColor: theme.vars.palette.background.popup,
+            }),
+        }),
+        arrow: ({ theme, ownerState }) => ({
+          ...(ownerState.color === 'neutral' &&
+            ownerState.variant === 'soft' && {
+              '&::before': {
+                borderTopColor: theme.vars.palette.background.popup,
+                borderRightColor: theme.vars.palette.background.popup,
+              },
+            }),
+        }),
       },
     },
   },

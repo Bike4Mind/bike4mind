@@ -4,7 +4,7 @@ import { GITHUB_REPOSITORY_FULL_NAME_PATTERN } from '@bike4mind/mcp/github/const
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, InternalServerError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { decryptEnvVariables } from '@server/security/tokenEncryption';
+import { decryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { z } from 'zod';
 
 // Security fix: this used to be a raw NextApiRequest with no auth - any

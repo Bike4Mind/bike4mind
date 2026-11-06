@@ -42,7 +42,12 @@ describe('ElevenLabsSoundGenerator', () => {
     expect(url).toContain('output_format=mp3_44100_128');
     expect(init.method).toBe('POST');
     expect(init.headers['xi-api-key']).toBe('secret');
-    expect(JSON.parse(init.body)).toEqual({ text: 'dog barking', duration_seconds: 3, prompt_influence: 0.5 });
+    expect(JSON.parse(init.body)).toEqual({
+      model_id: 'eleven_text_to_sound_v2',
+      text: 'dog barking',
+      duration_seconds: 3,
+      prompt_influence: 0.5,
+    });
 
     expect(result.contentType).toBe('audio/mpeg');
     expect(result.audio.toString()).toBe('audio-bytes');
@@ -55,7 +60,7 @@ describe('ElevenLabsSoundGenerator', () => {
     await generator.generate('rain');
 
     const [, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(JSON.parse(init.body)).toEqual({ text: 'rain' });
+    expect(JSON.parse(init.body)).toEqual({ model_id: 'eleven_text_to_sound_v2', text: 'rain' });
   });
 
   it('maps the requested output format to the right content type', async () => {

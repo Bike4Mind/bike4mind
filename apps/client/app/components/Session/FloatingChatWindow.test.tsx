@@ -7,8 +7,12 @@ import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSession
 import FloatingChatWindow from './FloatingChatWindow';
 
 // The control cluster reaches SessionsContext/react-query through useCopySessionMarkdown,
-// which is irrelevant to the close-button wiring under test.
-vi.mock('./ChatPanelControls', () => ({ default: () => null }));
+// which is irrelevant to the close-button wiring under test. The stub only reports its props.
+vi.mock('./ChatPanelControls', () => ({
+  default: ({ dockable }: { dockable?: boolean }) => (
+    <div data-testid="chat-panel-controls-stub" data-dockable={String(dockable)} />
+  ),
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: React.ReactNode }) => (
@@ -30,6 +34,41 @@ describe('FloatingChatWindow', () => {
     fireEvent.click(screen.getByTestId('floating-chat-close'));
 
     expect(useSessionLayout.getState().layout).toBe('hide');
+  });
+
+  it('offers the dock layouts by default', () => {
+    render(
+      <Wrapper>
+        <FloatingChatWindow>chat</FloatingChatWindow>
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('chat-panel-controls-stub')).toHaveAttribute('data-dockable', 'true');
+  });
+
+  it('withholds the dock layouts when dockable is off', () => {
+    render(
+      <Wrapper>
+        <FloatingChatWindow dockable={false}>chat</FloatingChatWindow>
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('chat-panel-controls-stub')).toHaveAttribute('data-dockable', 'false');
+  });
+
+  it('collapses to the pill instead of hiding when closeToPill is set', () => {
+    render(
+      <Wrapper>
+        <FloatingChatWindow closeToPill>chat</FloatingChatWindow>
+      </Wrapper>
+    );
+
+    fireEvent.click(screen.getByTestId('floating-chat-close'));
+
+    const state = useSessionLayout.getState();
+    expect(state.layout).toBe('floatingChat');
+    expect(state.floatingChatMinimized).toBe(true);
+    expect(screen.getByTestId('floating-chat-minimized')).toBeTruthy();
   });
 
   // The other half of DockedChatPanel's "Hide chat": the pill is a waypoint back to the

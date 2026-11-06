@@ -15,15 +15,31 @@ function wrapHandler(fn: (req: unknown, res: any) => Promise<unknown>) {
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const mock: { _post?: (req: unknown, res: unknown) => Promise<unknown>; post: (fn: unknown) => typeof mock } = {
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
+    const mock: {
+      _post?: (req: unknown, res: unknown) => Promise<unknown>;
+      use: (fn: (req: unknown, res: unknown, next: () => void) => void) => typeof mock;
+      post: (fn: unknown) => typeof mock;
+    } = {
+      use: function (fn) {
+        middlewares.push(fn);
+        return mock;
+      },
       post: function (fn: unknown) {
-        mock._post = wrapHandler(fn as (req: unknown, res: unknown) => Promise<unknown>);
+        const handlerFn = fn as (req: unknown, res: unknown) => Promise<unknown>;
+        mock._post = wrapHandler(async (req, res) => {
+          for (const middleware of middlewares) middleware(req, res, () => undefined);
+          return handlerFn(req, res);
+        });
         return mock;
       },
     };
     return mock;
   },
 }));
+
+const mockAudit = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
 const listPrincipals = vi.fn();
 vi.mock('@bike4mind/database', () => ({
@@ -71,6 +87,7 @@ async function post(body: Record<string, unknown>) {
 describe('/api/admin/mementos/reembed-ledger', () => {
   beforeEach(() => {
     listPrincipals.mockReset();
+    mockAudit.mockClear();
     migrateMock.mockReset();
     listPrincipals.mockResolvedValue([]);
     migrateMock.mockResolvedValue(stats());
@@ -81,6 +98,27 @@ describe('/api/admin/mementos/reembed-ledger', () => {
     await (handler as any)._post(req, res);
     expect(res._getStatusCode()).toBe(403);
     expect(listPrincipals).not.toHaveBeenCalled();
+  });
+
+  it('audits an execute pass but not a dry run', async () => {
+    listPrincipals.mockResolvedValue([p('a')]);
+    migrateMock.mockResolvedValue(stats({ backfilled: 2, reembedded: 1 }));
+
+    await post({});
+    expect(mockAudit).not.toHaveBeenCalled();
+
+    await post({ execute: true });
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'ops.memory_ledger.reembedded',
+      target: { kind: 'system', id: 'memory-ledger-reembed' },
+      details: { backfilled: 2, reembedded: 1, processedPrincipals: 1 },
+    });
+  });
+
+  it('does not audit an execute pass over an empty page', async () => {
+    await post({ execute: true });
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 
   it('rejects a malformed cursor', async () => {
@@ -122,17 +160,13 @@ describe('/api/admin/mementos/reembed-ledger', () => {
   it('surfaces a keyless principal in failedPrincipals during a dry run', async () => {
     listPrincipals.mockResolvedValue([p('a'), p('b')]);
     migrateMock
-      .mockResolvedValueOnce(
-        stats({ noProviderKey: 5, embedderError: 'no key', errors: ['owner o1: no key'] })
-      )
+      .mockResolvedValueOnce(stats({ noProviderKey: 5, embedderError: 'no key', errors: ['owner o1: no key'] }))
       .mockResolvedValueOnce(stats({ backfilled: 3, providerCalls: 3 }));
 
     const data = (await post({}))._getJSONData();
 
     expect(migrateMock).toHaveBeenCalledWith(expect.anything(), { dryRun: true });
-    expect(data.failedPrincipals).toEqual([
-      { ...p('a'), error: 'embedding service unavailable for owner o1: no key' },
-    ]);
+    expect(data.failedPrincipals).toEqual([{ ...p('a'), error: 'embedding service unavailable for owner o1: no key' }]);
     expect(data).toMatchObject({
       dryRun: true,
       noProviderKey: 5,

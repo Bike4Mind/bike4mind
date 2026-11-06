@@ -43,7 +43,7 @@ DataLakeAccessGrantSchema.index({ dataLakeId: 1, principalType: 1, principalId: 
 // (principalType, principalId).
 DataLakeAccessGrantSchema.index({ principalType: 1, principalId: 1 });
 
-export const DataLakeAccessGrantModel =
+export const DataLakeAccessGrantModel: mongoose.Model<IDataLakeAccessGrantDocument> =
   (mongoose.models['DataLakeAccessGrant'] as unknown as mongoose.Model<IDataLakeAccessGrantDocument>) ||
   mongoose.model<IDataLakeAccessGrantDocument>('DataLakeAccessGrant', DataLakeAccessGrantSchema);
 

@@ -30,7 +30,7 @@ import { buildApiKeyTable, getAvailableModels, getLlmByModel } from '@bike4mind/
 import { Logger } from '@bike4mind/observability';
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 import { z } from 'zod';
 

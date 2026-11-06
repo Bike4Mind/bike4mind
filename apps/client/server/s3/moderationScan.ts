@@ -4,7 +4,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { generateUploadConstraintFor } from '@bike4mind/server-utils/files/generateUploadMarker';
-import { moderateUploadedFile } from '@bike4mind/server-utils/s3/moderateUploadedFile';
+import { moderateUploadedFile, type ModerationVerdict } from '@bike4mind/server-utils/s3/moderateUploadedFile';
 import type { ClientSession, Types } from 'mongoose';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
@@ -23,7 +23,7 @@ export type ModerationVerdictPatch = {
 type FabFileKey = Types.ObjectId | string;
 
 /** The verdict fields of a scan result; the byte-sniffed mimeType is applied by each caller. */
-export const toVerdictPatch = (result: Awaited<ReturnType<typeof moderateUploadedFile>>): ModerationVerdictPatch => ({
+export const toVerdictPatch = (result: ModerationVerdict): ModerationVerdictPatch => ({
   moderationStatus: result.moderationStatus,
   ...(result.blockReason ? { blockReason: result.blockReason } : {}),
 });
@@ -32,21 +32,49 @@ export const toVerdictPatch = (result: Awaited<ReturnType<typeof moderateUploade
 export const normalizeETag = (eTag: string | null | undefined): string | undefined =>
   eTag?.replace(/^"|"$/g, '') || undefined;
 
+/** A landing that kept losing its compare-and-set to concurrent reconciliations; the caller retries it. */
+export class ModerationVersionRaceError extends Error {
+  constructor(objectKey: string) {
+    super(`Moderation version changed for ${objectKey}; retry the landing`);
+    this.name = 'ModerationVersionRaceError';
+  }
+}
+
+// One lost race is expected (a concurrent re-upload landed first) and a fresh read settles it, so
+// it is retried here at warn rather than failing the invocation. Losing every attempt is not.
+const MAX_LANDING_ATTEMPTS = 3;
+
 /**
  * Reconciles moderation with the object currently in storage, never a notification's historical
  * ETag. A delayed event for A must not reopen a terminal verdict for the unchanged current B.
  * Read the row before HEAD and compare-and-set that snapshot: a delayed HEAD must not rewind a
- * newer reconciliation, even when the ETag has cycled back to an older value. Lookup failures
- * and lost update races retry the landing instead of rescanning bytes under an unknown or stale version.
+ * newer reconciliation, even when the ETag has cycled back to an older value. A lost update race
+ * re-runs the whole read-HEAD-CAS with a fresh snapshot; lookup failures and an exhausted race
+ * throw so the landing retries instead of rescanning bytes under an unknown or stale version.
  */
-export const recordLandedObject = async (fabFileId: FabFileKey, objectKey: string): Promise<void> => {
+export const recordLandedObject = async (
+  fabFileId: FabFileKey,
+  objectKey: string,
+  logger: { warn: (message: string) => void }
+): Promise<void> => {
+  for (let attempt = 1; attempt <= MAX_LANDING_ATTEMPTS; attempt++) {
+    if (await tryRecordLandedObject(fabFileId, objectKey)) return;
+    if (attempt < MAX_LANDING_ATTEMPTS) {
+      logger.warn(`Moderation version changed for ${objectKey} during landing; re-reading (attempt ${attempt})`);
+    }
+  }
+  throw new ModerationVersionRaceError(objectKey);
+};
+
+/** One read-HEAD-CAS pass. Returns false only when a concurrent reconciliation won the race. */
+const tryRecordLandedObject = async (fabFileId: FabFileKey, objectKey: string): Promise<boolean> => {
   const observed = await FabFile.findById(fabFileId).select('moderationETag moderationRevision').lean();
-  if (!observed) return;
+  if (!observed) return true;
 
   const eTag = normalizeETag((await getFilesStorage().getMetadata(objectKey)).etag);
   if (!eTag) throw new Error(`No ETag for ${objectKey}; moderation version not reconciled`);
   // An unchanged version needs no write: even a delayed HEAD here cannot reset a successor.
-  if (observed.moderationETag === eTag) return;
+  if (observed.moderationETag === eTag) return true;
 
   const snapshot = {
     _id: fabFileId,
@@ -65,11 +93,9 @@ export const recordLandedObject = async (fabFileId: FabFileKey, objectKey: strin
       },
     },
   ]);
-  if (!result.matchedCount) {
-    const current = await FabFile.findById(fabFileId).select('moderationETag').lean();
-    if (current?.moderationETag === eTag) return;
-    throw new Error(`Moderation version changed for ${objectKey}; retry the landing`);
-  }
+  if (result.matchedCount) return true;
+  const current = await FabFile.findById(fabFileId).select('moderationETag').lean();
+  return current?.moderationETag === eTag;
 };
 
 /**
@@ -116,19 +142,27 @@ export const writeModerationVerdict = async (
  * ours. The S3 event (if it has not fired yet) or the rescue sweep can then claim the file; an S3
  * event that already lost the claim to this caller exited normally and is not redelivered, so after
  * that only the sweep recovers it. The attempt bookkeeping is what the sweep's fairness sort and
- * backoff read, matching knowledgeModerationDeps.release.
+ * backoff read, matching knowledgeModerationDeps.release. A scan deferred by the moderation
+ * allowance passes `countAttempt: false`: it did not fail, so it must not climb the route's attempt cap.
  */
-export const releaseModerationClaim = (fabFileId: FabFileKey, claimedAt: Date) =>
+export const releaseModerationClaim = (
+  fabFileId: FabFileKey,
+  claimedAt: Date,
+  { countAttempt = true }: { countAttempt?: boolean } = {}
+) =>
   FabFile.updateOne(
     { _id: fabFileId, moderationStatus: 'scanning', moderationClaimedAt: claimedAt },
     {
       $set: { moderationStatus: 'pending', moderationLastAttemptAt: new Date() },
-      $inc: { moderationAttempts: 1 },
+      ...(countAttempt ? { $inc: { moderationAttempts: 1 } } : {}),
       $unset: { moderationClaimedAt: 1 },
     }
   );
 
-/** Runs the byte scan for an uploaded object with the production detector and storage wiring. */
+/**
+ * Runs the byte scan for an uploaded object with the production detector and storage wiring, spending
+ * the uploader's moderation allowance (a deferral comes back as `moderationStatus: 'pending'`).
+ */
 export const scanUploadedObject = async (args: {
   fabFile: { id: string; userId: string; mimeType?: string | null; sourceMetadata?: unknown };
   objectKey: string;
@@ -136,6 +170,8 @@ export const scanUploadedObject = async (args: {
 }) => {
   const { fabFile, objectKey, logger } = args;
   const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+  // Loaded on use: this module's other exports (e.g. normalizeETag) do not need its billing imports.
+  const { buildUploadModerationMeter } = await import('@server/s3/uploadModerationMeter');
   return moderateUploadedFile({
     userId: fabFile.userId,
     fabFileId: fabFile.id,
@@ -151,5 +187,6 @@ export const scanUploadedObject = async (args: {
     downloadPartialBytes: length => getFilesStorage().downloadRange(objectKey, length),
     moderateImageOrThrow,
     logger,
+    ...buildUploadModerationMeter({ userId: fabFile.userId, fabFileId: fabFile.id, logger }),
   });
 };

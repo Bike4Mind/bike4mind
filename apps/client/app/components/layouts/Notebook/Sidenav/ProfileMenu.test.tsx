@@ -24,7 +24,14 @@ vi.mock('@client/app/components/inbox/Badge', () => ({
 const billing = vi.hoisted(() => ({ openView: vi.fn(), creditsEnabled: false }));
 const analytics = vi.hoisted(() => ({ mutate: vi.fn() }));
 const user = vi.hoisted(() => ({
-  current: { id: 'u1', name: 'Jane' } as { id: string; name: string; photoUrl?: string | null },
+  current: { id: 'u1', name: 'Jane' } as {
+    id: string;
+    name: string;
+    photoUrl?: string | null;
+    isAdmin?: boolean;
+    adminPermissions?: string[];
+  },
+  avatarVersion: 0,
 }));
 const config = vi.hoisted(() => ({ cdnUrl: 'https://cdn.example.test' as string | undefined }));
 vi.mock('@client/app/components/subscription/BillingDeepLinkModals', () => ({
@@ -34,7 +41,8 @@ vi.mock('@client/app/contexts/InboxContext', () => ({
   useInbox: { getState: () => ({ setOpen: vi.fn() }) },
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: (select: (s: unknown) => unknown) => select({ currentUser: user.current, isAdmin: false }),
+  useUser: (select: (s: unknown) => unknown) =>
+    select({ currentUser: user.current, isAdmin: false, avatarVersion: user.avatarVersion }),
 }));
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: analytics.mutate }) }));
 vi.mock('@client/app/hooks/data/settings', () => ({
@@ -52,6 +60,10 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({
 vi.mock('@client/app/hooks/useAppVersion', () => ({ useAppVersion: () => ({ data: undefined }) }));
 const desktopPromo = vi.hoisted(() => ({ enabled: false }));
 vi.mock('@client/app/hooks/useDesktopPromoEnabled', () => ({ useDesktopPromoEnabled: () => desktopPromo.enabled }));
+const preferenceArena = vi.hoisted(() => ({ enabled: false }));
+vi.mock('@client/app/hooks/usePreferenceArenaEnabled', () => ({
+  usePreferenceArenaEnabled: () => preferenceArena.enabled,
+}));
 const features = vi.hoisted(() => ({ enabled: new Set<string>() }));
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isFeatureEnabled: (key: string) => features.enabled.has(key) }),
@@ -125,6 +137,7 @@ describe('ProfileMenu AccountCard - semantics', () => {
 describe('ProfileMenu - avatar', () => {
   afterEach(() => {
     user.current = { id: 'u1', name: 'Jane' };
+    user.avatarVersion = 0;
     config.cdnUrl = 'https://cdn.example.test';
     delete process.env.NEXT_PUBLIC_CDN_URL;
   });
@@ -181,6 +194,28 @@ describe('ProfileMenu - avatar', () => {
     const img = screen.getByTestId('profile-menu-avatar').querySelector('img');
     expect(img?.getAttribute('src')).toBe('https://build-cdn.example.test/profile-photos/u1/abc.png');
   });
+
+  // Joy's Avatar latches on a failed load of an unchanged src; only a remount re-requests it.
+  it('remounts the avatar when avatarVersion bumps, even with the same photo', () => {
+    user.current = { id: 'u1', name: 'Jane', photoUrl: 'profile-photos/u1/abc.png' };
+    const view = render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+    const before = screen.getByTestId('profile-menu-avatar');
+
+    user.avatarVersion = 1;
+    view.rerender(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+
+    const after = screen.getByTestId('profile-menu-avatar');
+    expect(after).not.toBe(before);
+    expect(after.querySelector('img')?.getAttribute('src')).toBe('https://cdn.example.test/profile-photos/u1/abc.png');
+  });
 });
 
 describe('closeSideNavOnOverlay', () => {
@@ -198,6 +233,29 @@ describe('closeSideNavOnOverlay', () => {
     closeSideNavOnOverlay(false, setOpenSideNav);
 
     expect(setOpenSideNav).not.toHaveBeenCalled();
+  });
+});
+
+describe('ProfileMenu - Admin entry', () => {
+  afterEach(() => {
+    user.current = { id: 'u1', name: 'Jane' };
+  });
+
+  it.each([
+    ['an admin', { isAdmin: true }, true],
+    ['a delegate with a tab to open', { isAdmin: false, adminPermissions: ['settings:manage'] }, true],
+    ['a delegate whose permissions open no tab', { isAdmin: false, adminPermissions: ['support:read'] }, false],
+    ['a user with no admin role', { isAdmin: false }, false],
+  ])('is shown to %s', (_case, role, shown) => {
+    user.current = { id: 'u1', name: 'Jane', ...role };
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('profile-menu-card'));
+
+    expect(screen.queryByTestId('profile-menu-admin') !== null).toBe(shown);
   });
 });
 
@@ -474,6 +532,7 @@ describe('ProfileMenu - desktop app link', () => {
 
   afterEach(() => {
     desktopPromo.enabled = false;
+    preferenceArena.enabled = false;
   });
 
   const openMenu = () => {
@@ -497,6 +556,18 @@ describe('ProfileMenu - desktop app link', () => {
     openMenu();
     expect(screen.getByTestId('profile-menu-panel')).toBeInTheDocument();
     expect(screen.queryByTestId('profile-menu-desktop-app')).not.toBeInTheDocument();
+  });
+
+  it('opens the preference arena when the deployment enabled it', () => {
+    preferenceArena.enabled = true;
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-arena'));
+    expect(router.navigate).toHaveBeenCalledWith({ to: '/arena' });
+  });
+
+  it('hides the preference arena row while the flag is off', () => {
+    openMenu();
+    expect(screen.queryByTestId('profile-menu-arena')).not.toBeInTheDocument();
   });
 });
 

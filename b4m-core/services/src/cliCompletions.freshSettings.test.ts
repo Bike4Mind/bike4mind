@@ -7,6 +7,18 @@ import { CreditHolderType } from '@bike4mind/common';
  * ignored for up to the cache TTL (5 min). Here the real settings accessors run against a fake repo,
  * so the read path under test is the production one - no `getSettingsMap`/`getSettingsValue` stub.
  */
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+// Pricing is stubbed flat in this file, so the per-round credit cap cannot be priced here; it is held
+// open, and cliCompletions.creditCap.test.ts covers it on real pricing.
+vi.mock('./completionCreditBudget', async importOriginal => ({
+  ...(await importOriginal<typeof import('./completionCreditBudget')>()),
+  affordableRoundBudget: () => ({ affordable: true, outputTokens: Number.MAX_SAFE_INTEGER }),
+}));
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
   ...(await importOriginal<typeof import('./creditService')>()),
@@ -96,9 +108,14 @@ describe('executeCompletion - admin settings are read fresh', () => {
     vi.clearAllMocks();
     shutdownSettingsCache();
   });
-  afterEach(() => shutdownSettingsCache());
+  afterEach(() => {
+    shutdownSettingsCache();
+    vi.unstubAllEnvs();
+  });
 
   it('honours an enforceCredits flip on the next completion, with no restart', async () => {
+    // Enforcement can only be switched off on self-host; hosted keeps it on whatever the row says.
+    vi.stubEnv('B4M_SELF_HOST', 'true');
     const adminSettings = buildSettingsStore('true');
     const { db, users } = buildDb(adminSettings);
 

@@ -1,24 +1,33 @@
 // @vitest-environment node
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const { mockEmit, mockGetSetting, mockLogEventSafe, mockUserUpdate, mockUpdateOne } = vi.hoisted(() => ({
-  mockEmit: vi.fn(),
-  mockGetSetting: vi.fn(),
-  mockLogEventSafe: vi.fn(),
-  mockUserUpdate: vi.fn(),
-  mockUpdateOne: vi.fn(),
+const { mockEmit, mockGetSetting, mockLogEventSafe, mockUserUpdate, mockUpdateOne, mockRewardInviter } = vi.hoisted(
+  () => ({
+    mockEmit: vi.fn(),
+    mockGetSetting: vi.fn(),
+    mockLogEventSafe: vi.fn(),
+    mockUserUpdate: vi.fn(),
+    mockUpdateOne: vi.fn(),
+    mockRewardInviter: vi.fn(),
+  })
+);
+vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', () => ({
+  HOST_PRODUCT_ID: 'bike4mind',
+  emitProductEvent: mockEmit,
 }));
-vi.mock('./emitActiveEvent', () => ({ HOST_PRODUCT_ID: 'bike4mind', emitProductEvent: mockEmit }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: mockLogEventSafe }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: mockLogEventSafe }));
+vi.mock('@server/referrals/firstAnswerReward', () => ({ rewardInviterForFirstAnswer: mockRewardInviter }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { OVERWATCH_PSEUDONYM_SALT: 'test-salt' } }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: mockGetSetting },
   userRepository: { update: mockUserUpdate },
   User: { updateOne: mockUpdateOne },
 }));
+const { mockBindSignupHop } = vi.hoisted(() => ({ mockBindSignupHop: vi.fn() }));
+vi.mock('./hops', () => ({ bindSignupHop: (...a: unknown[]) => mockBindSignupHop(...a) }));
 
 import { APP_DECISION_COOKIE } from '@bike4mind/server-utils/lib/consentCookies';
-import { pseudonymize } from './pseudonymize';
+import { pseudonymize } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { stableEventId } from './signupEvents';
 import {
   emitEmailVerifiedFunnelEvents,
@@ -26,8 +35,8 @@ import {
   emitSignupFunnelEvents,
   recordFirstChatValue,
   recordFirstValue,
+  recordAccountLane,
   recordSignupAcquisition,
-  recordSyntheticIdentity,
   toUserAcquisition,
 } from './funnel';
 
@@ -37,11 +46,107 @@ const TOUCH_COOKIES = `b4m_app_first_touch=${enc({ source: 'reddit', campaign: '
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubEnv('NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS', 'staff.example');
   mockEmit.mockResolvedValue(undefined);
   mockGetSetting.mockResolvedValue('');
   mockLogEventSafe.mockResolvedValue(undefined);
   mockUserUpdate.mockResolvedValue(null);
   mockUpdateOne.mockResolvedValue({ modifiedCount: 1 });
+  mockBindSignupHop.mockResolvedValue(undefined);
+});
+
+const VERIFIED_TOUCH = {
+  srcProductId: 'source-product',
+  hopId: 'c'.repeat(32),
+  redeemedAt: new Date('2026-11-03T12:00:00Z'),
+};
+
+describe('a signup that followed a verified hop', () => {
+  it('stores the verified touch with the campaign touches', async () => {
+    mockBindSignupHop.mockResolvedValue(VERIFIED_TOUCH);
+    const req = reqWith(`${TOUCH_COOKIES}; ${APP_DECISION_COOKIE}=granted`);
+
+    const out = await recordSignupAcquisition({ req, user: { id: 'u1' }, method: 'otc' });
+
+    expect(mockBindSignupHop).toHaveBeenCalledWith(req);
+    expect(out.acquisition?.verifiedTouch).toEqual(VERIFIED_TOUCH);
+    expect(mockUserUpdate).toHaveBeenCalledWith({
+      id: 'u1',
+      acquisition: expect.objectContaining({
+        verifiedTouch: VERIFIED_TOUCH,
+        firstTouch: { source: 'reddit', campaign: 'launch' },
+        signupMethod: 'otc',
+      }),
+    });
+  });
+
+  it('stores the verified touch even with no campaign touch', async () => {
+    mockBindSignupHop.mockResolvedValue(VERIFIED_TOUCH);
+
+    const out = await recordSignupAcquisition({ req: reqWith(''), user: { id: 'u1' }, method: 'google' });
+
+    expect(out.acquisition).toEqual({
+      verifiedTouch: VERIFIED_TOUCH,
+      signupMethod: 'google',
+      capturedAt: expect.any(Date),
+    });
+    expect(mockUserUpdate).toHaveBeenCalledOnce();
+  });
+
+  it('stores none for a signup that followed no hop', async () => {
+    const out = await recordSignupAcquisition({
+      req: reqWith(`${TOUCH_COOKIES}; ${APP_DECISION_COOKIE}=granted`),
+      user: { id: 'u1' },
+      method: 'otc',
+    });
+    expect(out.acquisition).not.toHaveProperty('verifiedTouch');
+    expect(mockUserUpdate.mock.calls[0][0].acquisition).not.toHaveProperty('verifiedTouch');
+  });
+
+  it('puts the hop and its source on signup_completed, and on no other stage', async () => {
+    const user = {
+      id: 'u1',
+      acquisition: { firstTouch: { source: 'reddit' }, verifiedTouch: VERIFIED_TOUCH },
+    };
+    await emitSignupFunnelEvents({ user, method: 'otc', emailVerified: true, creditsGranted: 100 });
+
+    const byEvent = Object.fromEntries(mockEmit.mock.calls.map(([e]) => [e.event, e.metadata]));
+    expect(byEvent.signup_completed).toEqual({
+      method: 'otc',
+      hopId: VERIFIED_TOUCH.hopId,
+      srcProductId: 'source-product',
+    });
+    expect(byEvent.email_verified).not.toHaveProperty('hopId');
+    expect(byEvent.credits_granted).not.toHaveProperty('hopId');
+  });
+
+  it("prefers the account's stored touch to anything a caller passes", async () => {
+    await emitFunnelEvent({
+      user: { id: 'u1', acquisition: { verifiedTouch: VERIFIED_TOUCH } },
+      event: 'signup_completed',
+      metadata: { method: 'otc', hopId: 'forged', srcProductId: 'forged' },
+    });
+
+    expect(mockEmit.mock.calls[0][0].metadata).toMatchObject({
+      hopId: VERIFIED_TOUCH.hopId,
+      srcProductId: 'source-product',
+    });
+  });
+
+  it('sends no hop on the signup_completed of a signup that followed none', async () => {
+    await emitSignupFunnelEvents({
+      user: { id: 'u1', acquisition: { firstTouch: { source: 'reddit' } } },
+      method: 'otc',
+      emailVerified: false,
+      creditsGranted: 0,
+    });
+    const signup = mockEmit.mock.calls.find(([e]) => e.event === 'signup_completed')![0];
+    expect(signup.metadata).toEqual({ method: 'otc' });
+  });
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe('toUserAcquisition', () => {
@@ -107,7 +212,7 @@ describe('recordSignupAcquisition', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     await expect(
       recordSignupAcquisition({ req: reqWith(`${APP_DECISION_COOKIE}=granted; ${TOUCH_COOKIES}`), user, method: 'otc' })
-    ).resolves.toEqual({ isSynthetic: false });
+    ).resolves.toEqual({ isSynthetic: false, isInternal: false });
   });
 
   it('keeps a persona synthetic when the write fails, so it is not sent as a real signup', async () => {
@@ -119,12 +224,51 @@ describe('recordSignupAcquisition', () => {
         user: { id: 'u3', username: 'persona-qa', email: 'qa@real.example' },
         method: 'otc',
       })
-    ).resolves.toEqual({ isSynthetic: true });
+    ).resolves.toEqual({ isSynthetic: true, isInternal: false });
     expect(mockUserUpdate).toHaveBeenCalledWith({ id: 'u3', isSynthetic: true });
+  });
+
+  it('flags a staff-domain account as internal even without consent', async () => {
+    const out = await recordSignupAcquisition({
+      req: reqWith(''),
+      user: { id: 'u4', username: 'carol', email: 'Carol@Staff.Example' },
+      method: 'google',
+    });
+    expect(out).toEqual({ isSynthetic: false, isInternal: true });
+    expect(mockUserUpdate).toHaveBeenCalledWith({ id: 'u4', isInternal: true });
+  });
+
+  it('leaves a lookalike domain, and every account when no staff domain is configured, unflagged', async () => {
+    const lookalike = await recordSignupAcquisition({
+      req: reqWith(''),
+      user: { id: 'u5', username: 'dave', email: 'dave@notstaff.example' },
+      method: 'otc',
+    });
+    vi.stubEnv('NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS', '');
+    const unconfigured = await recordSignupAcquisition({
+      req: reqWith(''),
+      user: { id: 'u6', username: 'erin', email: 'erin@staff.example' },
+      method: 'otc',
+    });
+    expect([lookalike.isInternal, unconfigured.isInternal]).toEqual([false, false]);
+    expect(mockUserUpdate).not.toHaveBeenCalled();
+  });
+
+  it('stores both flags for a persona on a staff domain, and keeps the internal flag through a failed write', async () => {
+    mockUserUpdate.mockRejectedValue(new Error('db down'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(
+      recordSignupAcquisition({
+        req: reqWith(''),
+        user: { id: 'u7', username: 'persona-staff', email: 'p@staff.example' },
+        method: 'otc',
+      })
+    ).resolves.toEqual({ isSynthetic: true, isInternal: true });
+    expect(mockUserUpdate).toHaveBeenCalledWith({ id: 'u7', isSynthetic: true, isInternal: true });
   });
 });
 
-describe('recordSyntheticIdentity', () => {
+describe('recordAccountLane', () => {
   it.each([
     [{ id: 'u1', username: 'persona-admin', email: 'a@real.example' }, ''],
     [{ id: 'u2', username: 'admin-seeded', email: 'a@test.example' }, 'test.example'],
@@ -133,15 +277,15 @@ describe('recordSyntheticIdentity', () => {
     async (user, domains) => {
       mockGetSetting.mockResolvedValue(domains);
 
-      const isSynthetic = await recordSyntheticIdentity(user);
+      const lane = await recordAccountLane(user);
       await emitSignupFunnelEvents({
-        user: { ...user, isSynthetic },
+        user: { ...user, ...lane },
         method: 'admin',
         emailVerified: false,
         creditsGranted: 50,
       });
 
-      expect(isSynthetic).toBe(true);
+      expect(lane).toEqual({ isSynthetic: true, isInternal: false });
       expect(mockUserUpdate).toHaveBeenCalledWith({ id: user.id, isSynthetic: true });
       // Both marks travel: the lane says it is a persona, and the admin mark still keeps it out
       // of DAU until its own first request.
@@ -151,6 +295,40 @@ describe('recordSyntheticIdentity', () => {
       ]);
     }
   );
+
+  it.each([
+    ['a staff-domain account', { id: 'u3', username: 'staffer', email: 'a@staff.example' }],
+    ['an admin an admin created', { id: 'u4', username: 'boss', email: 'b@customer.example', isAdmin: true }],
+  ])('persists %s as internal and sends its funnel stages marked internal', async (_name, user) => {
+    const lane = await recordAccountLane(user);
+    await emitSignupFunnelEvents({
+      user: { ...user, ...lane },
+      method: 'admin',
+      emailVerified: false,
+      creditsGranted: 0,
+    });
+
+    expect(lane).toEqual({ isSynthetic: false, isInternal: true });
+    expect(mockUserUpdate).toHaveBeenCalledWith({ id: user.id, isInternal: true });
+    expect(mockEmit.mock.calls.map(([event]) => event.metadata)).toEqual([
+      { method: 'admin', userAction: false, internal: true },
+    ]);
+  });
+
+  it('writes nothing for a customer account and keeps the decision through a failed write', async () => {
+    expect(await recordAccountLane({ id: 'u5', username: 'cust', email: 'c@customer.example' })).toEqual({
+      isSynthetic: false,
+      isInternal: false,
+    });
+    expect(mockUserUpdate).not.toHaveBeenCalled();
+
+    mockUserUpdate.mockRejectedValue(new Error('db down'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await recordAccountLane({ id: 'u6', username: 'staff2', email: 's@staff.example' })).toEqual({
+      isSynthetic: false,
+      isInternal: true,
+    });
+  });
 });
 
 describe('emitFunnelEvent', () => {
@@ -187,6 +365,34 @@ describe('emitFunnelEvent', () => {
     expect(mockEmit.mock.calls[0][0].metadata).toEqual({ lane: 'synthetic' });
   });
 
+  it.each([
+    ['isInternal', { isInternal: true }],
+    ['an admin', { isAdmin: true }],
+  ])("sends an internal account's stage (%s) marked internal", async (_name, flags) => {
+    await emitFunnelEvent({ user: { id: 'u1', ...flags }, event: 'signup_completed', metadata: { method: 'otc' } });
+    expect(mockEmit.mock.calls[0][0].metadata).toEqual({ method: 'otc', internal: true });
+  });
+
+  it('marks a synthetic internal account synthetic only, and lets no caller metadata unmark either', async () => {
+    await emitFunnelEvent({ user: { id: 'u1', isSynthetic: true, isInternal: true }, event: 'signup_completed' });
+    await emitFunnelEvent({
+      user: { id: 'u2', isInternal: true },
+      event: 'signup_completed',
+      metadata: { internal: false },
+    });
+    expect(mockEmit.mock.calls[0][0].metadata).toEqual({ lane: 'synthetic' });
+    expect(mockEmit.mock.calls[1][0].metadata).toEqual({ internal: true });
+  });
+
+  it("drops a caller's lane marks from a customer's stage, so only the user record marks it", async () => {
+    await emitFunnelEvent({
+      user: { id: 'u1' },
+      event: 'signup_completed',
+      metadata: { method: 'otc', internal: true, lane: 'synthetic' },
+    });
+    expect(mockEmit.mock.calls[0][0].metadata).toEqual({ method: 'otc' });
+  });
+
   it("leaves a real user's stage unmarked, and sends no empty metadata", async () => {
     await emitFunnelEvent({ user: { id: 'u1', isSynthetic: false }, event: 'email_verified' });
     await emitFunnelEvent({
@@ -196,6 +402,14 @@ describe('emitFunnelEvent', () => {
     });
     expect(mockEmit.mock.calls[0][0]).not.toHaveProperty('metadata');
     expect(mockEmit.mock.calls[1][0].metadata).toEqual({ method: 'otc' });
+  });
+
+  it('names the visit the stage happened in, and no session when there is none', async () => {
+    await emitFunnelEvent({ user: { id: 'u1' }, event: 'signup_completed', visitId: 'a'.repeat(32) });
+    await emitFunnelEvent({ user: { id: 'u2' }, event: 'signup_completed' });
+
+    expect(mockEmit.mock.calls[0][0].sessionId).toBe('a'.repeat(32));
+    expect(mockEmit.mock.calls[1][0]).not.toHaveProperty('sessionId');
   });
 
   it('never throws when the emitter rejects', async () => {
@@ -227,6 +441,23 @@ describe('emitSignupFunnelEvents', () => {
     expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
       ['credits_granted', { amount: 50, source: 'signup', method: 'github' }],
       ['signup_completed', { method: 'github' }],
+    ]);
+  });
+
+  it('ties every stage of the signup to the visit it came from', async () => {
+    const visitId = 'b'.repeat(32);
+    await emitSignupFunnelEvents({
+      user: { id: 'u1' },
+      method: 'github',
+      emailVerified: true,
+      creditsGranted: 5,
+      visitId,
+    });
+
+    expect(mockEmit.mock.calls.map(([event]) => [event.event, event.sessionId])).toEqual([
+      ['email_verified', visitId],
+      ['credits_granted', visitId],
+      ['signup_completed', visitId],
     ]);
   });
 
@@ -276,6 +507,17 @@ describe('emitEmailVerifiedFunnelEvents', () => {
     await emitEmailVerifiedFunnelEvents({ user: { id: 'u1' }, method: 'otc', creditsGranted: 70 });
 
     expect(mockEmit).not.toHaveBeenCalled();
+    expect(mockRewardInviter).not.toHaveBeenCalled();
+  });
+
+  it('checks the inviter reward for a post-launch account', async () => {
+    await emitEmailVerifiedFunnelEvents({
+      user: { id: 'u1', createdAt: new Date('2026-10-11T00:00:00Z') },
+      method: 'otc',
+      creditsGranted: 70,
+    });
+
+    expect(mockRewardInviter).toHaveBeenCalledWith('u1');
   });
 });
 
@@ -310,6 +552,27 @@ describe('recordFirstValue', () => {
     mockUpdateOne.mockResolvedValue({ modifiedCount: 0 });
     expect(await recordFirstValue({ user, feature: 'chat', now })).toBe(false);
     expect(mockEmit).not.toHaveBeenCalled();
+    expect(mockRewardInviter).not.toHaveBeenCalled();
+  });
+
+  it('checks the inviter reward only for the request that recorded it', async () => {
+    expect(await recordFirstValue({ user, feature: 'chat', now })).toBe(true);
+    expect(mockRewardInviter).toHaveBeenCalledWith('u1');
+  });
+
+  it('skips a pre-launch user without checking the inviter reward', async () => {
+    await recordFirstValue({ user: { id: 'u1', createdAt: new Date('2026-10-10T23:59:59Z') }, feature: 'chat', now });
+    expect(mockRewardInviter).not.toHaveBeenCalled();
+  });
+
+  it("emits an internal account's first_value marked internal", async () => {
+    expect(await recordFirstValue({ user: { ...user, isInternal: true }, feature: 'chat', now })).toBe(true);
+    expect(mockEmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'first_value',
+        metadata: { feature: 'chat', secondsSinceSignup: 100, internal: true },
+      })
+    );
   });
 
   it('records the stage and emits first_value marked with the synthetic lane for a synthetic user', async () => {
@@ -392,5 +655,38 @@ describe('recordFirstChatValue', () => {
   it('never throws when the quest read fails', async () => {
     const loadQuest = () => Promise.reject(new Error('db down'));
     await expect(recordFirstChatValue({ user, loadQuest })).resolves.toBe(false);
+  });
+
+  describe('the visit the question was asked in', () => {
+    const visitId = 'c'.repeat(32);
+    const loadQuest = async () => ({ status: 'done', type: 'message' });
+
+    it('names it as the session of first_value', async () => {
+      expect(await recordFirstChatValue({ user, loadQuest, visitId })).toBe(true);
+      expect(mockEmit).toHaveBeenCalledTimes(1);
+      expect(mockEmit.mock.calls[0][0]).toMatchObject({ event: 'first_value', sessionId: visitId });
+    });
+
+    it('names no visit when the turn carried none', async () => {
+      expect(await recordFirstChatValue({ user, loadQuest })).toBe(true);
+      expect(mockEmit.mock.calls[0][0]).not.toHaveProperty('sessionId');
+    });
+
+    it('emits once for a redelivered turn, under the visit it carried', async () => {
+      mockUpdateOne.mockResolvedValueOnce({ modifiedCount: 1 }).mockResolvedValueOnce({ modifiedCount: 0 });
+      expect(await recordFirstChatValue({ user, loadQuest, visitId })).toBe(true);
+      expect(await recordFirstChatValue({ user, loadQuest, visitId })).toBe(false);
+      expect(mockEmit.mock.calls.map(([event]) => event.sessionId)).toEqual([visitId]);
+    });
+
+    it('changes nothing for a user whose first answer is already recorded', async () => {
+      const quest = vi.fn(loadQuest);
+      expect(
+        await recordFirstChatValue({ user: { ...user, firstValueAt: new Date() }, loadQuest: quest, visitId })
+      ).toBe(false);
+      expect(quest).not.toHaveBeenCalled();
+      expect(mockUpdateOne).not.toHaveBeenCalled();
+      expect(mockEmit).not.toHaveBeenCalled();
+    });
   });
 });

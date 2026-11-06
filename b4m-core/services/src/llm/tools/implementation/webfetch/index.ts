@@ -6,13 +6,14 @@ import { GetEffectiveApiKeyAdapters, getFirecrawlConfig } from '../../../../apiK
 import { CitableSource, UnprocessableEntityError } from '@bike4mind/common';
 import { FirecrawlError } from '@mendable/firecrawl-js';
 import { createFirecrawlApp, type FirecrawlClient, type FirecrawlScrapeParams } from './firecrawlApp';
-import { plainFetchScrape } from './plainFetch';
-import { UnsafeScrapeTargetError } from './errors';
-import { resolveAndVetUrl, unsafeFetchUrlReason } from './ssrfGuard';
+import { NoExtractableContentError, plainFetchScrape } from './plainFetch';
+import { refuseFetch, resolveAndVetUrl, unsafeFetchUrlReason } from './ssrfGuard';
 
 // Re-exported so external construction sites (e.g. apps/workers researchEngineQueue)
 // can use the interop-safe constructor instead of the raw default import.
 export { createFirecrawlApp } from './firecrawlApp';
+export { RefusedFetchTargetError } from './errors';
+export { NoExtractableContentError } from './plainFetch';
 
 interface WebFetchParams {
   url: string;
@@ -38,6 +39,10 @@ interface WebFetchResult {
   durationMs: number;
   /** When set, the origin advertises an llms.txt/llms-full.txt worth suggesting for long-form content. */
   llmsTxtUrl?: string;
+  /** Hosted URL of a first-screen (viewport, not full-page) screenshot, exactly as Firecrawl returned
+   *  it. Only set when the caller asked for one and Firecrawl produced one; never on the PDF or
+   *  plain-fetch paths, so callers must treat absence as "use the text". */
+  screenshot?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -169,6 +174,12 @@ type FirecrawlFetchOptions = {
   onlyMainContent?: boolean;
   /** Fetch live and ask Firecrawl not to cache the result (maxAge 0, storeInCache false). */
   fresh?: boolean;
+  /** Also ask Firecrawl for a first-screen (viewport) screenshot, returned as WebFetchResult.screenshot.
+   *  Firecrawl-only: PDFs and the keyless plain-fetch fallback get none, and a scrape that comes back
+   *  without one simply has no `screenshot` field. */
+  screenshot?: boolean;
+  /** Render as a phone, so the screenshot is the mobile one. Only sent together with `screenshot`. */
+  mobile?: boolean;
 };
 
 /**
@@ -183,6 +194,51 @@ export class UnsupportedScrapeTargetError extends UnprocessableEntityError {
   constructor(url: string, cause: Error) {
     super(`This site can't be fetched: the web scraper does not support ${new URL(url).hostname}.`);
     this.name = 'UnsupportedScrapeTargetError';
+    this.cause = cause;
+  }
+}
+
+// Firecrawl's wording for a URL that serves a file type it cannot parse (an image, a favicon, ...).
+// firecrawl-js keeps no error code, only the message; the status has been 500, so the text is the signal.
+const FIRECRAWL_UNSUPPORTED_FILE_TYPE = 'file type that firecrawl cannot process';
+
+function isUnsupportedFileTypeError(error: unknown): error is FirecrawlError {
+  return error instanceof FirecrawlError && error.message.toLowerCase().includes(FIRECRAWL_UNSUPPORTED_FILE_TYPE);
+}
+
+/**
+ * The URL serves a file type the scraper cannot read. Like UnsupportedScrapeTargetError, a property
+ * of the URL rather than a fault of ours: a 422 that /api/tools/web-fetch logs at warn, and a hint
+ * from the web_fetch tool.
+ */
+export class UnsupportedContentTypeError extends UnprocessableEntityError {
+  // `cause` is the FirecrawlError, typed as Error for the same reason as UnsupportedScrapeTargetError.
+  constructor(cause: Error) {
+    super("This URL can't be fetched: it serves a file type the web scraper cannot read, such as an image.");
+    this.name = 'UnsupportedContentTypeError';
+    this.cause = cause;
+  }
+}
+
+// Firecrawl's wording when every engine it tried (browser and retry) failed to load the page: the
+// site is down, blocks bots or the URL is wrong. Like the file-type case it comes as a 500 with no code.
+const FIRECRAWL_ALL_ENGINES_FAILED = 'all scraping engines failed';
+
+function isAllEnginesFailedError(error: unknown): error is FirecrawlError {
+  return error instanceof FirecrawlError && error.message.toLowerCase().includes(FIRECRAWL_ALL_ENGINES_FAILED);
+}
+
+/**
+ * No scraping engine could load the page. A property of the URL the model picked rather than a
+ * fault of ours: a 422 that /api/tools/web-fetch logs at warn, and a hint from the web_fetch tool.
+ */
+export class UnreachableScrapeTargetError extends UnprocessableEntityError {
+  // `cause` is the FirecrawlError, typed as Error for the same reason as UnsupportedScrapeTargetError.
+  constructor(cause: Error) {
+    super(
+      "This page can't be fetched: the web scraper could not load it. The site may be down or block automated access."
+    );
+    this.name = 'UnreachableScrapeTargetError';
     this.cause = cause;
   }
 }
@@ -222,13 +278,9 @@ export async function firecrawlFetch(
   // Checked before choosing a backend: a self-hosted Firecrawl (`apiUrl`) fetches from inside our
   // network, so handing it a private address is the same SSRF as fetching it ourselves. Same
   // handling as the guard inside the Firecrawl wrapper: a private or protocol refusal is permanent
-  // (`UnsafeScrapeTargetError`), a DNS hiccup is a plain Error so a retry wrapper still retries it.
+  // (`UnsafeScrapeTargetError`), a DNS hiccup is retryable (see refuseFetch).
   const vetted = await resolveAndVetUrl(new URL(url));
-  if (!vetted.safe) {
-    const message = `Refusing to fetch ${url}: ${vetted.reason}`;
-    if (vetted.retryable) throw new Error(message);
-    throw new UnsafeScrapeTargetError(message);
-  }
+  if (!vetted.safe) throw refuseFetch(url, vetted);
 
   // Use longer timeout for PDF URLs - large PDFs need more server-side processing time.
   // Callers with shorter Lambda lifetimes can cap via maxTimeoutMs.
@@ -252,12 +304,16 @@ export async function firecrawlFetch(
     `📥 WebFetch Tool: Scraping URL with Firecrawl${isPdf ? ' (PDF mode, extended timeout)' : ''}...`
   );
 
+  // PDFs get no screenshot: Firecrawl parses them directly, there is no page to render.
+  const wantScreenshot = !!options?.screenshot && !isPdf;
+
   // PDF URLs skip the JS wait action - Firecrawl parses them directly
-  const baseParams = {
-    formats: ['markdown' as const],
+  const baseParams: FirecrawlScrapeParams = {
+    formats: wantScreenshot ? ['markdown', 'screenshot'] : ['markdown'],
     timeout: timeoutMs,
     ...(options?.onlyMainContent !== undefined && { onlyMainContent: options.onlyMainContent }),
     ...(options?.fresh && { maxAge: 0, storeInCache: false }),
+    ...(wantScreenshot && options?.mobile && { mobile: true }),
   };
 
   const startedAt = Date.now();
@@ -268,6 +324,8 @@ export async function firecrawlFetch(
     if (scrapeError instanceof FirecrawlError && scrapeError.statusCode === 403) {
       throw new UnsupportedScrapeTargetError(url, scrapeError);
     }
+    if (isUnsupportedFileTypeError(scrapeError)) throw new UnsupportedContentTypeError(scrapeError);
+    if (isAllEnginesFailedError(scrapeError)) throw new UnreachableScrapeTargetError(scrapeError);
     throw scrapeError;
   }
   const durationMs = Date.now() - startedAt;
@@ -279,11 +337,17 @@ export async function firecrawlFetch(
   }
 
   if (!('markdown' in result) || !result.markdown) {
-    Logger.globalInstance.error('❌ WebFetch Tool: No markdown content returned');
-    throw new Error('No content could be extracted from the URL');
+    throw new NoExtractableContentError();
   }
 
-  return buildWebFetchResult(result.markdown, result.metadata?.title, url, options?.offset, durationMs);
+  return buildWebFetchResult(
+    result.markdown,
+    result.metadata?.title,
+    url,
+    options?.offset,
+    durationMs,
+    wantScreenshot ? result.screenshot : undefined
+  );
 }
 
 /**
@@ -302,7 +366,8 @@ async function buildWebFetchResult(
   title: string | undefined,
   url: string,
   rawOffset: number | undefined,
-  durationMs: number
+  durationMs: number,
+  screenshot?: string
 ): Promise<WebFetchResult> {
   // Coerce a non-finite offset (e.g. a model passing offset:"abc" on the unvalidated tool/CLI
   // paths) to 0 rather than letting slice(NaN, NaN) return a silent empty string.
@@ -338,6 +403,7 @@ async function buildWebFetchResult(
     cap: WEB_FETCH_CONTENT_CAP,
     durationMs,
     llmsTxtUrl,
+    ...(screenshot && { screenshot }),
   };
 }
 
@@ -377,10 +443,20 @@ const WEB_FETCH_UNREACHABLE_MSG =
   'The page could not be reached \u2014 the server may be down, unreachable, or blocking automated access. ' +
   'Try using web_search to find the information instead.';
 
+const WEB_FETCH_NO_CONTENT_MSG =
+  'No readable content could be extracted from this page \u2014 it may be empty, need a login, or render ' +
+  'its text in a way the scraper cannot read. Try web_search, or ask the user for another URL.';
+
+const WEB_FETCH_UNSUPPORTED_FILE_TYPE_MSG =
+  'This URL points to a file type the scraper cannot read (for example an image or icon), so there is no ' +
+  'page text to fetch. Try a URL for an HTML page or a PDF, or use web_search instead.';
+
 const WEB_FETCH_FAILURE_MESSAGES = new Set([
   ...Object.values(FIRECRAWL_FAILURE_MESSAGES).map(m => m.userMessage),
   WEB_FETCH_PDF_TOO_LARGE_MSG,
+  WEB_FETCH_UNSUPPORTED_FILE_TYPE_MSG,
   WEB_FETCH_UNREACHABLE_MSG,
+  WEB_FETCH_NO_CONTENT_MSG,
 ]);
 
 /** Scores the failures web_fetch reports as text; a fetched page is left to the default score. */
@@ -457,6 +533,31 @@ export const webFetchTool: ToolDefinition = {
           });
           await context.statusUpdate({}, `WebFetch: ${statusLabel}`);
           return userMessage;
+        }
+
+        if (error instanceof NoExtractableContentError) {
+          context.logger.warn('WebFetch no extractable content', { url: params.url });
+          await context.statusUpdate({}, 'WebFetch: no readable content');
+          return WEB_FETCH_NO_CONTENT_MSG;
+        }
+
+        if (error instanceof UnsupportedContentTypeError) {
+          context.logger.warn('WebFetch unsupported file type', {
+            url: params.url,
+            error: errorMessage,
+            cause: error.cause instanceof Error ? error.cause.message : undefined,
+          });
+          await context.statusUpdate({}, 'WebFetch: unsupported file type');
+          return WEB_FETCH_UNSUPPORTED_FILE_TYPE_MSG;
+        }
+
+        if (error instanceof UnreachableScrapeTargetError) {
+          context.logger.warn('WebFetch page unreachable', {
+            url: params.url,
+            cause: error.cause instanceof Error ? error.cause.message : undefined,
+          });
+          await context.statusUpdate({}, 'WebFetch: page unreachable');
+          return WEB_FETCH_UNREACHABLE_MSG;
         }
 
         // Firecrawl 500 with PDF page-count timeout hint - the PDF is too large to process

@@ -20,6 +20,7 @@ export const ADMIN_USER_LIST_FIELDS = [
   'username',
   'email',
   'isAdmin',
+  'adminPermissions',
   'level',
   'tags',
   'isBanned',
@@ -42,12 +43,20 @@ export const ADMIN_USER_LIST_FIELDS = [
   // admin activity view reads them here. Intentional admin-only exposure, not serialize-everywhere.
   'loginRecords',
   'signupMeta',
+  // Restricted-tier state: admin-only like loginRecords, in USER_SECRET_FIELDS for every self view.
+  'throttle',
+  'riskSignals',
   'subscribedUntil',
   'numReferralsAvailable',
   'currentCredits',
+  'signupGrant',
+  'signupGrantAssessment',
   'organizationId',
   'pendingEmail',
   'emailVerified',
+  'apiKeyTrustApproved',
+  'newAccountSpendCapLifted',
+  'isInternal',
 ] as const satisfies readonly (keyof IUserDocument)[];
 
 export const ADMIN_USER_PROJECTION: Record<string, 1> = {

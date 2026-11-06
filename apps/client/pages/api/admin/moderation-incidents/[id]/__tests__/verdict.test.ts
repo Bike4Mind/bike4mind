@@ -9,8 +9,11 @@ const mockUpdateReviewStatus = vi.fn();
 const mockResolveConfirmedCsam = vi.fn();
 const mockSetNcmecReportId = vi.fn();
 const mockRecordManualReport = vi.fn();
+const mockMarkNoAction = vi.fn();
 const mockSubmitNcmecReport = vi.fn();
 const mockFinishNcmecReport = vi.fn();
+const mockUserFindById = vi.fn();
+const audit = vi.hoisted(() => ({ record: vi.fn(), inTransaction: [] as boolean[], txActive: false }));
 
 vi.mock('@bike4mind/database', () => ({
   imageModerationIncidentRepository: {
@@ -20,6 +23,23 @@ vi.mock('@bike4mind/database', () => ({
     resolveConfirmedCsam: (...args: unknown[]) => mockResolveConfirmedCsam(...args),
     setNcmecReportId: (...args: unknown[]) => mockSetNcmecReportId(...args),
     recordManualReport: (...args: unknown[]) => mockRecordManualReport(...args),
+    markNoAction: (...args: unknown[]) => mockMarkNoAction(...args),
+  },
+  withTransaction: async (fn: () => Promise<unknown>) => {
+    audit.txActive = true;
+    try {
+      return await fn();
+    } finally {
+      audit.txActive = false;
+    }
+  },
+}));
+
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: audit.record,
+  userAuditTarget: async (id: string) => {
+    const user = await mockUserFindById(id);
+    return { kind: 'user', id, displayName: user?.email ?? user?.username ?? id };
   },
 }));
 
@@ -113,6 +133,12 @@ const NcmecFinishFailedError = ncmecService.NcmecFinishFailedError as unknown as
 describe('admin/moderation-incidents/[id]/verdict', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUserFindById.mockResolvedValue({ id: 'user-suspect-1', email: 'suspect@example.com', username: 'suspect' });
+    audit.record.mockReset().mockImplementation(async () => {
+      audit.inTransaction.push(audit.txActive);
+      return null;
+    });
+    audit.inTransaction = [];
   });
 
   // ------------------------------------------------------------------ confirmed_csam -- success
@@ -281,15 +307,58 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       expect(res.status).toHaveBeenCalledWith(404);
     });
 
-    it('returns 409 when the incident is already reported or being processed', async () => {
-      mockUpdateReviewStatus.mockResolvedValue(null);
-      mockFindById.mockResolvedValue({ reviewStatus: 'confirmed_csam' });
+    it.each(['confirmed_csam', 'reported', 'no_action'])(
+      'returns 409 naming the state when the incident is already %s',
+      async reviewStatus => {
+        mockUpdateReviewStatus.mockResolvedValue(null);
+        mockFindById.mockResolvedValue({ reviewStatus });
+
+        const res = makeRes();
+        await runHandler(makeReq({ verdict: 'false_positive' }), res);
+
+        expect(res.status).toHaveBeenCalledWith(409);
+        expect(res.json).toHaveBeenCalledWith({ error: `Incident is already ${reviewStatus}` });
+      }
+    );
+  });
+
+  describe('verdict: no_action', () => {
+    it('closes the incident as no_action, attributed to the admin, without calling NCMEC', async () => {
+      mockMarkNoAction.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'no_action' });
 
       const res = makeRes();
-      await runHandler(makeReq({ verdict: 'false_positive' }), res);
+      await runHandler(makeReq({ verdict: 'no_action' }), res);
 
-      expect(res.status).toHaveBeenCalledWith(409);
+      expect(mockMarkNoAction).toHaveBeenCalledWith('inc-1', 'admin-1');
+      expect(mockUpdateReviewStatus).not.toHaveBeenCalled();
+      expect(mockSubmitNcmecReport).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(200);
     });
+
+    it('returns 404 when the incident is not found', async () => {
+      mockMarkNoAction.mockResolvedValue(null);
+      mockFindById.mockResolvedValue(null);
+
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'no_action' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+    });
+
+    it.each(['false_positive', 'no_action', 'reported', 'confirmed_csam'])(
+      'returns 409 naming the state when the incident is already %s',
+      async reviewStatus => {
+        mockMarkNoAction.mockResolvedValue(null);
+        mockFindById.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus });
+
+        const res = makeRes();
+        await runHandler(makeReq({ verdict: 'no_action' }), res);
+
+        expect(res.status).toHaveBeenCalledWith(409);
+        expect(res.json).toHaveBeenCalledWith({ error: `Incident is already ${reviewStatus}` });
+        expect(audit.record).not.toHaveBeenCalled();
+      }
+    );
   });
 
   // ------------------------------------------------------------------ mark_reported (recovery)
@@ -472,6 +541,21 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       expect(req.logger.info).toHaveBeenCalledWith(expect.stringContaining('(overriding false_positive)'));
     });
 
+    it('logs when the manual report overrode a no_action verdict', async () => {
+      mockRecordManualReport.mockResolvedValue({
+        reviewStatus: 'reported',
+        ncmecReportId: '123456',
+        previousReviewStatus: 'no_action',
+      });
+
+      const req = makeReq({ verdict: 'record_manual_report', ncmecReportId: '123456' });
+      const res = makeRes();
+      await runHandler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(req.logger.info).toHaveBeenCalledWith(expect.stringContaining('(overriding no_action)'));
+    });
+
     it('works when NCMEC API credentials are not configured', async () => {
       const { Resource } = await import('sst');
       const r = Resource as unknown as Record<string, { value: string }>;
@@ -572,6 +656,296 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       await runHandler(makeReq({}), res);
 
       expect(res.status).toHaveBeenCalledWith(400);
+    });
+  });
+
+  // ------------------------------------------------------------------ admin audit
+  describe('admin audit', () => {
+    const REPORTED = { ...CLAIMED_INCIDENT, reviewStatus: 'reported', ncmecReportId: 'RPT-001' };
+
+    const arrange: Record<string, () => void> = {
+      confirmed_csam: () => {
+        mockClaimForNcmecSubmission.mockResolvedValue(CLAIMED_INCIDENT);
+        mockSubmitNcmecReport.mockResolvedValue({ reportId: 'RPT-001' });
+        mockUpdateReviewStatus.mockResolvedValue(REPORTED);
+      },
+      false_positive: () =>
+        mockUpdateReviewStatus.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'false_positive' }),
+      no_action: () => mockMarkNoAction.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'no_action' }),
+      mark_reported: () => mockResolveConfirmedCsam.mockResolvedValue(REPORTED),
+      requeue: () =>
+        mockResolveConfirmedCsam.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'pending_review' }),
+      retry_finish: () => {
+        mockFindById.mockResolvedValue({ ...CLAIMED_INCIDENT, ncmecReportId: 'RPT-001' });
+        mockFinishNcmecReport.mockResolvedValue(undefined);
+        mockResolveConfirmedCsam.mockResolvedValue(REPORTED);
+      },
+      record_manual_report: () => mockRecordManualReport.mockResolvedValue(REPORTED),
+    };
+    const bodyFor = (verdict: string) =>
+      verdict === 'mark_reported' || verdict === 'record_manual_report'
+        ? { verdict, ncmecReportId: 'RPT-001' }
+        : { verdict };
+    const primaryWrite: Record<string, () => ReturnType<typeof vi.fn>> = {
+      confirmed_csam: () => mockUpdateReviewStatus,
+      false_positive: () => mockUpdateReviewStatus,
+      no_action: () => mockMarkNoAction,
+      mark_reported: () => mockResolveConfirmedCsam,
+      requeue: () => mockResolveConfirmedCsam,
+      retry_finish: () => mockResolveConfirmedCsam,
+      record_manual_report: () => mockRecordManualReport,
+    };
+    const verdicts = Object.keys(arrange);
+
+    it.each(verdicts)(
+      'records moderation.incident.verdict_recorded for %s inside the write transaction',
+      async verdict => {
+        arrange[verdict]();
+        const req = makeReq(bodyFor(verdict));
+        const res = makeRes();
+        await runHandler(req, res);
+
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(audit.record).toHaveBeenCalledTimes(1);
+        expect(audit.record.mock.calls[0][0]).toBe(req);
+        expect(audit.record.mock.calls[0][1]).toMatchObject({
+          action: 'moderation.incident.verdict_recorded',
+          target: { kind: 'user', id: 'user-suspect-1', displayName: 'suspect@example.com' },
+          details: { incidentId: 'inc-1', verdict },
+        });
+        expect(audit.inTransaction).toEqual([true]);
+        expect(primaryWrite[verdict]().mock.invocationCallOrder[0]).toBeLessThan(
+          audit.record.mock.invocationCallOrder[0]
+        );
+      }
+    );
+
+    it.each(verdicts.filter(v => v !== 'confirmed_csam' && v !== 'retry_finish'))(
+      'fails %s without a 200 when the audit write rejects',
+      async verdict => {
+        arrange[verdict]();
+        audit.record.mockRejectedValue(new Error('audit down'));
+        const res = makeRes();
+
+        await expect(runHandler(makeReq(bodyFor(verdict)), res)).rejects.toThrow('audit down');
+        expect(res.status).not.toHaveBeenCalledWith(200);
+      }
+    );
+
+    const jsonBody = (res: unknown) => (res as { json: ReturnType<typeof vi.fn> }).json.mock.calls[0][0];
+
+    it('keeps the incident reported without the audit when the confirmed_csam audit write rejects', async () => {
+      arrange.confirmed_csam();
+      const txStates: boolean[] = [];
+      mockUpdateReviewStatus.mockImplementation(async () => {
+        txStates.push(audit.txActive);
+        return REPORTED;
+      });
+      audit.record.mockRejectedValue(new Error('audit down'));
+      const req = makeReq({ verdict: 'confirmed_csam' });
+      const res = makeRes();
+
+      await runHandler(req, res);
+
+      expect(mockUpdateReviewStatus).toHaveBeenCalledTimes(2);
+      expect(mockUpdateReviewStatus).toHaveBeenLastCalledWith('inc-1', 'reported', 'RPT-001', 'admin-1');
+      expect(txStates).toEqual([true, false]);
+      expect(mockSetNcmecReportId).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(jsonBody(res)).toEqual({ ok: true, ncmecReportId: 'RPT-001', auditRecorded: false });
+      expect(req.logger.error).toHaveBeenCalledWith(expect.stringContaining('without an admin audit entry'));
+      expect(mockSubmitNcmecReport).toHaveBeenCalledOnce();
+      expect(mockFinishNcmecReport).not.toHaveBeenCalled();
+    });
+
+    it('keeps the incident reported when the confirmed_csam primary write rejects once and the fallback succeeds', async () => {
+      arrange.confirmed_csam();
+      mockUpdateReviewStatus.mockRejectedValueOnce(new Error('db blip')).mockResolvedValue(REPORTED);
+      const req = makeReq({ verdict: 'confirmed_csam' });
+      const res = makeRes();
+
+      await runHandler(req, res);
+
+      expect(mockUpdateReviewStatus).toHaveBeenCalledTimes(2);
+      expect(mockSetNcmecReportId).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(jsonBody(res)).toEqual({ ok: true, ncmecReportId: 'RPT-001', auditRecorded: false });
+      expect(req.logger.error).toHaveBeenCalledWith(expect.stringContaining('without an admin audit entry'));
+    });
+
+    it('returns 409 when the confirmed_csam fallback write finds the incident already resolved', async () => {
+      arrange.confirmed_csam();
+      mockUpdateReviewStatus.mockResolvedValueOnce(REPORTED).mockResolvedValueOnce(null);
+      audit.record.mockRejectedValue(new Error('audit down'));
+      const res = makeRes();
+
+      await runHandler(makeReq({ verdict: 'confirmed_csam' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(409);
+    });
+
+    it('does not let retry_finish re-finish a report whose confirmed_csam audit failed (regression)', async () => {
+      arrange.confirmed_csam();
+      audit.record.mockRejectedValue(new Error('audit down'));
+      await runHandler(makeReq({ verdict: 'confirmed_csam' }), makeRes());
+
+      expect(mockUpdateReviewStatus).toHaveBeenLastCalledWith('inc-1', 'reported', 'RPT-001', 'admin-1');
+
+      // The incident now reads as reported, exactly as the fallback wrote it.
+      mockFindById.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'reported', ncmecReportId: 'RPT-001' });
+      const retryRes = makeRes();
+      await runHandler(makeReq({ verdict: 'retry_finish' }), retryRes);
+
+      expect(retryRes.status).toHaveBeenCalledWith(409);
+      expect(mockFinishNcmecReport).not.toHaveBeenCalled();
+    });
+
+    it('keeps the incident reported without the audit when the retry_finish audit write rejects', async () => {
+      arrange.retry_finish();
+      const txStates: boolean[] = [];
+      mockResolveConfirmedCsam.mockImplementation(async () => {
+        txStates.push(audit.txActive);
+        return REPORTED;
+      });
+      audit.record.mockRejectedValue(new Error('audit down'));
+      const req = makeReq({ verdict: 'retry_finish' });
+      const res = makeRes();
+
+      await runHandler(req, res);
+
+      expect(mockFinishNcmecReport).toHaveBeenCalledOnce();
+      expect(mockResolveConfirmedCsam).toHaveBeenCalledTimes(2);
+      expect(mockResolveConfirmedCsam).toHaveBeenLastCalledWith(
+        'inc-1',
+        { status: 'reported', ncmecReportId: 'RPT-001', reportedBy: 'admin-1' },
+        0
+      );
+      expect(txStates).toEqual([true, false]);
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(jsonBody(res)).toEqual({ ok: true, ncmecReportId: 'RPT-001', auditRecorded: false });
+      expect(req.logger.error).toHaveBeenCalledWith(expect.stringContaining('without an admin audit entry'));
+    });
+
+    it('keeps the incident reported when the retry_finish primary write rejects once and the fallback succeeds', async () => {
+      arrange.retry_finish();
+      mockResolveConfirmedCsam.mockRejectedValueOnce(new Error('db blip')).mockResolvedValue(REPORTED);
+      const res = makeRes();
+
+      await runHandler(makeReq({ verdict: 'retry_finish' }), res);
+
+      expect(mockResolveConfirmedCsam).toHaveBeenCalledTimes(2);
+      expect(mockFinishNcmecReport).toHaveBeenCalledOnce();
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(jsonBody(res)).toEqual({ ok: true, ncmecReportId: 'RPT-001', auditRecorded: false });
+    });
+
+    it('persists the NCMEC report id and returns 500 when the confirmed_csam audit and fallback writes both reject', async () => {
+      arrange.confirmed_csam();
+      audit.record.mockRejectedValue(new Error('audit down'));
+      mockUpdateReviewStatus.mockResolvedValueOnce(REPORTED).mockRejectedValue(new Error('db down'));
+      mockSetNcmecReportId.mockResolvedValue(undefined);
+      const res = makeRes();
+
+      await runHandler(makeReq({ verdict: 'confirmed_csam' }), res);
+
+      expect(mockSetNcmecReportId).toHaveBeenCalledWith('inc-1', 'RPT-001');
+      expect(res.status).toHaveBeenCalledWith(500);
+      const body = jsonBody(res);
+      expect(body).toMatchObject({ ncmecReportId: 'RPT-001' });
+      expect(body.error).toContain('mark_reported');
+      expect(body.error).toContain('10 minutes');
+      expect(body.error).not.toContain('retry_finish');
+      expect(mockSubmitNcmecReport).toHaveBeenCalledOnce();
+      expect(mockFinishNcmecReport).not.toHaveBeenCalled();
+    });
+
+    it('returns mark_reported recovery instructions when the retry_finish database write and fallback both reject', async () => {
+      arrange.retry_finish();
+      mockResolveConfirmedCsam.mockRejectedValue(new Error('db down'));
+      const res = makeRes();
+
+      await runHandler(makeReq({ verdict: 'retry_finish' }), res);
+
+      expect(mockFinishNcmecReport).toHaveBeenCalledOnce();
+      expect(mockResolveConfirmedCsam).toHaveBeenCalledTimes(2);
+      expect(mockSubmitNcmecReport).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.status).not.toHaveBeenCalledWith(200);
+      const body = jsonBody(res);
+      expect(body).toMatchObject({ ncmecReportId: 'RPT-001' });
+      expect(body.error).toContain('mark_reported');
+      expect(body.error).toContain('10 minutes');
+      expect(body.error).not.toContain('retry_finish');
+    });
+
+    it('returns mark_reported recovery instructions when the confirmed_csam database write rejects', async () => {
+      arrange.confirmed_csam();
+      mockUpdateReviewStatus.mockRejectedValue(new Error('db down'));
+      mockSetNcmecReportId.mockResolvedValue(undefined);
+      const res = makeRes();
+
+      await runHandler(makeReq({ verdict: 'confirmed_csam' }), res);
+
+      expect(mockSetNcmecReportId).toHaveBeenCalledWith('inc-1', 'RPT-001');
+      expect(mockSubmitNcmecReport).toHaveBeenCalledOnce();
+      expect(mockFinishNcmecReport).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(500);
+      const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(body).toMatchObject({ ncmecReportId: 'RPT-001' });
+      expect(body.error).toContain('mark_reported');
+      expect(body.error).toContain('10 minutes');
+      expect(body.error).not.toContain('retry_finish');
+    });
+
+    it('still returns 500 with the report id when persisting it after a failed audit also fails', async () => {
+      arrange.confirmed_csam();
+      audit.record.mockRejectedValue(new Error('audit down'));
+      mockUpdateReviewStatus.mockResolvedValueOnce(REPORTED).mockRejectedValue(new Error('db down'));
+      mockSetNcmecReportId.mockRejectedValue(new Error('db down'));
+      const res = makeRes();
+
+      const req = makeReq({ verdict: 'confirmed_csam' });
+
+      await runHandler(req, res);
+
+      expect(mockSetNcmecReportId).toHaveBeenCalledWith('inc-1', 'RPT-001');
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect((res.json as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({ ncmecReportId: 'RPT-001' });
+      expect(req.logger.error).toHaveBeenCalledWith(expect.stringContaining('failed to persist reportId'));
+    });
+
+    it('falls back to the user id when the flagged user no longer exists', async () => {
+      arrange.false_positive();
+      mockUserFindById.mockResolvedValue(null);
+      await runHandler(makeReq({ verdict: 'false_positive' }), makeRes());
+
+      expect(audit.record.mock.calls[0][1].target.displayName).toBe('user-suspect-1');
+    });
+
+    it('records the NCMEC report id for a confirmed_csam verdict', async () => {
+      arrange.confirmed_csam();
+      await runHandler(makeReq({ verdict: 'confirmed_csam' }), makeRes());
+
+      expect(audit.record.mock.calls[0][1].details).toMatchObject({ ncmecReportId: 'RPT-001' });
+    });
+
+    it('still records retry_finish when a concurrent resolution won the DB write', async () => {
+      arrange.retry_finish();
+      mockResolveConfirmedCsam.mockResolvedValue(null);
+      await runHandler(makeReq({ verdict: 'retry_finish' }), makeRes());
+
+      expect(audit.record.mock.calls[0][1].details).toMatchObject({ ncmecReportId: 'RPT-001', incidentUpdated: false });
+    });
+
+    it('records nothing when the verdict is refused', async () => {
+      mockUpdateReviewStatus.mockResolvedValue(null);
+      mockFindById.mockResolvedValue({ reviewStatus: 'confirmed_csam' });
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'false_positive' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(409);
+      expect(audit.record).not.toHaveBeenCalled();
     });
   });
 });

@@ -40,9 +40,12 @@ apps/client/pages/api/agent-quest/manifest.ts           # Public agent-quest man
 apps/client/pages/api/agent-quest/__tests__/manifest.test.ts # Test file for the handler above (script greps by path, not export)
 
 # Slack — authenticated via HMAC-SHA256 signature (Slack signing secret)
+apps/client/pages/api/admin/users/[userId]/notes.ts # adminApi wraps baseApi with JWT-only auth and method-specific admin permissions
+apps/client/pages/api/admin/users/[userId]/tags.ts # adminApi wraps baseApi with JWT-only auth and settings:manage permission
 apps/client/pages/api/slack/commands.ts                 # verifySlackRequest() HMAC check
 apps/client/pages/api/slack/interactive.ts              # verifySlackRequest() HMAC check
 apps/client/pages/api/slack/__tests__/interactive.confirm.test.ts # Test file for the handler above (script greps by path, not export)
+apps/client/pages/api/slack/__tests__/requestLogContext.test.ts # Test file for the handlers above (script greps by path, not export)
 
 # SRE workflow callback — authenticated via encrypted bearer token
 apps/client/pages/api/sre/workflow-callback.ts          # crypto.timingSafeEqual() bearer token
@@ -75,3 +78,5 @@ apps/client/pages/api/ai/__tests__/generate-video.integration.test.ts # Test fil
 apps/client/pages/api/[...unmatchedApiPath].ts           # JSON 404 in the shared error envelope instead of the SPA shell
 apps/client/pages/api/__tests__/unmatchedApiPath.test.ts # Test file for the handler above (script greps by path, not export)
 apps/client/pages/api/v1/[...unmatchedV1Path].ts        # Re-exports the catch-all above so /api/v1 misses outrank pages/api/[type]/[id]
+apps/client/pages/api/partners/__tests__/bedrocknews-claims.test.ts # Test file for the claims routes, which use baseApi(); the script greps by path, not export
+apps/client/pages/api/tools/__tests__/billing.test.ts # Test file for the web-search/web-fetch handlers (script greps by path, not export)

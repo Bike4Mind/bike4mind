@@ -8,7 +8,7 @@
  * pin both halves of that split (see the Publish Thumbnail Queue block in infra/queues.ts).
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
+import { readdirSync, readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -36,8 +36,8 @@ const QUEUE = cut(QUEUES, "const publishThumbnailQueue = new sst.aws.Queue('publ
 const rendererKeys = () => [...RENDERER.matchAll(/^ {2}([A-Za-z]+):/gm)].map(match => match[1]);
 
 describe('publish thumbnail renderer function', () => {
-  it('declares only its code, runtime and sizing: no link, secrets, VPC, environment, permissions or role', () => {
-    expect(rendererKeys().sort()).toEqual(['handler', 'memory', 'nodejs', 'runtime', 'timeout']);
+  it('declares only its code, fonts, runtime and sizing: no link, secrets, VPC, environment, permissions or role', () => {
+    expect(rendererKeys().sort()).toEqual(['copyFiles', 'handler', 'memory', 'nodejs', 'runtime', 'timeout']);
     // No layers either: an extension runs as its own process, which every render's clean-environment
     // check (apps/workers/src/media/renderEnvironment.ts) would refuse.
     for (const forbidden of ['link', 'allSecrets', 'vpc', 'environment', 'permissions', 'role', 'url', 'layers']) {
@@ -49,6 +49,18 @@ describe('publish thumbnail renderer function', () => {
   it('points at the minimal handler and ships the browser packages unbundled', () => {
     expect(RENDERER).toMatch(/handler:\s*'apps\/workers\/src\/media\/publishThumbnailRenderer\.handler'/);
     expect(RENDERER).toMatch(/install:\s*\['@sparticuz\/chromium', 'playwright-core', 'sharp'\]/);
+  });
+
+  it('ships fallback symbol fonts where the packaged browser looks for them', () => {
+    // /var/task/fonts is one of the directories in @sparticuz/chromium's bundled fonts.conf.
+    expect(RENDERER).toMatch(/copyFiles:\s*\[\{\s*from:\s*'apps\/workers\/src\/media\/fonts',\s*to:\s*'fonts'\s*\}\]/);
+    const files = readdirSync(path.join(REPO_ROOT, 'apps/workers/src/media/fonts'));
+    expect(files.filter(name => name.endsWith('.ttf')).sort()).toEqual([
+      'NotoSansMath-Regular.ttf',
+      'NotoSansSymbols-Regular.ttf',
+      'NotoSansSymbols2-Regular.ttf',
+    ]);
+    expect(files).toContain('OFL.txt');
   });
 
   it('times out before the orchestrator gives up on the invoke', () => {

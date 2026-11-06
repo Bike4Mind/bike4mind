@@ -11,6 +11,7 @@ import {
   McpRefreshLeaseResult,
   McpConnectionStatus,
   McpDiscoveryUpdate,
+  McpOAuthConfigUpdate,
   McpOAuthTokenUpdate,
   McpToolSettingsUpdate,
   McpToolVersionConflictError,
@@ -39,7 +40,7 @@ import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 
 /** How long a refresh lease is held before another caller may take it over (design 4.7). */
-export const MCP_REFRESH_LEASE_TTL_MS = 15_000;
+export const MCP_REFRESH_LEASE_TTL_MS = 30_000;
 
 export class McpConnectionOwnerError extends Error {
   constructor(message: string) {
@@ -357,6 +358,24 @@ function oauthTokenWrite(
   return { $set, $unset };
 }
 
+/** Every `auth.oauth` field `setOAuthConfig` owns; the token fields are written only by the token writers. */
+const OAUTH_CONFIG_FIELDS = [
+  'resource',
+  'resourceMetadataUrl',
+  'issuer',
+  'authorizationServerUrl',
+  'tokenEndpoint',
+  'revocationEndpoint',
+  'registrationEndpoint',
+  'tokenEndpointAuthMethod',
+  'issParameterSupported',
+  'scopes',
+  'clientMode',
+  'clientRegistrationId',
+  'manualClientIdEnc',
+  'manualClientSecretEnc',
+] as const satisfies readonly (keyof McpOAuthConfigUpdate)[];
+
 // A probe or refresh that finishes after a disconnect must not re-offer an OAuth connection with no token.
 const CONNECTABLE_FILTER = { $or: [{ 'auth.kind': { $ne: 'oauth' } }, { 'auth.oauth.hasAccessToken': true }] };
 
@@ -490,11 +509,14 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
 
   async listMemberConnections(
     organizationId: string,
+    memberUserIds: readonly string[],
     options: { urlHost?: string } = {}
   ): Promise<IMcpConnectionSummary[]> {
+    if (memberUserIds.length === 0) return [];
     return this.findSummaries({
       organizationId,
       ownerType: 'user',
+      userId: { $in: [...memberUserIds] },
       ...(options.urlHost ? { urlHost: options.urlHost.toLowerCase() } : {}),
     });
   }
@@ -651,9 +673,37 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     return result?.toJSON() ?? null;
   }
 
+  async setOAuthConfig(
+    id: string,
+    owner: McpConnectionOwner,
+    config: McpOAuthConfigUpdate
+  ): Promise<IMcpConnectionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id) || owner.ownerType !== 'user') return null;
+    const $set: Record<string, unknown> = { 'auth.kind': 'oauth' };
+    const $unset: Record<string, 1> = {};
+    for (const field of OAUTH_CONFIG_FIELDS) {
+      if (config[field] === undefined) $unset[`auth.oauth.${field}`] = 1;
+      else $set[`auth.oauth.${field}`] = config[field];
+    }
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, ownerType: 'user', ownerKey: owner.ownerKey, 'auth.kind': { $in: ['none', 'oauth'] } },
+      { $set, ...(Object.keys($unset).length > 0 ? { $unset } : {}) },
+      { new: true, runValidators: true }
+    );
+    if (!result) return null;
+    // A `none` connection that was `connected` must not stay offered as usable once it is an OAuth one with no token.
+    const demoted = await this.model.findOneAndUpdate(
+      { _id: id, status: 'connected', 'auth.oauth.hasAccessToken': { $ne: true } },
+      { $set: { status: 'pending_auth' } },
+      { new: true }
+    );
+    return (demoted ?? result).toJSON();
+  }
+
   async setPendingAuth(
     id: string,
-    challenge: { resourceMetadataUrl?: string; scope?: string; message: string }
+    challenge: { resourceMetadataUrl?: string; scope?: string; message: string },
+    expectedAccessTokenEnc?: string | null
   ): Promise<IMcpConnectionDocument | null> {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     const now = new Date();
@@ -664,8 +714,11 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
       challenge.resourceMetadataUrl.length <= MCP_CONNECTION_LIMITS.authChallengeUrlLength
         ? challenge.resourceMetadataUrl
         : undefined;
-    const result = await this.model.findByIdAndUpdate(
-      id,
+    const result = await this.model.findOneAndUpdate(
+      {
+        _id: id,
+        ...(expectedAccessTokenEnc !== undefined ? { 'auth.oauth.accessTokenEnc': expectedAccessTokenEnc } : {}),
+      },
       {
         $set: {
           status: 'pending_auth',
@@ -706,13 +759,15 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     id: string,
     status: 'error' | 'needs_reconnect',
     lastError: McpConnectionLastErrorInput,
-    expectedApiKeyValueEnc?: string | null
+    expectedApiKeyValueEnc?: string | null,
+    expectedAccessTokenEnc?: string | null
   ): Promise<IMcpConnectionDocument | null>;
   async setStatus(
     id: string,
     status: McpConnectionStatus,
     lastError?: McpConnectionLastErrorInput,
-    expectedApiKeyValueEnc?: string | null
+    expectedApiKeyValueEnc?: string | null,
+    expectedAccessTokenEnc?: string | null
   ): Promise<IMcpConnectionDocument | null> {
     if ((status === 'error' || status === 'needs_reconnect') && !lastError) {
       throw new Error(`setStatus(${status}) requires a lastError`);
@@ -741,6 +796,7 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
       ...(expectedApiKeyValueEnc !== undefined
         ? { 'auth.kind': 'api_key', 'auth.apiKey.valueEnc': expectedApiKeyValueEnc }
         : {}),
+      ...(expectedAccessTokenEnc !== undefined ? { 'auth.oauth.accessTokenEnc': expectedAccessTokenEnc } : {}),
     };
     const result = await this.model.findOneAndUpdate(filter, update, { new: true, runValidators: true });
     return result?.toJSON() ?? null;
@@ -809,7 +865,7 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
    * Take the refresh lease when it is free or expired. Atomic, so of N concurrent callers exactly
    * one wins. Uses the app clock for `now` and `until`: a pipeline update could use `$$NOW`, but
    * DOCUMENTDB_COMPATIBILITY_NOTES.md does not establish pipeline-update support, so instances are
-   * assumed NTP-synced and the 15 s TTL absorbs ordinary skew.
+   * assumed NTP-synced and the 30 s TTL absorbs ordinary skew.
    */
   async acquireRefreshLease(
     id: string,
@@ -843,6 +899,29 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
       { $unset: { refreshLease: 1 } }
     );
     return result.modifiedCount === 1;
+  }
+
+  async setNeedsReconnectIfHolder(
+    id: string,
+    holder: string,
+    lastError: McpConnectionLastErrorInput
+  ): Promise<IMcpConnectionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, 'auth.kind': 'oauth', 'refreshLease.holder': holder },
+      {
+        $set: {
+          status: 'needs_reconnect',
+          lastError: {
+            ...lastError,
+            message: lastError.message.slice(0, MCP_CONNECTION_LIMITS.lastErrorMessageLength),
+            at: new Date(),
+          },
+        },
+      },
+      { new: true }
+    );
+    return result?.toJSON() ?? null;
   }
 
   async deleteForOwner(id: string, owner: McpConnectionOwner): Promise<boolean> {

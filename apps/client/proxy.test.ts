@@ -79,6 +79,14 @@ describe('proxy CSP header', () => {
     expect(sources('connect-src')).toContain('https://www.facebook.com');
   });
 
+  it('allows the Turnstile script, widget frame and verification calls', () => {
+    const csp = proxy(makeRequest('https://app.bike4mind.com/login')).headers.get('Content-Security-Policy') ?? '';
+    const sources = (name: string) => (csp.match(new RegExp(`${name} ([^;]*)`))?.[1] ?? '').split(/\s+/);
+    for (const directive of ['script-src', 'frame-src', 'connect-src']) {
+      expect(sources(directive)).toContain('https://challenges.cloudflare.com');
+    }
+  });
+
   // connect-src too: the service worker's image cache re-fetches tiles, and a worker fetch is
   // checked against connect-src, so img-src alone leaves the map blank once the SW is active.
   it.each(['img-src', 'connect-src'])('%s allows the OpenStreetMap tiles the inline location map loads', directive => {
@@ -86,6 +94,44 @@ describe('proxy CSP header', () => {
     const csp = response.headers.get('Content-Security-Policy') ?? '';
     const values = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').split(/\s+/);
     expect(values).toContain('https://tile.openstreetmap.org');
+  });
+
+  // ElevenLabs hosts voice preview clips on regional hosts (api.us.elevenlabs.io). connect-src as
+  // well, for the same service-worker re-fetch as the map tiles above.
+  it.each(['media-src', 'connect-src'])('%s allows the ElevenLabs hosts that serve voice previews', directive => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
+    const csp = response.headers.get('Content-Security-Policy') ?? '';
+    const values = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').split(/\s+/);
+    expect(values).toContain('https://*.elevenlabs.io');
+  });
+
+  // Social post thumbnails load straight from each network's image CDN. connect-src as well, for
+  // the same service-worker re-fetch as the map tiles above. video.cdn.bsky.app is where
+  // video.bsky.app redirects every poster frame, and CSP checks each redirect hop.
+  const socialImageHosts = [
+    'https://cdn.bsky.app',
+    'https://video.bsky.app',
+    'https://video.cdn.bsky.app',
+    'https://*.fbcdn.net',
+    'https://i.ytimg.com',
+  ];
+
+  it.each(['img-src', 'connect-src'])('%s allows the social CDN hosts that serve post thumbnails', directive => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
+    const csp = response.headers.get('Content-Security-Policy') ?? '';
+    const values = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').split(/\s+/);
+    expect(values).toEqual(expect.arrayContaining(socialImageHosts));
+  });
+
+  // These CDNs serve whatever their users upload, so they may load images and be fetched, never
+  // run as script, frame or media.
+  it('keeps the social CDN hosts out of every other directive', () => {
+    const csp = proxy(makeRequest('https://app.bike4mind.com/dashboard')).headers.get('Content-Security-Policy') ?? '';
+    for (const directive of csp.split(';')) {
+      const [name, ...sources] = directive.trim().split(/\s+/);
+      if (name === 'img-src' || name === 'connect-src') continue;
+      for (const host of socialImageHosts) expect(sources, name).not.toContain(host);
+    }
   });
 
   it('connect-src allows the GitHub API the desktop download page reads its latest release from', () => {
@@ -174,6 +220,14 @@ describe('proxy CSP header', () => {
   it('does NOT clobber Referrer-Policy on /embed/ routes (the URL carries the ?k= key)', () => {
     const embed = proxy(makeRequest('https://app.bike4mind.com/embed/chat?k=b4m_live_x'));
     expect(embed.headers.get('Referrer-Policy')).toBeNull();
+  });
+
+  it('serves a verified-hop landing with strict-origin, so the token never rides a Referer', () => {
+    const landing = proxy(makeRequest('https://app.bike4mind.com/new?utm_source=x&b4m_hop=abc.123.def'));
+    expect(landing.headers.get('Referrer-Policy')).toBe('strict-origin');
+    // Only the landing that carries one: the same page without it keeps the app default.
+    const plain = proxy(makeRequest('https://app.bike4mind.com/new?utm_source=x'));
+    expect(plain.headers.get('Referrer-Policy')).toBe('strict-origin-when-cross-origin');
   });
 
   it('sets X-Frame-Options on HTML routes', () => {
@@ -450,6 +504,39 @@ describe('proxy origin verification', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/api/health')) as unknown as Forwarded;
     expect(response.status).toBe(200);
     expect(response.forwardedRequestHeaders).toBeUndefined();
+  });
+
+  it('removes unverified fingerprint headers without refusing access', () => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', '');
+    const response = proxy(
+      makeRequest('https://example.com/api/otc/verify', {
+        'cloudfront-viewer-ja4-fingerprint': 'client-supplied',
+      })
+    ) as unknown as Forwarded;
+    expect(response.status).toBe(200);
+    expect(response.forwardedRequestHeaders?.has('cloudfront-viewer-ja4-fingerprint')).toBe(false);
+  });
+
+  it('preserves a fingerprint only after origin verification', () => {
+    const response = proxy(
+      makeRequest('https://example.com/api/otc/verify', {
+        'x-b4m-origin-verify': SECRET,
+        'cloudfront-viewer-ja4-fingerprint': 'synthetic',
+      })
+    ) as unknown as Forwarded;
+    expect(response.forwardedRequestHeaders?.get('cloudfront-viewer-ja4-fingerprint')).toBe('synthetic');
+  });
+
+  it('strips the fingerprint on self-host even after origin verification', () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    const response = proxy(
+      makeRequest('https://example.com/api/otc/verify', {
+        'x-b4m-origin-verify': SECRET,
+        'cloudfront-viewer-ja4-fingerprint': 'synthetic',
+      })
+    ) as unknown as Forwarded;
+    expect(response.status).toBe(200);
+    expect(response.forwardedRequestHeaders?.has('cloudfront-viewer-ja4-fingerprint')).toBe(false);
   });
 });
 

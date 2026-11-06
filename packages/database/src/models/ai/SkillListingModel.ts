@@ -2,6 +2,7 @@ import mongoose, { Document, Model, Schema, model } from 'mongoose';
 import { randomBytes } from 'crypto';
 import { claudeSkillNameFor, type ISkillListing } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
+import { SkillBundle } from './SkillBundleModel';
 
 /**
  * A Skill Market listing. Holds a denormalized copy of its current APPROVED version (name,
@@ -195,11 +196,14 @@ export async function approvePendingListingVersion(
  */
 export async function assignClaudePluginName(listingId: string, skillName: string): Promise<void> {
   const base = claudeSkillNameFor(skillName);
+  const organizationId = (await SkillListing.findById(listingId).select('organizationId').lean())?.organizationId;
   // A skill can deliberately occupy an id-suffixed name too. Keep trying unique-index-backed
   // candidates instead of permanently omitting an otherwise approved listing from the feed.
   for (let attempt = 0; ; attempt += 1) {
     const claudePluginName =
       attempt === 0 ? base : attempt === 1 ? `${base}-${listingId.slice(-6)}` : `${base}-${listingId}-${attempt}`;
+    // Bundles share the org feed's plugin namespace (SkillBundleModel), without a shared unique index.
+    if (organizationId && (await SkillBundle.exists({ organizationId, pluginName: claudePluginName }))) continue;
     try {
       await SkillListing.updateOne(
         { _id: listingId, visibility: 'organization', claudePluginName: { $exists: false } },

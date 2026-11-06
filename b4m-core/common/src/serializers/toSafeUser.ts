@@ -49,8 +49,18 @@ export const USER_SECRET_FIELDS = [
   'securityQuestions',
   'loginRecords',
   'signupMeta',
+  'riskScore',
+  'riskEvidence',
+  'freeCreditClaimEmail',
+  'grantPackageId',
+  'signupGrantAssessment',
   'userNotes',
+  'throttle',
+  'riskSignals',
+  'signupLanding',
   'stripeCustomerId',
+  // Server-side lease against an export racing account cleanup; never client state.
+  'accountDataExportLease',
 ] as const;
 
 /**
@@ -137,7 +147,14 @@ export type SelfKeepableSecretField = (typeof SELF_KEEPABLE_SECRET_FIELDS)[numbe
  * every user the admin's private notes about them. Re-including one requires `keepAdminOnly`,
  * whose name is the reminder that the caller must have checked the VIEWER, not the subject.
  */
-export const ADMIN_ONLY_USER_FIELDS = ['userNotes', 'loginRecords', 'signupMeta'] as const;
+export const ADMIN_ONLY_USER_FIELDS = [
+  'userNotes',
+  'loginRecords',
+  'signupMeta',
+  'signupGrantAssessment',
+  'throttle',
+  'riskSignals',
+] as const;
 export type AdminOnlyUserField = (typeof ADMIN_ONLY_USER_FIELDS)[number];
 
 /**
@@ -260,6 +277,12 @@ export function redactUserSecretsForSelf(
     if (f === 'securityQuestions' && Array.isArray(user.securityQuestions)) {
       u.securityQuestions = user.securityQuestions.map(({ question }) => ({ question, answer: '' }));
     }
+  }
+
+  // The grant stays visible to its holder (the signup credits UI reads it), but an admin's block is not.
+  if (user.signupGrant?.blocked) {
+    const { blocked: _blocked, ...grant } = user.signupGrant;
+    u.signupGrant = grant;
   }
 
   // Separate door for the admin-only fields, so a viewer check is required to open it.

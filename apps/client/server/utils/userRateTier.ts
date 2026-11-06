@@ -1,14 +1,16 @@
-import { hasDeveloperUserTag, type SettingKey } from '@bike4mind/common';
+import { hasDeveloperUserTag, isShadowTier, type IUser, type SettingKey } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import {
   getActiveSubscriptionsForUser,
   getRequestActiveSubscriptions,
+  type ActiveSubscription,
   type ActiveSubscriptionsRequest,
 } from '@server/entitlements/activeSubscriptions';
-import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
-import { UserSubscriptionTier } from '@client/lib/userSubscriptions/types';
+import { getHighestLadderTier } from '@client/lib/userSubscriptions/utils';
+import { holdsPaidStanding, type PaidStandingUser } from '@server/entitlements/paidStanding';
+import { UserSubscriptionTier } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 
 /**
@@ -19,23 +21,25 @@ import { isDevelopment } from '@bike4mind/server-utils/utils/config';
  * `bypass` - admins and developer-tagged users (internal), never rate limited.
  * `pro` / `basic` - highest tier among the user's active subscriptions,
  *   including org seats (`getActiveSubscriptionsForUser`; a Team plan is Pro).
- * `free` - authenticated user with no active paid, ladder-tiered subscription.
+ *   Paid standing with no ladder plan (a credit purchase, a standalone plan) is `basic`.
+ * `free` - authenticated user without paid standing (`paidStanding.ts`).
+ * `shadow` - admin-restricted users (see `isShadowTier`); checked before subscriptions.
  */
-export type UserRateTier = 'bypass' | 'pro' | 'basic' | 'free';
+export type UserRateTier = 'bypass' | 'pro' | 'basic' | 'free' | 'shadow';
 
 /** The minimal user shape the tier resolver needs (a subset of `Express.User`). */
-export interface RateTierUser {
+export interface RateTierUser extends PaidStandingUser {
   id: string;
   isAdmin?: boolean;
   tags?: string[] | null;
+  throttle?: Pick<NonNullable<IUser['throttle']>, 'tier'> | null;
 }
 
 /**
- * Fail-safe floor if a tier setting somehow resolves to `undefined`. The
- * schema's `.prefault` makes this practically unreachable, but coalescing to
- * the most-restrictive tier default (never `0`/`Infinity`) guarantees we fail
- * CLOSED rather than accidentally disabling the limit. Mirrors the Free-tier
- * default in `settings.ts`.
+ * Floor applied when the tier or its setting cannot be resolved: the Free-tier
+ * default (never `Infinity`), so a read failure never disables the limiter. It
+ * does not honor an admin-set Free limit of 0, because the tier is unknown then
+ * and blocking would lock out paid users during an outage.
  */
 const FALLBACK_RATE_LIMIT_PER_MIN = 10;
 
@@ -44,6 +48,7 @@ const TIER_SETTING_KEY = {
   free: 'apiRateLimitFreePerMin',
   basic: 'apiRateLimitBasicPerMin',
   pro: 'apiRateLimitProPerMin',
+  shadow: 'shadowTierRequestsPerMin',
 } as const satisfies Record<Exclude<UserRateTier, 'bypass'>, SettingKey>;
 
 /**
@@ -52,27 +57,60 @@ const TIER_SETTING_KEY = {
  * call these routes make. Pass the request to resolve through its per-request
  * memo, so the handler's entitlement gate reuses these reads instead of repeating them.
  */
-export async function resolveUserRateTier(user: RateTierUser, req?: ActiveSubscriptionsRequest): Promise<UserRateTier> {
+export async function resolveUserRateTier(
+  user: RateTierUser,
+  req?: ActiveSubscriptionsRequest,
+  options?: { strict?: boolean }
+): Promise<UserRateTier> {
   if (user.isAdmin || hasDeveloperUserTag(user.tags)) return 'bypass';
+  if (isShadowTier(user)) return 'shadow';
 
   const activeSubscriptions =
-    req?.user?.id === user.id ? await getRequestActiveSubscriptions(req) : await getActiveSubscriptionsForUser(user.id);
+    req?.user?.id === user.id
+      ? await getRequestActiveSubscriptions(req, options)
+      : await getActiveSubscriptionsForUser(user.id, options);
 
-  // Take the HIGHEST ladder tier across active subscriptions. Plans with no
-  // `tier` (standalone single-product plans sold off the main ladder) are not
-  // on the ladder and don't confer a rate tier - they fall through to `free`
-  // unless another active subscription grants one.
-  let highestTier: UserSubscriptionTier | undefined;
-  for (const subscription of activeSubscriptions) {
-    const planTier = getEntitlingPlanByPriceId(subscription.priceId)?.tier;
-    if (planTier !== undefined && (highestTier === undefined || planTier > highestTier)) {
-      highestTier = planTier;
-    }
-  }
+  const tier = ladderRateTier(activeSubscriptions);
+  return tier === 'free' && holdsPaidStanding(user, activeSubscriptions) ? 'basic' : tier;
+}
+
+/**
+ * The HIGHEST ladder tier across a set of active subscriptions. Plans with no `tier`
+ * (standalone single-product plans sold off the main ladder) are not on the ladder and
+ * don't confer a tier - they fall through to `free` here; `resolveUserRateTier` floors paid
+ * standing at `basic`.
+ */
+export function ladderRateTier(
+  activeSubscriptions: readonly Pick<ActiveSubscription, 'priceId'>[]
+): Exclude<UserRateTier, 'bypass'> {
+  const highestTier = getHighestLadderTier(activeSubscriptions);
 
   if (highestTier === UserSubscriptionTier.Pro) return 'pro';
   if (highestTier === UserSubscriptionTier.Basic) return 'basic';
   return 'free';
+}
+
+/**
+ * Per-process cache of the tier settings read. This runs on every request to per-keystroke helpers
+ * (rapid-reply, optimize-input, semantic search), so it bypasses the shared 5-minute settings cache
+ * with its own short TTL: an admin's 0 (block) or its lift reaches every process within the TTL.
+ */
+const TIER_SETTINGS_CACHE_TTL_MS = 15_000;
+const tierSettingsCache = new Map<string, { settings: Record<string, string>; expiresAt: number }>();
+
+/** Test-only: drop the in-process cache so a mocked setting in one test cannot leak into the next. */
+export const __resetTierSettingsCache = (): void => tierSettingsCache.clear();
+
+async function readTierSettings(settingKey: SettingKey): Promise<Record<string, string>> {
+  const now = Date.now();
+  const cached = tierSettingsCache.get(settingKey);
+  if (cached && cached.expiresAt > now) return cached.settings;
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { skipCache: true, names: [settingKey] }
+  );
+  tierSettingsCache.set(settingKey, { settings, expiresAt: now + TIER_SETTINGS_CACHE_TTL_MS });
+  return settings;
 }
 
 /**
@@ -85,7 +123,7 @@ export async function resolveUserRateTier(user: RateTierUser, req?: ActiveSubscr
  * Accepts `undefined` because callers pass `req.user`, which the base Express
  * type models as optional even though these routes run behind auth (the
  * non-optional `req.user` augmentation is client-package-local). A missing user
- * is a can't-happen post-auth; we fail CLOSED to the most-restrictive limit.
+ * is a can't-happen post-auth; we fail CLOSED to the fallback floor.
  */
 export async function resolveUserRateLimitPerMin(
   user: RateTierUser | undefined,
@@ -101,13 +139,15 @@ export async function resolveUserRateLimitPerMin(
     const tier = await resolveUserRateTier(user, req);
     if (tier === 'bypass') return Infinity;
 
-    const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-    return getSettingsValue(TIER_SETTING_KEY[tier], settings) ?? FALLBACK_RATE_LIMIT_PER_MIN;
+    const settingKey = TIER_SETTING_KEY[tier];
+    const settings = await readTierSettings(settingKey);
+    // `??` keeps an explicit 0, which the middleware treats as "block".
+    return getSettingsValue(settingKey, settings) ?? FALLBACK_RATE_LIMIT_PER_MIN;
   } catch (error) {
     // This runs in the rate-limit middleware, BEFORE the handler. A transient
     // subscription/settings read failure must not turn every request into a 500
-    // - apply the most-restrictive floor so the limiter stays ON (fail closed).
-    Logger.globalInstance.warn('[rateTier] resolution failed; applying Free-tier floor', { error });
+    // - apply the fallback floor so the limiter stays ON (fail closed).
+    Logger.globalInstance.warn('[rateTier] resolution failed; applying fallback floor', { error });
     return FALLBACK_RATE_LIMIT_PER_MIN;
   }
 }

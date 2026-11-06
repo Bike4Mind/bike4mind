@@ -26,7 +26,7 @@ vi.mock('@bike4mind/database', () => ({
   AdminSettings: { findOne: () => ({ lean: () => h.stored() }) },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     updateOperationsModel: h.update,
     getOperationsModel: h.getModel,

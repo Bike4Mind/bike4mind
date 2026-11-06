@@ -1,9 +1,16 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { VideoModel } from '@bike4mind/common';
+import {
+  CompletionReasoningEffortSchema,
+  supportsOneHourPromptCache,
+  type ReasoningEffort,
+  type VideoModel,
+} from '@bike4mind/common';
 import type { ChatModelCatalog, ChatModelOption } from '@shared/chat';
+import type { ModelListOptions } from '../modelServers/ModelServerRegistry';
 import { parseVideoModels } from './media/videoModels';
+import { hostedControls, withOllamaContext } from './modelControls';
 import { supportsReasoningEffort } from './reasoningEffort';
-import { OllamaLocal } from './OllamaLocal';
+import { currentLocalContext, OllamaLocal } from './OllamaLocal';
 
 /**
  * The model list is per-DEPLOYMENT and per-ACCOUNT, never a constant in this client.
@@ -39,12 +46,41 @@ interface WireModel {
   name?: unknown;
   type?: unknown;
   backend?: unknown;
+  releaseDate?: unknown;
   contextWindow?: unknown;
   max_tokens?: unknown;
   supportsTools?: unknown;
   supportsVision?: unknown;
   can_think?: unknown;
+  thinkingStyle?: unknown;
+  dispatchProfile?: unknown;
+  pricing?: unknown;
+  disabled?: unknown;
 }
+
+/**
+ * The public projection of the same list, read only for `reasoning_efforts` and
+ * `reasons_within_output_budget`: the server computes those in llm-adapters, which this client
+ * cannot import, and `/api/models` does not carry them.
+ */
+const PUBLIC_MODELS_PATH = '/api/v1/models';
+const PUBLIC_MODELS_PAGE = 100;
+const PUBLIC_MODELS_MAX_PAGES = 5;
+const PUBLIC_MODELS_TIMEOUT_MS = 5_000;
+
+/** Whether two reads hold the same rows, in whatever order the pages listed them. */
+function sameReasoning(a: HostedReasoningById, b: HostedReasoningById): boolean {
+  const key = (byId: HostedReasoningById) => JSON.stringify([...byId].sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)));
+  return a.size === b.size && key(a) === key(b);
+}
+
+/** How a model reasons, as one `/api/v1/models` row states it; a field the row lacks is absent. */
+export interface HostedReasoning {
+  efforts?: readonly ReasoningEffort[];
+  reasonsWithinOutputBudget?: boolean;
+}
+
+export type HostedReasoningById = ReadonlyMap<string, HostedReasoning>;
 
 export interface ModelCatalogLogger {
   debug(message: string): void;
@@ -57,6 +93,8 @@ export interface ModelCatalogDeps {
   getApiClient(): AuthenticatedApiClient | null;
   /** Cache identity: switching environments must not show the previous server's models. */
   getEnvironmentUrl(): string;
+  /** The cached hosted list changed without a list() call, after the reasoning read landed late. */
+  changed?(): void;
 }
 
 /**
@@ -67,9 +105,20 @@ export interface ModelCatalogDeps {
  * the same reasoning `/api/models` applies to its own server-side cache.
  */
 export class ModelCatalog {
-  private cache: { environmentUrl: string; models: ChatModelOption[]; expiresAt: number } | null = null;
+  private cache: { environmentUrl: string; wire: unknown; models: ChatModelOption[]; expiresAt: number } | null = null;
+
+  /** The last `/api/v1/models` read, kept past the list's TTL so a slow read never costs what is already known. */
+  private reasoning: { environmentUrl: string; byId: HostedReasoningById } | null = null;
+
+  private reasoningRead: string | null = null;
 
   private localCache: { models: ChatModelOption[]; expiresAt: number } | null = null;
+  /**
+   * Reads started, and the newest start number whose read may no longer be cached: a read never replaces one that
+   * started later, and one in flight at forgetLocal() is not cached.
+   */
+  private localReads = 0;
+  private localWritten = 0;
 
   /** Separate from `cache` because the two views are read on different paths; see listImageModels. */
   private imageCache: { environmentUrl: string; models: string[]; expiresAt: number } | null = null;
@@ -78,14 +127,16 @@ export class ModelCatalog {
 
   constructor(
     private readonly deps: ModelCatalogDeps,
-    private readonly local = new OllamaLocal()
+    private readonly local: { models(options?: ModelListOptions): Promise<ChatModelOption[]> } = new OllamaLocal()
   ) {}
 
   /** Cached models for the current environment, without a round trip. Null when nothing is cached. */
   cached(): ChatModelOption[] | null {
     const entry = this.cache;
     if (!this.deps.getApiClient()) {
-      return this.localCache && Date.now() < this.localCache.expiresAt ? this.localCache.models : null;
+      return this.localCache && Date.now() < this.localCache.expiresAt
+        ? withCurrentContexts(this.localCache.models)
+        : null;
     }
     if (!entry) return null;
     if (entry.environmentUrl !== this.deps.getEnvironmentUrl()) return null;
@@ -100,27 +151,38 @@ export class ModelCatalog {
     return entry.models.find(model => model.id === modelId)?.thinkingToggle;
   }
 
-  async list(force = false): Promise<ChatModelCatalog> {
-    const local = await this.listLocal(force);
-    if (!force && this.deps.getApiClient()) {
-      const hit = this.cached();
-      if (hit) return { models: hit };
-    }
-
+  async list(force: boolean | 'local' = false): Promise<ChatModelCatalog> {
     const api = this.deps.getApiClient();
-    if (!api) return local.length ? { models: local } : { models: [], error: 'Sign in to see models.' };
+    const entry = this.cache;
+    const hostedHit =
+      force !== true && api && entry?.environmentUrl === this.deps.getEnvironmentUrl() && Date.now() < entry.expiresAt
+        ? entry.models
+        : null;
+    // The device and the server are asked at the same time; neither waits on the other, and the list
+    // waits on neither the effort levels nor the reasoning floor, which update it when they land.
+    if (api && !hostedHit) this.refreshReasoning(api);
+    const [local, hosted] = await Promise.all([
+      this.listLocal(force !== false),
+      api && !hostedHit
+        ? api.get<{ models?: WireModel[] }>(MODELS_PATH).then(
+            response => ({ ok: true as const, wire: response?.models }),
+            (err: unknown) => ({ ok: false as const, err })
+          )
+        : null,
+    ]);
+    if (hostedHit) return { models: this.mergeLocal(hostedHit, local) };
+    if (!api || !hosted) return local.length ? { models: local } : { models: [], error: 'Sign in to see models.' };
 
-    let models: ChatModelOption[];
-    try {
-      const response = await api.get<{ models?: WireModel[] }>(MODELS_PATH);
-      models = selectUsableModels(response?.models);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+    if (!hosted.ok) {
+      const message = hosted.err instanceof Error ? hosted.err.message : String(hosted.err);
       this.deps.logger.warn(`CHAT: model list lookup failed: ${message}`);
       return local.length
         ? { models: local }
         : { models: [], error: 'Could not load the model list from this server.' };
     }
+    const environmentUrl = this.deps.getEnvironmentUrl();
+    const known = this.reasoning?.environmentUrl === environmentUrl ? this.reasoning.byId : undefined;
+    const models = selectUsableModels(hosted.wire, known);
 
     if (models.length === 0) {
       this.cache = null;
@@ -128,26 +190,100 @@ export class ModelCatalog {
       return { models: local };
     }
 
-    this.cache = {
-      environmentUrl: this.deps.getEnvironmentUrl(),
-      models,
-      expiresAt: Date.now() + CACHE_TTL_MS,
-    };
+    this.cache = { environmentUrl, wire: hosted.wire, models, expiresAt: Date.now() + CACHE_TTL_MS };
     this.deps.logger.debug(`CHAT: ${models.length} model(s) available`);
-    return { models: this.mergeLocal(models) };
+    return { models: this.mergeLocal(models, local) };
+  }
+
+  /** Starts one reasoning read per environment; a read that lands after the list rebuilds the cached one. */
+  private refreshReasoning(api: AuthenticatedApiClient): void {
+    const environmentUrl = this.deps.getEnvironmentUrl();
+    if (this.reasoningRead === environmentUrl) return;
+    this.reasoningRead = environmentUrl;
+    void this.readReasoning(api).then(byId => {
+      if (this.reasoningRead === environmentUrl) this.reasoningRead = null;
+      if (!byId || environmentUrl !== this.deps.getEnvironmentUrl()) return;
+      const previous = this.reasoning?.environmentUrl === environmentUrl ? this.reasoning.byId : undefined;
+      this.reasoning = { environmentUrl, byId };
+      if (previous && sameReasoning(previous, byId)) return;
+      const entry = this.cache;
+      if (entry?.environmentUrl !== environmentUrl) return;
+      this.cache = { ...entry, models: selectUsableModels(entry.wire, byId) };
+      this.deps.changed?.();
+    });
+  }
+
+  /**
+   * How every listed model reasons, or null when the server publishes nothing (an older server, a
+   * failed read). Any failure leaves the list itself alone: the models then keep the levels Desktop
+   * always offered.
+   */
+  private async readReasoning(api: AuthenticatedApiClient): Promise<HostedReasoningById | null> {
+    const reasoning = new Map<string, HostedReasoning>();
+    let cursor: string | null = null;
+    try {
+      for (let page = 0; page < PUBLIC_MODELS_MAX_PAGES; page++) {
+        const response: unknown = await api.get<unknown>(PUBLIC_MODELS_PATH, {
+          params: { limit: PUBLIC_MODELS_PAGE, ...(cursor ? { cursor } : {}) },
+          timeout: PUBLIC_MODELS_TIMEOUT_MS,
+        });
+        const read = parseReasoningPage(response);
+        if (!read) return null;
+        for (const [id, row] of read.rows) reasoning.set(id, row);
+        cursor = read.nextCursor;
+        if (!cursor) break;
+      }
+      if (cursor) {
+        this.deps.logger.warn(
+          `CHAT: effort levels read stopped at ${PUBLIC_MODELS_MAX_PAGES} pages; later models keep the fallback levels`
+        );
+      }
+    } catch (err) {
+      this.deps.logger.debug(`CHAT: effort levels unavailable: ${err instanceof Error ? err.message : 'unknown'}`);
+      return null;
+    }
+    return reasoning;
   }
 
   /** Device discovery never depends on the configured server or account. */
-  async listLocal(force = false): Promise<ChatModelOption[]> {
-    if (force || !this.localCache || Date.now() >= this.localCache.expiresAt) {
-      this.localCache = { models: await this.local.models(), expiresAt: Date.now() + 5_000 };
+  async listLocal(force = false, options?: ModelListOptions): Promise<ChatModelOption[]> {
+    if (!force && this.localCache && Date.now() < this.localCache.expiresAt) {
+      return withCurrentContexts(this.localCache.models);
     }
-    return this.localCache.models;
+    const started = ++this.localReads;
+    const models = await this.local.models(options);
+    if (started > this.localWritten) {
+      this.localWritten = started;
+      this.localCache = { models, expiresAt: Date.now() + 5_000 };
+    }
+    return withCurrentContexts(models);
   }
 
-  private mergeLocal(hosted: ChatModelOption[]): ChatModelOption[] {
-    const local = this.localCache && Date.now() < this.localCache.expiresAt ? this.localCache.models : [];
+  /** The last local list however old, without a round trip; null before the first list or after forgetLocal. */
+  lastLocal(): ChatModelOption[] | null {
+    return this.localCache ? withCurrentContexts(this.localCache.models) : null;
+  }
+
+  /** After the local context setting changes or a model turns out removed, so the next list reads Ollama again. */
+  forgetLocal(): void {
+    this.localCache = null;
+    this.localWritten = this.localReads;
+  }
+
+  /**
+   * After a server's health changed: the next list reads again while lastLocal keeps the rows, and a read in flight
+   * still caches its result, since a picker read can itself be what changed that health.
+   */
+  expireLocal(): void {
+    if (this.localCache) this.localCache = { ...this.localCache, expiresAt: 0 };
+  }
+
+  private mergeLocal(hosted: ChatModelOption[], local = this.freshLocal()): ChatModelOption[] {
     return [...hosted.filter(model => !local.some(candidate => candidate.id === model.id)), ...local];
+  }
+
+  private freshLocal(): ChatModelOption[] {
+    return this.localCache && Date.now() < this.localCache.expiresAt ? withCurrentContexts(this.localCache.models) : [];
   }
 
   /**
@@ -211,6 +347,19 @@ export class ModelCatalog {
 
 const VIDEO_MODELS_PATH = '/api/v1/video-models';
 
+/** A context that grew or fell back since the list was cached replaces the one it advertised. */
+function withCurrentContexts(models: ChatModelOption[]): ChatModelOption[] {
+  return models.map(model => {
+    const tokens = currentLocalContext(model.id);
+    if (tokens === undefined || tokens === model.contextWindow) return model;
+    return {
+      ...model,
+      contextWindow: tokens,
+      ...(model.controls ? { controls: withOllamaContext(model.controls, tokens) } : {}),
+    };
+  });
+}
+
 /** Image-generation model ids from the server's catalog, in the order it listed them. */
 export function selectImageModels(wire: unknown): string[] {
   if (!Array.isArray(wire)) return [];
@@ -228,27 +377,110 @@ export function selectImageModels(wire: unknown): string[] {
  * claims it read your files. Image, video and speech models are filtered for the same reason
  * the CLI filters them: they cannot answer a completion request at all.
  */
-export function selectUsableModels(wire: unknown): ChatModelOption[] {
+export function selectUsableModels(wire: unknown, reasoning?: HostedReasoningById): ChatModelOption[] {
   if (!Array.isArray(wire)) return [];
 
   return wire
     .filter((model): model is WireModel => !!model && typeof model === 'object')
     .filter(model => model.type === 'text' && model.supportsTools === true && typeof model.id === 'string')
-    .map(model => ({
-      id: model.id as string,
-      name: typeof model.name === 'string' && model.name ? model.name : (model.id as string),
-      ...(typeof model.backend === 'string' ? { backend: model.backend } : {}),
-      ...(typeof model.contextWindow === 'number' ? { contextWindow: model.contextWindow } : {}),
-      ...(typeof model.max_tokens === 'number' && model.max_tokens > 0 ? { maxOutputTokens: model.max_tokens } : {}),
-      // Carried through only when the server stated it. Absent is "not said", which the
-      // attachment gate treats differently from an explicit false - see ChatService.
-      ...(typeof model.supportsVision === 'boolean' ? { supportsVision: model.supportsVision } : {}),
-      // Decided here rather than read off the wire: the catalog does not report it, and the
-      // renderer has to disable the effort picker on a model that would ignore the field.
-      supportsReasoningEffort: supportsReasoningEffort(model.id as string),
-      supportsTools: true,
-      ...(model.backend === 'ollama' && model.can_think === true ? { thinkingToggle: true } : {}),
-    }));
+    .map(model => {
+      const id = model.id as string;
+      const maxOutputTokens =
+        typeof model.max_tokens === 'number' && model.max_tokens > 0 ? model.max_tokens : undefined;
+      const stated = reasoning?.get(id);
+      const controls = hostedControls(
+        {
+          id,
+          ...(typeof model.backend === 'string' ? { backend: model.backend } : {}),
+          canThink: model.can_think === true,
+          ...(typeof model.thinkingStyle === 'string' ? { thinkingStyle: model.thinkingStyle } : {}),
+          ...(maxOutputTokens ? { maxOutputTokens } : {}),
+          maxCompletionTokens: maxTokensParamOf(model.dispatchProfile) === 'max_completion_tokens',
+          ...(stated?.reasonsWithinOutputBudget !== undefined
+            ? { reasonsWithinOutputBudget: stated.reasonsWithinOutputBudget }
+            : {}),
+        },
+        stated?.efforts,
+        supportsReasoningEffort(id)
+      );
+      return {
+        id,
+        name: typeof model.name === 'string' && model.name ? model.name : id,
+        ...(typeof model.backend === 'string' ? { backend: model.backend } : {}),
+        ...(typeof model.releaseDate === 'string' && model.releaseDate ? { releaseDate: model.releaseDate } : {}),
+        ...(typeof model.contextWindow === 'number' ? { contextWindow: model.contextWindow } : {}),
+        ...(maxOutputTokens ? { maxOutputTokens } : {}),
+        // Carried through only when the server stated it. Absent is "not said", which the
+        // attachment gate treats differently from an explicit false - see ChatService.
+        ...(typeof model.supportsVision === 'boolean' ? { supportsVision: model.supportsVision } : {}),
+        // Always stated: the renderer disables the effort picker on a model that would ignore the field.
+        supportsReasoningEffort: controls.effort !== undefined,
+        // Direct Anthropic only: it is the one backend Desktop marks for caching (see supportsPromptCache).
+        ...(model.backend === 'anthropic' && supportsOneHourPromptCache({ id, backend: model.backend })
+          ? { supportsOneHourCache: true }
+          : {}),
+        supportsTools: true,
+        ...(model.backend === 'ollama' && model.can_think === true ? { thinkingToggle: true } : {}),
+        ...(model.disabled === true ? { disabled: true } : {}),
+        ...pricingOf(model.pricing),
+        controls,
+      };
+    });
+}
+
+function maxTokensParamOf(profile: unknown): unknown {
+  return profile && typeof profile === 'object' ? (profile as { maxTokensParam?: unknown }).maxTokensParam : undefined;
+}
+
+const KNOWN_EFFORTS: ReadonlySet<string> = new Set(CompletionReasoningEffortSchema.options);
+
+/** One page of `/api/v1/models`, or null when the answer is not that shape. */
+export function parseReasoningPage(
+  wire: unknown
+): { rows: [string, HostedReasoning][]; nextCursor: string | null } | null {
+  if (!wire || typeof wire !== 'object') return null;
+  const { data, next_cursor: nextCursor } = wire as { data?: unknown; next_cursor?: unknown };
+  if (!Array.isArray(data)) return null;
+  const rows = data.flatMap((row): [string, HostedReasoning][] => {
+    const {
+      id,
+      reasoning_efforts: levels,
+      reasons_within_output_budget: withinBudget,
+    } = (row ?? {}) as { id?: unknown; reasoning_efforts?: unknown; reasons_within_output_budget?: unknown };
+    if (typeof id !== 'string') return [];
+    const read: HostedReasoning = {
+      ...(Array.isArray(levels)
+        ? { efforts: levels.filter((level): level is ReasoningEffort => KNOWN_EFFORTS.has(level)) }
+        : {}),
+      ...(typeof withinBudget === 'boolean' ? { reasonsWithinOutputBudget: withinBudget } : {}),
+    };
+    return Object.keys(read).length > 0 ? [[id, read]] : [];
+  });
+  return { rows, nextCursor: typeof nextCursor === 'string' && nextCursor ? nextCursor : null };
+}
+
+/** Only well-formed tiers, so a malformed row prices nothing rather than a wrong figure. */
+function pricingOf(wire: unknown): Pick<ChatModelOption, 'pricing'> {
+  if (!wire || typeof wire !== 'object') return {};
+  const pricing: NonNullable<ChatModelOption['pricing']> = {};
+  const rate = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
+  for (const [key, tier] of Object.entries(wire)) {
+    const threshold = Number(key);
+    if (!Number.isFinite(threshold) || !tier || typeof tier !== 'object') continue;
+    const fields = tier as Record<string, unknown>;
+    const input = rate(fields.input);
+    const output = rate(fields.output);
+    if (input === undefined || output === undefined) continue;
+    const cacheRead = rate(fields.cache_read);
+    const cacheWrite = rate(fields.cache_write);
+    pricing[threshold] = {
+      input,
+      output,
+      ...(cacheRead !== undefined ? { cache_read: cacheRead } : {}),
+      ...(cacheWrite !== undefined ? { cache_write: cacheWrite } : {}),
+    };
+  }
+  return Object.keys(pricing).length > 0 ? { pricing } : {};
 }
 
 /**

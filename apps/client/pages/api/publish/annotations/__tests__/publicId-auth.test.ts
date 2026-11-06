@@ -49,7 +49,7 @@ vi.mock('@server/middlewares/apiKeyAuth', () => ({
 
 // The enforceMFA half of the admission is covered in optionalAuth.test.ts. Only that check is made
 // inert here, so the real admitsOptionalAuthUser (and the shim that calls it) still runs below.
-vi.mock('@server/auth/mfaEnforcement', () => ({
+vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
   isMfaEnrollmentOwed: async () => false,
   MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
 }));
@@ -108,6 +108,15 @@ describe('POST /api/publish/annotations/[publicId] - OAuth tokens cannot write',
 
   it('401s a pre-MFA (mfaPending) session and creates nothing', async () => {
     queueAuthResult({ id: 'u1', mfaPending: true });
+    const { res, promise } = post(undefined);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('401s a deletion-pending session and creates nothing', async () => {
+    queueAuthResult({ id: 'u1', deletion: { scheduledFor: new Date() } });
     const { res, promise } = post(undefined);
     await promise;
 

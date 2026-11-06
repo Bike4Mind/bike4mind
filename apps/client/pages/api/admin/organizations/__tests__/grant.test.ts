@@ -54,7 +54,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockSubCreate = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { create: (...a: unknown[]) => mockSubCreate(...a) },
 }));
 
@@ -62,7 +62,7 @@ vi.mock('@server/models/Subscription', () => ({
 vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
   getTeamPlanSettings: vi.fn(async () => ({ minSeats: 4, maxSeats: 100, creditsPerSeat: 50000 })),
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn() }));
 // parseAdminActionReason stays real so the reason 400s come from the route itself.
 vi.mock('@server/utils/adminAudit', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
@@ -71,9 +71,12 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
     return null;
   }),
 }));
+vi.mock('@server/entitlements/paidStanding', () => ({ priceAffectsEntitlements: vi.fn(() => true) }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { priceAffectsEntitlements } from '@server/entitlements/paidStanding';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import handler from '../grant';
 
 const BODY = {
@@ -126,6 +129,25 @@ describe('POST /api/admin/organizations/grant', () => {
     expect(res._getJSONData()).toMatchObject({ organizationId: 'org-1', name: 'Acme Corp' });
   });
 
+  it('wakes the owner entitlement cache when the org plan price affects entitlements', async () => {
+    const { run } = call({});
+    await run();
+    expect(sendToClient).toHaveBeenCalledWith('owner-1', 'ws-endpoint', {
+      action: 'invalidate_query',
+      queryKey: ['entitlements'],
+    });
+  });
+
+  it('skips the entitlements push when the price does not affect entitlements', async () => {
+    vi.mocked(priceAffectsEntitlements).mockReturnValueOnce(false);
+    const { run } = call({});
+    await run();
+    expect(sendToClient).not.toHaveBeenCalledWith('owner-1', 'ws-endpoint', {
+      action: 'invalidate_query',
+      queryKey: ['entitlements'],
+    });
+  });
+
   it('records org.credits.granted against the new organization', async () => {
     const { run } = call({});
     await run();
@@ -170,7 +192,13 @@ describe('POST /api/admin/organizations/grant', () => {
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        details: expect.objectContaining({ ownerId: 'owner-1', seats: 5, initialCredits: 1000, credits: 1000 }),
+        details: expect.objectContaining({
+          ownerId: 'owner-1',
+          seats: 5,
+          initialCredits: 1000,
+          credits: 1000,
+          subscriptionId: mockSubCreate.mock.calls[0][0].subscriptionId,
+        }),
       })
     );
   });

@@ -21,6 +21,8 @@ import type {
   BrowserTabSummary,
 } from '@shared/ipc';
 import { markAgentBrowserWindow } from '../../windows';
+import { ArtifactViewRegistry, serveArtifactView } from '../artifacts/artifactViews';
+import { ARTIFACT_SCHEME } from '../artifacts/sandboxProtocol';
 import type { BrowserContext, BrowserPage, BrowserProvider, BrowserTabInfo } from '../tools/types';
 import { CookieImporter } from './cookies/CookieImporter';
 import {
@@ -687,6 +689,7 @@ export class BrowserManager implements BrowserProvider {
   private readonly watchedWindows = new WeakSet<BrowserWindow>();
   /** Placement failures already logged, so a wedged page logs once rather than on every event. */
   private readonly warned = new Set<string>();
+  private readonly artifactViews = new ArtifactViewRegistry();
 
   /**
    * The user's own Chrome sessions, for sites they named. Public because the renderer drives it
@@ -788,6 +791,28 @@ export class BrowserManager implements BrowserProvider {
     return this.stateOf(sessionId);
   }
 
+  /**
+   * Show an HTML artifact full-size, from the "Open in browser" button on its card.
+   *
+   * The one way a `b4m-artifact:` page gets into this browser. It skips {@link navigate}'s
+   * http/https rule because main mints the url here, for content the renderer already shows in
+   * its sandboxed frame; typed addresses and the agent's tools still refuse the scheme. Opens a
+   * new tab when the active one is showing a page, so the agent's place is not lost.
+   */
+  async openArtifact(sessionId: string, title: string, content: string): Promise<BrowserPaneState> {
+    this.session();
+    const url = this.artifactViews.add(title, content);
+    const current = this.sessions.get(sessionId)?.active;
+    const page = current?.showable ? (this.openTab(sessionId, true) ?? current) : this.activeTab(sessionId);
+    try {
+      await page.navigate(url);
+    } catch (err) {
+      page.fail(err instanceof Error ? err.message : String(err));
+    }
+    this.apply();
+    return this.stateOf(sessionId);
+  }
+
   /** Back, forward or reload. The resulting navigation arrives on its own as a state push. */
   go(sessionId: string, action: BrowserGoAction): BrowserPaneState {
     const page = this.sessions.get(sessionId)?.active;
@@ -823,6 +848,7 @@ export class BrowserManager implements BrowserProvider {
   }
 
   closeAll(): void {
+    this.artifactViews.clear();
     this.pane = undefined;
     this.shown = undefined;
     const all = [...this.sessions.values()].flatMap(tabs => tabs.list);
@@ -1065,6 +1091,8 @@ export class BrowserManager implements BrowserProvider {
     partition.on('will-download', event => {
       event.preventDefault();
     });
+    // Only what openArtifact registered; see artifacts/artifactViews.
+    partition.protocol.handle(ARTIFACT_SCHEME, request => serveArtifactView(this.artifactViews, request.url));
 
     const pageOf = (id: number | undefined) => (id === undefined ? undefined : this.byContents.get(id));
     partition.webRequest.onBeforeRequest((details, callback) => {

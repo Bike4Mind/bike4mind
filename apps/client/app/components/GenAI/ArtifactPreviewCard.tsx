@@ -19,6 +19,7 @@ import { useSelectedAccount } from '@client/app/components/Credits/AccountSelect
 import { buildArtifactPublishWiring } from '@client/app/utils/publishApi';
 import type { ArtifactType } from '@bike4mind/common';
 import type { ReactArtifactGroupRole } from '@client/app/utils/reactArtifactGroup';
+import { reactPublishFiles } from '@client/app/utils/reactArtifactPublish';
 
 // Shared by copy / save / open-in-viewer: 18px glyphs dimmed to 70%, brightening to full
 // on hover, over the same hover fill the sidebar items use (notebooklist.hoverBg) rather
@@ -263,13 +264,14 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
         title,
         userId: String(shareUser.id),
         orgId: teamOrg?.id,
+        reactFiles: publishType === 'react' ? reactPublishFiles(reactGroup) : null,
       }),
     });
   };
 
   // Push live content changes to the Knowledge Base store. Guarded: a card that merely
   // mounts (scrolled back into view) must not overwrite the store with older content (#457).
-  useSelectedArtifactContentSync(artifactId, artifactType, contentKey, artifactContent);
+  useSelectedArtifactContentSync(artifactId, artifactType, contentKey, artifactContent, reactGroup);
 
   return (
     <Card

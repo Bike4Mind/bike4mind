@@ -9,10 +9,11 @@ on:
   pull_request:
     types: [opened, edited, synchronize]
     branches: [main]
-  # Also run on the merge queue so the required "validate" check reports there.
-  # A merge_group has no PR title to lint, so the job no-ops and passes; without
-  # this, enabling a merge queue would hang forever waiting on a check that never
-  # runs on merge_group.
+  # Also triggered by the merge queue so the required "validate" check reports there;
+  # without this, the queue would hang forever waiting on a check that never runs.
+  # A merge_group has no PR title to lint, so the job is skipped at the job level:
+  # a skipped required check counts as passing and, unlike a job of skipped steps,
+  # takes no runner slot.
   merge_group:
     branches: [main]
 
@@ -22,11 +23,12 @@ permissions:
 
 jobs:
   validate:
-    # Runs on the canonical repo for both pull_request and merge_group, so the
-    # required "validate" check always reports (forks are excluded and can't reach
-    # the merge queue anyway). The actual title lint is gated to real PRs below.
-    if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    # Canonical repo only (forks can't reach the merge queue anyway). Skipped on
+    # merge_group, where every step below would be skipped too.
+    if: >-
+      github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5') &&
+      github.event_name != 'merge_group'
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 10
     steps:
       - name: Validate PR title (Conventional Commits)

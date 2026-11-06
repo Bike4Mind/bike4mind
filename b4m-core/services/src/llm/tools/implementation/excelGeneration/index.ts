@@ -2,6 +2,7 @@ import { ToolContext, ToolDefinition } from '../../base/types';
 import writeXlsxFile from 'write-excel-file/node';
 import type { CellObject, Sheet, SheetData } from 'write-excel-file/node';
 import { v4 as uuidv4 } from 'uuid';
+import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
 import { z } from 'zod';
 import { persistGeneratedFileAsFabFile } from '../../helpers/persistGeneratedFile';
 
@@ -504,8 +505,8 @@ function sanitizeFilename(filename: string): string {
   // Remove dangerous characters (including control chars U+0000-U+001F)
   // eslint-disable-next-line no-control-regex
   name = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_');
-  // Limit length
-  name = name.slice(0, 100);
+  // Limit length by code point so an emoji's surrogate pair is never split
+  name = Array.from(name).slice(0, 100).join('');
   // Ensure it's not empty
   if (!name) name = 'spreadsheet';
   return name;
@@ -537,7 +538,7 @@ export const excelGenerationTool: ToolDefinition = {
         // Upload to generated content storage (same bucket as images)
         await context.imageGenerateStorage.upload(buffer, filename, {
           ContentType: XLSX_MIME,
-          ContentDisposition: `attachment; filename="${sanitizedName}.xlsx"`,
+          ContentDisposition: buildContentDisposition(`${sanitizedName}.xlsx`),
         });
 
         // Persist as a session FabFile so the spreadsheet is browsable + downloadable in the

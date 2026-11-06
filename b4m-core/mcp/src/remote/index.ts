@@ -15,3 +15,4 @@ export {
   type RemoteMcpTransportKind,
 } from './RemoteMcpClient';
 export * from './validateRemoteMcpUrl';
+export * from './oauth';

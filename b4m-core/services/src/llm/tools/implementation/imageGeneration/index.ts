@@ -1,3 +1,5 @@
+import { createToolModelAdmission } from '../../helpers/modelAdmission';
+import { toolModelRefusal } from '../../helpers/toolModelRefusal';
 import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import type { ImageToolCostInput, ImageToolFinishData } from '../../imageToolBilling';
@@ -27,7 +29,12 @@ import {
   getSettingsMap,
   getSettingsValue,
 } from '@bike4mind/utils';
-import { BFLImageService, ImageModerationBlockedError, downloadImageAsBuffer } from '@bike4mind/utils';
+import {
+  BFLImageService,
+  ExpectedImageGenerationError,
+  downloadImageAsBuffer,
+  logImageGenerationFailure,
+} from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { ImageGenerateParams } from 'openai/resources/images';
 import { getEffectiveApiKey } from '../../../../apiKeyService';
@@ -102,7 +109,12 @@ async function moderateToolImage(
 export async function processAndStoreImages(
   images: string[],
   context: ToolContext,
-  { model, provider, prompt }: { model: string; provider: string; prompt: string }
+  {
+    model,
+    provider,
+    prompt,
+    request,
+  }: { model: string; provider: string; prompt: string; request: Record<string, unknown> }
 ): Promise<string[]> {
   await context.statusUpdate({}, 'Storing images...');
   // Unique file names for an n>1 batch, which would otherwise share the Date.now() suffix.
@@ -128,7 +140,7 @@ export async function processAndStoreImages(
       await saveGeneratedAssetFromTool(context, {
         bytes: buffer,
         contentType: mimeType,
-        generation: { generator: 'image', provider, modelId: model, jobId: `${batchId}-${index}`, prompt },
+        generation: { generator: 'image', provider, modelId: model, jobId: `${batchId}-${index}`, prompt, request },
       });
 
       return path;
@@ -152,14 +164,26 @@ async function updateQuestAndReturnMarkdown(
   return instructions;
 }
 
+/**
+ * An expected provider failure (content policy, provider timeout) becomes the tool result, logged at
+ * warn, so the model can relay the reason instead of the run failing at error level. `null` otherwise.
+ */
+function expectedFailureToolResult(error: unknown, logMessage: string): string | null {
+  if (!(error instanceof ExpectedImageGenerationError)) {
+    return null;
+  }
+  logImageGenerationFailure(Logger.globalInstance, logMessage, error);
+  return `Error: ${error.message}`;
+}
+
 export const imageGenerationTool: ToolDefinition = {
   name: 'image_generation',
-  implementation: (context, config: GenerateImageToolCall) => ({
+  implementation: (context, config: unknown) => ({
     toolFn: async val => {
       // Get imageConfig from config (passed from client via imageConfig).
       // When no imageConfig is pre-set, signal via pendingAction so the caller
       // can handle model selection (e.g., show a picker UI).
-      const imageConfig = config;
+      const imageConfig = config as GenerateImageToolCall | undefined;
       if (!imageConfig) {
         const { prompt } = val as { prompt?: string };
         await context.statusUpdate({
@@ -213,6 +237,14 @@ export const imageGenerationTool: ToolDefinition = {
       const wantsTransparent = background === 'transparent';
       const model =
         wantsTransparent && rejectsTransparentBackground(resolvedModel) ? ImageModels.GPT_IMAGE_1_5 : resolvedModel;
+      const refusal = await toolModelRefusal(
+        context,
+        await createToolModelAdmission(context),
+        model,
+        'image_generation'
+      );
+      if (refusal) return refusal;
+
       const safety_tolerance = imageConfig?.safety_tolerance || toolSafetyTolerance;
       const width = imageConfig?.width;
       const height = imageConfig?.height;
@@ -240,6 +272,23 @@ export const imageGenerationTool: ToolDefinition = {
               ? 'local-image'
               : 'openai';
 
+      // The arguments this call ran with, so a later take can reload them.
+      const request = {
+        model,
+        prompt,
+        n,
+        ...(size && { size }),
+        ...(quality && { quality }),
+        ...(width !== undefined && { width }),
+        ...(height !== undefined && { height }),
+        ...(aspect_ratio && { aspect_ratio }),
+        ...(seed != null && { seed }),
+        ...(safety_tolerance !== undefined && { safety_tolerance }),
+        ...(prompt_upsampling !== undefined && { prompt_upsampling }),
+        ...(output_format && { output_format }),
+        ...(background && { background }),
+      };
+
       // onStart only gates affordability; the charge waits for onFinish.
       const costInput: ImageToolCostInput = { model, n, size, quality };
       await context.onStart?.('image_generation', { ...costInput, prompt });
@@ -250,14 +299,19 @@ export const imageGenerationTool: ToolDefinition = {
         const apiKey = await getEffectiveApiKey(context.userId, { type: ApiKeyType.xai }, { db: context.db });
         const service = new XAIImageService(requireApiKey(apiKey, 'xAI (Grok)', context.logger), context.logger);
 
-        const images = await service.generate(prompt, {
-          n,
-          model,
-          user: context.userId,
-          safety_tolerance,
-        });
+        let images: string[];
+        try {
+          images = await service.generate(prompt, { n, model, user: context.userId, safety_tolerance });
+        } catch (xaiError) {
+          const result = expectedFailureToolResult(
+            xaiError,
+            `[image_generation] xAI image generation failed (model: ${model})`
+          );
+          if (result) return result;
+          throw xaiError;
+        }
 
-        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
+        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt, request });
 
         return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
       } else if (isBFLModel) {
@@ -283,10 +337,16 @@ export const imageGenerationTool: ToolDefinition = {
             safety_tolerance: safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT,
           });
 
-          const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
+          const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt, request });
 
           return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
         } catch (bflError) {
+          const result = expectedFailureToolResult(
+            bflError,
+            `[image_generation] BFL image generation failed (model: ${model})`
+          );
+          if (result) return result;
+
           // Log status + message only. Never log the raw AxiosError: its
           // `config.headers` carries the BFL `x-key`, which would leak the API
           // key into CloudWatch in plaintext.
@@ -321,20 +381,30 @@ export const imageGenerationTool: ToolDefinition = {
         const apiKey = await getEffectiveApiKey(context.userId, { type: ApiKeyType.gemini }, { db: context.db });
         const service = new GeminiImageService(requireApiKey(apiKey, 'Google Gemini', context.logger), context.logger);
 
-        const images = await service.generate(prompt, {
-          n,
-          model,
-          aspect_ratio: aspect_ratio,
-          output_format: nonWebpOutputFormat ?? 'png',
-          safety_tolerance: safety_tolerance,
-          // prompt_upsampling/seed are intentionally passed through here - Gemini's own adapter
-          // (GeminiImageService.buildGenerationConfig()) is the single place that refuses to
-          // forward them to Google's API, since it rejects their mere presence.
-          prompt_upsampling: prompt_upsampling,
-          seed: seed,
-        });
+        let images: string[];
+        try {
+          images = await service.generate(prompt, {
+            n,
+            model,
+            aspect_ratio: aspect_ratio,
+            output_format: nonWebpOutputFormat ?? 'png',
+            safety_tolerance: safety_tolerance,
+            // prompt_upsampling/seed are intentionally passed through here - Gemini's own adapter
+            // (GeminiImageService.buildGenerationConfig()) is the single place that refuses to
+            // forward them to Google's API, since it rejects their mere presence.
+            prompt_upsampling: prompt_upsampling,
+            seed: seed,
+          });
+        } catch (geminiError) {
+          const result = expectedFailureToolResult(
+            geminiError,
+            `[image_generation] Gemini image generation failed (model: ${model})`
+          );
+          if (result) return result;
+          throw geminiError;
+        }
 
-        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
+        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt, request });
 
         return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
       } else if (isLocalImageModel) {
@@ -361,7 +431,7 @@ export const imageGenerationTool: ToolDefinition = {
           ...resolveImageDimensions({ width, height, size }),
         });
 
-        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
+        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt, request });
 
         return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
       } else {
@@ -387,17 +457,15 @@ export const imageGenerationTool: ToolDefinition = {
           // messages; return them as the tool result so the model can relay a clear reason instead
           // of the run dying with a generic "Agent execution failed".
           const message = openaiError instanceof Error ? openaiError.message : 'Unknown error';
-          if (openaiError instanceof ImageModerationBlockedError) {
-            Logger.globalInstance.warn(`[WARN] OpenAI image generation blocked by content policy (model: ${model})`, {
-              requestId: openaiError.requestId,
-            });
-          } else {
-            console.error(`[ERROR] OpenAI image generation failed (model: ${model}): ${message}`);
-          }
+          logImageGenerationFailure(
+            Logger.globalInstance,
+            `[image_generation] OpenAI image generation failed (model: ${model}): ${message}`,
+            openaiError
+          );
           return `Error: ${message}`;
         }
 
-        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
+        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt, request });
 
         return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
       }
@@ -431,7 +499,7 @@ export const imageGenerationTool: ToolDefinition = {
             description:
               "The quality tier of the image to generate (OpenAI GPT-image models only). If the user states a tier (e.g. 'low', 'medium', 'high'), pass it through. Omit this field when the user does not state one, so their saved preference applies. Legacy values are accepted: 'standard' maps to 'medium' and 'hd' to 'high'.",
             // xhigh/max only for a 2.5 model, so the model is never offered a tier that renders as 'high'.
-            enum: isGPTImage25Model(config?.model)
+            enum: isGPTImage25Model((config as GenerateImageToolCall | undefined)?.model)
               ? [...TOOL_SELECTABLE_IMAGE_QUALITIES]
               : TOOL_SELECTABLE_IMAGE_QUALITIES.filter(quality => !isExtendedGptImageQuality(quality)),
           },

@@ -18,6 +18,7 @@ describe('toPublicSession', () => {
       retrievalTags: [],
       lakeScopeExplicit: true,
       includeLibraryFiles: true,
+      promptCacheTtl: '1h',
       lastUsedModel: 'model',
       firstCreated: new Date('2026-01-01T00:00:00Z'),
       lastUpdated: new Date('2026-01-02T00:00:00Z'),

@@ -9,5 +9,6 @@ export * from './resolveOwnedApiKey';
 export * from './revoke';
 export * from './rotate';
 export * from './spendCap';
+export * from './trust';
 export * from './updateEmbedKey';
 export * from './validate';

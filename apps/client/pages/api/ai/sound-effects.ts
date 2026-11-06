@@ -1,3 +1,5 @@
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+import { DEFAULT_SOUND_MODEL_ID } from '@bike4mind/common';
 import { randomUUID } from 'crypto';
 import {
   isSupportedElevenLabsFormat,
@@ -14,7 +16,7 @@ import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { providerBusyHttpError } from '@server/utils/providerBusyHttpError';
-import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
+import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 import { AUDIO_VENDOR_API_KEY_TYPE } from '@server/utils/audioVendorApiKeyType';
@@ -47,6 +49,8 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
   if (format !== undefined && !SUPPORTS_OUTPUT_FORMAT[provider](format)) {
     throw new UnprocessableEntityError(`The ${provider} provider does not support the '${format}' output format`);
   }
+
+  await (await createModelAdmission(req.user!)).assert(DEFAULT_SOUND_MODEL_ID);
 
   const apiKey = await apiKeyService.getEffectiveApiKey(
     userId,
@@ -182,6 +186,13 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
               prompt: text,
               ...(durationSeconds !== undefined && { durationSeconds }),
               ...(promptInfluence !== undefined && { promptInfluence }),
+              request: {
+                provider,
+                text,
+                ...(durationSeconds !== undefined && { durationSeconds }),
+                ...(promptInfluence !== undefined && { promptInfluence }),
+                ...(format !== undefined && { format }),
+              },
             },
           },
           req.logger

@@ -1,4 +1,5 @@
 import { Resource } from 'sst';
+import { getUserEntitlements } from '@server/entitlements';
 import {
   resolveToolAvailability,
   buildSharedTools,
@@ -89,6 +90,7 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
     const toolDeps: ToolBuilderDeps = {
       userId: ownerUserId,
       user: owner,
+      getEntitlements: () => getUserEntitlements(owner),
       logger: config.logger,
       retrievalFilter: config.retrievalFilter,
       db: {

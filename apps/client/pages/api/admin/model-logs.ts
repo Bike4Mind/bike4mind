@@ -2,18 +2,77 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { ApiKeyScope, IChatHistoryItemDocument, redactPromptMetaForViewer } from '@bike4mind/common';
+import { ApiKeyScope } from '@bike4mind/common';
+import type { PipelineStage, Types } from 'mongoose';
 import { z } from 'zod';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { dateParam } from '@server/utils/dateParam';
+import { MODEL_LOGS_MAX_PAGE } from '@client/shared/modelLogs';
 
-// Query parameter schema
+export const MODEL_LOGS_MAX_LIMIT = 100;
+const MODEL_LOGS_DEFAULT_LIMIT = 25;
+const ARTIFACT_PREVIEW_CHARS = 100;
+
 const querySchema = z.object({
   startDate: dateParam.optional(),
   endDate: dateParam.optional(),
   model: z.string().optional(),
   search: z.string().optional(),
+  page: z.coerce.number().int().min(1).max(MODEL_LOGS_MAX_PAGE).default(1),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .default(MODEL_LOGS_DEFAULT_LIMIT)
+    .transform(limit => Math.min(limit, MODEL_LOGS_MAX_LIMIT)),
 });
+
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// The tab sends a bare YYYY-MM-DD end date meaning "through that day"; `$lte` its midnight
+// dropped every log from the end date itself.
+const endDateBound = (endDate: string) =>
+  DATE_ONLY.test(endDate) ? { $lt: new Date(Date.parse(endDate) + DAY_MS) } : { $lte: new Date(endDate) };
+
+const arrayLength = (path: string) => ({ $cond: [{ $isArray: path }, { $size: path }, 0] });
+
+// Only what a list card renders. The full promptMeta (tool output, citations, artifacts) made a
+// wide date range overflow the Lambda response limit; it is served per log by model-logs/[id].
+const LIST_PROJECTION = {
+  timestamp: 1,
+  modelName: '$promptMeta.model.name',
+  totalResponseTime: '$promptMeta.performance.totalResponseTime',
+  inputTokens: '$promptMeta.tokenUsage.inputTokens',
+  outputTokens: '$promptMeta.tokenUsage.outputTokens',
+  attachedFileCount: arrayLength('$promptMeta.context.attachedFiles'),
+  messageHistoryLength: '$promptMeta.context.messageHistoryLength',
+  completedStepCount: arrayLength('$promptMeta.executionTracking.completedSteps'),
+  failedStepCount: arrayLength('$promptMeta.executionTracking.failedSteps'),
+  artifacts: {
+    $map: {
+      input: { $cond: [{ $isArray: '$promptMeta.artifacts' }, '$promptMeta.artifacts', []] },
+      in: {
+        type: '$$this.type',
+        preview: { $substrCP: [{ $ifNull: ['$$this.content', ''] }, 0, ARTIFACT_PREVIEW_CHARS] },
+      },
+    },
+  },
+};
+
+type ModelLogSummaryRow = {
+  _id: Types.ObjectId;
+  timestamp: Date;
+  modelName?: string;
+  totalResponseTime?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  attachedFileCount: number;
+  messageHistoryLength?: number;
+  completedStepCount: number;
+  failedStepCount: number;
+  artifacts: { type: string; preview: string }[];
+};
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
   asyncHandler(async (req, res) => {
@@ -23,20 +82,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
     }
 
     try {
-      console.log('Model logs route hit');
+      const { startDate, endDate, model, search, page, limit } = querySchema.parse(req.query);
 
-      // Validate query parameters
-      const { startDate, endDate, model, search } = querySchema.parse(req.query);
-      console.log('Query parameters:', { startDate, endDate, model, search });
+      // aggregate/countDocuments skip the softDeletePlugin's find hook, so filter tombstones here.
+      const query: Record<string, unknown> = { deletedAt: null };
 
-      // Build query
-      const query: any = {};
-
-      // Add date range filter
       if (startDate || endDate) {
-        query.timestamp = {};
-        if (startDate) query.timestamp.$gte = new Date(startDate);
-        if (endDate) query.timestamp.$lte = new Date(endDate);
+        query.timestamp = {
+          ...(startDate ? { $gte: new Date(startDate) } : {}),
+          ...(endDate ? endDateBound(endDate) : {}),
+        };
       }
 
       // Add model filter
@@ -68,36 +123,23 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
         ];
       }
 
-      console.log('MongoDB query:', JSON.stringify(query, null, 2));
-
-      // Fetch logs from database
-      const logs = await Quest.find(query).select('promptMeta timestamp').sort({ timestamp: -1 }).limit(1000);
-
-      console.log('Found logs:', logs.length);
-
-      // Transform logs to match the expected format
-      // This route serves logs across ALL users to any admin - redact the same owner-only
-      // fields (functionCalls[].returnValue/.error) every other cross-user read path does,
-      // rather than trusting every future reader of this endpoint to redact it themselves.
-      const transformedLogs = logs.map((log: IChatHistoryItemDocument) => {
-        // log.promptMeta is a hydrated Mongoose subdocument, not a plain object - its declared
-        // type has no toJSON, but the runtime instance has one. redactPromptMetaForViewer's
-        // shallow spread needs a clean plain object; spreading the raw subdocument directly
-        // leaked the unredacted returnValue right back in via its internal _doc/$__ structure.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- runtime-only toJSON, not on the declared PromptMeta type
-        const plainPromptMeta = (log.promptMeta as any)?.toJSON?.() ?? log.promptMeta;
-        return {
-          id: log.id,
-          timestamp: log.timestamp.toISOString(),
-          ...redactPromptMetaForViewer(plainPromptMeta, false),
-        };
-      });
-
-      console.log('Transformed logs:', transformedLogs.length);
+      const pipeline: PipelineStage[] = [
+        { $match: query },
+        { $sort: { timestamp: -1, _id: -1 } },
+        { $skip: (page - 1) * limit },
+        { $limit: limit },
+        { $project: LIST_PROJECTION },
+      ];
+      const [rows, total] = await Promise.all([
+        Quest.aggregate<ModelLogSummaryRow>(pipeline),
+        Quest.countDocuments(query),
+      ]);
 
       res.json({
-        logs: transformedLogs,
-        total: transformedLogs.length,
+        logs: rows.map(({ _id, ...row }) => ({ id: _id.toString(), ...row, timestamp: row.timestamp.toISOString() })),
+        total,
+        page,
+        limit,
       });
     } catch (error) {
       console.error('Error fetching model logs:', error);

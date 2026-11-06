@@ -17,7 +17,7 @@ import {
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { CreditHolderType, ICreditHolderMethods } from '@bike4mind/common';
+import { CreditHolderType, ICreditHolderMethods, assignConsumptionFIFO, computeConsumption } from '@bike4mind/common';
 import { creditService } from '@bike4mind/services';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
@@ -64,8 +64,8 @@ export async function processHolder(
         return { expiredLots: 0, expiredCredits: 0 };
       }
 
-      const consumption = creditService.computeConsumption(lots, holder.currentCredits);
-      const assigned = creditService.assignConsumptionFIFO(lots, consumption);
+      const consumption = computeConsumption(lots, holder.currentCredits);
+      const assigned = assignConsumptionFIFO(lots, consumption);
 
       let remainingBalance = holder.currentCredits;
       let expiredLots = 0;

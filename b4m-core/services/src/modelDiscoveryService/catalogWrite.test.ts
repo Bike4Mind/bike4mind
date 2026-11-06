@@ -1062,13 +1062,9 @@ describe('planCatalogWrites', () => {
 
       const providerDown = run([models], { rows: cleared.rows });
       expect(providerDown.rows).toEqual([]);
-      expect(providerDown.dropped).toContainEqual({
-        source: 'models.dev',
-        modelId: 'gpt-6',
-        reason:
-          `deprecationDate ${FUTURE} refused: openai reported the model "active" with no deprecation date ` +
-          'on an earlier run and is not reporting this run',
-      });
+      expect(providerDown.dropped).toEqual([
+        { source: 'models.dev', modelId: 'gpt-6', reason: 'record carries no usable fields' },
+      ]);
 
       const providerBack = run([openaiUndated, models], { rows: cleared.rows });
       expect(providerBack.rows).toEqual([]);
@@ -1085,19 +1081,19 @@ describe('planCatalogWrites', () => {
     const silent = { name: 'openai', kind: 'provider' as const, records: [] };
     it.each([
       {
-        name: 'does not extend a down aggregator undated word to another aggregator with no provider this run',
+        name: 'withholds an unconfirmed date when the prior contributor was another aggregator',
         contributions: [litellmDate],
         previous: creditedTo('models.dev'),
         providerSourceNames: undefined,
       },
       {
-        name: 'lets an aggregator date through when the credited provider is not configured',
+        name: 'withholds an unconfirmed date when the credited provider is not configured',
         contributions: [litellmDate],
         previous: creditedTo('openai'),
         providerSourceNames: new Set<string>(),
       },
       {
-        name: 'does not apply the down-provider fallback when the provider ran but did not list the model',
+        name: 'withholds an unconfirmed date when the provider ran but did not list the model',
         contributions: [silent, litellmDate],
         previous: creditedTo('openai'),
         providerSourceNames: undefined,
@@ -1106,7 +1102,7 @@ describe('planCatalogWrites', () => {
       const result = run(contributions, previous, providerSourceNames);
 
       expect(result.dropped.filter(d => d.reason.includes('earlier run'))).toEqual([]);
-      expect(result.rows[0].patch.lifecycle).toEqual({ status: 'active', deprecationDate: FUTURE });
+      expect(result.rows).toEqual([]);
     });
 
     it('keeps the date when only an aggregator speaks to the lifecycle', () => {
@@ -2337,6 +2333,71 @@ describe('planCatalogWrites', () => {
         'gpt-6-astra',
         'gpt-6-astra-2026-09-01',
       ]);
+    });
+
+    it('refuses the alias of a dated snapshot a static adapter table ships', () => {
+      // The seed holds only the snapshot, so `base` does not; a named alias would
+      // otherwise list as a second "GPT-6 Astra" next to the static entry.
+      const result = introduce([astra()], { staticModelIds: new Set(['gpt-6-astra-2026-09-01']) });
+
+      expect(result.rows).toHaveLength(0);
+      expect(result.dropped).toContainEqual({
+        source: 'openai',
+        modelId: 'gpt-6-astra',
+        reason: 'id is the alias of a dated snapshot the catalog already holds',
+      });
+      expect(result.sightedModelIds.has('gpt-6-astra')).toBe(true);
+    });
+
+    it('refuses the alias of a dated snapshot the catalog holds', () => {
+      const base = asBase(
+        [],
+        [
+          seedRow(
+            {
+              id: 'gpt-6-astra-2026-09-01',
+              vendor: 'openai',
+              backend: 'openai',
+              type: 'text',
+              name: 'GPT-6 Astra',
+              contextWindow: 400_000,
+            },
+            ['identity', 'limits']
+          ),
+        ]
+      );
+
+      expect(introduce([astra()], { base }).rows).toHaveLength(0);
+    });
+
+    it('still introduces an alias the static adapter tables ship next to their snapshot', () => {
+      const result = introduce([astra()], { staticModelIds: new Set(['gpt-6-astra', 'gpt-6-astra-2026-09-01']) });
+
+      expect(result.dropped.map(drop => drop.reason)).not.toContain(
+        'id is the alias of a dated snapshot the catalog already holds'
+      );
+    });
+
+    it('still introduces an alias whose only dated sibling is unheld', () => {
+      const result = introduce([astra()], { staticModelIds: new Set(['gpt-6-nova-2026-09-01']) });
+
+      expect(result.diff.map(entry => entry.modelId)).toEqual(['gpt-6-astra']);
+    });
+
+    it('keeps updating an alias row the catalog already holds next to its snapshot', () => {
+      const introduced = introduce([astra()]);
+      const row = introduced.rows[0];
+      const result = introduce([astra({ contextWindow: 1_050_000 })], {
+        base: asBase([row]),
+        priorDiscoveryGroups: new Map([[row.modelId, row.ownedGroups]]),
+        staticModelIds: new Set(['gpt-6-astra-2026-09-01']),
+        runStartedAt: new Date(RUN_AT.getTime() + 60_000),
+      });
+
+      expect(result.dropped.map(drop => drop.reason)).not.toContain(
+        'id is the alias of a dated snapshot the catalog already holds'
+      );
+      expect(result.diff[0]).toMatchObject({ modelId: 'gpt-6-astra', kind: 'updated' });
     });
 
     it('keeps updating a snapshot the catalog already holds', () => {

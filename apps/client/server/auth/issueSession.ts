@@ -6,6 +6,7 @@ import type { Response } from 'express';
 import { authTokenGenerator } from './tokenGenerator';
 import { buildSessionDevice } from './sessionDevice';
 import { recordLoginEvent } from './networkMeta';
+import { withAccountNotPurging } from './withAccountNotPurging';
 import { setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 
 interface RequestLike {
@@ -33,24 +34,28 @@ export async function issueSessionForRequest(
     createdVia: AuthSessionCreatedVia;
     tokenVersion: number;
     impersonatedBy?: string | null;
+    impersonationExpiresAt?: Date;
     clientId?: string | null;
     device?: IAuthSessionDevice;
   }
 ): Promise<{ accessToken: string; refreshToken: string; sid: string }> {
-  const session = await authSessionService.issueSession(
-    userId,
-    {
-      createdVia: params.createdVia,
-      tokenVersion: params.tokenVersion,
-      impersonatedBy: params.impersonatedBy,
-      clientId: params.clientId,
-      device: params.device ?? buildSessionDevice(req),
-    },
-    {
-      db: { authSessions: authSessionRepository },
-      signAccessToken: (id, tv, extra) => authTokenGenerator.signAccessToken(id, tv, extra),
-      logger: req.logger,
-    }
+  const session = await withAccountNotPurging(userId, () =>
+    authSessionService.issueSession(
+      userId,
+      {
+        createdVia: params.createdVia,
+        tokenVersion: params.tokenVersion,
+        impersonatedBy: params.impersonatedBy,
+        impersonationExpiresAt: params.impersonationExpiresAt,
+        clientId: params.clientId,
+        device: params.device ?? buildSessionDevice(req),
+      },
+      {
+        db: { authSessions: authSessionRepository },
+        signAccessToken: (id, tv, extra) => authTokenGenerator.signAccessToken(id, tv, extra),
+        logger: req.logger,
+      }
+    )
   );
   if (!NOT_A_LOGIN.has(params.createdVia)) {
     await recordLoginEvent({ req, userId, method: params.createdVia });

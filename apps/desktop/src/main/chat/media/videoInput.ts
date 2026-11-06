@@ -1,6 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
-import { isWithin, PathAccessDenied, physicalTarget, resolveWithinRoots } from '../tools/paths';
+import { PathAccessDenied, physicalTarget, resolveWithinRoots, withinGuarded } from '../tools/paths';
 import { protectionFor } from '../tools/sandbox';
 import type { ToolContext } from '../tools/types';
 import { MediaToolError, type MediaApiClient } from './MediaApiClient';
@@ -62,10 +62,7 @@ export async function resolveInputImage(
 
   const path = await resolveWithinRoots(requestedPath, context.roots, context.workingDirectory);
   const real = await physicalTarget(path);
-  if (
-    (context.protectedPaths ?? []).some(guarded => isWithin(guarded, real) || isWithin(guarded, path)) ||
-    protectionFor([path, real], 'read')
-  ) {
+  if (withinGuarded(context.protectedPaths ?? [], [path, real]) || protectionFor([path, real], 'read')) {
     throw new PathAccessDenied(
       requestedPath,
       `Refused: ${requestedPath} is a protected location and cannot be uploaded.`

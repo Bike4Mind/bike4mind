@@ -63,6 +63,10 @@ vi.mock('sst', () => ({
     SLACK_ERROR_REPORTING_WEBHOOK_URL: { value: 'https://hooks.slack.com/test-error' },
     GOOGLE_CLIENT_ID: { value: 'test-google-client-id' },
     GOOGLE_CLIENT_SECRET: { value: 'test-google-client-secret' },
+    APPLE_CLIENT_ID: { value: 'not-configured' },
+    APPLE_TEAM_ID: { value: 'not-configured' },
+    APPLE_KEY_ID: { value: 'not-configured' },
+    APPLE_PRIVATE_KEY: { value: 'not-configured' },
     GITHUB_CLIENT_ID: { value: 'test-github-client-id' },
     GITHUB_CLIENT_SECRET: { value: 'test-github-client-secret' },
     GITHUB_LAKE_APP_CLIENT_ID: { value: 'test-github-lake-app-client-id' },
@@ -134,4 +138,58 @@ vi.mock('@/app/contexts/WebsocketContext', () => ({
     send: vi.fn(),
     isConnected: false,
   }),
+}));
+
+// The default per-user write limit (defaultWriteRateLimit.ts) reads admin settings and a Mongo
+// counter on every signed-in write that baseApi serves, so route suites that stub the database
+// would hang on it. Pass through by default; its own suite unmocks it.
+vi.mock('@server/middlewares/defaultWriteRateLimit', () => ({
+  defaultWriteRateLimit: (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
+// The per-user upload allowance (fileUploadBudget.ts) resolves the caller's tier and a Mongo counter on
+// every upload door, so route suites that stub the database would hang on it. Pass through by default;
+// its own suite unmocks it.
+vi.mock('@server/files/fileUploadBudget', () => ({
+  consumeFileUploadBudget: async () => undefined,
+}));
+
+// Same for the pending-upload cap (pendingUploads.ts), which reads the tier and aggregates FabFile:
+// admits everything with nothing in flight by default; its own suites unmock it.
+vi.mock('@server/files/pendingUploads', () => ({
+  PENDING_UPLOAD_WINDOW_MS: 30 * 60 * 1000,
+  PENDING_UPLOAD_LIMITED: 'pending_upload_limit',
+  admitPendingUploads: async () => ({ count: 0, bytesFor: () => 0 }),
+}));
+
+// The `app` surface of the IP-block gate (checkBlockedIP.ts, mounted on every authenticated write
+// by baseApi) reads the active `all` blocks from Mongo. Suites that drive the real baseApi chain
+// with connectDB stubbed would wait out Mongoose's 10s command buffer on each write, so that
+// surface passes through by default. The `login` surface stays real for the sign-in suites.
+// Suites that exercise the app surface mock the module themselves or `vi.unmock` it.
+vi.mock('@server/middlewares/checkBlockedIP', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/middlewares/checkBlockedIP')>();
+  const passThrough: ReturnType<typeof actual.checkBlockedIP> = (_req, _res, next) => next();
+  return {
+    ...actual,
+    checkBlockedIP: (options: Parameters<typeof actual.checkBlockedIP>[0] = {}) =>
+      options.surface === 'app' ? passThrough : actual.checkBlockedIP(options),
+    ipBlockRefusal: async (...args: Parameters<typeof actual.ipBlockRefusal>) =>
+      args[1] === 'app' ? null : actual.ipBlockRefusal(...args),
+  };
+});
+
+// The paid-only API key switch (apiKeyAccessGate.ts) reads admin settings and subscriptions, and
+// defaults to paid on hosted, so every test that authenticates a key or CLI session would need a
+// seeded subscription. Allow by default; suites that exercise the gate mock or unmock it per file.
+// The real module is not spread in: it imports the Subscription model, which suites that stub
+// @bike4mind/database cannot load.
+vi.mock('@server/utils/apiKeyAccessGate', () => ({
+  API_KEY_ACCESS_DENIED_MESSAGE: 'API keys require an active paid subscription',
+  CLI_ACCESS_DENIED_MESSAGE: 'The CLI and desktop app require an active paid subscription',
+  SUBSCRIPTION_REQUIRED_ERROR: 'subscription_required',
+  isApiKeyAccessAllowed: async () => true,
+  describeApiKeyAccess: async () => ({ mode: 'all', allowed: true, basis: 'open_to_all' }),
+  assertApiKeyAccessAllowed: async () => undefined,
+  assertCliSessionAllowed: async () => undefined,
 }));

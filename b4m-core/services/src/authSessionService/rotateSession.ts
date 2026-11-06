@@ -5,6 +5,7 @@ import {
   IRealtimeConnectionRepository,
   IUserDocument,
   IUserRepository,
+  isAuthSessionActive,
 } from '@bike4mind/common';
 import { TooManyRequestsError, UnauthorizedError } from '@bike4mind/utils';
 import {
@@ -87,7 +88,7 @@ const invalid = () => new UnauthorizedError('Invalid refresh token');
 
 /** Live == present, not revoked, not past its expiry. */
 const isLive = (session: IAuthSessionDocument | null, now: Date): session is IAuthSessionDocument =>
-  !!session && !session.revokedAt && session.expiresAt > now;
+  !!session && isAuthSessionActive(session, now);
 
 /** True when `hash` is the one-generation-back secret and its coalesce window is still open. */
 const isReplayable = (session: IAuthSessionDocument, hash: string, now: Date): boolean =>
@@ -133,6 +134,7 @@ const describeReuse = (session: IAuthSessionDocument, reason: ReuseRevokeReason,
  * DEFAULT_REFRESH_TTL_MS (and any `refreshTtlMs` override passed to issueSession) stays under it.
  */
 const slideExpiresAt = (session: IAuthSessionDocument, now: Date): Date => {
+  if (session.impersonatedBy) return session.expiresAt;
   const slid = now.getTime() + DEFAULT_REFRESH_TTL_MS;
   const cap = new Date(session.createdAt).getTime() + ABSOLUTE_SESSION_MAX_MS;
   return new Date(Math.max(new Date(session.expiresAt).getTime(), Math.min(slid, cap)));
@@ -241,10 +243,13 @@ export const rotateSession = async (
   const finish = async (rotatedSecret: string | null): Promise<RotateSessionResult> => {
     const user = await db.users.findById(session.userId);
     if (!user) throw invalid();
+    if (session.impersonatedBy && !isLive(session, new Date())) throw invalid();
 
     const accessToken = signAccessToken(user.id, user.tokenVersion ?? 0, {
       sid,
-      ...(session.impersonatedBy ? { impersonatedBy: session.impersonatedBy } : {}),
+      ...(session.impersonatedBy
+        ? { impersonatedBy: session.impersonatedBy, impersonationExpiresAt: session.impersonationExpiresAt?.getTime() }
+        : {}),
     });
     const base: RotateSessionResultBase = {
       userId: user.id,

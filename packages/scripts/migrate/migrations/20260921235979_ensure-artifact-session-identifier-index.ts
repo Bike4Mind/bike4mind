@@ -5,8 +5,8 @@ import { type MigrationFile } from './index';
  * Ensure the `{ sessionId, identifier }` index exists on artifacts: chat persistence looks up the
  * session's row for a re-emitted `<artifact identifier=...>` to version it.
  *
- * Migration rather than autoIndex for the same reason as 20260921235993: prod runs DocumentDB, where
- * an index build takes a foreground collection lock. Idempotent: createIndex is a no-op when the
+ * Migration rather than autoIndex for the same reason as 20260921235993: autoIndex builds are
+ * fire-and-forget (a failure is silent). Idempotent: createIndex is a no-op when the
  * index already exists. Id backdated below 20260922000001, whose test asserts it stays highest.
  */
 const migration: MigrationFile = {

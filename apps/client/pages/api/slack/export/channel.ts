@@ -1,11 +1,13 @@
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
 import pLimit from 'p-limit';
+import { escapeCsvField } from '@bike4mind/server-utils/integrations/slack/slackExportCsv';
 import {
   isSlackUserValidationError,
   isSlackUserValidationErrorByMessage,
@@ -81,12 +83,6 @@ interface ExportResult {
     suggestion: string;
   };
 }
-
-const ensureAdmin = (isAdmin?: boolean | null) => {
-  if (!isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-};
 
 /**
  * Translate Slack API error codes to user-friendly messages with suggestions
@@ -385,23 +381,6 @@ async function fetchThreadReplies(channelId: string, threadTs: string, slackBotT
 }
 
 /**
- * Escape CSV field to prevent formula injection and parsing issues
- */
-function escapeCsvField(field: string): string {
-  if (!field) return '';
-
-  // Prevent CSV formula injection (security vulnerability)
-  if (field.startsWith('=') || field.startsWith('+') || field.startsWith('-') || field.startsWith('@')) {
-    field = "'" + field; // Prefix with single quote to neutralize formula
-  }
-
-  // Escape quotes and newlines for proper CSV parsing
-  field = field.replace(/"/g, '""').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-
-  return field;
-}
-
-/**
  * Sanitize filename to prevent path traversal and invalid characters
  */
 function sanitizeFilename(name: string): string {
@@ -466,9 +445,7 @@ function formatAsMarkdown(exportData: ExportResult): string {
   return parts.join('');
 }
 
-const handler = baseApi().post(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
-
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post(async (req, res) => {
   const result = ExportRequestSchema.safeParse(req.body);
   if (!result.success) {
     throw new BadRequestError(result.error.issues[0]?.message || 'Invalid request body');
@@ -531,7 +508,7 @@ const handler = baseApi().post(async (req, res) => {
   };
 
   // Helper to build and send export (supports partial exports)
-  const buildAndSendExport = () => {
+  const buildAndSendExport = async () => {
     stats.duration_ms = Date.now() - startTime;
 
     const exportData: ExportResult = {
@@ -588,6 +565,20 @@ const handler = baseApi().post(async (req, res) => {
       durationMs: stats.duration_ms,
     });
 
+    await recordAdminActionFromRequest(req, {
+      action: 'integration.slack_channel.exported',
+      target: { kind: 'settings', id: channelId, displayName: `Slack channel ${channelName ?? channelId}` },
+      summary: `exported Slack channel ${channelName ?? channelId} (${exportStatus})`,
+      details: {
+        workspaceId,
+        channelId,
+        format,
+        mode: 'download',
+        status: exportStatus,
+        messageCount: messages.length,
+      },
+    });
+
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', buildContentDisposition(filename));
     // Add custom header to indicate partial export (useful for client-side handling)
@@ -641,7 +632,7 @@ const handler = baseApi().post(async (req, res) => {
         phase: currentPhase,
         suggestion: 'Try using a narrower date range to export smaller batches.',
       };
-      return buildAndSendExport();
+      return await buildAndSendExport();
     }
 
     Logger.info('✅ Fetched all messages', { count: messages.length });
@@ -707,7 +698,7 @@ const handler = baseApi().post(async (req, res) => {
           phase: currentPhase,
           suggestion: 'Messages were exported but some thread replies may be missing.',
         };
-        return buildAndSendExport();
+        return await buildAndSendExport();
       }
     }
 
@@ -792,7 +783,7 @@ const handler = baseApi().post(async (req, res) => {
       if (isTimedOut()) {
         addWarning('resolving_users', 'Export timed out while resolving user names', 'Some users may show as IDs');
         exportStatus = 'partial';
-        return buildAndSendExport();
+        return await buildAndSendExport();
       }
     }
 
@@ -819,7 +810,7 @@ const handler = baseApi().post(async (req, res) => {
     }
 
     // Success - send complete export
-    return buildAndSendExport();
+    return await buildAndSendExport();
   } catch (error: any) {
     clearTimeout(requestTimeoutId);
 

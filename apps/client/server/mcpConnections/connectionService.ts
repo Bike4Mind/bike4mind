@@ -4,10 +4,12 @@ import {
   BadRequestError,
   ConflictError,
   ForbiddenError,
+  INTEGRATION_CATALOG,
   McpConnectionCapError,
   McpConnectionSlugConflictError,
   NotFoundError,
   TooManyRequestsError,
+  getMcpPresetHost,
   isValidMcpConnectionSlug,
   toMcpApiKeyLast4,
   toMcpConnectionPublic,
@@ -22,15 +24,16 @@ import {
 import { mcpConnectionRepository } from '@bike4mind/database';
 import { RemoteMcpError } from '@bike4mind/mcp/remote';
 import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
-import { encryptToken } from '@server/security/tokenEncryption';
+import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import type {
   McpConnectionApiKeyBody,
   McpConnectionCreateBody,
   McpConnectionPatchBody,
 } from '@server/validators/mcpConnectionValidators';
 import { prepareConnectionUrl } from './connectionUrl';
-import { evaluateConnectionPolicy, type CustomMcpContext } from './customMcpAccess';
+import { evaluateConnectionPolicy, resolveCustomMcpContext, type CustomMcpContext } from './customMcpAccess';
 import { discoverConnectionTools, type DiscoveryOutcome } from './discovery';
+import { revokeConnectionGrant } from './oauth/revoke';
 import {
   CustomMcpPolicyBlockedError,
   CustomMcpUnavailableError,
@@ -46,13 +49,16 @@ import {
 
 export interface ConnectionActor {
   id: string;
-  /** The selected org pointer; stamped on a new connection only when the user is a member. */
-  organizationId?: string | null;
+  /**
+   * The selected org pointer; stamped on a new connection only when the user is a member. On
+   * `req.user` this is the user document's ObjectId, not a string.
+   */
+  organizationId?: string | { toString(): string } | null;
 }
 
-const userOwner = (userId: string): McpConnectionOwner => ({ ownerType: 'user', ownerKey: userId });
+export const userOwner = (userId: string): McpConnectionOwner => ({ ownerType: 'user', ownerKey: userId });
 
-function audit(
+export function audit(
   actor: ConnectionActor,
   action: string,
   // A refused create has no id or slug yet.
@@ -79,6 +85,7 @@ export function toPublicView(
     evaluateConnectionPolicy(context, {
       urlHost: connection.urlHost,
       authKind: connection.auth?.kind ?? 'none',
+      presetRemoteHost: getMcpPresetHost(connection.presetId),
       url: connection.displayUrl,
     })
   );
@@ -113,6 +120,8 @@ export function deriveMcpConnectionSlug(displayName: string, urlHost: string): s
 
 function buildAuth(body: McpConnectionCreateBody['auth']): IMcpConnectionAuth {
   if (body.kind === 'none') return { kind: 'none' };
+  // No `oauth` subdocument yet: the start route discovers and writes it, and the 401 probe records the challenge.
+  if (body.kind === 'oauth') return { kind: 'oauth' };
   const valueEnc = encryptToken(body.value);
   if (!valueEnc) throw new Error('API key encryption returned nothing');
   return {
@@ -199,15 +208,22 @@ async function probe(
   }
 }
 
-function assertPolicyAllows(
+export function assertPolicyAllows(
   actor: ConnectionActor,
   context: CustomMcpContext,
-  connection: Pick<IMcpConnectionDocument, 'urlHost'> & Partial<Pick<IMcpConnectionDocument, 'id' | 'slug'>>,
+  connection: Pick<IMcpConnectionDocument, 'urlHost'> &
+    Partial<Pick<IMcpConnectionDocument, 'id' | 'slug' | 'presetId'>>,
   authKind: IMcpConnectionAuth['kind'],
   url: string,
   action: string
 ): void {
-  const verdict = evaluateConnectionPolicy(context, { urlHost: connection.urlHost, authKind, url });
+  // The preset host comes from the catalog entry the stored `presetId` names, never from the request.
+  const verdict = evaluateConnectionPolicy(context, {
+    urlHost: connection.urlHost,
+    authKind,
+    presetRemoteHost: getMcpPresetHost(connection.presetId),
+    url,
+  });
   if (verdict.allowed) return;
   audit(actor, action, connection, { policyVerdict: verdict.reason }).failure('policy_blocked');
   throw new ForbiddenError(verdict.message, { code: 'policy_blocked', reason: verdict.reason });
@@ -225,15 +241,39 @@ export async function createUserConnection(
   options: InvokeRemoteMcpOptions = {}
 ): Promise<IMcpConnectionPublic> {
   const prepared = prepareConnectionUrl(body.url, context.network);
-  assertPolicyAllows(actor, context, { urlHost: prepared.urlHost }, body.auth.kind, prepared.url, 'connection_created');
+  // A preset connects to its own server only, with the sign-in its catalog entry declares: a body
+  // naming a preset with another host or auth kind is refused before the policy runs, so a preset id
+  // can never carry a custom URL past `presets_only`.
+  if (body.presetId && getMcpPresetHost(body.presetId) !== prepared.urlHost) {
+    audit(actor, 'connection_created', { urlHost: prepared.urlHost }).failure('preset_host_mismatch');
+    throw new BadRequestError('This URL is not the server of the chosen connector preset', {
+      code: 'preset_host_mismatch',
+    });
+  }
+  if (body.presetId && INTEGRATION_CATALOG[body.presetId].remoteMcp?.auth !== body.auth.kind) {
+    audit(actor, 'connection_created', { urlHost: prepared.urlHost }).failure('preset_auth_mismatch');
+    throw new BadRequestError('The chosen connector preset needs a different sign-in method', {
+      code: 'preset_auth_mismatch',
+    });
+  }
+  assertPolicyAllows(
+    actor,
+    context,
+    { urlHost: prepared.urlHost, presetId: body.presetId },
+    body.auth.kind,
+    prepared.url,
+    'connection_created'
+  );
 
-  const organizationId =
-    actor.organizationId && context.organizationIds.includes(actor.organizationId) ? actor.organizationId : undefined;
+  // String() first: the membership ids are strings, so an ObjectId pointer never matched them.
+  const selectedOrgId = actor.organizationId ? String(actor.organizationId) : undefined;
+  const organizationId = selectedOrgId && context.organizationIds.includes(selectedOrgId) ? selectedOrgId : undefined;
   const base = {
     ownerType: 'user' as const,
     ownerKey: actor.id,
     userId: actor.id,
     ...(organizationId ? { organizationId } : {}),
+    ...(body.presetId ? { presetId: body.presetId } : {}),
     displayName: body.displayName,
     urlEnc: prepared.urlEnc,
     displayUrl: prepared.displayUrl,
@@ -393,21 +433,46 @@ export async function rotateUserConnectionApiKey(
   return toPublicView(context, reloaded);
 }
 
-/**
- * SEAM (OAuth): revoke the refresh token, then the access token, at the advertised
- * `revocation_endpoint` (RFC 7009, best effort, logged) before the record goes. Nothing to revoke
- * for `none` and `api_key` connections; an API key is the user's to revoke at the vendor.
- */
-async function revokeRemoteGrant(connection: IMcpConnectionDocument): Promise<void> {
-  if (connection.auth.kind !== 'oauth') return;
-}
-
 /** Owner-scoped delete; open even with connectors switched off, so a user can always clean up. */
 export async function deleteUserConnection(actor: ConnectionActor, id: string): Promise<void> {
   const owner = userOwner(actor.id);
-  const connection = await mcpConnectionRepository.findByIdForOwner(id, owner);
+  const connection = await mcpConnectionRepository.findByIdWithCredentials(id, owner);
   if (!connection) throw new NotFoundError('Connection not found');
-  await revokeRemoteGrant(connection);
+  await revokeRemoteGrant(actor, connection);
   if (!(await mcpConnectionRepository.deleteForOwner(id, owner))) throw new NotFoundError('Connection not found');
   audit(actor, 'disconnected', connection).success();
+}
+
+/**
+ * Revokes an OAuth grant at the authorization server (RFC 7009, best effort and logged, so it never
+ * blocks the caller). Nothing to revoke for `none` and `api_key` connections; an API key is the
+ * user's to revoke at the vendor.
+ */
+async function revokeRemoteGrant(actor: ConnectionActor, connection: IMcpConnectionDocument): Promise<void> {
+  if (connection.auth.kind !== 'oauth') return;
+  try {
+    const { network } = await resolveCustomMcpContext(actor.id);
+    await revokeConnectionGrant(connection, network);
+  } catch {
+    console.warn(`[connectionService] Could not revoke the grant of connection ${connection.id}`);
+  }
+}
+
+/** Revokes the grant and clears the tokens: the connection goes back to waiting for sign-in. */
+export async function disconnectUserConnectionOAuth(
+  actor: ConnectionActor,
+  context: CustomMcpContext,
+  id: string
+): Promise<IMcpConnectionPublic> {
+  const owner = userOwner(actor.id);
+  const connection = await mcpConnectionRepository.findByIdWithCredentials(id, owner);
+  if (!connection) throw new NotFoundError('Connection not found');
+  if (connection.auth.kind !== 'oauth') {
+    throw new ConflictError('This connection does not use OAuth sign-in', { code: 'not_oauth' });
+  }
+  await revokeConnectionGrant(connection, context.network);
+  const cleared = await mcpConnectionRepository.clearOAuthTokens(id, owner);
+  if (!cleared) throw new NotFoundError('Connection not found');
+  audit(actor, 'oauth_disconnected', cleared).success();
+  return toPublicView(context, cleared);
 }

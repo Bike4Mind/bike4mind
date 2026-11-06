@@ -204,6 +204,7 @@ export const createFabFileByUrl = async (
       // 'text/plain' (both supported), so under claim-first the claim always resolves first. A future
       // change widening fetchAndParseURL's mimeType set must keep that invariant in mind.
       mimeTypePrecedence: 'claim-first',
+      serverUpload: true,
     }
   );
 

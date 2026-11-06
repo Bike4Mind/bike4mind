@@ -19,6 +19,7 @@ export function toPublicSession(session: ISessionDocument): SessionResponse {
     retrievalTags: redacted.retrievalTags,
     lakeScopeExplicit: redacted.lakeScopeExplicit,
     includeLibraryFiles: redacted.includeLibraryFiles,
+    promptCacheTtl: redacted.promptCacheTtl,
     lastUsedModel: redacted.lastUsedModel,
     firstCreated: redacted.firstCreated,
     lastUpdated: redacted.lastUpdated,

@@ -1,0 +1,151 @@
+// @vitest-environment jsdom
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { CssVarsProvider } from '@mui/joy/styles';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { ChatModelOption } from '@shared/chat';
+import type { LocalModelEntry } from '@shared/models';
+import { desktopTheme } from '../theme';
+import { InstalledTab } from './InstalledTab';
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+window.matchMedia ??= ((query: string) => ({
+  matches: false,
+  media: query,
+  onchange: null,
+  addListener: () => {},
+  removeListener: () => {},
+  addEventListener: () => {},
+  removeEventListener: () => {},
+  dispatchEvent: () => false,
+})) as typeof window.matchMedia;
+
+const bare = {
+  sizeBytes: null,
+  quantization: null,
+  family: null,
+  parameterSize: null,
+  modifiedAt: null,
+  capabilities: { tools: false, vision: false, thinking: false, embeddings: false, completion: false },
+  loaded: false,
+  fit: null,
+};
+
+let root: Root;
+let host: HTMLElement;
+
+beforeEach(() => {
+  host = document.createElement('div');
+  document.body.appendChild(host);
+  root = createRoot(host);
+});
+
+afterEach(async () => {
+  await act(async () => root.unmount());
+  host.remove();
+});
+
+const row = (name: string) =>
+  host.querySelector<HTMLElement>(`[data-testid="models-installed-row"][data-name="${name}"]`);
+const within = (parent: HTMLElement | null, testId: string) =>
+  parent?.querySelector<HTMLElement>(`[data-testid="${testId}"]`)?.textContent ?? null;
+
+describe('InstalledTab on a vLLM server', () => {
+  it('shows a model once with its other served names and context, and an adapter with its base', async () => {
+    const models: LocalModelEntry[] = [
+      { ...bare, name: 'qwen-small', contextLength: 4096, aliases: ['qwen'] },
+      { ...bare, name: 'sql-lora', contextLength: 4096, baseModel: 'qwen-small' },
+    ];
+    await act(async () =>
+      root.render(
+        <CssVarsProvider theme={desktopTheme}>
+          <InstalledTab
+            status={null}
+            target={{ id: 'gpu', name: 'gpu vllm', local: false, management: 'unsupported' }}
+            installed={{ ok: true, models }}
+            onRetry={() => {}}
+            onExplore={() => {}}
+          />
+        </CssVarsProvider>
+      )
+    );
+    expect(host.querySelectorAll('[data-testid="models-installed-row"]')).toHaveLength(2);
+    expect(within(row('qwen-small'), 'models-installed-aliases')).toBe('Also served as qwen');
+    expect(within(row('qwen-small'), 'models-installed-context')).toBe('4K context');
+    expect(within(row('qwen-small'), 'models-installed-lora-chip')).toBeNull();
+    expect(within(row('sql-lora'), 'models-installed-lora-chip')).toBe('LoRA on qwen-small');
+    expect(within(row('sql-lora'), 'models-installed-context')).toBe('4K context');
+  });
+});
+
+describe('InstalledTab embedding-only rows', () => {
+  it('says why an embedding-only model has no Use in chat button, and leaves chat models alone', async () => {
+    const models: LocalModelEntry[] = [
+      { ...bare, name: 'qwen3-embedding:0.6b', capabilities: { ...bare.capabilities, embeddings: true } },
+      { ...bare, name: 'llama3', capabilities: { ...bare.capabilities, completion: true } },
+    ];
+    await act(async () =>
+      root.render(
+        <CssVarsProvider theme={desktopTheme}>
+          <InstalledTab
+            status={null}
+            target={{ id: 'local', name: 'This computer', local: true, management: 'unsupported' }}
+            installed={{ ok: true, models }}
+            chatOn={name => (name === 'llama3' ? () => {} : null)}
+            onRetry={() => {}}
+            onExplore={() => {}}
+          />
+        </CssVarsProvider>
+      )
+    );
+    const note = row('qwen3-embedding:0.6b')?.querySelector('[data-testid="models-installed-embedding-note"]');
+    expect(note?.textContent).toBe('Embedding model, not for chat');
+    expect(note?.getAttribute('role')).toBe('note');
+    expect(within(row('qwen3-embedding:0.6b'), 'models-installed-use-btn')).toBeNull();
+    expect(within(row('llama3'), 'models-installed-embedding-note')).toBeNull();
+    expect(within(row('llama3'), 'models-installed-use-btn')).toBe('Use in chat');
+  });
+});
+
+describe('InstalledTab model settings', () => {
+  it("offers Settings for a model chat lists with controls, and opens that model's dialog", async () => {
+    (window as unknown as { b4m: unknown }).b4m = {
+      chat: { getModelSettings: async () => ({}), getModelLoadOffer: async () => ({}) },
+      models: { getLoadedState: async () => ({ kind: 'unloaded' }) },
+    };
+    const chatModel: ChatModelOption = {
+      id: 'local:ollama:llama3',
+      name: 'llama3',
+      controls: { temperature: { min: 0, max: 2, step: 0.05, default: 0.8, scope: 'request' } },
+    };
+    const models: LocalModelEntry[] = [
+      { ...bare, name: 'llama3', capabilities: { ...bare.capabilities, completion: true } },
+      { ...bare, name: 'nomic-embed', capabilities: { ...bare.capabilities, embeddings: true } },
+      { ...bare, name: 'bare-model', capabilities: { ...bare.capabilities, completion: true } },
+    ];
+    const bareOption: ChatModelOption = { id: 'local:ollama:bare-model', name: 'bare-model', controls: {} };
+    await act(async () =>
+      root.render(
+        <CssVarsProvider theme={desktopTheme}>
+          <InstalledTab
+            status={null}
+            target={{ id: 'local', name: 'This computer', local: true, management: 'allowed' }}
+            installed={{ ok: true, models }}
+            modelOn={name => (name === 'llama3' ? chatModel : name === 'bare-model' ? bareOption : null)}
+            onRetry={() => {}}
+            onExplore={() => {}}
+          />
+        </CssVarsProvider>
+      )
+    );
+    expect(within(row('nomic-embed'), 'models-installed-settings-btn')).toBeNull();
+    expect(within(row('bare-model'), 'models-installed-settings-btn')).toBeNull();
+    const button = row('llama3')?.querySelector<HTMLButtonElement>('[data-testid="models-installed-settings-btn"]');
+    expect(button?.textContent).toBe('Settings');
+    await act(async () => button?.click());
+    expect(document.querySelector('[data-testid="model-defaults-dialog"]')?.textContent).toContain(
+      'Settings for llama3'
+    );
+    expect(document.querySelector('[data-testid="model-defaults-temperature-input"]')).not.toBeNull();
+  });
+});

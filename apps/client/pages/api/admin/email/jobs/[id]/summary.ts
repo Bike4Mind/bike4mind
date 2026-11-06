@@ -1,6 +1,6 @@
 import { emailJobRepository, emailSendAttemptRepository } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
 
 /**
@@ -9,11 +9,10 @@ import { ApiKeyScope } from '@bike4mind/common';
  * Get aggregated summary statistics for a job's send attempts.
  * Uses MongoDB aggregation for efficiency with large datasets.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   const { id } = req.query as { id: string };
 
   const job = await emailJobRepository.findById(id);

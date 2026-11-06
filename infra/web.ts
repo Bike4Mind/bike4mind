@@ -29,6 +29,7 @@ import {
 } from './emailIngestion';
 import { eventBus } from './eventBus';
 import { mcpHandler } from './mcp';
+import { remoteMcpHandler } from './remoteMcp';
 import { providerFederation } from './providerFederation';
 import {
   fabFileChunkQueue,
@@ -42,6 +43,7 @@ import {
   slackExportQueue,
   githubWebhookQueue,
   questExportQueue,
+  accountDataExportQueue,
   publishThumbnailQueue,
   publishThumbnailQueueDLQ,
   dataLakeCleanupQueue,
@@ -52,6 +54,8 @@ import {
   dataLakeResearchQueueDLQ,
   lakeMemoryQueue,
   lakeMemoryQueueDLQ,
+  riskEvidenceQueue,
+  riskEvidenceQueueDLQ,
   lakeInconsistencyModelQueue,
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueue,
@@ -83,6 +87,7 @@ import {
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
   questExportQueueDLQ,
+  accountDataExportQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueue,
   tavernHeartbeatQueueDLQ,
@@ -104,28 +109,25 @@ import {
   bobRunQueueDLQ,
   libreoncologyAudioRenderQueue,
   libreoncologyAudioRenderQueueDLQ,
+  contributedQueues,
 } from './queues';
 import { imageProcessor } from './functions';
 import { chatCompletion } from './chatCompletion';
 import { searxngUrl } from './searxng';
-import {
-  router,
-  routerDistributionId,
-  cdnUrlForLambdaEnv,
-  appUrlForLambdaEnv,
-  originVerifySecret,
-} from './router';
-import { secrets } from './secrets';
+import { router, routerDistributionId, cdnUrlForLambdaEnv, appUrlForLambdaEnv, originVerifySecret } from './router';
+import { allSecrets } from './secrets';
 import { migratorInvocation } from './database';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
-import { wafWebAclArn } from './waf';
+import { wafLabelForwarding, wafQueryWebAclArn, wafReadPermissions, wafWebAclArn } from './waf';
 
 // SQS queue URLs bundled as Linkable resources. Stored in resource.enc at deploy
 // time — no IAM statements generated, no env var size concerns. The wildcard SQS
 // permission already grants runtime access to all queues.
 const dlqUrls = new sst.Linkable('dlqUrls', {
   properties: {
+    // Contributed entries go first so a core key always wins.
+    ...Object.fromEntries(Object.values(contributedQueues).map(({ spec, dlq }) => [spec.label, dlq.url])),
     'fab-file-vectorize': fabFileVectorizeQueueDLQ.url,
     'fab-file-chunk': fabFileChunkQueueDLQ.url,
     'generation-callback': generationCallbackQueueDLQ.url,
@@ -141,6 +143,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'github-webhook': githubWebhookQueueDLQ.url,
     'webhook-delivery': webhookDeliveryQueueDLQ.url,
     'quest-export': questExportQueueDLQ.url,
+    'account-data-export': accountDataExportQueueDLQ.url,
     'liveops-triage': liveOpsTriageQueueDLQ.url,
     'email-ingestion': emailIngestionQueueDLQ.url,
     'email-analysis': emailAnalysisQueueDLQ.url,
@@ -160,6 +163,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'data-lake-taxonomy': dataLakeTaxonomyQueueDLQ.url,
     'data-lake-research': dataLakeResearchQueueDLQ.url,
     'lake-memory': lakeMemoryQueueDLQ.url,
+    'risk-evidence': riskEvidenceQueueDLQ.url,
     'lake-inconsistency-model': lakeInconsistencyModelQueueDLQ.url,
     'drive-lake-ingest': driveLakeIngestQueueDLQ.url,
     'drive-disconnect-purge': driveDisconnectPurgeQueueDLQ.url,
@@ -189,6 +193,7 @@ const lambdaFunctionNames = new sst.Linkable('lambdaFunctionNames', {
 
 const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
   properties: {
+    ...Object.fromEntries(Object.values(contributedQueues).map(({ spec, queue }) => [spec.name, queue.url])),
     emailJobQueue: emailJobQueue.url,
     fabFileChunkQueue: fabFileChunkQueue.url,
     fabFileVectorizeQueue: fabFileVectorizeQueue.url,
@@ -201,6 +206,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     slackExportQueue: slackExportQueue.url,
     githubWebhookQueue: githubWebhookQueue.url,
     questExportQueue: questExportQueue.url,
+    accountDataExportQueue: accountDataExportQueue.url,
     whatsNewHighlightsQueue: whatsNewHighlightsQueue.url,
     whatsNewGenerationQueue: whatsNewGenerationQueue.url,
     liveOpsTriageQueue: liveOpsTriageQueue.url,
@@ -223,6 +229,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     dataLakeTaxonomyQueue: dataLakeTaxonomyQueue.url,
     dataLakeResearchQueue: dataLakeResearchQueue.url,
     lakeMemoryQueue: lakeMemoryQueue.url,
+    riskEvidenceQueue: riskEvidenceQueue.url,
     lakeInconsistencyModelQueue: lakeInconsistencyModelQueue.url,
     driveLakeIngestQueue: driveLakeIngestQueue.url,
     driveDisconnectPurgeQueue: driveDisconnectPurgeQueue.url,
@@ -243,6 +250,8 @@ export const web = new sst.aws.Nextjs(
 
     vpc: lambdaVpc,
     router: router ? { instance: router } : undefined,
+    // The function URL keeps SST's default CORS, so it adds `Access-Control-Allow-Origin: *` to any
+    // request with an Origin; handlers must not add a second (apps/client/server/utils/allowOrigin.ts).
     server: {
       timeout: '60 seconds',
       runtime: 'nodejs24.x',
@@ -254,13 +263,14 @@ export const web = new sst.aws.Nextjs(
       memory: '2048 MB',
     },
     link: [
-      ...Object.values(secrets),
+      ...allSecrets,
       websocketApi,
       historyImportBucket,
       // Linked so the frontend can resolve Resource.ChatCompletion.url to POST quests.
       chatCompletion,
       imageProcessor,
       mcpHandler,
+      remoteMcpHandler,
       fabFileBucket,
       generatedImagesBucket,
       appFilesBucket,
@@ -301,6 +311,9 @@ export const web = new sst.aws.Nextjs(
       // Resource.generationCallbackQueue.url, which also has to resolve in the generation queue
       // Lambdas and the timeout sweep, where only direct links exist.
       generationCallbackQueue,
+      // apps/client/server/auth/riskEvidence.ts reads Resource.riskEvidenceQueue.url directly to enqueue
+      // refreshes; via sourceQueueUrls alone the key would not resolve on the Resource proxy.
+      riskEvidenceQueue,
     ],
     permissions: [
       {
@@ -406,27 +419,19 @@ export const web = new sst.aws.Nextjs(
         ],
       },
       {
-        // Read-only CloudWatch metrics access used by the WAF Traffic Overview panel.
-        // Scoped to AWS/WAFV2 namespace metrics only.
+        // Read-only CloudWatch metrics for the WAF Traffic panel and the incident view; neither action is resource-scopable.
         actions: ['cloudwatch:GetMetricData', 'cloudwatch:ListMetrics'],
         resources: ['*'],
       },
+      ...wafReadPermissions,
+      // Incident view: lists this stage's alarms by name prefix.
+      { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
+      // Incident view: reads the router WebACL's rules and the size of each IP set they reference.
+      { actions: ['wafv2:GetWebACL'], resources: [wafQueryWebAclArn] },
       {
-        // Read-only WAF logging config discovery used by the WAF Logs Insights panels.
-        // Scoped to CloudFront-scope WebACLs in us-east-1 only, further restricted to
-        // bike4mind-api-protection-* WebACLs to enforce least privilege.
-        actions: ['wafv2:GetLoggingConfiguration'],
+        actions: ['wafv2:GetIPSet'],
         resources: [
-          $interpolate`arn:aws:wafv2:us-east-1:${aws.getCallerIdentityOutput().accountId}:global/webacl/bike4mind-api-protection-*`,
-        ],
-      },
-      {
-        // CloudWatch Logs Insights query permissions for WAF log analysis.
-        // Scoped to us-east-1 (CloudFront-scope WAF always logs to us-east-1) and
-        // bike4mind-specific log groups to enforce least privilege.
-        actions: ['logs:StartQuery', 'logs:GetQueryResults', 'logs:StopQuery'],
-        resources: [
-          $interpolate`arn:aws:logs:us-east-1:${aws.getCallerIdentityOutput().accountId}:log-group:aws-waf-logs-bike4mind-*`,
+          $interpolate`arn:${aws.getPartitionOutput().partition}:wafv2:us-east-1:${aws.getCallerIdentityOutput().accountId}:global/ipset/*/*`,
         ],
       },
       ...providerFederation.permissions,
@@ -435,6 +440,7 @@ export const web = new sst.aws.Nextjs(
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       B4M_DEPLOYED_REVISION: process.env.B4M_DEPLOYED_REVISION || '',
       B4M_BUILD_FINGERPRINT: process.env.B4M_BUILD_FINGERPRINT || '',
+      IMPERSONATION_TTL_MINUTES: process.env.IMPERSONATION_TTL_MINUTES || '60',
       ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
       ...TEST_DECISION_PROVIDER_ENVIRONMENT,
       NEXT_PUBLIC_SERVER_DOMAIN: process.env.SERVER_DOMAIN || '',
@@ -451,6 +457,8 @@ export const web = new sst.aws.Nextjs(
       ...(!$dev && process.env.DISABLE_ORIGIN_VERIFY !== 'true'
         ? { ORIGIN_VERIFY_SECRET: originVerifySecret.result }
         : {}),
+      // Set only when the attached ACL inserts the label headers (see resolveWafLabelForwarding).
+      ...(wafLabelForwarding ? { WAF_LABEL_FORWARDING: 'true' } : {}),
       // Kill-switch for in-handler response gzip (apps/client/server/utils/sendMaybeGzip.ts).
       // Declared here so the lever is greppable from infra and survives a redeploy; set to
       // 'true' to fall back to plain res.json on every route using the helper.

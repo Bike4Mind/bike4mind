@@ -11,9 +11,11 @@ const {
   mockReplSessionCtor,
   mockMakeCodeExecuteTool,
   mockAgentRun,
+  mockAgentCtor,
   mockSessionDispose,
   mockRecordReplSandboxUnavailable,
 } = vi.hoisted(() => ({
+  mockAgentCtor: vi.fn(),
   // Captures the options the wake path asks for. Which executor it picks is the
   // security posture of the whole deep-agent runtime, so it has to be observable.
   mockReplSessionCtor: vi.fn(),
@@ -47,6 +49,9 @@ vi.mock('../../rlm/replSandboxMetrics', async importOriginal => ({
 vi.mock('../../ReActAgent', async importOriginal => ({
   ...(await importOriginal<typeof import('../../ReActAgent')>()),
   ReActAgent: class {
+    constructor(context: unknown) {
+      mockAgentCtor(context);
+    }
     on = vi.fn();
     run = mockAgentRun;
   },
@@ -323,6 +328,20 @@ describe('createReActRunAct sandbox wiring', () => {
   // Reference handles that the guest isolate's own disposal does not reclaim).
   // The wake runtime is long-lived, so a leak here accumulates per wake rather
   // than being cleaned up by process exit.
+  it("runs the act at the owner's thinking visibility", async () => {
+    const resolveThinkingVisibility = vi.fn(async () => 'none' as const);
+    await createReActRunAct({
+      llm: {} as never,
+      model: 'global.anthropic.claude-sonnet-4-6',
+      logger: logger as unknown as Logger,
+      buildTools: async () => [],
+      resolveThinkingVisibility,
+    })(actContext());
+
+    expect(resolveThinkingVisibility).toHaveBeenCalledWith(actContext().charter.identity.ownerUserId);
+    expect(mockAgentCtor).toHaveBeenCalledWith(expect.objectContaining({ thinkingVisibility: 'none' }));
+  });
+
   it('disposes the isolate when the wake completes', async () => {
     await runAct();
 

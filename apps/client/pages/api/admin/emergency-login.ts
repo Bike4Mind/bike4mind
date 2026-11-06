@@ -6,7 +6,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { mfaService } from '@bike4mind/services';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { z } from 'zod';
 import { Resource } from 'sst';

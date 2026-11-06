@@ -1,8 +1,8 @@
 import { emailJobRepository, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
@@ -32,11 +32,10 @@ const getTestRecipients = (requested?: string[], stored?: string[]) => [
  * - Supports partial sends (specific users only)
  * - Supports test mode (redirect to test recipients)
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   const { id } = req.query as { id: string };
   const { userIds, testMode, testRecipients, testSubjectIndicator } = req.body;
 

@@ -1,12 +1,15 @@
 import type { Request } from 'express';
-import type { SubscriptionAcquisition, SubscriptionAcquisitionTouch } from '@client/lib/subscriptions/types';
+import type {
+  SubscriptionAcquisition,
+  SubscriptionAcquisitionTouch,
+} from '@bike4mind/server-utils/lib/subscriptions/types';
 import {
   ACQUISITION_FIELD_LIMIT,
   readAcquisitionCookies,
   type AcquisitionTouches,
 } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
-import { parseCookies } from './cookies';
-import { resolveServerConsent } from './serverConsent';
+import { parseCookies } from '@bike4mind/server-utils/analytics/cookies';
+import { resolveServerConsent } from '@bike4mind/server-utils/analytics/serverConsent';
 
 const UTM_FIELDS = ['source', 'medium', 'campaign', 'content'] as const;
 

@@ -52,6 +52,7 @@ export function buildDiscoveryMetricData(
     count('ModelsPromoted', metrics.ModelsPromoted),
     count('ModelsBlockedByDispatch', metrics.ModelsBlockedByDispatch),
     count('ModelsDeprecated', metrics.ModelsDeprecated),
+    count('LifecycleDateChanges', result.lifecycle.dateChanges.length),
     count('PriceRowsAppended', metrics.PriceRowsAppended),
     count('PriceFlagged', metrics.PriceFlagged),
     count('CatalogRowsRejected', metrics.CatalogRowsRejected),

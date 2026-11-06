@@ -1,6 +1,11 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
 import type { ImageModerationIncident as ImageModerationIncidentData, IncidentReviewStatus } from '@bike4mind/common';
-import { INCIDENT_REPORT_CHANNELS, INCIDENT_REVIEW_STATUSES, INCIDENT_SURFACES } from '@bike4mind/common';
+import {
+  INCIDENT_OVERRIDABLE_REVIEW_STATUSES,
+  INCIDENT_REPORT_CHANNELS,
+  INCIDENT_REVIEW_STATUSES,
+  INCIDENT_SURFACES,
+} from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
 /**
@@ -47,10 +52,13 @@ const ImageModerationIncidentSchema = new Schema(
     reportChannel: { type: String, enum: INCIDENT_REPORT_CHANNELS, required: false },
     reportedBy: { type: String, required: false },
     reportedAt: { type: Date, required: false },
-    previousReviewStatus: { type: String, enum: ['false_positive'], required: false },
+    previousReviewStatus: { type: String, enum: INCIDENT_OVERRIDABLE_REVIEW_STATUSES, required: false },
     falsePositiveBy: { type: String, required: false },
     falsePositiveAt: { type: Date, required: false },
+    noActionBy: { type: String, required: false },
+    noActionAt: { type: Date, required: false },
     alertedAt: { type: Date, required: false },
+    lastReminderAt: { type: Date, required: false },
   },
   {
     timestamps: true,
@@ -66,7 +74,7 @@ ImageModerationIncidentSchema.index({ createdAt: -1 }); // moderation queue
 // Admin triage queue: absent reviewStatus (pre-Q3) sorts alongside 'pending_review' via $in query.
 ImageModerationIncidentSchema.index({ reviewStatus: 1, createdAt: 1 });
 
-export const ImageModerationIncident =
+export const ImageModerationIncident: Model<IImageModerationIncidentDocument> =
   (mongoose.models.ImageModerationIncident as mongoose.Model<IImageModerationIncidentDocument>) ||
   model<IImageModerationIncidentDocument>('ImageModerationIncident', ImageModerationIncidentSchema);
 
@@ -77,6 +85,10 @@ export const STALE_CONFIRMED_CSAM_MS = 10 * 60 * 1000;
 // missing field too. Shared so claimForNcmecSubmission and recordManualReport cannot diverge:
 // both are the "unreviewed" predicate, and only one of them may win a given race.
 const UNREVIEWED_REVIEW_STATUSES: (IncidentReviewStatus | null)[] = ['pending_review', null];
+
+// Incidents with a final verdict, for looking past verdicts up. confirmed_csam is a claim in
+// flight, not a verdict, so it is neither here nor in the unreviewed set.
+export const CLOSED_REVIEW_STATUSES: IncidentReviewStatus[] = ['false_positive', 'no_action', 'reported'];
 
 export class ImageModerationIncidentRepository extends BaseRepository<IImageModerationIncidentDocument> {
   constructor(model: Model<IImageModerationIncidentDocument>) {
@@ -108,11 +120,73 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
     await this.model.updateOne({ _id: id }, { $set: { alertedAt } });
   }
 
+  /** Stamps the time a reminder digest covered these still-unreviewed incidents. */
+  async markReminded(ids: string[], lastReminderAt = new Date()): Promise<void> {
+    if (ids.length === 0) return;
+    await this.model.updateMany({ _id: { $in: ids } }, { $set: { lastReminderAt } });
+  }
+
+  /** Number of unreviewed incidents (reviewStatus absent or 'pending_review'). */
+  async countPendingReview(): Promise<number> {
+    return this.model.countDocuments({ reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } });
+  }
+
+  /**
+   * Unreviewed incidents created at or before `createdBefore` that no alert has been delivered
+   * for, oldest first. A missing alertedAt is the only signal: none configured, or the send failed.
+   */
+  async findUnalerted(createdBefore: Date, limit: number): Promise<IImageModerationIncidentDocument[]> {
+    return this.model
+      .find({ reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES }, alertedAt: null, createdAt: { $lte: createdBefore } })
+      .sort({ createdAt: 1 })
+      .limit(limit)
+      .lean() as unknown as IImageModerationIncidentDocument[];
+  }
+
+  /**
+   * Unreviewed incidents that were alerted and are due another reminder: both the alert and the
+   * last reminder (when there is one) are at or before `notifiedBefore`. Oldest first.
+   */
+  async findDueForReminder(notifiedBefore: Date, limit: number): Promise<IImageModerationIncidentDocument[]> {
+    return this.model
+      .find({
+        reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES },
+        alertedAt: { $ne: null, $lte: notifiedBefore },
+        $or: [{ lastReminderAt: null }, { lastReminderAt: { $lte: notifiedBefore } }],
+      })
+      .sort({ createdAt: 1 })
+      .limit(limit)
+      .lean() as unknown as IImageModerationIncidentDocument[];
+  }
+
   /** Returns unreviewed incidents (reviewStatus absent or 'pending_review'), oldest first. */
   async findPendingReview(limit: number): Promise<IImageModerationIncidentDocument[]> {
     return this.model
       .find({ reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } })
       .sort({ createdAt: 1 })
+      .limit(limit)
+      .lean() as unknown as IImageModerationIncidentDocument[];
+  }
+
+  /**
+   * Incidents with a final verdict (see CLOSED_REVIEW_STATUSES), newest first. `before` pages
+   * back: only incidents created strictly before it, or created at `before` with an id below
+   * `beforeId` (so rows sharing one createdAt are neither skipped nor repeated across pages).
+   */
+  async findClosed(limit: number, before?: Date, beforeId?: string): Promise<IImageModerationIncidentDocument[]> {
+    const cursor = !before
+      ? {}
+      : beforeId
+        ? {
+            $or: [
+              { createdAt: { $lt: before } },
+              { createdAt: before, _id: { $lt: new mongoose.Types.ObjectId(beforeId) } },
+            ],
+          }
+        : { createdAt: { $lt: before } };
+    return this.model
+      .find({ reviewStatus: { $in: CLOSED_REVIEW_STATUSES }, ...cursor })
+      .sort({ createdAt: -1, _id: -1 })
       .limit(limit)
       .lean() as unknown as IImageModerationIncidentDocument[];
   }
@@ -153,8 +227,8 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
    * absent/pending_review to 'reported' in one atomic write, so it races cleanly with
    * claimForNcmecSubmission: whichever lands first wins and the other gets null.
    *
-   * Also overrides a 'false_positive' verdict: the tip already exists at NCMEC, so the record
-   * must say so, and previousReviewStatus keeps the earlier verdict visible. Never acts on
+   * Also overrides a 'false_positive' or 'no_action' verdict: the tip already exists at NCMEC, so
+   * the record must say so, and previousReviewStatus keeps the earlier verdict visible. Never acts on
    * 'confirmed_csam' (an API submission owns it) or 'reported'.
    */
   async recordManualReport(
@@ -174,10 +248,27 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
       { new: true }
     );
     if (fromUnreviewed) return fromUnreviewed;
-    // Each write is atomic on its own filter; a row can only match one of the two.
+    // Each write is atomic on its own filter; a row can only match one of them.
+    for (const previousReviewStatus of INCIDENT_OVERRIDABLE_REVIEW_STATUSES) {
+      const overridden = await this.model.findOneAndUpdate(
+        { _id: id, reviewStatus: previousReviewStatus },
+        { $set: { ...reported, previousReviewStatus } },
+        { new: true }
+      );
+      if (overridden) return overridden;
+    }
+    return null;
+  }
+
+  /**
+   * Close an unreviewed incident as correctly blocked with nothing to report. Only from
+   * absent/pending_review, so it never overwrites another verdict or an in-flight submission.
+   * Returns null when the incident is not unreviewed (or not found).
+   */
+  async markNoAction(id: string, actorId: string): Promise<IImageModerationIncidentDocument | null> {
     return this.model.findOneAndUpdate(
-      { _id: id, reviewStatus: 'false_positive' },
-      { $set: { ...reported, previousReviewStatus: 'false_positive' } },
+      { _id: id, reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } },
+      { $set: { reviewStatus: 'no_action', noActionBy: actorId, noActionAt: new Date() } },
       { new: true }
     );
   }
@@ -187,7 +278,8 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
    * (`reportedBy`, with `reportedAt`) are set when `status === 'reported'`; for 'false_positive'
    * the acting admin and time go to `falsePositiveBy`/`falsePositiveAt`. Returns null if the
    * transition is disallowed:
-   * - always blocked when already 'reported' (idempotency)
+   * - always blocked when already 'reported' (idempotency) or 'no_action' (a closing verdict is
+   *   never replaced by this method; recordManualReport is the override path)
    * - also blocked from 'confirmed_csam' when targeting 'false_positive', to prevent a
    *   concurrent false_positive verdict from overriding an in-flight NCMEC submission.
    */
@@ -207,7 +299,8 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
       update.falsePositiveAt = new Date();
       if (actorId) update.falsePositiveBy = actorId;
     }
-    const excluded = status === 'false_positive' ? ['reported', 'confirmed_csam'] : ['reported'];
+    const excluded =
+      status === 'false_positive' ? ['reported', 'confirmed_csam', 'no_action'] : ['reported', 'no_action'];
     return this.model.findOneAndUpdate({ _id: id, reviewStatus: { $nin: excluded } }, { $set: update }, { new: true });
   }
 
@@ -245,8 +338,9 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
 
   /**
    * Persist a known reportId on a confirmed_csam incident without changing reviewStatus.
-   * Called when /finish fails after a successful /submit: the reportId is known and should
-   * be stored so an admin can use 'mark_reported' to finalize within NCMEC's 24-hour window.
+   * Stored after /finish fails so an admin can retry_finish within NCMEC's 24-hour window,
+   * or after finalization succeeds but recording it fails so an admin can mark_reported
+   * once the claim is stale. mark_reported records a finalized report without calling NCMEC.
    */
   async setNcmecReportId(id: string, ncmecReportId: string): Promise<void> {
     await this.model.updateOne({ _id: id, reviewStatus: 'confirmed_csam' }, { $set: { ncmecReportId } });

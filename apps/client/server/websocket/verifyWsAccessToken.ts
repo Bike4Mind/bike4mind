@@ -1,11 +1,12 @@
 import { User } from '@bike4mind/database';
 import { secretRotationRepository } from '@bike4mind/database/infra';
 import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/services';
-import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
+import { isRotatedSecretWithinGraceWindow } from '@bike4mind/server-utils/auth/secretRotationGrace';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
-import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
-import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@server/auth/mfaEnforcement';
+import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
+import { assertNoPendingDeletion } from '@bike4mind/server-utils/auth/deletionPendingGate';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { ForbiddenError, NotFoundError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import jwt from 'jsonwebtoken';
 
@@ -58,6 +59,9 @@ export async function verifyWsAccessTokenClaims(accessToken: string | undefined)
   if (decoded.mfaPending) {
     throw new UnauthorizedError('MFA verification required');
   }
+  if (decoded.impersonatedBy) {
+    throw new ForbiddenError('Impersonated sessions cannot use realtime credentials.');
+  }
 
   const user = await User.findById(decoded.id);
   if (!user) throw new NotFoundError('User not found');
@@ -68,6 +72,7 @@ export async function verifyWsAccessTokenClaims(accessToken: string | undefined)
     throw new UnauthorizedError('Session expired');
   }
   assertAccountStateUsable(user);
+  assertNoPendingDeletion(user);
   // enforceMFA binds sessions minted before it applied, as on REST (auth.ts). Forbidden, not
   // Unauthorized: the credential is valid, so a client must re-enroll rather than refresh.
   if (await isMfaEnrollmentOwed(user, { impersonatedBy: decoded.impersonatedBy })) {

@@ -4,6 +4,7 @@ import {
   IUser,
 } from '@bike4mind/common';
 import type { AdminUserListItem } from './adminUserProjection';
+import type { EmailDomainGroup } from './signupAnomaly';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import axios, { AxiosResponse } from 'axios';
@@ -27,18 +28,27 @@ export interface IGetUsersParams {
   tags?: string[];
   projectId?: string;
   pendingInviteProjectId?: string;
+  pendingInviteOrganizationId?: string;
   publicView?: boolean;
+  recentSignups?: 'hour';
+  /** ISO instants bounding the created-at filter; `createdTo` is exclusive. */
+  createdFrom?: string;
+  createdTo?: string;
+  groupBy?: 'emailDomain';
 }
 
 export interface IGetUsersResponse {
   // Derived from the endpoint's projection, so reading a field GET /api/users does not
   // emit is a compile error. publicView requests return only the PUBLIC_USER_LIST_PROJECTION
   // subset of these fields.
-  // pendingInvite is set only when the request carried pendingInviteProjectId.
+  // pendingInvite is set only for an authorized project or organization invite context.
   users: (AdminUserListItem & { pendingInvite?: boolean })[];
   currentPage: number;
   totalPages: number;
   totalUsers: number;
+  groups?: EmailDomainGroup[];
+  groupsTruncated?: boolean;
+  keysTruncated?: boolean;
 }
 
 export const fetchUsers = async (params: IGetUsersParams & { downloadAll?: boolean }): Promise<IGetUsersResponse> => {
@@ -47,6 +57,7 @@ export const fetchUsers = async (params: IGetUsersParams & { downloadAll?: boole
     return response.data;
   } catch (error) {
     console.error('Error fetching users:', error);
+    if (params.groupBy) throw error;
     return { users: [], currentPage: 1, totalPages: 1, totalUsers: 0 };
   }
 };
@@ -55,13 +66,14 @@ export interface FetchCounterLogsParams {
   startDate?: string;
   endDate?: string;
   events?: string[];
-  report?: boolean;
-  includeInsights?: boolean;
   orgs?: string[] | null;
   excludeOrgs?: string[] | null;
+  /** Drop rows whose counter log carries no organization. */
+  excludeNoOrg?: boolean;
+  /** Drop admin, system, synthetic and staff-domain accounts. */
+  excludeStaff?: boolean;
   isGated?: boolean;
   isHero?: boolean;
-  weeklyReport?: boolean;
   page?: number;
   limit?: number;
   counterName?: string;
@@ -69,23 +81,9 @@ export interface FetchCounterLogsParams {
   metadataFilters?: MetadataFilter[];
   /**
    * IANA zone startDate/endDate name a day in. Defaults to the viewer's own zone so "today" means
-   * their today rather than a UTC day shifted by their offset. Ignored by the report paths, whose
-   * cached rows are UTC-day-keyed and shared between admins.
+   * their today rather than a UTC day shifted by their offset.
    */
   timezone?: string;
-}
-
-/**
- * Both report modes answer on the same `reports` key with different envelopes: the daily one
- * carries `date`, the weekly one the week's bounds. Hence the optional keys rather than a
- * discriminated union - which key is set follows the request flag, not anything in the payload.
- */
-export interface AnalyticsReport {
-  date?: string;
-  startDate?: string;
-  endDate?: string;
-  report: string;
-  aiInsights?: string | null;
 }
 
 /** One rendered User Activity row: the server groups per day/counter/user/metadata. */
@@ -102,7 +100,6 @@ export interface CounterLogRow {
 
 interface CounterLogsResponse {
   logs?: CounterLogRow[];
-  reports?: AnalyticsReport[];
   total?: number;
 }
 
@@ -110,13 +107,12 @@ export const fetchCounterLogs = async ({
   startDate,
   endDate,
   events,
-  report = false,
-  includeInsights = false,
   orgs = null,
   excludeOrgs = null,
+  excludeNoOrg = false,
+  excludeStaff = false,
   isGated,
   isHero,
-  weeklyReport = false,
   page,
   limit,
   counterName,
@@ -127,26 +123,21 @@ export const fetchCounterLogs = async ({
   const queryParams: Record<string, string> = {
     startDate: startDate || '',
     endDate: endDate || '',
+    timezone: timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
   };
-
-  // The report paths stay UTC-keyed: their rows are cached per UTC day and shared between admins.
-  if (!report && !weeklyReport) {
-    queryParams.timezone = timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-  }
 
   // Handle arrays by joining with commas and encoding each value
   if (events?.length) {
     queryParams.events = events.map(e => encodeURIComponent(e)).join(',');
   }
-  if (report) queryParams.report = 'true';
-  if (weeklyReport) queryParams.weeklyReport = 'true';
-  if (includeInsights) queryParams.includeInsights = 'true';
   if (orgs?.length) {
     queryParams.orgs = orgs.map(org => encodeURIComponent(org)).join(',');
   }
   if (excludeOrgs?.length) {
     queryParams.excludeOrgs = excludeOrgs.map(org => encodeURIComponent(org)).join(',');
   }
+  if (excludeNoOrg) queryParams.excludeNoOrg = 'true';
+  if (excludeStaff) queryParams.excludeStaff = 'true';
   if (isGated !== undefined) queryParams.isGated = String(isGated);
   if (isHero !== undefined) queryParams.isHero = String(isHero);
   if (page !== undefined) queryParams.page = String(page);

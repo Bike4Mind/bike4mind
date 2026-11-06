@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sessionRepository, agentRepository, sessionAgentConfigRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { presentAgentsForViewer } from '@server/agents/presentAgentsForViewer';
-import { assertSessionAccess } from '@server/utils/sessionAccess';
+import { assertSessionAccess } from '@bike4mind/server-utils/utils/sessionAccess';
 import { IAgentDocument, redactSessionForClient } from '@bike4mind/common';
 
 const handler = baseApi()

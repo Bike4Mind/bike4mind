@@ -182,6 +182,7 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
     onVerify: handleVerify,
     loading: verifyMFA.isPending || verifyMFASetup.isPending,
     error,
+    mode,
     title: mode === 'setup' ? 'Set Up Multi-Factor Authentication' : 'Multi-Factor Authentication Required',
     description:
       mode === 'setup'

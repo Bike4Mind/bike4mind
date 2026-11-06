@@ -20,7 +20,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   const chain = { use: () => chain, get: register('get'), patch: register('patch'), delete: register('delete') };
   return { baseApi: () => chain };
 });
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => () => undefined }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => undefined }));
 vi.mock('@bike4mind/database', () => ({

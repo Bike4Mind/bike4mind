@@ -1,12 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: vi.fn() },
   getEffectiveApiKeyByBackend: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({ SkillListing: {} }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
 
 import { normalizeSuggestedTags, suggestListingTags } from './suggestTags';
 import type { ClassifierLlm } from './classifySkill';
@@ -55,6 +55,12 @@ describe('suggestListingTags', () => {
   it('returns [] when the model throws', async () => {
     const llm: ClassifierLlm = { model: 'm', complete: vi.fn(async () => Promise.reject(new Error('boom'))) };
     expect(await suggestListingTags(snapshot, llm)).toEqual([]);
+  });
+
+  it('shows the model the declared Claude Code tools', async () => {
+    const llm = llmReturning('{"tags":[]}');
+    await suggestListingTags({ ...snapshot, claudeCodeAllowedTools: ['Bash(gh:*)'] }, llm);
+    expect(vi.mocked(llm.complete).mock.calls[0][1]).toContain('declared Claude Code tools: Bash(gh:*)');
   });
 
   it('wraps the skill in nonce markers', async () => {

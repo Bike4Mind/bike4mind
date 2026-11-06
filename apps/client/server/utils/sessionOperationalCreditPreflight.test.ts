@@ -1,16 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
-const { mockFindUserById, mockFindOrgById, mockBillingEnabled, mockGetOperationsModel } = vi.hoisted(() => ({
-  mockFindUserById: vi.fn(),
-  mockFindOrgById: vi.fn(),
-  mockBillingEnabled: vi.fn(async () => false),
-  mockGetOperationsModel: vi.fn(),
-}));
+const { mockFindUserById, mockFindOrgById, mockBillingEnabled, mockCreditsEnforced, mockGetOperationsModel } =
+  vi.hoisted(() => ({
+    mockFindUserById: vi.fn(),
+    mockFindOrgById: vi.fn(),
+    mockBillingEnabled: vi.fn(async () => false),
+    mockCreditsEnforced: vi.fn(async () => true),
+    mockGetOperationsModel: vi.fn(),
+  }));
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   organizationRepository: { findById: mockFindOrgById },
+  usageEventRepository: {},
   userRepository: { findById: mockFindUserById },
 }));
 // The pair semantics of the two toggles are this helper's own contract, covered by
@@ -18,10 +21,18 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/services')>()),
   isOperationalBillingEnabled: mockBillingEnabled,
+  areCreditsEnforced: mockCreditsEnforced,
 }));
 // Reached only on a would-be refusal, and mocked rather than imported for real because the
 // service resolves system API keys and builds the whole model catalog.
-vi.mock('@client/services/operationsModelService', () => ({
+const activePlanResolver = vi.hoisted(() => ({ hasActivePlan: vi.fn() }));
+vi.mock('@server/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
+const mockDailyCap = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@server/billing/freeTierDailyCapGate', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/billing/freeTierDailyCapGate')>()),
+  checkFreeTierDailySpendCap: mockDailyCap,
+}));
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: mockGetOperationsModel },
 }));
 
@@ -30,7 +41,7 @@ import {
   assertSessionOperationalCredits,
   filterSessionIdsByOperationalCredits,
 } from './sessionOperationalCreditPreflight';
-import { getQuestErrorCode } from '@bike4mind/common';
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, getQuestErrorCode, TooManyRequestsError } from '@bike4mind/common';
 
 const USER_ID = 'user-1';
 const ORG_ID = 'org-1';
@@ -55,14 +66,57 @@ describe('checkSessionOperationalCredits', () => {
     mockFindOrgById.mockResolvedValue(null);
   });
 
-  // The gap this gate closes is latent: operational billing defaults OFF, so a deployment that
-  // records-but-never-bills must keep queueing this work. A pre-flight stricter than the
-  // settlement would take a working feature away from every deploy that never pays for it.
-  it('allows, and reads no billing state, when operational billing is off', async () => {
+  // A holder the settlement would never bill must keep queueing this work: a pre-flight stricter
+  // than the settlement would take a working feature away from every account that never pays for it.
+  it('allows a broke holder when operational billing does not apply to them', async () => {
     mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0 });
 
     await expect(preflight()).resolves.toEqual({ allowed: true });
+  });
+
+  // Same holder and plan resolver recordSessionOperationalUsage settles with, so the free-tier
+  // carve-out cannot make the gate and the charge disagree.
+  it('asks the shared billing helper about the holder that would pay', async () => {
+    const user = { id: USER_ID, currentCredits: 0, organizationId: ORG_ID };
+    const org = { id: ORG_ID, currentCredits: 0, userDetails: [] };
+    mockFindUserById.mockResolvedValue(user);
+    mockFindOrgById.mockResolvedValue(org);
+
+    await preflight();
+
+    expect(mockBillingEnabled).toHaveBeenCalledWith(expect.anything(), undefined, {
+      user,
+      organization: org,
+      activePlans: { hasActivePlan: expect.any(Function) },
+    });
+  });
+
+  // Self-host does not meter credits, so it pays for no holder reads at all.
+  it('allows without reading the holder when credits are not enforced', async () => {
+    mockCreditsEnforced.mockResolvedValueOnce(false);
+
+    await expect(preflight()).resolves.toEqual({ allowed: true });
     expect(mockFindUserById).not.toHaveBeenCalled();
+    expect(mockBillingEnabled).not.toHaveBeenCalled();
+  });
+
+  it('names the plan read as the failed read when that is what threw', async () => {
+    mockBillingEnabled.mockImplementationOnce(
+      async (
+        _db: unknown,
+        _logger: unknown,
+        holder: { activePlans: { hasActivePlan(id: string): Promise<boolean> } }
+      ) => holder.activePlans.hasActivePlan(USER_ID)
+    );
+    activePlanResolver.hasActivePlan.mockRejectedValueOnce(new Error('subscriptions down'));
+    const logger = { warn: vi.fn(), error: vi.fn() };
+
+    await expect(preflight({ logger: logger as never })).resolves.toEqual({ allowed: true });
+    expect(logger.error).toHaveBeenCalledWith(
+      '[sessionOperationalCreditPreflight] gate disabled: failed to read billing settings',
+      expect.any(Error),
+      { failedRead: 'activePlan' }
+    );
   });
 
   // The settings read is inside the same fail-open boundary as the user/org reads.
@@ -75,10 +129,22 @@ describe('checkSessionOperationalCredits', () => {
     const logger = { warn: vi.fn(), error: vi.fn() };
 
     await expect(preflight({ logger: logger as never })).resolves.toEqual({ allowed: true });
-    expect(mockFindUserById).not.toHaveBeenCalled();
     // The level is the alarm channel, so it is asserted, not incidental: a silent fail-open is
     // indistinguishable from the ungated behavior this gate replaced.
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('gate disabled'), expect.any(Error));
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('gate disabled'), expect.any(Error), {
+      failedRead: 'settings',
+    });
+  });
+
+  it('allows when the enforceCredits read throws, and says so at error level', async () => {
+    mockCreditsEnforced.mockRejectedValueOnce(new Error('mongo down'));
+    const logger = { warn: vi.fn(), error: vi.fn() };
+
+    await expect(preflight({ logger: logger as never })).resolves.toEqual({ allowed: true });
+    expect(mockFindUserById).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('gate disabled'), expect.any(Error), {
+      failedRead: 'settings',
+    });
   });
 
   it('allows a funded holder when billing is on', async () => {
@@ -155,6 +221,13 @@ describe('checkSessionOperationalCredits', () => {
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('gate disabled'), expect.any(Error));
   });
 
+  it('treats a holder with no recorded balance as holding 0 credits', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID });
+
+    await expect(preflight()).resolves.toMatchObject({ allowed: false, reason: expect.stringContaining('0 credits') });
+  });
+
   it('allows when the owner no longer exists', async () => {
     billingOn();
     mockFindUserById.mockResolvedValue(null);
@@ -167,6 +240,46 @@ describe('checkSessionOperationalCredits', () => {
 
     await expect(preflight({ operationCount: 0 })).resolves.toEqual({ allowed: true });
     expect(mockBillingEnabled).not.toHaveBeenCalled();
+  });
+
+  it('checks the free-tier daily caps for the paying holder once billing applies', async () => {
+    billingOn();
+    const user = { id: USER_ID, currentCredits: 1000, organizationId: ORG_ID };
+    mockFindUserById.mockResolvedValue(user);
+    mockFindOrgById.mockResolvedValue({ id: ORG_ID, currentCredits: 1000, userDetails: [] });
+
+    await expect(preflight()).resolves.toEqual({ allowed: true });
+    expect(mockDailyCap).toHaveBeenCalledWith(
+      expect.objectContaining({ user, billingOrganizationId: ORG_ID, logger: expect.anything() })
+    );
+  });
+
+  it('refuses a funded holder who reached a free-tier daily cap', async () => {
+    billingOn();
+    const capError = new TooManyRequestsError('Daily free-tier usage limit reached. Try again tomorrow.', {
+      errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+    });
+    mockDailyCap.mockRejectedValueOnce(capError);
+
+    await expect(preflight()).resolves.toEqual({
+      allowed: false,
+      reason: 'Daily free-tier usage limit reached. Try again tomorrow.',
+      dailyCapError: capError,
+    });
+    expect(mockGetOperationsModel).not.toHaveBeenCalled();
+  });
+
+  it('rethrows an error from the daily cap check that is not a cap refusal', async () => {
+    billingOn();
+    const failure = new Error('unexpected');
+    mockDailyCap.mockRejectedValueOnce(failure);
+
+    await expect(preflight({ logger: { warn: vi.fn(), error: vi.fn() } as never })).rejects.toBe(failure);
+  });
+
+  it('skips the daily cap check when operational billing does not apply', async () => {
+    await preflight();
+    expect(mockDailyCap).not.toHaveBeenCalled();
   });
 
   // A half-resolved pair would skip the cap and bill the member personally for org usage.
@@ -239,6 +352,19 @@ describe('checkSessionOperationalCredits', () => {
           id: 'llama3-cache-priced',
           freeToRun: true,
           pricing: { 128000: { input: 0, output: 0, cache_read: 0.01, cache_write: 0.1 } },
+        },
+      });
+
+      await expect(preflight()).resolves.toMatchObject({ allowed: false });
+    });
+
+    it('keeps the refusal when a freeToRun model carries only a cache-write rate', async () => {
+      brokeHolder();
+      mockGetOperationsModel.mockResolvedValue({
+        modelInfo: {
+          id: 'llama3-cache-write',
+          freeToRun: true,
+          pricing: { 128000: { input: 0, output: 0, cache_write: 0.1 } },
         },
       });
 
@@ -341,6 +467,20 @@ describe('assertSessionOperationalCredits', () => {
     expect(getQuestErrorCode(error)).toBe('insufficient_credits');
     expect((error as { statusCode?: number }).statusCode).toBe(422);
   });
+
+  it('rethrows the free-tier daily cap 429 rather than recasting it as insufficient credits', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 10 });
+    const capError = new TooManyRequestsError('Daily free-tier usage limit reached. Try again tomorrow.', {
+      errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+      retryAfter: 60,
+    });
+    mockDailyCap.mockRejectedValueOnce(capError);
+
+    await expect(
+      assertSessionOperationalCredits({ userId: USER_ID, operationCount: 1, operation: 'session tagging' })
+    ).rejects.toBe(capError);
+  });
 });
 
 describe('filterSessionIdsByOperationalCredits', () => {
@@ -350,6 +490,7 @@ describe('filterSessionIdsByOperationalCredits', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetOperationsModel.mockResolvedValue(PRICED_OPERATIONS_MODEL);
+    mockFindUserById.mockResolvedValue({ id: PAYER_ID, currentCredits: 1000 });
     mockFindOrgById.mockResolvedValue(null);
   });
 
@@ -380,11 +521,10 @@ describe('filterSessionIdsByOperationalCredits', () => {
 
     expect(allowed).toEqual(new Set(['s1', 's2', 's3']));
     expect(mockBillingEnabled).toHaveBeenCalledTimes(1);
-    expect(mockFindUserById).not.toHaveBeenCalled();
-    expect(mockFindOrgById).not.toHaveBeenCalled();
     expect(logger.error).toHaveBeenCalledExactlyOnceWith(
       '[sessionOperationalCreditPreflight] gate disabled: failed to read billing settings',
-      error
+      error,
+      { failedRead: 'settings' }
     );
   });
 

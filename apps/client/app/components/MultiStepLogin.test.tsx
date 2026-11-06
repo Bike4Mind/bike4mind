@@ -21,11 +21,18 @@ type MfaHookOptions = {
 
 // Factory-safe mock handles (vi.mock is hoisted above imports).
 const mocks = vi.hoisted(() => ({
+  publicConfig: {
+    data: { allowTrustedDevices: true } as { allowTrustedDevices: boolean; supportEmail?: string } | undefined,
+    isLoading: false,
+  },
   sendOTC: vi.fn(),
+  formToken: { data: 'form-tok-1' as string | undefined, refetch: vi.fn() },
   verifyOTC: vi.fn(),
+  startOAuthSignIn: vi.fn(),
   setCurrentUser: vi.fn(),
   trackSignupConversion: vi.fn(),
   applyRedirect: vi.fn(),
+  navigate: vi.fn(),
   // Mutable so the "already logged in" tests can vary the session state. Not reset by
   // vi.clearAllMocks() (it only touches mock fns) - each describe's beforeEach resets these.
   userState: { currentUser: null as unknown },
@@ -43,10 +50,21 @@ const mocks = vi.hoisted(() => ({
   websiteUrl: '',
 }));
 
-vi.mock('@client/app/hooks/data/auth', () => ({
-  useSendOTC: () => ({ mutateAsync: mocks.sendOTC, isPending: false }),
-  useVerifyOTC: () => ({ mutateAsync: mocks.verifyOTC, isPending: false }),
-}));
+vi.mock('@client/app/hooks/data/auth', async () => {
+  const { useState } = await vi.importActual<typeof import('react')>('react');
+  return {
+    useSignupBotFields: () => {
+      const [honeypot, setHoneypot] = useState('');
+      return {
+        botFields: { formToken: mocks.formToken.data, formExtra: honeypot },
+        honeypotProps: { value: honeypot, onChange: setHoneypot },
+      };
+    },
+    useSendOTC: () => ({ mutateAsync: mocks.sendOTC, isPending: false }),
+    useVerifyOTC: () => ({ mutateAsync: mocks.verifyOTC, isPending: false }),
+    useStartOAuthSignIn: () => mocks.startOAuthSignIn,
+  };
+});
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ setCurrentUser: mocks.setCurrentUser, currentUser: mocks.userState.currentUser }),
 }));
@@ -77,7 +95,7 @@ vi.mock('@client/app/hooks/data/passkeys', () => ({
   passkeysSupported: () => false,
 }));
 vi.mock('@tanstack/react-router', () => ({
-  useNavigate: () => vi.fn(),
+  useNavigate: () => mocks.navigate,
   useRouter: () => ({ history: {} }),
 }));
 // finishLogin calls applyRedirect(router.history, ...); stub it so the empty history is inert.
@@ -93,7 +111,7 @@ vi.mock('@client/app/hooks/useCommonStyles', () => ({
 vi.mock('@client/app/hooks/useGetLogo', () => ({ default: () => '/logo.png' }));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useBrandingSettings: () => ({}),
-  usePublicConfig: () => ({ data: { allowTrustedDevices: true } }),
+  usePublicConfig: () => mocks.publicConfig,
 }));
 vi.mock('next/image', () => ({ default: () => null }));
 vi.mock('react-i18next', () => ({
@@ -119,6 +137,15 @@ const renderLogin = (props: React.ComponentProps<typeof MultiStepLogin> = {}) =>
 
 const textboxIn = (testId: string) => within(screen.getByTestId(testId)).getByRole('textbox');
 const checkboxIn = (testId: string) => within(screen.getByTestId(testId)).getByRole('checkbox');
+
+// useJoinWaitlist passes the email as a history-state updater, never in the query string.
+const expectWaitlistNavigation = (source: string, email: string | undefined) => {
+  expect(mocks.navigate).toHaveBeenCalledWith(
+    expect.objectContaining({ to: '/subscribe', search: { source }, state: expect.any(Function) })
+  );
+  const { state } = mocks.navigate.mock.calls.at(-1)[0];
+  expect(state({ key: 'k' })).toEqual({ key: 'k', waitlistEmail: email });
+};
 
 // Drives the flow from the email step to the register-username step (email -> code ->
 // registrationRequired). Assumes mocks.verifyOTC's FIRST call resolves registrationRequired.
@@ -149,6 +176,65 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
       ok: true,
       json: async () => ({ requiresRedirect: false }),
     }) as unknown as typeof fetch;
+  });
+
+  it('links invite-only visitors to the registration form', async () => {
+    renderLogin({ enableRegister: false });
+    expect(screen.getByTestId('signup-text')).toHaveTextContent('Have an invite code?');
+    await userEvent.setup().click(screen.getByTestId('signup-text'));
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: '/register', search: undefined });
+  });
+
+  it('offers invite-only visitors the waitlist with their typed email', async () => {
+    const user = userEvent.setup();
+    renderLogin({ enableRegister: false });
+
+    await user.type(textboxIn('login-email-input'), ' new@test.com ');
+    await user.click(screen.getByTestId('login-join-waitlist-link'));
+
+    expectWaitlistNavigation('login_signup_closed', 'new@test.com');
+  });
+
+  it('hides the waitlist link when registration is open', () => {
+    renderLogin({ enableRegister: true });
+    expect(screen.queryByTestId('login-join-waitlist-link')).not.toBeInTheDocument();
+  });
+
+  it('turns an email-code signup refusal into a waitlist action carrying the verified email', async () => {
+    const user = userEvent.setup();
+    mocks.verifyOTC.mockResolvedValueOnce({
+      registrationRequired: true,
+      registrationAllowed: false,
+      email: 'new@test.com',
+      pendingToken: 'ptok-closed',
+    });
+    renderLogin({ enableRegister: false });
+
+    await user.type(textboxIn('login-email-input'), 'new@test.com');
+    await user.click(screen.getByTestId('login-continue-btn'));
+    await user.type(within(await screen.findByTestId('login-otc-input')).getByRole('textbox'), '12345678');
+    await user.click(screen.getByTestId('login-verify-btn'));
+
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed', expect.anything()));
+    const [, options] = mocks.toast.error.mock.calls[0];
+    expect(options.action.label).toBe('auth.joinWaitlist');
+    options.action.onClick();
+    expectWaitlistNavigation('login_signup_closed', 'new@test.com');
+  });
+
+  it('lets keyboard users open invite-only registration', async () => {
+    const user = userEvent.setup();
+    renderLogin({ enableRegister: false });
+    const signup = screen.getByTestId('signup-text');
+    expect(signup.tagName).toBe('BUTTON');
+    expect(signup).toHaveAttribute('type', 'button');
+    for (let tabCount = 0; tabCount < 10 && document.activeElement !== signup; tabCount += 1) {
+      await user.tab();
+    }
+    expect(signup).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: '/register', search: undefined });
+    expect(mocks.sendOTC).not.toHaveBeenCalled();
   });
 
   it('hydrates currentUser with a FLAT user (not the nested {user} wrapper) after inline registration', async () => {
@@ -425,7 +511,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     await user.click(screen.getByTestId('login-continue-btn'));
     await user.type(within(await screen.findByTestId('login-otc-input')).getByRole('textbox'), '12345678');
     await user.click(screen.getByTestId('login-verify-btn'));
-    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed'));
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed', expect.anything()));
 
     await user.click(screen.getByTestId('login-verify-btn'));
 
@@ -457,13 +543,88 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
       await user.type(otcInput, '12345678');
       await user.click(screen.getByTestId('login-verify-btn'));
 
-      await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed'));
+      await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed', expect.anything()));
       expect(mocks.toast.dismiss).toHaveBeenCalledWith('otc-code-sent');
       // Must NOT strand the user on the username step, and must not create a session.
       expect(screen.queryByTestId('login-register-username-input')).not.toBeInTheDocument();
       expect(mocks.setCurrentUser).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('MultiStepLogin - OAuth sign-in start', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userState.currentUser = null;
+    mocks.accessTokenState.accessToken = null;
+    mocks.startOAuthSignIn.mockResolvedValue(undefined);
+  });
+
+  it.each([
+    ['login-google-btn', '/api/auth/google'],
+    ['login-github-btn', '/api/auth/github'],
+    ['login-okta-btn', '/api/auth/okta'],
+  ])('starts the provider sign-in through the challenge-aware hook from %s', async (testId, startUrl) => {
+    const user = userEvent.setup();
+    renderLogin();
+    await user.click(screen.getByTestId(testId));
+    expect(mocks.startOAuthSignIn).toHaveBeenCalledWith(startUrl);
+  });
+
+  it('hides the Apple button unless Apple sign-in is enabled', () => {
+    renderLogin();
+    expect(screen.queryByTestId('login-apple-btn')).toBeNull();
+  });
+
+  it('starts the Apple sign-in through the same hook when enabled', async () => {
+    const user = userEvent.setup();
+    renderLogin({ enableAppleAuth: true });
+    await user.click(screen.getByTestId('login-apple-btn'));
+    expect(mocks.startOAuthSignIn).toHaveBeenCalledWith('/api/auth/apple');
+  });
+
+  it('routes an email-strategy redirect through the same hook', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ requiresRedirect: true, redirectUrl: '/api/auth/github' }),
+      })
+    );
+    renderLogin();
+    await user.type(textboxIn('login-email-input'), 'dev@test.com');
+    await user.click(screen.getByTestId('login-continue-btn'));
+    await waitFor(() => expect(mocks.startOAuthSignIn).toHaveBeenCalledWith('/api/auth/github'));
+    expect(mocks.sendOTC).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('shows the challenge error and stays on the page when the sign-in cannot start', async () => {
+    const user = userEvent.setup();
+    mocks.startOAuthSignIn.mockRejectedValue(new Error('Could not complete the verification check.'));
+    renderLogin();
+    await user.click(screen.getByTestId('login-google-btn'));
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('Could not complete the verification check.'));
+  });
+
+  it('returns to the email step when an email-strategy redirect cannot start', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ requiresRedirect: true, redirectUrl: '/api/auth/github' }),
+      })
+    );
+    mocks.startOAuthSignIn.mockRejectedValue(new Error('Could not complete the verification check.'));
+    renderLogin();
+    await user.type(textboxIn('login-email-input'), 'dev@test.com');
+    await user.click(screen.getByTestId('login-continue-btn'));
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('Could not complete the verification check.'));
+    expect(screen.getByTestId('login-continue-btn')).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
 });
 
 // The "already logged in" bounce must gate on a LIVE session (currentUser + token), not on a
@@ -680,6 +841,36 @@ describe('MultiStepLogin - email step guidance and code-request errors', () => {
       vi.useRealTimers();
     }
   });
+
+  it('ignores a second Resend click while a resend is still in flight', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let finishResend: (value: { pendingToken: string }) => void = () => {};
+      mocks.sendOTC
+        .mockResolvedValueOnce({ pendingToken: 'ptok-1' })
+        .mockReturnValueOnce(new Promise(resolve => (finishResend = resolve)));
+      renderLogin();
+
+      await user.type(textboxIn('login-email-input'), 'someone@test.com');
+      await user.click(screen.getByTestId('login-continue-btn'));
+      await screen.findByTestId('login-resend-btn');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(31000);
+      });
+      await user.dblClick(screen.getByTestId('login-resend-btn'));
+      expect(mocks.sendOTC).toHaveBeenCalledTimes(2);
+
+      await act(async () => finishResend({ pendingToken: 'ptok-2' }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(31000);
+      });
+      await user.click(screen.getByTestId('login-resend-btn'));
+      expect(mocks.sendOTC).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('MultiStepLogin - second-factor handoff', () => {
@@ -783,4 +974,120 @@ describe('MultiStepLogin - second-factor handoff', () => {
       expect(mocks.toast[toastKind as 'error' | 'info']).toHaveBeenCalledTimes(1);
     }
   );
+});
+
+describe('MultiStepLogin - OAuth registration_closed redirect', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userState.currentUser = null;
+    mocks.accessTokenState.accessToken = null;
+  });
+
+  afterEach(() => {
+    window.history.replaceState({}, '', '/');
+  });
+
+  it('explains the invite gate and offers the waitlist, then strips the code from the URL', async () => {
+    window.history.replaceState({}, '', '/login?error=registration_closed');
+    renderLogin({ enableRegister: false });
+
+    await waitFor(() =>
+      expect(mocks.toast.error).toHaveBeenCalledWith(expect.stringMatching(/invite-only/), expect.anything())
+    );
+    const [, options] = mocks.toast.error.mock.calls[0];
+    options.action.onClick();
+    expectWaitlistNavigation('oauth_signup_closed', undefined);
+    expect(window.location.search).toBe('');
+  });
+
+  it('adds no waitlist action to other sign-in errors', async () => {
+    window.history.replaceState({}, '', '/login?error=callback_error');
+    renderLogin({ enableRegister: false });
+
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalled());
+    const [, options] = mocks.toast.error.mock.calls[0];
+    expect(options.action).toBeUndefined();
+  });
+
+  describe('blocked-account notice', () => {
+    afterEach(() => {
+      mocks.publicConfig = { data: { allowTrustedDevices: true }, isLoading: false };
+    });
+
+    it('names the configured support address', async () => {
+      mocks.publicConfig = { data: { allowTrustedDevices: true, supportEmail: 'help@example.com' }, isLoading: false };
+      window.history.replaceState({}, '', '/login?error=account_on_hold');
+      renderLogin({ enableRegister: false });
+
+      await waitFor(() =>
+        expect(mocks.toast.error).toHaveBeenCalledWith(
+          'Your account is on hold pending a payment review. Please contact support. Support: help@example.com',
+          expect.anything()
+        )
+      );
+      expect(window.location.search).toBe('');
+    });
+
+    it('waits for the public config before showing it', async () => {
+      mocks.publicConfig = { data: undefined, isLoading: true };
+      window.history.replaceState({}, '', '/login?error=account_on_hold');
+      renderLogin({ enableRegister: false });
+
+      expect(mocks.toast.error).not.toHaveBeenCalled();
+      expect(window.location.search).toBe('?error=account_on_hold');
+    });
+
+    it('shows the notice without an address when none is configured', async () => {
+      mocks.publicConfig = { data: { allowTrustedDevices: true, supportEmail: '' }, isLoading: false };
+      window.history.replaceState({}, '', '/login?error=account_on_hold');
+      renderLogin({ enableRegister: false });
+
+      await waitFor(() =>
+        expect(mocks.toast.error).toHaveBeenCalledWith(
+          'Your account is on hold pending a payment review. Please contact support.',
+          expect.anything()
+        )
+      );
+    });
+  });
+});
+
+describe('MultiStepLogin - signup bot checks', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.formToken.data = 'form-tok-1';
+    mocks.sendOTC.mockResolvedValue({ pendingToken: 'ptok-1' });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ requiresRedirect: false }),
+    }) as unknown as typeof fetch;
+  });
+
+  const submitEmail = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.type(textboxIn('login-email-input'), 'new@test.com');
+    await user.click(screen.getByTestId('login-continue-btn'));
+    await screen.findByTestId('login-otc-input');
+  };
+
+  it('sends the form token and an empty honeypot value with the initial code request', async () => {
+    renderLogin();
+    await submitEmail(userEvent.setup());
+    expect(mocks.sendOTC).toHaveBeenCalledWith({ email: 'new@test.com', formToken: 'form-tok-1', formExtra: '' });
+  });
+
+  it('sends the honeypot value when it was filled', async () => {
+    const user = userEvent.setup();
+    renderLogin();
+    await user.type(screen.getByTestId('signup-honeypot-input'), 'spam');
+    await submitEmail(user);
+    expect(mocks.sendOTC).toHaveBeenCalledWith(expect.objectContaining({ formExtra: 'spam' }));
+  });
+
+  it('submits immediately without a token when none is loaded', async () => {
+    mocks.formToken.data = undefined;
+    renderLogin();
+    await submitEmail(userEvent.setup());
+    expect(mocks.formToken.refetch).not.toHaveBeenCalled();
+    expect(mocks.sendOTC).toHaveBeenCalledWith({ email: 'new@test.com', formToken: undefined, formExtra: '' });
+  });
 });

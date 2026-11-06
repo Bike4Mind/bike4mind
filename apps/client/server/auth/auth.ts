@@ -1,10 +1,10 @@
 import passport from 'passport';
 // TODO Bring back after we fix facebook secrets
 // import { Strategy as FacebookStrategy } from 'passport-facebook';
-import { AuthStrategy, type IUserDocument } from '@bike4mind/common';
+import { ACCOUNT_DELETION_PENDING_CODE, AuthStrategy, type IUserDocument } from '@bike4mind/common';
 import ability from '@server/auth/ability';
 import { User } from '@bike4mind/database';
-import { verifyCallback } from '@server/utils/auth/verifyCallback';
+import { selfServeVerifyCallback, verifyCallback } from '@server/utils/auth/verifyCallback';
 import { Config } from '@bike4mind/server-utils/utils/config';
 
 import { Request, RequestHandler, Response } from 'express';
@@ -20,11 +20,18 @@ import nc from 'next-connect';
 import { Logger } from '@bike4mind/observability';
 import { jwtSecretOrKeyProvider } from './jwtSecretOrKeyProvider';
 import { verifyJwtPayload } from './verifyJwtPayload';
-import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from './mfaEnforcement';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { githubOAuthStateStore, googleOAuthStateStore } from './passportOAuthStateStore';
 import { createGitHubStrategy } from './githubStrategy';
+import { registerAppleStrategy } from './appleStrategy';
+import { getAppleConfig } from '@bike4mind/server-utils/auth/appleConfig';
 import { isPolicyConsentRequired, type ConsentGateUser } from '@bike4mind/server-utils/auth/consentGate';
 import { samlRequestCache } from './samlRequestCache';
+import {
+  ACCOUNT_DELETION_PENDING_MESSAGE,
+  isBlockedByPendingDeletion,
+  type DeletionGateUser,
+} from '@bike4mind/server-utils/auth/deletionPendingGate';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
 
 passport.use(
@@ -67,6 +74,8 @@ const MFA_ENROLLMENT_ALLOWED_PATHS = new Set([
 function isMfaEnrollmentAllowedRoute(req: Request, userId: string): boolean {
   const path = req.url.split('?')[0];
   if (MFA_ENROLLMENT_ALLOWED_PATHS.has(path)) return true;
+  // A deletion-pending account owing enrollment must still be able to cancel the deletion.
+  if (req.method === 'DELETE' && path === '/api/account/deletion') return true;
   // auth/success bootstraps the current user from its own profile after a sign-in.
   return req.method === 'GET' && path === `/api/users/${userId}`;
 }
@@ -163,6 +172,18 @@ export const auth = handler
       });
     }
 
+    // A deletion-pending account is confined to the cancel screen until it cancels or is purged.
+    // 403, not 401, for the same reason as the consent gate above.
+    const deletionUser = req.user as (DeletionGateUser & { mfaPending?: boolean }) | undefined;
+    if (!deletionUser?.mfaPending && isBlockedByPendingDeletion(deletionUser, req.url, req.method)) {
+      return res.status(403).json({
+        error: ACCOUNT_DELETION_PENDING_MESSAGE,
+        code: ACCOUNT_DELETION_PENDING_CODE,
+        scheduledFor: deletionUser!.deletion!.scheduledFor,
+        request_id: req.requestId,
+      });
+    }
+
     next();
   })
   .use(mfaEnrollmentGate)
@@ -188,8 +209,9 @@ if (Config.GOOGLE_CLIENT_ID && Config.GOOGLE_CLIENT_ID !== 'not-configured') {
         clientSecret: Config.GOOGLE_CLIENT_SECRET,
         callbackURL: process.env.APP_URL + '/api/auth/google/callback',
         store: googleOAuthStateStore,
+        passReqToCallback: true,
       },
-      verifyCallback(AuthStrategy.Google)
+      selfServeVerifyCallback(AuthStrategy.Google)
     )
   );
 } else {
@@ -229,12 +251,18 @@ if (Config.GITHUB_CLIENT_ID && Config.GITHUB_CLIENT_ID !== 'not-configured') {
         // it, SSO logins resolve with email=null and fall into the
         // account-create path instead of matching the existing account by email.
         scope: ['user:email'],
+        passReqToCallback: true,
       },
-      verifyCallback(AuthStrategy.Github)
+      selfServeVerifyCallback(AuthStrategy.Github)
     )
   );
 } else {
   console.warn('[AUTH] GitHub OAuth disabled: GITHUB_CLIENT_ID not configured');
+}
+
+// Only register Sign in with Apple if all four credentials are configured
+if (!registerAppleStrategy(passport, getAppleConfig())) {
+  console.warn('[AUTH] Sign in with Apple disabled: APPLE_* credentials not configured');
 }
 
 // Note: Okta authentication is now handled by openid-client in oktaOidcClient.ts

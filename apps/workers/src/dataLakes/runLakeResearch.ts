@@ -17,6 +17,7 @@ import { fetchAndParseURL } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import type { ResearchRunTotals, SettleResearchRunInput } from '@bike4mind/common';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 
 /**
@@ -141,6 +142,22 @@ export async function runLakeResearch(
     return { claimed: true };
   }
 
+  // Re-checked here because a queued or scheduled run outlives the start that admitted it: an owner
+  // blocked since then (ban, dispute, suspension) must not have research spent on their behalf.
+  const owner = await userRepository
+    .findById(lake.createdByUserId)
+    .catch(error => failAndRethrow(error, 0, claimed.totals));
+  if (owner && aiAccessDeniedMessage(owner)) {
+    await settle({
+      status: 'failed',
+      completedAt: new Date(),
+      spentMicroUsd: 0,
+      totals: claimed.totals,
+      error: "This data lake's owner account cannot run research",
+    });
+    return { claimed: true };
+  }
+
   // Mirrors what the loop last reported, so the `failed` settle below records the money actually
   // spent rather than zero. A run that dies after four judgments really did spend four judgments,
   // and reporting 0 would make the per-lake ceiling look untouched on the very run that proves it
@@ -148,6 +165,7 @@ export async function runLakeResearch(
   let spentMicroUsd = 0;
   let totals: ResearchRunTotals = claimed.totals;
   let judgeProvider: string | undefined;
+  const judgeUsage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0 };
 
   // A run reaching an outcome left no trace in the lake's History tab. `.catch()` here is
   // deliberate belt-and-suspenders: `recordLakeConfigChange` itself is already best-effort and
@@ -175,7 +193,7 @@ export async function runLakeResearch(
   // closure value is the best available regardless, and can itself undercount by one judgment if
   // `propose` throws after that judgment was priced but before its progress tick.
   const recordSpend = async (amountMicroUsd: number) => {
-    if (amountMicroUsd <= 0) return;
+    if (amountMicroUsd <= 0 && Object.values(judgeUsage).every(tokens => tokens === 0)) return;
     if (!judgeModel) {
       // Should not happen once any judgment has run (judgeModel is set before the first `judge`
       // port call), but this guards against a future path that could report spend without one.
@@ -213,10 +231,7 @@ export async function runLakeResearch(
         feature: 'operations',
         provider: judgeProvider ?? 'unknown',
         model: judgeModel,
-        // Token counts are not accumulated at the run level today (only the priced total is) - see
-        // RelevanceJudgeService.priceCall. The ledger's cost figure is real; only the token column
-        // reads zero.
-        inputTokens: 0,
+        ...judgeUsage,
         // The ACTUAL spend, not the ceiling: the ceiling is what the balance pre-flight had to
         // cover, and it is the in-run guard that stops the loop - charging the ceiling here would
         // bill for judgments that never ran.
@@ -327,8 +342,8 @@ export async function runLakeResearch(
         });
         return hits.map(hit => ({ title: hit.title, url: hit.url, snippet: hit.snippet }));
       },
-      judge: candidate =>
-        judgeService.judge({
+      judge: async candidate => {
+        const judgment = await judgeService.judge({
           apiKeyTable,
           models,
           model,
@@ -337,7 +352,13 @@ export async function runLakeResearch(
           url: candidate.url,
           snippet: candidate.snippet,
           endUserId: lake.createdByUserId,
-        }),
+        });
+        judgeUsage.inputTokens += judgment.inputTokens ?? 0;
+        judgeUsage.outputTokens += judgment.outputTokens ?? 0;
+        judgeUsage.cachedInputTokens += judgment.cacheReadInputTokens ?? 0;
+        judgeUsage.cacheWriteTokens += judgment.cacheCreationInputTokens ?? 0;
+        return judgment;
+      },
       fetchSource: url => fetchSourceForProposal(url, logger),
       propose: candidate =>
         dataLakeService.proposeDataLakeContent(lake, candidate, {

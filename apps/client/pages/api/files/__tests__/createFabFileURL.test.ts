@@ -1,10 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   fabFileCreate: vi.fn(),
   createFabFileByUrl: vi.fn(),
   logEvent: vi.fn(),
   signUrl: vi.fn(),
+  consumeFileUploadBudget: vi.fn(async (_req: unknown, _fileCount: number) => undefined),
   baseApiOptions: undefined as unknown,
 }));
 
@@ -18,7 +19,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
+vi.mock('@server/files/fileUploadBudget', () => ({ consumeFileUploadBudget: h.consumeFileUploadBudget }));
+
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: h.signUrl }),
 }));
@@ -93,12 +96,30 @@ describe('POST /api/files/createFabFileURL', () => {
     });
   });
 
+  it('spends one unit of the allowance for the import', async () => {
+    await run(makeRes().res);
+
+    expect(h.consumeFileUploadBudget).toHaveBeenCalledTimes(1);
+    expect(h.consumeFileUploadBudget.mock.calls[0][1]).toBe(1);
+  });
+
+  it('imports nothing when the allowance refuses the upload', async () => {
+    h.consumeFileUploadBudget.mockRejectedValueOnce(new Error('Upload limit reached'));
+
+    await expect(run(makeRes().res)).rejects.toThrow('Upload limit reached');
+    expect(h.createFabFileByUrl).not.toHaveBeenCalled();
+  });
+
   it('requires files:write at the baseApi route gate', () => {
     expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
   });
 });
 
+afterEach(() => vi.unstubAllEnvs());
+
 it('returns a browser URL without modifying the privately cached imported row', async () => {
+  // A browser URL distinct from the cached private one is only minted on split-endpoint deploys.
+  vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://public.test');
   const saved = {
     ...PERSISTED,
     moderationStatus: 'clean',

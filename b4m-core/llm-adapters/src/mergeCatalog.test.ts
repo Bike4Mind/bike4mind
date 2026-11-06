@@ -3,6 +3,8 @@ import { ChatModels, ImageModels, ModelBackend, toModelRecord } from '@bike4mind
 import type { IModelCatalogRow, ModelInfo } from '@bike4mind/common';
 import { getAvailableModels, setModelCatalogProvider, setModelPriceRowsProvider } from './index';
 import { mergeCatalog, mergeCatalogWithDrops, resolveCatalogRecords } from './mergeCatalog';
+import { catalogLifecycles } from './deprecationHorizon';
+import { catalogSuccessors } from './resolveDeprecatedModel';
 import type { BackendGateContext } from './backendGate';
 
 const NO_KEYS: BackendGateContext = { apiKeys: null, isSelfHost: false, bedrockReachable: true };
@@ -542,6 +544,45 @@ describe('mergeCatalog: catalog-only records and the invocability contract', () 
   afterEach(() => {
     setModelCatalogProvider(null);
     setModelPriceRowsProvider(null);
+  });
+});
+
+describe('mergeCatalog: a snapshot alias retired through the queue', () => {
+  // The discovery row that listed "gpt-4.1" next to the seeded dated snapshot.
+  const alias = row({
+    modelId: 'gpt-4.1',
+    ownedGroups: ['identity', 'limits', 'dispatch', 'lifecycle'],
+    patch: {
+      id: 'gpt-4.1',
+      vendor: 'openai',
+      backend: ModelBackend.OpenAI,
+      type: 'text',
+      name: 'GPT-4.1',
+      contextWindow: 1_047_576,
+      adapterFamily: 'openai-chat',
+      dispatchProfile: { maxTokensParam: 'max_completion_tokens', toolTransport: 'chat' },
+      lifecycle: { status: 'active' },
+    },
+  });
+  // What accepting the snapshot-alias suggestion appends (model-deprecation-status.ts).
+  const accepted = row({
+    modelId: 'gpt-4.1',
+    source: 'operator',
+    ownedGroups: ['lifecycle'],
+    patch: { lifecycle: { status: 'deprecated', replacedBy: ChatModels.GPT4_1 } },
+    effectiveFrom: new Date('2026-02-01T00:00:00Z'),
+  });
+  const ctx: BackendGateContext = { ...NO_KEYS, apiKeys: { openai: 'sk-test' } };
+
+  it('lists the alias next to the snapshot until accepted', () => {
+    const ids = mergeCatalog([seedModel()], [alias], ctx).map(model => model.id);
+    expect(ids).toEqual([ChatModels.GPT4_1, 'gpt-4.1']);
+  });
+
+  it('drops the alias once accepted, and redirects its pins to the snapshot', () => {
+    const rows = [alias, accepted];
+    expect(mergeCatalog([seedModel()], rows, ctx).map(model => model.id)).toEqual([ChatModels.GPT4_1]);
+    expect(catalogSuccessors(catalogLifecycles(rows)).get('gpt-4.1')).toBe(ChatModels.GPT4_1);
   });
 });
 

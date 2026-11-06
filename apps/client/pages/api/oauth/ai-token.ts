@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   agentRepository,
   cacheRepository,
@@ -35,10 +35,16 @@ import {
 import { userApiKeyService, API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/services';
 import { ApiKeyScope, ApiKeyStatus, BadRequestError } from '@bike4mind/common';
 import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
+import { isAccountDeletionPending } from '@bike4mind/server-utils/auth/deletionPendingGate';
 import { checkFederatedGrant } from '@server/auth/federatedGrantGate';
 import { verifyFederatedIdToken, FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { logOAuthError } from '@server/auth/oauthErrorLog';
+import {
+  API_KEY_ACCESS_DENIED_MESSAGE,
+  SUBSCRIPTION_REQUIRED_ERROR,
+  isApiKeyAccessAllowed,
+} from '@server/utils/apiKeyAccessGate';
 
 /** Minted key lifetime. The app caches the key per-user and re-exchanges only when it expires. */
 const AI_TOKEN_TTL_SECONDS = userApiKeyService.MAX_EXCHANGE_KEY_TTL_MS / 1000;
@@ -199,6 +205,18 @@ const handler = baseApi({ auth: false })
     if (!hasAcceptedPolicy(user)) {
       logError('access_denied', 403);
       return res.status(403).json({ error: 'access_denied', error_description: 'Policy acceptance required' });
+    }
+    if (isAccountDeletionPending(user)) {
+      logError('access_denied', 403);
+      return res.status(403).json({ error: 'access_denied', error_description: 'Account is scheduled for deletion' });
+    }
+
+    // 6.5. The admin paid-only switch; the same gate re-runs on every use of the key.
+    if (!(await isApiKeyAccessAllowed(user, undefined, req))) {
+      logError(SUBSCRIPTION_REQUIRED_ERROR, 403);
+      return res
+        .status(403)
+        .json({ error: SUBSCRIPTION_REQUIRED_ERROR, error_description: API_KEY_ACCESS_DENIED_MESSAGE });
     }
 
     const clientIp = getClientIp(req);

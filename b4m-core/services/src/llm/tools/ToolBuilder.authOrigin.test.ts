@@ -15,7 +15,9 @@ vi.mock('./index', async importOriginal => {
  * with the wrong key id has to fail at build time rather than reach a tool.
  */
 describe('ToolBuilder threads authOrigin into ToolContext', () => {
-  function build(auth: Partial<Pick<ToolContext, 'authOrigin' | 'apiKeyId'>>): ToolContext | undefined {
+  function build(
+    auth: Partial<Pick<ToolContext, 'authOrigin' | 'apiKeyId' | 'getEntitlements'>>
+  ): ToolContext | undefined {
     let seen: ToolContext | undefined;
     const probe: ToolDefinition = {
       implementation: context => {
@@ -47,6 +49,14 @@ describe('ToolBuilder threads authOrigin into ToolContext', () => {
     } as unknown as BuildToolsArgs);
     return seen;
   }
+
+  it('forwards the lazy entitlement resolver through the real builder chain', async () => {
+    const getEntitlements = vi.fn(async () => ['plan:paid']);
+    const context = build({ authOrigin: 'internal', getEntitlements });
+    expect(getEntitlements).not.toHaveBeenCalled();
+    expect(context?.getEntitlements).toBe(getEntitlements);
+    await expect(context?.getEntitlements?.()).resolves.toEqual(['plan:paid']);
+  });
 
   it.each(['session', 'internal'] as const)('passes a %s origin through with no key id', authOrigin => {
     const context = build({ authOrigin });

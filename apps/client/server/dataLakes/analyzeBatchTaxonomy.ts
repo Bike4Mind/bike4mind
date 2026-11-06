@@ -24,7 +24,7 @@ import {
   type InferTaxonomyResponse,
   type TaxonomyStatus,
 } from '@bike4mind/common';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import {
   runTaxonomyInference,
   sampleFabFilesForTaxonomy,

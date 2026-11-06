@@ -1,11 +1,19 @@
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { ChatQueueEvent, ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
+import type {
+  ChatMessageSkill,
+  ChatQueueEvent,
+  ChatRelayOrigin,
+  ChatSessionSummary,
+  ChatStreamEvent,
+} from '@shared/chat';
+import { formatSessionMention } from '@shared/sessionMention';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChatService } from './ChatService';
+import { ChatService, RUN_HERE_PREAMBLE } from './ChatService';
 import { MessageQueue } from './MessageQueue';
 import { SessionActivity } from './SessionActivity';
 import { SessionStore } from './SessionStore';
@@ -81,8 +89,8 @@ describe('ChatService session_send', () => {
     for (const stream of streams) stream.end();
   });
 
-  async function codeSession(title: string): Promise<ChatSessionSummary> {
-    const created = await service.createCodeSession({ directory: project, branch: '', workspace: false });
+  async function codeSession(title: string, directory = project): Promise<ChatSessionSummary> {
+    const created = await service.createCodeSession({ directory, branch: '', workspace: false });
     if (!created.ok) throw new Error(created.error);
     // Fixed titles so a relay's own framing never collides with the markers below, and so the
     // rows under test name something a reader recognises.
@@ -163,16 +171,106 @@ describe('ChatService session_send', () => {
     const delivered = calls.filter(call => call?.status === 'done');
     const refused = calls.filter(call => call?.status === 'error');
 
-    // Three messages get through - one per hop - and the fourth attempt is refused. The chain is
+    // Five messages get through - one per hop - and the sixth attempt is refused. The chain is
     // bounded by the hop count each message carries, so it terminates whichever way the two
     // sessions arrange it.
-    expect(delivered).toHaveLength(3);
+    expect(delivered).toHaveLength(5);
     expect(refused).toHaveLength(1);
     expect(refused[0]?.error).toMatch(/hops from the user/);
 
     // The exchange really is over rather than merely slow: nothing further opened.
     const settled = streams.length;
     await expect(awaitStream(settled, 1000)).rejects.toThrow();
+  });
+
+  it('stops two busy sessions relaying to each other mid-turn', async () => {
+    const alpha = await codeSession('Alpha');
+    const beta = await codeSession('Beta');
+    await service.send(alpha.id, 'kick off alpha');
+    await service.send(beta.id, 'kick off beta');
+
+    // Every request that ends on a kick-off or a relay answers by messaging the other session and
+    // carrying on with a tool step, so both stay busy and each relay lands at a round boundary.
+    let opened = 0;
+    let midTurn = 0;
+    for (; opened < 60; opened++) {
+      try {
+        await awaitStream(opened, 1500);
+      } catch {
+        break;
+      }
+      const messages = messagesOf(opened);
+      const last = JSON.stringify(messages.at(-1)?.content ?? '');
+      if (!last.includes('kick off') && !last.includes('[Message from another conversation')) {
+        endTurn(streams[opened]);
+        continue;
+      }
+      if (!isFreshTurn(opened)) midTurn++;
+      const isAlpha = String(messages[1]?.content).includes('kick off alpha');
+      requestSend(streams[opened], isAlpha ? beta.id : alpha.id, `ping ${opened}`, `send-${opened}`);
+    }
+    expect(opened).toBeLessThan(60);
+    expect(midTurn).toBeGreaterThan(0);
+
+    // Two chains, one per kick-off, each held to five hops however the relays land.
+    const calls = settledCalls('session_send');
+    expect(calls.filter(call => call?.status === 'done')).toHaveLength(10);
+    const refused = calls.filter(call => call?.status === 'error');
+    expect(refused).toHaveLength(2);
+    for (const call of refused) expect(call?.error).toMatch(/hops from the user/);
+
+    const settled = streams.length;
+    await expect(awaitStream(settled, 1000)).rejects.toThrow();
+  });
+
+  it('ends a chain of notify_when_done messages at the hop bound, landing the last notice without a turn', async () => {
+    const alpha = await codeSession('Alpha');
+    const beta = await codeSession('Beta');
+    await service.send(alpha.id, 'kick off');
+
+    let opened = 0;
+    for (; opened < 60; opened++) {
+      try {
+        await awaitStream(opened, 1500);
+      } catch {
+        break;
+      }
+      const last = JSON.stringify(messagesOf(opened).at(-1)?.content ?? '');
+      if (!isFreshTurn(opened) || last.includes('finished the turn your message started')) {
+        endTurn(streams[opened]);
+        continue;
+      }
+      const isAlpha = String(messagesOf(opened)[1]?.content).includes('kick off');
+      streams[opened].write(
+        frame({
+          type: 'tool_use',
+          tools: [
+            {
+              id: `send-${opened}`,
+              name: 'session_send',
+              arguments: JSON.stringify({
+                session_id: isAlpha ? beta.id : alpha.id,
+                message: `ping ${opened}`,
+                notify_when_done: true,
+              }),
+            },
+          ],
+        })
+      );
+      streams[opened].write(frame('[DONE]'));
+    }
+    expect(opened).toBeLessThan(60);
+
+    const settledStreams = streams.length;
+    await expect(awaitStream(settledStreams, 1000)).rejects.toThrow();
+
+    const stored = [...((await store.get(alpha.id))?.messages ?? []), ...((await store.get(beta.id))?.messages ?? [])];
+    const notices = stored.filter(message => /finished the turn your message started/.test(message.content));
+    expect(notices.some(message => message.relay?.kind === 'done')).toBe(true);
+    const landed = notices.filter(message => !message.relay);
+    expect(landed.length).toBeGreaterThan(0);
+    expect(landed.every(message => !message.content.includes('session_read'))).toBe(true);
+    expect(notices.some(message => message.relay && message.content.includes('"Alpha"'))).toBe(true);
   });
 
   it('caps how many messages one turn may send, so a single turn cannot fan out across the project', async () => {
@@ -204,6 +302,120 @@ describe('ChatService session_send', () => {
     const refused = calls.filter(call => call?.status === 'error');
     expect(refused).toHaveLength(1);
     expect(refused[0]?.error).toMatch(/may send 2 messages/);
+  });
+
+  describe('delivered into a running turn', () => {
+    const askForTool = (stream: PassThrough, id: string) => {
+      stream.write(frame({ type: 'tool_use', tools: [{ id, name: 'no_such_tool', arguments: '{}' }] }));
+      stream.write(frame('[DONE]'));
+    };
+    const streamCarrying = (text: string) =>
+      streams.findIndex((_, index) => JSON.stringify(messagesOf(index).at(-1) ?? '').includes(text));
+
+    it.each(['same boundary', 'later boundary'])(
+      'never lowers the hop limit for a shallower relay at the %s',
+      async boundary => {
+        const target = await codeSession('Target');
+        const other = await codeSession('Other');
+        await service.send(target.id, 'a long task');
+        await awaitStream(0);
+        const origin = { fromSessionId: other.id, fromTitle: 'Other' };
+        queue.enqueueRelay(target.id, 'deep relay', { ...origin, hops: 5 });
+        if (boundary === 'same boundary') queue.enqueueRelay(target.id, 'shallow relay', { ...origin, hops: 1 });
+        askForTool(streams[0], 'step-1');
+        await awaitStream(1);
+        if (boundary === 'later boundary') {
+          queue.enqueueRelay(target.id, 'shallow relay', { ...origin, hops: 1 });
+          askForTool(streams[1], 'step-2');
+          await awaitStream(2);
+        }
+        requestSend(streams.at(-1)!, other.id, 'must not send', 'send-capped');
+
+        await vi.waitUntil(() => settledCalls('session_send').length === 1);
+        expect(settledCalls('session_send')[0]).toMatchObject({
+          status: 'error',
+          error: expect.stringMatching(/5 hops from the user/),
+        });
+        expect(queue.list(other.id)).toEqual([]);
+        expect((await store.get(other.id))?.messages).toEqual([]);
+      }
+    );
+
+    it('holds a mid-turn relay to the same hop limit as a turn of its own', async () => {
+      const sender = await codeSession('Sender');
+      const target = await codeSession('Target');
+      const other = await codeSession('Other');
+
+      await service.send(target.id, 'a long task');
+      await awaitStream(0);
+      queue.enqueueRelay(target.id, 'pass this on', { fromSessionId: sender.id, fromTitle: 'Sender', hops: 5 });
+      askForTool(streams[0], 'step-1');
+
+      await awaitStream(1);
+      expect(streamCarrying('pass this on')).toBe(1);
+      requestSend(streams[1], other.id, 'passing it on', 'send-capped');
+
+      await vi.waitUntil(() => settledCalls('session_send').length === 1, { timeout: 5000, interval: 5 });
+      expect(settledCalls('session_send')[0]?.status).toBe('error');
+      expect(settledCalls('session_send')[0]?.error).toMatch(/5 hops from the user/);
+      expect(queue.list(other.id)).toHaveLength(0);
+      expect((await store.get(other.id))?.messages ?? []).toHaveLength(0);
+    });
+
+    it('carries the turn on at the relay depth with the send budget its own turn would start with', async () => {
+      const sender = await codeSession('Sender');
+      const target = await codeSession('Target');
+      const other = await codeSession('Other');
+
+      await service.send(target.id, 'a long task');
+      await awaitStream(0);
+      // Both of this turn's sends spent at hop 0, then a relay at hop 1 arrives behind them.
+      streams[0].write(
+        frame({
+          type: 'tool_use',
+          tools: ['first', 'second'].map(message => ({
+            id: `spend-${message}`,
+            name: 'session_send',
+            arguments: JSON.stringify({ session_id: other.id, message }),
+          })),
+        })
+      );
+      queue.enqueueRelay(target.id, 'one more thing', { fromSessionId: sender.id, fromTitle: 'Sender', hops: 1 });
+      streams[0].write(frame('[DONE]'));
+
+      await vi.waitUntil(() => streamCarrying('one more thing') >= 0, { timeout: 5000, interval: 5 });
+      const continuing = streams[streamCarrying('one more thing')];
+      continuing.write(
+        frame({
+          type: 'tool_use',
+          tools: ['third', 'fourth', 'fifth'].map(message => ({
+            id: `send-after-relay-${message}`,
+            name: 'session_send',
+            arguments: JSON.stringify({ session_id: other.id, message }),
+          })),
+        })
+      );
+      continuing.write(frame('[DONE]'));
+
+      await vi.waitUntil(() => settledCalls('session_send').length === 5, { timeout: 5000, interval: 5 });
+      expect(settledCalls('session_send').filter(call => call?.status === 'done')).toHaveLength(4);
+      expect(settledCalls('session_send').filter(call => call?.status === 'error')[0]?.error).toMatch(
+        /may send 2 messages/
+      );
+      // Parallel tools can finish in either order; the successful calls determine which messages arrived.
+      const sentAfterRelay = settledCalls('session_send')
+        .filter(call => call?.status === 'done' && call.id.startsWith('send-after-relay-'))
+        .map(call => call?.input.message);
+      expect(sentAfterRelay).toHaveLength(2);
+      expect(queue.list(other.id).map(entry => entry.relay?.hops)).toEqual([1, 2, 2]);
+      expect(
+        queue
+          .list(other.id)
+          .slice(1)
+          .map(entry => entry.text)
+          .sort()
+      ).toEqual(sentAfterRelay.sort());
+    });
   });
 
   it('runs the message straight away in a session that is idle', async () => {
@@ -260,7 +472,7 @@ describe('ChatService session_send', () => {
 
     await vi.waitUntil(() => settledCalls('session_send').length === 1, { timeout: 5000, interval: 5 });
     expect(settledCalls('session_send')[0]?.status).toBe('done');
-    expect(settledCalls('session_send')[0]?.preview).toMatch(/runs as its next turn/);
+    expect(settledCalls('session_send')[0]?.preview).toMatch(/once its current step finishes/);
     expect(queue.list(target.id)).toHaveLength(1);
     expect(queue.list(target.id)[0]?.relay).toMatchObject({ fromTitle: 'Sender', hops: 1 });
 
@@ -370,12 +582,48 @@ describe('ChatService session_send', () => {
     // Every one is an ordinary failed tool result the model can act on - nothing thrown, nothing
     // half-delivered, and no turn started anywhere.
     expect(byId.get('x-gone')?.status).toBe('error');
-    expect(byId.get('x-gone')?.error).toMatch(/No conversation with that id/);
+    expect(byId.get('x-gone')?.error).toMatch(/No conversation matches/);
     expect(byId.get('x-archived')?.status).toBe('error');
     expect(byId.get('x-archived')?.error).toMatch(/is archived/);
     expect(byId.get('x-self')?.status).toBe('error');
     expect(byId.get('x-self')?.error).toMatch(/this conversation/);
     expect(queue.list(archived.id)).toHaveLength(0);
+  });
+
+  it('tells a sender that asked to be notified when its message never runs', async () => {
+    const sender = await codeSession('Sender');
+    const target = await codeSession('Target');
+
+    await service.send(target.id, 'a question the user asked');
+    await awaitStream(0);
+    await service.send(sender.id, 'go');
+    await awaitStream(1);
+    streams[1].write(
+      frame({
+        type: 'tool_use',
+        tools: [
+          {
+            id: 'n-stranded',
+            name: 'session_send',
+            arguments: JSON.stringify({ session_id: target.id, message: 'run later', notify_when_done: true }),
+          },
+        ],
+      })
+    );
+    streams[1].write(frame('[DONE]'));
+    await vi.waitUntil(() => queue.list(target.id).length === 1, { timeout: 5000, interval: 5 });
+
+    service.stop(target.id);
+
+    await vi.waitUntil(
+      async () =>
+        JSON.stringify(queue.list(sender.id)).includes('did not run your message') ||
+        JSON.stringify(post.mock.calls).includes('did not run your message') ||
+        ((await store.get(sender.id))?.messages ?? []).some(message =>
+          /did not run your message/.test(message.content)
+        ),
+      { timeout: 5000, interval: 10 }
+    );
   });
 
   it('keeps a relayed message in the target transcript when its turn never runs', async () => {
@@ -417,9 +665,428 @@ describe('ChatService session_send', () => {
 
     const declared = post.mock.calls[0][1].options.tools as { toolSchema: { name: string; parameters: object } }[];
     const schema = declared.find(entry => entry.toolSchema.name === 'session_send');
+    // notify_when_done only asks for a turn back here; nothing in it says where a message may go.
     expect(Object.keys((schema?.toolSchema.parameters as { properties: object }).properties)).toEqual([
       'session_id',
+      'notify_when_done',
       'message',
     ]);
+  });
+
+  describe('across projects', () => {
+    let other: string;
+
+    beforeEach(async () => {
+      other = await realpath(await mkdtemp(join(tmpdir(), 'b4m-relay-other-')));
+    });
+
+    function callTools(stream: PassThrough, calls: { id: string; name: string; input: object }[]): void {
+      stream.write(
+        frame({
+          type: 'tool_use',
+          tools: calls.map(call => ({ id: call.id, name: call.name, arguments: JSON.stringify(call.input) })),
+        })
+      );
+      stream.write(frame('[DONE]'));
+    }
+
+    /** The first request whose last message is a string matching `pattern`: a fresh turn about it. */
+    async function turnAbout(pattern: RegExp): Promise<number> {
+      const find = () =>
+        post.mock.calls.findIndex((_call, index) => {
+          const messages = messagesOf(index);
+          const last = messages[messages.length - 1]?.content;
+          return typeof last === 'string' && pattern.test(last);
+        });
+      await vi.waitUntil(() => find() >= 0, { timeout: 5000, interval: 5 });
+      return find();
+    }
+
+    const callById = (id: string) =>
+      ['session_send', 'session_read', 'session_list'].flatMap(settledCalls).find(call => call?.id === id);
+
+    it('holds a message to another project until its user lets it in, then runs it there', async () => {
+      const sender = await codeSession('Sender');
+      const target = await codeSession('Elsewhere', other);
+
+      await service.send(sender.id, 'go');
+      await awaitStream(0);
+      requestSend(streams[0], target.id, 'please rebase onto main', 'h1');
+      await vi.waitUntil(() => !!callById('h1'), { timeout: 5000, interval: 5 });
+
+      expect(callById('h1')?.error).toBeUndefined();
+      expect(callById('h1')?.preview).toMatch(/waiting for that conversation's/);
+      const held = service.heldRelaysFor(target.id);
+      expect(held).toHaveLength(1);
+      expect(held[0].reason).toBe('other-project');
+      expect(held[0].relay.fromProject).toBe(basename(project));
+      expect(events.some(event => event.type === 'held-relays' && event.sessionId === target.id)).toBe(true);
+      expect(queue.list(target.id)).toHaveLength(0);
+      expect(service.isSessionBusy(target.id)).toBe(false);
+
+      await service.resolveHeldRelay(target.id, held[0].id, true);
+      const index = await turnAbout(/please rebase onto main/);
+      const framed = messagesOf(index).at(-1)?.content as string;
+      expect(framed).toContain(`in the project "${basename(project)}"`);
+      expect(framed).toContain(`session_send with session_id ${sender.id}`);
+      expect(service.heldRelaysFor(target.id)).toHaveLength(0);
+    });
+
+    it('tells the sender when the receiving user declines, and runs nothing there', async () => {
+      const sender = await codeSession('Sender');
+      const target = await codeSession('Elsewhere', other);
+
+      await service.send(sender.id, 'go');
+      await awaitStream(0);
+      requestSend(streams[0], target.id, 'delete the build folder', 'd1');
+      await vi.waitUntil(() => service.heldRelaysFor(target.id).length === 1, { timeout: 5000, interval: 5 });
+      await awaitStream(1);
+      endTurn(streams[1]);
+      await vi.waitUntil(() => !service.isSessionBusy(sender.id), { timeout: 5000, interval: 5 });
+      const requests = post.mock.calls.length;
+
+      await service.resolveHeldRelay(target.id, service.heldRelaysFor(target.id)[0].id, false);
+
+      const stored = await store.get(sender.id);
+      expect(stored?.messages.some(message => message.system && /declined your message/.test(message.content))).toBe(
+        true
+      );
+      expect(post.mock.calls).toHaveLength(requests);
+      expect((await store.get(target.id))?.messages).toHaveLength(0);
+    });
+
+    it('tells the sender when the receiving conversation is archived with its message still held', async () => {
+      const sender = await codeSession('Sender');
+      const target = await codeSession('Elsewhere', other);
+
+      await service.send(sender.id, 'go');
+      await awaitStream(0);
+      requestSend(streams[0], target.id, 'please rebase onto main', 'a1');
+      await vi.waitUntil(() => service.heldRelaysFor(target.id).length === 1, { timeout: 5000, interval: 5 });
+      await awaitStream(1);
+      endTurn(streams[1]);
+      await vi.waitUntil(() => !service.isSessionBusy(sender.id), { timeout: 5000, interval: 5 });
+
+      await service.setSessionArchived(target.id, true);
+
+      expect(service.heldRelaysFor(target.id)).toHaveLength(0);
+      const stored = await store.get(sender.id);
+      expect(stored?.messages.some(message => message.system && /could not be delivered/.test(message.content))).toBe(
+        true
+      );
+    });
+
+    it('tells the sender when the receiving conversation is deleted with its message still held', async () => {
+      const sender = await codeSession('Sender');
+      const target = await codeSession('Elsewhere', other);
+
+      await service.send(sender.id, 'go');
+      await awaitStream(0);
+      requestSend(streams[0], target.id, 'please rebase onto main', 'x1');
+      await vi.waitUntil(() => service.heldRelaysFor(target.id).length === 1, { timeout: 5000, interval: 5 });
+      await awaitStream(1);
+      endTurn(streams[1]);
+      await vi.waitUntil(() => !service.isSessionBusy(sender.id), { timeout: 5000, interval: 5 });
+
+      await service.deleteSession(target.id);
+
+      expect(service.heldRelaysFor(target.id)).toHaveLength(0);
+      const stored = await store.get(sender.id);
+      expect(stored?.messages.some(message => message.system && /could not be delivered/.test(message.content))).toBe(
+        true
+      );
+    });
+
+    /** A sender whose message to another project is held, with the sender's own turn ended. */
+    async function heldFromIdleSender(text: string, id: string) {
+      const sender = await codeSession('Sender');
+      const target = await codeSession('Elsewhere', other);
+      await service.send(sender.id, 'go');
+      await awaitStream(0);
+      requestSend(streams[0], target.id, text, id);
+      await vi.waitUntil(() => service.heldRelaysFor(target.id).length === 1, { timeout: 5000, interval: 5 });
+      await awaitStream(1);
+      endTurn(streams[1]);
+      await vi.waitUntil(() => !service.isSessionBusy(sender.id), { timeout: 5000, interval: 5 });
+      return { sender, target, heldId: service.heldRelaysFor(target.id)[0].id };
+    }
+
+    it.each([
+      ['deleted', (id: string) => service.deleteSession(id)],
+      ['archived', (id: string) => service.setSessionArchived(id, true)],
+    ])('drops a held message from the receiver when its sender is %s', async (_name, remove) => {
+      const { sender, target } = await heldFromIdleSender('please rebase onto main', 'g1');
+      const requests = post.mock.calls.length;
+
+      await remove(sender.id);
+
+      expect(service.heldRelaysFor(target.id)).toHaveLength(0);
+      const lastHeld = events.findLast(event => event.type === 'held-relays' && event.sessionId === target.id);
+      expect(lastHeld?.type === 'held-relays' && lastHeld.held).toEqual([]);
+      expect(queue.list(target.id)).toHaveLength(0);
+      expect(post.mock.calls).toHaveLength(requests);
+      expect((await store.get(target.id))?.messages).toHaveLength(0);
+    });
+
+    it('runs nothing when a held message is delivered after its sender has gone', async () => {
+      const { sender, target, heldId } = await heldFromIdleSender('please rebase onto main', 'g2');
+      const requests = post.mock.calls.length;
+      // Straight to the store, as if the sender went between the card being drawn and Deliver.
+      await store.delete(sender.id);
+
+      await service.resolveHeldRelay(target.id, heldId, true);
+
+      await expect(awaitStream(requests, 1000)).rejects.toThrow();
+      expect(service.heldRelaysFor(target.id)).toHaveLength(0);
+      expect(queue.list(target.id)).toHaveLength(0);
+      expect((await store.get(target.id))?.messages).toHaveLength(0);
+      expect(await store.get(sender.id)).toBeNull();
+    });
+
+    it('refuses to deliver a held message into a conversation that is being cleaned up', async () => {
+      const { sender, target, heldId } = await heldFromIdleSender('please rebase onto main', 'g3');
+      (service as unknown as { abandoning: Set<string> }).abandoning.add(target.id);
+
+      await service.resolveHeldRelay(target.id, heldId, true);
+
+      expect(queue.list(target.id)).toHaveLength(0);
+      expect((await store.get(target.id))?.messages).toHaveLength(0);
+      const stored = await store.get(sender.id);
+      expect(stored?.messages.some(message => message.system && /could not be delivered/.test(message.content))).toBe(
+        true
+      );
+    });
+
+    it("runs a relay queued unheld even if the receiver's mode is loosened before it is taken", async () => {
+      const target = await codeSession('Target');
+      const sender = await codeSession('Sender');
+      await service.send(target.id, 'keep working');
+      await awaitStream(0);
+      await service.send(sender.id, 'go');
+      await awaitStream(1);
+      requestSend(streams[1], target.id, 'run the migration', 'm2');
+      await vi.waitUntil(() => !!callById('m2'), { timeout: 5000, interval: 5 });
+      expect(queue.list(target.id)).toHaveLength(1);
+
+      // Loose enough that sending now would be held: the hold is decided at send time only.
+      await store.setApprovalMode(target.id, 'full');
+      endTurn(streams[0]);
+
+      await turnAbout(/run the migration/);
+      expect(service.heldRelaysFor(target.id)).toHaveLength(0);
+    });
+
+    it('holds a message to a conversation in a looser approval mode, even in the same project', async () => {
+      const sender = await codeSession('Sender');
+      const target = await codeSession('Loose');
+      await store.setApprovalMode(sender.id, 'auto');
+      await store.setApprovalMode(target.id, 'full');
+
+      await service.send(sender.id, 'go');
+      await awaitStream(0);
+      requestSend(streams[0], target.id, 'run the migration', 'm1');
+      await vi.waitUntil(() => service.heldRelaysFor(target.id).length === 1, { timeout: 5000, interval: 5 });
+      expect(service.heldRelaysFor(target.id)[0].reason).toBe('looser-mode');
+    });
+
+    it('addresses a conversation by title, and refuses a title two conversations share', async () => {
+      const sender = await codeSession('Sender');
+      const solo = await codeSession('Solo');
+      await codeSession('Twin');
+      await codeSession('Twin');
+
+      await service.send(sender.id, 'go');
+      await awaitStream(0);
+      callTools(streams[0], [
+        { id: 't-solo', name: 'session_send', input: { session_id: 'solo', message: 'hello solo' } },
+        { id: 't-twin', name: 'session_send', input: { session_id: 'Twin', message: 'hello twin' } },
+      ]);
+      await vi.waitUntil(() => !!callById('t-solo') && !!callById('t-twin'), { timeout: 5000, interval: 5 });
+
+      expect(callById('t-solo')?.error).toBeUndefined();
+      expect(callById('t-solo')?.preview).toContain(solo.id);
+      expect(callById('t-twin')?.error).toMatch(/matches 2 conversations/);
+    });
+
+    it('resolves a title in the caller project first, and widens only when it is absent there', async () => {
+      const sender = await codeSession('Sender');
+      const local = await codeSession('Shared title');
+      await codeSession('Shared title', other);
+      const away = await codeSession('Only away', other);
+      await codeSession('Doubled');
+      await codeSession('Doubled');
+
+      await service.send(sender.id, 'go');
+      await awaitStream(0);
+      callTools(streams[0], [
+        { id: 'r-local', name: 'session_send', input: { session_id: 'Shared title', message: 'hi local' } },
+        { id: 'r-away', name: 'session_send', input: { session_id: 'Only away', message: 'hi away' } },
+      ]);
+      await vi.waitUntil(() => !!callById('r-local') && !!callById('r-away'), { timeout: 5000, interval: 5 });
+      expect(callById('r-local')?.error).toBeUndefined();
+      expect(callById('r-local')?.preview).toContain(local.id);
+      expect(callById('r-away')?.error).toBeUndefined();
+      expect(callById('r-away')?.preview).toMatch(/waiting for that conversation's/);
+      expect(service.heldRelaysFor(away.id)).toHaveLength(1);
+      expect(service.heldRelaysFor(local.id)).toHaveLength(0);
+
+      const second = await codeSession('Sender two');
+      const opened = streams.length;
+      await service.send(second.id, 'go');
+      await awaitStream(opened);
+      callTools(streams[opened], [
+        { id: 'r-twice', name: 'session_send', input: { session_id: 'Doubled', message: 'hi' } },
+      ]);
+      await vi.waitUntil(() => !!callById('r-twice'), { timeout: 5000, interval: 5 });
+      expect(callById('r-twice')?.error).toMatch(/matches 2 conversations/);
+    });
+
+    it('refuses a sixth message held for one conversation', async () => {
+      const target = await codeSession('Elsewhere', other);
+      const results: string[] = [];
+      for (let n = 0; n < 6; n++) {
+        const sender = await codeSession(`Sender ${n}`);
+        const opened = streams.length;
+        await service.send(sender.id, 'go');
+        await awaitStream(opened);
+        requestSend(streams[opened], target.id, `message ${n}`, `c${n}`);
+        await vi.waitUntil(() => !!callById(`c${n}`), { timeout: 5000, interval: 5 });
+        results.push(callById(`c${n}`)?.error ?? 'ok');
+      }
+      expect(results.slice(0, 5)).toEqual(['ok', 'ok', 'ok', 'ok', 'ok']);
+      expect(results[5]).toMatch(/already has 5 messages waiting/);
+      expect(service.heldRelaysFor(target.id)).toHaveLength(5);
+    });
+
+    it('lists every project with scope all, and reads another project only once the user mentions it', async () => {
+      const sender = await codeSession('Sender');
+      const target = await codeSession('Elsewhere', other);
+      await service.send(target.id, 'a question the user asked there');
+      await awaitStream(0);
+      endTurn(streams[0], 'the answer over there');
+      await vi.waitUntil(() => !service.isSessionBusy(target.id), { timeout: 5000, interval: 5 });
+
+      await service.send(sender.id, 'go');
+      await awaitStream(1);
+      callTools(streams[1], [
+        { id: 'l-project', name: 'session_list', input: {} },
+        { id: 'l-all', name: 'session_list', input: { scope: 'all' } },
+        { id: 'r-before', name: 'session_read', input: { session_id: target.id } },
+      ]);
+      // The three calls run concurrently, so wait for every one of them, not just the last listed.
+      await vi.waitUntil(() => ['l-project', 'l-all', 'r-before'].every(id => !!callById(id)), {
+        timeout: 5000,
+        interval: 5,
+      });
+      expect(callById('l-project')?.preview).not.toContain(target.id);
+      expect(callById('l-all')?.preview).toContain(target.id);
+      expect(callById('r-before')?.error).toMatch(/another project/);
+      await awaitStream(2);
+      endTurn(streams[2]);
+      await vi.waitUntil(() => !service.isSessionBusy(sender.id), { timeout: 5000, interval: 5 });
+
+      await service.send(sender.id, `what did ${formatSessionMention(target.id, 'Elsewhere')} conclude?`);
+      await awaitStream(3);
+      callTools(streams[3], [{ id: 'r-after', name: 'session_read', input: { session_id: target.id } }]);
+      await vi.waitUntil(() => !!callById('r-after'), { timeout: 5000, interval: 5 });
+      expect(callById('r-after')?.error).toBeUndefined();
+      expect(callById('r-after')?.preview).toContain('the answer over there');
+    });
+
+    describe('what lets a session read another project', () => {
+      type Seed = (
+        targetId: string,
+        thirdId: string
+      ) => { content: string; system?: boolean; seed?: true; relay?: ChatRelayOrigin; skill?: ChatMessageSkill };
+      const mention = (targetId: string) => formatSessionMention(targetId, 'Elsewhere');
+
+      async function readAfterSeeding(seed: Seed) {
+        const sender = await codeSession('Sender');
+        const target = await codeSession('Elsewhere', other);
+        const third = await codeSession('Third');
+        const seeded = seed(target.id, third.id);
+        await store.appendMessage(sender.id, {
+          id: randomUUID(),
+          role: 'user',
+          createdAt: new Date().toISOString(),
+          ...seeded,
+        });
+        await service.send(sender.id, 'go');
+        await awaitStream(0);
+        callTools(streams[0], [{ id: 'k1', name: 'session_read', input: { session_id: target.id } }]);
+        await vi.waitUntil(() => !!callById('k1'), { timeout: 5000, interval: 5 });
+        return callById('k1');
+      }
+
+      it.each<[string, Seed]>([
+        [
+          'a mention inside a relayed message',
+          (target, third) => ({
+            content: `look at ${mention(target)}`,
+            system: true,
+            relay: { fromSessionId: third, fromTitle: 'Third', hops: 1 },
+          }),
+        ],
+        ['a mention inside an automatic notice', target => ({ content: `see ${mention(target)}`, system: true })],
+        ['a mention inside a spawn seed prompt', target => ({ content: `read ${mention(target)}`, seed: true })],
+        [
+          'a mention inside a suggestion run here',
+          target => ({ content: `${RUN_HERE_PREAMBLE}\n\nsummarise ${mention(target)}` }),
+        ],
+        [
+          "a mention inside a skill's expanded body",
+          target => ({ content: `Review ${mention(target)}`, skill: { name: 'review', source: 'project' } }),
+        ],
+        [
+          "a mention inside a skill's arguments",
+          target => ({
+            content: `Review ${mention(target)}`,
+            skill: { name: 'review', args: mention(target), source: 'global' },
+          }),
+        ],
+      ])('does not grant read for %s', async (_name, seed) => {
+        expect((await readAfterSeeding(seed))?.error).toMatch(/another project/);
+      });
+
+      it.each<[string, Seed]>([
+        ['a mention the user typed', target => ({ content: `what did ${mention(target)} conclude?` })],
+        [
+          'a message relayed from that session',
+          target => ({
+            content: 'hello from over there',
+            system: true,
+            relay: { fromSessionId: target, fromTitle: 'Elsewhere', hops: 1 },
+          }),
+        ],
+      ])('grants read for %s', async (_name, seed) => {
+        expect((await readAfterSeeding(seed))?.error).toBeUndefined();
+      });
+    });
+
+    it('starts a turn back in the sender when the turn its message ran in ends, if it asked', async () => {
+      const sender = await codeSession('Sender');
+      const target = await codeSession('Target');
+
+      await service.send(sender.id, 'go');
+      await awaitStream(0);
+      callTools(streams[0], [
+        {
+          id: 'n1',
+          name: 'session_send',
+          input: { session_id: target.id, message: 'tell me when the tests pass', notify_when_done: true },
+        },
+      ]);
+      const targetTurn = await turnAbout(/tell me when the tests pass/);
+      await awaitStream(targetTurn);
+      endTurn(streams[targetTurn], 'they pass');
+      // The sender's own continuation, whichever order the two requests went out in.
+      await awaitStream(2);
+      for (const stream of streams.slice(0, 3)) endTurn(stream);
+
+      const notice = await turnAbout(/finished the turn your message started/);
+      expect(messagesOf(notice).at(-1)?.content).toContain(target.id);
+      const stored = await store.get(sender.id);
+      expect(stored?.messages.some(message => message.relay?.kind === 'done')).toBe(true);
+    });
   });
 });

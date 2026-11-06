@@ -24,6 +24,14 @@ import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
 import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
 import * as z from 'zod';
 import { requireStepUp } from '@server/auth/stepUp';
+import { propagateAccountRisk } from '@server/billing/linkedAccounts';
+import {
+  cancelAccountSubscriptions,
+  SINGLE_USER_CANCEL_BUDGET_MS,
+  subscriptionCancellationAudit,
+  subscriptionCancellationResponse,
+  type AccountSubscriptionCancellation,
+} from '@server/billing/cancelAccountSubscriptions';
 import {
   diffProfileFields,
   profileFieldsSent,
@@ -35,6 +43,7 @@ import {
   isSameUserId,
   isSelfOrImpersonator,
   parseAdminActionReason,
+  readAdminActionReason,
   recordAdminActionFromRequest,
 } from '@server/utils/adminAudit';
 
@@ -42,6 +51,12 @@ const idParamSchema = z.object({ id: z.string() });
 
 const updateUserResponseSchema = selfUserProfileResponseSchema.extend({
   ignoredFields: z.array(z.string()).optional(),
+  subscriptionCancellation: z
+    .object({
+      canceled: z.array(z.string()),
+      failed: z.array(z.object({ customerId: z.string(), subscriptionId: z.string().nullable(), reason: z.string() })),
+    })
+    .optional(),
 });
 
 /** Fields that change how the account signs in; see the credential gates in the handler. */
@@ -129,11 +144,14 @@ async function handleTelemetryConsentChange(
 
 type AccountStateSnapshot = Parameters<typeof userService.entersBlockedState>[0] & {
   isAdmin?: boolean;
+  isModerated?: boolean;
   email?: string | null;
 };
 
 type AuditTargetSnapshot = {
   isAdmin?: boolean;
+  isBanned?: boolean;
+  isModerated?: boolean;
   currentCredits?: number;
   name?: string;
   username?: string;
@@ -145,6 +163,27 @@ const userAuditTarget = (userId: string, user: AuditTargetSnapshot | null) => ({
   id: userId,
   displayName: user?.name || user?.username || user?.email || userId,
 });
+
+/** The status flags an admin update can flip, each with its own audit action pair. */
+const STATUS_FLAGS = [
+  {
+    field: 'isBanned',
+    on: { action: 'user.suspended', summary: 'suspended the account' },
+    off: { action: 'user.reinstated', summary: 'reinstated the account' },
+  },
+  {
+    field: 'isModerated',
+    on: { action: 'user.restricted', summary: 'restricted the account' },
+    off: { action: 'user.restriction_lifted', summary: 'lifted the restriction' },
+  },
+] as const;
+
+/**
+ * The flags this body actually flips. Generic edits resend the whole user, so a flag sent with its
+ * current value is not a change and needs no reason.
+ */
+const statusFlagChanges = (body: userService.AdminUpdateUserParameters, before: AuditTargetSnapshot | null) =>
+  STATUS_FLAGS.filter(({ field }) => body[field] !== undefined && body[field] !== !!before?.[field]);
 
 /** Whether an admin update body asks to move the balance; mirrors adminUpdateUser's delta rule. */
 const requestsCreditChange = (body: userService.AdminUpdateUserParameters, currentCredits: number | undefined) =>
@@ -231,26 +270,21 @@ const handler = baseApi().put(
       const body = userService.adminUpdateUserSchema.parse({ ...rawBody, id: userId });
 
       const targetBefore = (await User.findById(userId)
-        .select('isAdmin currentCredits name username email')
+        .select('isAdmin isBanned isModerated currentCredits name username email')
         .lean()) as AuditTargetSnapshot | null;
       const auditTarget = userAuditTarget(userId, targetBefore);
       const changesRole = body.isAdmin !== undefined && body.isAdmin !== !!targetBefore?.isAdmin;
+      const statusChanges = statusFlagChanges(body, targetBefore);
       const changesCredits = requestsCreditChange(body, targetBefore?.currentCredits);
 
-      // No self-service privilege: an admin cannot move their own balance or change their own
-      // admin flag. The attempt is recorded as a critical denied entry and answered with a 403.
-      const deniesSelf = isSelfOrImpersonator(currentUser, userId);
-      if (deniesSelf && changesRole) {
+      // No self-service privilege: an admin cannot change their own admin flag. The attempt is
+      // recorded as a critical denied entry and answered with a 403. Self credit adjustments are
+      // allowed for now, pending scoped admin permissions, and flagged in their audit entry.
+      const targetsSelf = isSelfOrImpersonator(currentUser, userId);
+      if (targetsSelf && changesRole) {
         await denySelfAdminAction(req, {
           action: 'user.role.denied',
           attempted: body.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
-          target: auditTarget,
-        });
-      }
-      if (deniesSelf && changesCredits) {
-        await denySelfAdminAction(req, {
-          action: 'user.credits.denied',
-          attempted: 'user.credits.adjusted',
           target: auditTarget,
         });
       }
@@ -258,6 +292,8 @@ const handler = baseApi().put(
       // Validated before any write so a missing reason never leaves a half-applied update.
       const roleChangeReason = changesRole ? parseAdminActionReason(body.roleChangeReason) : undefined;
       const creditReason = changesCredits ? parseAdminActionReason(body.creditReason) : undefined;
+      const throttleReason = body.throttleTier ? parseAdminActionReason(body.throttleReason) : undefined;
+      const statusChangeReason = statusChanges.length > 0 ? parseAdminActionReason(body.statusChangeReason) : undefined;
 
       // Lockout guard: an explicit demote must not remove the ONLY remaining Super Admin.
       if (changesRole && body.isAdmin === false) {
@@ -276,13 +312,13 @@ const handler = baseApi().put(
       const profileBefore = profileFields.length > 0 ? await readProfileSnapshot(userId, profileFields) : null;
 
       req.logger.updateMetadata({ updatedFields: Object.keys(body) });
-      await commitWithSessionEnd(
+      const { snapshot: blockSnapshot, updated: blockUpdated } = await commitWithSessionEnd(
         req,
         async () => {
           // Read inside the transaction so the reason sees the state the write saw; an
           // outside read can be stale by the time the write commits.
           const snapshot = (await User.findById(userId)
-            .select('isAdmin email isBanned disputePending moderation')
+            .select('isAdmin email isBanned isModerated disputePending moderation')
             .lean()) as AccountStateSnapshot | null;
           const { user: updated, creditAdjustment } = await userService.adminUpdateUser(
             currentUser.id,
@@ -299,15 +335,29 @@ const handler = baseApi().put(
             }
           );
 
-          // Both entries are strict: a failed audit write aborts this transaction, so neither the
-          // role change nor the balance change can commit without its record.
-          if (changesRole && snapshot?.isAdmin !== updated?.isAdmin) {
+          // These entries are strict: a failed audit write aborts this transaction, so no role,
+          // balance, suspension or restriction change can commit without its record. Role and status
+          // entries follow what this write flipped, not the pre-read: a concurrent edit can make the
+          // pre-read stale, and a flip it missed still needs its reason, or the 400 rolls it back. No
+          // written user (the row vanished) means nothing flipped.
+          if (updated && !!snapshot?.isAdmin !== !!updated.isAdmin) {
             await recordAdminActionFromRequest(req, {
               action: updated?.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
               target: auditTarget,
               summary: updated?.isAdmin ? 'granted the admin role' : 'revoked the admin role',
-              reason: roleChangeReason,
+              reason: roleChangeReason ?? parseAdminActionReason(body.roleChangeReason),
               changes: [{ field: 'isAdmin', before: !!snapshot?.isAdmin, after: !!updated?.isAdmin }],
+            });
+          }
+          for (const { field, on, off } of updated ? STATUS_FLAGS : []) {
+            const before = !!snapshot?.[field];
+            const after = !!updated?.[field];
+            if (before === after) continue;
+            await recordAdminActionFromRequest(req, {
+              ...(after ? on : off),
+              target: auditTarget,
+              reason: statusChangeReason ?? parseAdminActionReason(body.statusChangeReason),
+              changes: [{ field, before, after }],
             });
           }
           if (creditAdjustment) {
@@ -318,9 +368,26 @@ const handler = baseApi().put(
               summary: `${credits > 0 ? 'granted' : 'deducted'} ${Math.abs(credits)} credits`,
               reason: creditAdjustment.note,
               changes: [{ field: 'currentCredits', before: previousBalance, after: resultingBalance }],
-              details: { credits },
+              details: { credits, selfGrant: targetsSelf },
               related: creditTransactionId ? { creditTransactionId } : undefined,
             });
+          }
+          if (body.throttleTier && throttleReason) {
+            const tierChange = await userService.setThrottleTier(
+              userId,
+              body.throttleTier,
+              { reason: throttleReason, source: 'admin', changedBy: currentUser.id },
+              { db: { users: userRepository } }
+            );
+            if (tierChange.changed) {
+              await recordAdminActionFromRequest(req, {
+                action: 'user.throttle_tier.changed',
+                target: auditTarget,
+                summary: `set the restricted tier to ${tierChange.after} (source: admin, reason: ${throttleReason})`,
+                reason: throttleReason,
+                changes: [{ field: 'throttle.tier', before: tierChange.before, after: tierChange.after }],
+              });
+            }
           }
           return { snapshot, updated };
         },
@@ -330,6 +397,35 @@ const handler = baseApi().put(
           return reason && { userId, reason, actorUserId: currentUser.id !== userId ? currentUser.id : undefined };
         }
       );
+
+      // A ban, suspension or dispute flag reaches accounts linked by card or network. After commit
+      // and never throws, so it cannot undo the admin's change.
+      if (blockSnapshot && blockUpdated && userService.entersBlockedState(blockSnapshot, blockUpdated)) {
+        await propagateAccountRisk(
+          { sourceUserId: userId, trigger: 'blocked by an admin', key: `admin-block:${userId}:${Date.now()}` },
+          req.logger
+        );
+      }
+
+      let cancellation: AccountSubscriptionCancellation | null = null;
+      // A banned or suspended account must not renew. Stripe failures are logged and audited, never
+      // undo the block.
+      if (blockSnapshot && blockUpdated && userService.entersSuspension(blockSnapshot, blockUpdated)) {
+        cancellation = await cancelAccountSubscriptions(
+          { userId, reason: 'suspended', deadline: Date.now() + SINGLE_USER_CANCEL_BUDGET_MS },
+          req.logger
+        );
+        const cancellationEntry = subscriptionCancellationAudit(cancellation, 'suspended');
+        if (cancellationEntry) {
+          await recordAdminActionFromRequest(req, {
+            ...cancellationEntry,
+            target: auditTarget,
+            // A moderation-only suspension carries no status reason; this runs after the commit and
+            // the Stripe cancel, so it must not throw.
+            reason: statusChangeReason ?? readAdminActionReason(body.statusChangeReason),
+          });
+        }
+      }
 
       if (profileFields.length > 0) {
         await recordProfileUpdate(req, {
@@ -343,19 +439,27 @@ const handler = baseApi().put(
         await handleTelemetryConsentChange(userId, previousTelemetryLevel, incomingTelemetryLevel, req);
       }
 
+      const subscriptionCancellationBody = subscriptionCancellationResponse(cancellation);
+
       // Double-check we have the latest state
       const finalUser = await User.findById(userId);
       // Admin branch: symmetric with the admin view of GET /users/[id].
       const safeUser = redactUserSecretsForSelf(finalUser, {
         keep: ['securityQuestions'],
-        keepAdminOnly: ['userNotes', 'signupMeta'],
+        keepAdminOnly: ['userNotes', 'signupMeta', 'signupGrantAssessment', 'throttle', 'riskSignals'],
       });
       // safeUser is null when the row vanished mid-request; spreading null there would
       // turn the response into a bare { ignoredFields } that reads as a user document.
       return respond(
         res,
         updateUserResponseSchema.nullable(),
-        safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser
+        safeUser && (ignoredFields.length > 0 || subscriptionCancellationBody.subscriptionCancellation)
+          ? {
+              ...safeUser,
+              ...(ignoredFields.length > 0 && { ignoredFields }),
+              ...subscriptionCancellationBody,
+            }
+          : safeUser
       );
     } else {
       // Parse with the self-service schema -- excludes isAdmin, tags, email, etc.

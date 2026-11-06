@@ -47,14 +47,16 @@ describe('useFeedbackPagination', () => {
   });
 
   it('keeps the pinned report and other params when paging', () => {
-    act(() => fakeAdminRouter.reset({ tab: 'feedback', feedbackId: 'f1', feedbackStatus: 'Closed' }));
+    act(() =>
+      fakeAdminRouter.reset({ tab: 'feedback', feedbackId: 'bbbbbbbbbbbbbbbbbbbbbbbb', feedbackStatus: 'Closed' })
+    );
     const { result } = renderHook(() => useFeedbackPagination());
 
     act(() => result.current.handlePageChange(2));
 
     expect(fakeAdminRouter.search).toEqual({
       tab: 'feedback',
-      feedbackId: 'f1',
+      feedbackId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
       feedbackStatus: 'Closed',
       feedbackPage: 2,
     });

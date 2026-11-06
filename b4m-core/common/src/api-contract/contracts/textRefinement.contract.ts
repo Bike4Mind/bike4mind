@@ -8,7 +8,7 @@ import {
   TextRefinementRequestSchema,
   TextRefinementResponseSchema,
 } from '../../schemas/textRefinement';
-import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
+import { ApiErrorSchema, InsufficientCreditsErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
 
 const EXAMPLE_REQUEST = {
   text: 'a dog on a beach',
@@ -28,7 +28,8 @@ export const createTextRefinementContract = defineEndpoint({
     'Rewrites `text` to be more concise, clear and detailed while keeping its intent. `context` is optional ' +
     `background that steers the rewrite. \`text\` is at most ${MAX_REFINE_TEXT_CHARS} characters and ` +
     `\`context\` at most ${MAX_REFINE_CONTEXT_CHARS}. Output is capped at about 800 tokens, and identical ` +
-    'requests are served from a cache for about five minutes. Not billed in credits. Authenticate with an ' +
+    'requests are served from a cache for about five minutes. A refinement the model runs is billed in ' +
+    'credits for the tokens it used; a cached answer is free. Authenticate with an ' +
     'API key (`b4m_live_`) carrying `ai:generate`, or a JWT.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
@@ -41,6 +42,12 @@ export const createTextRefinementContract = defineEndpoint({
       schema: TextRefinementResponseSchema,
       example: { text: 'A golden retriever running along a sunlit beach at sunset, waves breaking behind it.' },
     },
+    400: {
+      description:
+        'The billing user or organization could not be resolved, or the API key bills an organization ' +
+        'its owner is no longer a member of.',
+      schema: ApiErrorSchema,
+    },
     401: {
       description:
         'Missing/invalid credentials, or the text-refinement provider refused the configured key ' +
@@ -51,6 +58,12 @@ export const createTextRefinementContract = defineEndpoint({
       description:
         'The API key does not hold `ai:generate`, or AI features are disabled on this account by an administrator.',
       schema: ScopeForbiddenErrorSchema,
+    },
+    422: {
+      description:
+        'Request body failed validation, or the caller cannot afford the refinement - the latter is tagged ' +
+        '`errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted).',
+      schema: InsufficientCreditsErrorSchema,
     },
     429: { description: 'Per-key rate limit exceeded.', schema: ApiErrorSchema },
     500: {

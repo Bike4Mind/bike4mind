@@ -16,7 +16,7 @@ The Bike4Mind API is built with Next.js API routes and follows RESTful principle
 
 Bike4Mind exposes two API surfaces - pick the one that fits your use case:
 
-- **[Completions API](./completions/)** (recommended for programmatic access) - a standalone, API-key-authenticated endpoint (`b4m_live_...` keys, created in your profile settings) for chat completions, streaming, and tools. Start here if you want to call Bike4Mind from your own code.
+- **[Completions API](./completions/)** (recommended for programmatic access) - a standalone, API-key-authenticated endpoint (`b4m_live_...` keys, created from the Profile menu -> More -> API Keys) for chat completions, streaming, and tools. Start here if you want to call Bike4Mind from your own code.
 - **Platform REST API** (documented below) - the same JWT-authenticated API the web app uses internally: agents, sessions, users, organizations. Useful for understanding the platform or extending it; tokens come from the app's login session.
 
 ## Getting Started
@@ -36,16 +36,13 @@ Bike4Mind exposes two API surfaces - pick the one that fits your use case:
 
 ## Quick Example
 
-```typescript
-// Basic API call with authentication
-const response = await fetch('https://app.bike4mind.com/api/users', {
-  headers: {
-    'Authorization': `Bearer ${token}`,
-    'Content-Type': 'application/json'
-  }
-});
-
-const users = await response.json();
+```bash
+curl -N -X POST https://app.bike4mind.com/api/ai/v1/completions \
+  -H "Authorization: Bearer $B4M_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
+
+The response is a stream of server-sent events. For every field and status code, see the [API reference](https://app.bike4mind.com/api/v1/docs).
 
 For detailed examples and SDK usage, see our [Examples section](./examples).

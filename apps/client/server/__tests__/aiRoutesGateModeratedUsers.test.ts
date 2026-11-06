@@ -29,13 +29,12 @@ const AI_MARKERS = [
   /\bSessionEvents\.(?:Summarize|Tag)\.publish\(/,
   /\battachSessionsToProject\(/,
 ];
-const GATE = /\b(?:assertAiAccessAllowed|createModelAdmission|reserveRequestCredits|isAiAccessRevoked)\(/;
+const GATE =
+  /\b(?:assertAiAccessAllowed|assertOutboundActionAllowed|createModelAdmission|reserveRequestCredits|aiAccessDeniedMessage)\(/;
 
 const EXEMPT = new Set([
   'admin/modal-tool.ts', // admin
   'admin/operations-model.ts', // admin
-  'admin/security-dashboard/ai-assessment.ts', // admin
-  'users/counterLogs.ts', // admin
 ]);
 
 function sourceFiles(dir: string): string[] {

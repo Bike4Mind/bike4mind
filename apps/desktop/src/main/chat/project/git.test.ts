@@ -12,6 +12,7 @@ import {
   parseWorktreePorcelain,
   readableGitMessage,
   uncommittedChanges,
+  worktreeRecordsFrom,
 } from './git';
 
 async function repository(): Promise<string> {
@@ -121,6 +122,21 @@ describe('parseWorktreePorcelain', () => {
       { path: '/repo/main', branch: 'main' },
     ]);
   });
+
+  it('maps the Linux paths git prints in a WSL folder onto the share the folder was opened from', () => {
+    const porcelain =
+      'worktree /home/me/repo/.bare\nbare\n\nworktree /home/me/repo/main\nbranch refs/heads/main\n\n' +
+      'worktree /home/me/repo/fix+x\nbranch refs/heads/fix/x\nprunable gitdir file points to non-existent location\n';
+    expect(worktreeRecordsFrom('\\\\wsl$\\Ubuntu\\home\\me\\repo\\main', porcelain, 'win32')).toEqual([
+      { path: '\\\\wsl$\\Ubuntu\\home\\me\\repo\\.bare', bare: true },
+      { path: '\\\\wsl$\\Ubuntu\\home\\me\\repo\\main', branch: 'main' },
+      { path: '\\\\wsl$\\Ubuntu\\home\\me\\repo\\fix+x', branch: 'fix/x', prunable: true },
+    ]);
+    expect(worktreeRecordsFrom('/home/me/repo/main', porcelain, 'linux')[1]).toEqual({
+      path: '/home/me/repo/main',
+      branch: 'main',
+    });
+  });
 });
 
 describe('branchCheckouts', () => {
@@ -171,6 +187,31 @@ describe('readable git errors', () => {
     expect(readableGitMessage('error: Your local changes would be overwritten\nAborting\n')).toBe(
       'Your local changes would be overwritten Aborting'
     );
+  });
+
+  it('drops the progress lines a killed checkout leaves, keeping the reason', () => {
+    const progress = Array.from({ length: 200 }, (_unused, index) => `Updating files:  ${index % 5}% (${index}/15405)`);
+    const stderr = `Preparing worktree (new branch 'agent/x')\n${progress.join('\r')}\rfatal: could not write index\n`;
+
+    expect(readableGitMessage(stderr)).toBe("Preparing worktree (new branch 'agent/x') could not write index");
+  });
+
+  it('caps a long message so it stays one readable line', () => {
+    const message = readableGitMessage(`fatal: ${'x'.repeat(1000)}`);
+
+    expect(message.length).toBe(300);
+    expect(message.endsWith('...')).toBe(true);
+  });
+
+  it('says a git call that ran past its timeout timed out, not what it printed', async () => {
+    const directory = await repository();
+
+    // Waits on stdin, which nothing ever writes or closes.
+    const failure = await git(directory, ['hash-object', '--stdin'], { timeoutMs: 50 }).catch((err: unknown) => err);
+
+    expect(failure).toBeInstanceOf(GitError);
+    expect((failure as GitError).message).toBe('git hash-object --stdin timed out after 50 ms.');
+    expect((failure as GitError).timedOutAfterMs).toBe(50);
   });
 
   it('carries no fatal: tag on a GitError from a real refusal', async () => {

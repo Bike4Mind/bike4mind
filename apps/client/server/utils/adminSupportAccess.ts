@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { Request } from 'express';
 import { AdminSupportAccessAction, ISessionDocument } from '@bike4mind/common';
-import { adminSupportAccessAuditLogRepository, sessionRepository } from '@bike4mind/database';
+import { adminSupportAccessAuditLogRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
@@ -90,6 +90,12 @@ export async function authorizeSupportRead(req: SupportReadRequest): Promise<Sup
   const session = await sessionRepository.findById(id);
   if (!session) {
     throw new NotFoundError('Session not found');
+  }
+
+  // An account in its deletion grace period is out of reach of support browsing.
+  const owner = await userRepository.findById(session.userId);
+  if (owner?.deletion) {
+    throw new ForbiddenError('This account is scheduled for deletion');
   }
 
   const userAgent = req.headers?.['user-agent'];

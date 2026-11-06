@@ -59,7 +59,9 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     pricing: { unit: 'per_second', usdByResolution: { '480p': 0.08, '720p': 0.14 } },
     defaultEnabled: true,
   },
-  // Audio is generated and included in the per-second price; a blocked clip is documented as not charged.
+  // Google shut this preview down on the Gemini API; its GA id is served only on Vertex, which the Veo adapter does
+  // not call. Still priced so jobs made before then settle: audio is included in the per-second price, and a
+  // blocked clip is documented as not charged.
   'veo-3.1-fast-generate-preview': {
     provider: 'veo',
     displayName: 'Veo 3.1 Fast',
@@ -73,8 +75,22 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     typicalRenderSeconds: 90,
     audio: 'always',
     pricing: { unit: 'per_second', usdByResolution: { '720p': 0.1 } },
-    defaultEnabled: true,
+    defaultEnabled: false,
+    retired: { date: '2026-10-22', replacement: 'gemini-omni-1.1-flash' },
   },
 };
 
 export const getVideoModelCapabilities = (id: VideoModelId): VideoModelCapabilities => VIDEO_MODEL_CATALOG[id];
+
+export const isVideoModelRetired = (id: VideoModelId): boolean => VIDEO_MODEL_CATALOG[id].retired !== undefined;
+
+/** The refusal for a new job on a retired model, naming the model to use instead; null while the model is live. */
+export const retiredVideoModelMessage = (id: VideoModelId): string | null => {
+  const { displayName, retired } = VIDEO_MODEL_CATALOG[id];
+  if (!retired) return null;
+  const replacement = VIDEO_MODEL_CATALOG[retired.replacement];
+  return (
+    `${displayName} (${id}) was retired by its provider on ${retired.date}; ` +
+    `use ${retired.replacement} (${replacement.displayName}) instead`
+  );
+};

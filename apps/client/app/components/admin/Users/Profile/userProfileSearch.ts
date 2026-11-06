@@ -3,7 +3,9 @@
  * eagerly. Tabs from later work register here by adding a slug.
  */
 
-export const USER_PROFILE_TABS = ['overview', 'activity', 'admin'] as const;
+import { parseActivitySearch, type ActivitySearch } from './activitySearch';
+
+export const USER_PROFILE_TABS = ['overview', 'activity', 'credits', 'keys', 'signins', 'admin'] as const;
 
 export type UserProfileTab = (typeof USER_PROFILE_TABS)[number];
 
@@ -12,10 +14,13 @@ export const DEFAULT_USER_PROFILE_TAB: UserProfileTab = 'overview';
 export const USER_PROFILE_TAB_LABELS: Readonly<Record<UserProfileTab, string>> = {
   overview: 'Overview',
   activity: 'Activity',
-  admin: 'Admin',
+  credits: 'Credits',
+  keys: 'API keys',
+  signins: 'Sign-ins',
+  admin: 'Admin log',
 };
 
-export type UserProfileSearch = { tab?: UserProfileTab };
+export type UserProfileSearch = { tab?: UserProfileTab } & ActivitySearch;
 
 export const isUserProfileTab = (value: unknown): value is UserProfileTab =>
   typeof value === 'string' && (USER_PROFILE_TABS as readonly string[]).includes(value);
@@ -28,7 +33,10 @@ export const isUserProfileTab = (value: unknown): value is UserProfileTab =>
  */
 export const parseUserProfileSearch = (search: Record<string, unknown>): UserProfileSearch => {
   const tab = search.tab;
-  return { tab: isUserProfileTab(tab) && tab !== DEFAULT_USER_PROFILE_TAB ? tab : undefined };
+  // Filters belong to the Activity tab; any other tab drops them explicitly (see above).
+  const activity =
+    tab === 'activity' ? parseActivitySearch(search) : { types: undefined, from: undefined, to: undefined };
+  return { tab: isUserProfileTab(tab) && tab !== DEFAULT_USER_PROFILE_TAB ? tab : undefined, ...activity };
 };
 
 /**

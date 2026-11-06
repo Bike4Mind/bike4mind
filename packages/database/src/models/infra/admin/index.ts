@@ -1,5 +1,7 @@
 export * from './AdminAuditAlertStateModel';
 export * from './AdminAuditLogModel';
+export * from './AdminAuditReviewModel';
+export * from './AdminSavedViewModel';
 export * from './AdminSupportAccessAuditLogModel';
 export * from './InternalTeamMemberModel';
 export * from './OrganizationModel';

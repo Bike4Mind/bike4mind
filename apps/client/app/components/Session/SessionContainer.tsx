@@ -97,6 +97,10 @@ interface SessionLayoutProps {
   floatingChatHeaderActions?: React.ReactNode;
   /** Overrides the docked/floating chat header's default "AI Chat" label (e.g. /opti swaps in the Data Lakes toggle). */
   dockedChatTitle?: React.ReactNode;
+  /** Forwarded to FloatingChatWindow: its close button collapses to the pill instead of hiding the chat. */
+  floatingChatCloseToPill?: boolean;
+  /** Forwarded to FloatingChatWindow: offer the dock layouts. Off where the host clips a docked panel (e.g. /admin). */
+  floatingChatDockable?: boolean;
   /** Called when the server auto-creates a session (e.g. first prompt with no session). Lets parent pages like /opti sync their local session state. */
   onSessionCreated?: (sessionId: string) => void;
   /** Show the conversation for reading only: no composer, no drop zone, no writing message actions. See SessionReadOnlyContext. */
@@ -222,6 +226,8 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
   emptySessionSplash,
   floatingChatHeaderActions,
   dockedChatTitle,
+  floatingChatCloseToPill,
+  floatingChatDockable,
   onSessionCreated,
 }) => {
   const readOnly = useSessionReadOnly();
@@ -606,7 +612,12 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
 
         {/* Floating Chat Window - renders when layout is floatingChat */}
         {layout === 'floatingChat' && (
-          <FloatingChatWindow headerActions={floatingChatHeaderActions} title={dockedChatTitle}>
+          <FloatingChatWindow
+            headerActions={floatingChatHeaderActions}
+            title={dockedChatTitle}
+            closeToPill={floatingChatCloseToPill}
+            dockable={floatingChatDockable}
+          >
             <Box
               ref={containerRef}
               sx={{

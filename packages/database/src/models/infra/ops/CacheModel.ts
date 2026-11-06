@@ -448,6 +448,36 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
     }
   }
 
+  /** Extends a live holder in place; a released or lapsed holder must never be resurrected. */
+  async renewLease(key: string, holderId: string, leaseMs: number): Promise<boolean> {
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + leaseMs);
+    const result = await this.model.collection.updateOne(
+      { key, 'result.holders': { $elemMatch: { id: holderId, expiresAt: { $gt: now } } } },
+      [
+        {
+          $set: {
+            'result.holders': {
+              $map: {
+                input: '$result.holders',
+                as: 'holder',
+                in: {
+                  $cond: [
+                    { $eq: ['$$holder.id', holderId] },
+                    { $mergeObjects: ['$$holder', { expiresAt: { $max: ['$$holder.expiresAt', expiresAt] } }] },
+                    '$$holder',
+                  ],
+                },
+              },
+            },
+          },
+        },
+        { $set: { expiresAt: { $max: '$result.holders.expiresAt' } } },
+      ]
+    );
+    return result.matchedCount > 0;
+  }
+
   async releaseLease(key: string, holderId: string): Promise<void> {
     await this.model.updateOne({ key }, { $pull: { 'result.holders': { id: holderId } } });
   }

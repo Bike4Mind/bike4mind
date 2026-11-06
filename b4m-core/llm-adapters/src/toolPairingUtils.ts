@@ -27,6 +27,8 @@ export const stripToolDependentMessages = (messages: IMessage[]): IMessage[] =>
  * This function handles both cases by:
  * - Removing orphaned tool_result blocks that reference tool_use_ids that no longer exist
  * - Removing orphaned tool_use blocks that don't have corresponding tool_result blocks
+ * - Enforcing adjacency in both directions: a tool_use needs its tool_result in the next message, and a
+ *   tool_result needs its tool_use in the previous one
  */
 export const ensureToolPairingIntegrity = (
   messages: IMessage[],
@@ -285,6 +287,53 @@ export const ensureToolPairingIntegrity = (
         // Message only contained orphaned tool_result blocks - preserve structure with a placeholder
         result[j] = { ...laterMsg, content: '[Tool results removed during adjacency repair]' };
       }
+    }
+  }
+
+  // Fourth pass: the reverse direction. The passes above only match IDs across the whole history, so a
+  // tool_result whose tool_use sits anywhere earlier survives - including one at messages[0] with no
+  // assistant turn before it, which the API rejects. Keep a tool_result only when its tool_use is in
+  // the message immediately before it. Runs after the third pass, which already guarantees every
+  // surviving tool_use has its result next to it, so nothing here can orphan a tool_use.
+  for (let i = 0; i < result.length; i++) {
+    const msg = result[i];
+    if (msg.role !== 'user' || !Array.isArray(msg.content)) continue;
+
+    const content = msg.content as MessageContentObject[];
+    if (!content.some(b => b.type === 'tool_result')) continue;
+
+    const prevMsg = result[i - 1];
+    const precedingToolUseIds = new Set<string>();
+    if (prevMsg?.role === 'assistant' && Array.isArray(prevMsg.content)) {
+      for (const b of prevMsg.content as MessageContentObject[]) {
+        if (b.type === 'tool_use' && 'id' in b) {
+          precedingToolUseIds.add((b as MessageContentToolUse).id);
+        }
+      }
+    }
+
+    const kept = content.filter(
+      b =>
+        !(
+          b.type === 'tool_result' &&
+          'tool_use_id' in b &&
+          !precedingToolUseIds.has((b as { tool_use_id: string }).tool_use_id)
+        )
+    );
+    if (kept.length === content.length) continue;
+
+    const removed = content.length - kept.length;
+    // A placeholder rather than a dropped message keeps a leading user turn in place and avoids
+    // leaving two assistant messages adjacent.
+    result[i] =
+      kept.length > 0
+        ? { ...msg, content: kept }
+        : { ...msg, content: '[Tool results removed during adjacency repair]' };
+
+    if (logger) {
+      logger.warn(
+        `[Tool Pairing Adjacency] Stripped ${removed} tool_result block(s) from message ${i} with no matching tool_use in the preceding message`
+      );
     }
   }
 

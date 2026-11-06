@@ -15,7 +15,7 @@ vi.mock('@bike4mind/database', () => ({
 const mockCreate = vi.fn();
 const mockFindByPriceId = vi.fn();
 const mockFindNonTerminalSubs = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     create: (...a: unknown[]) => mockCreate(...a),
     findUserSubscriptionByPriceId: (...a: unknown[]) => mockFindByPriceId(...a),
@@ -23,7 +23,7 @@ vi.mock('@server/models/Subscription', () => ({
   },
 }));
 
-import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { grantIndividualAdminSubscription } from './grantIndividualAdminSubscription';
 
@@ -96,7 +96,11 @@ describe('grantIndividualAdminSubscription', () => {
 
     await grantIndividualAdminSubscription({ ...params, onGranted });
 
-    expect(onGranted).toHaveBeenCalledWith({ credits: plan.credits * 3, creditTransactionId: 'tx-ind' });
+    expect(onGranted).toHaveBeenCalledWith({
+      credits: plan.credits * 3,
+      creditTransactionId: 'tx-ind',
+      subscriptionId: expect.stringMatching(/^admin_grant_/),
+    });
   });
 
   it('reports the post-grant balance', async () => {

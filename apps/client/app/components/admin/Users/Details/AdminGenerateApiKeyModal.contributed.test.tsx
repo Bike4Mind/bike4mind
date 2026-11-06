@@ -6,7 +6,7 @@ import AdminGenerateApiKeyModal from './AdminGenerateApiKeyModal';
 
 const h = vi.hoisted(() => ({ mutate: vi.fn() }));
 
-vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumApiKeyScopes.generated', () => ({
   premiumApiKeyScopes: [
     { value: 'acme:read', label: 'Acme Read', description: 'Read Acme data', endpoints: [] },
     {

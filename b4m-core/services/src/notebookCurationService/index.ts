@@ -14,7 +14,7 @@ import {
   IAdminSettingsRepository,
   ISessionDocument,
   IChatHistoryItem,
-  getQuestErrorCode,
+  isTerminalCreditRefusal,
 } from '@bike4mind/common';
 import type { CurationTokenUsage, LLMContext } from './llmMarkdownGenerator';
 import type { CurationMessage } from './artifactExtractor';
@@ -323,8 +323,9 @@ export class NotebookCurationService {
       if (error instanceof BadRequestError) {
         return { success: false, error: error.message, retryable: false };
       }
-      // The owner cannot pay for the summary; a redelivery would be refused the same way.
-      if (getQuestErrorCode(error) === 'insufficient_credits') {
+      // The owner cannot pay for the summary (no credits, or the free-tier daily cap); a redelivery
+      // would be refused the same way.
+      if (isTerminalCreditRefusal(error)) {
         return { success: false, error: (error as Error).message, retryable: false };
       }
       if (error instanceof NotebookCurationError) {

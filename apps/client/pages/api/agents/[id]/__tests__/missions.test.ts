@@ -23,7 +23,8 @@ vi.mock('@server/middlewares/baseApi', () => {
   };
   return { baseApi: () => chain };
 });
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@server/middlewares/perUserRateLimit', () => ({ blockedAtZeroTierLimit: (n: number) => n }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
@@ -42,7 +43,11 @@ vi.mock('@server/deepAgent/wakeMetering', () => ({
 const enrollMissionForAgent = vi.hoisted(() => vi.fn());
 const listMissionsForAgent = vi.hoisted(() => vi.fn());
 const discardEnrolledMission = vi.hoisted(() => vi.fn());
-vi.mock('@server/deepAgent/missions', () => ({ enrollMissionForAgent, listMissionsForAgent, discardEnrolledMission }));
+vi.mock('@bike4mind/server-utils/deepAgent/missions', () => ({
+  enrollMissionForAgent,
+  listMissionsForAgent,
+  discardEnrolledMission,
+}));
 vi.mock('@bike4mind/server-utils/deepAgent/store', () => ({ MongoDeepAgentStore: class MongoDeepAgentStore {} }));
 const runMissionFirstWake = vi.hoisted(() => vi.fn());
 vi.mock('@server/deepAgent/firstWake', () => ({ runMissionFirstWake }));

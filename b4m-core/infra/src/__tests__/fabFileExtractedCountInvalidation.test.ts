@@ -43,6 +43,8 @@ const NOT_A_REWRITE = new Set([
   'b4m-core/services/src/fabFileService/createByUrl.ts',
   // Stages an admin audit-log CSV under exports/ (no FabFile row); nothing to invalidate.
   'apps/client/server/utils/adminAuditExportStorage.ts',
+  // Uploads the account data export zip under exports/ (no FabFile row); nothing to invalidate.
+  'apps/workers/src/queueHandlers/accountDataExport.ts',
   // Only uploads while the row is still `pending` (a first write); the S3 event charges it.
   'apps/client/pages/api/files/[id]/upload.ts',
   // Each creates a NEW row (or presigns the first write for one); the S3 event charges it.
@@ -55,9 +57,11 @@ const NOT_A_REWRITE = new Set([
   'apps/workers/src/queueHandlers/notebookCuration.ts',
   'apps/workers/src/emailIngestion/emailParser.ts',
   'apps/client/server/s3/notebookImportComplete.ts',
-  'apps/client/server/utils/saveGeneratedAssetToFiles.ts',
+  'packages/server-utils/src/utils/saveGeneratedAssetToFiles.ts',
   'apps/client/server/slack/dataLakeIngestDeps.ts',
   'apps/client/server/dataLakes/proposalAdmissionDeps.ts',
+  // Uploads a freshly generated avatar under a new filename and creates a new FabFile row; a first write.
+  'apps/client/server/agents/authoring/generateAgentAvatar.ts',
   'apps/client/server/files/createPresignedUpload.ts',
   // Its upload writes the FabFile it has just created through createFabFile (a first write). It is ALSO
   // listed in ADAPTER_WIRING_SITES on purpose: line ~248 reaches a real rewrite through updateFabFile.
@@ -132,6 +136,7 @@ describe('every FabFile content rewrite clears the cached extracted length', () 
       'apps/workers/src',
       'b4m-core/services/src/fabFileService',
       'b4m-core/services/src/researchTaskService',
+      'packages/server-utils/src',
     ];
     const found: string[] = [];
     searchRoots.forEach(root => walkTs(root, rel => UPLOAD_PATTERN.test(read(rel)) && found.push(rel)));

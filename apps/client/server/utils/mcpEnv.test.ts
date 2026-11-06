@@ -2,12 +2,12 @@ import { describe, it, expect, vi } from 'vitest';
 import type { IMcpServerDocument } from '@bike4mind/common';
 
 vi.mock('@bike4mind/database', () => ({ userRepository: { findById: vi.fn() } }));
-vi.mock('@server/integrations/jira/atlassianTokenManager', () => ({
+vi.mock('@bike4mind/server-utils/integrations/jira/atlassianTokenManager', () => ({
   AtlassianTokenManager: { getValidTokens: vi.fn() },
   AtlassianReconnectRequiredError: class extends Error {},
 }));
 // Stored values are encrypted at rest; identity decryption keeps the fixtures readable.
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptEnvVariables: (envVariables: unknown) => envVariables,
 }));
 

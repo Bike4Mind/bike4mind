@@ -1,10 +1,12 @@
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { CliToolRequestAction } from '@bike4mind/common';
 import { verifyJwtToken, checkRateLimit, verifyApiKey, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
-import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
+import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { validateToolRequest, executeToolWithLogging } from '@bike4mind/server-utils/cli/toolsHandler.shared';
-import { withWebSocketContext, sendToConnection } from '@server/websocket/utils';
+import { withWebSocketContext, sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { sanitizeErrorMessage } from '@server/utils/errorSanitization';
+import { buildWebToolExecutors } from '@server/cli/webToolExecutors';
 
 /**
  * WebSocket handler for CLI tool execution (request-response)
@@ -40,13 +42,16 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // Authenticate (try API key first, then JWT)
   let userId: string;
   let userEmail: string | undefined;
+  // Set only when an API key authenticated the request, so the billed web tools charge the key's owner.
+  let apiKeyInfo: Awaited<ReturnType<typeof verifyApiKey>> | undefined;
 
   try {
-    const apiKeyInfo = await verifyApiKey({ authorization: `Bearer ${accessToken}` });
-    userId = apiKeyInfo.userId;
+    const verifiedKey = await verifyApiKey({ authorization: `Bearer ${accessToken}` });
+    apiKeyInfo = verifiedKey;
+    userId = verifiedKey.userId;
 
-    await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
-      userId: apiKeyInfo.userId,
+    await checkApiKeyRateLimitOrThrow(verifiedKey, {
+      userId: verifiedKey.userId,
       endpoint: 'ws/cli_tool_request',
       method: 'WS',
     });
@@ -62,16 +67,20 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       return { statusCode: 200 };
     }
     try {
-      const user = await verifyJwtToken(accessToken);
+      const user = await verifyJwtToken(accessToken, { requireApiAccess: true });
+      apiKeyInfo = undefined;
       userId = user.id;
       userEmail = user.email ?? undefined;
       await checkRateLimit(userId, undefined, { bucket: 'ws' });
-    } catch {
+    } catch (error) {
       await sendToConnection(connectionId, endpoint, {
         action: 'cli_tool_response' as const,
         requestId,
         success: false,
-        error: 'Authentication failed. Provide a valid API key or JWT token.',
+        error:
+          error instanceof ForbiddenError || isAuthInfraFailure(error)
+            ? error.message
+            : 'Authentication failed. Provide a valid API key or JWT token.',
       });
       return { statusCode: 200 };
     }
@@ -94,6 +103,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       userId,
       userEmail,
       logger,
+      executors: buildWebToolExecutors(logger, apiKeyInfo),
     });
 
     await sendToConnection(connectionId, endpoint, {
@@ -102,6 +112,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       success: result.success,
       content: result.success ? result.content : undefined,
       error: result.error,
+      errorCode: result.errorCode,
     });
   } catch (error) {
     logger.error('[CLI_WS_TOOL] Tool execution error:', error);

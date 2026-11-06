@@ -2,17 +2,34 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { AddressInfo } from 'net';
 import { request as httpRequest, type Server } from 'http';
 import express from 'express';
+import { OutputBudgetExhaustedError } from '@bike4mind/llm-adapters';
 import type { z } from 'zod';
 import { checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 
 // Real @bike4mind/common (pure SSE helpers + the published stream-event schema, which
 // these tests parse frames against). Only the seams below are mocked.
 const mockLoggerError = vi.hoisted(() => vi.fn());
 const mockLoggerWarn = vi.hoisted(() => vi.fn());
+const mockCheckFreeTierDailySpendCap = vi.hoisted(() => vi.fn());
+vi.mock('@server/billing/freeTierDailyCapGate', () => ({ checkFreeTierDailySpendCap: mockCheckFreeTierDailySpendCap }));
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
+const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
+vi.mock('@server/utils/apiKeyAccessGate', async () => {
+  const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+  const message = 'API keys require an active paid subscription';
+  return {
+    API_KEY_ACCESS_DENIED_MESSAGE: message,
+    isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
+    assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown) => {
+      if (!(await isApiKeyAccessAllowedMock(user, billing))) throw new ForbiddenError(message);
+    },
+  };
+});
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     info = vi.fn();
@@ -21,6 +38,7 @@ vi.mock('@bike4mind/observability', () => ({
     debug = vi.fn();
     updateMetadata = vi.fn();
   },
+  describeErrorCause: () => undefined,
 }));
 
 const mockExecuteCompletion = vi.hoisted(() => vi.fn());
@@ -60,7 +78,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   apiKeyRepository: {},
   creditTransactionRepository: {},
-  userRepository: {},
+  userRepository: { findById: vi.fn().mockResolvedValue(null) },
   usageEventRepository: { record: vi.fn() },
   organizationRepository: {},
   cacheRepository: {},
@@ -69,7 +87,20 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockResolveContractAuth = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
 vi.mock('@server/cli/resolveContractAuth', () => ({ resolveContractAuth: mockResolveContractAuth }));
+
+const quotaRelease = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockAdmitApiKeyCompletion = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitApiKeyCompletion: mockAdmitApiKeyCompletion,
+  NO_COMPLETION_QUOTA: { release: () => Promise.resolve() },
+}));
 
 vi.mock('@server/cli/auth', () => ({
   checkRateLimit: vi.fn().mockResolvedValue(undefined),
@@ -107,6 +138,7 @@ import {
   BadRequestError,
   CompletionStreamEventSchema,
   createCompletionContract,
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
   ForbiddenError,
   HTTPError,
   InsufficientCreditsErrorSchema,
@@ -138,6 +170,7 @@ beforeAll(async () => {
 afterAll(() => server?.close());
 
 beforeEach(() => {
+  mockAdmitApiKeyCompletion.mockResolvedValue({ release: quotaRelease });
   mockResolveContractAuth.mockResolvedValue({
     method: 'apiKey',
     userId: 'user-1',
@@ -166,6 +199,7 @@ const UPSTREAM_OPERATOR_ERRORS = [
   [404, 'The model `gpt-x` does not exist or you do not have access to it.'],
   [404, 'Claude Fable 5 is not available. Please use Opus 4.8'],
   [400, 'Your credit balance is too low to access the Anthropic API.'],
+  [400, 'You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.'],
   [404, 'The model claude-3-5-haiku-20241022 does not exist'],
   [400, 'The provided model identifier is invalid'],
   [404, 'Model not available'],
@@ -254,6 +288,23 @@ describe('JWT rate limiting', () => {
     expect(vi.mocked(logCompletionAnalytics)).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop' }));
   });
 
+  it("passes the client's session id through to the completion, for its ledger row", async () => {
+    expect((await postAs({ 'user-agent': 'b4m-desktop/0.1.0' }, { ...COMPLETION, sessionId: 's-1' })).status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's-1' }));
+  });
+
+  it('rejects an oversized session id instead of storing it', async () => {
+    expect((await postAs({}, { ...COMPLETION, sessionId: 'x'.repeat(129) })).status).toBe(422);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('resolves thinking visibility for the caller', async () => {
+    expect((await postAs({})).status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ getThinkingVisibility: resolveThinkingVisibility })
+    );
+  });
+
   /**
    * User-Agent wins, and x-b4m-client is only consulted when there is none - the same precedence
    * `resolveApiCompletionSource` uses, so the tier and the source attribution cannot disagree.
@@ -275,6 +326,20 @@ describe('JWT rate limiting', () => {
     const body = await expectJsonError(res, 429);
     expect(res.headers.get('retry-after')).toBe('900');
     expect(String(body.error)).toMatch(/^Rate limit exceeded/);
+  });
+
+  it('answers a free-tier daily cap refusal with 429, Retry-After and its errorCode, not a 422', async () => {
+    mockCheckFreeTierDailySpendCap.mockRejectedValueOnce(
+      new TooManyRequestsError('Daily free usage limit reached.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+    const res = await post();
+    const body = await expectJsonError(res, 429);
+    expect(res.headers.get('retry-after')).toBe('3600');
+    expect(body.errorCode).toBe(DAILY_FREE_LIMIT_REACHED_ERROR_CODE);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 });
 
@@ -968,6 +1033,32 @@ describe('POST /api/ai/v1/completions - failures after the stream opened', () =>
     expect(text).not.toContain('secret-model-name');
   });
 
+  it('classifies an exhausted caller max_tokens in-band and logs it at warn', async () => {
+    mockExecuteCompletion.mockImplementationOnce(
+      failAfterReady(new OutputBudgetExhaustedError('DeepSeek', 'secret-model-name'))
+    );
+
+    const text = await (await post({ ...COMPLETION, max_tokens: 256 })).text();
+    expect(errorFrame(text)).toMatchObject({ code: 'output_budget_exhausted' });
+    expect(text).not.toContain('secret-model-name');
+    expect(mockLoggerWarn).toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['non-positive', 0],
+  ])('keeps a %s max_tokens budget that ran out as provider_error, still at warn', async (_label, maxTokens) => {
+    mockLoggerError.mockClear();
+    mockExecuteCompletion.mockImplementationOnce(failAfterReady(new OutputBudgetExhaustedError('DeepSeek', 'm')));
+
+    const text = await (
+      await post(maxTokens === undefined ? COMPLETION : { ...COMPLETION, max_tokens: maxTokens })
+    ).text();
+    expect(errorFrame(text)).toMatchObject({ code: 'provider_error' });
+    expect(mockLoggerWarn).toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
+    expect(mockLoggerError).not.toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
+  });
+
   it('classifies a Bedrock AccessDeniedException as provider_rejected and logs its status', async () => {
     const legacy = 'Access denied. This Model is marked by provider as Legacy';
     const upstream = Object.assign(new Error(legacy), { name: 'AccessDeniedException', $fault: 'client' });
@@ -1090,5 +1181,98 @@ describe('POST /api/ai/v1/completions - admin role on the reloaded owner', () =>
     mockResolveContractAuth.mockResolvedValue({ method: 'jwt', userId: 'u1' });
     expect((await postAs({})).status).toBe(200);
     expect(scopeActorOfCall()).toBeUndefined();
+  });
+});
+
+describe('POST /api/ai/v1/completions - untrusted owner quotas', () => {
+  it("admits an API-key completion against the owner's quotas and holds a slot for it", async () => {
+    mockResolveContractAuth.mockResolvedValue({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', billingOwnerType: 'User', ownerUntrusted: true },
+    });
+    expect((await post()).status).toBe(200);
+    expect(mockAdmitApiKeyCompletion).toHaveBeenCalledWith({
+      owner: 'user-1',
+      ownerUntrusted: true,
+      billingOwnerType: 'User',
+      holdSlot: true,
+    });
+  });
+
+  it('does not apply them to a JWT session', async () => {
+    mockResolveContractAuth.mockResolvedValue({ method: 'jwt', userId: 'u1' });
+    expect((await postAs({})).status).toBe(200);
+    expect(mockAdmitApiKeyCompletion).not.toHaveBeenCalled();
+  });
+
+  it('frees the slot after a completed stream', async () => {
+    const res = await post();
+    await res.text();
+    await vi.waitFor(() => expect(quotaRelease).toHaveBeenCalled());
+  });
+
+  it('frees the slot when the completion fails', async () => {
+    mockExecuteCompletion.mockRejectedValue(new Error('boom'));
+    const res = await post();
+    await res.text();
+    await vi.waitFor(() => expect(quotaRelease).toHaveBeenCalled());
+  });
+
+  it('holds the slot after the client disconnects until the completion settles, then frees it', async () => {
+    let finishCompletion: () => void = () => {};
+    mockExecuteCompletion.mockImplementation(async (params: ExecuteParams) => {
+      await params.onReady?.();
+      await new Promise<void>(resolve => {
+        finishCompletion = resolve;
+      });
+    });
+    const controller = new AbortController();
+    const res = await fetch(COMPLETIONS_URL(), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': 'b4m_live_test' },
+      body: JSON.stringify(COMPLETION),
+      signal: controller.signal,
+    });
+    expect(res.status).toBe(200);
+    controller.abort();
+    // Long enough for the server to see the socket close.
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(quotaRelease).not.toHaveBeenCalled();
+
+    finishCompletion();
+    await vi.waitFor(() => expect(quotaRelease).toHaveBeenCalledTimes(1));
+  });
+
+  it('answers a refused quota with a 429, its errorCode and Retry-After, without starting the completion', async () => {
+    mockAdmitApiKeyCompletion.mockRejectedValue(
+      new TooManyRequestsError('Token rate limit exceeded', { errorCode: 'token_rate_limit_exceeded', retryAfter: 12 })
+    );
+    const res = await post();
+    const body = await expectJsonError(res, 429);
+    expect(body.errorCode).toBe('token_rate_limit_exceeded');
+    expect(res.headers.get('retry-after')).toBe('12');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+});
+
+describe('daily cap billing target', () => {
+  it.each([undefined, 'team-org'])('uses the completion billing target %s', async organizationId => {
+    mockResolveContractAuth.mockResolvedValueOnce({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', scopes: [ApiKeyScope.AI_CHAT], organizationId },
+    });
+
+    const response = await post();
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', billingOrganizationId: organizationId })
+    );
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOrganizationId: organizationId })
+    );
   });
 });

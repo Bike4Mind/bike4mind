@@ -2,8 +2,17 @@ import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Logger } from '@bike4mind/observability';
-import { ApiKeyScope } from '@bike4mind/common';
-import { createModal, listModals, updateModal, deleteModal } from '@client/server/tools/modalOperations';
+import { ApiKeyScope, HTTPError } from '@bike4mind/common';
+import { meterCompletionBackend, type CompletionMeter } from '@bike4mind/services';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import {
+  collectModalChanges,
+  createModal,
+  listModals,
+  updateModal,
+  deleteModal,
+} from '@client/server/tools/modalOperations';
+import { recordModalChanges } from '@client/server/tools/recordModalChanges';
 
 const logger = new Logger({ metadata: { service: 'admin-modal-tool' } });
 
@@ -23,9 +32,9 @@ const requestSchema = z.object({
  */
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler(async (req: any, res: any) => {
-    // Silently fail for non-admin users
+    // Silently fail for callers without modal management access (admins and settings:manage delegates)
     if (!req.ability?.can('manage', 'Modal')) {
-      logger.info('Modal tool access denied for non-admin user - returning silent failure');
+      logger.info('Modal tool access denied (no modal management permission) - returning silent failure');
       return res.json({
         success: false,
         message: 'This feature is not available',
@@ -38,36 +47,43 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 
     try {
       // Parse the natural language query to determine intent and parameters
-      const toolParams = await parseNaturalLanguageQuery(query, context);
+      const toolParams = await parseNaturalLanguageQuery(
+        query,
+        context,
+        createRequestCompletionMeter(req, 'admin modal tool', { systemModel: true })
+      );
       logger.info(`Parsed tool params - Action: ${toolParams.action}`, toolParams);
 
       // Execute the appropriate action based on parsed parameters
-      let result;
-      switch (toolParams.action) {
-        case 'create':
-          logger.info('Executing CREATE action');
-          result = await createModal(toolParams);
-          break;
-        case 'list':
-          logger.info('Executing LIST action with filter:', toolParams.filter);
-          result = await listModals(toolParams.filter);
-          break;
-        case 'update':
-          logger.info(`Executing UPDATE action for modal ${toolParams.modalId}`);
-          result = await updateModal(toolParams.modalId, toolParams);
-          break;
-        case 'delete':
-          logger.info(`Executing DELETE action for modal ${toolParams.modalId}`);
-          result = await deleteModal(toolParams.modalId);
-          break;
-        default:
-          logger.error(`Unknown action: ${toolParams.action}`);
-          result = { success: false, error: 'Unknown action' };
-      }
+      const { result, changes } = await collectModalChanges(
+        async () => {
+          switch (toolParams.action) {
+            case 'create':
+              logger.info('Executing CREATE action');
+              return await createModal(toolParams);
+            case 'list':
+              logger.info('Executing LIST action with filter:', toolParams.filter);
+              return await listModals(toolParams.filter);
+            case 'update':
+              logger.info(`Executing UPDATE action for modal ${toolParams.modalId}`);
+              return await updateModal(toolParams.modalId, toolParams);
+            case 'delete':
+              logger.info(`Executing DELETE action for modal ${toolParams.modalId}`);
+              return await deleteModal(toolParams.modalId);
+            default:
+              logger.error(`Unknown action: ${toolParams.action}`);
+              return { success: false, error: 'Unknown action' };
+          }
+        },
+        partial => recordModalChanges(req, partial, 'modal-tool')
+      );
+      await recordModalChanges(req, changes, 'modal-tool');
 
       logger.info(`Modal tool result - Success: ${result.success}, Message: ${result.message}`);
       return res.json(result);
     } catch (error) {
+      // Credit and admission refusals keep their status (422) instead of becoming a 500.
+      if (error instanceof HTTPError) throw error;
       logger.error('Modal tool error:', error);
       return res.status(500).json({
         success: false,
@@ -80,16 +96,18 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 /**
  * Use LLM to intelligently parse natural language query into tool parameters
  */
-export async function parseNaturalLanguageQueryDirect(query: string, context?: any) {
-  return parseNaturalLanguageQuery(query, context);
+export async function parseNaturalLanguageQueryDirect(query: string, context: any, meter: CompletionMeter) {
+  return parseNaturalLanguageQuery(query, context, meter);
 }
 
-async function parseNaturalLanguageQuery(query: string, context?: any) {
+async function parseNaturalLanguageQuery(query: string, context: any, meter: CompletionMeter) {
   try {
     // Dynamically import OperationsModelService only when needed (server-side only)
-    const { OperationsModelService } = await import('@client/services/operationsModelService');
+    const { OperationsModelService } = await import('@bike4mind/server-utils/services/operationsModelService');
     // Get the operations model for LLM processing
-    const { modelId, llm } = await OperationsModelService.getOperationsModel();
+    const operations = await OperationsModelService.getOperationsModel();
+    const { modelId } = operations;
+    const llm = meterCompletionBackend(operations.llm, meter, operations.modelInfo);
 
     logger.info(`Using LLM model ${modelId} for intent recognition`);
 
@@ -406,6 +424,8 @@ What is the user's intent?`;
       return fallbackParsing(query, context);
     }
   } catch (error) {
+    // A credit or admission refusal must reach the admin, not degrade silently to pattern matching.
+    if (error instanceof HTTPError) throw error;
     logger.error('Error in LLM intent recognition:', error);
     // Fallback to simple pattern matching
     return fallbackParsing(query, context);

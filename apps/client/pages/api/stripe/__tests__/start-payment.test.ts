@@ -5,18 +5,31 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { CreditPackageId, TransactionType } from '@client/lib/credits/types';
 import { CreditPurchaseEvents, MIN_PRICE_PER_CREDIT_USD } from '@bike4mind/common';
 
-// baseApi: unwrap the chain so handler.post(fn) just returns fn, and .use() is a no-op.
+type Middleware = (req: unknown, res: unknown, next: (error?: unknown) => void) => void;
+
+// baseApi: unwrap the chain so handler.post(fn) runs the route's .use() middlewares, then fn; an error passed
+// to next() rejects, as the real error handler would answer it. refuseBlockedAccount runs for real.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    use: function () {
-      return this;
-    },
-    post: (fn: unknown) => fn,
-  }),
+  baseApi: () => {
+    const middlewares: Middleware[] = [];
+    return {
+      use(middleware: Middleware) {
+        middlewares.push(middleware);
+        return this;
+      },
+      post: (fn: (req: unknown, res: unknown) => Promise<unknown>) => async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) {
+          await new Promise<void>((resolve, reject) =>
+            middleware(req, res, error => (error ? reject(error) : resolve()))
+          );
+        }
+        return fn(req, res);
+      },
+    };
+  },
 }));
 
-// requireStripeWebhook is applied via .use(), which our baseApi mock drops. Stub the
-// factory so importing the handler module doesn't touch real webhook config.
+// Stub the factory so importing the handler module doesn't touch real webhook config.
 vi.mock('@server/middlewares/requireStripeWebhook', () => ({
   requireStripeWebhook: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
@@ -38,6 +51,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 const mockCreateCustomer = vi.fn();
 const mockPaymentIntentsCreate = vi.fn();
 const mockCustomersDel = vi.fn();
+const mockCustomersUpdate = vi.fn();
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   createCustomer: (...args: unknown[]) => mockCreateCustomer(...args),
   CustomerType: { User: 'user' },
@@ -47,12 +61,20 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
     },
     customers: {
       del: (...args: unknown[]) => mockCustomersDel(...args),
+      update: (...args: unknown[]) => mockCustomersUpdate(...args),
     },
   },
 }));
 
 const mockLogEventSafe = vi.fn();
-vi.mock('@server/utils/analyticsLog', () => ({
+const mockRecordPaymentStart = vi.fn();
+vi.mock('@server/billing/paymentRisk', () => ({
+  recordPaymentStart: (...args: unknown[]) => mockRecordPaymentStart(...args),
+}));
+const network = { ip: '203.0.113.7', isDatacenter: true, wafAnonIp: null };
+vi.mock('@server/auth/networkMeta', () => ({ readNetworkMeta: () => network }));
+
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({
   logEventSafe: (...args: unknown[]) => mockLogEventSafe(...args),
 }));
 
@@ -66,6 +88,14 @@ vi.mock('@client/lib/credits/utils', () => ({
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { STAGE: 'test', STRIPE_PUBLISHABLE_KEY: 'pk_test_123' },
 }));
+
+const mockFirstPurchaseCardOptions = vi.fn();
+vi.mock('@server/integrations/stripe/threeDSecure', () => ({
+  firstPurchaseCardOptions: (...args: unknown[]) => mockFirstPurchaseCardOptions(...args),
+}));
+// The gate's own rules are covered in server/billing/checkoutGate.test.ts; here only that the route calls it.
+const { mockAssertCheckoutAllowed } = vi.hoisted(() => ({ mockAssertCheckoutAllowed: vi.fn() }));
+vi.mock('@server/billing/checkoutGate', () => ({ assertCheckoutAllowed: mockAssertCheckoutAllowed }));
 
 import handler from '../start-payment';
 
@@ -84,7 +114,7 @@ function makeReq(body: unknown, userOverrides: Record<string, unknown> = {}) {
     disputePending: false,
     ...userOverrides,
   };
-  (req as Record<string, unknown>).logger = { info: vi.fn(), error: vi.fn() };
+  (req as Record<string, unknown>).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return { req, res };
 }
 
@@ -103,6 +133,8 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
     });
     mockPaymentIntentsCreate.mockResolvedValue({ client_secret: 'cs_test_abc', id: 'pi_1' });
     mockCustomersDel.mockResolvedValue({ id: 'cus_new', deleted: true });
+    mockCustomersUpdate.mockResolvedValue({ id: 'cus_existing' });
+    mockFirstPurchaseCardOptions.mockResolvedValue({});
   });
 
   it('creates a payment intent for a non-subscribed user buying a package', async () => {
@@ -117,6 +149,40 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
       publishableKey: 'pk_test_123',
       paymentIntentId: 'pi_1',
     });
+  });
+
+  it('records where the payment started, for the payment risk alert', async () => {
+    const { req, res } = makeReq({ transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 });
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockRecordPaymentStart).toHaveBeenCalledWith(
+      { paymentIntentId: 'pi_1', userId: 'user_1', amount: 2000, currency: 'usd', network },
+      expect.anything()
+    );
+  });
+
+  it('records the visit the payment started in on the attempt, and never sends it to Stripe', async () => {
+    const visitId = 'a'.repeat(32);
+    const { req, res } = makeReq({ transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 });
+    req.headers.cookie = `b4m_vid=${visitId}`;
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockRecordPaymentStart).toHaveBeenCalledWith(
+      expect.objectContaining({ paymentIntentId: 'pi_1', visitId }),
+      expect.anything()
+    );
+    expect(JSON.stringify(mockPaymentIntentsCreate.mock.calls)).not.toContain(visitId);
+  });
+
+  it('records no visit for a visit cookie this server did not mint', async () => {
+    const { req, res } = makeReq({ transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 });
+    req.headers.cookie = 'b4m_vid=forged-visit';
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockRecordPaymentStart.mock.calls[0][0].visitId).toBeUndefined();
   });
 
   it('creates a payment intent for a non-subscribed user buying per-credit', async () => {
@@ -261,4 +327,115 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
       expect(mockPaymentIntentsCreate).not.toHaveBeenCalled();
     }
   );
+
+  describe('risk metadata for Radar rules', () => {
+    const HOUR_MS = 60 * 60 * 1000;
+    const signupMeta = {
+      ip: '203.0.113.7',
+      userAgent: 'agent',
+      asn: 16509,
+      asnOrg: 'hosting',
+      country: 'DE',
+      isDatacenter: true,
+      capturedAt: new Date('2026-10-01T00:00:00Z'),
+    };
+    const signupFields = { signup_asn: '16509', signup_is_datacenter: 'true', signup_country: 'DE' };
+
+    it('stamps the account age and signup network on the payment intent, never the IP', async () => {
+      const { req, res } = makeReq(
+        { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
+        { createdAt: new Date(Date.now() - 3 * HOUR_MS - 60 * 1000), signupMeta }
+      );
+
+      await (handler as HandlerFn)(req, res);
+
+      const args = mockPaymentIntentsCreate.mock.calls[0][0] as { metadata: Record<string, string> };
+      expect(args.metadata).toMatchObject({ account_age_hours: '3', ...signupFields, userId: 'user_1' });
+      expect(JSON.stringify(args.metadata)).not.toContain('203.0.113.7');
+    });
+
+    it('sends the age alone for an account with no signup capture', async () => {
+      const { req, res } = makeReq(
+        { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
+        { createdAt: new Date(Date.now() - 50 * HOUR_MS) }
+      );
+
+      await (handler as HandlerFn)(req, res);
+
+      const args = mockPaymentIntentsCreate.mock.calls[0][0] as { metadata: Record<string, string> };
+      expect(args.metadata.account_age_hours).toBe('50');
+      expect(args.metadata).not.toHaveProperty('signup_is_datacenter');
+      expect(mockCustomersUpdate).not.toHaveBeenCalled();
+    });
+
+    it('creates a new customer with the signup fields and skips the backfill', async () => {
+      mockCreateCustomer.mockResolvedValue({ id: 'cus_new' });
+      const { req, res } = makeReq(
+        { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
+        { stripeCustomerId: null, signupMeta }
+      );
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockCreateCustomer).toHaveBeenCalledWith(expect.objectContaining({ metadata: signupFields }));
+      expect(mockCustomersUpdate).not.toHaveBeenCalled();
+    });
+
+    it('backfills the signup fields onto an existing customer before charging it', async () => {
+      const { req, res } = makeReq(
+        { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
+        { signupMeta }
+      );
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockCustomersUpdate).toHaveBeenCalledWith('cus_existing', { metadata: signupFields });
+      expect(mockPaymentIntentsCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it('still charges when the customer backfill fails', async () => {
+      mockCustomersUpdate.mockRejectedValue(new Error('stripe down'));
+      const { req, res } = makeReq(
+        { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
+        { signupMeta }
+      );
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockPaymentIntentsCreate).toHaveBeenCalledTimes(1);
+      expect(res.statusCode).toBe(200);
+    });
+  });
+
+  describe('3-D Secure on first purchase', () => {
+    const accountCreatedAt = new Date('2026-10-01T00:00:00Z');
+    const challengeOptions = { payment_method_options: { card: { request_three_d_secure: 'challenge' } } };
+
+    it('adds the challenge options to the payment intent and asks the helper about this account', async () => {
+      mockFirstPurchaseCardOptions.mockResolvedValue(challengeOptions);
+      const { req, res } = makeReq(
+        { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
+        { createdAt: accountCreatedAt }
+      );
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockFirstPurchaseCardOptions).toHaveBeenCalledWith(
+        { stripeCustomerId: 'cus_existing', accountCreatedAt },
+        expect.anything()
+      );
+      expect(mockPaymentIntentsCreate).toHaveBeenCalledWith(expect.objectContaining(challengeOptions));
+    });
+
+    it('leaves payment_method_options off when the helper returns nothing', async () => {
+      const { req, res } = makeReq(
+        { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
+        { createdAt: accountCreatedAt }
+      );
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockPaymentIntentsCreate.mock.calls[0][0]).not.toHaveProperty('payment_method_options');
+    });
+  });
 });

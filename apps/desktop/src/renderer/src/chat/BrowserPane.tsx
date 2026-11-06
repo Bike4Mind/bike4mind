@@ -88,10 +88,15 @@ export function BrowserPane({
   sessionId,
   suspended,
   conversation,
+  historyEnabled,
+  onHistory,
 }: {
   sessionId: string | null;
   suspended: boolean;
   conversation: RefObject<HTMLElement | null>;
+  /** See BrowserMenu. */
+  historyEnabled: boolean | null;
+  onHistory: (enabled: boolean) => void;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const pane = useRef<HTMLDivElement | null>(null);
@@ -413,6 +418,8 @@ export function BrowserPane({
         onNavigate={navigate}
         onGo={go}
         onCookieState={setCookies}
+        historyEnabled={historyEnabled}
+        onHistory={onHistory}
       />
       <Box ref={ref} sx={{ position: 'relative', flex: 1, minHeight: 0, display: 'grid', placeItems: 'center' }}>
         {still && (

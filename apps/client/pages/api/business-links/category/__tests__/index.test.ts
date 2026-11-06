@@ -45,6 +45,8 @@ vi.mock('@bike4mind/database/content', () => ({
   },
 }));
 
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn() }));
+
 // Import after mocks are registered so the chain capture runs.
 import '@pages/api/business-links/category';
 

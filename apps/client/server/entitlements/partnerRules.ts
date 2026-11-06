@@ -5,7 +5,7 @@
  *
  * This module is SERVER-ONLY: it reads `@bike4mind/database`, so it must never
  * be imported from `apps/client/app/**` (the browser bundle) - the pure
- * registry (`@client/lib/entitlements/registry`) stays the isomorphic layer.
+ * registry (`@bike4mind/server-utils/lib/entitlements/registry`) stays the isomorphic layer.
  * The env registry rows remain a fallback (see the resolver callers) so nothing
  * regresses before the collection is seeded.
  *
@@ -16,7 +16,11 @@
  * comparison rule shared with the registry so domain/key matching is identical.
  */
 import { partnerSignupRuleRepository } from '@bike4mind/database';
-import { normalizeTag, KNOWN_ENTITLEMENT_KEYS, unknownEntitlementKeys } from '@client/lib/entitlements/registry';
+import {
+  normalizeTag,
+  KNOWN_ENTITLEMENT_KEYS,
+  unknownEntitlementKeys,
+} from '@bike4mind/server-utils/lib/entitlements/registry';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
@@ -27,6 +31,7 @@ type ResolvedRule = {
   domain: string;
   entitlements: EntitlementKey[];
   signupCredits: number;
+  grantPackageId: string | null;
   /** Org a verified signup on this domain is auto-added to, or null. */
   organizationId: string | null;
   /** User tags stamped at signup; case preserved (see IPartnerSignupRule.tags). */
@@ -58,6 +63,7 @@ async function loadRules(): Promise<Map<string, ResolvedRule>> {
       domain,
       entitlements: rule.entitlements.map(normalizeTag).filter(Boolean),
       signupCredits: rule.signupCredits ?? 0,
+      grantPackageId: rule.grantPackageId ?? null,
       organizationId: rule.organizationId ?? null,
       tags: rule.tags ?? [],
       subscription: rule.subscription ? { ...rule.subscription } : null,
@@ -159,6 +165,7 @@ export type PartnerSignupGrant =
       matched: false;
       entitlements: Set<EntitlementKey>;
       signupCredits: 0;
+      grantPackageId: null;
       organizationId: null;
       tags: [];
       subscription: null;
@@ -169,6 +176,7 @@ export type PartnerSignupGrant =
       domain: string;
       entitlements: Set<EntitlementKey>;
       signupCredits: number;
+      grantPackageId: string | null;
       organizationId: string | null;
       tags: string[];
       subscription: { priceId: string; durationMonths: number } | null;
@@ -191,6 +199,7 @@ export async function partnerSignupGrantForEmail(
       matched: false,
       entitlements: new Set(),
       signupCredits: 0,
+      grantPackageId: null,
       organizationId: null,
       tags: [],
       subscription: null,
@@ -203,6 +212,7 @@ export async function partnerSignupGrantForEmail(
     subscription: rule.subscription ? { ...rule.subscription } : null,
     entitlements: new Set(rule.entitlements),
     signupCredits: rule.signupCredits,
+    grantPackageId: rule.grantPackageId,
     organizationId: rule.organizationId,
     tags: [...rule.tags],
   };

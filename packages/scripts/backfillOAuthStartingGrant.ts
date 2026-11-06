@@ -1,4 +1,5 @@
 #!/usr/bin/env npx ts-node -r tsconfig-paths/register
+import { signupProtectionRepository } from '@bike4mind/database';
 
 /**
  * Grant the starting free credits to Google/GitHub signups that got none before OAuth signup
@@ -133,10 +134,15 @@ const grantAll = async (users: readonly StartingGrantUser[]): Promise<{ granted:
             creditTransactions: creditTransactionRepository,
             creditLots: creditLotRepository,
             users: userRepository,
+            signupProtection: { repository: signupProtectionRepository, mode: 'enforce' },
           },
           reason: GRANT_REASON,
         }
       );
+      if (result.withheld) {
+        console.log(`  deferred ${describeUser(user)} - pending domain review`);
+        continue;
+      }
       granted++;
       console.log(`  ok  ${describeUser(user)}  +${result.creditsGranted} credits`);
     } catch (error) {

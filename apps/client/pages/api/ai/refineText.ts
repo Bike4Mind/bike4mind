@@ -1,15 +1,13 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { refineTextLLMSchema } from '@bike4mind/services/llm/refineText';
-import { ApiKeyScope } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { RefineFailedError, RefineProviderUnavailableError, refineTextRequest } from '@server/ai/refineTextRequest';
 import { z } from 'zod';
 
-// POST (not GET): this triggers an LLM completion, so it isn't a safe/idempotent
-// read. Gated to ai:generate so an under-scoped API key can't drive LLM cost.
-// Legacy route for the SPA; the documented public equivalent is POST /api/v1/text-refinements.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(
+// POST (not GET): this triggers an LLM completion, so it isn't a safe/idempotent read.
+// Legacy route for the SPA, so JWT only; API keys use POST /api/v1/text-refinements.
+const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler(async (req, res) => {
     let params: z.infer<typeof refineTextLLMSchema>;
     try {
@@ -23,7 +21,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(
 
     let enhancedText: string;
     try {
-      enhancedText = await refineTextRequest(params, { logger: req.logger, user: req.user });
+      enhancedText = await refineTextRequest(params, req);
     } catch (error) {
       // v1 maps the wrapper to 502; this route must keep the behaviour it had before the wrapper
       // existed, where the provider's own error reached errorHandler and its numeric `status`

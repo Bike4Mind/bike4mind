@@ -1,9 +1,10 @@
 import { Request } from 'express';
 import { clientIdFromAuthorizeRedirect } from '@bike4mind/common';
 import OAuth2Strategy from 'passport-oauth2';
-import { createStateToken, verifyStateToken } from './jwtStateStore';
-import { readStateNonceHash } from './oauthFlowCookie';
+import { createStateToken, verifyStateToken } from '@bike4mind/server-utils/auth/jwtStateStore';
+import { readStateNonceHash } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { STATE_REASON_TO_CODE } from '@server/utils/auth/oauthFailureReason';
+import { recordTurnstileVerification, wasTurnstileVerified } from './signupChallenge';
 
 /**
  * The flow-start handler (pages/api/auth/[strategy]/index.ts) sets the nonce
@@ -13,6 +14,22 @@ import { STATE_REASON_TO_CODE } from '@server/utils/auth/oauthFailureReason';
  * so the field is available synchronously.
  */
 export const OAUTH_NONCE_HASH_REQ_KEY = '__oauthNonceHash';
+
+const MAX_OAUTH_INVITE_CODE_LENGTH = 64;
+
+/** Trimmed invite code, or undefined for anything that is not a 1..64 char string. */
+export function sanitizeOAuthInviteCode(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  return trimmed && trimmed.length <= MAX_OAUTH_INVITE_CODE_LENGTH ? trimmed : undefined;
+}
+
+// Set only by verify() from a valid state token, so the code a callback sees is the one the
+// flow started with, never a value the callback request itself carried.
+const verifiedInviteCodes = new WeakMap<object, string>();
+
+/** The invite code carried by this callback's verified OAuth state, if any (verifyCallback.ts). */
+export const readOAuthInviteCode = (req: object): string | null => verifiedInviteCodes.get(req) ?? null;
 
 type Metadata = OAuth2Strategy.Metadata;
 type StoreCallback = OAuth2Strategy.StateStoreStoreCallback;
@@ -55,9 +72,18 @@ export class PassportOAuthStateStore implements OAuth2Strategy.StateStore {
       // The OAuth client a signup came through, for its source tag (stampOAuthSourceTag).
       const clientId = clientIdFromAuthorizeRedirect(redirectTo);
       const nonceHash = (req as unknown as Record<string, unknown>)[OAUTH_NONCE_HASH_REQ_KEY];
+      // A registration invite code typed on /register, redeemed if this login creates an account.
+      // The state is signed, not encrypted, so the provider and browser can read the code; codes are
+      // email-bound and single-use.
+      const inviteCode = sanitizeOAuthInviteCode(req.query?.inviteCode);
       const token = createStateToken(
         { audience: this.audience },
-        redirectTo ? { redirectTo, ...(clientId ? { clientId } : {}) } : undefined,
+        {
+          challengeVerified: wasTurnstileVerified(req),
+          ...(redirectTo ? { redirectTo } : {}),
+          ...(clientId ? { clientId } : {}),
+          ...(inviteCode ? { inviteCode } : {}),
+        },
         typeof nonceHash === 'string' ? nonceHash : undefined
       );
       cb(null, token);
@@ -70,11 +96,26 @@ export class PassportOAuthStateStore implements OAuth2Strategy.StateStore {
   verify(req: Request, state: string, meta: Metadata, callback: VerifyCallback): void;
   verify(req: Request, state: string, metaOrCallback: Metadata | VerifyCallback, callback?: VerifyCallback): void {
     const cb = (typeof metaOrCallback === 'function' ? metaOrCallback : callback) as VerifyCallback;
+    recordTurnstileVerification(req, false);
+    verifiedInviteCodes.delete(req);
     try {
       // Enforce browser-binding: the token's nonce hash must match this browser's
       // cookie (readStateNonceHash returns null when absent -> fails closed).
       const result = verifyStateToken(state, { audience: this.audience }, readStateNonceHash(req));
       if (result.valid) {
+        const payload = result.payload;
+        recordTurnstileVerification(
+          req,
+          typeof payload === 'object' &&
+            payload !== null &&
+            'challengeVerified' in payload &&
+            payload.challengeVerified === true
+        );
+        const inviteCode =
+          typeof payload === 'object' && payload !== null && 'inviteCode' in payload
+            ? sanitizeOAuthInviteCode(payload.inviteCode)
+            : undefined;
+        if (inviteCode) verifiedInviteCodes.set(req, inviteCode);
         cb(null, true, result.payload);
       } else {
         cb(null, false, { code: STATE_REASON_TO_CODE[result.reason], message: result.message });
@@ -87,3 +128,4 @@ export class PassportOAuthStateStore implements OAuth2Strategy.StateStore {
 
 export const githubOAuthStateStore = new PassportOAuthStateStore('github-oauth-state');
 export const googleOAuthStateStore = new PassportOAuthStateStore('google-oauth-state');
+export const appleOAuthStateStore = new PassportOAuthStateStore('apple-oauth-state');

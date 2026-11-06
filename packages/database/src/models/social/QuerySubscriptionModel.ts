@@ -31,38 +31,40 @@ export type IQuerySubscription = {
 
 export interface IQuerySubscriptionDocument extends IQuerySubscription, IMongoDocument {}
 
-export const QuerySubscriptionSubscriberSchema = new mongoose.Schema<IQuerySubscriptionSubscriber>(
-  {
-    endpoint: { type: String, required: true },
-    connectionId: { type: String, required: true },
-    clientId: { type: String, required: true },
-    attempts: { type: Number, default: 0 },
-    errorReason: { type: String },
-    createdAt: { type: Date, default: Date.now },
-  },
-  {
-    _id: false,
-  }
-);
-
-export const QuerySubscriptionSchema = new mongoose.Schema<IQuerySubscriptionDocument>(
-  {
-    collectionName: { type: String, required: true },
-    queryId: { type: String, required: true },
-    query: { type: Object, required: true },
-    fields: { type: Object, required: true },
-    subscribers: {
-      type: [QuerySubscriptionSubscriberSchema],
-      required: true,
+export const QuerySubscriptionSubscriberSchema: mongoose.Schema<IQuerySubscriptionSubscriber> =
+  new mongoose.Schema<IQuerySubscriptionSubscriber>(
+    {
+      endpoint: { type: String, required: true },
+      connectionId: { type: String, required: true },
+      clientId: { type: String, required: true },
+      attempts: { type: Number, default: 0 },
+      errorReason: { type: String },
+      createdAt: { type: Date, default: Date.now },
     },
-    lastChange: { type: String, required: false },
-  },
-  {
-    timestamps: true,
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true },
-  }
-);
+    {
+      _id: false,
+    }
+  );
+
+export const QuerySubscriptionSchema: mongoose.Schema<IQuerySubscriptionDocument> =
+  new mongoose.Schema<IQuerySubscriptionDocument>(
+    {
+      collectionName: { type: String, required: true },
+      queryId: { type: String, required: true },
+      query: { type: Object, required: true },
+      fields: { type: Object, required: true },
+      subscribers: {
+        type: [QuerySubscriptionSubscriberSchema],
+        required: true,
+      },
+      lastChange: { type: String, required: false },
+    },
+    {
+      timestamps: true,
+      toJSON: { virtuals: true },
+      toObject: { virtuals: true },
+    }
+  );
 
 // Compound index for subscribers fields as recommended by MongoDB Atlas
 QuerySubscriptionSchema.index({

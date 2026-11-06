@@ -43,7 +43,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   methodNotAllowedHandler: () => (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) =>
     res.status(405).json({ error: 'Method not allowed' }),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => {
     rateLimitOptions.push(options);
     return (_req: unknown, _res: unknown, next: () => void) => next();

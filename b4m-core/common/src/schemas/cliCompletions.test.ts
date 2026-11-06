@@ -550,6 +550,7 @@ describe('CompletionSseErrorEventSchema', () => {
       'provider_error',
       'provider_rejected',
       'content_blocked',
+      'output_budget_exhausted',
     ]);
   });
 });

@@ -23,7 +23,7 @@ export const USAGE_EVENT_FEATURES = [
   'tool',
   // Operational-model spend the app incurs on the user's behalf outside a direct
   // chat turn (auto-naming, summarization, tagging, context summarization). Billed
-  // to the user/org only when the billOperationalUsage admin setting is on.
+  // to free-tier holders, and to everyone when the billOperationalUsage setting is on.
   'operations',
   // Query-embedding spend (e.g. every search_knowledge_base semantic search).
   'embedding',
@@ -54,6 +54,8 @@ export const UsageEventRates = z.object({
   output: z.number(),
   cacheRead: z.number().optional(),
   cacheWrite: z.number().optional(),
+  /** Stamped only on a row that wrote with the 1-hour TTL. */
+  cacheWrite1h: z.number().optional(),
 });
 
 export type IUsageEventRates = z.infer<typeof UsageEventRates>;
@@ -64,6 +66,7 @@ export const UsageEventTurn = z.object({
   outputTokens: z.number(),
   cacheReadTokens: z.number().optional(),
   cacheWriteTokens: z.number().optional(),
+  cacheWrite1hTokens: z.number().optional(),
   tierKey: z.number(),
 });
 
@@ -71,6 +74,24 @@ export type IUsageEventTurn = z.infer<typeof UsageEventTurn>;
 
 /** Most turns one UsageEvent stores; a longer completion keeps the first N-1 plus one aggregated tail entry. */
 export const USAGE_EVENT_TURN_USAGE_CAP = 100;
+
+/**
+ * What funded the credits a usage event spent. `unknown` covers legacy-backfill lots and
+ * credits no lot accounts for (lot stamping is best-effort and an admin absolute-set
+ * balance can leave lots short of the real history).
+ */
+export const USAGE_FUNDING_SOURCES = ['granted', 'purchased', 'subscription', 'unknown'] as const;
+export type UsageFundingSource = (typeof USAGE_FUNDING_SOURCES)[number];
+
+/** Credits per funding source; the four values sum to the event's creditsCharged. */
+export const UsageFundingBreakdown = z.object({
+  granted: z.number(),
+  purchased: z.number(),
+  subscription: z.number(),
+  unknown: z.number(),
+});
+
+export type IUsageFundingBreakdown = z.infer<typeof UsageFundingBreakdown>;
 
 /**
  * One row per provider API call. Ties true COGS (costUsd, frozen
@@ -98,6 +119,12 @@ export const UsageEvent = z.object({
   provider: z.string(),
   /** Exact model id string used for the call. */
   model: z.string(),
+  /**
+   * Admin-only: the provider/model that actually ran, set only when the restricted tier substituted it.
+   * provider/model above keep the requested ids; costUsd prices the executed model. Never return to users.
+   */
+  executedProvider: z.string().optional(),
+  executedModel: z.string().optional(),
 
   // Token quantities. inputTokens/outputTokens are ALWAYS the local tokenizer
   // estimate and providerInputTokens/providerOutputTokens ALWAYS the provider's
@@ -123,6 +150,17 @@ export const UsageEvent = z.object({
    * sum(creditsCharged) - sum(writtenOffCredits); absent means nothing written off.
    */
   writtenOffCredits: z.number().optional(),
+  /**
+   * The credit hold the settled turn reserved before it ran (chat settlement events only). Set so a
+   * turn that settled far above its hold can be found per account; absent on other events.
+   */
+  reservedCredits: z.number().optional(),
+  /**
+   * creditsCharged split by what funded it, stamped by UsageEventRepository.record() from
+   * the holder's credit lots (see attributeChargeToFundingSources). Absent on zero-credit
+   * rows and on rows written before stamping existed.
+   */
+  fundingBreakdown: UsageFundingBreakdown.optional(),
 
   status: z.enum(USAGE_EVENT_STATUSES).default('ok'),
   latencyMs: z.number().optional(),
@@ -165,6 +203,8 @@ export const UsageEvent = z.object({
   turnUsage: z.array(UsageEventTurn).optional(),
   /** True when turnUsage was capped: its last entry is the sum of every turn from there on. */
   turnUsageTruncated: z.boolean().optional(),
+  /** The part of cacheWriteTokens written with the 1-hour TTL, priced at rates.cacheWrite1h. Absent when none. */
+  cacheWrite1hTokens: z.number().optional(),
 
   createdAt: z.date(),
   updatedAt: z.date(),
@@ -180,7 +220,7 @@ export type IUsageEventInput = Omit<IUsageEvent, 'id' | 'createdAt' | 'updatedAt
 /** The price-stamp fields of a UsageEvent, as built by buildUsagePriceStamp. */
 export type UsagePriceStamp = Pick<
   IUsageEventInput,
-  'priceSource' | 'priceRowId' | 'rates' | 'turnUsage' | 'turnUsageTruncated'
+  'priceSource' | 'priceRowId' | 'rates' | 'turnUsage' | 'turnUsageTruncated' | 'cacheWrite1hTokens'
 >;
 
 /** One aggregation bucket of v_margin_by_model_day (schema-doc naming). */
@@ -229,6 +269,25 @@ export interface ISettlementBreakdown {
   outputTokenDelta: number;
   /** Count of rows contributing to the token deltas above (providerInputTokens/providerOutputTokens both > 0). */
   deltaSampleSize: number;
+}
+
+/**
+ * Provider cost and credits by funding source for one signup-week cohort over the report
+ * window (admin usage-margin view 'funding-cohort').
+ */
+export interface IFundingCohortCost {
+  /** Monday 00:00 UTC of the spending users' signup week; null when the user record is gone. */
+  cohortWeek: Date | null;
+  /** Distinct spending users in the cohort over the window. */
+  accounts: number;
+  /** Each row's costUsd split by its fundingBreakdown shares. */
+  costUsd: Record<UsageFundingSource, number>;
+  credits: Record<UsageFundingSource, number>;
+  /**
+   * Provider cost on rows without a fundingBreakdown: zero-credit calls, rows written before
+   * stamping, and rows whose funding lookup failed.
+   */
+  unattributedCostUsd: number;
 }
 
 /** Shared spend totals for any owner-scoped usage aggregation bucket. */
@@ -628,12 +687,48 @@ export interface ISessionUsageResponse {
   executions: ISessionAgentExecution[];
 }
 
+/** The settlement that most exceeded its hold, from largestSettlementOverHold. */
+export interface ISettlementOverHold {
+  reservedCredits: number;
+  settledCredits: number;
+  /** settledCredits / reservedCredits. */
+  ratio: number;
+}
+
+export interface IUserUsageActivity {
+  events: number;
+  completed: number;
+  failed: number;
+  credits: number;
+  latestAt: Date | null;
+}
+
 export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocument> {
   /** Append one event. Must never throw into the billing path; callers fire-and-forget. */
   record(event: IUsageEventInput): Promise<IUsageEventDocument | null>;
 
   /** Margin buckets per model per day since the given date (default 30 days back). */
   marginByModelDay(since?: Date): Promise<IModelDayMargin[]>;
+
+  /** Credits the user spent in [from, to): charged plus written off. */
+  creditsSpentByUser(userId: string, from: Date, to: Date): Promise<number>;
+
+  /**
+   * The user's usage in [from, to): event count, `ok` events, the rest (error/timeout/refusal/
+   * degenerate), credits charged plus written off, and the newest event's time (null when none).
+   * Reads at most `limit` of the newest events, so `events === limit` means the counts are a floor.
+   */
+  activitySummaryByUser(userId: string, from: Date, to: Date, limit: number): Promise<IUserUsageActivity>;
+
+  /** Credits each user has spent in total, charged plus written off; users with none are absent. */
+  creditsSpentByUsers(userIds: string[]): Promise<Record<string, number>>;
+
+  /**
+   * Per user, the chat settlement since `since` that settled furthest above its hold: settled credits
+   * (charged plus written off) over reservedCredits. Only events that recorded a hold count; users
+   * with none are absent.
+   */
+  largestSettlementOverHold(userIds: string[], since: Date): Promise<Record<string, ISettlementOverHold>>;
 
   /** Margin buckets per user over the trailing N days (default 30), worst margin first. */
   marginByUser(days?: number): Promise<IUserMargin[]>;
@@ -654,6 +749,9 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
 
   /** Settlement-basis rollup over the trailing N days (default 30): provider-vs-local token delta and written-off credits. */
   settlementBreakdown(days?: number): Promise<ISettlementBreakdown[]>;
+
+  /** Provider cost by funding source per signup-week cohort over the trailing N days (default 30), newest cohort first. */
+  costByFundingCohort(days?: number): Promise<IFundingCohortCost[]>;
 
   /**
    * All spend for one credit holder (org/user/agent) over the trailing N days

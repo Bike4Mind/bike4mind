@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { publicVideoModel } from '../media/__fixtures__/videoModels';
-import { findTool, isOfferedEditTool, toolsForRequest } from './registry';
+import { findTool, isOfferedEditTool, offeredMediaToolNames, toolsForRequest } from './registry';
 import type { ToolSchema } from './types';
 
 const names = (options: Parameters<typeof toolsForRequest>[0]) =>
@@ -29,6 +29,28 @@ describe('toolsForRequest', () => {
     expect(declared).toContain('generate_image');
     expect(declared).toContain('session_spawn');
     expect(declared).toContain('mcp__notion_search');
+  });
+
+  it('declares the ten simulator tools only when the simulator is available', () => {
+    const declared = names({ roots: [], media: false, host: false, simulator: true });
+    expect(declared.filter(name => name.startsWith('simulator_')).sort()).toEqual(
+      [
+        'simulator_appearance',
+        'simulator_boot',
+        'simulator_build',
+        'simulator_devices',
+        'simulator_input',
+        'simulator_launch',
+        'simulator_open_url',
+        'simulator_rotate',
+        'simulator_screenshot',
+        'simulator_view',
+      ].sort()
+    );
+    for (const options of [{ simulator: false }, {}]) {
+      const none = names({ roots: [], media: false, host: false, ...options });
+      expect(none.filter(name => name.startsWith('simulator_'))).toEqual([]);
+    }
   });
 
   it('declares generate_video only when the server offers a video model', () => {
@@ -71,6 +93,30 @@ describe('toolsForRequest', () => {
     expect(attended).not.toContain(revising[0]);
     expect(findTool('session_suggestion_update')).toBeDefined();
     expect(findTool('session_suggestion_dismiss')).toBeDefined();
+  });
+
+  it('describes session_spawn as starting the agent at once when the session delegates', () => {
+    const spawnDescription = (delegates: boolean) =>
+      toolsForRequest({ roots: [], media: false, host: true, ask: true, suggestions: !delegates, delegates }).find(
+        entry => entry.toolSchema.name === 'session_spawn'
+      )?.toolSchema.description ?? '';
+
+    const delegated = spawnDescription(true);
+    expect(delegated).toContain('STARTS it at once');
+    expect(delegated).toContain('its own git worktree');
+    expect(delegated).not.toContain('only SUGGESTS');
+    expect(spawnDescription(false)).toContain('only SUGGESTS');
+  });
+
+  it('offers quest_complete only to a session that orchestrates agents', () => {
+    const names = (delegates: boolean) =>
+      toolsForRequest({ roots: [], media: false, host: true, ask: true, suggestions: !delegates, delegates }).map(
+        entry => entry.toolSchema.name
+      );
+
+    expect(names(true)).toContain('quest_complete');
+    expect(names(false)).not.toContain('quest_complete');
+    expect(findTool('quest_complete')).toBeDefined();
   });
 
   it('offers the browser without a folder, a project or anything else', () => {
@@ -147,5 +193,21 @@ describe('toolsForRequest', () => {
       expect(isOfferedEditTool('file_write', false)).toBe(true);
       expect(isOfferedEditTool('file_read', true)).toBe(true);
     });
+  });
+});
+
+describe('offeredMediaToolNames', () => {
+  const MEDIA = /^generate_/;
+
+  it('names exactly the generation tools toolsForRequest declares for the same inputs', () => {
+    const gemini = publicVideoModel('gemini-omni-1.1-flash');
+    for (const options of [
+      { media: false, video: [gemini] },
+      { media: true, video: [] },
+      { media: true, video: [gemini] },
+    ]) {
+      const declared = names({ roots: [], host: false, ...options }).filter(name => MEDIA.test(name));
+      expect(offeredMediaToolNames(options)).toEqual(declared);
+    }
   });
 });

@@ -15,9 +15,9 @@
 
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sreErrorPatternRepository } from '@bike4mind/database';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
@@ -30,10 +30,8 @@ const PatchBodySchema = z.object({
   confirmReactivate: z.boolean().optional(),
 });
 
-const handler = baseApi().patch(
+const handler = adminApi({ adminPermissions: { PATCH: 'settings:manage' } }).patch(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Permission denied');
-
     const { id } = req.query as Record<string, string>;
     if (typeof id !== 'string' || !isValidObjectId(id)) {
       throw new BadRequestError('Invalid pattern id');

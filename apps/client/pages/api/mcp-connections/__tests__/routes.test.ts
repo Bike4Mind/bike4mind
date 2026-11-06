@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { EventEmitter } from 'events';
+import { Types } from 'mongoose';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks, type RequestMethod } from 'node-mocks-http';
 import {
@@ -52,7 +53,7 @@ vi.mock('@server/middlewares/baseApi', async () => {
   };
 });
 
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: { limit: number; windowMs: number; bucket?: string }) => {
     h.rateLimitOptions.push(options);
     return (req: { user: { id: string } }, _res: unknown, next: (error?: unknown) => void) => {
@@ -90,7 +91,7 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordCircuitBreakerRejection: vi.fn(async () => undefined),
   recordCircuitBreakerTransition: vi.fn(async () => undefined),
 }));
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: (value: string | null | undefined) => (value ? `enc:${Buffer.from(value).toString('base64')}` : null),
   decryptToken: (value: string | null | undefined) => value,
 }));
@@ -122,6 +123,7 @@ const ownerMatches = (doc: Record<string, unknown> | undefined, owner: { ownerKe
 const repo = vi.hoisted(() => ({
   createWithinUserCap: vi.fn(),
   findByIdForOwner: vi.fn(),
+  findByIdWithCredentials: vi.fn(),
   listAllForUser: vi.fn(),
   updateSettings: vi.fn(),
   setStatus: vi.fn(),
@@ -142,6 +144,9 @@ function installRepo(): void {
     return defaultRead(h.store.get(id));
   });
   repo.findByIdForOwner.mockImplementation(async (id: string, owner: { ownerKey: string }) =>
+    ownerMatches(h.store.get(id), owner) ? defaultRead(h.store.get(id)) : null
+  );
+  repo.findByIdWithCredentials.mockImplementation(async (id: string, owner: { ownerKey: string }) =>
     ownerMatches(h.store.get(id), owner) ? defaultRead(h.store.get(id)) : null
   );
   repo.listAllForUser.mockImplementation(async (userId: string) =>
@@ -419,6 +424,55 @@ describe('POST /api/mcp-connections', () => {
     expect(repo.createWithinUserCap).not.toHaveBeenCalled();
   });
 
+  it('admits a catalog preset under presets_only and stores its id, while a custom URL still fails', async () => {
+    h.context = context({ policies: [CustomMcpPolicySchema.parse({})] });
+    const preset = await createConnection({ presetId: 'linear' });
+    expect(preset.status).toBe(201);
+    expect(preset.body).toMatchObject({ presetId: 'linear', urlHost: 'mcp.linear.app' });
+    expect(([...h.store.values()][0] as unknown as Doc).presetId).toBe('linear');
+
+    const custom = await createConnection({ url: 'https://mcp.evil.example/mcp' });
+    expect(custom.status).toBe(403);
+    expect(custom.body).toMatchObject({ code: 'policy_blocked', reason: 'presets_only' });
+    expect(h.store.size).toBe(1);
+  });
+
+  it('refuses a preset id paired with another host, before the policy runs and before writing', async () => {
+    h.context = context({ policies: [CustomMcpPolicySchema.parse({})] });
+    const result = await createConnection({ presetId: 'linear', url: 'https://mcp.evil.example/mcp' });
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ code: 'preset_host_mismatch' });
+    expect(repo.createWithinUserCap).not.toHaveBeenCalled();
+    expect(h.audits).toContainEqual({ action: 'connection_created', outcome: 'failure:preset_host_mismatch' });
+  });
+
+  it('refuses a preset paired with a sign-in its catalog entry does not declare, before writing', async () => {
+    h.context = context({ policies: [CustomMcpPolicySchema.parse({ mode: 'any', allowUnauthenticated: true })] });
+    const result = await createConnection({ presetId: 'linear', auth: { kind: 'none' } });
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ code: 'preset_auth_mismatch' });
+    expect(repo.createWithinUserCap).not.toHaveBeenCalled();
+    expect(h.audits).toContainEqual({ action: 'connection_created', outcome: 'failure:preset_auth_mismatch' });
+  });
+
+  it('refuses an unknown preset id and keeps the other policy gates on a preset', async () => {
+    h.context = context({ policies: [CustomMcpPolicySchema.parse({})] });
+    const unknown = await createConnection({ presetId: 'hubspot' });
+    expect(unknown.status).toBe(400);
+    expect(unknown.body).toMatchObject({ code: 'invalid_body' });
+
+    h.context = context({ platformBlockedHosts: ['*.linear.app'], policies: [CustomMcpPolicySchema.parse({})] });
+    expect((await createConnection({ presetId: 'linear' })).body).toMatchObject({ reason: 'platform_blocked_host' });
+    expect(repo.createWithinUserCap).not.toHaveBeenCalled();
+  });
+
+  it('keeps a stored preset connection allowed on refresh under presets_only', async () => {
+    h.context = context({ policies: [CustomMcpPolicySchema.parse({})] });
+    const created = (await createConnection({ presetId: 'linear' })).body as { id: string };
+    const refreshed = await call(routes.refresh, { method: 'POST', id: created.id });
+    expect(refreshed.status).toBe(200);
+  });
+
   it('refuses the deployment own host and internal addresses with a 400 reason', async () => {
     const own = await createConnection({ url: 'https://app.example.com/mcp' });
     expect(own.status).toBe(400);
@@ -480,6 +534,22 @@ describe('POST /api/mcp-connections', () => {
     expect(repo.createWithinUserCap).toHaveBeenLastCalledWith(expect.anything(), 1);
     // Another user is counted separately.
     expect((await createConnection({}, OTHER)).status).toBe(201);
+  });
+
+  it('stamps the selected org when the user is a member, even though req.user holds it as an ObjectId', async () => {
+    const orgId = new Types.ObjectId();
+    h.context = context({ organizationIds: [String(orgId)] });
+    expect((await createConnection({}, { id: 'user-1', organizationId: orgId })).status).toBe(201);
+    expect(repo.createWithinUserCap).toHaveBeenLastCalledWith(
+      expect.objectContaining({ organizationId: String(orgId) }),
+      20
+    );
+  });
+
+  it('leaves the org off when the selected org is not one of the user memberships', async () => {
+    h.context = context({ organizationIds: [String(new Types.ObjectId())] });
+    expect((await createConnection({}, { id: 'user-1', organizationId: new Types.ObjectId() })).status).toBe(201);
+    expect(repo.createWithinUserCap.mock.lastCall?.[0]).not.toHaveProperty('organizationId');
   });
 
   it('holds creates to 10 an hour per user', async () => {

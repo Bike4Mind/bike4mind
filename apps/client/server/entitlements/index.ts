@@ -26,7 +26,7 @@ import {
   resolveEntitlements,
   normalizeTag,
   BASE_ENTITLEMENT_KEY,
-} from '@client/lib/entitlements/registry';
+} from '@bike4mind/server-utils/lib/entitlements/registry';
 import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
 import {
   getActiveSubscriptionsForUser,
@@ -34,7 +34,8 @@ import {
   type ActiveSubscriptionsRequest,
 } from '@server/entitlements/activeSubscriptions';
 import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
-import type { IUserDocument } from '@bike4mind/common';
+import { resolvePaidStanding } from '@server/entitlements/paidStanding';
+import { PAID_PLAN_ENTITLEMENT_KEY, type IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
 /**
@@ -58,6 +59,8 @@ export interface EntitlementUser {
   /** Granting a domain entitlement requires BOTH (verified-email gate). */
   email?: string | null;
   emailVerified?: boolean | null;
+  /** Set by a credit purchase, never by an admin grant alone; unlocks `plan:paid` (see paidStanding.ts). */
+  lastCreditsPurchasedAt?: Date | null;
 }
 
 /** Projects an authenticated `IUserDocument` onto the fields `getUserEntitlements` reads. */
@@ -68,6 +71,7 @@ export function toEntitlementUser(user: IUserDocument): EntitlementUser {
     isAdmin: user.isAdmin,
     email: user.email,
     emailVerified: user.emailVerified,
+    lastCreditsPurchasedAt: user.lastCreditsPurchasedAt,
   };
 }
 
@@ -110,6 +114,10 @@ export async function getUserEntitlements(
   for (const key of partnerKeys) {
     keys.add(key);
   }
+  const paidStanding = resolvePaidStanding(user, activeSubscriptions);
+  for (const key of paidStanding.subscriberKeys) {
+    keys.add(key);
+  }
   // Baseline access: every authenticated user holds the reserved `base` key, so
   // any model gated only on `base` (the default for base models) is reachable
   // without a per-account tag. This is what lets tag-less OAuth/SSO/admin-created
@@ -120,7 +128,12 @@ export async function getUserEntitlements(
   // Implications run last, over the union of every source, so an implying key
   // confers the same keys whether it came from a tag, domain, partner rule or
   // subscription. Must stay the only place they are applied for gating.
-  return applyImpliedEntitlements(keys);
+  const resolved = applyImpliedEntitlements(keys);
+  // `plan:paid` unlocks paid-only models (the free-tier gate in modelAdmission.ts), so it comes from
+  // paid standing alone (paidStanding.ts), never from a passthrough tag or any other source above.
+  // An admin comps it with an `admin_grant` subscription row.
+  const withoutPaidPlan = resolved.filter(key => key !== PAID_PLAN_ENTITLEMENT_KEY);
+  return paidStanding.holdsPaidStanding ? [...withoutPaidPlan, PAID_PLAN_ENTITLEMENT_KEY] : withoutPaidPlan;
 }
 
 /**

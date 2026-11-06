@@ -440,6 +440,47 @@ describe('SmartChunker', () => {
     });
   });
 
+  describe('chunkFile with application/json', () => {
+    const chunkTexts = async (text: string): Promise<string> =>
+      (await chunker.chunkFile(Buffer.from(text, 'utf8'), 'application/json')).map(c => c.text).join('\n');
+
+    it('chunks a file with trailing commas and comments instead of throwing', async () => {
+      const text = '{\n  // note\n  "title": "Quarterly report",\n  "tags": ["a", "b",],\n}';
+      const out = await chunkTexts(text);
+
+      expect(out).toContain('Quarterly report');
+      expect(chunker.getExtractedText()).toBe(text);
+    });
+
+    it('chunks a BOM-prefixed file', async () => {
+      const out = await chunkTexts('\uFEFF{\r\n  "y": "payload"\r\n}');
+
+      expect(out).toContain('payload');
+    });
+
+    it('falls back to BOM-free text chunking for a BOM-prefixed file that is not JSON', async () => {
+      const out = await chunkTexts('\uFEFF{"a": nope, "note": "bom fallback"}');
+
+      expect(out).toContain('bom fallback');
+      expect(out).not.toContain('\uFEFF');
+    });
+
+    it('falls back to text chunking for a file that is not JSON', async () => {
+      const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+      const out = await chunkTexts('{"a": nope, "note": "still searchable"}');
+
+      expect(out).toContain('still searchable');
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('chunking it as text'));
+      warn.mockRestore();
+    });
+
+    it('keeps the structured path for valid JSON', async () => {
+      const chunks = await chunker.chunkFile(Buffer.from('{"k":"v"}', 'utf8'), 'application/json');
+
+      expect(chunks.map(c => c.text)).toEqual([JSON.stringify({ k: 'v' })]);
+    });
+  });
+
   describe('chunkFile with text/plain', () => {
     it('produces valid chunks for text/plain content with no whitespace', async () => {
       const content = Buffer.from('x'.repeat(20000));
@@ -721,11 +762,64 @@ describe('getExtractedText (lake admission fingerprint source, #1679)', () => {
     expect(small.getExtractedText()).toBe(large.getExtractedText());
   });
 
-  it('is undefined for a file that yields no extractable text', async () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each(['application/x-cfb', 'application/octet-stream'])(
+    'warns and returns no chunks for unsupported %s',
+    async mimeType => {
+      const chunker = buildChunker(DEFAULT_PASSAGE_TOKEN_TARGET);
+      const warn = vi.spyOn(Logger.prototype, 'warn');
+      const error = vi.spyOn(Logger.prototype, 'error');
+      try {
+        await expect(chunker.chunkFile(Buffer.from('anything'), mimeType)).resolves.toEqual([]);
+        expect(warn).toHaveBeenCalledExactlyOnceWith(`Unsupported file type: ${mimeType}`);
+        expect(error).not.toHaveBeenCalled();
+        expect(chunker.getExtractedText()).toBeUndefined();
+      } finally {
+        chunker.freeEncoder();
+      }
+    }
+  );
+
+  it('returns no chunks for a file with no recorded MIME type', async () => {
     const chunker = buildChunker(DEFAULT_PASSAGE_TOKEN_TARGET);
-    await chunker.chunkFile(Buffer.from('anything'), 'application/octet-stream');
-    chunker.freeEncoder();
-    expect(chunker.getExtractedText()).toBeUndefined();
+    const warn = vi.spyOn(Logger.prototype, 'warn');
+    const error = vi.spyOn(Logger.prototype, 'error');
+    try {
+      await expect(chunker.chunkFile({ filePath: 'untyped-file' })).resolves.toEqual([]);
+      expect(warn).toHaveBeenCalledExactlyOnceWith('Unsupported file type: undefined');
+      expect(error).not.toHaveBeenCalled();
+      expect(chunker.getExtractedText()).toBeUndefined();
+    } finally {
+      chunker.freeEncoder();
+    }
+  });
+
+  it.each(['audio/mpeg', 'video/mp4'])('keeps media-only %s quiet', async mimeType => {
+    const chunker = buildChunker(DEFAULT_PASSAGE_TOKEN_TARGET);
+    const warn = vi.spyOn(Logger.prototype, 'warn');
+    const error = vi.spyOn(Logger.prototype, 'error');
+    try {
+      await expect(chunker.chunkFile(Buffer.from('anything'), mimeType)).resolves.toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+      expect(chunker.getExtractedText()).toBeUndefined();
+    } finally {
+      chunker.freeEncoder();
+    }
+  });
+
+  it('still chunks an unknown text/* type as plain text', async () => {
+    const chunker = buildChunker(DEFAULT_PASSAGE_TOKEN_TARGET);
+    try {
+      const chunks = await chunker.chunkFile(Buffer.from('hello world'), 'text/x-foo');
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunker.getExtractedText()).toBe('hello world');
+    } finally {
+      chunker.freeEncoder();
+    }
   });
 });
 
@@ -864,23 +958,20 @@ describe('chunkFile captures a document date', () => {
       expect(chunker.getDocumentDate()).toBeUndefined();
     });
 
-    // Regression: mammoth extracts the text through its OWN zip read, entirely separate from the
-    // one opened here just for the date - so a second opener choking on the same bytes must cost
-    // the file only its vintage, not the chunks mammoth already produced.
-    it('still extracts text when the container cannot be reopened for its date', async () => {
+    // The container open is what bounds the XML before mammoth inflates it, so a container it
+    // cannot open is never handed to mammoth (which reads the zip with the same library anyway).
+    it('fails a DOCX whose container cannot be opened rather than parsing it unbounded', async () => {
       const docx = await buildDatedDocx(
         '<dcterms:created xsi:type="dcterms:W3CDTF">2019-03-04T09:15:00Z</dcterms:created>'
       );
       jsZipLoadFailure.message = 'zip end of central directory not found';
-      const chunks = await chunker.chunkFile(docx, DOCX_MIME);
-      expect(chunks.map(c => c.text).join(' ')).toContain('Quarterly revenue report');
-      expect(chunker.getDocumentDate()).toBeUndefined();
+      await expect(chunker.chunkFile(docx, DOCX_MIME)).rejects.toThrow('zip end of central directory not found');
     });
 
-    // Mirrors the PPTX case below: openOoxmlContainerForDate opens fine (the zip headers are
-    // intact), but readOoxmlDocumentDate's own readZipEntryBounded call fails to inflate the
-    // damaged entry. Text extraction goes through mammoth's own, separate zip read, so it must
-    // survive even though the date read does not.
+    // Mirrors the PPTX case below: the container opens fine (the zip headers are intact), but
+    // readOoxmlDocumentDate's own readZipEntryBounded call fails to inflate the damaged entry.
+    // Text extraction goes through mammoth's own, separate zip read, so it must survive even
+    // though the date read does not.
     it('leaves the slot empty for a DOCX whose core.xml cannot be decompressed', async () => {
       const docx = corruptZipEntryPayload(
         await buildDatedDocx(
@@ -1012,18 +1103,15 @@ describe('chunkFile captures a document date', () => {
       expect(chunker.getDocumentDate()).toBeUndefined();
     });
 
-    // Regression: readWorkbookDocumentDate now tries JSZip.loadAsync unconditionally, not just when
-    // isZipContainer's byte sniff already said yes - so a container that opener chokes on entirely
-    // must fall back to the SheetJS-parsed date already in hand, not lose the vintage outright.
-    it('falls back to the SheetJS date when the workbook container cannot be opened at all', async () => {
+    // The size bound runs through the same opener before SheetJS parses anything, so a zip it
+    // cannot open is refused rather than handed to SheetJS's own, unbounded zip reader. (The
+    // SheetJS-date fallback for an unopenable container stays covered by the legacy .xls cases.)
+    it('refuses a zip-signatured workbook whose container cannot be opened to bound it', async () => {
       const xlsx = await buildDatedWorkbook('xlsx', new Date('2019-03-04T00:00:00Z'));
       jsZipLoadFailure.message = 'zip end of central directory not found';
       const chunks = await chunker.chunkFile(xlsx, XLSX_MIME);
-      expect(chunks.length).toBeGreaterThan(0);
-      expect(chunker.getDocumentDate()).toEqual({
-        date: new Date('2019-03-04T00:00:00.000Z'),
-        source: DocumentDateSource.DOCUMENT_PROPERTIES,
-      });
+      expect(chunks).toEqual([]);
+      expect(chunker.getExtractedText()).toBeUndefined();
     });
 
     /**
@@ -1184,4 +1272,293 @@ describe('chunkFile captures a document date', () => {
     await chunker.chunkFile(Buffer.from('Plain text with no vintage.'), 'text/plain');
     expect(chunker.getDocumentDate()).toBeUndefined();
   });
+});
+
+describe('extraction output caps', () => {
+  const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const PDF_MIME = 'application/pdf';
+
+  let chunker: SmartChunker;
+
+  beforeEach(() => {
+    chunker = createChunker();
+  });
+
+  afterEach(() => {
+    chunker.freeEncoder();
+    vi.restoreAllMocks();
+  });
+
+  const allText = (chunks: Chunk[]): string => chunks.map(c => c.text).join(' ');
+
+  /** Deflates to almost nothing and inflates past the 128MB container budget. */
+  const OVER_BUDGET_BULK = 'x'.repeat(129 * 1024 * 1024);
+  /** Under the budget alone; two of them are over it together. */
+  const HALF_BUDGET_BULK = 'x'.repeat(70 * 1024 * 1024);
+
+  async function buildDocx(bodyText: string, extraEntries: Record<string, string> = {}): Promise<Buffer> {
+    const zip = new JSZip();
+    zip.file(
+      '[Content_Types].xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+        '<Default Extension="xml" ContentType="application/xml"/>' +
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+        '</Types>'
+    );
+    zip.file(
+      '_rels/.rels',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
+        '</Relationships>'
+    );
+    zip.file(
+      'word/document.xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
+        `<w:p><w:r><w:t>${bodyText}</w:t></w:r></w:p></w:body></w:document>`
+    );
+    for (const [path, body] of Object.entries(extraEntries)) zip.file(path, body);
+    return Buffer.from(await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }));
+  }
+
+  async function buildXlsx(rows: unknown[][]): Promise<Buffer> {
+    const { utils, write } = await import('xlsx');
+    const workbook = utils.book_new();
+    utils.book_append_sheet(workbook, utils.aoa_to_sheet(rows), 'Sheet1');
+    return Buffer.from(write(workbook, { type: 'buffer', bookType: 'xlsx', compression: true }) as ArrayBuffer);
+  }
+
+  /**
+   * Rewrites the sheet's `<dimension>` tag in the written XML. Setting `!ref` before writing does
+   * not work: SheetJS's writer walks that range itself, so the fixture would hang, not the code.
+   */
+  async function withDeclaredDimension(xlsx: Buffer, ref: string): Promise<Buffer> {
+    const zip = await JSZip.loadAsync(xlsx);
+    const sheetPath = 'xl/worksheets/sheet1.xml';
+    const xml = await zip.file(sheetPath)!.async('string');
+    zip.file(sheetPath, xml.replace(/<dimension ref="[^"]*"/, `<dimension ref="${ref}"`));
+    return Buffer.from(await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }));
+  }
+
+  type DeclaredRange = { s: { r: number; c: number }; e: { r: number; c: number } };
+
+  /**
+   * An .xlsb with one sheet per entry, each declaring `range` in its BrtWsDim record. Unlike the
+   * xlsx `<dimension>` tag, SheetJS keeps a reversed BrtWsDim as the sheet's `!ref`.
+   */
+  async function buildXlsbWithDeclaredRanges(sheets: { rows: unknown[][]; range: DeclaredRange }[]): Promise<Buffer> {
+    const { utils, write } = await import('xlsx');
+    const workbook = utils.book_new();
+    sheets.forEach(({ rows }, i) => utils.book_append_sheet(workbook, utils.aoa_to_sheet(rows), `Sheet${i + 1}`));
+    const zip = await JSZip.loadAsync(write(workbook, { type: 'buffer', bookType: 'xlsb' }) as ArrayBuffer);
+    for (const [i, { range }] of sheets.entries()) {
+      const path = `xl/worksheets/sheet${i + 1}.bin`;
+      const bin = await zip.file(path)!.async('nodebuffer');
+      // Record type 0x94 (BrtWsDim) as a varint, then its 16-byte size: rwFirst, rwLast, colFirst, colLast.
+      const at = bin.indexOf(Buffer.from([0x94, 0x01, 0x10]));
+      expect(at).toBeGreaterThanOrEqual(0);
+      [range.s.r, range.e.r, range.s.c, range.e.c].forEach((value, field) =>
+        bin.writeUInt32LE(value, at + 3 + field * 4)
+      );
+      zip.file(path, bin);
+    }
+    return Buffer.from(await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }));
+  }
+
+  /**
+   * A structurally valid PDF whose page N shows `pageText(N)`, then `fillerLines` lines of 999
+   * characters each. pdf.js extracts only glyphs that land on the page, so the filler is set in a
+   * 0.1pt font for ~1M characters to fit on one page.
+   */
+  function buildMultiPagePdf(pageCount: number, pageText: (pageNumber: number) => string, fillerLines = 0): Buffer {
+    const filler = `(${'w'.repeat(999)}) Tj T* `.repeat(fillerLines);
+    // Objects: 1 catalog, 2 pages tree, 3 font, then a (page, content) pair per page.
+    const pageObjectNumber = (i: number) => 4 + i * 2;
+    const objects: string[] = [
+      '<</Type/Catalog/Pages 2 0 R>>',
+      `<</Type/Pages/Kids[${Array.from({ length: pageCount }, (_, i) => `${pageObjectNumber(i)} 0 R`).join(' ')}]/Count ${pageCount}>>`,
+      '<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>',
+    ];
+    for (let i = 0; i < pageCount; i++) {
+      const content = `BT /F1 0.1 Tf 0.2 TL 10 780 Td (${pageText(i + 1)}) Tj T* ${filler}ET`;
+      objects.push(
+        `<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents ${pageObjectNumber(i) + 1} 0 R/Resources<</Font<</F1 3 0 R>>>>>>`,
+        `<</Length ${content.length}>>\nstream\n${content}\nendstream`
+      );
+    }
+    let pdf = '%PDF-1.4\n';
+    const offsets: number[] = [];
+    objects.forEach((body, i) => {
+      offsets.push(pdf.length);
+      pdf += `${i + 1} 0 obj\n${body}\nendobj\n`;
+    });
+    const xrefStart = pdf.length;
+    pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+    for (const offset of offsets) pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
+    pdf += `trailer\n<</Size ${objects.length + 1}/Root 1 0 R>>\nstartxref\n${xrefStart}\n%%EOF\n`;
+    return Buffer.from(pdf, 'latin1');
+  }
+
+  describe('DOCX', () => {
+    it('does not hand mammoth a container whose XML inflates past the budget', async () => {
+      // Not an .xml name: the parsers read parts by relationship target, not by extension, so every
+      // entry counts toward the budget whatever it is called.
+      const docx = await buildDocx('BODY_MARKER', { 'word/media/bulk.bin': OVER_BUDGET_BULK });
+      const chunks = await chunker.chunkFile(docx, DOCX_MIME);
+      expect(chunks).toEqual([]);
+      expect(chunker.getExtractedText()).toBeUndefined();
+    }, 60_000);
+
+    it('charges every entry against one shared budget, not each against its own', async () => {
+      const docx = await buildDocx('BODY_MARKER', {
+        'word/media/a.bin': HALF_BUDGET_BULK,
+        'word/media/b.bin': HALF_BUDGET_BULK,
+      });
+      expect(await chunker.chunkFile(docx, DOCX_MIME)).toEqual([]);
+    }, 60_000);
+
+    it('chunks a DOCX whose XML fits the budget', async () => {
+      const chunks = await chunker.chunkFile(await buildDocx('BODY_MARKER'), DOCX_MIME);
+      expect(allText(chunks)).toContain('BODY_MARKER');
+    });
+
+    it('truncates the extracted text at the character cap', async () => {
+      const docx = await buildDocx(`HEAD_MARKER ${'word '.repeat(450_000)} TAIL_MARKER`);
+      const chunks = await chunker.chunkFile(docx, DOCX_MIME);
+      expect(allText(chunks)).toContain('HEAD_MARKER');
+      expect(allText(chunks)).not.toContain('TAIL_MARKER');
+      expect(chunker.getExtractedText()?.length).toBe(2_000_000);
+    }, 60_000);
+  });
+
+  describe('XLSX', () => {
+    it('does not hand SheetJS a container whose XML inflates past the budget', async () => {
+      const zip = await JSZip.loadAsync(await buildXlsx([['CELL_MARKER']]));
+      zip.file('xl/media/bulk.bin', OVER_BUDGET_BULK);
+      const xlsx = Buffer.from(await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }));
+      const chunks = await chunker.chunkFile(xlsx, XLSX_MIME);
+      expect(chunks).toEqual([]);
+    }, 60_000);
+
+    it('refuses a PK-led workbook the measuring reader rejects, rather than letting SheetJS open it', async () => {
+      // Rewriting every local-header signature leaves a file SheetJS's own zip reader still
+      // accepts but JSZip does not; the budget cannot measure it, so it is not parsed.
+      const xlsx = await buildXlsx([['CELL_MARKER']]);
+      const mangled = Buffer.from(xlsx.toString('latin1').split('PK\x03\x04').join('PK\x01\x01'), 'latin1');
+      expect(await chunker.chunkFile(mangled, XLSX_MIME)).toEqual([]);
+    });
+
+    it('hands a non-zip workbook to SheetJS without opening it as a zip', async () => {
+      const { utils, write } = await import('xlsx');
+      const workbook = utils.book_new();
+      utils.book_append_sheet(workbook, utils.aoa_to_sheet([['CELL_MARKER']]), 'Sheet1');
+      const xls = Buffer.from(write(workbook, { type: 'buffer', bookType: 'biff8' }) as ArrayBuffer);
+      const loadAsync = vi.spyOn(JSZip, 'loadAsync');
+      const chunks = await chunker.chunkFile(xls, 'application/vnd.ms-excel');
+      expect(allText(chunks)).toContain('CELL_MARKER');
+      // The one open is readWorkbookDocumentDate, which tries every workbook on purpose; the size
+      // bound no longer hands JSZip bytes that SheetJS will not read as a zip.
+      expect(loadAsync).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps every row of a sparse sheet whose declared range overstates its columns', async () => {
+      // 50k rows of one column declared as 52 columns wide: 2.6M declared cells against a 2M-cell
+      // budget. Trimming to the populated columns keeps all rows; counting declared cells would not.
+      const rows = Array.from({ length: 50_000 }, (_, i) => [`R${i}`]);
+      const xlsx = await withDeclaredDimension(await buildXlsx(rows), 'A1:AZ50000');
+      await chunker.chunkFile(xlsx, XLSX_MIME);
+      const text = chunker.getExtractedText() ?? '';
+      expect(text).toContain('["R0"]');
+      expect(text).toContain('["R49999"]');
+    }, 60_000);
+
+    it('clamps a spoofed sheet dimension to the cell budget instead of walking it', async () => {
+      // Two real cells, but the dimension tag claims the whole 16384 x 1048576 grid (~17B cells).
+      // Unclamped, SheetJS walks every one of them; the cap stops it at 2M cells.
+      const { utils } = await import('xlsx');
+      const sheetToJson = vi.spyOn(utils, 'sheet_to_json');
+      const xlsx = await withDeclaredDimension(await buildXlsx([['CELL_MARKER', 'Revenue']]), 'A1:XFD1048576');
+      const start = Date.now();
+      const chunks = await chunker.chunkFile(xlsx, XLSX_MIME);
+      expect(allText(chunks)).toContain('CELL_MARKER');
+      expect(Date.now() - start).toBeLessThan(20_000);
+      // Trimmed to the populated extent: the declared grid would not fit, so its empty rows go too.
+      expect(sheetToJson).toHaveBeenCalledTimes(1);
+      expect(sheetToJson.mock.calls[0][1]).toMatchObject({ range: { s: { r: 0, c: 0 }, e: { r: 0, c: 1 } } });
+    }, 60_000);
+
+    it('charges a reversed sheet range nothing, so it cannot refund the next sheet a bigger walk', async () => {
+      // Sheet1 declares its rows end-before-start: a negative area that, subtracted, used to add
+      // ~1M cells to the budget. Sheet2's declared full-width grid (2 populated columns x 1048576
+      // rows) then fit the inflated budget and was walked row by row instead of being trimmed.
+      const xlsb = await buildXlsbWithDeclaredRanges([
+        { rows: [['REVERSED_MARKER']], range: { s: { r: 1_048_575, c: 0 }, e: { r: 0, c: 16_383 } } },
+        { rows: [['CELL_MARKER', 'Revenue']], range: { s: { r: 0, c: 0 }, e: { r: 1_048_575, c: 16_383 } } },
+      ]);
+      const { utils } = await import('xlsx');
+      const sheetToJson = vi.spyOn(utils, 'sheet_to_json');
+      // No xlsb MIME is supported; SheetJS sniffs the binary workbook on the spreadsheet path.
+      await chunker.chunkFile(xlsb, XLSX_MIME);
+      expect(chunker.getExtractedText()).toContain('CELL_MARKER');
+      expect(sheetToJson).toHaveBeenCalledTimes(1);
+      expect(sheetToJson.mock.calls[0][1]).toMatchObject({ range: { s: { r: 0, c: 0 }, e: { r: 0, c: 1 } } });
+    }, 60_000);
+
+    it('stops at the first row that would cross the character cap', async () => {
+      // 100 rows of ~30k characters: the cap admits the first ~66 and drops the rest.
+      const rows = Array.from({ length: 100 }, (_, i) => [`ROW_${i}_MARKER`, 'word '.repeat(6_000)]);
+      const chunks = await chunker.chunkFile(await buildXlsx(rows), XLSX_MIME);
+      const text = chunker.getExtractedText() ?? '';
+      expect(text).toContain('ROW_0_MARKER');
+      expect(text).not.toContain('ROW_99_MARKER');
+      expect(text.length).toBeLessThanOrEqual(2_000_000 + 1_000);
+      expect(allText(chunks)).toContain('ROW_0_MARKER');
+    }, 60_000);
+  });
+
+  describe('PDF', () => {
+    it('extracts every page of a PDF under the page cap, in order', async () => {
+      const pdf = buildMultiPagePdf(3, n => `PAGE_${n}_MARKER`);
+      const chunks = await chunker.chunkFile(pdf, PDF_MIME);
+      const text = allText(chunks);
+      expect(text.indexOf('PAGE_1_MARKER')).toBeLessThan(text.indexOf('PAGE_2_MARKER'));
+      expect(text.indexOf('PAGE_2_MARKER')).toBeLessThan(text.indexOf('PAGE_3_MARKER'));
+    });
+
+    it('truncates the extracted text at the character cap, stopping mid-document', async () => {
+      // Three pages of ~1M characters: the cap falls inside page 2, so page 3 is never read.
+      const pdf = buildMultiPagePdf(3, n => `PAGE_${n}_MARKER`, 1_000);
+      await chunker.chunkFile(pdf, PDF_MIME);
+      const text = chunker.getExtractedText() ?? '';
+      expect(text).toContain('PAGE_2_MARKER');
+      expect(text).not.toContain('PAGE_3_MARKER');
+      // The cap counts page text; the one extra character is the newline joining the two pages.
+      expect(text.length).toBe(2_000_001);
+    }, 60_000);
+
+    it('stops at the page cap', async () => {
+      const pdf = buildMultiPagePdf(2_001, n => `PAGE_${n}_MARKER`);
+      await chunker.chunkFile(pdf, PDF_MIME);
+      const text = chunker.getExtractedText() ?? '';
+      expect(text).toContain('PAGE_2000_MARKER');
+      expect(text).not.toContain('PAGE_2001_MARKER');
+    }, 60_000);
+  });
+
+  it('keeps at most 10,000 chunks from one file', async () => {
+    // Plain text has no extractor cap of its own, so only the per-file chunk cap bounds it. At a
+    // 64-token target, 12k paragraphs of ~60 tokens each are one chunk apiece.
+    const small = createChunker(64);
+    try {
+      const paragraph = 'alpha beta gamma delta epsilon zeta eta theta iota kappa. '.repeat(5);
+      const text = Array.from({ length: 12_000 }, () => paragraph).join('\n');
+      const chunks = await small.chunkFile(Buffer.from(text), 'text/plain');
+      expect(chunks).toHaveLength(10_000);
+    } finally {
+      small.freeEncoder();
+    }
+  }, 120_000);
 });

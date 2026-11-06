@@ -21,7 +21,7 @@ vi.mock('../models', () => ({
 }));
 
 import { defineAbilitiesFor } from './ability';
-import { Prompt, FabFile, FeedbackModel, Project } from '../models';
+import { Prompt, FabFile, FeedbackModel, Project, ModalModel, User, AdminSettings } from '../models';
 import { accessibleBy } from '@casl/mongoose';
 
 const makeUser = (overrides: Partial<IUserDocument> = {}): IUserDocument =>
@@ -70,6 +70,34 @@ describe('db-core defineAbilitiesFor - Prompt library', () => {
 // image/video generators compile into a Mongo query via accessibleBy - the path where a
 // cross-element group match actually bites. Must stay in sync with the HTTP ability
 // (apps/client/server/auth/ability.ts); these mirror that file's group tests exactly.
+describe('db-core defineAbilitiesFor - Modal management', () => {
+  const canManageModals = (a: ReturnType<typeof defineAbilitiesFor>) =>
+    a.can('create', ModalModel) && a.can('update', ModalModel) && a.can('delete', ModalModel);
+
+  it('lets a full admin and a settings:manage delegate create/update/delete modals', () => {
+    expect(canManageModals(defineAbilitiesFor(makeUser({ isAdmin: true })))).toBe(true);
+    expect(canManageModals(defineAbilitiesFor(makeUser({ adminPermissions: ['settings:manage'] })))).toBe(true);
+  });
+
+  it.each([
+    ['no permissions', { adminPermissions: undefined }],
+    ['an empty grant list', { adminPermissions: [] }],
+    ['a different permission', { adminPermissions: ['support:read'] }],
+  ])('denies modal writes to a user with %s', (_label, overrides) => {
+    const a = defineAbilitiesFor(makeUser(overrides as Partial<IUserDocument>));
+    expect(a.can('create', ModalModel)).toBe(false);
+    expect(a.can('update', ModalModel)).toBe(false);
+    expect(a.can('delete', ModalModel)).toBe(false);
+    expect(a.can('read', ModalModel)).toBe(true);
+  });
+
+  it('does not extend a settings:manage delegate to User or AdminSettings writes', () => {
+    const a = defineAbilitiesFor(makeUser({ adminPermissions: ['settings:manage'] }));
+    expect(a.can('delete', User)).toBe(false);
+    expect(a.can('update', AdminSettings)).toBe(false);
+  });
+});
+
 describe('db-core defineAbilitiesFor - group-shared document access', () => {
   type GroupShare = { groupId: string; permissions: string[] };
   const sharedWithGroups = (groups: GroupShare[]) =>
@@ -218,6 +246,32 @@ describe('db-core defineAbilitiesFor - user-shared document access', () => {
       groups: [],
     });
     expect(ability.can('read', project)).toBe(false);
+  });
+});
+
+// Mirrors the HTTP ability's FabFile export block (apps/client/server/auth/ability.ts). The
+// knowledge-files export route compiles this into a Mongo query via accessibleBy, so a missing
+// rule here empties the archive exactly as a missing rule there does.
+describe('db-core defineAbilitiesFor - FabFile export scoping', () => {
+  const ownDoc = () => Object.assign(new FabFile(), { userId: 'u1' });
+  const othersDoc = () => Object.assign(new FabFile(), { userId: 'someone-else' });
+
+  it("lets a user export their own files but not someone else's", () => {
+    const a = defineAbilitiesFor(makeUser());
+    expect(a.can('export', ownDoc())).toBe(true);
+    expect(a.can('export', othersDoc())).toBe(false);
+  });
+
+  it("scopes the export query to the caller and to an admin's own files, and fails closed without one", () => {
+    expect(accessibleBy(defineAbilitiesFor(makeUser()), 'export').ofType(FabFile)).toEqual({
+      $or: [{ userId: 'u1' }],
+    });
+    expect(accessibleBy(defineAbilitiesFor(makeUser({ isAdmin: true })), 'export').ofType(FabFile)).toEqual({
+      $or: [{ userId: 'u1' }],
+    });
+    expect(accessibleBy(defineAbilitiesFor(undefined), 'export').ofType(FabFile)).toEqual({
+      $expr: { $eq: [0, 1] },
+    });
   });
 });
 

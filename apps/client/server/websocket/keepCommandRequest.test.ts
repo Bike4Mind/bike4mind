@@ -6,7 +6,7 @@ vi.mock('@server/cli/auth', () => ({
   checkRateLimit: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
   ),
@@ -15,8 +15,10 @@ vi.mock('@server/websocket/utils', () => ({
 }));
 
 import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
-import { sendToClient, sendToConnection } from '@server/websocket/utils';
+import { sendToClient, sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { func } from './keepCommandRequest';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 
 const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
 
@@ -86,5 +88,32 @@ describe('keepCommandRequest websocket handler - session-only auth', () => {
         error: 'Authentication failed. Sign in again and retry.',
       })
     );
+  });
+});
+
+describe('keepCommandRequest live session access failures', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    ['subscription refusal', new ForbiddenError('The CLI and desktop app require an active paid subscription')],
+    [
+      'session lookup outage',
+      toApiKeyAuthError(Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' })),
+    ],
+  ])('relays the server-authored %s without sign-in guidance', async (_label, error) => {
+    vi.mocked(verifyJwtToken).mockRejectedValueOnce(error);
+    await run();
+    expect(sendToConnection).toHaveBeenCalledWith('conn-1', 'https://example.test/test', {
+      action: 'keep_command_result',
+      requestId: 'req-1',
+      success: false,
+      error: error.message,
+    });
+    expect(sendToClient).not.toHaveBeenCalled();
+    const payloads = JSON.stringify(vi.mocked(sendToConnection).mock.calls);
+    expect(payloads).not.toContain('ECONNREFUSED');
+    expect(payloads).not.toContain('Sign in again');
   });
 });

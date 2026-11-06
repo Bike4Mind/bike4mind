@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ReActAgent } from '@bike4mind/agents';
 import type { AgentResult, ServerAgentDefinition } from '@bike4mind/agents';
-import { CREDITS_PER_USD_COST, getTextModelCost, getTurnsCost, type ModelInfo } from '@bike4mind/common';
+import {
+  CREDITS_PER_USD_COST,
+  ForbiddenError,
+  getTextModelCost,
+  getTurnsCost,
+  type ModelInfo,
+} from '@bike4mind/common';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import {
@@ -11,6 +17,7 @@ import {
   type SubagentHandoffSignal,
   type ChildExecutionStatus,
 } from './ServerSubagentOrchestrator';
+import { reportSubagentCredits } from '../tools/implementation/delegateToAgent';
 import { runWithFakeTimers } from '../__tests__/helpers/fakeTimers';
 
 // The real stochastic rounding, with its draw pinned so the fallback charge is assertable.
@@ -91,6 +98,52 @@ describe('ServerSubagentOrchestrator', () => {
   beforeEach(() => {
     vi.useRealTimers();
   });
+
+  it.each(['execution-model', 'other-model'])(
+    'applies substitute identity only to its execution model (%s)',
+    async effectiveModel => {
+      const llm = makeLlm(effectiveModel);
+      const run = vi.spyOn(ReActAgent.prototype, 'run').mockImplementation(async function (this: ReActAgent) {
+        await this.completeText('Identify yourself');
+        return {
+          finalAnswer: 'done',
+          steps: [],
+          completionInfo: {
+            totalTokens: 0,
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            iterations: 1,
+            toolCalls: 0,
+            reachedMaxIterations: false,
+          },
+        } satisfies AgentResult;
+      });
+      try {
+        const orchestrator = new ServerSubagentOrchestrator({
+          userId: 'u1',
+          llm,
+          logger: makeLogger(),
+          parentTools: [],
+          substituteIdentity: {
+            substituteId: 'execution-model',
+            identityId: 'requested-model',
+            displayName: 'Requested',
+          },
+        });
+        await orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: effectiveModel }) });
+
+        const options = vi.mocked(llm.complete).mock.calls[0]?.[2];
+        if (effectiveModel === 'execution-model') {
+          expect(options).toMatchObject({ modelIdentityId: 'requested-model', modelDisplayName: 'Requested' });
+        } else {
+          expect(options).not.toHaveProperty('modelIdentityId');
+          expect(options).not.toHaveProperty('modelDisplayName');
+        }
+      } finally {
+        run.mockRestore();
+      }
+    }
+  );
 
   describe('dispatchBackgroundAgent', () => {
     it('creates a background child and dispatches to Lambda, returning immediately', async () => {
@@ -216,6 +269,99 @@ describe('ServerSubagentOrchestrator', () => {
       expect(assert).toHaveBeenCalledWith(GATED_ID);
       expect(llm.complete).not.toHaveBeenCalled();
       expect(tracker.onStart).not.toHaveBeenCalled();
+    });
+
+    describe('free-tier refusal', () => {
+      const PAID_ID = 'claude-opus-5';
+      const FREE_ID = 'claude-haiku-5-5';
+      const PARENT_ID = 'parent-model';
+
+      const assertRefusingPaid = () =>
+        vi.fn(async (modelId: string) => {
+          if (modelId === PAID_ID) {
+            throw new ForbiddenError(`Model "${modelId}" requires a paid plan`, {
+              errorCode: 'model_requires_subscription',
+            });
+          }
+        });
+
+      const makeOrchestrator = (assert: (modelId: string) => Promise<void>, serviceable: string[]) => {
+        const resolveBackend = vi.fn((modelId: string) => (serviceable.includes(modelId) ? makeLlm(modelId) : null));
+        const orchestrator = new ServerSubagentOrchestrator({
+          userId: 'u1',
+          llm: makeLlm(PARENT_ID),
+          logger: makeLogger(),
+          parentTools: [],
+          resolveBackend,
+          modelAdmission: { assert },
+        });
+        return { orchestrator, resolveBackend };
+      };
+
+      beforeEach(() => {
+        vi.spyOn(ReActAgent.prototype, 'run').mockResolvedValue({
+          finalAnswer: 'done',
+          steps: [],
+          completionInfo: {
+            totalTokens: 100,
+            totalInputTokens: 80,
+            totalOutputTokens: 20,
+            totalCredits: 1,
+            iterations: 1,
+            toolCalls: 0,
+            reachedMaxIterations: false,
+          },
+        } satisfies AgentResult);
+      });
+
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      it('runs on an admitted fallback instead of failing when the pinned model needs a paid plan', async () => {
+        const { orchestrator, resolveBackend } = makeOrchestrator(assertRefusingPaid(), [PAID_ID, FREE_ID]);
+
+        const result = await orchestrator.delegateToAgent({
+          task: 't',
+          agentDef: makeAgentDef({ model: PAID_ID, fallbackModels: [FREE_ID] }),
+          thoroughness: 'medium',
+        });
+
+        expect(resolveBackend).toHaveBeenCalledWith(FREE_ID);
+        expect(resolveBackend).not.toHaveBeenCalledWith(PAID_ID);
+        expect(result.model).toBe(FREE_ID);
+      });
+
+      it("runs on the parent's model when no fallback is admitted", async () => {
+        const { orchestrator, resolveBackend } = makeOrchestrator(assertRefusingPaid(), [PAID_ID]);
+
+        const result = await orchestrator.delegateToAgent({
+          task: 't',
+          agentDef: makeAgentDef({ model: PAID_ID, fallbackModels: [PAID_ID] }),
+          thoroughness: 'medium',
+        });
+
+        expect(resolveBackend).not.toHaveBeenCalled();
+        expect(result.model).toBe(PARENT_ID);
+      });
+
+      it('still rejects when the pinned model is refused for any reason other than the free-tier gate', async () => {
+        const assert = vi.fn(async (modelId: string) => {
+          // A ForbiddenError without the subscription errorCode pins that only that code degrades.
+          if (modelId === PAID_ID) {
+            throw new ForbiddenError(`Model "${modelId}" is not accessible and no fallback available`);
+          }
+        });
+        const { orchestrator } = makeOrchestrator(assert, [PAID_ID, FREE_ID]);
+
+        await expect(
+          orchestrator.delegateToAgent({
+            task: 't',
+            agentDef: makeAgentDef({ model: PAID_ID, fallbackModels: [FREE_ID] }),
+            thoroughness: 'medium',
+          })
+        ).rejects.toThrow(`Model "${PAID_ID}" is not accessible`);
+      });
     });
   });
 
@@ -952,6 +1098,148 @@ describe('ServerSubagentOrchestrator', () => {
       expect(checkInsufficientCredits).toHaveBeenCalledWith(MODEL_ID);
       expect(tracker.onStart).not.toHaveBeenCalled();
       expect(run).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('substituted run pricing', () => {
+    const rates = (k: number) => ({ 1_000_000: { input: 0.000003 * k, output: 0.000015 * k } });
+    const cheap = { id: 'cheap-model', backend: 'bedrock', pricing: rates(1) } as unknown as ModelInfo;
+    const premium = { id: 'premium-model', backend: 'bedrock', pricing: rates(10) } as unknown as ModelInfo;
+    const other = { id: 'other-model', backend: 'bedrock', pricing: rates(3) } as unknown as ModelInfo;
+    const turnUsage = [{ inputTokens: 10_000, outputTokens: 2_000 }];
+    const ranInfo = {
+      totalTokens: 12_000,
+      totalInputTokens: 10_000,
+      totalOutputTokens: 2_000,
+      turnUsage,
+      iterations: 1,
+      toolCalls: 0,
+      reachedMaxIterations: false,
+    };
+    const substituteIdentity = {
+      substituteId: 'cheap-model',
+      identityId: 'premium-model',
+      chargedModel: premium,
+    };
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    function stubRun(): void {
+      vi.spyOn(ReActAgent.prototype, 'run').mockResolvedValue({
+        finalAnswer: 'done',
+        steps: [],
+        completionInfo: { ...ranInfo },
+      } satisfies AgentResult);
+    }
+
+    it('prices on the charged model without availableModels and does not warn', async () => {
+      stubRun();
+      const logger = makeLogger();
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm('cheap-model'),
+        logger,
+        parentTools: [],
+        substituteIdentity,
+      });
+
+      const result = await orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: undefined }) });
+
+      expect(result.completionInfo.totalCredits).toBe(settledAtHalf(getTurnsCost(premium, turnUsage)));
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('prices credits on the requested model while costUsd stays on the run model', async () => {
+      stubRun();
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm('cheap-model'),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [cheap],
+        substituteIdentity,
+      });
+
+      const result = await orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: undefined }) });
+
+      expect(result.model).toBe('cheap-model');
+      expect(result.completionInfo.totalCredits).toBe(settledAtHalf(getTurnsCost(premium, turnUsage)));
+      expect(result.completionInfo.totalCredits).not.toBe(settledAtHalf(getTurnsCost(cheap, turnUsage)));
+
+      const onCredits = vi.fn();
+      await reportSubagentCredits(result, { onCredits, availableModels: [cheap], logger: makeLogger() });
+      expect(onCredits).toHaveBeenCalledWith(
+        result.completionInfo.totalCredits,
+        expect.objectContaining({ usdCost: getTurnsCost(cheap, turnUsage), model: 'cheap-model' })
+      );
+    });
+
+    it('prices the tokens a failed run spent on the requested model', async () => {
+      vi.spyOn(ReActAgent.prototype, 'run').mockRejectedValue(new Error('provider 500'));
+      vi.spyOn(ReActAgent.prototype, 'toCheckpoint').mockReturnValue({
+        totalTokens: ranInfo.totalTokens,
+        totalInputTokens: ranInfo.totalInputTokens,
+        totalOutputTokens: ranInfo.totalOutputTokens,
+        totalCacheReadTokens: 0,
+        totalCacheWriteTokens: 0,
+        turnUsage,
+        totalCredits: 0,
+      } as unknown as ReturnType<ReActAgent['toCheckpoint']>);
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm('cheap-model'),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [cheap],
+        substituteIdentity,
+      });
+
+      const error = await orchestrator
+        .delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: undefined }) })
+        .catch((err: unknown) => err);
+
+      const credits = spentResultOf(error)?.completionInfo.totalCredits;
+      expect(credits).toBe(settledAtHalf(getTurnsCost(premium, turnUsage)));
+      expect(credits).not.toBe(settledAtHalf(getTurnsCost(cheap, turnUsage)));
+    });
+
+    it('prices a pinned subagent model on its own price on a substituted run', async () => {
+      stubRun();
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm('cheap-model'),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [cheap, other],
+        resolveBackend: (id: string) => makeLlm(id),
+        substituteIdentity,
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: 'other-model' }),
+      });
+
+      expect(result.model).toBe('other-model');
+      expect(result.completionInfo.totalCredits).toBe(settledAtHalf(getTurnsCost(other, turnUsage)));
+    });
+
+    it('prices on the run model when the substitute carries no charged model', async () => {
+      stubRun();
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm('cheap-model'),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [cheap],
+        substituteIdentity: { substituteId: 'cheap-model', identityId: 'premium-model' },
+      });
+
+      const result = await orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: undefined }) });
+
+      expect(result.completionInfo.totalCredits).toBe(settledAtHalf(getTurnsCost(cheap, turnUsage)));
     });
   });
 

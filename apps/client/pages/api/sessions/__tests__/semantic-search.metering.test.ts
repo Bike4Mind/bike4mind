@@ -8,6 +8,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { getEmbeddingModelCost, insufficientCreditsError } from '@bike4mind/common';
 
+const { quotaAdmission, quotaRelease } = vi.hoisted(() => {
+  const release = vi.fn().mockResolvedValue(undefined);
+  return { quotaAdmission: vi.fn().mockResolvedValue({ release }), quotaRelease: release };
+});
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quotaAdmission }));
+
 const m = vi.hoisted(() => ({
   enforce: true,
   complete: vi.fn(),
@@ -37,6 +43,11 @@ vi.mock('@bike4mind/database', () => ({
   sessionRepository: {
     findSessionIdsByUserId: async () => ['s1'],
     find: async () => [{ id: 's1', name: 'Bike trip' }],
+  },
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
   },
 }));
 vi.mock('@bike4mind/database/content', () => ({
@@ -110,7 +121,7 @@ vi.mock('@bike4mind/services/llm/reranker', async importOriginal => {
 });
 
 const MODEL = { id: 'ops-model', backend: 'openai', pricing: { 200_000: { input: 1e-6, output: 2e-6 } } };
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: async () => ({ modelId: MODEL.id, modelInfo: MODEL, llm: { complete: m.complete } }),
   },
@@ -214,9 +225,11 @@ describe('POST /api/sessions/semantic-search metering', () => {
       expect((await response)._getStatusCode()).toBe(200);
       expect(m.complete).toHaveBeenCalledTimes(2);
       expect(m.settle).not.toHaveBeenCalled();
+      expect(quotaRelease).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(7_000);
       expect(m.settle).toHaveBeenCalledTimes(2);
+      expect(quotaRelease).toHaveBeenCalledTimes(1);
       expect(m.settle).toHaveBeenNthCalledWith(1, { inputTokens: 100, outputTokens: 20 });
       expect(m.settle).toHaveBeenNthCalledWith(2, { inputTokens: 100, outputTokens: 20 });
       expect(m.refund).not.toHaveBeenCalled();
@@ -305,4 +318,14 @@ describe('POST /api/sessions/semantic-search metering', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(m.embed).toHaveBeenCalled();
   });
+});
+
+it('enforces the API completion quota before invoking the model', async () => {
+  const refusal = new Error('completion quota exhausted');
+  quotaAdmission.mockRejectedValueOnce(refusal);
+  await expect(call(1000)).rejects.toBe(refusal);
+  expect(quotaAdmission).toHaveBeenCalledWith(expect.objectContaining({ user: expect.any(Object) }), {
+    holdSlot: true,
+  });
+  expect(m.embed).not.toHaveBeenCalled();
 });

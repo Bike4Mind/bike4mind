@@ -52,14 +52,14 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return { get: compose, post: compose, delete: compose };
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => {
     mockRateLimitOptions(options);
     return (_req: unknown, _res: unknown, next: () => void) => next();
   },
 }));
 vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: mockLogEvent }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: mockLogEvent }));
 vi.mock('@bike4mind/database', () => ({
   projectRepository: {
     shareable: { findAccessibleById: mockFindAccessibleById, findUpdateAccessById: mockFindUpdateAccessById },
@@ -69,7 +69,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: mockFindUser, findByIds: vi.fn().mockResolvedValue([]) },
   fabFileRepository: {
     findPageByIds: mockFindPageByIds,
-    shareable: { findAllAccessibleByIds: mockFindAllAccessibleFiles },
+    shareable: { findAllAccessibleByIds: mockFindAllAccessibleFiles, updateUserShares: vi.fn() },
     update: mockFileUpdate,
   },
   inviteRepository: { findAllByDocumentId: vi.fn().mockResolvedValue([]) },

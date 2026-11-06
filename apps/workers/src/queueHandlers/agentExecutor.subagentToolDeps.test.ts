@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn(async () => 'raw') }));
 
 // Model admission reads admin settings from the real repository; these tests exercise other gates.
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
@@ -115,7 +116,7 @@ const childDoc = {
 const baseSession = { id: 'session-1', userId: 'user-1', disableUserIntegrations: true };
 
 const resolveWorkspaceSettings = vi.hoisted(() => vi.fn());
-vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
   premiumWorkspaceSessionSettings: {
     'settings-workspace': { ownedFields: ['disableUserIntegrations'], resolve: resolveWorkspaceSettings },
   },
@@ -233,6 +234,27 @@ describe('processSubagentDispatch tool deps', () => {
       );
       expect(llm.currentModel).toBe(SUCCESSOR_ID);
       expect(deps.model).toBe(SUCCESSOR_ID);
+    } finally {
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValue(childDoc as never);
+    }
+  });
+
+  it('withholds the owner admin role on a child of a run whose key lacks the admin scope', async () => {
+    const { agentExecutionRepository, User } = await import('@bike4mind/database');
+    vi.mocked(User.findById).mockResolvedValueOnce({ id: 'user-1', currentCredits: 100, isAdmin: true } as never);
+    vi.mocked(agentExecutionRepository.findById).mockResolvedValue({ ...childDoc, adminRoleWithheld: true } as never);
+    try {
+      const deps = await dispatchWithSession(baseSession);
+
+      expect((deps.user as { isAdmin?: boolean }).isAdmin).toBe(false);
+      const { userRepository } = await import('@bike4mind/database');
+      const users = (deps.db as { users: typeof userRepository }).users;
+      const findUser = vi.spyOn(userRepository, 'findById').mockResolvedValueOnce({ isAdmin: true } as never);
+      try {
+        expect(((await users.findById('user-1')) as { isAdmin?: boolean }).isAdmin).toBe(false);
+      } finally {
+        findUser.mockRestore();
+      }
     } finally {
       vi.mocked(agentExecutionRepository.findById).mockResolvedValue(childDoc as never);
     }

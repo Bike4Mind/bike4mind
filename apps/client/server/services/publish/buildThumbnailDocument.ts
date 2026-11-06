@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { BLESSED_SCRIPT_PATHS } from '@bike4mind/common';
 import { collectInlineAssets } from './collectInlineAssets';
-import { isBundlePagePath, renderSandboxedBundle } from './renderSandboxedBundle';
+import { isBundlePagePath, renderSandboxedBundle, resolveBundlePath } from './renderSandboxedBundle';
 import { isStreamedFile } from './signedFiles';
 import { PUBLISH_HOST } from './validateBundle';
 
@@ -26,8 +26,20 @@ export interface ThumbnailDocument {
   srcdoc: string;
   /** Exact URLs the render may load: the blessed library scripts on the app origin(s). */
   allowedScriptUrls: string[];
-  /** Assets left out (missing or over the inline budget); the render shows the page without them. */
-  droppedAssets: string[];
+  /**
+   * Assets the render goes without, as bundle paths. Always-streamed media is left out on purpose
+   * and is not listed here.
+   */
+  droppedAssets: DroppedAssets;
+}
+
+export interface DroppedAssets {
+  /** Referenced by the page but not in the bundle at all. */
+  missing: string[];
+  /** In the bundle but over an inline size cap (collectInlineAssets.ts). */
+  oversized: string[];
+  /** In the bundle but failed to load from storage. */
+  failed: string[];
 }
 
 export interface BuildThumbnailDocumentInput {
@@ -62,11 +74,17 @@ export async function buildThumbnailDocument(input: BuildThumbnailDocumentInput)
     assets: collected.assets,
   });
 
+  // A dropped ref to a bundle file is already covered: oversized, failed, or streamed media skipped above.
+  const bundlePaths = new Set(input.manifest.map(f => f.path));
+  const missing = droppedAssets
+    .map(ref => resolveBundlePath('index.html', ref) ?? ref)
+    .filter(path => !bundlePaths.has(path));
+
   const scriptOrigins = [...new Set([origin, PUBLISH_HOST ? `https://${PUBLISH_HOST}` : ''].filter(Boolean))];
   return {
     srcdoc,
     allowedScriptUrls: scriptOrigins.flatMap(o => BLESSED_SCRIPT_PATHS.map(path => `${o}${path}`)),
-    droppedAssets: [...new Set([...droppedAssets, ...collected.oversized, ...collected.failed])],
+    droppedAssets: { missing: [...new Set(missing)], oversized: collected.oversized, failed: collected.failed },
   };
 }
 

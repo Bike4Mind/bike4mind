@@ -1,8 +1,9 @@
 /**
- * External skills command (b4m skills push <path>).
+ * External skills command (b4m skills push <path> [--publish]).
  * Imports a Claude Code SKILL.md (or commands/*.md) as the user's own
- * Bike4Mind skill. Runs outside the interactive CLI session. Validation is
- * left to the server (apps/client/server/utils/skillValidation.ts).
+ * Bike4Mind skill, and with --publish lists it on the Skill Market. Runs
+ * outside the interactive CLI session. Validation is left to the server
+ * (apps/client/server/utils/skillValidation.ts).
  */
 
 import { promises as fs } from 'fs';
@@ -10,6 +11,7 @@ import os from 'os';
 import path from 'path';
 import { createInterface } from 'readline';
 import { parseSkillMd, type SkillMdFields } from '@bike4mind/common/utils/skillMd';
+import type { PublicSkillListing, PublicSkillListingVersion, SkillMarketSubmitResponse } from '@bike4mind/common';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import { RemoteSkillSource } from '../storage/RemoteSkillSource.js';
 import { ApiClient } from '../auth/ApiClient.js';
@@ -21,6 +23,11 @@ interface SkillsCommandArgs {
   path?: string;
   update?: boolean;
   yes?: boolean;
+  publish?: boolean;
+  visibility?: MarketVisibility;
+  org?: string;
+  tags?: string;
+  'api-key'?: string;
   [key: string]: unknown;
 }
 
@@ -29,6 +36,7 @@ export interface SkillPayload {
   description: string;
   body: string;
   argumentHint?: string;
+  claudeCodeAllowedTools: string[];
   disableModelInvocation: boolean;
 }
 
@@ -49,6 +57,8 @@ interface SkillRow {
 
 export interface PushDeps {
   api: Pick<ApiClient, 'get' | 'post' | 'put' | 'getCurrentUser'>;
+  /** Who the skill belongs to. Defaults to the stored login; an API key resolves it via /api/v1/me. */
+  whoAmI?: () => Promise<{ id: string } | null>;
   confirm: (question: string) => Promise<boolean>;
   isTTY: boolean;
   update: boolean;
@@ -57,6 +67,10 @@ export interface PushDeps {
   apiOrigin?: string;
   log: (line: string) => void;
 }
+
+export type MarketVisibility = 'organization' | 'public' | 'unlisted';
+
+export type PushResult = { outcome: 'created' | 'updated'; skillId: string } | { outcome: 'aborted' };
 
 const MAX_LISTED_FILES = 10;
 // Must stay in sync with SKILL_DESCRIPTION_MAX in apps/client/server/utils/skillValidation.ts.
@@ -73,9 +87,10 @@ function descriptionFor(fields: SkillMdFields): string {
 }
 
 /**
- * Built from an explicit field list (never a spread of parsed data) so
- * allowedTools can't reach the server: Claude Code tool names don't map to B4M.
- * disableModelInvocation is always sent so an update mirrors the file.
+ * Built from an explicit field list (never a spread of parsed data). The file's
+ * allowed-tools goes to claudeCodeAllowedTools, never allowedTools: Claude Code
+ * tool names don't map to B4M. claudeCodeAllowedTools and disableModelInvocation
+ * are always sent so an update mirrors the file.
  */
 export function buildSkillPayload(fields: SkillMdFields, fallbackName: string): SkillPayload {
   return {
@@ -83,6 +98,7 @@ export function buildSkillPayload(fields: SkillMdFields, fallbackName: string): 
     description: descriptionFor(fields),
     body: fields.body ?? '',
     ...(fields.argumentHint !== undefined && { argumentHint: fields.argumentHint }),
+    claudeCodeAllowedTools: fields.claudeCodeAllowedTools ?? [],
     disableModelInvocation: fields.disableModelInvocation ?? false,
   };
 }
@@ -157,7 +173,7 @@ function isSameOrigin(url: string, apiOrigin: string | undefined): boolean {
  * creates or updates the skill. Nothing is sent to the server before the
  * third-party gate passes. Throws on any exit-1 condition.
  */
-export async function pushSkill(file: SkillFile, deps: PushDeps): Promise<'created' | 'updated' | 'aborted'> {
+export async function pushSkill(file: SkillFile, deps: PushDeps): Promise<PushResult> {
   const { payload, dropped, source, extraFiles } = file;
   const { api, log } = deps;
 
@@ -184,13 +200,13 @@ export async function pushSkill(file: SkillFile, deps: PushDeps): Promise<'creat
       );
       if (!deps.yes) {
         if (!deps.isTTY) throw new Error("Re-run with --yes to push another author's skill as your own.");
-        if (!(await deps.confirm('Push it as your own skill anyway? [y/N] '))) return 'aborted';
+        if (!(await deps.confirm('Push it as your own skill anyway? [y/N] '))) return { outcome: 'aborted' };
       }
     }
   }
 
   try {
-    const me = await api.getCurrentUser();
+    const me = await (deps.whoAmI ?? (() => api.getCurrentUser()))();
     if (!me) throw new Error('Not authenticated. Run `b4m /login` to authenticate.');
 
     // ?query is a fuzzy name/description match over every visible skill, so page until the own exact match.
@@ -204,8 +220,8 @@ export async function pushSkill(file: SkillFile, deps: PushDeps): Promise<'creat
     }
 
     if (!existing) {
-      await api.post('/api/skills', payload);
-      return 'created';
+      const created = await api.post<{ id: string }>('/api/skills', payload);
+      return { outcome: 'created', skillId: created.id };
     }
     if (existing.importedFrom) {
       throw new Error(
@@ -216,13 +232,80 @@ export async function pushSkill(file: SkillFile, deps: PushDeps): Promise<'creat
       if (!deps.isTTY) {
         throw new Error(`A skill named "${payload.name}" already exists - re-run with --update to overwrite it.`);
       }
-      if (!(await deps.confirm(`A skill named "${payload.name}" already exists. Update it? [y/N] `))) return 'aborted';
+      if (!(await deps.confirm(`A skill named "${payload.name}" already exists. Update it? [y/N] `)))
+        return { outcome: 'aborted' };
     }
     // PUT preserves omitted fields, so explicitly clear a hint removed from the local file.
     await api.put(`/api/skills/${existing.id}`, { ...payload, argumentHint: payload.argumentHint ?? '' });
-    return 'updated';
+    return { outcome: 'updated', skillId: existing.id };
   } catch (error) {
     throw new Error(serverMessage(error));
+  }
+}
+
+function describeVersion(version: PublicSkillListingVersion): string {
+  const verdict = `scan ${version.scan_status}, review ${version.review_status}, risk ${version.risk_tier ?? 'n/a'}`;
+  return version.review_status === 'pending' ? `${verdict} - it goes live once a reviewer approves it` : verdict;
+}
+
+/**
+ * Lists a pushed skill on the Skill Market: a new version of its live listing when there is one,
+ * else a new listing. Uses the /api/v1 routes, so an API key needs `skills:write`.
+ */
+export async function publishToMarket(
+  skillId: string,
+  opts: { visibility: MarketVisibility; org?: string; tags?: string[] },
+  api: Pick<ApiClient, 'get' | 'post'>,
+  log: (line: string) => void
+): Promise<void> {
+  try {
+    const { data } = await api.get<{ data: PublicSkillListing[] }>('/api/v1/skills/market/listings/mine', {
+      params: { source_skill_id: skillId },
+    });
+    const live = data.find(l => l.status !== 'withdrawn' && l.status !== 'delisted');
+    const tags = opts.tags ? { tags: opts.tags } : {};
+    if (live) {
+      let version: SkillMarketSubmitResponse['version'];
+      try {
+        ({ version } = await api.post<SkillMarketSubmitResponse>(
+          `/api/v1/skills/market/listings/${live.id}/versions`,
+          tags
+        ));
+      } catch (error) {
+        const status = (error as { response?: { status?: number } }).response?.status;
+        if (status === 400 && serverMessage(error).includes('already live or waiting for review')) {
+          log(`Listing "${live.name}" is already up to date`);
+          return;
+        }
+        throw error;
+      }
+      log(`Submitted version ${version.version} of listing "${live.name}": ${describeVersion(version)}`);
+      return;
+    }
+    const { listing, version } = await api.post<SkillMarketSubmitResponse>('/api/v1/skills/market/listings', {
+      skill_id: skillId,
+      visibility: opts.visibility,
+      ...(opts.org && { organization_id: opts.org }),
+      ...tags,
+    });
+    log(`Published listing "${listing.name}" (${listing.visibility}): ${describeVersion(version)}`);
+  } catch (error) {
+    const required = (error as { response?: { data?: { required_scopes?: string[] } } }).response?.data
+      ?.required_scopes;
+    const hint = required?.length ? ` (the API key needs ${required.join(' or ')})` : '';
+    throw new Error(`Publishing to the Skill Market failed: ${serverMessage(error)}${hint}`);
+  }
+}
+
+/** The key's owner, for a push made with an API key (the stored-login lookup does not apply). */
+async function whoAmIWithKey(api: Pick<ApiClient, 'get'>): Promise<{ id: string }> {
+  try {
+    return await api.get<{ id: string }>('/api/v1/me');
+  } catch (error) {
+    if ((error as { response?: { status?: number } }).response?.status === 403) {
+      throw new Error('This API key needs the me:read and skills:write scopes.');
+    }
+    throw error;
   }
 }
 
@@ -238,17 +321,20 @@ async function confirm(question: string): Promise<boolean> {
 
 export async function handleSkillsCommand(subcommand: string | undefined, argv: SkillsCommandArgs): Promise<void> {
   if (subcommand !== 'push') throw new Error(`Unknown skills subcommand: ${subcommand ?? '(none)'}`);
-  if (!argv.path) throw new Error('Usage: b4m skills push <path>');
+  if (!argv.path) throw new Error('Usage: b4m skills push <path> [--publish]');
 
   const file = await readSkillFile(argv.path);
 
   const configStore = new ConfigStore();
   const config = await configStore.load();
-  const authTokens = await configStore.getAuthTokens();
+  // Same precedence as `b4m mcp serve`: --api-key, then B4M_API_KEY, then the stored login.
+  const apiKey = argv['api-key'] ?? process.env.B4M_API_KEY;
   // A stale access token is fine: ApiClient refreshes it on the first 401.
-  if (!authTokens) throw new Error('Not authenticated. Run `b4m /login` to authenticate.');
+  if (!apiKey && !(await configStore.getAuthTokens())) {
+    throw new Error('Not authenticated. Run `b4m /login` to authenticate, or set B4M_API_KEY.');
+  }
   const apiUrl = requireApiUrl(config.apiConfig);
-  const apiClient = new ApiClient(apiUrl, configStore);
+  const apiClient = new ApiClient(apiUrl, configStore, apiKey);
 
   const result = await pushSkill(file, {
     api: apiClient,
@@ -258,9 +344,10 @@ export async function handleSkillsCommand(subcommand: string | undefined, argv: 
     yes: Boolean(argv.yes),
     apiOrigin: apiUrl,
     log: line => console.log(line),
+    ...(apiKey && { whoAmI: () => whoAmIWithKey(apiClient) }),
   });
 
-  if (result === 'aborted') {
+  if (result.outcome === 'aborted') {
     console.log('Aborted');
     return;
   }
@@ -269,5 +356,18 @@ export async function handleSkillsCommand(subcommand: string | undefined, argv: 
   } catch (error) {
     console.warn(`Skill saved, but the local skills cache could not be cleared: ${serverMessage(error)}`);
   }
-  console.log(`${result === 'created' ? 'Created' : 'Updated'} skill /${file.payload.name}`);
+  console.log(`${result.outcome === 'created' ? 'Created' : 'Updated'} skill /${file.payload.name}`);
+
+  if (argv.publish) {
+    const tags = argv.tags
+      ?.split(',')
+      .map(t => t.trim())
+      .filter(Boolean);
+    await publishToMarket(
+      result.skillId,
+      { visibility: argv.visibility ?? 'organization', org: argv.org, tags },
+      apiClient,
+      line => console.log(line)
+    );
+  }
 }

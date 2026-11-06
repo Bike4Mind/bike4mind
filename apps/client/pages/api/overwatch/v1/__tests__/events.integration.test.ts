@@ -52,6 +52,12 @@ const RATE_LIMIT_HEADERS = {
 };
 
 // --- AWS edges (mocked) ---
+vi.mock('@server/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendBatchToQueue: (...a: unknown[]) => mockSendBatch(...a) }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: (...a: unknown[]) => mockEmitMetric(...a),
@@ -62,7 +68,7 @@ vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
 }));
 
 // Keep fire-and-forget analytics writes from touching the DB / polluting output.
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 // The real apiKeyRateLimit middleware runs; only its Mongo-backed counter check
 // is stubbed (otherwise the query buffers forever against the stubbed connectDB).
@@ -304,7 +310,7 @@ describe('POST /api/overwatch/v1/events (integration — real middleware chain)'
       await handler(req, res);
       expect(res._getStatusCode()).toBe(403);
       // distinguish from the scope-check 403 above (message is the dispute one)
-      expect(res._getJSONData().error).toMatch(/dispute/i);
+      expect(res._getJSONData().error).toMatch(/payment review/i);
       expect(mockRateLimit).not.toHaveBeenCalled();
       expect(mockSendBatch).not.toHaveBeenCalled();
     });

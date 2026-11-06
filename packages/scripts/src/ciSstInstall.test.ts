@@ -14,7 +14,7 @@ afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
-function runInstall(failures: number) {
+function runInstall(failures: number, hangs = 0) {
   const directory = mkdtempSync(path.join(tmpdir(), 'ci-sst-install-'));
   temporaryDirectories.push(directory);
   const counterPath = path.join(directory, 'count');
@@ -29,6 +29,7 @@ count=$(cat "$SST_INSTALL_TEST_COUNTER")
 count=$((count + 1))
 printf '%s' "$count" > "$SST_INSTALL_TEST_COUNTER"
 printf '%s\\n' "$*" >> "$SST_INSTALL_TEST_ARGUMENTS"
+if [ "$count" -le "$SST_INSTALL_TEST_HANGS" ]; then exec /bin/sleep 30; fi
 if [ "$count" -le "$SST_INSTALL_TEST_FAILURES" ]; then exit 37; fi
 exit 0
 `,
@@ -54,6 +55,8 @@ printf '%s\\n' "$1" >> "$SST_INSTALL_TEST_DELAYS"
       SST_INSTALL_TEST_ARGUMENTS: argumentsPath,
       SST_INSTALL_TEST_DELAYS: delaysPath,
       SST_INSTALL_TEST_FAILURES: String(failures),
+      SST_INSTALL_TEST_HANGS: String(hangs),
+      SST_INSTALL_ATTEMPT_TIMEOUT_SECONDS: '1',
     },
   });
   if (result.error) throw result.error;
@@ -83,6 +86,16 @@ describe('CI SST installation', () => {
     expect(result.stderr).toContain('::warning::SST installation failed (exit 37)');
     expect(result.stderr).not.toContain('::error::');
   });
+
+  it.runIf(spawnSync('sh', ['-c', 'command -v timeout']).status === 0)(
+    'retries an attempt that stalls instead of waiting on it',
+    () => {
+      const result = runInstall(1, 1);
+      expect(result.status).toBe(0);
+      expect(result.attempts).toBe(2);
+      expect(result.stderr).toContain('::warning::SST installation failed (exit 124)');
+    }
+  );
 
   it('preserves failure after the retry limit without a final sleep', () => {
     const result = runInstall(3);

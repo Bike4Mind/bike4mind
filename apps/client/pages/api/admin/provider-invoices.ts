@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { providerInvoiceRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
@@ -42,6 +43,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       invoiceUsd: parsed.data.invoiceUsd,
       note,
       enteredBy: req.user.id,
+    });
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.provider_invoice.recorded',
+      target: {
+        kind: 'settings',
+        id: `${parsed.data.month}:${parsed.data.provider}`,
+        displayName: `${parsed.data.provider} invoice ${parsed.data.month}`,
+      },
+      summary: `recorded ${parsed.data.provider} invoice for ${parsed.data.month}`,
+      details: { month: parsed.data.month, provider: parsed.data.provider, invoiceUsd: parsed.data.invoiceUsd, note },
     });
     return res.json({ invoice });
   });

@@ -62,6 +62,25 @@ describe('analyzeRouteSource', () => {
     expect(analyze(`baseApi({ auth: !isDev }).get(a)`).auth).toEqual(['unknown']);
   });
 
+  it('treats adminApi as baseApi plus the implicit admin scope', () => {
+    const base = `adminApi({ adminPermissions: { GET: 'settings:manage' } })`;
+    const defaults = analyze(`${base}.get(a)`);
+    expect(defaults.auth).toEqual(['jwt+key']);
+    expect(defaults.scopes).toEqual(['admin:*']);
+    expect(defaults.methods).toEqual(['GET']);
+    // jwtOnly refuses every key, so no scope is accepted.
+    expect(analyze(`adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'settings:manage' } }).get(a)`)).toMatchObject(
+      {
+        auth: ['jwt'],
+        scopes: [],
+      }
+    );
+    expect(
+      analyze(`adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { GET: 'settings:manage' } }).get(a)`)
+        .scopes
+    ).toEqual(['admin:*']);
+  });
+
   it('resolves inline, imported and spread scope arrays to scope strings', () => {
     expect(analyze(`baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(a)`).scopes).toEqual(['admin:*']);
     expect(analyze(`baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES }).get(a)`).scopes).toEqual([

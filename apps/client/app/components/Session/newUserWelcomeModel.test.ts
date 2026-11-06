@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { STARTER_PROMPTS, shouldShowNewUserWelcome, welcomeCreditsLine } from './newUserWelcomeModel';
+import {
+  STARTER_PROMPTS,
+  activeTimeCopy,
+  advertisedDripCredits,
+  shouldShowNewUserWelcome,
+  unlockPathsCopy,
+  welcomeCreditsLine,
+} from './newUserWelcomeModel';
 
 describe('shouldShowNewUserWelcome', () => {
   it('shows only for a loaded, notebook-free, undismissed user', () => {
@@ -45,6 +52,32 @@ describe('welcomeCreditsLine', () => {
       'Verify your email to unlock your free credits.'
     );
   });
+
+  it('names every unlock path and the daily drip amount for a staged tranche', () => {
+    expect(
+      welcomeCreditsLine({
+        ...base,
+        awaitingVerification: true,
+        pendingGrant: 1000,
+        pendingGrantIsMaximum: true,
+        dailyDripCredits: 1000,
+      })
+    ).toBe(
+      'Verify your email to unlock up to 1,000 credits now. The rest unlocks up to 1,000 credits for each day you have Bike4Mind open and in use for about 1 minute (a hidden tab or 5 minutes without input does not count), all at once when you subscribe, or all at once when you verify a card.'
+    );
+  });
+
+  it('omits the daily drip clause when the drip is off', () => {
+    const line = welcomeCreditsLine({
+      ...base,
+      awaitingVerification: true,
+      pendingGrant: 1000,
+      pendingGrantIsMaximum: true,
+    });
+    expect(line).toContain('when you subscribe');
+    expect(line).not.toContain('each day');
+    expect(line).not.toContain('eligibility');
+  });
 });
 
 describe('STARTER_PROMPTS', () => {
@@ -52,5 +85,64 @@ describe('STARTER_PROMPTS', () => {
     expect(STARTER_PROMPTS).toHaveLength(3);
     expect(new Set(STARTER_PROMPTS.map(p => p.prompt)).size).toBe(3);
     for (const p of STARTER_PROMPTS) expect(p.prompt).toMatch(/^[\x20-\x7e]+$/);
+  });
+});
+
+describe('activeTimeCopy', () => {
+  it.each([
+    [undefined, 'about 1 minute'],
+    ['junk', 'about 1 minute'],
+    [0, 'about 1 minute'],
+    [600, 'about 10 minutes'],
+    [900, 'about 15 minutes'],
+    [3600, 'about 1 hour'],
+    [5400, 'about 1.5 hours'],
+    [7200, 'about 2 hours'],
+  ])('renders %s as %s', (seconds, expected) => {
+    expect(activeTimeCopy(seconds)).toBe(expected);
+  });
+
+  it('feeds the unlock paths copy from the setting', () => {
+    expect(unlockPathsCopy(500, '1800')).toContain('for about 30 minutes');
+  });
+});
+
+describe('advertisedDripCredits', () => {
+  const on = { dailyCredits: 1000, dripCap: 9000 };
+  it('advertises the daily amount while the cap leaves at least that much', () => {
+    expect(advertisedDripCredits({ ...on, grant: { dripCredits: 3000 } })).toBe(1000);
+  });
+
+  it('advertises only what the cap still leaves when that is below the daily amount', () => {
+    expect(advertisedDripCredits({ dailyCredits: 1000, dripCap: 400, grant: {} })).toBe(400);
+    expect(
+      advertisedDripCredits({
+        dailyCredits: 1000,
+        dripCap: 9000,
+        grant: { stage: 'unlocked', unlockedBy: 'card_verified' },
+      })
+    ).toBe(0);
+    expect(
+      advertisedDripCredits({
+        dailyCredits: 1000,
+        dripCap: 9000,
+        grant: { stage: 'unlocked', unlockedBy: 'activity_drip', dripCredits: 8500 },
+      })
+    ).toBe(500);
+    expect(advertisedDripCredits({ ...on, grant: { dripCredits: 8500 } })).toBe(500);
+  });
+
+  it('advertises nothing once the account has dripped up to or past the cap', () => {
+    expect(advertisedDripCredits({ ...on, grant: { dripCredits: 9000 } })).toBe(0);
+    expect(advertisedDripCredits({ ...on, grant: { dripCredits: 9500 } })).toBe(0);
+    expect(advertisedDripCredits({ ...on, dripCap: 0, grant: {} })).toBe(0);
+  });
+
+  it('treats an absent grant as nothing dripped yet', () => {
+    expect(advertisedDripCredits({ ...on, grant: undefined })).toBe(1000);
+  });
+
+  it('stays off when no daily amount is set', () => {
+    expect(advertisedDripCredits({ dailyCredits: 0, dripCap: 9000, grant: {} })).toBe(0);
   });
 });

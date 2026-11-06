@@ -27,8 +27,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: (flag: string) => h.requireFeatureEnabled(flag),
 }));
-vi.mock('@server/auth/oauthFlowCookie', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/auth/oauthFlowCookie')>();
+vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/auth/oauthFlowCookie')>();
   return { ...actual, readStateNonceHash: h.readStateNonceHash, clearStateNonce: h.clearStateNonce };
 });
 vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', () => ({
@@ -39,12 +39,12 @@ vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
   requireGitHubLakeAppConfig: h.requireGitHubLakeAppConfig,
 }));
 // The grant store has its own dedicated unit tests (githubLakeAuthGrant.test.ts).
-vi.mock('@server/integrations/github/dataLake/githubLakeAuthGrant', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/githubLakeAuthGrant', () => ({
   consumeGitHubLakeAuthGrant: h.consumeGitHubLakeAuthGrant,
 }));
 
 import handler from '../github-callback';
-import { NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 
 // Captured at module load time, before beforeEach clears mock call history.
 const flagGateCallsAtLoad = h.requireFeatureEnabled.mock.calls.map(call => call[0]);

@@ -17,13 +17,15 @@ vi.mock('@aws-sdk/client-s3', () => ({
 }));
 vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: h.getSignedUrl }));
 vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: vi.fn() },
   scopedSettingsRepository: { findOverrides: vi.fn() },
   dataLakeRepository: { findByDatalakeTag: vi.fn(), find: vi.fn().mockResolvedValue([]) },
   dataLakeBatchRepository: { findById: vi.fn() },
   dataLakeAccessGrantRepository: { listByLake: vi.fn().mockResolvedValue([]) },
+  // The personal quota check re-reads the uploader (createPresignedUpload.ts).
+  userRepository: { findById: vi.fn(async (id: string) => ({ id, isAdmin: false })) },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async (req: { user: { id: string } }) => ({

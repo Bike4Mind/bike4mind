@@ -26,19 +26,18 @@ vi.mock('@bike4mind/database', async () => ({
   FabFile: class FabFile {},
   Memento: class Memento {},
   Project: class Project {},
-  QuestMasterPlan: class QuestMasterPlan {},
 }));
 
 vi.mock('@bike4mind/database/infra', () => ({
   SecretRotation: class SecretRotation {},
 }));
 
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   Subscription: class Subscription {},
 }));
 
 import defineAbilitiesFor from '../ability';
-import { Prompt, FabFile, FeedbackModel, Organization } from '@bike4mind/database';
+import { Prompt, FabFile, FeedbackModel, Organization, ModalModel, User, AdminSettings } from '@bike4mind/database';
 import { accessibleBy } from '@casl/mongoose';
 
 const makeUser = (overrides: Partial<IUserDocument> = {}): IUserDocument =>
@@ -263,6 +262,38 @@ describe('defineAbilitiesFor - user-shared document access', () => {
   });
 });
 
+// Knowledge Files "Export All" (pages/api/files/download.ts) picks its files with
+// accessibleBy(ability, 'export').ofType(FabFile). With no export rule at all CASL answers
+// with its unsatisfiable filter, so the route always zipped an empty archive.
+describe('defineAbilitiesFor - FabFile export scoping', () => {
+  const ownDoc = () => Object.assign(new FabFile(), { userId: 'u1' });
+  const othersDoc = () => Object.assign(new FabFile(), { userId: 'someone-else' });
+
+  it("lets a user export their own files but not someone else's", () => {
+    const ability = defineAbilitiesFor(makeUser());
+    expect(ability.can('export', ownDoc())).toBe(true);
+    expect(ability.can('export', othersDoc())).toBe(false);
+  });
+
+  it('scopes the export query to the caller', () => {
+    const scope = accessibleBy(defineAbilitiesFor(makeUser()), 'export').ofType(FabFile);
+    expect(scope).toEqual({ $or: [{ userId: 'u1' }] });
+  });
+
+  // No `manage all` fallback is reintroduced: an admin exports the same own-only set, mirroring
+  // the Session export rule. An org-wide dump belongs in a separate, audited admin tool.
+  it("scopes an admin's export to the admin's own files too", () => {
+    const scope = accessibleBy(defineAbilitiesFor(makeUser({ isAdmin: true })), 'export').ofType(FabFile);
+    expect(scope).toEqual({ $or: [{ userId: 'u1' }] });
+  });
+
+  it('fails closed for a caller with no ability at all', () => {
+    const scope = accessibleBy(defineAbilitiesFor(undefined), 'export').ofType(FabFile);
+    expect(scope).toEqual({ $expr: { $eq: [0, 1] } });
+    expect(scope).not.toEqual({});
+  });
+});
+
 describe('defineAbilitiesFor - org manager rule', () => {
   const org = (fields: { adminUserIds: string[]; users: Array<{ userId: string; permissions: string[] }> }) =>
     Object.assign(new Organization(), { userId: 'owner', groups: [], ...fields });
@@ -287,5 +318,46 @@ describe('defineAbilitiesFor - org manager rule', () => {
     const query = JSON.stringify(accessibleBy(ability, 'update').ofType(Organization));
     expect(query).toContain('"adminUserIds":"u1"');
     expect(query).toContain('"users":{"$elemMatch":{"userId":"u1"}}');
+  });
+});
+
+describe('defineAbilitiesFor - modal management follows settings:manage', () => {
+  const MODAL_ACTIONS = ['create', 'update', 'delete', 'manage'] as const;
+  const delegate = () => defineAbilitiesFor(makeUser({ isAdmin: false, adminPermissions: ['settings:manage'] }));
+
+  it('lets a settings:manage delegate manage modals and the modal tool subject', () => {
+    const ability = delegate();
+    for (const action of MODAL_ACTIONS) expect(ability.can(action, ModalModel)).toBe(true);
+    expect(ability.can('manage', 'Modal')).toBe(true);
+  });
+
+  it('lets a full admin manage modals', () => {
+    const ability = defineAbilitiesFor(makeUser({ isAdmin: true }));
+    for (const action of MODAL_ACTIONS) expect(ability.can(action, ModalModel)).toBe(true);
+    expect(ability.can('manage', 'Modal')).toBe(true);
+  });
+
+  it.each([
+    ['no permissions', { adminPermissions: undefined }],
+    ['an empty grant list', { adminPermissions: [] }],
+    ['a different permission', { adminPermissions: ['support:read'] }],
+  ])('denies modal writes with %s', (_label, overrides) => {
+    const ability = defineAbilitiesFor(makeUser({ isAdmin: false, ...overrides }));
+    for (const action of MODAL_ACTIONS) expect(ability.can(action, ModalModel)).toBe(false);
+    expect(ability.can('manage', 'Modal')).toBe(false);
+    expect(ability.can('read', ModalModel)).toBe(true);
+  });
+
+  it('does not hand a delegate the User, Organization or AdminSettings abilities', () => {
+    const ability = delegate();
+    expect(ability.can('update', User)).toBe(false);
+    expect(ability.can('delete', User)).toBe(false);
+    // Organization has conditional share rules for everyone, so compare against a plain user.
+    const plain = defineAbilitiesFor(makeUser({ isAdmin: false }));
+    for (const action of ['read', 'update', 'delete'] as const) {
+      expect(ability.can(action, Organization)).toBe(plain.can(action, Organization));
+    }
+    expect(ability.can('update', AdminSettings)).toBe(false);
+    expect(ability.can('create', AdminSettings)).toBe(false);
   });
 });

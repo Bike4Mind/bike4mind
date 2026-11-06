@@ -1,4 +1,4 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest } from '@bike4mind/database';
 import { z } from 'zod';
@@ -7,6 +7,7 @@ import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
 import { ApiKeyScope, type ContextTelemetry } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { createTelemetryIssue } from '@server/utils/telemetryIssueCreator';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const paramsSchema = z.object({
   id: z.string().min(1),
@@ -21,12 +22,11 @@ const bodySchema = z.object({
     .describe('Additional context to include in the issue'),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const logger = new Logger({
       metadata: {
         service: 'ContextTelemetryCreateIssue',
@@ -66,6 +66,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 
     switch (result.status) {
       case 'created':
+        await recordAdminActionFromRequest(req, {
+          action: 'ops.context_telemetry.issue_created',
+          target: { kind: 'system', id, displayName: `Context telemetry for quest ${id}` },
+          summary: `created issue #${result.issue.number} in ${repository} from context telemetry`,
+          details: { questId: id, repository, issueNumber: result.issue.number },
+        });
         res.json({
           success: true,
           issue: {

@@ -73,7 +73,7 @@ import {
   parseArtifactsWithFallback,
   shouldWarnElidedArtifact,
   validateMermaidSyntax,
-} from '@client/app/utils/artifactParser';
+} from '@bike4mind/server-utils/app/utils/artifactParser';
 import { groupReactArtifacts } from '@client/app/utils/reactArtifactGroup';
 import RechartsRenderer from '../Charts/RechartsRenderer';
 import ChessBoard from '../Chess/ChessBoard';
@@ -83,7 +83,11 @@ import DeepResearchProgress from '../GenAI/DeepResearchProgress';
 import PromptEnhancementBanner from './PromptEnhancementBanner';
 import { extractCodeBlockTitle } from '@client/app/utils/codeBlockTitleExtractor';
 import CitableSources from './CitableSources';
-import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/app/utils/chartJsonParser';
+import {
+  parseChartJSON,
+  ChartParseError,
+  getChartErrorMessage,
+} from '@bike4mind/server-utils/app/utils/chartJsonParser';
 import NavigationButtons from './NavigationButtons';
 import ReplyChoiceButtons from './ReplyChoiceButtons';
 import ReplyAccessories from './ReplyAccessories';
@@ -175,7 +179,8 @@ export const createCodeComponent = () => {
   const code = ({ node, className, children, ref, ...props }: ComponentProps<'code'> & ExtraProps) => {
     const match = /language-(\w+)/.exec(className || '');
     const language = match ? match[1] : 'text';
-    const codeContent = String(children).replace(/\n$/, '');
+    // An empty fence has no children at all.
+    const codeContent = String(children ?? '').replace(/\n$/, '');
     const lineCount = codeContent.split('\n').length;
     const inline =
       node?.position?.start.line === node?.position?.end.line &&
@@ -621,6 +626,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
     <>
       <ReplyContainer
         completed={messageData.status === 'done'}
+        settled={messageData.status === 'done' || messageData.status === 'stopped'}
         errorCode={messageData.errorCode}
         showSyntaxHighlight={showSyntaxHighlight}
         reply={messageData.questMasterReply || replies[0]}
@@ -1228,6 +1234,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   search,
   isExpandable = false,
   completed = false,
+  settled = completed,
   errorCode,
   questMasterPlanId,
   onSendMessage,
@@ -1395,9 +1402,9 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
     let preprocessedContent = cleanReply;
     if (isStreamingArtifact) {
-      const artifactIndex = preprocessedContent.indexOf('<artifact');
+      const artifactIndex = preprocessedContent.lastIndexOf('<artifact');
       if (artifactIndex !== -1) {
-        preprocessedContent = preprocessedContent.substring(0, artifactIndex).trim();
+        preprocessedContent = preprocessedContent.substring(0, artifactIndex).trimEnd();
       }
     } else if (isTruncatedArtifact) {
       preprocessedContent = repairTruncatedArtifact(preprocessedContent);
@@ -1643,6 +1650,10 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
               sources={deepResearchState.sources}
               completedSteps={deepResearchState.completedSteps}
               totalExpectedSteps={deepResearchState.totalExpectedSteps}
+              researchCompleted={deepResearchState.completed}
+              turnDone={settled}
+              startTime={deepResearchState.startTime}
+              endTime={deepResearchState.endTime}
             />
           )}
           {agentIds && agentIds.length > 0 && <AgentAttribution agentIds={agentIds} />}
@@ -1851,7 +1862,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                           // and nothing else: the banners, media grids and artifact
                           // chrome are siblings above, and must not inherit the
                           // reading typography or land in the `> *` measure rules.
-                          <div className="b4m-md">
+                          <div className="b4m-md" data-testid="ai-response-markdown">
                             <ReplyCompleteContext.Provider value={!!completed}>
                               <ReplyPlacesContext.Provider value={placesById}>
                                 <ReplyCitablesContext.Provider value={promptMeta?.citables ?? NO_CITABLES}>
@@ -1912,9 +1923,9 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       {(chessBoard || nonChessArtifacts.length > 0) && (
         <Stack spacing={2} sx={{ mt: 3, mb: 1 }}>
           {chessBoard}
-          {nonChessArtifacts.map((artifact, index) => (
+          {nonChessArtifacts.map(artifact => (
             <ArtifactRenderer
-              key={`${artifact.type}_${artifact.identifier}_${index}`}
+              key={`${artifact.type}_${artifact.identifier}_${artifact.startIndex}`}
               artifact={artifact}
               // The full parse's index, chess included, which is what persistence numbers ids by.
               index={artifacts.indexOf(artifact)}

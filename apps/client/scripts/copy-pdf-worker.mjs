@@ -62,9 +62,12 @@ const ASSET_DIRS = ['wasm', 'standard_fonts', 'cmaps', 'iccs'];
 const ASSETS_DIR_PREFIX = 'pdfjs-assets-';
 // pdf.js's scripting sandbox (a JS interpreter), which PdfViewer never enables; not worth serving.
 const UNUSED_WASM_PREFIX = 'quickjs-';
+// Preserve bundled notices with a text extension the hosted asset store can serve.
+const LICENSE_PREFIX = 'LICENSE';
 const TEMP_SUFFIX = '.tmp';
 const TEMP_MAX_AGE_MS = 10 * 60 * 1000;
-const COMPLETE_MARKER = '.complete';
+// Bump when the generated asset layout changes so existing copies are rebuilt.
+const COMPLETE_MARKER = '.complete-v2';
 const SWAP_ATTEMPTS = 3;
 
 function main() {
@@ -124,8 +127,16 @@ function main() {
     for (const dir of ASSET_DIRS) {
       cpSync(path.join(pdfjsDir, dir), path.join(tempDir, dir), {
         recursive: true,
-        filter: source => !path.basename(source).startsWith(UNUSED_WASM_PREFIX),
+        filter: source => {
+          const name = path.basename(source);
+          return !name.startsWith(UNUSED_WASM_PREFIX) && !name.startsWith(LICENSE_PREFIX);
+        },
       });
+      for (const name of readdirSync(path.join(pdfjsDir, dir))) {
+        if (!name.startsWith(LICENSE_PREFIX)) continue;
+        const servedName = path.extname(name) ? name : `${name}.txt`;
+        copyFileSync(path.join(pdfjsDir, dir, name), path.join(tempDir, dir, servedName));
+      }
     }
     writeFileSync(path.join(tempDir, COMPLETE_MARKER), '');
     for (let attempt = 1; ; attempt++) {

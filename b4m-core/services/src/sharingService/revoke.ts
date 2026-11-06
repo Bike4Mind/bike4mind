@@ -110,10 +110,9 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
   // grant path, so it opts in to the version guard (`updateGuarded`). Because the write carries `__v`, a
   // racing write that ALSO goes through `updateGuarded` throws ConcurrencyConflictError (409,
   // surfaced by the shared errorHandler) instead of clobbering this revoke, and the route's
-  // `withTransaction` rolls back the `revokeFromProject` side effects above on that conflict. Note the
-  // guard only defends against other *guarded* writers: a plain `update` of the same doc (e.g. some
-  // accept.ts paths) is not conditioned on `__v` and can still resurrect access - guarding those is a
-  // follow-up. (Access *widening* via updateDocumentSharing is a targeted `$set` of
+  // `withTransaction` rolls back the `revokeFromProject` side effects above on that conflict. Grants
+  // and removals through `shareable.updateUserShares` bump `__v` when they change `users`, so they
+  // also make this write conflict rather than be overwritten. (Access *widening* via updateDocumentSharing is a targeted `$set` of
   // isGlobalRead/isGlobalWrite with no `__v`, so it stays on the unguarded path.)
   // `updateGuarded` is optional on IBaseRepository (additive for external implementers), but every
   // in-repo repo is a concrete BaseRepository that provides it.
@@ -187,19 +186,27 @@ export const revokeFromProject = async (
   let fileIds = project.fileIds;
   let sessionIds = project.sessionIds;
 
+  // Everyone else holding a grant this project minted on the leaver's documents. The owner is never in
+  // project.users, but addFiles/addSessions grant the owner every document a member contributes.
+  const othersInProject = Array.from(
+    new Set([project.userId, ...project.users.map(u => u.userId)].filter(id => id !== userIdToRevoke))
+  );
+  // One row the cascade cannot reach must not keep the others: same NotFoundError tolerance as below.
+  const revokeFromOthers = async (id: string, type: 'files' | 'sessions') => {
+    for (const userId of othersInProject) {
+      try {
+        await revoke(userId, { id, type, userId, projectId: project.id }, adapters);
+      } catch (e) {
+        if (!(e instanceof NotFoundError)) throw e;
+      }
+    }
+  };
+
   for (const file of files) {
     try {
-      // If the file is owned by the user being revoked,
-      // we need to revoke the sharing for all other users in the project
+      // The leaver's own file leaves the project, so everyone else loses this project's grant on it.
       if (file.userId === userIdToRevoke) {
-        const usersToBeRevoked = project.users.filter(u => u.userId !== userIdToRevoke);
-        for (const user of usersToBeRevoked) {
-          await revoke(
-            user.userId,
-            { id: file.id, type: 'files', userId: user.userId, projectId: project.id },
-            adapters
-          );
-        }
+        await revokeFromOthers(file.id, 'files');
 
         fileIds = fileIds.filter(id => id !== file.id);
       } else {
@@ -220,17 +227,9 @@ export const revokeFromProject = async (
 
   for (const session of sessions) {
     try {
-      // If the session is owned by the user being revoked,
-      // we need to revoke the sharing for all other users in the project
+      // The leaver's own session leaves the project, so everyone else loses this project's grant on it.
       if (session.userId === userIdToRevoke) {
-        const usersToBeRevoked = project.users.filter(u => u.userId !== userIdToRevoke);
-        for (const user of usersToBeRevoked) {
-          await revoke(
-            user.userId,
-            { id: session.id, type: 'sessions', userId: user.userId, projectId: project.id },
-            adapters
-          );
-        }
+        await revokeFromOthers(session.id, 'sessions');
 
         sessionIds = sessionIds.filter(id => id !== session.id);
       } else {

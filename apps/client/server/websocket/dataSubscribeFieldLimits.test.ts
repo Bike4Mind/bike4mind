@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { CHAT_MESSAGE_WITHHELD_FIELDS, OWNER_ONLY_PROMPT_META_PROJECTION_PATHS } from '@bike4mind/common';
+import {
+  CHAT_MESSAGE_WITHHELD_FIELDS,
+  OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
+  USER_SECRET_FIELDS,
+} from '@bike4mind/common';
 import { findWithheldFilterPaths, resolveFieldLimits, type FieldLimitOptions } from './dataSubscribeFieldLimits';
 
 const opts = (overrides: Partial<FieldLimitOptions> = {}): FieldLimitOptions => ({
@@ -19,6 +23,7 @@ describe('resolveFieldLimits', () => {
       callback: false,
       embedding: false,
       slackNotification: false,
+      signupActivity: false,
     });
   });
 
@@ -54,9 +59,60 @@ describe('resolveFieldLimits', () => {
     expect(resolveFieldLimits('quests', opts())).toMatchObject(serverOnly);
   });
 
-  it('excludes password/stripeCustomerId/resetPasswordToken for the users collection', () => {
+  it('excludes password/stripeCustomerId/resetPasswordToken/throttle/riskSignals for the users collection', () => {
     const limits = resolveFieldLimits('users', opts());
-    expect(limits).toEqual({ password: false, stripeCustomerId: false, resetPasswordToken: false });
+    expect(limits).toEqual({
+      password: false,
+      'signupGrant.blocked': false,
+      stripeCustomerId: false,
+      resetPasswordToken: false,
+      signupGrantAssessment: false,
+      riskScore: false,
+      riskEvidence: false,
+      throttle: false,
+      riskSignals: false,
+      signupLanding: false,
+    });
+  });
+
+  it('withholds every abuse-evidence field the REST self-view drops', () => {
+    // Abuse evidence describes the account to admins; a new one must be added to both lists.
+    const abuseEvidence = [
+      'signupGrantAssessment',
+      'riskScore',
+      'riskEvidence',
+      'throttle',
+      'riskSignals',
+      'signupLanding',
+    ] as const;
+    const limits = resolveFieldLimits('users', opts());
+    for (const field of abuseEvidence) {
+      expect(USER_SECRET_FIELDS).toContain(field);
+      expect(limits).toHaveProperty(field, false);
+    }
+  });
+
+  it('refuses a users subscription filter that probes throttle or riskSignals', () => {
+    const limits = resolveFieldLimits('users', opts());
+    expect(findWithheldFilterPaths({ 'throttle.tier': 'shadow' }, limits)).toEqual(['throttle.tier']);
+    expect(findWithheldFilterPaths({ $or: [{ riskSignals: { $exists: true } }] }, limits)).toEqual(['riskSignals']);
+  });
+
+  it('withholds only the admin block of signupGrant, not the whole sub-document the credits UI reads', () => {
+    const limits = resolveFieldLimits('users', opts());
+    expect(limits).toMatchObject({ 'signupGrant.blocked': false });
+    expect(limits).not.toHaveProperty('signupGrant');
+  });
+
+  it('refuses a users subscription filter that probes the signup grant block', () => {
+    const limits = resolveFieldLimits('users', opts());
+    expect(findWithheldFilterPaths({ 'signupGrant.blocked': { $exists: true } }, limits)).toEqual([
+      'signupGrant.blocked',
+    ]);
+    expect(findWithheldFilterPaths({ 'signupGrant.blocked.at': { $gt: new Date(0) } }, limits)).toEqual([
+      'signupGrant.blocked.at',
+    ]);
+    expect(findWithheldFilterPaths({ 'signupGrant.heldReason': 'budget_exhausted' }, limits)).toEqual([]);
   });
 
   it('returns undefined for a collection with no configured limits', () => {
@@ -86,12 +142,15 @@ describe('resolveFieldLimits', () => {
       callback: false,
       embedding: false,
       slackNotification: false,
+      signupActivity: false,
     });
   });
 
   it('excludes stripeCustomerId and billingContact for a non-admin organizations subscriber', () => {
     expect(resolveFieldLimits('organizations', opts())).toEqual({
       stripeCustomerId: false,
+      signupGrantUnlockCount: false,
+      signupInviteBonusCount: false,
       billingContact: false,
     });
   });
@@ -101,12 +160,16 @@ describe('resolveFieldLimits', () => {
     // is privileged. Owners are NOT privileged here - see the projection note in the source.
     expect(resolveFieldLimits('organizations', opts({ isPlatformAdmin: true }))).toEqual({
       stripeCustomerId: false,
+      signupGrantUnlockCount: false,
+      signupInviteBonusCount: false,
     });
   });
 
   it('uses the passed-in organization collection name rather than a hardcoded literal', () => {
     expect(resolveFieldLimits('orgs_v2', opts({ organizationCollectionName: 'orgs_v2' }))).toEqual({
       stripeCustomerId: false,
+      signupGrantUnlockCount: false,
+      signupInviteBonusCount: false,
       billingContact: false,
     });
   });

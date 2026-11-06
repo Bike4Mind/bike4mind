@@ -1,59 +1,71 @@
+import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { questRepository, sessionRepository } from '@bike4mind/database';
-import { redactSessionForClient } from '@bike4mind/common';
-import { sessionService } from '@bike4mind/services';
+import { HTTPError, redactSessionForClient } from '@bike4mind/common';
+import { meterCompletionBackend, sessionService } from '@bike4mind/services';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { InternalServerError, NotFoundError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
-import { assertSessionAccess } from '@server/utils/sessionAccess';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { assertSessionAccess } from '@bike4mind/server-utils/utils/sessionAccess';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { Request } from 'express';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
-const handler = baseApi().post<Request<unknown, unknown, unknown, { id: string }>>(async (req, res) => {
-  assertAiAccessAllowed(req.user);
-  const { id } = req.query;
+const handler = baseApi().post<Request<unknown, unknown, unknown, { id: string }>>(
+  withRequestCompletionQuota(async (req, res) => {
+    assertAiAccessAllowed(req.user);
+    const { id } = req.query;
 
-  // Bind the caller-supplied session id to the caller before renaming. Outside the try
-  // below so a 403/404 surfaces as-is instead of being remapped to a 500.
-  await assertSessionAccess(id, req.user!.id, 'write', req.user!.groups ?? []);
+    // Bind the caller-supplied session id to the caller before renaming. Outside the try
+    // below so a 403/404 surfaces as-is instead of being remapped to a 500.
+    await assertSessionAccess(id, req.user!.id, 'write', req.user!.groups ?? []);
 
-  try {
-    // Get operations model
-    const { modelId, llm } = await OperationsModelService.getOperationsModel();
+    try {
+      // Get operations model
+      const operations = await OperationsModelService.getOperationsModel();
+      const { modelId } = operations;
+      const llm = meterCompletionBackend(
+        operations.llm,
+        createRequestCompletionMeter(req, 'session auto-rename', { systemModel: true }),
+        operations.modelInfo
+      );
 
-    const updatedSession = await sessionService.autoName(
-      { sessionId: id },
-      {
-        db: {
-          sessions: sessionRepository,
-          quests: questRepository,
+      const updatedSession = await sessionService.autoName(
+        { sessionId: id },
+        {
+          db: {
+            sessions: sessionRepository,
+            quests: questRepository,
+          },
+          createCompletion: async (prompt: string) => {
+            let result = '';
+            await llm.complete(
+              modelId,
+              [{ role: 'user', content: prompt }],
+              { maxTokens: 600 },
+              async (chunks: (string | null | undefined)[]) => {
+                result += chunks.filter(Boolean).join('');
+              }
+            );
+
+            const title = result.trim();
+            if (!title) throw new InternalServerError('Failed to generate name');
+            return title;
+          },
+          logger: req.logger,
         },
-        createCompletion: async (prompt: string) => {
-          let result = '';
-          await llm.complete(
-            modelId,
-            [{ role: 'user', content: prompt }],
-            { maxTokens: 600 },
-            async (chunks: (string | null | undefined)[]) => {
-              result += chunks.filter(Boolean).join('');
-            }
-          );
+        req.user!
+      );
 
-          const title = result.trim();
-          if (!title) throw new InternalServerError('Failed to generate name');
-          return title;
-        },
-        logger: req.logger,
-      },
-      req.user!
-    );
-
-    return res.json(redactSessionForClient(updatedSession));
-  } catch (error) {
-    // Revoked or deleted during the LLM call: the gated write refused it.
-    if (error instanceof NotFoundError) throw error;
-    req.logger.error('Error in auto-rename:', error);
-    throw new InternalServerError('Failed to auto-rename session');
-  }
-});
+      return res.json(redactSessionForClient(updatedSession));
+    } catch (error) {
+      // Revoked or deleted during the LLM call: the gated write refused it.
+      if (error instanceof NotFoundError) throw error;
+      // Credit and admission refusals keep their status (422); the empty-title 500 is logged below.
+      if (error instanceof HTTPError && !(error instanceof InternalServerError)) throw error;
+      req.logger.error('Error in auto-rename:', error);
+      throw new InternalServerError('Failed to auto-rename session');
+    }
+  })
+);
 
 export default handler;

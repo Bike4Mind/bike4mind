@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Box, Typography, Alert, CircularProgress, Stack, Tabs, TabPanel } from '@mui/joy';
 import ArtifactModeTabs from '@client/app/components/common/ArtifactModeTabs';
 import { type HtmlArtifact } from '@bike4mind/common';
-import { validateArtifactContent } from '@client/app/utils/artifactParser';
+import { validateArtifactContent } from '@bike4mind/server-utils/app/utils/artifactParser';
 import { sanitizeHtmlForIframe, absolutizeBlessedScripts } from '@client/app/utils/htmlSanitizer';
 import { whiteAlpha } from '@client/app/utils/themes/colors';
 import WarningIcon from '@mui/icons-material/Warning';

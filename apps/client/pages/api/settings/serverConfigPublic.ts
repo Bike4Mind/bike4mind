@@ -3,7 +3,10 @@ import { adminSettingsRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isOpenRegistrationAllowed } from '@server/utils/auth/openRegistration';
-import { isLocalAppUrl } from '@server/utils/validators';
+import { getTurnstilePolicy } from '@server/utils/auth/turnstile';
+import { getAppleConfig } from '@bike4mind/server-utils/auth/appleConfig';
+import { publicAppUrl } from '@server/utils/validators';
+import { configuredSupportEmail } from '@server/auth/blockedSignIn';
 
 export type ServerConfigPublic = {
   apiUrl: string;
@@ -14,6 +17,12 @@ export type ServerConfigPublic = {
   pyodideBaseUrl: string;
   /** When true, the MFA prompt offers "remember this device" so the next login skips TOTP. */
   allowTrustedDevices: boolean;
+  /** Turnstile site key; empty when the challenge is not enforced on this stage. */
+  turnstileSiteKey: string;
+  /** True when Apple credentials are configured, so the login page offers Sign in with Apple. */
+  appleSignInEnabled: boolean;
+  /** Support address the login page names on a blocked-account notice; empty when not configured. */
+  supportEmail: string;
 };
 
 // Public pre-login config - minimal fields only.
@@ -35,15 +44,17 @@ const handler = baseApi({ auth: false }).get(
     const trustedParsed = settingsMap.allowTrustedDevices.schema.safeParse(trustedSetting?.settingValue);
     const allowTrustedDevices = trustedParsed.success ? trustedParsed.data : true;
 
+    const turnstile = await getTurnstilePolicy();
+
     const config: ServerConfigPublic = {
-      // In dev, derive from request host so the URL matches the actual port
-      apiUrl: isLocalAppUrl()
-        ? `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host || 'localhost:3000'}`
-        : process.env.APP_URL || '',
+      apiUrl: publicAppUrl(req),
       defaultTheme: 'bike4mind',
       allowOpenRegistration,
       pyodideBaseUrl: process.env.PYODIDE_BASE_URL || '',
       allowTrustedDevices,
+      turnstileSiteKey: turnstile.active ? turnstile.siteKey : '',
+      appleSignInEnabled: getAppleConfig() !== null,
+      supportEmail: configuredSupportEmail() ?? '',
     };
 
     return res.json(config);

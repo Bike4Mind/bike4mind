@@ -9,8 +9,8 @@ import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 
 const AdminUserProfile = () => {
   useDocumentTitle('User profile', ' | Admin');
-  const { userId } = useParams({ from: '/admin/users/$userId' });
-  const { tab = DEFAULT_USER_PROFILE_TAB } = useSearch({ from: '/admin/users/$userId' });
+  const { userId } = useParams({ from: '/admin-layout/admin/users/$userId' });
+  const { tab = DEFAULT_USER_PROFILE_TAB } = useSearch({ from: '/admin-layout/admin/users/$userId' });
   const navigate = useNavigate({ from: '/admin/users/$userId' });
 
   // Replace, so flipping tabs does not stack history entries for Back to walk through.
