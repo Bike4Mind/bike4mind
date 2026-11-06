@@ -86,15 +86,6 @@ describe('a config this build cannot validate', () => {
     );
   });
 
-  it('refuses a settings save, naming the file, and leaves the file unchanged', async () => {
-    const before = await readFile(configPath, 'utf-8');
-
-    await expect(new ConfigStore(configPath).save({ defaultModel: 'x' })).rejects.toThrow(
-      `${configPath} failed validation`
-    );
-    expect(await readFile(configPath, 'utf-8')).toBe(before);
-  });
-
   it('records the chosen backend without touching any other key', async () => {
     await new ConfigStore(configPath).markEndpointChosen();
 

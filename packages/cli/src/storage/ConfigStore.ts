@@ -2,6 +2,7 @@ import { promises as fs, existsSync } from 'fs';
 import { createHash } from 'node:crypto';
 import path from 'path';
 import { homedir } from 'os';
+import { isDeepStrictEqual } from 'node:util';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { ChatModels } from '@bike4mind/common';
@@ -438,6 +439,36 @@ const CONFIG_LOCK_POLL_MS = 10;
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Applies what changed from `base` to `next` onto `target`, a value as the file holds it, and keeps everything else
+ * in `target`: keys set or removed in objects, items added or removed in arrays, any other value replaced.
+ */
+function applyChanges(target: unknown, base: unknown, next: unknown): unknown {
+  if (isDeepStrictEqual(base, next)) return target;
+  // An empty map or list filled in where there was none is not a change.
+  const empty = (isJsonObject(next) && Object.keys(next).length === 0) || (Array.isArray(next) && next.length === 0);
+  if (base === undefined && target === undefined && empty) return undefined;
+  if (isJsonObject(base) && isJsonObject(next)) {
+    const out: Record<string, unknown> = isJsonObject(target) ? { ...target } : {};
+    for (const key of new Set([...Object.keys(base), ...Object.keys(next)])) {
+      if (next[key] === undefined) {
+        if (base[key] !== undefined) delete out[key];
+        continue;
+      }
+      const value = applyChanges(out[key], base[key], next[key]);
+      if (value === undefined) delete out[key];
+      else out[key] = value;
+    }
+    return out;
+  }
+  if (Array.isArray(base) && Array.isArray(next) && Array.isArray(target)) {
+    const has = (list: unknown[], item: unknown) => list.some(entry => isDeepStrictEqual(entry, item));
+    const kept = target.filter(item => has(next, item) || !has(base, item));
+    return [...kept, ...next.filter(item => !has(base, item) && !has(kept, item))];
+  }
+  return next;
 }
 
 /** The sign-in and backend fields as written to the file; read from it, each may be in any shape. */
@@ -914,8 +945,11 @@ export class ConfigStore {
   private serial: Promise<unknown> = Promise.resolve();
   /** The config write lock while this store holds it; checked right before each rename onto the file. */
   private configLock: HeldLock | null = null;
-  /** The global snapshot is DEFAULT_CONFIG standing in for a file that failed validation; it must never be saved over it. */
-  private globalFailedValidation = false;
+  /**
+   * Set when the global snapshot is DEFAULT_CONFIG standing in for a file that failed validation: the snapshot as of
+   * the last load or save, so a save writes only what changed since onto the file's own JSON.
+   */
+  private fallbackBase: CliConfig | null = null;
   /** Canonicalized (realpath'd) discovered project root, or null. */
   private projectRealPath: string | null = null;
   /** Whether the discovered project root is in the global `trustedProjects`. */
@@ -1056,7 +1090,7 @@ export class ConfigStore {
       // ONLY from here, never from the merged effective config, so repo layers
       // can't be laundered into ~/.bike4mind/config.json.
       this.globalConfig = globalConfig;
-      this.globalFailedValidation = globalFailedValidation;
+      this.fallbackBase = globalFailedValidation ? structuredClone(globalConfig) : null;
 
       // Reset per-load project state, then discover + realpath the project root.
       this.projectConfigDir = null;
@@ -1585,13 +1619,8 @@ export class ConfigStore {
     config?: GlobalConfigPatch,
     opts?: { clearFeatures?: boolean; authFields?: DiskAuthFields }
   ): Promise<void> {
-    if (this.globalFailedValidation) {
-      throw new Error(
-        `Could not save settings: ${this.configPath} failed validation, so it was left unchanged. Fix the file, or remove it to start over.`
-      );
-    }
     const global = this.globalConfig!;
-    const authFields = opts?.authFields ?? (await this.diskAuthFields());
+    const authFields = opts?.authFields ?? (this.fallbackBase ? undefined : await this.diskAuthFields());
 
     if (config) {
       // The security-critical, repo-launderable fields never flow through a
@@ -1654,11 +1683,14 @@ export class ConfigStore {
     if (!opts?.clearFeatures) {
       this.globalConfig = await this.mergeModelFields(this.globalConfig, global, config);
     }
-    const contents = { ...this.globalConfig, ...authFields };
+    const contents = this.fallbackBase
+      ? await this.mergeOverInvalidConfig(this.fallbackBase, this.globalConfig, opts?.authFields)
+      : { ...this.globalConfig, ...authFields };
 
     try {
       // Persist ONLY the global layer, never the merged effective config.
       await this.writeConfigFile(JSON.stringify(contents, null, 2));
+      if (this.fallbackBase) this.fallbackBase = structuredClone(this.globalConfig);
 
       // Set secure permissions (0600 - only owner can read/write)
       // This protects auth tokens and API keys from other users
@@ -1673,12 +1705,52 @@ export class ConfigStore {
   }
 
   /**
+   * The file contents for a save while the snapshot stands in for a file that failed validation: the file's own
+   * JSON, unknown and invalid keys included, with only what this process changed since `base` applied, so none of
+   * the defaults behind the snapshot reach the file. The caller holds the config write lock.
+   */
+  private async mergeOverInvalidConfig(
+    base: CliConfig,
+    next: CliConfig,
+    authFields: DiskAuthFields | undefined
+  ): Promise<Record<string, unknown>> {
+    let text: string | null;
+    let raw: Record<string, unknown> | null = null;
+    try {
+      text = await this.readConfigText();
+      if (text !== null) raw = this.parseConfigText(text);
+    } catch {
+      text = '';
+    }
+    if (text === null) {
+      // The file is gone, so there is nothing left to keep.
+      this.fallbackBase = null;
+      return { ...next, ...(authFields ?? (await this.diskAuthFields())) };
+    }
+    if (!raw) {
+      throw new Error(
+        `Could not save settings: ${this.configPath} failed validation, so it was left unchanged. Fix the file, or remove it to start over.`
+      );
+    }
+    const { auth: _baseAuth, authByEnv: _baseByEnv, apiConfig: _baseApi, ...from } = base;
+    const { auth: _auth, authByEnv: _byEnv, apiConfig: _api, ...to } = next;
+    const merged = applyChanges(raw, from, to) as Record<string, unknown>;
+    if (authFields) {
+      for (const key of ['auth', 'authByEnv', 'apiConfig'] as const) {
+        if (authFields[key] === undefined) delete merged[key];
+        else merged[key] = authFields[key];
+      }
+    }
+    return merged;
+  }
+
+  /**
    * Reset configuration to defaults
    */
   async reset(): Promise<CliConfig> {
     // structuredClone so reset never shares DEFAULT_CONFIG's mutable arrays.
     this.globalConfig = { ...structuredClone(DEFAULT_CONFIG), userId: uuidv4() };
-    this.globalFailedValidation = false;
+    this.fallbackBase = null;
     this.projectTrusted = false;
     this.rawProjectConfig = null;
     this.rawProjectLocalConfig = null;
