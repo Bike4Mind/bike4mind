@@ -75,6 +75,8 @@ export type DataHolder =
       references: readonly [UserReference, ...UserReference[]];
       /** Never exported: credentials, token hashes, encrypted secrets, signed URLs. */
       secretPaths?: readonly string[];
+      /** Exported functions the erasure executor must call before walking this holder's references. */
+      beforeErasure?: readonly string[];
       /** Paths whose names look like a user reference but are not one (see `looksLikeUserReference`). */
       unrelatedPaths?: readonly string[];
       /**

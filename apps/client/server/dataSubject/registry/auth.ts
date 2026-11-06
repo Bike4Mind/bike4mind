@@ -38,7 +38,8 @@ export const authHolders = {
   // The person's own sign-in trail: no accountability purpose for anyone else, so it goes with them.
   AuthEvent: {
     kind: 'holder',
-    // Erasure must run `retainDeletedSignupTraces` first, or the signup-abuse traces it keeps go too.
+    // The signup-abuse traces it keeps would go with the rows otherwise.
+    beforeErasure: ['retainDeletedSignupTraces'],
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
   AuthFailLog: {
