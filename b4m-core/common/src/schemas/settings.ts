@@ -8138,6 +8138,22 @@ export function redactSettingSecretsForBroadcast(setting: AdminSettingDoc): Admi
   return redactSettingSecrets(setting);
 }
 
+/** Non-sensitive settings whose value embeds secrets that redactSettingSecrets masks field by field. */
+const SETTINGS_WITH_NESTED_SECRETS: ReadonlySet<string> = new Set(['sreAgentConfig']);
+
+/**
+ * Setting keys whose raw stored document is safe to stream over a WebSocket subscription:
+ * defined (core or contributed), not `isSensitive`, and not a shape that nests secrets
+ * (sreAgentConfig, see redactSettingSecrets). An allowlist so an orphaned or newly added
+ * sensitive row is withheld by default. Sensitive settings reach admins only through the
+ * redacting REST paths (/api/settings, /api/settings/fetch).
+ */
+export function broadcastSafeSettingKeys(): string[] {
+  return allSettingDefinitions()
+    .filter(definition => !definition.isSensitive && !SETTINGS_WITH_NESTED_SECRETS.has(definition.key))
+    .map(definition => definition.key);
+}
+
 /** Setting keys explicitly tagged `publicSafe` - the only keys allowed in the public artifact. */
 export function publicSafeSettingKeys(): string[] {
   return allSettingDefinitions()
