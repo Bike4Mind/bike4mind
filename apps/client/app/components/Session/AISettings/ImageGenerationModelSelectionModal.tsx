@@ -54,10 +54,15 @@ import {
 import MetadataChip from './MetaDataChips';
 import { useModelStats } from '@client/app/hooks/data/useModelStats';
 import { ContextHelpButton } from '@client/app/components/help';
+// From the module, not the barrel: component tests mock the barrel.
+import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 import {
   ASPECT_RATIO_INERT_NOTE,
+  OUTPUT_FORMAT_INERT_NOTE,
   ignoresAspectRatio,
-  ignoresUpsamplingAndSeed,
+  ignoresOutputFormat,
+  ignoresSeed,
+  seedInertNote,
   withInertNote,
 } from './inertImageSettings';
 import { imageSizeUpdate } from './imageSizeUpdate';
@@ -350,9 +355,10 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
       onChange: (value: number | undefined) => setLLM({ seed: typeof value === 'number' ? value : null }),
       tooltip: withInertNote(
         'Set a specific seed for reproducible images (leave empty for random)',
-        ignoresUpsamplingAndSeed(contextImageModel)
+        ignoresSeed(contextImageModel),
+        seedInertNote(contextImageModel)
       ),
-      disabled: ignoresUpsamplingAndSeed(contextImageModel),
+      disabled: ignoresSeed(contextImageModel),
       inputProps: {
         type: 'number',
         placeholder: 'Random',
@@ -426,6 +432,12 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
       type: 'select' as const,
       value: (_output_format ?? 'png') as 'jpeg' | 'png',
       onChange: (value: 'jpeg' | 'png' | null) => value && setLLM({ output_format: value }),
+      tooltip: withInertNote(
+        FIELD_TOOLTIPS.imageOutputFormat,
+        ignoresOutputFormat(contextImageModel),
+        OUTPUT_FORMAT_INERT_NOTE
+      ),
+      disabled: ignoresOutputFormat(contextImageModel),
       options: [
         { value: 'jpeg', label: 'JPEG' },
         { value: 'png', label: 'PNG' },

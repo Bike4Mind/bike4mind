@@ -58,6 +58,8 @@ export enum ImageModels {
   FLUX_2_KLEIN_9B = 'flux-2-klein-9b',
   FLUX_2_KLEIN_9B_PREVIEW = 'flux-2-klein-9b-preview',
   FLUX_2_KLEIN_4B = 'flux-2-klein-4b',
+  FLUX_3_IMAGE = 'flux-3-image',
+  FLUX_3_IMAGE_KLEIN = 'flux-3-image-klein',
   GROK_IMAGINE_IMAGE_QUALITY = 'grok-imagine-image-quality',
   GEMINI_2_5_FLASH_IMAGE = 'gemini-2.5-flash-image',
   GEMINI_3_PRO_IMAGE_PREVIEW = 'gemini-3-pro-image-preview',

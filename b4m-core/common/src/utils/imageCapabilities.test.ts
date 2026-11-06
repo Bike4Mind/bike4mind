@@ -28,6 +28,8 @@ const EXPECTED_SIZING: Record<ImageModels, ImageSizing['kind']> = {
   [ImageModels.FLUX_2_KLEIN_9B]: 'dimensions',
   [ImageModels.FLUX_2_KLEIN_9B_PREVIEW]: 'dimensions',
   [ImageModels.FLUX_2_KLEIN_4B]: 'dimensions',
+  [ImageModels.FLUX_3_IMAGE]: 'dimensions',
+  [ImageModels.FLUX_3_IMAGE_KLEIN]: 'dimensions',
   [ImageModels.GROK_IMAGINE_IMAGE_QUALITY]: 'fixed',
   [ImageModels.GEMINI_2_5_FLASH_IMAGE]: 'aspectRatio',
   [ImageModels.GEMINI_3_PRO_IMAGE_PREVIEW]: 'aspectRatio',
@@ -158,8 +160,15 @@ describe('getImageModelCapabilities', () => {
       [ImageModels.FLUX_2_FLEX, 8],
       [ImageModels.FLUX_2_KLEIN_9B, 4],
       [ImageModels.FLUX_2_KLEIN_4B, 4],
+      [ImageModels.FLUX_3_IMAGE, 10],
+      [ImageModels.FLUX_3_IMAGE_KLEIN, 10],
     ])('%s advertises its total reference input limit', (model, limit) => {
       expect(getImageModelCapabilities(model).supports.maxReferenceImages).toBe(limit);
+    });
+
+    it('FLUX 3 Image takes no seed; FLUX 3 Image Klein does', () => {
+      expect(getImageModelCapabilities(ImageModels.FLUX_3_IMAGE).supports.seed).toBe(false);
+      expect(getImageModelCapabilities(ImageModels.FLUX_3_IMAGE_KLEIN).supports.seed).toBe(true);
     });
 
     it('Kontext needs an input image', () => {

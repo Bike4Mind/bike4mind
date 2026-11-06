@@ -60,20 +60,54 @@ export function isFlux2ImageModel(model?: string | null): boolean {
 }
 
 /**
+ * FLUX 3 Image and FLUX 3 Image Klein. Listed by id rather than by a `flux-3-` prefix because BFL
+ * serves other FLUX 3 endpoints (video) that are not image models. Their request schema differs from
+ * FLUX.2: references arrive as one `images` array, and flux-3-image rejects any field it does not
+ * define (seed, output_format, prompt_upsampling) with a 422. `BFLImageService.generate` builds the
+ * body from this predicate.
+ */
+export function isFlux3ImageModel(model?: string | null): boolean {
+  return model === ImageModels.FLUX_3_IMAGE || model === ImageModels.FLUX_3_IMAGE_KLEIN;
+}
+
+/**
+ * BFL models that take the workbench image and every reference image together as one list of input
+ * images under a single cap (getMaxReferenceImages), rather than FLUX.1's lone `image_prompt`.
+ */
+export function takesBflInputImageList(model?: string | null): boolean {
+  return isFlux2ImageModel(model) || isFlux3ImageModel(model);
+}
+
+/**
+ * BFL models that accept `seed`. flux-3-image defines none and rejects the field; Klein takes one.
+ */
+export function supportsBflSeed(model?: string | null): boolean {
+  return isBflImageModel(model) && model !== ImageModels.FLUX_3_IMAGE;
+}
+
+/**
+ * BFL models that accept `output_format`. flux-3-image defines none and rejects the field.
+ */
+export function supportsBflOutputFormat(model?: string | null): boolean {
+  return isBflImageModel(model) && model !== ImageModels.FLUX_3_IMAGE;
+}
+
+/**
  * Image models sized by discrete `width`/`height` rather than a size string or an aspect ratio.
- * The Flux Pro generation pair and the whole FLUX.2 family take width/height; Ultra takes an
+ * The Flux Pro generation pair and the FLUX.2 and FLUX 3 Image families take width/height (FLUX 3
+ * also offers resolution tiers, which are not used); Ultra takes an
  * aspect ratio, and Fill and Kontext are dispatched through the edit path, which reads neither.
  * The settings UI and the generation dispatch both key off this, so they cannot disagree about
  * which controls matter.
  */
 export function usesDiscreteImageDimensions(model?: string | null): boolean {
-  return model === ImageModels.FLUX_PRO || model === ImageModels.FLUX_PRO_1_1 || isFlux2ImageModel(model);
+  return model === ImageModels.FLUX_PRO || model === ImageModels.FLUX_PRO_1_1 || takesBflInputImageList(model);
 }
 
 /**
  * Image models offering a prompt-enhancement toggle in the UI, where the provider is meant to
  * rewrite and expand the prompt before generating. BFL takes `prompt_upsampling` or its inverse
- * `disable_pup`; Klein has neither. Gemini is included for historical/UI-grouping reasons, but
+ * `disable_pup`; FLUX.2 Klein has neither, and FLUX 3 has no toggle (Klein always upsamples). Gemini is included for historical/UI-grouping reasons, but
  * GeminiImageService.buildGenerationConfig() deliberately never forwards this to Google's API -
  * `generateImages` rejects the mere presence of `enhancePrompt`, so the toggle is a no-op for
  * Gemini today. Do not reintroduce a Gemini enhancePrompt mapping without confirming Google's API
@@ -83,7 +117,10 @@ export function usesDiscreteImageDimensions(model?: string | null): boolean {
  * have to agree about this field, and they previously did so through three separate BFL checks.
  */
 export function supportsPromptUpsampling(model?: string | null): boolean {
-  return (isBflImageModel(model) && !model?.startsWith('flux-2-klein-')) || isGeminiImageModel(model);
+  return (
+    (isBflImageModel(model) && !model?.startsWith('flux-2-klein-') && !isFlux3ImageModel(model)) ||
+    isGeminiImageModel(model)
+  );
 }
 
 /**
@@ -277,9 +314,10 @@ export const IMAGES_PER_EDIT_REQUEST = 1;
  */
 export const MAX_REFERENCE_IMAGES = 15;
 
-/** FLUX.2's limit includes the primary input; GPT reserves a separate primary slot. */
+/** FLUX.2's and FLUX 3's limits include the primary input; GPT reserves a separate primary slot. */
 export function getMaxReferenceImages(model: string): number {
   if (isGPTImageModel(model)) return MAX_REFERENCE_IMAGES;
+  if (isFlux3ImageModel(model)) return 10;
   if (!isFlux2ImageModel(model)) return 0;
   return model.startsWith('flux-2-klein-') ? 4 : 8;
 }

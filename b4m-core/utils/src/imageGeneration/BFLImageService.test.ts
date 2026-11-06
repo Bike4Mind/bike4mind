@@ -170,6 +170,66 @@ describe('BFLImageService - reference image field', () => {
     expect(postSpy).not.toHaveBeenCalled();
   });
 
+  it('sends FLUX 3 references as one images array, redacted in the log', async () => {
+    await service.generate('combine these', {
+      model: ImageModels.FLUX_3_IMAGE,
+      image_prompt: 'primary-image',
+      reference_images: ['second-image', 'third-image'],
+    });
+
+    expect(submittedBody().images).toEqual(['primary-image', 'second-image', 'third-image']);
+    expect(submittedBody()).not.toHaveProperty('input_image');
+    expect(submittedBody()).not.toHaveProperty('image_prompt');
+    const output = logged.join('\n');
+    for (const image of ['primary-image', 'second-image', 'third-image']) {
+      expect(output).not.toContain(image);
+    }
+  });
+
+  it.each([ImageModels.FLUX_3_IMAGE, ImageModels.FLUX_3_IMAGE_KLEIN])(
+    'enforces the 10-image limit for %s before submitting',
+    async model => {
+      const reference_images = Array.from({ length: 11 }, (_, index) => `image-${index}`);
+      await expect(service.generate('too many', { model, reference_images })).rejects.toThrow(
+        'at most 10 reference images'
+      );
+      expect(postSpy).not.toHaveBeenCalled();
+    }
+  );
+
+  it('sends flux-3-image only the fields its endpoint defines, since it rejects unknown ones', async () => {
+    await service.generate('a lighthouse', {
+      model: ImageModels.FLUX_3_IMAGE,
+      seed: 42,
+      output_format: 'png',
+      prompt_upsampling: true,
+      aspect_ratio: '1:1',
+      width: 1024,
+      height: 1024,
+      user: 'user-1',
+      safety_tolerance: 2,
+      steps: 30,
+    });
+
+    expect(Object.keys(submittedBody()).sort()).toEqual(['height', 'prompt', 'safety_tolerance', 'user', 'width']);
+  });
+
+  it('sends FLUX 3 Image Klein its seed and output_format, and no upsampling field', async () => {
+    await service.generate('a lighthouse', {
+      model: ImageModels.FLUX_3_IMAGE_KLEIN,
+      seed: 42,
+      output_format: 'png',
+      prompt_upsampling: true,
+      width: 1024,
+      height: 768,
+    });
+
+    expect(submittedBody()).toMatchObject({ seed: 42, output_format: 'png', width: 1024, height: 768 });
+    expect(submittedBody()).not.toHaveProperty('prompt_upsampling');
+    expect(submittedBody()).not.toHaveProperty('disable_pup');
+    expect(submittedBody()).not.toHaveProperty('images');
+  });
+
   it('redacts the FLUX.2 reference image in the logged body', async () => {
     await service.generate('make it pop', { model: ImageModels.FLUX_2_PRO, image_prompt: 'base64-secret-image' });
 
@@ -331,6 +391,15 @@ describe('BFLImageService - expected failures stay below error level', () => {
       requestId: 'req-1',
     });
     expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(['Reasoning', 'Generating'])('treats polling that runs out on FLUX 3 %s as a slow provider', async status => {
+    pollReturns({ status });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const thrown = await (service as any).pollForResult('req-1', POLLING_URL, 1, 0).catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ImageProviderUnavailableError);
   });
 
   it.each(['ETIMEDOUT', 'ENETUNREACH'])('treats a %s network failure as provider unavailable', async code => {
