@@ -135,8 +135,10 @@ function corroboratingAxes(
   // A shared hosting ASN is a VPN or cloud exit that strangers share; only a residential or mobile ASN counts.
   const sameAsn = account.asn !== null && account.asn === blocked.asn && account.hosting === false;
   if (samePrefix || sameAsn) axes.push('network');
-  const hours = hoursApart(account.signedUpAt, blocked.signedUpAt);
-  if (hours !== null && hours <= policy.timingWindowHours) axes.push('timing');
+  if (account.signedUpAt && blocked.signedUpAt) {
+    const gapMs = Math.abs(account.signedUpAt.getTime() - blocked.signedUpAt.getTime());
+    if (gapMs <= policy.timingWindowHours * HOUR_MS) axes.push('timing');
+  }
   return axes;
 }
 

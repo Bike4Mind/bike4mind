@@ -1610,7 +1610,7 @@ export const AutoContainmentConfigSchema = z.object({
   deviceLinkWindowHours: z.number().int().min(0).max(720).prefault(168).meta({
     title: 'Device-link window (hours)',
     description:
-      'A new account used from the same device (screen, pixel ratio, user agent) as a banned account that signed up within this many hours of it is recorded and assessed at once. 0 turns the rule off.',
+      'A new account used from the same uncommon device (screen, pixel ratio, user agent) as a banned account, plus one more agreeing signal (signups within this many hours, the same signup network, or the same uncommon TLS fingerprint), is recorded and assessed at once. 0 turns the rule off.',
   }),
   deviceLinkCommonNetworks: z.number().int().min(2).max(100).prefault(5).meta({
     title: 'Device-link common networks',
