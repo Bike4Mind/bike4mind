@@ -15,7 +15,7 @@ import {
 export type { OperandReader } from '../../wsl/wslPath';
 
 /** The kernel's own limit (MAXSYMLINKS); past it the open fails with ELOOP anyway. */
-const MAX_LINK_HOPS = 32;
+export const MAX_LINK_HOPS = 32;
 
 /**
  * Thrown when a tool is pointed outside every granted root. Carries no filesystem detail
@@ -362,42 +362,59 @@ function nativeOrJsRealpath(path: string): string {
   }
 }
 
+/** A path resolved as far as it exists, the rest kept as given, and whether all of it exists. */
+export interface NearestPath {
+  path: string;
+  exists: boolean;
+}
+
 /**
  * `path` with symlinks resolved as far as it exists, the rest kept as given. Null when resolution
  * fails for any reason but a missing component (EACCES, ELOOP, ...): where it lands is then unknown.
  */
 export function realpathSyncNearest(path: string): string | null {
+  return nearestSync(path, { hops: 0 })?.path ?? null;
+}
+
+/**
+ * When realpath fails as missing or too long, `path` is resolved one name at a time under its
+ * parent's physical path: macOS realpath refuses any path of PATH_MAX (1024) bytes or more, and
+ * Linux readlink past 4096, while the physical spelling may be short. A name that cannot be read
+ * under an existing parent is null. resolveSubject's `nearest` mirrors this.
+ */
+function nearestSync(path: string, walk: { hops: number }): NearestPath | null {
   try {
-    return nativeOrJsRealpath(path);
+    return { path: nativeOrJsRealpath(path), exists: true };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (!isMissingPathError(code, path)) return null;
-    const absent = code === 'ENOENT' || code === 'ENOTDIR';
-    let tooLong = false;
-    // A dangling link is still followed by a write, which creates its target.
-    try {
-      const target = readlinkSync(path);
-      return realpathSyncNearest(isAbsolute(target) ? target : `${dirname(path)}${sep}${target}`);
-    } catch (linkError) {
-      const linkCode = (linkError as NodeJS.ErrnoException).code;
-      tooLong = absent && linkCode === 'ENAMETOOLONG';
-      if (linkCode !== 'EINVAL' && !tooLong && !isMissingPathError(linkCode, path)) return null;
-    }
-    const parent = dirname(path);
-    if (parent === path) return path;
-    const real = realpathSyncNearest(parent);
-    if (real === null) return null;
-    const resolved = join(real, basename(path));
-    if (!tooLong) return resolved;
-    // readlink cannot read a name past PATH_MAX: a shorter physical spelling may expose a link there.
-    if (resolved !== path) return realpathSyncNearest(resolved);
-    try {
-      nativeOrJsRealpath(parent);
-      return null;
-    } catch {
-      return resolved;
-    }
+    if (code !== 'ENAMETOOLONG' && !isMissingPathError(code, path)) return null;
   }
+  const parentPath = dirname(path);
+  if (parentPath === path) return { path, exists: false };
+  const parent = nearestSync(parentPath, walk);
+  if (parent === null) return null;
+  const name = basename(path);
+  const candidate = join(parent.path, name);
+  // Nothing under a missing folder can be a link.
+  if (!parent.exists) return { path: candidate, exists: false };
+  let target: string;
+  try {
+    target = readlinkSync(candidate);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EINVAL') {
+      try {
+        return { path: nativeOrJsRealpath(candidate), exists: true };
+      } catch {
+        return null;
+      }
+    }
+    // ENAMETOOLONG for a name within NAME_MAX is a path too long to read, which could still be a link.
+    return isMissingPathError(code, name) ? { path: candidate, exists: false } : null;
+  }
+  // A dangling link is still followed by a write, which creates its target.
+  if (++walk.hops > MAX_LINK_HOPS) return null;
+  return nearestSync(isAbsolute(target) ? target : `${parent.path}${sep}${target}`, walk);
 }
 
 async function realpathOrSelf(target: string): Promise<string> {

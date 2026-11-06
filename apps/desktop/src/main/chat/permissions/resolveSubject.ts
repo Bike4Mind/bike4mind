@@ -1,7 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { readlink, realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, sep } from 'node:path';
-import { isMissingPathError } from '../tools/paths';
+import { isMissingPathError, MAX_LINK_HOPS, type NearestPath } from '../tools/paths';
 import type { PermissionSubject } from './rules';
 
 // Mirrors nativeOrJsRealpath in ../tools/paths: win32 volumes outside the mount manager throw EISDIR.
@@ -15,38 +15,35 @@ async function realpathOrJs(path: string): Promise<string> {
 }
 
 export async function physicalPath(path: string): Promise<string> {
+  return (await nearest(path, { hops: 0 })).path;
+}
+
+// Mirrors nearestSync in ../tools/paths, throwing where it returns null.
+async function nearest(path: string, walk: { hops: number }): Promise<NearestPath> {
   try {
-    return await realpathOrJs(path);
+    return { path: await realpathOrJs(path), exists: true };
   } catch (error) {
-    if (!(error instanceof Error && 'code' in error && isMissingPathError(error.code, path))) throw error;
-    const absent = error.code === 'ENOENT' || error.code === 'ENOTDIR';
-    let tooLong = false;
-    // realpath cannot follow a dangling link, but a write will still follow it to create its target.
-    try {
-      const target = await readlink(path);
-      return physicalPath(isAbsolute(target) ? target : `${dirname(path)}${sep}${target}`);
-    } catch (linkError) {
-      tooLong = absent && (linkError as NodeJS.ErrnoException).code === 'ENAMETOOLONG';
-      if (!(
-        linkError instanceof Error &&
-        'code' in linkError &&
-        (linkError.code === 'EINVAL' || tooLong || isMissingPathError(linkError.code, path))
-      ))
-        throw linkError;
-    }
-    const parent = dirname(path);
-    if (parent === path) throw error;
-    const resolved = join(await physicalPath(parent), basename(path));
-    if (!tooLong) return resolved;
-    // readlink cannot read a name past PATH_MAX: a shorter physical spelling may expose a link there.
-    if (resolved !== path) return physicalPath(resolved);
-    const parentExists = await realpathOrJs(parent).then(
-      () => true,
-      () => false
-    );
-    if (parentExists) throw error;
-    return resolved;
+    const code = (error as NodeJS.ErrnoException).code;
+    if ((code !== 'ENAMETOOLONG' && !isMissingPathError(code, path)) || dirname(path) === path) throw error;
   }
+  const parent = await nearest(dirname(path), walk);
+  const name = basename(path);
+  const candidate = join(parent.path, name);
+  if (!parent.exists) return { path: candidate, exists: false };
+  let target: string;
+  try {
+    target = await readlink(candidate);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EINVAL') return { path: await realpathOrJs(candidate), exists: true };
+    if (isMissingPathError(code, name)) return { path: candidate, exists: false };
+    throw error;
+  }
+  // realpath cannot follow a dangling link, but a write will still follow it to create its target.
+  if (++walk.hops > MAX_LINK_HOPS) {
+    throw Object.assign(new Error(`ELOOP: too many symbolic links, resolve '${path}'`), { code: 'ELOOP' });
+  }
+  return nearest(isAbsolute(target) ? target : `${parent.path}${sep}${target}`, walk);
 }
 
 // Also the path's own physical location: an unlink acts on a final link, not on its target.

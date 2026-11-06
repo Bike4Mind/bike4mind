@@ -14,6 +14,32 @@ import {
   withRealPath,
 } from './paths';
 
+const readlinkTooLong = vi.hoisted(() => ({ for: (_path: string): boolean => false }));
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  const readlinkSync = ((...args: Parameters<typeof actual.readlinkSync>) => {
+    if (readlinkTooLong.for(String(args[0]))) throw Object.assign(new Error('long'), { code: 'ENAMETOOLONG' });
+    return actual.readlinkSync(...args);
+  }) as typeof actual.readlinkSync;
+  return { ...actual, readlinkSync };
+});
+
+/**
+ * macOS realpath(3) and readlink(2) refuse any path of PATH_MAX (1024) bytes or more, whatever its
+ * components. `overflows` is a link whose text takes realpath past that limit, so it fails there too.
+ */
+function limitPathMax(bytes: number, overflows?: string): void {
+  readlinkTooLong.for = path => Buffer.byteLength(path) >= bytes;
+  const native = realpathSync.native;
+  vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+    const text = String(path);
+    if (readlinkTooLong.for(text) || (overflows !== undefined && text.startsWith(overflows))) {
+      throw Object.assign(new Error('long'), { code: 'ENAMETOOLONG' });
+    }
+    return native(path, options);
+  });
+}
+
 describe('resolveWithinRoots', () => {
   let base: string;
   let granted: string;
@@ -264,7 +290,10 @@ describe('ownLocation', () => {
 });
 
 describe('realpathSyncNearest', () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    readlinkTooLong.for = () => false;
+    vi.restoreAllMocks();
+  });
 
   it('returns null when resolution fails for a reason other than a missing path', () => {
     vi.spyOn(realpathSync, 'native').mockImplementation(() => {
@@ -309,6 +338,7 @@ describe('realpathSyncNearest', () => {
         if (String(path).includes(wide)) throw Object.assign(new Error('long'), { code: 'ENAMETOOLONG' });
         return native(path, options);
       });
+      readlinkTooLong.for = path => path.includes(wide);
       expect(realpathSyncNearest(join(tmpdir(), wide, 'x'))).toBeNull();
     } finally {
       Object.defineProperty(process, 'platform', platform!);
@@ -325,7 +355,10 @@ describe('realpathSyncNearest', () => {
     expect(realpathSyncNearest(join(tmpdir(), name, 'x'))).toBe(join(native(tmpdir()), name, 'x'));
   });
 
-  it('follows a dangling link past PATH_MAX reached through links that shrink the path', async () => {
+  it.each([
+    ['as this platform allows', Infinity],
+    ['under the macOS PATH_MAX', 1024],
+  ])('follows a dangling link past PATH_MAX reached through links that shrink the path, %s', async (_, bytes) => {
     const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
     const loop = 'L'.repeat(250);
     await mkdir(join(base, 'prot'));
@@ -333,19 +366,43 @@ describe('realpathSyncNearest', () => {
     await symlink(join('prot', 'new'), join(base, 'dang'));
     const long = join(base, ...Array.from({ length: 17 }, () => loop), 'dang');
     expect(Buffer.byteLength(long)).toBeGreaterThan(4096);
+    limitPathMax(bytes);
     expect(realpathSyncNearest(long)).toBe(join(base, 'prot', 'new'));
     expect(withRealPath(long)).toEqual([long, join(base, 'prot', 'new'), join(base, 'dang')]);
   });
 
-  it('returns null on ENAMETOOLONG from total length with short components', () => {
-    const native = realpathSync.native;
-    const deep = join(tmpdir(), ...Array.from({ length: 40 }, () => 'd'.repeat(100)));
-    vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
-      if (String(path).length > 1000) throw Object.assign(new Error('long'), { code: 'ENAMETOOLONG' });
-      return native(path, options);
-    });
-    expect(realpathSyncNearest(deep)).toBeNull();
+  it.each([
+    ['as this platform allows', Infinity],
+    ['under the macOS PATH_MAX', 1024],
+  ])('resolves a missing path over PATH_MAX made of short components, %s', async (_, bytes) => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+    const deep = join(base, ...Array.from({ length: 50 }, () => 'd'.repeat(100)));
+    expect(Buffer.byteLength(deep)).toBeGreaterThan(4096);
+    limitPathMax(bytes);
+    expect(realpathSyncNearest(deep)).toBe(deep);
     expect(withRealPath(deep)).toEqual([deep]);
+  });
+
+  it('returns null for a name past PATH_MAX under a folder that exists, which could be a link', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+    await mkdir(join(base, 'dir'));
+    limitPathMax(Buffer.byteLength(join(base, 'dir')) + 50);
+    const past = join(base, 'dir', 'n'.repeat(100), 'x');
+    expect(realpathSyncNearest(past)).toBeNull();
+    expect(ownLocation(past)).toBeNull();
+    expect(withRealPath(past)).toEqual([past]);
+    const underMissing = join(base, 'gone', 'n'.repeat(100), 'x');
+    expect(realpathSyncNearest(underMissing)).toBe(underMissing);
+  });
+
+  it('returns null for a link that leads back to itself through a path realpath cannot read', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+    const loop = 'L'.repeat(250);
+    await symlink('.', join(base, loop));
+    const link = join(base, 'x');
+    await symlink(join(base, ...Array.from({ length: 8 }, () => loop), 'x'), link);
+    limitPathMax(1024, link);
+    expect(realpathSyncNearest(join(link, 'new'))).toBeNull();
   });
 
   it('retries with the JS realpath on win32 when native throws EISDIR', () => {

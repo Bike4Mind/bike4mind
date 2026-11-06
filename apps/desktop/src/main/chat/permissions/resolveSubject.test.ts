@@ -6,14 +6,32 @@ import { resolveSubject } from './resolveSubject';
 import { PermissionRuleSet, compileRule, parseRule } from './rules';
 
 const eisdir = vi.hoisted(() => ({ on: false }));
+// macOS realpath(3) and readlink(2) refuse any path of PATH_MAX (1024) bytes or more, whatever its
+// components. `overflows` is a link whose text takes realpath past that limit, so it fails there too.
+const pathMax = vi.hoisted(() => ({ bytes: Infinity, overflows: undefined as string | undefined }));
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const tooLong = (path: unknown, realpath: boolean): boolean =>
+    Buffer.byteLength(String(path)) >= pathMax.bytes ||
+    (realpath && pathMax.overflows !== undefined && String(path).startsWith(pathMax.overflows));
+  const refusal = () => Promise.reject(Object.assign(new Error('long'), { code: 'ENAMETOOLONG' }));
   return {
     ...actual,
     realpath: (...args: Parameters<typeof actual.realpath>) =>
-      eisdir.on ? Promise.reject(Object.assign(new Error('dir'), { code: 'EISDIR' })) : actual.realpath(...args),
+      eisdir.on
+        ? Promise.reject(Object.assign(new Error('dir'), { code: 'EISDIR' }))
+        : tooLong(args[0], true)
+          ? refusal()
+          : actual.realpath(...args),
+    readlink: (...args: Parameters<typeof actual.readlink>) =>
+      tooLong(args[0], false) ? refusal() : actual.readlink(...args),
   };
 });
+
+const PATH_MAX_CASES = [
+  ['as this platform allows', Infinity],
+  ['under the macOS PATH_MAX', 1024],
+] as const;
 
 describe('resolveSubject', () => {
   let root: string;
@@ -21,6 +39,8 @@ describe('resolveSubject', () => {
     root = await realpath(await mkdtemp(join(tmpdir(), 'permission-paths-')));
   });
   afterEach(async () => {
+    pathMax.bytes = Infinity;
+    pathMax.overflows = undefined;
     await rm(root, { recursive: true, force: true });
   });
 
@@ -37,33 +57,65 @@ describe('resolveSubject', () => {
     expect((await resolveSubject({ tool: 'bash_execute', paths: [message] })).paths).toEqual([message]);
   });
 
-  it('resolves a missing path over PATH_MAX made of short components', async () => {
+  it.each(PATH_MAX_CASES)('resolves a missing path over PATH_MAX made of short components, %s', async (_, bytes) => {
     const deep = join(root, ...Array.from({ length: 60 }, () => 'd'.repeat(100)));
+    pathMax.bytes = bytes;
     expect((await resolveSubject({ tool: 'file_read', paths: [deep] })).paths).toEqual([deep]);
   });
 
-  it('resolves a multi-line command argument longer than PATH_MAX as a missing path', async () => {
-    const lines = Array.from(
-      { length: 70 },
-      (_, i) => `see apps/desktop/src/main/chat/tools/paths.ts line ${i} for details`
-    );
-    const message = join(root, `fix(desktop): x\n\n${lines.join('\n')}`);
-    expect(Buffer.byteLength(message)).toBeGreaterThan(4096);
-    expect((await resolveSubject({ tool: 'bash_execute', paths: [message] })).paths).toEqual([message]);
+  it.each(PATH_MAX_CASES)(
+    'resolves a multi-line command argument longer than PATH_MAX as a missing path, %s',
+    async (_, bytes) => {
+      const lines = Array.from(
+        { length: 70 },
+        (_, i) => `see apps/desktop/src/main/chat/tools/paths.ts line ${i} for details`
+      );
+      const message = join(root, `fix(desktop): x\n\n${lines.join('\n')}`);
+      expect(Buffer.byteLength(message)).toBeGreaterThan(4096);
+      pathMax.bytes = bytes;
+      expect((await resolveSubject({ tool: 'bash_execute', paths: [message] })).paths).toEqual([message]);
+    }
+  );
+
+  it.each(PATH_MAX_CASES)(
+    'follows a dangling link past PATH_MAX reached through links that shrink the path, %s',
+    async (_, bytes) => {
+      const loop = 'L'.repeat(250);
+      await mkdir(join(root, 'prot'));
+      await symlink('.', join(root, loop));
+      await symlink(join('prot', 'new'), join(root, 'dang'));
+      const long = join(root, ...Array.from({ length: 17 }, () => loop), 'dang');
+      expect(Buffer.byteLength(long)).toBeGreaterThan(4096);
+      pathMax.bytes = bytes;
+      expect((await resolveSubject({ tool: 'file_write', paths: [long] })).paths).toEqual([
+        long,
+        join(root, 'prot', 'new'),
+        join(root, 'dang'),
+      ]);
+    }
+  );
+
+  it('refuses a name past PATH_MAX under a folder that exists, which could be a link', async () => {
+    await mkdir(join(root, 'dir'));
+    pathMax.bytes = Buffer.byteLength(join(root, 'dir')) + 50;
+    const past = join(root, 'dir', 'n'.repeat(100), 'x');
+    await expect(resolveSubject({ tool: 'file_write', paths: [past] })).rejects.toMatchObject({
+      code: 'ENAMETOOLONG',
+    });
+    const underMissing = join(root, 'gone', 'n'.repeat(100), 'x');
+    expect((await resolveSubject({ tool: 'file_write', paths: [underMissing] })).paths).toEqual([underMissing]);
   });
 
-  it('follows a dangling link past PATH_MAX reached through links that shrink the path', async () => {
+  it('refuses a link that leads back to itself through a path realpath cannot read', async () => {
     const loop = 'L'.repeat(250);
-    await mkdir(join(root, 'prot'));
     await symlink('.', join(root, loop));
-    await symlink(join('prot', 'new'), join(root, 'dang'));
-    const long = join(root, ...Array.from({ length: 17 }, () => loop), 'dang');
-    expect(Buffer.byteLength(long)).toBeGreaterThan(4096);
-    expect((await resolveSubject({ tool: 'file_write', paths: [long] })).paths).toEqual([
-      long,
-      join(root, 'prot', 'new'),
-      join(root, 'dang'),
-    ]);
+    const link = join(root, 'x');
+    await symlink(join(root, ...Array.from({ length: 8 }, () => loop), 'x'), link);
+    pathMax.bytes = 1024;
+    pathMax.overflows = link;
+    await expect(resolveSubject({ tool: 'file_write', paths: [join(link, 'new')] })).rejects.toMatchObject({
+      code: 'ELOOP',
+    });
   });
 
   it('retries the JS realpath on win32 when the async realpath throws EISDIR', async () => {
