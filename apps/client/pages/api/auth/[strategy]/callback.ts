@@ -42,7 +42,7 @@ function isExpectedOAuthError(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;
   const { name, code, message } = error as { name?: unknown; code?: unknown; message?: unknown };
   return (
-    (name === 'TokenError' && (code === 'invalid_grant' || code === 'bad_verification_code')) ||
+    (name === 'TokenError' && code === 'invalid_grant') ||
     (name === 'UserInfoError' && message === 'Invalid Credentials')
   );
 }

@@ -19,7 +19,7 @@ import { providerFetchOptions } from './providerDispatcher';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources';
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
-import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   declaredArtifactType,
@@ -575,6 +575,11 @@ export class XAIBackend implements ICompletionBackend {
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
                 const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+                // The tool layer leaves the failure log to the adapter: warn for expected refusals, error otherwise.
+                this.logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed', {
+                  toolName: outcome.name,
+                  error: errorMessage,
+                });
                 const observation = stripToolArtifactMarkup(
                   `Error processing ${outcome.name} tool: ${errorMessage}`,
                   ARTIFACT_REMOVED_PLACEHOLDER
@@ -895,6 +900,11 @@ export class XAIBackend implements ICompletionBackend {
           } else {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
             const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+            // The tool layer leaves the failure log to the adapter: warn for expected refusals, error otherwise.
+            this.logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed', {
+              toolName: outcome.name,
+              error: errorMessage,
+            });
             const observation = stripToolArtifactMarkup(
               `Error processing ${outcome.name} tool: ${errorMessage}`,
               ARTIFACT_REMOVED_PLACEHOLDER

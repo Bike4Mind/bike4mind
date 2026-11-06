@@ -571,17 +571,6 @@ export const webFetchTool: ToolDefinition = {
           return WEB_FETCH_PDF_TOO_LARGE_MSG;
         }
 
-        // Still a failed tool call, so a Firecrawl outage stays visible to the model; only the log
-        // level changes. ExpectedToolError keeps the message and lets the adapter warn, not error.
-        if (error instanceof RefusedFetchTargetError || firecrawlStatus === 500) {
-          // Refused targets are already logged by the SSRF guard.
-          if (!(error instanceof RefusedFetchTargetError)) {
-            context.logger.warn('WebFetch expected upstream failure', { url: params.url, error: errorMessage });
-          }
-          await context.statusUpdate({}, `WebFetch failed: ${errorMessage}`);
-          throw new ExpectedToolError(errorMessage);
-        }
-
         // Network-level errors (no response, connection reset, blocked redirect, ...) - return a
         // user-friendly message so the agent can continue. The keyless plain-fetch path uses native
         // fetch, which puts the real reason on error.cause and only 'fetch failed' on error.message,
@@ -606,6 +595,18 @@ export const webFetchTool: ToolDefinition = {
           });
           await context.statusUpdate({}, 'WebFetch: network error');
           return WEB_FETCH_UNREACHABLE_MSG;
+        }
+
+        // Runs after the network-pattern return so a matching message keeps the friendly result.
+        // Still a failed tool call, so a Firecrawl outage stays visible to the model; only the log
+        // level changes. ExpectedToolError keeps the message and lets the adapter warn, not error.
+        if (error instanceof RefusedFetchTargetError || firecrawlStatus === 500) {
+          // Refused targets are already logged by the SSRF guard.
+          if (!(error instanceof RefusedFetchTargetError)) {
+            context.logger.warn('WebFetch expected upstream failure', { url: params.url, error: errorMessage });
+          }
+          await context.statusUpdate({}, `WebFetch failed: ${errorMessage}`);
+          throw new ExpectedToolError(errorMessage);
         }
 
         // Unexpected errors - log as error and rethrow

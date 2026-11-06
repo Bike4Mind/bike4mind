@@ -139,10 +139,9 @@ export const handler = async (params: any) => {
       const isExpectedConnectionError = /Connection closed|\bEPIPE\b|\bECONNRESET\b/.test(errorMessage);
       const FailureError = isExpectedConnectionError ? ExpectedToolError : Error;
       const enhancedError = new FailureError(`MCP Handler failed for ${name} (action: ${action}): ${errorMessage}`);
-      // Warn for every action: callTool has callers outside the chat adapters (confirm, Slack,
-      // attachment routes) that would otherwise leave a server that keeps failing unlogged.
-      const logFailure = isExpectedConnectionError ? console.warn : console.error;
-      logFailure(
+      // Retries are exhausted, so a server that keeps failing (e.g. crashes on start) still pages
+      // here. The typed ExpectedToolError only lets the calling adapter log its own line at warn.
+      console.error(
         `MCP Handler Error for ${name}:`,
         enhancedError,
         ...(stderrTail.length ? ['\nchild stderr:', stderrTail.join('\n')] : [])

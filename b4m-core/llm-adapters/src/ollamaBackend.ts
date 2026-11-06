@@ -29,7 +29,7 @@ import {
   buildIdentityReminder,
   shouldOmitIdentityReminder,
 } from './identityReminder';
-import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
 import { attachFullToolResult, truncateToolResult } from './recordToolResult';
 import {
   declaredArtifactType,
@@ -448,8 +448,14 @@ export class OllamaBackend implements ICompletionBackend {
         } else {
           // A denied permission must abort, not be fed back as a result.
           if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+          const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+          // The tool layer leaves the failure log to the adapter: warn for expected refusals, error otherwise.
+          this._logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed', {
+            toolName: tc.name,
+            error: errorMessage,
+          });
           const errorMsg = stripToolArtifactMarkup(
-            `Error running ${tc.name}: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`,
+            `Error running ${tc.name}: ${errorMessage}`,
             ARTIFACT_REMOVED_PLACEHOLDER
           );
           observations[i] = errorMsg;

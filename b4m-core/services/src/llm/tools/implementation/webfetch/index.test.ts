@@ -949,4 +949,17 @@ describe('web_fetch expected upstream failures', () => {
     expect(context.logger.warn).toHaveBeenCalledTimes(error instanceof RefusedFetchTargetError ? 0 : 1);
     expect(context.logger.error).not.toHaveBeenCalled();
   });
+
+  it.each([
+    new FirecrawlError('Upstream redirect loop', 500),
+    new RefusedFetchTargetError('Refusing to fetch https://example.com/abort'),
+  ])('keeps the friendly result when the message matches a network pattern: %s', async error => {
+    scrapeUrl.mockRejectedValueOnce(error);
+    const context = makeContext(vi.fn(async () => {}));
+
+    const result = await webFetchTool.implementation(context, {}).toolFn({ url: 'https://example.com/doc' });
+
+    expect(result).toContain('The page could not be reached');
+    expect(context.logger.error).not.toHaveBeenCalled();
+  });
 });

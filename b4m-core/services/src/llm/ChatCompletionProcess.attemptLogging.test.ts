@@ -6,7 +6,7 @@ import {
   processFabFilesServer,
   fetchAndConvertFabFiles,
 } from '@bike4mind/utils';
-import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
+import { getLlmByModel, getAvailableModels, LlmTimeoutError } from '@bike4mind/llm-adapters';
 import { ChatModels, ModelBackend, type IMessage } from '@bike4mind/common';
 import { ChatCompletionProcess } from './ChatCompletionProcess';
 
@@ -259,6 +259,15 @@ describe('ChatCompletionProcess failed attempt logging', () => {
 
     expect(logger.error).not.toHaveBeenCalledWith(refusal);
     expect(logger.warn).not.toHaveBeenCalledWith(refusal);
+    expect(summaryCalls(logger.debug)).toHaveLength(1);
+    expect(summaryCalls(logger.warn)).toHaveLength(0);
+  });
+
+  it('a typed timeout is not logged as an error, and its summary goes to debug', async () => {
+    const timeout = new LlmTimeoutError('request', 60_000, 'request timeout - no response received after 60000ms');
+    await runFailingTurn(timeout);
+
+    expect(logger.error).not.toHaveBeenCalledWith(timeout);
     expect(summaryCalls(logger.debug)).toHaveLength(1);
     expect(summaryCalls(logger.warn)).toHaveLength(0);
   });

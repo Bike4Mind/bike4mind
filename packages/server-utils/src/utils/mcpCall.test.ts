@@ -124,7 +124,7 @@ describe('mcpCall connect failures', () => {
   });
 
   it.each(['getTools', 'callTool'])(
-    "logs the child's own stderr at warn when it closes the connection on every attempt (%s)",
+    "logs the child's own stderr once at error when it closes the connection on every attempt (%s)",
     async action => {
       h.connect = async onStderrLine => {
         onStderrLine(h.rateLimitLine);
@@ -138,9 +138,10 @@ describe('mcpCall connect failures', () => {
       await expect(failure).rejects.toBeInstanceOf(ExpectedToolError);
       await expect(failure).rejects.toThrow('Connection closed');
 
-      expect(error).not.toHaveBeenCalled();
-      const logged = warn.mock.calls.flat().map(String).join(' ');
+      expect(error).toHaveBeenCalledTimes(1);
+      const logged = error.mock.calls.flat().map(String).join(' ');
       expect(logged).toContain('something the server could not survive');
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('retrying'));
       expect(logged).not.toContain('RATE_LIMIT_WARNING');
     }
   );

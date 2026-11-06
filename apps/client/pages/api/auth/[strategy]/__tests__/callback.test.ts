@@ -298,7 +298,6 @@ describe('[strategy]/callback - err branch log level', () => {
   });
 
   it.each([
-    tokenError('bad_verification_code'),
     Object.assign(new Error('Invalid Credentials'), { name: 'UserInfoError' }),
     'account_link_email_mismatch',
     'account_link_requires_verification',
