@@ -9,6 +9,7 @@ import {
   type ImageModeCapabilities,
   type ImageModelCatalogEntry,
 } from './types';
+import { imageFailureReason, type ImageFailureDetail } from './reasons';
 
 /**
  * The capability-relevant part of an image request. Inputs carry only their role so any request shape that
@@ -48,12 +49,17 @@ export const IMAGE_VALIDATION_ERROR_CODES = [
 ] as const;
 export type ImageValidationErrorCode = (typeof IMAGE_VALIDATION_ERROR_CODES)[number];
 
-// `field` names the request field at fault so a per-field reason can be attached; `role` narrows an inputs failure.
+/**
+ * `field` names the request field at fault and `role` narrows an inputs failure. `message` is the diagnostic for
+ * logs and API errors; `reason` is the short user-facing "why not" built from `detail` (see ./reasons).
+ */
 export type ImageValidationFailure = {
   code: ImageValidationErrorCode;
   field: ImageRequestField;
   role?: ImageInputRole;
   message: string;
+  reason: string;
+  detail: ImageFailureDetail;
 };
 
 export type ImageValidationResult<T extends ImageCapabilityRequest = ImageCapabilityRequest> =
@@ -72,6 +78,11 @@ const parseRatio = (ratio: string): number | null => {
   return width && height ? width / height : null;
 };
 
+function failure(detail: ImageFailureDetail, field: ImageRequestField, message: string): ImageValidationFailure {
+  const role = 'role' in detail ? detail.role : undefined;
+  return { code: detail.code, field, ...(role && { role }), message, reason: imageFailureReason(detail), detail };
+}
+
 const listOrNone = (values: readonly string[]): string => (values.length > 0 ? values.join(', ') : 'none');
 
 function checkInputs(request: ImageCapabilityRequest, modeCaps: ImageModeCapabilities): ImageValidationFailure[] {
@@ -83,34 +94,25 @@ function checkInputs(request: ImageCapabilityRequest, modeCaps: ImageModeCapabil
     const isRequired = request.mode === 'edit' && (role === 'edit_source' || accepted?.required === true);
     if (count === 0) {
       if (isRequired)
-        failures.push({ code: 'missing_input', field: 'inputs', role, message: `edit requires a ${role} input` });
+        failures.push(failure({ code: 'missing_input', role }, 'inputs', `edit requires a ${role} input`));
       continue;
     }
     if (request.mode === 'generate' && EDIT_ONLY_ROLES.has(role)) {
-      failures.push({
-        code: 'unexpected_input',
-        field: 'inputs',
-        role,
-        message: `a ${role} input is only valid for edit`,
-      });
+      failures.push(failure({ code: 'unexpected_input', role }, 'inputs', `a ${role} input is only valid for edit`));
       continue;
     }
     if (!accepted) {
-      failures.push({
-        code: 'unsupported_input_role',
-        field: 'inputs',
-        role,
-        message: `${role} inputs are not supported`,
-      });
+      failures.push(failure({ code: 'unsupported_input_role', role }, 'inputs', `${role} inputs are not supported`));
       continue;
     }
     if (count > accepted.max) {
-      failures.push({
-        code: 'too_many_inputs',
-        field: 'inputs',
-        role,
-        message: `at most ${accepted.max} ${role} input(s)`,
-      });
+      failures.push(
+        failure(
+          { code: 'too_many_inputs', role, max: accepted.max, requested: count },
+          'inputs',
+          `at most ${accepted.max} ${role} input(s)`
+        )
+      );
     }
   }
   return failures;
@@ -187,38 +189,46 @@ function checkModeOutput(
   const { aspectRatio, outputFormat, count, transparentBackground } = request;
   const { aspectRatios, outputFormats, maxOutputs } = modeCaps;
   if (aspectRatio !== undefined && !(aspectRatios && isAspectRatioAllowed(aspectRatio, aspectRatios))) {
-    failures.push({
-      code: 'unsupported_aspect_ratio',
-      field: 'aspectRatio',
-      message: aspectRatios
-        ? `aspect ratio ${aspectRatio} is not supported (${describeAspectRatios(aspectRatios)})`
-        : `aspect ratio is not supported for ${request.mode}`,
-    });
+    failures.push(
+      failure(
+        { code: 'unsupported_aspect_ratio', requested: aspectRatio, mode: request.mode, allowed: aspectRatios },
+        'aspectRatio',
+        aspectRatios
+          ? `aspect ratio ${aspectRatio} is not supported (${describeAspectRatios(aspectRatios)})`
+          : `aspect ratio is not supported for ${request.mode}`
+      )
+    );
   }
   if (outputFormat !== undefined && !outputFormats.includes(outputFormat)) {
-    failures.push({
-      code: 'unsupported_output_format',
-      field: 'outputFormat',
-      message: `output format ${outputFormat} is not supported (allowed: ${listOrNone(outputFormats)})`,
-    });
+    failures.push(
+      failure(
+        { code: 'unsupported_output_format', requested: outputFormat, allowed: outputFormats, needsAlpha: false },
+        'outputFormat',
+        `output format ${outputFormat} is not supported (allowed: ${listOrNone(outputFormats)})`
+      )
+    );
   } else if (
     transparentBackground &&
     caps.transparentBackground &&
     outputFormat !== undefined &&
     !ALPHA_FORMATS.has(outputFormat)
   ) {
-    failures.push({
-      code: 'unsupported_output_format',
-      field: 'outputFormat',
-      message: `output format ${outputFormat} cannot carry a transparent background`,
-    });
+    failures.push(
+      failure(
+        { code: 'unsupported_output_format', requested: outputFormat, allowed: outputFormats, needsAlpha: true },
+        'outputFormat',
+        `output format ${outputFormat} cannot carry a transparent background`
+      )
+    );
   }
   if (count !== undefined && (!Number.isInteger(count) || count < 1 || count > maxOutputs)) {
-    failures.push({
-      code: 'unsupported_output_count',
-      field: 'count',
-      message: `${count} images per request is not supported for ${request.mode} (allowed: 1-${maxOutputs})`,
-    });
+    failures.push(
+      failure(
+        { code: 'unsupported_output_count', requested: count, max: maxOutputs },
+        'count',
+        `${count} images per request is not supported for ${request.mode} (allowed: 1-${maxOutputs})`
+      )
+    );
   }
   return failures;
 }
@@ -227,35 +237,43 @@ function checkModelParams(request: ImageCapabilityRequest, caps: ImageModelCatal
   const failures: ImageValidationFailure[] = [];
   const { size, quality, style, transparentBackground, seed } = request;
   if (size !== undefined && !isSizeAllowed(size, caps.sizing)) {
-    failures.push({
-      code: 'unsupported_size',
-      field: 'size',
-      message: `size ${size} is not supported (${describeSizing(caps.sizing)})`,
-    });
+    failures.push(
+      failure(
+        { code: 'unsupported_size', requested: size, sizing: caps.sizing },
+        'size',
+        `size ${size} is not supported (${describeSizing(caps.sizing)})`
+      )
+    );
   }
   if (quality !== undefined && !caps.qualities.includes(quality)) {
-    failures.push({
-      code: 'unsupported_quality',
-      field: 'quality',
-      message: `quality ${quality} is not supported (allowed: ${listOrNone(caps.qualities)})`,
-    });
+    failures.push(
+      failure(
+        { code: 'unsupported_quality', requested: quality, allowed: caps.qualities },
+        'quality',
+        `quality ${quality} is not supported (allowed: ${listOrNone(caps.qualities)})`
+      )
+    );
   }
   if (style !== undefined && !caps.styles.includes(style)) {
-    failures.push({
-      code: 'unsupported_style',
-      field: 'style',
-      message: `style ${style} is not supported (allowed: ${listOrNone(caps.styles)})`,
-    });
+    failures.push(
+      failure(
+        { code: 'unsupported_style', requested: style, allowed: caps.styles },
+        'style',
+        `style ${style} is not supported (allowed: ${listOrNone(caps.styles)})`
+      )
+    );
   }
   if (transparentBackground && !caps.transparentBackground) {
-    failures.push({
-      code: 'unsupported_transparent_background',
-      field: 'transparentBackground',
-      message: 'transparent background is not supported',
-    });
+    failures.push(
+      failure(
+        { code: 'unsupported_transparent_background' },
+        'transparentBackground',
+        'transparent background is not supported'
+      )
+    );
   }
   if (seed !== undefined && !caps.seed) {
-    failures.push({ code: 'unsupported_seed', field: 'seed', message: 'a seed is not supported' });
+    failures.push(failure({ code: 'unsupported_seed' }, 'seed', 'a seed is not supported'));
   }
   return failures;
 }
@@ -273,11 +291,11 @@ export function validateImageRequest<T extends ImageCapabilityRequest>(
   const failures: ImageValidationFailure[] = modeCaps
     ? [...checkInputs(request, modeCaps), ...checkModeOutput(request, caps, modeCaps)]
     : [
-        {
-          code: 'unsupported_mode',
-          field: 'mode',
-          message: `${request.mode} is not supported (allowed: ${listOrNone(Object.keys(caps.modes))})`,
-        },
+        failure(
+          { code: 'unsupported_mode', mode: request.mode },
+          'mode',
+          `${request.mode} is not supported (allowed: ${listOrNone(Object.keys(caps.modes))})`
+        ),
       ];
   failures.push(...checkModelParams(request, caps));
   const [first, ...rest] = failures;

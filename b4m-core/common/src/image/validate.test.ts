@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { ImageModels } from '../models';
 import { getImageModelCatalogEntry } from './catalog';
-import { validateImageRequest, type ImageCapabilityRequest } from './validate';
+import { imageFailureReason, type ImageFailureDetail } from './reasons';
+import { IMAGE_VALIDATION_ERROR_CODES, validateImageRequest, type ImageCapabilityRequest } from './validate';
 
 const gptImage1 = getImageModelCatalogEntry(ImageModels.GPT_IMAGE_1);
 const gptImage2 = getImageModelCatalogEntry(ImageModels.GPT_IMAGE_2);
@@ -54,6 +55,8 @@ describe('validateImageRequest', () => {
             code: 'unsupported_transparent_background',
             field: 'transparentBackground',
             message: expect.stringContaining('transparent'),
+            reason: 'This model cannot render a transparent background',
+            detail: { code: 'unsupported_transparent_background' },
           },
         ],
       });
@@ -235,6 +238,105 @@ describe('validateImageRequest', () => {
     it('accepts a seed only where the model honours one', () => {
       expect(validateImageRequest({ mode: 'generate', seed: 42 }, fluxPro).ok).toBe(true);
       expect(codesOf(validateImageRequest({ mode: 'generate', seed: 42 }, gemini))).toEqual(['unsupported_seed']);
+    });
+  });
+
+  describe('why-not reasons', () => {
+    const reasonsOf = (result: ReturnType<typeof validateImageRequest>) =>
+      result.ok ? [] : result.failures.map(f => f.reason);
+
+    it('explains a role the model does not take', () => {
+      const result = validateImageRequest(
+        { mode: 'edit', inputs: [{ role: 'edit_source' }, { role: 'mask' }, { role: 'reference' }] },
+        fill
+      );
+      expect(reasonsOf(result)).toEqual(['This model takes no reference images']);
+    });
+
+    it('names the limit and the requested value', () => {
+      const inputs = Array.from({ length: 2 }, () => ({ role: 'reference' as const }));
+      expect(reasonsOf(validateImageRequest({ mode: 'generate', inputs }, ultra))).toEqual([
+        'This model takes up to 1 reference image; you added 2',
+      ]);
+      expect(reasonsOf(validateImageRequest({ mode: 'generate', count: 11 }, fluxPro))).toEqual([
+        'This model makes up to 10 images per request; you asked for 11',
+      ]);
+    });
+
+    it('carries the typed detail the reason was built from', () => {
+      const result = validateImageRequest({ mode: 'generate', count: 11 }, fluxPro);
+      expect(result).toMatchObject({
+        ok: false,
+        failures: [{ detail: { code: 'unsupported_output_count', requested: 11, max: 10 } }],
+      });
+    });
+
+    it('tells a format the model lacks apart from one that cannot carry alpha', () => {
+      const alpha = validateImageRequest(
+        { mode: 'generate', transparentBackground: true, outputFormat: 'jpeg' },
+        gptImage1
+      );
+      expect(reasonsOf(alpha)).toEqual(['JPEG cannot keep a transparent background; pick PNG or WEBP']);
+      expect(reasonsOf(validateImageRequest({ mode: 'generate', outputFormat: 'png' }, grok))).toEqual([
+        'This model has no output format setting',
+      ]);
+      expect(reasonsOf(validateImageRequest({ mode: 'generate', outputFormat: 'webp' }, fluxPro))[0]).toBe(
+        'This model outputs PNG or JPEG; you asked for WEBP'
+      );
+    });
+
+    // One sample detail per code; the satisfies clause fails to compile when a code is added without one.
+    const SAMPLES = {
+      unsupported_mode: { code: 'unsupported_mode', mode: 'edit' },
+      missing_input: { code: 'missing_input', role: 'mask' },
+      unexpected_input: { code: 'unexpected_input', role: 'edit_source' },
+      unsupported_input_role: { code: 'unsupported_input_role', role: 'reference' },
+      too_many_inputs: { code: 'too_many_inputs', role: 'reference', max: 4, requested: 6 },
+      unsupported_size: {
+        code: 'unsupported_size',
+        requested: '999x999',
+        sizing: { kind: 'presets', presets: ['1024x1024', '1792x1024'], defaultSize: '1024x1024' },
+      },
+      unsupported_aspect_ratio: {
+        code: 'unsupported_aspect_ratio',
+        requested: '1:4',
+        mode: 'generate',
+        allowed: { kind: 'range', tallest: '9:21', widest: '21:9' },
+      },
+      unsupported_quality: { code: 'unsupported_quality', requested: 'hd', allowed: [] },
+      unsupported_style: { code: 'unsupported_style', requested: 'vivid', allowed: ['natural'] },
+      unsupported_output_format: {
+        code: 'unsupported_output_format',
+        requested: 'webp',
+        allowed: ['png', 'jpeg'],
+        needsAlpha: false,
+      },
+      unsupported_output_count: { code: 'unsupported_output_count', requested: 2, max: 1 },
+      unsupported_transparent_background: { code: 'unsupported_transparent_background' },
+      unsupported_seed: { code: 'unsupported_seed' },
+    } satisfies { [C in ImageFailureDetail['code']]: Extract<ImageFailureDetail, { code: C }> };
+
+    it.each(IMAGE_VALIDATION_ERROR_CODES)('has a short ASCII reason for %s', code => {
+      const reason = imageFailureReason(SAMPLES[code]);
+      expect(reason).toMatch(/^[\x20-\x7e]+$/);
+      expect(reason.length).toBeLessThanOrEqual(120);
+    });
+
+    it('phrases each sample for a person, not a developer', () => {
+      expect(imageFailureReason(SAMPLES.unsupported_mode)).toBe('This model cannot edit images');
+      expect(imageFailureReason(SAMPLES.too_many_inputs)).toBe(
+        'This model takes up to 4 reference images; you added 6'
+      );
+      expect(imageFailureReason(SAMPLES.unsupported_size)).toBe(
+        'This model supports 1024x1024 or 1792x1024; you asked for 999x999'
+      );
+      expect(imageFailureReason(SAMPLES.unsupported_aspect_ratio)).toBe(
+        'This model supports 9:21 to 21:9; you asked for 1:4'
+      );
+      expect(imageFailureReason(SAMPLES.unsupported_quality)).toBe('This model has no quality setting');
+      expect(imageFailureReason(SAMPLES.unsupported_output_count)).toBe(
+        'This model makes one image per request; you asked for 2'
+      );
     });
   });
 });
