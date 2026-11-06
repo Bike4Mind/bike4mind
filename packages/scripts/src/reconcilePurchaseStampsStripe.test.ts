@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { userRepository } from '@bike4mind/database';
-import { createStripeLookups, resolveReportPath } from './reconcilePurchaseStampsStripe';
+import { createStripeLookups, openReportFile, resolveReportPath } from './reconcilePurchaseStampsStripe';
 
 vi.mock('@bike4mind/database', () => ({ userRepository: { findByStripeCustomerId: vi.fn() } }));
 
@@ -111,5 +111,34 @@ describe('resolveReportPath', () => {
   it('refuses an empty or relative path', () => {
     expect(() => resolveReportPath('', repo)).toThrow(/absolute path/);
     expect(() => resolveReportPath('report.json', repo)).toThrow(/absolute path/);
+  });
+
+  it('refuses a directory that does not exist', () => {
+    expect(() => resolveReportPath(path.join(outside, 'missing', 'report.json'), repo)).toThrow(/does not exist/);
+  });
+});
+
+describe('openReportFile', () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'reconcile-open-')));
+
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('refuses a symlink at the target and leaves the link target untouched', () => {
+    const real = path.join(dir, 'real.json');
+    fs.writeFileSync(real, 'keep');
+    fs.symlinkSync(real, path.join(dir, 'link.json'));
+
+    expect(() => openReportFile(path.join(dir, 'link.json'))).toThrow();
+    expect(fs.readFileSync(real, 'utf8')).toBe('keep');
+  });
+
+  it('resets an existing file to owner-only permissions', () => {
+    const existing = path.join(dir, 'existing.json');
+    fs.writeFileSync(existing, 'old', { mode: 0o644 });
+
+    fs.closeSync(openReportFile(existing));
+
+    expect(fs.statSync(existing).mode & 0o777).toBe(0o600);
+    expect(fs.readFileSync(existing, 'utf8')).toBe('');
   });
 });

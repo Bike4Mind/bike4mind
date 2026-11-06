@@ -60,9 +60,28 @@ export function createStripeLookups(stripe: StripeLookupClient) {
 export function resolveReportPath(raw: string, repoRoot: string): string {
   if (!raw || !path.isAbsolute(raw)) throw new Error('--report needs an absolute path outside the repository');
   const dir = path.dirname(raw);
-  const target = path.join(fs.existsSync(dir) ? fs.realpathSync(dir) : dir, path.basename(raw));
+  const dirExists = fs.existsSync(dir);
+  const target = path.join(dirExists ? fs.realpathSync(dir) : dir, path.basename(raw));
   if (isInsideRepo(target, fs.realpathSync(repoRoot))) {
     throw new Error(`--report must point outside the repository, got ${target}`);
   }
+  if (!dirExists) throw new Error(`--report directory does not exist: ${dir}`);
   return target;
+}
+
+/**
+ * Opens the report before the run so a bad target fails ahead of any write. Refuses a symlink at
+ * the target (resolveReportPath only resolves the directory) and resets an existing file to 0600.
+ */
+export function openReportFile(target: string): number {
+  const { O_WRONLY, O_CREAT, O_TRUNC, O_NOFOLLOW } = fs.constants;
+  const fd = fs.openSync(target, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0o600);
+  try {
+    if (!fs.fstatSync(fd).isFile()) throw new Error(`--report must be a regular file, got ${target}`);
+    fs.fchmodSync(fd, 0o600);
+  } catch (error) {
+    fs.closeSync(fd);
+    throw error;
+  }
+  return fd;
 }

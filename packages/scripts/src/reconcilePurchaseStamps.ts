@@ -15,8 +15,9 @@ import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscript
  * org seat. Purchases that Stripe shows fully refunded or lost to a dispute are marked reversed
  * first, the same way the webhook does (apps/client/server/billing/purchaseReversal.ts).
  *
- * Dry run writes nothing. A purchase row whose owner cannot be found might back a stamped user, so
- * an apply run with any such unresolved row stops before its first write.
+ * Dry run writes nothing. A purchase row with no owner id that no Stripe customer resolves might back
+ * a stamped user, so an apply run with any such row stops before its first write, and a dry run says
+ * so. A row naming a deleted user cannot back a live stamp and does not block.
  */
 
 export type PurchaseClassification =
@@ -32,12 +33,16 @@ export type OwnerlessPurchase = {
   transactionId: string;
   paymentIntentId: string | null;
   resolvedUserId: string | null;
+  /** No owner id and no resolved user: this row stops an apply run. */
+  blocking: boolean;
 };
 
 export type ReconcileResult = {
   apply: boolean;
-  /** True when an apply run stopped before writing because an ownerless purchase stayed unresolved. */
+  /** True when an apply run stopped before writing because a blocking purchase row exists. */
   aborted: boolean;
+  /** Blocking purchase rows; an apply run aborts when this is above zero, a dry run only reports it. */
+  blocking: number;
   users: UserVerdict[];
   reversals: { paymentIntentId: string; reason: PurchaseReversalReason; ownerId: string; ownerType: string }[];
   ownerless: OwnerlessPurchase[];
@@ -88,11 +93,16 @@ export async function reconcilePurchaseStamps(options: ReconcileOptions): Promis
   const result: ReconcileResult = {
     apply,
     aborted: false,
+    blocking: 0,
     users: [],
     reversals: [],
     ownerless: [],
     errors: [],
     cleared: 0,
+  };
+  // One entry per id: an intent whose Stripe read failed fails again in the owner lookup.
+  const recordError = (id: string, error: unknown) => {
+    if (!result.errors.some(e => e.id === id)) result.errors.push({ id, message: message(error) });
   };
 
   // Same filter as findUnreversedPurchase in packages/database CreditTransactionModel.
@@ -127,7 +137,7 @@ export async function reconcilePurchaseStamps(options: ReconcileOptions): Promis
       });
       continue;
     }
-    if (classification.kind === 'unknown') result.errors.push({ id: pi, message: classification.error });
+    if (classification.kind === 'unknown') recordError(pi, classification.error);
     standingRows.push(row);
   }
 
@@ -143,7 +153,6 @@ export async function reconcilePurchaseStamps(options: ReconcileOptions): Promis
   );
 
   const backed = new Set<string>();
-  let blocking = 0;
   for (const row of standingRows) {
     if (row.ownerType !== CreditHolderType.User) continue;
     if (row.ownerId && existing.has(row.ownerId)) {
@@ -156,27 +165,38 @@ export async function reconcilePurchaseStamps(options: ReconcileOptions): Promis
       try {
         resolvedUserId = await resolveOwnerByPaymentIntent(pi);
       } catch (error) {
-        result.errors.push({ id: pi, message: message(error) });
+        recordError(pi, error);
       }
     }
-    result.ownerless.push({ transactionId: String(row._id), paymentIntentId: pi, resolvedUserId });
+    // A named owner that no longer exists backs no stamp: stamps and findUnreversedPurchase key on live user ids.
+    const blocking = !resolvedUserId && !row.ownerId;
+    result.ownerless.push({ transactionId: String(row._id), paymentIntentId: pi, resolvedUserId, blocking });
     if (resolvedUserId) backed.add(resolvedUserId);
-    else blocking++;
+    if (blocking) result.blocking++;
   }
 
-  if (apply && blocking > 0) {
-    log(`Aborting before any write: ${blocking} purchase row(s) have no resolvable owner`);
-    result.aborted = true;
-    return result;
-  }
-
-  if (apply) {
-    for (const reversal of result.reversals) {
-      await creditTransactionRepository.markPurchaseReversed(reversal.paymentIntentId, reversal.reason);
+  if (result.blocking > 0) {
+    const what = `${result.blocking} purchase row(s) have no owner id and no Stripe customer that maps to a user`;
+    if (apply) {
+      log(`Aborting before any write: ${what}`);
+      result.aborted = true;
+      return result;
     }
+    log(`WARNING: --apply would abort before any write: ${what}`);
   }
+
   for (const reversal of result.reversals) {
-    log(`${apply ? 'Reversed' : 'Would reverse'} purchase ${reversal.paymentIntentId} (${reversal.reason})`);
+    if (!apply) {
+      log(`Would reverse purchase ${reversal.paymentIntentId} (${reversal.reason})`);
+      continue;
+    }
+    try {
+      await creditTransactionRepository.markPurchaseReversed(reversal.paymentIntentId, reversal.reason);
+      log(`Reversed purchase ${reversal.paymentIntentId} (${reversal.reason})`);
+    } catch (error) {
+      // The row stays unreversed, so decide()'s findUnreversedPurchase re-check still keeps its owner.
+      recordError(reversal.paymentIntentId, error);
+    }
   }
 
   const stamped = User.find({ lastCreditsPurchasedAt: { $ne: null } }, { _id: 1, lastCreditsPurchasedAt: 1 })
@@ -195,17 +215,22 @@ export async function reconcilePurchaseStamps(options: ReconcileOptions): Promis
     try {
       if (await hasActiveSubscription(userId)) return { userId, verdict: 'keep', reason: 'subscription' };
     } catch (error) {
-      result.errors.push({ id: userId, message: message(error) });
+      recordError(userId, error);
       return { userId, verdict: 'keep', reason: 'error' };
     }
     if (!apply) return { userId, verdict: 'clear', reason: 'no_backing' };
 
-    // A purchase can land after the candidate read above.
-    if (await creditTransactionRepository.findUnreversedPurchase(userId, CreditHolderType.User)) {
-      return { userId, verdict: 'keep', reason: 'purchase' };
-    }
-    if (!(await userRepository.clearPurchaseStampIfUnchanged(userId, stamp))) {
-      return { userId, verdict: 'keep', reason: 'stamp_changed' };
+    try {
+      // A purchase can land after the candidate read above.
+      if (await creditTransactionRepository.findUnreversedPurchase(userId, CreditHolderType.User)) {
+        return { userId, verdict: 'keep', reason: 'purchase' };
+      }
+      if (!(await userRepository.clearPurchaseStampIfUnchanged(userId, stamp))) {
+        return { userId, verdict: 'keep', reason: 'stamp_changed' };
+      }
+    } catch (error) {
+      recordError(userId, error);
+      return { userId, verdict: 'keep', reason: 'error' };
     }
     result.cleared++;
     try {

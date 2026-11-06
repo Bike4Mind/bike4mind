@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
-import { CreditTransaction, Organization, User } from '@bike4mind/database';
+import {
+  CreditTransaction,
+  Organization,
+  User,
+  creditTransactionRepository,
+  userRepository,
+} from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../database/src/__test__/createMongoServer';
 import {
   hasActiveSubscriptionForUser,
@@ -219,11 +225,77 @@ describe('reconcilePurchaseStamps', () => {
     const result = await wet.promise;
 
     expect(result.aborted).toBe(true);
+    expect(result.blocking).toBe(2);
     expect(result.ownerless.filter(o => o.resolvedUserId === null)).toHaveLength(2);
     expect(await stampOf(stale)).toEqual(STAMP);
     expect(await stampOf(refunded)).toEqual(STAMP);
     expect((await rowOf('pi_refunded'))?.reversedAt ?? null).toBeNull();
     expect(wet.notify).not.toHaveBeenCalled();
+  });
+
+  it('reports in a dry run that an unresolved ownerless purchase would abort --apply', async () => {
+    const stale = await seedUser();
+    await seedPurchase('', 'pi_orphan');
+    const logs: string[] = [];
+
+    const result = await run(false, { log: line => logs.push(line) }).promise;
+
+    expect(result.aborted).toBe(false);
+    expect(result.blocking).toBe(1);
+    expect(logs.some(line => line.includes('--apply would abort'))).toBe(true);
+    expect(await stampOf(stale)).toEqual(STAMP);
+  });
+
+  it('does not block on a purchase whose owner user was deleted and no customer resolves', async () => {
+    const stale = await seedUser();
+    await seedPurchase(new mongoose.Types.ObjectId().toString(), 'pi_deleted_owner');
+
+    const result = await run(true).promise;
+
+    expect(result.aborted).toBe(false);
+    expect(result.blocking).toBe(0);
+    expect(result.ownerless).toEqual([expect.objectContaining({ resolvedUserId: null, blocking: false })]);
+    expect(await stampOf(stale)).toBeNull();
+  });
+
+  it('records a failed Stripe read once when the owner lookup fails on the same intent', async () => {
+    await seedPurchase('', 'pi_down');
+
+    const result = await run(false, {
+      classes: { pi_down: { kind: 'unknown', error: 'stripe down' } },
+      resolveOwnerByPaymentIntent: async () => {
+        throw new Error('stripe down');
+      },
+    }).promise;
+
+    expect(result.errors).toEqual([{ id: 'pi_down', message: 'stripe down' }]);
+  });
+
+  it('keeps a user whose reversal or stamp clear fails and finishes the run', async () => {
+    const refunded = await seedUser();
+    const failing = await seedUser();
+    const stale = await seedUser();
+    await seedPurchase(refunded, 'pi_refunded');
+    vi.spyOn(creditTransactionRepository, 'markPurchaseReversed').mockRejectedValueOnce(new Error('write failed'));
+    const realClear = userRepository.clearPurchaseStampIfUnchanged.bind(userRepository);
+    vi.spyOn(userRepository, 'clearPurchaseStampIfUnchanged').mockImplementation(async (id, stamp) => {
+      if (id === failing) throw new Error('clear failed');
+      return realClear(id, stamp);
+    });
+
+    try {
+      const result = await run(true, { classes: { pi_refunded: { kind: 'reversed', reason: 'refunded' } } }).promise;
+
+      expect(verdictOf(result, refunded)).toMatchObject({ verdict: 'keep', reason: 'purchase' });
+      expect(verdictOf(result, failing)).toMatchObject({ verdict: 'keep', reason: 'error' });
+      expect(verdictOf(result, stale)).toMatchObject({ verdict: 'clear', reason: 'no_backing' });
+      expect(result.errors.map(e => e.id).sort()).toEqual(['pi_refunded', failing].sort());
+      expect(await stampOf(refunded)).toEqual(STAMP);
+      expect(await stampOf(failing)).toEqual(STAMP);
+      expect(await stampOf(stale)).toBeNull();
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it('does not count a reversed ownerless purchase as blocking', async () => {
