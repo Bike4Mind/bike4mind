@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process';
-import { lstat, readFile, realpath, stat } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { readFile, realpath, stat } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import { gitArgumentPath, gitCommand, gitCommandEnv, hostGitArgs, quickGitTimeout } from '../../git/hostGitArgs';
+import { wslLocation } from '../../wsl/wslPath';
 import { resolveOperand } from './paths';
 import { own } from '@shared/ownKeys';
 
@@ -16,6 +17,8 @@ export interface InPlaceWrites {
   trees: string[];
   /** Whether what it writes may include symlinks: an extracted archive, an applied diff or a checkout. */
   links?: boolean;
+  /** Whether it may write somewhere the scan cannot name. */
+  unread?: boolean;
 }
 
 const MAX_PATCH_BYTES = 2 * 1024 * 1024;
@@ -197,11 +200,37 @@ function inPlaceEdit(program: string, args: readonly string[]): string[] {
   return [];
 }
 
-/** GNU and BSD tar, including the old `tar xzf a.tgz` form whose letters take values in order. */
-function tarTrees(args: readonly string[]): string[] {
+/** tar long options that take a value in the next word. */
+const TAR_VALUED_LONG = [
+  'file',
+  'files-from',
+  'exclude-from',
+  'blocking-factor',
+  'directory',
+  'to-command',
+  'use-compress-program',
+  'info-script',
+  'new-volume-script',
+  'rsh-command',
+  'rmt-command',
+  'transform',
+  'xform',
+  'checkpoint-action',
+  'index-file',
+];
+
+/** tar options that run a program, rename members or write a file of their own, so what it writes is unread. */
+const TAR_UNREAD_LONG = TAR_VALUED_LONG.slice(5);
+
+/**
+ * GNU and BSD tar, including the old `tar xzf a.tgz` form whose letters take values in order; null when an
+ * option makes what it writes unreadable. A long option is matched by any prefix, as getopt_long takes one.
+ */
+function tarTrees(args: readonly string[]): string[] | null {
   const rest = [...args];
   let extract = false;
   let absolute = false;
+  let unread = false;
   let directory: string | undefined;
   const members: string[] = [];
   const takeShort = (letters: string, attached: boolean): void => {
@@ -209,6 +238,7 @@ function tarTrees(args: readonly string[]): string[] {
       const letter = letters[index];
       if (letter === 'x') extract = true;
       if (letter === 'P') absolute = true;
+      if (letter === 'I' || letter === 'F') unread = true;
       if (!TAR_VALUED.includes(letter)) continue;
       const tail = letters.slice(index + 1);
       const value = attached && tail ? tail : rest.shift();
@@ -223,20 +253,20 @@ function tarTrees(args: readonly string[]): string[] {
     if (arg === '--') {
       members.push(...rest.splice(0));
     } else if (arg.startsWith('--')) {
-      const [name, value] = arg.slice(2).split(/=(.*)/s);
-      if (name === 'extract' || name === 'get') extract = true;
-      // No other tar long option starts with `ab`, so getopt_long takes `--ab` and longer for it.
-      if (name.length >= 2 && 'absolute-names'.startsWith(name)) absolute = true;
-      if (name === 'directory') directory = value ?? rest.shift();
-      else if (value === undefined && ['file', 'files-from', 'exclude-from', 'blocking-factor'].includes(name)) {
-        rest.shift();
-      }
+      const [name = '', value] = arg.slice(2).split(/=(.*)/s);
+      const names = (option: string): boolean => name.length >= 2 && option.startsWith(name);
+      if (names('extract') || names('get')) extract = true;
+      if (names('absolute-names')) absolute = true;
+      if (TAR_UNREAD_LONG.some(names)) unread = true;
+      if (name.length >= 3 && 'directory'.startsWith(name)) directory = value ?? rest.shift();
+      else if (value === undefined && TAR_VALUED_LONG.some(names)) rest.shift();
     } else if (arg.length > 1 && arg.startsWith('-')) {
       takeShort(arg.slice(1), true);
     } else {
       members.push(arg);
     }
   }
+  if (unread) return null;
   if (!extract) return [];
   // Members keep a leading `/` and `..`, so the archive may write anywhere.
   if (absolute) return ['/'];
@@ -352,81 +382,508 @@ export async function findRepositoryRoot(directory: string): Promise<string | nu
   }
 }
 
-/**
- * What `git rev-parse --show-toplevel` prints from `directory`, or null when it is in no repository or a
- * config there may move the work tree (`core.worktree`, an include the scan does not follow).
- */
-export async function repositoryToplevel(directory: string): Promise<string | null> {
-  const root = await findRepositoryRoot(directory);
-  if (root === null) return null;
-  const dotGit = join(root, '.git');
-  let gitDir = dotGit;
-  if ((await stat(dotGit).catch(() => null))?.isFile()) {
-    const pointer = /^gitdir:\s*(.+?)\s*$/m.exec((await readSmall(dotGit)) ?? '');
-    if (!pointer?.[1]) return null;
-    gitDir = resolve(root, pointer[1]);
-  }
-  const configs = [join(gitDir, 'config')];
-  const common = (await readSmall(join(gitDir, 'commondir')))?.trim();
-  if (common) configs.push(join(resolve(gitDir, common), 'config'));
-  for (const config of configs) {
-    const text = await readFile(config, 'utf8').catch((error: NodeJS.ErrnoException) =>
-      error.code === 'ENOENT' ? '' : null
-    );
-    if (text === null || /worktree|include/i.test(text)) return null;
-  }
-  return realpath(root).catch(() => null);
-}
-
 /** The folder holding `.git` at or above `directory`, else `directory` itself. */
 export async function repositoryRoot(directory: string): Promise<string> {
   return (await findRepositoryRoot(directory)) ?? directory;
 }
 
-/** git subcommands that may rewrite any tracked file, given the arguments that make them do so. */
-const WHOLE_TREE_GIT: Readonly<Record<string, (args: readonly string[]) => boolean>> = {
-  'checkout-index': () => true,
-  switch: () => true,
-  merge: () => true,
-  'cherry-pick': () => true,
-  am: () => true,
-  pull: () => true,
-  rebase: () => true,
-  revert: () => true,
-  bisect: () => true,
-  stash: args => !['list', 'show', 'create'].includes(args[0] ?? ''),
-  reset: args => args.some(arg => ['--hard', '--merge', '--keep'].includes(arg)),
-  'read-tree': args => args.includes('-u'),
-};
+const GIT_OUTPUT_BYTES = 4 * 1024 * 1024;
 
-/**
- * The `.claude` folders a repository tracks or holds at its top, which a whole-tree git write may rewrite.
- * A listing that fails or overruns counts as one at the top.
- */
-async function repositorySettings(root: string): Promise<string[]> {
-  const top = join(root, '.claude');
-  if (await lstat(top).catch(() => null)) return [top];
-  const env = await gitCommandEnv(root);
+/** The output of a git query run in `directory` with hooks and fsmonitor off; null on an error, a timeout or an overrun. */
+async function gitQuery(directory: string, args: readonly string[]): Promise<string | null> {
+  const env = await gitCommandEnv(directory);
   const command = await gitCommand(
-    root,
-    hostGitArgs(['-C', gitArgumentPath(root, root), 'ls-files', '-z', '--', '.claude', '*/.claude/*'], root)
+    directory,
+    hostGitArgs(['-C', gitArgumentPath(directory, directory), ...args], directory)
   );
-  if (!command) return [top];
-  const listed = await new Promise<string | null>(resolve => {
+  if (!command) return null;
+  return new Promise(done => {
     execFile(
       command.file,
       command.args,
-      { env, timeout: quickGitTimeout(env), maxBuffer: 1024 * 1024, windowsHide: true },
-      (error, stdout) => resolve(error ? null : stdout)
+      { cwd: command.cwd, env, timeout: quickGitTimeout(env), maxBuffer: GIT_OUTPUT_BYTES, windowsHide: true },
+      (error, stdout) => done(error ? null : stdout)
     );
   });
-  if (listed === null) return [top];
-  const folders = new Set<string>();
-  for (const path of listed.split('\0')) {
-    const at = path.split('/').indexOf('.claude');
-    if (at !== -1) folders.add(join(root, ...path.split('/').slice(0, at + 1)));
+}
+
+/** What `git rev-parse --show-toplevel` prints in `directory` (a Linux path in a WSL folder), or null when git fails. */
+export async function gitToplevel(directory: string): Promise<string | null> {
+  const printed = (await gitQuery(directory, ['rev-parse', '--show-toplevel']))?.replace(/\r?\n$/, '');
+  return printed || null;
+}
+
+/** A git option grammar: short flags, short options with a value, long flags, long options with a value. */
+interface GitGrammar {
+  letters?: string;
+  valued?: string;
+  flags?: readonly string[];
+  long?: readonly string[];
+}
+
+interface GitArgs {
+  positionals: string[];
+  /** Options given, by long name or letter, with their values. */
+  given: Map<string, string | true>;
+  /** Words after `--`. */
+  paths: string[];
+  /** An option outside the grammar, which the scan cannot read. */
+  unknown: boolean;
+}
+
+/** Reads `args` as git's parse-options does, taking a long option's unique abbreviation for it. */
+function gitArgs(args: readonly string[], grammar: GitGrammar): GitArgs {
+  const read: GitArgs = { positionals: [], given: new Map(), paths: [], unknown: false };
+  const names = [...(grammar.flags ?? []), ...(grammar.long ?? [])];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] as string;
+    if (arg === '--') {
+      read.paths = args.slice(index + 1);
+      break;
+    }
+    if (arg.startsWith('--')) {
+      const [given = '', value] = arg.slice(2).split(/=(.*)/s);
+      const abbreviated = names.filter(name => name.startsWith(given));
+      const name = names.includes(given) ? given : abbreviated.length === 1 ? abbreviated[0] : undefined;
+      if (given === '' || name === undefined) {
+        read.unknown = true;
+        continue;
+      }
+      read.given.set(name, value ?? ((grammar.long ?? []).includes(name) ? (args[++index] ?? '') : true));
+    } else if (arg.length > 1 && arg.startsWith('-')) {
+      for (let at = 1; at < arg.length; at++) {
+        const letter = arg[at] as string;
+        if ((grammar.valued ?? '').includes(letter)) {
+          read.given.set(letter, arg.slice(at + 1) || (args[++index] ?? ''));
+          break;
+        }
+        if (!(grammar.letters ?? '').includes(letter)) read.unknown = true;
+        read.given.set(letter, true);
+      }
+    } else {
+      read.positionals.push(arg);
+    }
   }
-  return [...folders];
+  return read;
+}
+
+const has = (read: GitArgs, ...names: string[]): boolean => names.some(name => read.given.has(name));
+
+/** The options of the git subcommands that write the work tree from a commit; any other option leaves the command unread. */
+const TREE_GRAMMARS: Readonly<Record<string, GitGrammar>> = {
+  checkout: {
+    letters: 'qfmtl',
+    valued: 'bB',
+    flags: [
+      'quiet',
+      'force',
+      'merge',
+      'detach',
+      'track',
+      'no-track',
+      'guess',
+      'no-guess',
+      'progress',
+      'no-progress',
+      'ignore-other-worktrees',
+      'overwrite-ignore',
+      'no-overwrite-ignore',
+    ],
+    long: ['conflict'],
+  },
+  switch: {
+    letters: 'qfmtd',
+    valued: 'cC',
+    flags: [
+      'quiet',
+      'force',
+      'discard-changes',
+      'merge',
+      'detach',
+      'track',
+      'no-track',
+      'guess',
+      'no-guess',
+      'progress',
+      'no-progress',
+      'ignore-other-worktrees',
+    ],
+    long: ['create', 'force-create', 'conflict'],
+  },
+  merge: {
+    letters: 'qvn',
+    valued: 'mFsX',
+    flags: [
+      'commit',
+      'no-commit',
+      'no-edit',
+      'ff',
+      'no-ff',
+      'ff-only',
+      'squash',
+      'no-squash',
+      'stat',
+      'no-stat',
+      'log',
+      'no-log',
+      'quiet',
+      'verbose',
+      'progress',
+      'no-progress',
+      'signoff',
+      'no-signoff',
+      'verify',
+      'no-verify',
+      'allow-unrelated-histories',
+      'autostash',
+      'no-autostash',
+      'overwrite-ignore',
+      'rerere-autoupdate',
+      'no-rerere-autoupdate',
+    ],
+    long: ['message', 'file', 'strategy', 'strategy-option', 'cleanup', 'into-name'],
+  },
+  'cherry-pick': {
+    letters: 'nxs',
+    valued: 'mX',
+    flags: [
+      'no-commit',
+      'signoff',
+      'ff',
+      'allow-empty',
+      'allow-empty-message',
+      'keep-redundant-commits',
+      'rerere-autoupdate',
+      'no-rerere-autoupdate',
+    ],
+    long: ['mainline', 'strategy', 'strategy-option', 'cleanup', 'empty'],
+  },
+  revert: {
+    letters: 'ns',
+    valued: 'mX',
+    flags: ['no-commit', 'signoff', 'reference', 'rerere-autoupdate', 'no-rerere-autoupdate'],
+    long: ['mainline', 'strategy', 'strategy-option', 'cleanup'],
+  },
+  reset: {
+    letters: 'qN',
+    flags: ['quiet', 'soft', 'mixed', 'hard', 'merge', 'keep', 'intent-to-add', 'refresh', 'no-refresh'],
+  },
+  'read-tree': {
+    letters: 'muinv',
+    flags: ['reset', 'trivial', 'aggressive', 'empty', 'no-sparse-checkout', 'quiet'],
+    long: ['exclude-per-directory'],
+  },
+  'checkout-index': {
+    letters: 'afnquz',
+    flags: ['all', 'force', 'no-create', 'quiet', 'index', 'temp'],
+    long: ['stage'],
+  },
+  pull: {
+    letters: 'qvr',
+    flags: [
+      'quiet',
+      'verbose',
+      'rebase',
+      'no-rebase',
+      'ff',
+      'no-ff',
+      'ff-only',
+      'autostash',
+      'no-autostash',
+      'stat',
+      'no-stat',
+      'progress',
+      'no-progress',
+      'commit',
+      'no-commit',
+      'no-edit',
+    ],
+  },
+  rebase: {
+    letters: 'qvfn',
+    valued: 'sX',
+    flags: [
+      'quiet',
+      'verbose',
+      'autostash',
+      'no-autostash',
+      'fork-point',
+      'no-fork-point',
+      'force-rebase',
+      'no-ff',
+      'stat',
+      'no-stat',
+      'verify',
+      'no-verify',
+      'signoff',
+      'keep-empty',
+      'no-keep-empty',
+      'reapply-cherry-picks',
+      'no-reapply-cherry-picks',
+      'update-refs',
+      'no-update-refs',
+      'rebase-merges',
+      'no-rebase-merges',
+    ],
+    long: ['onto', 'strategy', 'strategy-option', 'empty', 'whitespace'],
+  },
+  stash: {
+    letters: 'kuaqS',
+    valued: 'm',
+    flags: ['keep-index', 'no-keep-index', 'include-untracked', 'all', 'quiet', 'staged', 'index'],
+    long: ['message'],
+  },
+  am: {
+    letters: '3skcqu',
+    valued: 'pC',
+    flags: [
+      'signoff',
+      'keep',
+      'keep-non-patch',
+      'keep-cr',
+      'no-keep-cr',
+      'scissors',
+      'no-scissors',
+      'quiet',
+      'utf8',
+      'no-utf8',
+      '3way',
+      'no-3way',
+      'committer-date-is-author-date',
+      'ignore-date',
+      'ignore-space-change',
+      'ignore-whitespace',
+      'reject',
+    ],
+    long: ['whitespace', 'exclude', 'include', 'patch-format', 'quoted-cr', 'empty'],
+  },
+  clean: { letters: 'dfxXnq', valued: 'e', flags: ['force', 'dry-run', 'quiet'], long: ['exclude'] },
+};
+
+/** A revision the scan hands to git as one: no option, expansion or space can hide in it. */
+const REVISION = /^[\w./@{}^~:+-]+$/;
+
+/** Work-tree contents staged into the index earlier in a script, which a later `git checkout-index` writes out. */
+export interface GitScript {
+  staged: string[];
+  /** Something earlier set the index to what the scan cannot name (`git update-index`). */
+  unknownIndex: boolean;
+}
+
+/** What a git call that writes the work tree writes: `.claude` files and symlinks; unread when the scan cannot tell. */
+interface TreeWrite {
+  files: string[];
+  links: boolean;
+  unread: boolean;
+}
+
+const UNREAD_TREE: TreeWrite = { files: [], links: false, unread: true };
+const NO_TREE: TreeWrite = { files: [], links: false, unread: false };
+
+/** Whether a path git prints from the top of a work tree is under a `.claude` folder. */
+const inSettings = (path: string): boolean => path.split('/').includes('.claude');
+
+/**
+ * What changes in the work tree at `top` when it is made to match each target (null for the index): the `.claude`
+ * files and the symlinks among the paths that differ, as `git diff -R --raw` lists them.
+ */
+async function treeDiff(
+  top: string,
+  targets: readonly (string | null)[],
+  within: readonly string[] = [],
+  from = top
+): Promise<TreeWrite> {
+  const files = new Set<string>();
+  let links = false;
+  for (const target of targets) {
+    if (target !== null && (!REVISION.test(target) || target.startsWith('-'))) return UNREAD_TREE;
+    // Run from `from` so pathspecs in `within` read as the command wrote them; git prints paths from the top.
+    const raw = await gitQuery(from, [
+      'diff',
+      '-R',
+      '--raw',
+      '-z',
+      '--no-renames',
+      '--no-ext-diff',
+      '--no-textconv',
+      '--ignore-submodules=none',
+      ...(target === null ? [] : [target]),
+      '--',
+      ...within,
+    ]);
+    if (raw === null) return UNREAD_TREE;
+    const fields = raw.split('\0');
+    for (let at = 0; at + 1 < fields.length; at += 2) {
+      const [, mode] = /^:\d+ (\d+) /.exec(fields[at] as string) ?? [];
+      const path = fields[at + 1] as string;
+      if (mode === undefined) return UNREAD_TREE;
+      const symlink = mode === '120000';
+      if (!symlink && !inSettings(path)) continue;
+      links ||= symlink;
+      files.add(`${top}/${path}`);
+    }
+  }
+  return { files: [...files], links, unread: false };
+}
+
+/** Each listed path under a `.claude` folder, from the top of the work tree; null when git fails. */
+async function settingsListed(top: string, args: readonly string[]): Promise<string[] | null> {
+  const listed = await gitQuery(top, [...args, '-z', '--', '.claude', '*/.claude/*']);
+  return listed === null ? null : listed.split('\0').filter(path => path !== '' && inSettings(path));
+}
+
+/** What `git clean` would remove, from its own dry run with the same choice of files. */
+async function cleanWrites(read: GitArgs, cwd: string): Promise<TreeWrite> {
+  const options = ['d', 'x', 'X'].filter(letter => read.given.has(letter)).map(letter => `-${letter}`);
+  const excludes = [read.given.get('e'), read.given.get('exclude')].filter(
+    (value): value is string => typeof value === 'string'
+  );
+  const listed = await gitQuery(cwd, [
+    'clean',
+    '-n',
+    ...options,
+    ...excludes.map(pattern => `--exclude=${pattern}`),
+    '--',
+    ...read.positionals,
+    ...read.paths,
+  ]);
+  if (listed === null) return UNREAD_TREE;
+  const files: string[] = [];
+  for (const line of listed.split('\n')) {
+    const removed = /^Would remove (.+)$/.exec(line)?.[1];
+    if (removed) files.push(resolveOperand(cwd, removed.replace(/\/$/, '')));
+    else if (line.trim() !== '' && !line.startsWith('Would skip')) return UNREAD_TREE;
+  }
+  return { files, links: false, unread: false };
+}
+
+/**
+ * What a git subcommand that rewrites the work tree from a commit writes, found by asking git what differs from
+ * that commit; null for one that does not. A target git cannot resolve, an option outside TREE_GRAMMARS, or a
+ * global option or GIT_* variable that can move the repository leaves it unread.
+ */
+async function gitTreeWrites(
+  sub: string,
+  args: readonly string[],
+  cwd: string,
+  script: GitScript,
+  moved: boolean
+): Promise<TreeWrite | null> {
+  const grammar = own(TREE_GRAMMARS, sub);
+  const read = gitArgs(args, grammar ?? {});
+  const top = async (): Promise<string | null> => {
+    const found = await gitToplevel(cwd);
+    if (found === null) return null;
+    // `core.worktree` can put the work tree elsewhere, which this folder is then not inside.
+    const here = (await realpath(cwd).catch(() => null)) ?? '';
+    const root = /^[A-Za-z]:\//.test(found) ? resolve(found) : found;
+    return wslLocation(cwd) !== null || here === root || here.startsWith(root.endsWith(sep) ? root : root + sep)
+      ? found
+      : null;
+  };
+  const against = async (targets: readonly (string | null)[]): Promise<TreeWrite> => {
+    if (moved || read.unknown) return UNREAD_TREE;
+    const root = await top();
+    return root === null ? UNREAD_TREE : treeDiff(root, targets);
+  };
+  const previous = (target: string): string => (target === '-' ? '@{-1}' : target);
+  switch (sub) {
+    case 'checkout':
+    case 'switch': {
+      if (read.positionals.length === 0 && !has(read, 'b', 'B', 'c', 'C', 'create', 'force-create')) return NO_TREE;
+      return against([previous(read.positionals[0] ?? 'HEAD')]);
+    }
+    case 'merge':
+      return against(read.positionals.length > 0 ? read.positionals : ['@{u}']);
+    case 'cherry-pick':
+    case 'revert': {
+      if (read.positionals.length === 0 || read.positionals.some(target => target.includes('..'))) return UNREAD_TREE;
+      // A revert undoes a commit, so the tree it moves toward is the commit's parent.
+      const parent = String(read.given.get('m') ?? read.given.get('mainline') ?? '');
+      return against(sub === 'revert' ? read.positionals.map(target => `${target}^${parent}`) : read.positionals);
+    }
+    case 'reset': {
+      const target = read.positionals[0] ?? 'HEAD';
+      if (!has(read, 'hard', 'merge', 'keep')) {
+        script.staged.push(target);
+        return NO_TREE;
+      }
+      return read.positionals.length > 1 || read.paths.length > 0 ? UNREAD_TREE : against([target]);
+    }
+    case 'read-tree': {
+      if (has(read, 'u'))
+        return has(read, 'empty') ? against(['4b825dc642cb6eb9a060e54bf8d69288fbee4904']) : against(read.positionals);
+      if (has(read, 'empty')) script.unknownIndex = true;
+      script.staged.push(...read.positionals);
+      return NO_TREE;
+    }
+    case 'checkout-index':
+      if (has(read, 'temp')) return NO_TREE;
+      return script.unknownIndex ? UNREAD_TREE : against([null, ...script.staged]);
+    case 'update-index':
+      script.unknownIndex = true;
+      return NO_TREE;
+    case 'pull':
+      return read.positionals.length > 0 ? UNREAD_TREE : against(['@{u}']);
+    case 'rebase': {
+      const [upstream, branch] = read.positionals;
+      const onto = read.given.get('onto');
+      const base = typeof onto === 'string' ? onto : (upstream ?? '@{u}');
+      return against(branch === undefined ? [base] : [base, branch]);
+    }
+    case 'stash': {
+      const [action = 'push', ...rest] = read.positionals;
+      if (['list', 'show', 'create', 'drop', 'clear', 'store'].includes(action)) return NO_TREE;
+      if (action === 'apply' || action === 'pop') {
+        const ref = rest[0] ?? 'stash@{0}';
+        if (!REVISION.test(ref)) return UNREAD_TREE;
+        // A stash holding untracked files writes them too, which the diff below does not list.
+        if ((await gitQuery(cwd, ['rev-parse', '--verify', '-q', `${ref}^3`])) !== null) return UNREAD_TREE;
+        return against([ref]);
+      }
+      if (action !== 'push' && action !== 'save') return UNREAD_TREE;
+      const reverted = await against(['HEAD']);
+      if (reverted.unread || !has(read, 'u', 'a', 'include-untracked', 'all')) return reverted;
+      const root = await top();
+      const untracked =
+        root === null
+          ? null
+          : await settingsListed(root, ['ls-files', '-o', ...(has(read, 'a', 'all') ? [] : ['--exclude-standard'])]);
+      if (untracked === null) return UNREAD_TREE;
+      return { ...reverted, files: [...reverted.files, ...untracked.map(path => `${root}/${path}`)] };
+    }
+    case 'am': {
+      if (moved || read.unknown || read.positionals.length === 0) return UNREAD_TREE;
+      const root = await repositoryRoot(cwd);
+      const mails = await Promise.all(read.positionals.map(path => readSmall(resolveOperand(cwd, path))));
+      if (mails.some(mail => mail === null)) return UNREAD_TREE;
+      const named = mails.flatMap(mail => patchedPaths(mail ?? ''));
+      return { files: named.map(path => resolveOperand(root, path)), links: true, unread: false };
+    }
+    case 'clean':
+      return moved || read.unknown ? UNREAD_TREE : cleanWrites(read, cwd);
+    case 'sparse-checkout': {
+      if (['list', 'check-rules'].includes(args[0] ?? '')) return NO_TREE;
+      const root = moved ? null : await top();
+      const tracked = root === null ? null : await settingsListed(root, ['ls-files']);
+      if (tracked === null) return UNREAD_TREE;
+      return { files: tracked.map(path => `${root}/${path}`), links: false, unread: false };
+    }
+    case 'submodule': {
+      const action = args.find(arg => !arg.startsWith('-'));
+      if (action === 'status' || action === 'summary') return NO_TREE;
+      if (action !== undefined && !['update', 'init', 'sync', 'deinit', 'absorbgitdirs'].includes(action)) {
+        return UNREAD_TREE;
+      }
+      const staged = moved ? null : await gitQuery(cwd, ['ls-files', '-s', '-z']);
+      if (staged === null) return UNREAD_TREE;
+      return staged.split('\0').some(entry => entry.startsWith('160000 ')) ? UNREAD_TREE : NO_TREE;
+    }
+    case 'bisect':
+      return ['log', 'view', 'visualize', 'terms', 'help'].includes(args[0] ?? '') ? NO_TREE : UNREAD_TREE;
+    default:
+      return null;
+  }
 }
 
 /** `git apply` names paths from the top of the repository, so each is recorded there and from `cwd`. */
@@ -449,32 +906,56 @@ async function gitApplyWrites(args: readonly string[], node: Node, cwd: string):
   };
 }
 
-/** Pathspecs `git checkout` or `git restore` rewrites from the index or another commit. */
-function gitRestoreTrees(sub: string, args: readonly string[]): string[] {
+/**
+ * Pathspecs `git checkout` or `git restore` rewrites, and the commit it takes them from (null for the index).
+ */
+function gitRestored(sub: string, args: readonly string[]): { paths: string[]; source: string | null } {
   const separator = args.indexOf('--');
   const valued = sub === 'restore' ? 's' : 'bB';
-  const named =
-    separator !== -1
-      ? args.slice(separator + 1)
-      : operands(
-          args.filter((arg, index) => !['--source', '--orphan'].includes(args[index - 1] ?? '')),
-          valued
-        );
+  const words = operands(
+    args.filter((arg, index) => !['--source', '--orphan'].includes(args[index - 1] ?? '')),
+    valued
+  );
+  const named = separator !== -1 ? args.slice(separator + 1) : words;
+  if (sub === 'restore') {
+    const source =
+      optionValue(args, '-s', '--source') ?? (args.some(arg => /^(--staged|-[A-Za-z]*S)$/.test(arg)) ? 'HEAD' : null);
+    return { paths: named, source };
+  }
   // `git checkout <commit> <path>`: the first word names the commit, not a path.
-  const paths = sub === 'checkout' && separator === -1 ? named.slice(1) : named;
-  return paths.map(treeOf);
+  if (separator === -1) return { paths: named.slice(1), source: named[0] ?? null };
+  return { paths: named, source: words.find(word => args.indexOf(word) < separator) ?? null };
 }
 
-/** `git [-C dir] [-c k=v] <sub> ...`: the subcommand, its arguments and the folder git runs in. */
-function gitSubcommand(args: readonly string[], cwd: string): { sub: string; rest: string[]; cwd: string } | null {
+/** git's global options that leave the repository and work tree where the folder puts them. */
+const PLAIN_GIT_OPTIONS = new Set(['--no-pager', '-P', '-p', '--paginate', '--no-optional-locks']);
+
+/**
+ * `git [-C dir] [-c k=v] <sub> ...`: the subcommand, its arguments, the folder git runs in, and whether a global
+ * option other than `-C` and the pager ones may point git at another repository or work tree.
+ */
+function gitSubcommand(
+  args: readonly string[],
+  cwd: string
+): { sub: string; rest: string[]; cwd: string; moved: boolean } | null {
   let directory = cwd;
+  let moved = false;
   for (let index = 0; index < args.length; index++) {
-    const arg = args[index];
+    const arg = args[index] as string;
     if (arg === '-C') directory = resolveOperand(directory, args[++index] ?? '.');
-    else if (['-c', '--git-dir', '--work-tree', '--namespace', '--config-env'].includes(arg)) index++;
-    else if (!arg.startsWith('-')) return { sub: arg, rest: args.slice(index + 1), cwd: directory };
+    else if (!arg.startsWith('-')) return { sub: arg, rest: args.slice(index + 1), cwd: directory, moved };
+    else if (!PLAIN_GIT_OPTIONS.has(arg)) {
+      moved = true;
+      if (['-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--exec-path'].includes(arg)) index++;
+    }
   }
   return null;
+}
+
+/** What a scan carries from one git call to the next, and whether GIT_* variables may move the repository. */
+export interface GitContext {
+  script: GitScript;
+  env: boolean;
 }
 
 /**
@@ -482,26 +963,40 @@ function gitSubcommand(args: readonly string[], cwd: string): { sub: string; res
  * perl, ruby and gawk kin, `patch` and `git apply`, archive extraction, decompression, and
  * `git checkout -- <path>` / `git restore`. `tokens` are unquoted, program first.
  */
-export async function inPlaceWrites(tokens: readonly string[], node: Node, cwd: string): Promise<InPlaceWrites> {
-  const { files, trees, links } = await writesOf(tokens, node, cwd);
+export async function inPlaceWrites(
+  tokens: readonly string[],
+  node: Node,
+  cwd: string,
+  git: GitContext = { script: { staged: [], unknownIndex: false }, env: false }
+): Promise<InPlaceWrites> {
+  const { files, trees, links, unread } = await writesOf(tokens, node, cwd, git);
   return {
     files: files.filter(path => !hasGlob(path)),
     trees: [...trees, ...files.filter(hasGlob).map(treeOf)],
     ...(links ? { links } : {}),
+    ...(unread ? { unread } : {}),
   };
 }
 
-async function writesOf(tokens: readonly string[], node: Node, cwd: string): Promise<InPlaceWrites> {
+async function writesOf(
+  tokens: readonly string[],
+  node: Node,
+  cwd: string,
+  context: GitContext
+): Promise<InPlaceWrites> {
   const [executable, ...args] = tokens;
   const program = basename(executable ?? '');
   const none: InPlaceWrites = { files: [], trees: [] };
-  const extracted = (trees: string[]): InPlaceWrites => ({ files: [], trees, links: true });
+  const extracted = (trees: string[] | null): InPlaceWrites =>
+    trees === null ? { files: [], trees: [], unread: true } : { files: [], trees, links: true };
   if (program === 'patch') return { ...(await patchWrites(args, node, cwd)), links: true };
   if (program === 'tar' || program === 'bsdtar') return extracted(tarTrees(args));
   if (program === 'unzip') return extracted(unzipTrees(args));
-  if (/^7zz?a?$/.test(program) && (args[0] === 'x' || args[0] === 'e')) {
-    if (args.includes('-spf')) return extracted(['/']);
-    const output = args.find(arg => arg.startsWith('-o'))?.slice(2);
+  // 7-Zip takes its command as the first word that is not a switch, and its switches anywhere.
+  const sevenZip = args.find(arg => !arg.startsWith('-'))?.toLowerCase();
+  if (/^7zz?a?$/.test(program) && (sevenZip === 'x' || sevenZip === 'e')) {
+    if (args.some(arg => /^-spf/i.test(arg))) return extracted(['/']);
+    const output = args.find(arg => /^-o/i.test(arg))?.slice(2);
     return extracted([output || '.']);
   }
   if (program === 'cpio' && args.some(arg => shortCluster(arg).includes('i') || arg === '--extract')) {
@@ -513,15 +1008,24 @@ async function writesOf(tokens: readonly string[], node: Node, cwd: string): Pro
   if (program === 'git') {
     const git = gitSubcommand(args, cwd);
     if (!git) return none;
+    const moved = git.moved || context.env;
     const relocate = (path: string): string => resolveOperand(git.cwd, path);
     if (git.sub === 'apply') return { ...(await gitApplyWrites(git.rest, node, git.cwd)), links: true };
-    const restored = git.sub === 'checkout' || git.sub === 'restore' ? gitRestoreTrees(git.sub, git.rest) : [];
-    if (restored.length > 0) return extracted(restored.map(relocate));
-    // A branch checkout and the like rewrite whatever the repository tracks; only its settings folders are recorded.
-    if (git.sub === 'checkout' || own(WHOLE_TREE_GIT, git.sub)?.(git.rest)) {
-      return { files: await repositorySettings(await repositoryRoot(git.cwd)), trees: [] };
+    const restored = git.sub === 'checkout' || git.sub === 'restore' ? gitRestored(git.sub, git.rest) : null;
+    if (restored && restored.paths.length > 0) {
+      if (git.sub === 'restore' && restored.source !== null) context.script.staged.push(restored.source);
+      const root = moved ? null : await gitToplevel(git.cwd);
+      const diff = root === null ? UNREAD_TREE : await treeDiff(root, [restored.source], restored.paths, git.cwd);
+      return { files: diff.files, trees: restored.paths.map(treeOf).map(relocate), links: true, unread: diff.unread };
     }
-    return none;
+    const tree = await gitTreeWrites(git.sub, git.rest, git.cwd, context.script, moved);
+    if (tree === null) return none;
+    return {
+      files: tree.files,
+      trees: [],
+      ...(tree.links ? { links: true } : {}),
+      ...(tree.unread ? { unread: true } : {}),
+    };
   }
   return { files: inPlaceEdit(program, args), trees: [] };
 }

@@ -1,4 +1,4 @@
-import { lstat, stat } from 'node:fs/promises';
+import { lstat, readdir, stat } from 'node:fs/promises';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { basename, dirname, isAbsolute, join, parse, posix, sep, win32 } from 'node:path';
 import type { Node } from 'web-tree-sitter';
@@ -24,7 +24,7 @@ import {
   resolveWithinRootsPhysically,
   type OperandReader,
 } from './paths';
-import { inPlaceWrites, repositoryToplevel } from './shellWrites';
+import { gitToplevel, inPlaceWrites, type GitScript } from './shellWrites';
 import { wslLocation, wslUncPath, wslUserEnvironment } from '../../wsl/wslPath';
 
 export interface ShellCommand {
@@ -228,7 +228,11 @@ const HARMLESS_REDIRECT_TARGETS = new Set(['/dev/null', '/dev/stdin', '/dev/stdo
 const PROCESS_LINK =
   /^\/+(proc\/+(self|thread-self|\d+|[^/]*[*?[][^/]*)(\/|$)|dev\/+(fd(\/|$)|(stdin|stdout|stderr)\/))/;
 
-const throughProcess = (path: string): boolean => !HARMLESS_REDIRECT_TARGETS.has(path) && PROCESS_LINK.test(path);
+const viaProcess = (path: string): boolean => !HARMLESS_REDIRECT_TARGETS.has(path) && PROCESS_LINK.test(path);
+
+/** Tests the text and its lexical form from `cwd`, as `/x/../proc/self` and `../../proc/self` reach the same place. */
+const throughProcess = (path: string, cwd: string): boolean =>
+  viaProcess(path) || viaProcess(posix.normalize(posix.isAbsolute(path) ? path : posix.join(cwd, path)));
 
 const WRITE_OPERATORS = new Set(['>', '>>', '>|', '&>', '&>>', '>&']);
 
@@ -429,6 +433,8 @@ const isActive = (piece: WordPiece | undefined, char: string): boolean =>
 
 /** More words than this from one brace expansion leave the operand unread. */
 const BRACE_LIMIT = 64;
+/** A word with braces longer than this is not expanded, which keeps the search for pairs bounded. */
+const BRACE_PIECES = 1024;
 
 /** The words a `{a..e}` or `{1..9..2}` sequence makes, null when it is no sequence, or 'many' past the limit. */
 function braceSequence(inner: readonly WordPiece[]): WordPiece[][] | null | 'many' {
@@ -457,6 +463,7 @@ function braceSequence(inner: readonly WordPiece[]): WordPiece[][] | null | 'man
 
 /** Bash's brace expansion, which runs before every other: null when it makes more than BRACE_LIMIT words. */
 function expandBraces(pieces: readonly WordPiece[]): WordPiece[][] | null {
+  if (pieces.length > BRACE_PIECES && pieces.some(piece => isActive(piece, '{'))) return null;
   for (let open = 0; open < pieces.length; open++) {
     if (!isActive(pieces[open], '{')) continue;
     let depth = 0;
@@ -523,6 +530,39 @@ const TOPLEVEL = /^\$\(\s*git\s+rev-parse\s+--show-toplevel\s*\)$/;
 
 /** A script that names HOME, PWD, OLDPWD or CDPATH other than to expand it may assign it (`=`, read, printf -v, for, export). */
 const REBINDS_HOME = /(^|[^$\w{])(HOME|PWD|OLDPWD|CDPATH)\b/;
+
+/** A longer script is not read at all. */
+const MAX_SCRIPT = 16384;
+
+/** Builtins whose words name the variables they assign. */
+const NAMES_VARIABLES = /^(export|declare|typeset|local|readonly|read|readarray|mapfile)$/;
+
+/**
+ * Whether the script can assign a variable whose name the text does not spell out: an ANSI-C quote, the
+ * alias and command hash tables, a nameref, or a computed name given to a builtin that assigns by name.
+ * `text` has its quotes and backslashes removed.
+ */
+function rebindsAnyName(command: string, text: string): boolean {
+  if (command.includes("$'") || /BASH_ALIASES|BASH_CMDS/.test(text)) return true;
+  for (const segment of text.split(/[;&|\n()]/)) {
+    const words = segment.trim().split(/\s+/);
+    while (words[0] === 'builtin' || words[0] === 'command') words.shift();
+    const redirect = words.findIndex(word => /^\d*[<>]/.test(word));
+    const [program = '', ...args] = redirect === -1 ? words : words.slice(0, redirect);
+    const computed = (word: string): boolean => /[$`]/.test(word.split('=')[0] as string);
+    if (program === 'printf') {
+      const at = args.findIndex(arg => /^-[A-Za-z]*v/.test(arg));
+      if (at !== -1 && (args[at] === '-v' ? computed(args[at + 1] ?? '') : computed((args[at] as string).slice(2)))) {
+        return true;
+      }
+      continue;
+    }
+    if (!NAMES_VARIABLES.test(program)) continue;
+    if (/^(declare|typeset|local)$/.test(program) && args.some(arg => /^-[A-Za-z]*n/.test(arg))) return true;
+    if (args.some(computed)) return true;
+  }
+  return false;
+}
 
 function loginName(): string {
   try {
@@ -623,6 +663,9 @@ function literalWord(text: string): OperandWord {
   const expandAt = text.search(/[$`]/);
   return { text, glob: [...text].map(char => '*?['.includes(char)), expandAt: expandAt === -1 ? null : expandAt };
 }
+
+/** A path read exactly as written: no glob and no expansion. */
+const exactWord = (text: string): OperandWord => ({ text, glob: [...text].map(() => false), expandAt: null });
 
 interface ReadOperand {
   /** The path the operand names, or for a glob or an expansion the folder it expands under. */
@@ -919,6 +962,102 @@ function treeOperands(
       break;
   }
   return { operands, cwd: null, glued };
+}
+
+/** Whether a command that walks a tree follows the links it finds there, not only those it is given. */
+function followsLinks(program: string, args: readonly string[]): boolean {
+  const flags = shortFlags(args);
+  const longs = args.map(arg => unquote(arg).split('=')[0] as string).filter(arg => arg.startsWith('--'));
+  const given = (...names: string[]): boolean => longs.some(arg => names.includes(arg));
+  switch (program) {
+    case 'grep':
+    case 'egrep':
+    case 'fgrep':
+      return flags.includes('R') || given('--dereference-recursive');
+    case 'rg':
+      return flags.includes('L') || given('--follow');
+    case 'find':
+      return args.some(arg => /^-(L|follow)$/.test(unquote(arg)));
+    case 'cp':
+      return /[LH]/.test(flags) || given('--dereference');
+    case 'rsync':
+      return /[Lk]/.test(flags) || given('--copy-links', '--copy-dirlinks');
+    case 'du':
+    case 'ls':
+      return flags.includes('L') || given('--dereference');
+    case 'tree':
+      return flags.includes('l');
+    case 'tar':
+    case 'bsdtar':
+      return flags.includes('h') || given('--dereference');
+    case 'zip':
+      return !flags.includes('y') && !given('--symlinks');
+    case 'chmod':
+    case 'chown':
+    case 'chgrp':
+      return flags.includes('L');
+    case 'diff':
+      return (flags.includes('r') || given('--recursive')) && !given('--no-dereference');
+    default:
+      return false;
+  }
+}
+
+/** Entries a glob expansion or a link walk may read before the operand counts as unread. */
+const WALK_ENTRIES = 10000;
+const GLOB_MATCHES = 256;
+
+/** `name` under `folder` as bash spells it, without folding `..` the way path.join would. */
+const under = (folder: string, name: string): string => (folder.endsWith('/') ? folder + name : `${folder}/${name}`);
+
+/**
+ * Each path a glob word expands to that passes through a symbolic link, found component by component with
+ * lstat as bash expands it. Null when the expansion reads more than WALK_ENTRIES entries or makes more than
+ * GLOB_MATCHES paths.
+ */
+async function globLinkMatches(word: OperandWord, cwd: string, dotGlob: boolean): Promise<string[] | null> {
+  const components: GlobChar[][] = [[]];
+  for (let at = 0; at < word.text.length; at++) {
+    const char = word.text[at] as string;
+    if (char === '/') components.push([]);
+    else components[components.length - 1]?.push({ char, glob: word.glob[at] === true });
+  }
+  let found = [{ path: word.text.startsWith('/') ? '/' : cwd, linked: false }];
+  let entries = 0;
+  for (const component of components) {
+    if (component.length === 0) continue;
+    const next: typeof found = [];
+    for (const { path, linked } of found) {
+      const names = component.some(piece => piece.glob)
+        ? ((await readdir(path).catch(() => [])) as string[]).filter(name => globMatches(component, name, dotGlob))
+        : [component.map(piece => piece.char).join('')];
+      entries += names.length;
+      if (entries > WALK_ENTRIES) return null;
+      for (const name of names) {
+        const info = await lstat(under(path, name)).catch(() => null);
+        if (info) next.push({ path: under(path, name), linked: linked || info.isSymbolicLink() });
+      }
+      if (next.length > GLOB_MATCHES) return null;
+    }
+    found = next;
+  }
+  return found.filter(match => match.linked).map(match => match.path);
+}
+
+/** Links inside the tree at `root`, by a walk that enters none of them; null once `budget` runs out. */
+async function linksUnder(root: string, budget: { entries: number }): Promise<string[] | null> {
+  const links: string[] = [];
+  const folders = [root];
+  for (let folder = folders.pop(); folder !== undefined; folder = folders.pop()) {
+    const entries = await readdir(folder, { withFileTypes: true }).catch(() => []);
+    budget.entries -= entries.length;
+    if (budget.entries < 0) return null;
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) links.push(under(folder, entry.name));
+      else if (entry.isDirectory()) folders.push(under(folder, entry.name));
+    }
+  }
+  return links;
 }
 
 /** Options whose value is a folder or file, so an expansion there is an unread path. */
@@ -1233,7 +1372,8 @@ const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
       ],
       assignments: true,
       chdir: { letters: 'D', long: ['chdir'] },
-      unread: { letters: 'R', long: ['chroot'] },
+      // `-s` and `-i` hand the command to a shell as one string; `-e` edits files instead of running one.
+      unread: { letters: 'Rise', long: ['chroot', 'shell', 'login', 'edit'] },
     },
   ],
   [
@@ -1438,6 +1578,31 @@ const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
   ],
   ['unbuffer', { values: '' }],
   ['caffeinate', { values: 'tw' }],
+  // Without `-x`, watch joins its words into one `sh -c` string, which the scan reads as a script of its own.
+  [
+    'watch',
+    {
+      values: 'nq',
+      glued: 'd',
+      long: ['interval', 'equexit'],
+      flags: [
+        'beep',
+        'color',
+        'no-color',
+        'differences',
+        'errexit',
+        'chgexit',
+        'precise',
+        'no-rerun',
+        'no-title',
+        'no-wrap',
+        'exec',
+        'help',
+        'version',
+      ],
+      needs: { letters: 'x', long: ['exec'] },
+    },
+  ],
   ['arch', { values: '', words: ['-arch', '-d', '-e'] }],
   [
     'wsl',
@@ -1671,49 +1836,66 @@ interface WrapperEffects {
   unread: boolean;
 }
 
+interface GivenOption {
+  option: string;
+  short: boolean;
+  value: string | undefined;
+}
+
+/** Each option given to the wrapper at `tokens[at]`, by letter or long name, with its value as written. */
+function givenOptions(tokens: readonly string[], at: number): GivenOption[] {
+  const name = programName(unquote(tokens[at] ?? ''));
+  const wrapper = WRAPPERS.get(name) ?? NO_OPTIONS;
+  const given: GivenOption[] = [];
+  for (const index of wrapperWords(name, tokens, at + 1).options) {
+    const word = unquote(tokens[index] as string);
+    if (wrapper.words) {
+      given.push({
+        option: word.slice(1),
+        short: true,
+        value: wrapper.words.includes(word) ? tokens[index + 1] : undefined,
+      });
+    } else if (word.startsWith('--')) {
+      const equals = word.indexOf('=');
+      const option = word.slice(2, equals === -1 ? undefined : equals);
+      const value =
+        equals !== -1 ? word.slice(equals + 1) : longTakesValue(wrapper, option) ? tokens[index + 1] : undefined;
+      given.push({ option: longOptionName(wrapper, option) ?? option, short: false, value });
+    } else {
+      for (let letter = 1; letter < word.length; letter++) {
+        const option = word[letter] as string;
+        const valued = wrapper.values.includes(option);
+        if (!valued && !wrapper.glued?.includes(option)) {
+          given.push({ option, short: true, value: undefined });
+          continue;
+        }
+        given.push({ option, short: true, value: word.slice(letter + 1) || (valued ? tokens[index + 1] : undefined) });
+        break;
+      }
+    }
+  }
+  return given;
+}
+
+const givenIn = (set: WrapperOptions | undefined, { option, short }: GivenOption): boolean =>
+  set !== undefined && (short ? (set.letters ?? '').includes(option) : (set.long ?? []).includes(option));
+
 /** What a run of leading wrappers does besides running the command: folders it moves into, files it writes. */
 function wrapperEffects(tokens: readonly string[]): WrapperEffects {
   const effects: WrapperEffects = { folders: [], outputs: [], unread: false };
   let at = 0;
   while (at < tokens.length && isWrapper(tokens[at])) {
-    const name = programName(unquote(tokens[at]));
-    const wrapper = WRAPPERS.get(name) ?? NO_OPTIONS;
+    const wrapper = WRAPPERS.get(programName(unquote(tokens[at]))) ?? NO_OPTIONS;
     if (wrapper.elsewhere) effects.unread = true;
     let needed = wrapper.needs === undefined;
-    const take = (option: string, short: boolean, value: string | undefined): void => {
-      const is = (set: WrapperOptions | undefined): boolean =>
-        set !== undefined && (short ? (set.letters ?? '').includes(option) : (set.long ?? []).includes(option));
-      if (is(wrapper.needs)) needed = true;
-      if (is(wrapper.unread)) effects.unread = true;
-      if (is(wrapper.chdir)) {
-        if (value === undefined) effects.unread = true;
-        else effects.folders.push(value);
+    for (const given of givenOptions(tokens, at)) {
+      if (givenIn(wrapper.needs, given)) needed = true;
+      if (givenIn(wrapper.unread, given)) effects.unread = true;
+      if (givenIn(wrapper.chdir, given)) {
+        if (given.value === undefined) effects.unread = true;
+        else effects.folders.push(given.value);
       }
-      if (is(wrapper.output) && value !== undefined) effects.outputs.push(value);
-    };
-    for (const index of wrapperWords(name, tokens, at + 1).options) {
-      const word = unquote(tokens[index]);
-      if (wrapper.words) {
-        take(word.slice(1), true, wrapper.words.includes(word) ? tokens[index + 1] : undefined);
-      } else if (word.startsWith('--')) {
-        const equals = word.indexOf('=');
-        const given = word.slice(2, equals === -1 ? undefined : equals);
-        const option = longOptionName(wrapper, given) ?? given;
-        const value =
-          equals !== -1 ? word.slice(equals + 1) : longTakesValue(wrapper, given) ? tokens[index + 1] : undefined;
-        take(option, false, value);
-      } else {
-        for (let letter = 1; letter < word.length; letter++) {
-          const option = word[letter] as string;
-          const valued = wrapper.values.includes(option);
-          if (!valued && !wrapper.glued?.includes(option)) {
-            take(option, true, undefined);
-            continue;
-          }
-          take(option, true, word.slice(letter + 1) || (valued ? tokens[index + 1] : undefined));
-          break;
-        }
-      }
+      if (givenIn(wrapper.output, given) && given.value !== undefined) effects.outputs.push(given.value);
     }
     if (!needed) effects.unread = true;
     const end = pastWrapper(tokens, at);
@@ -1738,6 +1920,39 @@ function xargsFeeds(tokens: readonly string[]): { file: boolean } | null {
     return { file };
   }
   return null;
+}
+
+/** Whether a redirect feeds `node` input, on it or on the pipeline it ends. */
+function stdinRedirected(node: Node): boolean {
+  for (
+    let at: Node = node;
+    at.parent?.type === 'redirected_statement' || at.parent?.type === 'pipeline';
+    at = at.parent
+  ) {
+    const parent: Node = at.parent;
+    if (parent.type !== 'redirected_statement') continue;
+    const input = parent.namedChildren.some(
+      child =>
+        child !== null &&
+        (child.type === 'heredoc_redirect' ||
+          child.type === 'herestring_redirect' ||
+          (child.type === 'file_redirect' && (redirectOperator(child) ?? '').includes('<')))
+    );
+    if (input) return true;
+  }
+  return false;
+}
+
+/**
+ * The script a leading `watch` hands `sh -c` when it runs without `-x`: its remaining words joined by spaces.
+ * Null when the command is no such watch, 'unread' when a word is not static.
+ */
+function watchScript(tokens: readonly string[]): string | 'unread' | null {
+  if (programName(unquote(tokens[0] ?? '')) !== 'watch') return null;
+  if (givenOptions(tokens, 0).some(given => givenIn(WRAPPERS.get('watch')?.needs, given))) return null;
+  const script = tokens.slice(pastWrapper(tokens, 0));
+  if (script.length === 0) return null;
+  return script.some(isDynamic) ? 'unread' : script.map(wordValue).join(' ');
 }
 
 /** Whether the command before `node` in its pipeline is a lister (`listsNames`), so its output is all xargs reads. */
@@ -1767,12 +1982,15 @@ function movesShell(name: string, args: readonly string[]): boolean {
 const ASSIGNS_BY_NAME =
   /\b(eval|source|declare|typeset|local|export|readonly|read|mapfile|readarray|getopts|let|unset|alias|trap|for|select|cd|pushd|popd|chdir)\b|\(\(|(^|[;&|\n(]\s*)\.\s|\bprintf\b[^;&|\n]*\s-v/;
 
+/** A longer loop body leaves its variable unbound, which keeps the patterns below bounded. */
+const LOOP_BODY = 4096;
+
 /**
  * Whether `for NAME in WORDS` keeps NAME to its words through the body: each word is a literal or a glob,
  * and the body neither assigns NAME nor changes directory.
  */
 function loopBinds(isFor: boolean, name: string, values: readonly string[], body: string): boolean {
-  if (!isFor || !/^[A-Za-z_]\w*$/.test(name) || values.length === 0) return false;
+  if (!isFor || !/^[A-Za-z_]\w*$/.test(name) || values.length === 0 || body.length > LOOP_BODY) return false;
   if (values.some(value => /[$`~]/.test(value))) return false;
   if (ASSIGNS_BY_NAME.test(body)) return false;
   return !new RegExp(`(^|[^\\w$])${name}(\\[[^\\]]*\\])?\\+?=|\\$\\{${name}:?=`).test(body);
@@ -1781,101 +1999,41 @@ function loopBinds(isFor: boolean, name: string, values: readonly string[], body
 /** Programs whose arguments name no file, so input words handed to them reach nothing. */
 const NAMES_NOTHING = new Set(['echo', 'printf', 'basename', 'dirname', 'true', 'false']);
 
-/** rg options that print more than the paths `-l` lists. */
-const RG_PRINTS_MORE = /^(-c|--count.*|--json|--vimgrep|--stats|--debug|--trace|--passthru)$/;
+/** rg options a lister may carry: none follows a link or prints more than paths. `-e`, `-g`, `-t` and `-T` take a value. */
+const RG_LISTS =
+  /^(-[lisFwu0]+|-uu|--(files-with-matches|files|ignore-case|smart-case|fixed-strings|word-regexp|hidden|no-ignore|null))$/;
+const RG_LIST_VALUES = /^(-[egtT]|--(regexp|glob|type|type-not))$/;
+
+/** git ls-files options a lister may carry, none of which prints more than paths from the folder it runs in. */
+const LS_FILES_LISTS = /^(-[zcomd]+|--(cached|others|modified|deleted|exclude-standard))$/;
 
 /**
  * Whether a command only prints names it found under the folders it was given: `find` printing paths,
- * `rg -l`, `rg --files`, `git ls-files`. Those folders are scanned as its own operands.
+ * `rg -l`, `rg --files`, `git ls-files`. Those folders are scanned as its own operands. No wrapper, no
+ * leading `find` option (`-L`, `-H`, `-P`, `-D`, `-O`), and nothing that follows a link or reads start
+ * points from a file.
  */
 function listsNames(raw: readonly string[]): boolean {
-  if (raw.some(isDynamic)) return false;
-  const [program, ...args] = withoutWrappers(raw).map(unquote);
+  if (raw.some(isDynamic) || isWrapper(raw[0] ?? '')) return false;
+  const [program, ...args] = raw.map(unquote);
   if (program === 'find') {
+    if (args[0]?.startsWith('-') && !/^-(name|iname|path|ipath|type|maxdepth|mindepth)$/.test(args[0])) return false;
+    if (args.some(arg => /^-(follow|files0-from)$/.test(arg))) return false;
     return containedCommand(raw) && !args.some(arg => /^-(printf|fprintf|ls|fls|fprint0?)$/.test(arg));
   }
   if (program === 'rg') {
     const lists = args.some(arg => arg === '-l' || arg === '--files-with-matches' || arg === '--files');
-    return lists && containedCommand(raw) && !args.some(arg => RG_PRINTS_MORE.test(arg));
+    for (let index = 0; index < args.length; index++) {
+      const arg = args[index] as string;
+      if (RG_LIST_VALUES.test(arg)) index++;
+      else if (arg.startsWith('-') && !RG_LISTS.test(arg) && !/^--(regexp|glob|type|type-not)=/.test(arg)) return false;
+    }
+    return lists && containedCommand(raw);
   }
-  if (program === 'git') return args[0] === 'ls-files' && !args.some(arg => arg.startsWith('--format'));
+  if (program === 'git') {
+    return args[0] === 'ls-files' && args.slice(1).every(arg => !arg.startsWith('-') || LS_FILES_LISTS.test(arg));
+  }
   return false;
-}
-
-/** The scan's in-place editors and copiers, which a launcher it does not model may run on their own operands. */
-const MODELED_PROGRAMS = new Set([
-  ...TOUCHES_FILES,
-  ...COPIES,
-  ...UNPACKS,
-  'git',
-  'sed',
-  'gsed',
-  'perl',
-  'ruby',
-  'awk',
-  'gawk',
-  'patch',
-]);
-
-const PACKAGE_MANAGERS = new Set([
-  'npm',
-  'pnpm',
-  'yarn',
-  'bun',
-  'cargo',
-  'go',
-  'pip',
-  'pip3',
-  'pipx',
-  'brew',
-  'apt',
-  'apt-get',
-  'dnf',
-  'yum',
-  'pacman',
-  'gem',
-  'uv',
-  'poetry',
-  'conda',
-  'rustup',
-  'composer',
-]);
-
-/** Package manager subcommands whose operands are package names, as `npm install tar` names a package. */
-const PACKAGE_NAME_SUBCOMMANDS = new Set([
-  'add',
-  'install',
-  'i',
-  'remove',
-  'rm',
-  'uninstall',
-  'un',
-  'update',
-  'up',
-  'upgrade',
-  'info',
-  'view',
-  'why',
-  'ls',
-  'list',
-  'outdated',
-  'search',
-  'show',
-]);
-
-/**
- * Whether a program the scan does not model is handed the name of one it does (`firejail cp ...`,
- * `parallel cp`), which it may run on operands the scan never reads as that program's.
- */
-function launchesModeled(raw: readonly string[]): boolean {
-  const [program, ...args] = withoutWrappers(raw).map(unquote);
-  if (program === undefined) return false;
-  const name = programName(program);
-  if (NAMES_NO_COMMAND.has(name)) return false;
-  if (PACKAGE_MANAGERS.has(name) && PACKAGE_NAME_SUBCOMMANDS.has(args.find(arg => !arg.startsWith('-')) ?? '')) {
-    return false;
-  }
-  return args.some(arg => MODELED_PROGRAMS.has(arg) || (isAbsolutePath(arg) && MODELED_PROGRAMS.has(programName(arg))));
 }
 
 /** A wrapper can change the executable, and these clients can start sending data just by changing flags. */
@@ -2484,28 +2642,6 @@ function uniqOutput(args: readonly string[]): string | undefined {
   return operands[1];
 }
 
-/** Programs whose words are no command they run, so a modeled program's name among them is only a name. */
-const NAMES_NO_COMMAND = new Set([
-  ...LOCAL_PROGRAMS,
-  ...MODELED_PROGRAMS,
-  'gh',
-  'make',
-  'type',
-  'man',
-  'help',
-  'info',
-  'whatis',
-  'whereis',
-  'apropos',
-  'hash',
-  'kill',
-  'pkill',
-  'killall',
-  'pgrep',
-  '[',
-  '[[',
-]);
-
 /** Options that make a listed program run another one. */
 const RUNS_A_PROGRAM: Readonly<Record<string, RegExp>> = {
   find: /^-(exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)$/,
@@ -2541,6 +2677,218 @@ function sortRunsOrWrites(args: readonly string[]): boolean {
     }
   }
   return false;
+}
+
+/** Builtins and reporting programs whose words name no file and no program to run. */
+const NAMES_NO_FILE = [
+  '[',
+  ':',
+  'break',
+  'continue',
+  'exit',
+  'getopts',
+  'jobs',
+  'kill',
+  'let',
+  'read',
+  'return',
+  'set',
+  'shift',
+  'shopt',
+  'times',
+  'type',
+  'umask',
+  'unalias',
+  'unset',
+  'wait',
+  'df',
+  'free',
+  'hostname',
+  'id',
+  'nproc',
+  'printenv',
+  'ps',
+  'seq',
+  'uname',
+  'uptime',
+  'whoami',
+];
+
+/**
+ * Programs whose every word the scan reads: what each reads, writes and changes is followed here and in
+ * shellWrites. `less` and `more` can run a command of their own; `scp` takes ssh options that can.
+ */
+const MODELED_PROGRAMS = new Set([
+  ...[...TOUCHES_FILES].filter(name => name !== 'less' && name !== 'more'),
+  ...[...COPIES].filter(name => name !== 'scp'),
+  ...UNPACKS,
+  ...LOCAL_PROGRAMS,
+  ...NAMES_NO_FILE,
+  'alias',
+  'trap',
+  'mapfile',
+  'readarray',
+  'chgrp',
+  'git',
+  'gh',
+  'curl',
+  'sed',
+  'gsed',
+  'awk',
+  'gawk',
+  'mawk',
+  'nawk',
+  'patch',
+]);
+
+/** Options that make a modeled program run another program or write a file the scan does not note. */
+const UNREAD_OPTIONS: Readonly<Record<string, RegExp>> = {
+  find: /^-(exec|execdir|ok|okdir|fprint0?|fprintf|fls)$/,
+  iconv: RUNS_A_PROGRAM.iconv as RegExp,
+  rg: RUNS_A_PROGRAM.rg as RegExp,
+  tree: RUNS_A_PROGRAM.tree as RegExp,
+  rsync: /^(--rsh|--rsync-path|-[A-Za-z]*e)/,
+  install: /^--strip-program/,
+  tar: /^(-[A-Za-z]*T|--files-from)/,
+  bsdtar: /^(-[A-Za-z]*T|--files-from)/,
+};
+
+/** git subcommands that run a program the scan does not read, and options that name one. */
+const GIT_RUNS = new Set(['difftool', 'mergetool', 'filter-branch', 'instaweb', 'web--browse']);
+const GIT_RUN_OPTIONS = /^--(exec-path|upload-pack|receive-pack|exec)(=|$)/;
+
+function gitRunsProgram(args: readonly string[]): boolean {
+  if (args.some(arg => GIT_RUN_OPTIONS.test(arg))) return true;
+  const [sub, action] = args.filter(arg => !arg.startsWith('-'));
+  return (
+    GIT_RUNS.has(sub ?? '') ||
+    (sub === 'submodule' && action === 'foreach') ||
+    (sub === 'bisect' && action === 'run') ||
+    (sub === 'rebase' && args.some(arg => /^(-[A-Za-z]*[xi]|--(exec|interactive|edit-todo))(=|$)/.test(arg)))
+  );
+}
+
+/** curl options the scan reads: flags, and options whose value is no file (`-o` is noted as a download). */
+const CURL_FLAGS = 'sSfLIivkgG46';
+const CURL_VALUED = 'oXHmdAeu';
+const CURL_LONG_FLAGS = new Set([
+  'silent',
+  'show-error',
+  'fail',
+  'fail-with-body',
+  'location',
+  'head',
+  'include',
+  'verbose',
+  'insecure',
+  'compressed',
+  'globoff',
+  'get',
+  'http1.1',
+  'http2',
+  'no-progress-meter',
+  'progress-bar',
+]);
+const CURL_LONG_VALUED = new Set([
+  'output',
+  'request',
+  'header',
+  'max-time',
+  'connect-timeout',
+  'retry',
+  'retry-delay',
+  'retry-max-time',
+  'data',
+  'data-raw',
+  'data-binary',
+  'data-urlencode',
+  'json',
+  'user-agent',
+  'referer',
+  'user',
+  'url',
+]);
+
+/** Whether every curl option is one above, and no value reads a file (`@path`), as `-d @f` and `-H @f` do. */
+function curlModeled(args: readonly string[]): boolean {
+  const readsFile = (option: string, value: string | undefined): boolean =>
+    option !== 'data-raw' &&
+    /^[dH]$|^(data|data-binary|data-urlencode|json|header)$/.test(option) &&
+    /(^|=)@/.test(value ?? '');
+  for (let at = 0; at < args.length; at++) {
+    const arg = args[at] as string;
+    if (arg === '--') return true;
+    if (arg.startsWith('--')) {
+      const [name = '', value] = arg.slice(2).split(/=(.*)/s);
+      if (CURL_LONG_FLAGS.has(name) && value === undefined) continue;
+      if (!CURL_LONG_VALUED.has(name)) return false;
+      const given = value ?? args[++at];
+      if (readsFile(name, given)) return false;
+      continue;
+    }
+    if (!arg.startsWith('-') || arg === '-') continue;
+    for (let letter = 1; letter < arg.length; letter++) {
+      const option = arg[letter] as string;
+      if (CURL_FLAGS.includes(option)) continue;
+      if (!CURL_VALUED.includes(option)) return false;
+      if (readsFile(option, arg.slice(letter + 1) || args[++at])) return false;
+      break;
+    }
+  }
+  return true;
+}
+
+/** npm, pnpm or yarn running one of the project's own scripts: `run`, `run-script`, `test` or `start`, past option values. */
+function runsPackageScript(program: string, args: readonly string[]): boolean {
+  if (program !== 'npm' && program !== 'pnpm' && program !== 'yarn') return false;
+  let at = 0;
+  while (at < args.length && (args[at] as string).startsWith('-')) {
+    const [name = '', value] = (args[at] as string).split(/=(.*)/s);
+    if (PACKAGE_VALUE_OPTIONS.includes(name)) at += value === undefined ? 2 : 1;
+    else if (PACKAGE_FLAGS.has(name) && value === undefined) at += 1;
+    else return false;
+  }
+  return ['run', 'run-script', 'test', 'start'].includes(args[at] ?? '');
+}
+
+/** Runtimes and package managers whose lone `--version` or `-v` only prints a version. */
+const VERSION_PROGRAMS = new Set(['node', 'npm', 'pnpm', 'yarn', 'bun', 'deno', 'python', 'python3']);
+
+/** A program word the scan can name: no quote, escape or expansion, and a path only into a system folder. */
+const PLAIN_PROGRAM = /^([\w.+-]+|\[|:)$/;
+const SYSTEM_PROGRAM = /^\/(usr\/(local\/)?)?s?bin\/[\w.+-]+$/;
+const namesProgram = (word: string): boolean => PLAIN_PROGRAM.test(word) || SYSTEM_PROGRAM.test(word);
+
+/**
+ * Whether the scan reads every word of a simple command: each wrapper and the program are plain words, and the
+ * program is one it models, a function this script defines, a dev tool run directly, or a package script.
+ * Anything else may run a program, or reach a file, that the scan never sees.
+ */
+function knownCommand(raw: readonly string[], functions: ReadonlySet<string>): boolean {
+  if (raw.length === 2 && VERSION_PROGRAMS.has(raw[0] as string) && /^(--version|-v)$/.test(raw[1] as string))
+    return true;
+  if (raw.some(arg => /^--files0?-from/.test(unquote(arg))) || opaqueForm(raw) !== null) return false;
+  let at = 0;
+  for (; at < raw.length && isWrapper(raw[at] as string); at = pastWrapper(raw, at)) {
+    if (!namesProgram(raw[at] as string)) return false;
+  }
+  if (raw[at] === 'builtin') at++;
+  const word = raw[at];
+  if (word === undefined) return true;
+  if (!namesProgram(word)) return false;
+  if (functions.has(word) && raw[at - 1] !== 'builtin') return true;
+  const name = basename(word);
+  const args = raw.slice(at + 1);
+  const words = args.map(unquote);
+  if (!MODELED_PROGRAMS.has(name)) return devTool([name, ...words]) || runsPackageScript(name, words);
+  const unread = own(UNREAD_OPTIONS, name);
+  if (unread && words.some(arg => unread.test(arg))) return false;
+  if ((name === 'tar' || name === 'bsdtar') && /^[A-Za-z]*T/.test(words[0] ?? '')) return false;
+  if (name === 'sort' && sortRunsOrWrites(words)) return false;
+  if (name === 'gh') return !args.some(isDynamic) && ghModeled(words);
+  if (name === 'curl') return curlModeled(words);
+  if (name === 'git') return !gitRunsProgram(words);
+  return !runsOpaqueScript(name, args);
 }
 
 /**
@@ -2680,11 +3028,30 @@ function readOnlyGh(args: readonly string[]): boolean {
   if (args.some(arg => arg.includes('://') && !arg.startsWith('https://github.com/'))) return false;
   const repo = optionValue(args, ['-R', '--repo']);
   if (repo !== undefined && repo.split('/').length > 2 && !repo.startsWith('github.com/')) return false;
-  const [sub, action] = args.filter(arg => !arg.startsWith('-'));
+  const [sub, action] = ghVerb(args);
   if (sub === 'api') {
     return outboundReason(['gh', ...args]) === null && !args.some(arg => /^--input(=|$)/.test(arg));
   }
   return own(GH_READS, sub)?.has(action) === true;
+}
+
+/** gh's subcommand and action: its first two words that are neither an option nor a `-R`/`--repo` value. */
+function ghVerb(args: readonly string[]): string[] {
+  return args.filter((arg, index) => !arg.startsWith('-') && !/^(-R|--repo)$/.test(args[index - 1] ?? ''));
+}
+
+/** gh subcommands that write to GitHub and read only the files `ghReadFiles` names, as `api` does. */
+const GH_WRITES: Readonly<Record<string, ReadonlySet<string>>> = {
+  pr: new Set(['create', 'comment', 'edit', 'close', 'reopen', 'ready', 'review']),
+  issue: new Set(['create', 'comment', 'edit', 'close', 'reopen']),
+};
+
+/** A gh call whose every word the scan reads: a read, or a write above with no editor and its subcommand first. */
+function ghModeled(args: readonly string[]): boolean {
+  if (readOnlyGh(args)) return true;
+  if (args.some(arg => /^--(hostname|editor|web)(=|$)|^-[ew]$/.test(arg))) return false;
+  const [sub, action] = args;
+  return sub === 'api' || own(GH_WRITES, sub ?? '')?.has(action ?? '') === true;
 }
 
 /** Environment variables that only tune a run's output or parallelism. Any other name in front of a command makes it uncoverable. */
@@ -2941,6 +3308,7 @@ export async function scanShell(
   startDirectory: string,
   roots: readonly string[]
 ): Promise<ShellScan | null> {
+  if (command.length > MAX_SCRIPT) return null;
   const tree = await parseBash(command);
   if (!tree) return null;
 
@@ -2957,7 +3325,10 @@ export async function scanShell(
     const paths = new Set<string>([await realpathNearest(startDirectory)]);
     const globFolders = new Set<string>();
     const dotlessGlobFolders = new Set<string>();
-    const dotGlob = MAY_SET_DOTGLOB.test(command);
+    // Bash removes quotes and backslashes before it reads a name, so the name gates read the script without them.
+    const gateText = command.replace(/[\\'"]/g, '');
+    const anyName = rebindsAnyName(command, gateText);
+    const dotGlob = anyName || MAY_SET_DOTGLOB.test(gateText);
     // Links `ln -s` makes in this script, in guard form: the scan cannot follow one that does not exist yet.
     const createdLinks = new Set<string>();
     // Folders whose `.claude` holds settings this session may load: its own and each shared root's.
@@ -2966,8 +3337,9 @@ export async function scanShell(
     // Bash joins a word across a backslash-newline that the parser splits, so such a script reads nothing for sure.
     let unreadOperands = /\S\\\r?\n\S/.test(command) ? 1 : 0;
     const joinsLines = unreadOperands > 0;
+    if (anyName) unreadOperands++;
     // A `cd` that CDPATH may redirect lands somewhere the scan cannot tell.
-    const cdPath = /CDPATH/.test(command) || process.env.CDPATH !== undefined;
+    const cdPath = anyName || /CDPATH/.test(gateText) || process.env.CDPATH !== undefined;
     // Nesting depth of conditionals, loops and function bodies: a directory change there may not happen.
     let branching = 0;
     // Statements that are a side of an `&&`/`||` list, whose failure visitList accounts for.
@@ -2975,18 +3347,22 @@ export async function scanShell(
     // Directory changes seen so far, so a function body that changes directory loses the folder wherever it runs.
     let directoryChanges = 0;
     let gitProgram: string | null = null;
-    const rebound = REBINDS_HOME.test(command);
+    const rebound = anyName || REBINDS_HOME.test(gateText);
     const user = loginName();
     const loopBindings = new Map<string, readonly string[]>();
+    // git settings the script or this process may hand git, so what it reports from a folder is not what the scan asks.
+    const gitEnvironment =
+      anyName ||
+      /GIT_/.test(gateText) ||
+      ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'].some(name => process.env[name] !== undefined);
     // Where `git rev-parse --show-toplevel` lands from each folder; filled in only while git reads no GIT_* setting.
     const toplevels = new Map<string, string | null>();
-    const readsToplevel =
-      /rev-parse/.test(command) &&
-      !/GIT_/.test(command) &&
-      process.env.GIT_DIR === undefined &&
-      process.env.GIT_WORK_TREE === undefined;
+    const readsToplevel = /rev-parse/.test(gateText) && !gitEnvironment;
+    const gitScript: GitScript = { staged: [], unknownIndex: false };
+    // Functions this script defines, which a command may call by name.
+    const functions = new Set<string>();
     // Under lastpipe the last part of a pipeline runs in this shell, so a cd there moves it.
-    const lastpipe = /lastpipe/.test(command);
+    const lastpipe = /lastpipe/.test(gateText);
     const directories = new Set<string>();
     const ungranted = new Set<string>();
     const envFiles = new Set<string>();
@@ -3040,6 +3416,18 @@ export async function scanShell(
       if (!dotless && (await lstat(join(folder, '.claude')).catch(() => null))) paths.add(join(folder, '.claude'));
     };
 
+    const processPath = (text: string, cwd: string): boolean =>
+      throughProcess(text, wslLocation(cwd)?.linuxPath ?? cwd);
+
+    /**
+     * The paths a glob operand expands to through a link, which are checked again as written; null when the
+     * expansion is too large to read. Empty where the scan does not expand (Windows, a WSL folder).
+     */
+    const linkMatches = async (word: OperandWord, operand: ReadOperand, cwd: string): Promise<string[] | null> => {
+      if (operand.start === null || operand.unread || sep !== '/' || wslLocation(cwd) !== null) return [];
+      return globLinkMatches(word, cwd, dotGlob);
+    };
+
     /** Whether `operand` lies within a link this script made, whose target the scan cannot read. */
     const underCreatedLink = (cwd: string, operand: string, reader: OperandReader): boolean =>
       createdLinks.size > 0 &&
@@ -3086,7 +3474,7 @@ export async function scanShell(
       }
       let landed: string | null = null;
       for (const word of words) {
-        if (throughProcess(word.text)) unreadOperands++;
+        if (processPath(word.text, cwd)) unreadOperands++;
         landed ??= await checkWord(word, '', cwd, probe, reader, reach);
       }
       return landed;
@@ -3105,6 +3493,11 @@ export async function scanShell(
       const rules = reader === 'windows' ? win32 : operandRules(cwd);
       const operand = readOperand(word, rules.dirname);
       if (operand.unread) unreadOperands++;
+      if (reader !== 'windows') {
+        const linked = await linkMatches(word, operand, cwd);
+        if (linked === null) unreadOperands++;
+        for (const match of linked ?? []) await checkWord(exactWord(match), device, cwd, probe, reader, reach);
+      }
       const { shape, folder } = shapeOf(word, operand, rules, reader === 'windows' || sep === '\\');
       const prefix = device + folder;
       if (underCreatedLink(cwd, prefix, reader)) unreadOperands++;
@@ -3170,7 +3563,7 @@ export async function scanShell(
     const run = async (node: Node): Promise<void> => {
       const unreadBefore = unreadOperands;
       if (readsToplevel && !state.lost && !toplevels.has(state.cwd) && /rev-parse/.test(node.text)) {
-        toplevels.set(state.cwd, await repositoryToplevel(state.cwd));
+        toplevels.set(state.cwd, wslLocation(state.cwd) ? null : await gitToplevel(state.cwd));
       }
       for (const child of node.children) {
         if (child && child.type !== 'command_name') await visit(child);
@@ -3213,7 +3606,26 @@ export async function scanShell(
     ): Promise<void> => {
       const [program, ...rest] = tokens;
       const [wrapped, ...wrappedRest] = withoutWrappers(tokens);
-      if (effects.unread || launchesModeled(tokens)) unreadOperands++;
+      const watched = watchScript(tokens);
+      if (watched !== null) {
+        commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
+        contained = false;
+        readOnly = false;
+        const nested = watched === 'unread' ? null : await parseBash(watched);
+        if (nested === null) {
+          unreadOperands++;
+          return;
+        }
+        const saved = snapshot();
+        try {
+          await visit(nested.rootNode);
+        } finally {
+          restore(saved);
+          nested.delete();
+        }
+        return;
+      }
+      if (effects.unread || !knownCommand(tokens, functions)) unreadOperands++;
       for (const output of effects.outputs) {
         noteWrite(output);
         await check(output, state.cwd);
@@ -3222,10 +3634,22 @@ export async function scanShell(
       if (feeds && !NAMES_NOTHING.has(programName(unquote(wrapped ?? 'echo')))) {
         // xargs runs its command on words it reads, which only a lister over checked folders keeps to them.
         const consumer = withoutWrappers(tokens);
-        if (!onlyReads(consumer) || feeds.file || !listerFeeds(node)) unreadOperands++;
+        if (
+          !onlyReads(consumer) ||
+          feeds.file ||
+          !listerFeeds(node) ||
+          effects.folders.length > 0 ||
+          stdinRedirected(node)
+        ) {
+          unreadOperands++;
+        }
       }
       if (wrapped !== undefined) noteWrites(wrapped, wrappedRest);
-      const inPlace = await inPlaceWrites(withoutWrappers(tokens.map(unquote)), node, state.cwd);
+      const inPlace = await inPlaceWrites(withoutWrappers(tokens.map(unquote)), node, state.cwd, {
+        script: gitScript,
+        env: gitEnvironment,
+      });
+      if (inPlace.unread) unreadOperands++;
       // In-place writes come back resolved against a folder that may not be where bash is.
       if (state.lost && inPlace.files.length + inPlace.trees.length > 0) unreadOperands++;
       for (const file of inPlace.files) noteWrite(file);
@@ -3254,7 +3678,9 @@ export async function scanShell(
         state.stackLost = true;
       }
       if (inner === 'dirs' || builtin === 'dirs') state.stackLost = true;
-      if (movesShell(builtin || inner, (builtin ? rest.slice(1) : wrappedRest).map(unquote))) {
+      if (movesShell(builtin || inner, (builtin ? rest.slice(1) : wrappedRest).map(wordValue))) {
+        // An alias, trap action or callback runs code the scan never reads.
+        if ((builtin || inner) !== 'shopt') unreadOperands++;
         directoryChanges++;
         Object.assign(state, { lost: true, stackLost: true });
       }
@@ -3395,6 +3821,23 @@ export async function scanShell(
         if (state.lost) unreadOperands++;
         await checkArgument(literalWord('.'), trees.cwd, true);
       }
+      if (followsLinks(name, wrappedRest) && sep === '/' && wslLocation(state.cwd) === null && !state.lost) {
+        // Each link the walk meets is read as the path it is, so its target is judged like any operand.
+        const budget = { entries: WALK_ENTRIES };
+        const operands = wrappedRest.filter(arg => !unquote(arg).startsWith('-'));
+        for (const arg of trees.cwd ? [...operands, '.'] : operands) {
+          for (const word of operandWords(arg, scope()) ?? []) {
+            const operand = readOperand(word, posix.dirname);
+            if (operand.unread) continue;
+            const links = await linksUnder(
+              posix.isAbsolute(operand.path) ? operand.path : under(state.cwd, operand.path),
+              budget
+            );
+            if (links === null) unreadOperands++;
+            for (const link of links ?? []) await checkArgument(exactWord(link), 'read', true);
+          }
+        }
+      }
       const target = COPIES.has(name) ? copyTarget(name, wrappedRest) : null;
       if (target?.glued) await check(target.value, state.cwd, false, 'program', trees.glued);
       if (UNPACKS.has(name)) {
@@ -3418,13 +3861,16 @@ export async function scanShell(
      */
     const checkArgument = async (word: OperandWord, reach: Reach | null, pathLike: boolean): Promise<void> => {
       if (word.text === '') return;
-      if (throughProcess(word.text)) unreadOperands++;
+      if (processPath(word.text, state.cwd)) unreadOperands++;
       const rules = operandRules(state.cwd);
       const operand = readOperand(word, rules.dirname);
       if (operand.unread) {
         if (!pathLike) return;
         unreadOperands++;
       }
+      const linked = await linkMatches(word, operand, state.cwd);
+      if (linked === null) unreadOperands++;
+      for (const match of linked ?? []) await checkArgument(exactWord(match), reach, true);
       const { shape, folder: prefix } = shapeOf(word, operand, rules, sep === '\\');
       if (underCreatedLink(state.cwd, prefix, 'program')) unreadOperands++;
       const record = async (physical: string): Promise<void> => {
@@ -3568,7 +4014,7 @@ export async function scanShell(
       const text = expand(unquote(raw));
       if (!text || HARMLESS_REDIRECT_TARGETS.has(text)) return;
       const homeWord = rebound && /^~|\$\{?HOME\b/.test(unquote(raw));
-      if (isDynamic(text) || (state.lost && !isAbsolutePath(text)) || throughProcess(text) || homeWord) {
+      if (isDynamic(text) || (state.lost && !isAbsolutePath(text)) || processPath(text, state.cwd) || homeWord) {
         unreadOperands++;
         return;
       }
@@ -3755,6 +4201,10 @@ export async function scanShell(
         return;
       }
       if (node.type === 'function_definition') {
+        // A function standing in for a program the scan models or looks through would read as that program.
+        const defined = node.childForFieldName('name')?.text ?? '';
+        if (!PLAIN_PROGRAM.test(defined) || MODELED_PROGRAMS.has(defined) || WRAPPERS.has(defined)) unreadOperands++;
+        else functions.add(defined);
         // The body runs wherever the function is called, so it is read from no known folder.
         const before = snapshot();
         const changes = directoryChanges;

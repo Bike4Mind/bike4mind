@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { permissionProtectedLocations } from '../protectedLocations';
 import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '../permissions/rules';
@@ -65,14 +65,56 @@ describe('shell commands that reach a protected location', () => {
     await writeFile(join(proj, 'a'), 'a');
     await writeFile(join(proj, 'evil.json'), '{}');
     await writeFile(join(proj, 't.txt'), 'evil.json .claude/settings.local.json\n');
+    await writeFile(join(proj, 'names.txt'), '../.config/Bike4Mind/vault.json\n');
+    // A decoy of the app's data folder, so a scan that loses track of `cd ..` sees a harmless write.
+    await mkdir(join(proj, '.config', 'Bike4Mind'), { recursive: true });
+    await writeFile(join(proj, '.config', 'Bike4Mind', 'vault.json'), '{}');
+    await mkdir(join(proj, 'lk'));
+    await symlink(join(home, '.config'), join(proj, 'lk', 'in'));
+    await symlink(join(userData, 'vault.json'), join(proj, 'lk', 'v'));
+    // repo tracks no .claude path and repo2 tracks sub/.claude; `dirty` targets add or change one, `clean` targets do not.
+    const git = (repo: string, ...args: string[]): void => {
+      execFileSync('git', ['-C', join(proj, repo), '-c', 'core.hooksPath=/dev/null', ...args], {
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: 't',
+          GIT_AUTHOR_EMAIL: 't@t',
+          GIT_COMMITTER_NAME: 't',
+          GIT_COMMITTER_EMAIL: 't@t',
+        },
+      });
+    };
+    const commit = (repo: string, message: string): void => {
+      git(repo, 'add', '-A');
+      git(repo, '-c', 'commit.gpgsign=false', 'commit', '-qm', message);
+    };
     for (const repo of ['repo', 'repo2']) {
       await mkdir(join(proj, repo, 'src'), { recursive: true });
-      execFileSync('git', ['init', '-q', join(proj, repo)]);
+      execFileSync('git', ['init', '-q', '-b', 'main', join(proj, repo)]);
       await writeFile(join(proj, repo, 'src', 'x'), 'x');
     }
     await mkdir(join(proj, 'repo2', 'sub', '.claude'), { recursive: true });
     await writeFile(join(proj, 'repo2', 'sub', '.claude', 'settings.json'), '{}');
-    execFileSync('git', ['-C', join(proj, 'repo2'), '-c', 'core.hooksPath=/dev/null', 'add', '-A']);
+    await writeFile(join(proj, 'repo2', '.gitignore'), 'settings.local.json\n');
+    for (const [repo, clean, dirty, settings] of [
+      ['repo', 'clean', 'dirty', '.claude/settings.local.json'],
+      ['repo2', 'clean2', 'dirty2', 'sub/.claude/settings.json'],
+    ] as const) {
+      commit(repo, 'first');
+      git(repo, 'checkout', '-qb', clean);
+      await writeFile(join(proj, repo, 'src', 'y'), 'y');
+      commit(repo, 'clean');
+      git(repo, 'checkout', '-q', 'main');
+      git(repo, 'checkout', '-qb', dirty);
+      await mkdir(join(proj, repo, dirname(settings)), { recursive: true });
+      await writeFile(join(proj, repo, settings), '{"x":1}');
+      commit(repo, 'dirty');
+      git(repo, 'checkout', '-q', 'main');
+    }
+    git('repo2', 'config', 'branch.main.remote', '.');
+    git('repo2', 'config', 'branch.main.merge', 'refs/heads/clean2');
+    await writeFile(join(proj, 'repo2', 'sub', '.claude', 'settings.local.json'), '{}');
+    await mkdir(join(proj, 'repo', '.config', 'Bike4Mind'), { recursive: true });
     await writeFile(
       join(proj, 'evil.diff'),
       [
@@ -85,6 +127,9 @@ describe('shell commands that reach a protected location', () => {
         '',
       ].join('\n')
     );
+    // The scan lets commands reach the temp folder, so it must not contain the fixture.
+    await mkdir(join(base, 'tmp'));
+    vi.stubEnv('TMPDIR', join(base, 'tmp'));
     vi.stubEnv('HOME', home);
     permissionRoots = permissionProtectedLocations(userData, home, managed, { warn: () => {} }).paths();
     const compiled: CompiledRule[] = [];
@@ -401,22 +446,9 @@ describe('shell commands that reach a protected location', () => {
       'git read-tree -u HEAD',
       'git rebase main',
       'git checkout-index -a',
-    ])('asks in auto mode and no rule allows %s in a repository with a .claude path', async command => {
-      for (const repo of [proj, join(proj, 'repo2')]) {
-        const verdict = await judge(command, 'P', repo);
-        expect(verdict.auto, repo).toBe(false);
-        expect(verdict.allowed, repo).toBe(false);
-      }
+    ])('asks in every mode before %s where git cannot read the target', async command => {
+      expect(await judge(command, 'P')).toEqual(refusedEverywhere);
     });
-
-    it.each(['git pull', 'git checkout main', 'git reset --hard HEAD~1'])(
-      'leaves %s to the mode in a repository with no .claude path',
-      async command => {
-        const verdict = await judge(command, 'P', join(proj, 'repo'));
-        expect(verdict).toMatchObject({ full: true, allowed: true });
-        expect(verdict.auto).toBe((await judge('git status', 'P', join(proj, 'repo'))).auto);
-      }
-    );
   });
 
   describe('a read or write the scan cannot follow', () => {
@@ -444,7 +476,6 @@ describe('shell commands that reach a protected location', () => {
       'for f in src/*; do cat "$f"; done',
       'for f in *.ts; do cat "$f"; done',
       'for f in src/*; do wc -l "$f" "$f.bak"; done',
-      'cd "$(git rev-parse --show-toplevel)" && ls',
     ])('runs %s unasked', async command => {
       for (const scenario of scenarios) {
         expect(await judge(command, scenario), scenario).toMatchObject({ auto: true, full: true });
@@ -465,6 +496,185 @@ describe('shell commands that reach a protected location', () => {
     it('reads the top level as unknown once git is pointed elsewhere', async () => {
       expect((await judge('export GIT_DIR=x; cd "$(git rev-parse --show-toplevel)" && ls', 'P')).auto).toBe(false);
     });
+  });
+
+  describe('a program the scan does not know', () => {
+    // Each runs in the project, or in its `src` folder when the second entry says so.
+    it.each([
+      ['c\\d ..; cp proj/evil.json .config/Bike4Mind/vault.json', ''],
+      ['"c"d ..; cp proj/evil.json .config/Bike4Mind/vault.json', ''],
+      ["c''d ..; cp proj/evil.json .config/Bike4Mind/vault.json", ''],
+      ['\\cd ..; cp proj/evil.json .config/Bike4Mind/vault.json', ''],
+      ['\\cp -r ../payload/. ..', 'src'],
+      ["c''p -r ../payload/. ..", 'src'],
+      ["tr\\ap 'cd ..' DEBUG; cp proj/evil.json .config/Bike4Mind/vault.json", ''],
+      ["watch -n1 'cd ..; cp proj/evil.json .config/Bike4Mind/vault.json'", ''],
+      ['watch -x cp -r ../payload/. ..', 'src'],
+      ["script -qc 'cd ..; cp proj/evil.json .config/Bike4Mind/vault.json' /dev/null", ''],
+      ["parallel ::: 'cd ..; cp proj/evil.json .config/Bike4Mind/vault.json'", ''],
+      ["firejail --quiet sh -c 'cd ..; cp proj/evil.json .config/Bike4Mind/vault.json'", ''],
+      ["docker run --rm -v ~:/h -w /h alpine sh -c 'cp proj/evil.json .config/Bike4Mind/vault.json'", ''],
+      ['pnpm exec cp -r ../payload/. ..', 'src'],
+      ['pnpm --filter test exec cp -r ../payload/. ..', 'src'],
+      ['npm --userconfig test x cp -r ../payload/. ..', 'src'],
+      ['npx cp -r ../payload/. ..', 'src'],
+    ])('asks in every mode before %s', async (command, folder) => {
+      for (const scenario of scenarios) {
+        expect(await judge(command, scenario, join(proj, folder)), scenario).toEqual(refusedEverywhere);
+      }
+    });
+
+    it.each(['pnpm test', 'pnpm --filter add run build', 'npm run lint', 'yarn start', 'watch -n 5 ls src'])(
+      'runs %s unasked',
+      async command => {
+        expect(await judge(command, 'P')).toMatchObject({ auto: true, full: true });
+      }
+    );
+  });
+
+  describe('a script that spells a gated name another way', () => {
+    it.each([
+      ["export HO''ME=~/.config; cd; echo {} > Bike4Mind/vault.json", ''],
+      ['export H\\OME=~/.config; cd; echo {} > Bike4Mind/vault.json', ''],
+      ['export "HOME"=~/.config; cd; echo {} > Bike4Mind/vault.json', ''],
+      ["export $'HOME'=$PWD/../.config; cd; echo {} > Bike4Mind/vault.json", ''],
+      ['n=HOM; export ${n}E=$PWD/../.config; cd; echo {} > Bike4Mind/vault.json', ''],
+      ['n=HOM; declare -x ${n}E=$PWD/../.config; cd; echo {} > Bike4Mind/vault.json', ''],
+      ['n=HOM; printf -v ${n}E %s $PWD/../.config; cd; echo {} > Bike4Mind/vault.json', ''],
+      ['n=HOM; declare -n r=${n}E; r=$PWD/../.config; cd; echo {} > Bike4Mind/vault.json', ''],
+      ["shopt -s expand_aliases; BASH_ALIASES[true]='cd ..'\ntrue\ncp proj/evil.json .config/Bike4Mind/vault.json", ''],
+      ['BASH_CMDS[ls]=/bin/cp; ls -r ../payload/. ..', 'src'],
+      ["export C''DPATH=~; cd .config; echo {} > Bike4Mind/vault.json", ''],
+      ["shopt -s last''pipe; echo | cd ..; cp proj/evil.json .config/Bike4Mind/vault.json", ''],
+      [
+        'export GIT\'\'_WORK_TREE=$PWD/../..; cd "$(git rev-parse --show-toplevel)"/.config; echo {} > Bike4Mind/vault.json',
+        'repo',
+      ],
+    ])('asks in every mode before %s', async (command, folder) => {
+      for (const scenario of scenarios) {
+        expect(await judge(command, scenario, join(proj, folder)), scenario).toEqual(refusedEverywhere);
+      }
+    });
+
+    it.each([
+      "sh''opt -s dot''glob; cp evil.json */settings.local.json",
+      "export GLOB''IGNORE=x; cp evil.json */settings.local.json",
+    ])('asks in every mode before %s', async command => {
+      expect(await judge(command, 'P')).toEqual(refusedEverywhere);
+    });
+  });
+
+  describe('xargs fed by a lister the scan cannot follow', () => {
+    it.each([
+      'find -L lk -name vault.json | xargs cat',
+      'find -H lk/in -name vault.json | xargs cat',
+      'find -P .config -name vault.json | xargs cat',
+      'find -O3 .config -name vault.json | xargs cat',
+      'find -D tree .config -name vault.json | xargs cat',
+      'find lk -follow -name vault.json | xargs cat',
+      'find -files0-from t.txt -name x | xargs cat',
+      'rg -L -l x lk | xargs cat',
+      'rg --follow --files lk | xargs cat',
+      'find .config -name vault.json | xargs env -C .. cat',
+      'find .config -name vault.json | env -C .. xargs cat',
+      'find src | xargs cat < names.txt',
+    ])('asks in every mode before %s', async command => {
+      for (const scenario of scenarios) {
+        expect(await judge(command, scenario), scenario).toEqual(refusedEverywhere);
+      }
+    });
+  });
+
+  describe('git writing a tree from a target', () => {
+    it.each([
+      ['git checkout dirty', 'repo'],
+      ['git switch dirty', 'repo'],
+      ['git merge dirty', 'repo'],
+      ['git cherry-pick dirty', 'repo'],
+      ['git reset --hard dirty', 'repo'],
+      ['git reset --ha dirty', 'repo'],
+      ['git read-tree -mu dirty', 'repo'],
+      ['git read-tree dirty && git checkout-index -af', 'repo'],
+      ['git checkout dirty2', 'repo2'],
+      ['git -c core.worktree=.. checkout clean', 'repo'],
+      ['GIT_DIR=.git git checkout clean', 'repo'],
+      ['git --git-dir=.git checkout clean', 'repo'],
+      ['git --work-tree=.. checkout clean', 'repo'],
+      ['git pull', 'repo'],
+      ['git clean -fdX', 'repo2'],
+      ['git clean -fdx', 'repo2'],
+      ['git sparse-checkout set src', 'repo2'],
+    ])('asks in every mode before %s in %s', async (command, repo) => {
+      for (const scenario of scenarios) {
+        expect(await judge(command, scenario, join(proj, repo)), scenario).toEqual(refusedEverywhere);
+      }
+    });
+
+    it.each([
+      ['git checkout clean2', 'repo2'],
+      ['git merge clean2', 'repo2'],
+      ['git pull', 'repo2'],
+      ['git rebase', 'repo2'],
+      ['git reset --hard clean2', 'repo2'],
+      ['git checkout clean', 'repo'],
+      ['git reset --hard clean', 'repo'],
+      ['git clean -fd', 'repo'],
+    ])('leaves %s in %s to the mode', async (command, repo) => {
+      const verdict = await judge(command, 'P', join(proj, repo));
+      expect(verdict).toMatchObject({ full: true, allowed: true });
+      expect(verdict.auto).toBe((await judge('git status', 'P', join(proj, repo))).auto);
+    });
+  });
+
+  describe('an archive the scan reads by its prefixes and switches', () => {
+    it.each([
+      'tar --extr -f a.tar -C build; cp evil.json build/h/x',
+      '7z -y x a.7z -obuild; cp evil.json build/h/x',
+      '7z x -spf2 a.7z -obuild',
+    ])('asks in every mode before %s', async command => {
+      expect(await judge(command, 'P')).toEqual(refusedEverywhere);
+    });
+  });
+
+  describe('a link inside a granted folder', () => {
+    it.each([
+      'cat lk/*/Bike4Mind/vault.json',
+      'cp evil.json lk/*/Bike4Mind/vault.json',
+      'grep -R x lk',
+      'cat lk/*',
+      'ln -s ../.config/Bike4Mind vb',
+      'ln -sr lk/v vb',
+    ])('asks in every mode before %s', async command => {
+      for (const scenario of scenarios) {
+        expect(await judge(command, scenario), scenario).toEqual(refusedEverywhere);
+      }
+    });
+  });
+
+  describe('a process link reached through a parent folder', () => {
+    it.each([
+      'cd ~; cp proj/evil.json /proc/../proc/self/cwd/.config/Bike4Mind/vault.json',
+      'cd /proc; cp ~/proj/evil.json self/cwd/x',
+    ])('asks in every mode before %s', async command => {
+      expect(await judge(command, 'H')).toEqual(refusedEverywhere);
+    });
+  });
+
+  describe('the top level git reports', () => {
+    it('runs a move to the top level of a repository unasked', async () => {
+      expect(await judge('cd "$(git rev-parse --show-toplevel)" && ls', 'P', join(proj, 'repo'))).toMatchObject({
+        auto: true,
+        full: true,
+      });
+    });
+
+    it('reads the top level as unknown where git finds no repository', async () => {
+      expect((await judge('cd "$(git rev-parse --show-toplevel)" && ls', 'P')).auto).toBe(false);
+    });
+  });
+
+  it('asks in every mode before a command longer than the scan reads', async () => {
+    expect(await judge(`${'true; '.repeat(4000)}cp evil.json x`, 'P')).toEqual(refusedEverywhere);
   });
 
   describe('everyday commands', () => {

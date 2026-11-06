@@ -519,9 +519,7 @@ export async function shellApproval(
       ? ['Reaches a location Desktop protects, such as its own data or permission and hook settings.']
       : []),
     ...(scan.unread
-      ? [
-          'Builds a path from a variable, a substitution or a folder it cannot follow, so where it acts cannot be checked.',
-        ]
+      ? ['Runs a program or builds a path that Desktop cannot follow, so where it acts cannot be checked.']
       : []),
     ...(writesWhileUnresolved
       ? ['May write while Desktop cannot resolve a protected folder, so where it writes cannot be checked.']
