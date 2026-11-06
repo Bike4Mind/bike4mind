@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { insufficientCreditsError, ResearchTaskStatus, TooManyRequestsError } from '@bike4mind/common';
+import { ForbiddenError, insufficientCreditsError, ResearchTaskStatus, TooManyRequestsError } from '@bike4mind/common';
+import { ACCOUNT_BANNED_MESSAGE } from '@bike4mind/services/userService/accountState';
 
 vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
@@ -181,6 +182,30 @@ describe('researchEngineQueue metering', () => {
       expect.objectContaining({ id: 'rt1', status: ResearchTaskStatus.FAILED, statusFailedMessage: message })
     );
   });
+
+  it('fails a discovered-links run for a suspended owner without rethrowing', async () => {
+    h.meter.mockRejectedValue(new ForbiddenError(ACCOUNT_BANNED_MESSAGE));
+
+    await expect(dispatch(makeEvent('processDiscoveredLinks'), {} as never, logger as never)).resolves.toBeUndefined();
+
+    expect(h.complete).not.toHaveBeenCalled();
+    expect(h.taskUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'rt1',
+        status: ResearchTaskStatus.FAILED,
+        statusFailedMessage: ACCOUNT_BANNED_MESSAGE,
+      })
+    );
+  });
+
+  it('still rethrows an unrelated forbidden error from a discovered-links run', async () => {
+    h.meter.mockRejectedValue(new ForbiddenError('Unauthorized. Admin access required.'));
+
+    await expect(dispatch(makeEvent('processDiscoveredLinks'), {} as never, logger as never)).rejects.toThrow(
+      'Unauthorized. Admin access required.'
+    );
+    expect(h.taskUpdate).not.toHaveBeenCalled();
+  });
 });
 
 describe('researchEngineQueue downloadRelevantLinks - storage adapters', () => {
@@ -262,6 +287,25 @@ describe('deepResearchIntoQuest action', () => {
     h.afford.mockRejectedValueOnce(refusal());
     await expect(dispatch(researchEvent(job), {} as never, logger as never)).resolves.toBeUndefined();
     expect(h.questSettle).toHaveBeenCalledWith('q1', patch);
+  });
+
+  it('settles the refusal when the owner account is suspended, without rethrowing', async () => {
+    h.questSettle.mockResolvedValue(true);
+    h.afford.mockRejectedValueOnce(new ForbiddenError(ACCOUNT_BANNED_MESSAGE));
+    await expect(dispatch(researchEvent(job), {} as never, logger as never)).resolves.toBeUndefined();
+    expect(h.deepResearchIntoQuest).not.toHaveBeenCalled();
+    expect(h.questSettle).toHaveBeenCalledWith('q1', {
+      status: 'done',
+      type: 'error',
+      reply: ACCOUNT_BANNED_MESSAGE,
+      replies: [ACCOUNT_BANNED_MESSAGE],
+    });
+  });
+
+  it('rethrows an unrelated forbidden error so the message is redelivered', async () => {
+    h.afford.mockRejectedValueOnce(new ForbiddenError('Unauthorized. Admin access required.'));
+    await expect(dispatch(researchEvent(job), {} as never, logger as never)).rejects.toThrow('Unauthorized');
+    expect(h.questSettle).not.toHaveBeenCalled();
   });
 
   it('settles a redelivered message as failed without loading the model or researching', async () => {
