@@ -29,6 +29,10 @@ const h = vi.hoisted(() => ({
   agentFind: vi.fn(),
   projectFind: vi.fn(),
   readProfile: vi.fn(),
+  assertClassified: vi.fn(),
+  exportSubject: vi.fn(),
+  recordModels: [] as string[],
+  records: vi.fn(),
   notebooks: [] as Array<{ id: string; name: string; chatHistory?: Array<{ images?: string[] }> }>,
 }));
 
@@ -57,6 +61,22 @@ vi.mock('@bike4mind/database', () => ({
   toolRepository: {},
   memoryLedgerRepository: {},
   memoryPrincipalKeyRepository: {},
+  mongoose: { modelNames: () => ['User'] },
+}));
+
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({}));
+vi.mock('@server/models/UserSubscription', () => ({}));
+vi.mock('@server/dataSubject/subjectRecordExport', () => ({
+  assertEveryModelClassified: h.assertClassified,
+  SubjectRecordExport: class {
+    models = h.recordModels;
+    constructor(subject: unknown) {
+      h.exportSubject(subject);
+    }
+    async *records(model: string) {
+      yield* await h.records(model);
+    }
+  },
 }));
 vi.mock('@bike4mind/services', () => ({
   notebookExportService: {
@@ -630,5 +650,108 @@ describe('account data export worker', () => {
     expect(h.permanentDelete).toHaveBeenCalledWith(KEY);
     expect(h.uploadFile).not.toHaveBeenCalled();
     expect(h.leaseRelease).not.toHaveBeenCalled();
+  });
+
+  describe('admin data subject export', () => {
+    const ADMIN_KEY = `exports/account-data/${USER_ID}/admin/${JOB_ID}/data-subject-export.zip`;
+    const runForAdmin = () => run({ exportJobId: JOB_ID, userId: USER_ID, requestedBy: 'admin-1' });
+
+    beforeEach(() => {
+      h.recordModels = ['User', 'Note', 'Team'];
+      h.records.mockImplementation(async (model: string) =>
+        model === 'Note'
+          ? [
+              { _id: 'n1', body: 'mine' },
+              { _id: 'n2', body: 'also mine' },
+            ]
+          : []
+      );
+    });
+
+    it('adds the registry records under its own key and emails no one', async () => {
+      await runForAdmin();
+
+      expect(h.uploadFile).toHaveBeenCalledWith(
+        expect.any(String),
+        ADMIN_KEY,
+        { ContentType: 'application/zip' },
+        expect.any(AbortSignal)
+      );
+      expect(h.assertClassified).toHaveBeenCalledWith(['User']);
+      expect(h.exportSubject).toHaveBeenCalledWith({ userId: USER_ID, email: 'ada@example.com' });
+      const entries = await unzip(h.uploaded!);
+      expect(entries.get('records/Note.ndjson')).toBe('{"_id":"n1","body":"mine"}\n{"_id":"n2","body":"also mine"}\n');
+      // A collection with no records is listed as searched but gets no file.
+      expect(entries.has('records/Team.ndjson')).toBe(false);
+      expect(JSON.parse(entries.get('records/index.json')!)).toEqual({
+        collections: [
+          { model: 'User', count: 0 },
+          { model: 'Note', count: 2 },
+          { model: 'Team', count: 0 },
+        ],
+      });
+      expect(entries.get('README.txt')).toContain('records/');
+      expect(entries.has('profile.json')).toBe(true);
+      expect(h.publish).not.toHaveBeenCalled();
+      expect(h.leaseRelease).toHaveBeenCalled();
+    });
+
+    it('leaves the records out of a self-serve export', async () => {
+      await run();
+
+      const entries = await unzip(h.uploaded!);
+      expect([...entries.keys()].some(name => name.startsWith('records/'))).toBe(false);
+      expect(entries.get('README.txt')).not.toContain('records/');
+      expect(h.exportSubject).not.toHaveBeenCalled();
+    });
+
+    it('builds for an account with no email', async () => {
+      h.userFindById.mockResolvedValue({ id: USER_ID, name: 'Ada', createdAt: new Date('2025-01-01T00:00:00Z') });
+
+      await runForAdmin();
+
+      expect(h.exportSubject).toHaveBeenCalledWith({ userId: USER_ID, email: null });
+      expect(h.uploadFile).toHaveBeenCalledWith(expect.any(String), ADMIN_KEY, expect.anything(), expect.anything());
+    });
+
+    it('lists a failing collection as omitted and keeps the others', async () => {
+      h.records.mockImplementation(async (model: string) => {
+        if (model === 'Team') throw new Error('query exceeded maxTimeMS');
+        return model === 'Note' ? [{ _id: 'n1' }] : [];
+      });
+
+      await runForAdmin();
+
+      const entries = await unzip(h.uploaded!);
+      expect(JSON.parse(entries.get('records/index.json')!).collections).toContainEqual({
+        model: 'Team',
+        count: 0,
+        omitted: 'error',
+      });
+      expect(entries.get('records/Note.ndjson')).toBe('{"_id":"n1"}\n');
+    });
+
+    it('lists the remaining collections as omitted once the time budget runs low', async () => {
+      remainingMs = () => 60_000;
+
+      await runForAdmin();
+
+      expect(h.records).not.toHaveBeenCalled();
+      const entries = await unzip(h.uploaded!);
+      expect(JSON.parse(entries.get('records/index.json')!).collections).toEqual([
+        { model: 'User', count: 0, omitted: 'time_limit' },
+        { model: 'Note', count: 0, omitted: 'time_limit' },
+        { model: 'Team', count: 0, omitted: 'time_limit' },
+      ]);
+    });
+
+    it('refuses to build when a registered model is unclassified', async () => {
+      h.assertClassified.mockImplementation(() => {
+        throw new Error('Data subject export refused: unclassified models Mystery');
+      });
+
+      await expect(runForAdmin()).rejects.toThrow(/unclassified models Mystery/);
+      expect(h.uploadFile).not.toHaveBeenCalled();
+    });
   });
 });

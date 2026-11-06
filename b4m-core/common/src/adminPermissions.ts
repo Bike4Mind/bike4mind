@@ -8,6 +8,7 @@ export const ADMIN_PERMISSIONS = [
   'users:impersonate',
   'keys:revoke',
   'users:delete',
+  'users:export',
   'settings:manage',
   'models:curate',
 ] as const;
