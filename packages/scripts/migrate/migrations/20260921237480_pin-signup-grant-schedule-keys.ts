@@ -96,7 +96,8 @@ const migration: MigrationFile = {
     const markers = mongoose.connection.collection<PinMarker>(PIN_MARKER_COLLECTION);
     const marker = await markers.findOne({ kind: 'pins' });
     for (const { settingName, settingValue } of marker?.pins ?? []) {
-      await AdminSettings.deleteOne({ settingName, settingValue });
+      // Raw delete: the soft-delete plugin would leave a tombstone holding the unique settingName.
+      await AdminSettings.collection.deleteOne({ settingName, settingValue, deletedAt: null });
     }
     await markers.deleteOne({ kind: 'pins' });
   },

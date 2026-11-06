@@ -38,7 +38,7 @@ const seed = async () => {
     { settingName: 'defaultFreeCredits', settingValue: '5000' },
     { settingName: 'verifiedUnlockCredits', settingValue: '3000' },
     { settingName: 'signupGrantDailyBudget', settingValue: '0' },
-    { settingName: 'stagedSignupGrantEnabled', settingValue: 'true', deleted: true },
+    { settingName: 'stagedSignupGrantEnabled', settingValue: 'true', deletedAt: new Date() },
     { settingName: 'signupGrantDripCap', settingValue: '3000' },
     { settingName: 'ReferralCreditsAmount', settingValue: '250' },
   ]);

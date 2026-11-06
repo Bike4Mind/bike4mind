@@ -193,5 +193,9 @@ describe('pin signup grant schedule keys migration', () => {
     expect(await scheduleValues()).toEqual([undefined, '15', '700', undefined]);
     expect(await value('signupGrantCredits')).toBe('250');
     expect(await marker()).toBeNull();
+    const leftover = await AdminSettings.collection.countDocuments({
+      settingName: { $in: ['signupGrantInitialCredits', 'signupGrantInviteBonusCredits'] },
+    });
+    expect(leftover).toBe(0);
   });
 });

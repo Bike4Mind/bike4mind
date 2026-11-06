@@ -19,7 +19,9 @@ const migration: MigrationFile = {
 
   up: async () => {
     const filter = { 'signupActivity.userId': { $exists: true } };
-    for (;;) {
+    // Bounded by the starting count so a writer that still stamps the field cannot keep this looping.
+    const maxBatches = Math.ceil((await Quest.collection.countDocuments(filter)) / BATCH_SIZE) + 1;
+    for (let batch = 0; batch < maxBatches; batch++) {
       const ids = (
         await Quest.collection
           .find(filter, { projection: { _id: 1 } })

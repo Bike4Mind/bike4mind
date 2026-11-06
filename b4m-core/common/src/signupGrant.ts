@@ -210,7 +210,8 @@ export async function resolveSignupGrantSettings(adminSettings: ScheduleSettings
  * `totalCredits` sets the enrolled entitlement (tranche first, remainder locked) instead of the signup settings.
  * It is a floor, not a ceiling: the drip and verification unlocks still grow the pool to the live drip cap
  * (signupGrantUnlockCredits, the drip branch in stagedSignupGrant.ts), so an invitee gets the larger of
- * `totalCredits` and the open-signup schedule. signupGrantInviteBonusCredits is the on-top invite bonus
+ * `totalCredits` and the open-signup unlock pool; with a drip cap of 0 the grant pays `totalCredits` as
+ * given, even below the open-signup initial credits. signupGrantInviteBonusCredits is the on-top invite bonus
  * (payInviteBonus).
  */
 export async function newSignupGrant(adminSettings: ScheduleSettingsReader, totalCredits?: number) {

@@ -55,6 +55,11 @@ export function useSignupGrantHeartbeat() {
       lastInputAt = Date.now();
     };
     INPUT_EVENTS.forEach(name => window.addEventListener(name, onInput, { passive: true }));
+    const stop = () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      INPUT_EVENTS.forEach(name => window.removeEventListener(name, onInput));
+    };
 
     const schedule = (delay: number) => {
       if (!stopped) timer = setTimeout(tick, delay);
@@ -73,7 +78,7 @@ export function useSignupGrantHeartbeat() {
         const res = await api.post<HeartbeatResponse>('/api/users/active-session');
         // Re-arms only when eligibility flips back on or the drip cap changes (both effect deps).
         if (res.data.spent === true) {
-          stopped = true;
+          stop();
           queryClient.invalidateQueries({ queryKey: ['identify'] });
           return;
         }
@@ -96,10 +101,6 @@ export function useSignupGrantHeartbeat() {
     };
     tick();
 
-    return () => {
-      stopped = true;
-      if (timer) clearTimeout(timer);
-      INPUT_EVENTS.forEach(name => window.removeEventListener(name, onInput));
-    };
+    return stop;
   }, [eligible, userId, queryClient, dripCap]);
 }
