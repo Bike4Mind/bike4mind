@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   AbuseAssessmentConfigSchema,
   AutoContainmentConfigSchema,
+  SignupDomainHoldAssessmentConfigSchema,
   UsagePatternSignalsConfigSchema,
 } from '@bike4mind/common';
 
@@ -33,6 +34,7 @@ export type StructuredSetting = {
 export const STRUCTURED_SETTINGS: Record<string, StructuredSetting> = {
   abuseAssessmentConfig: { schema: AbuseAssessmentConfigSchema },
   usagePatternSignalsConfig: { schema: UsagePatternSignalsConfigSchema },
+  signupDomainHoldAssessmentConfig: { schema: SignupDomainHoldAssessmentConfigSchema },
   autoContainmentConfig: {
     schema: AutoContainmentConfigSchema,
     confirmations: (next, stored) => [

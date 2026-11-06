@@ -1589,18 +1589,30 @@ export type AutoContainmentConfig = z.infer<typeof AutoContainmentConfigSchema>;
  * a zero budget. `signupDomainHoldAssessmentEnabled` gates all provider egress on top of this.
  */
 export const SignupDomainHoldAssessmentConfigSchema = z.object({
-  /** Decisions model to ask; must be served here and have a platform key. Null means no calls. */
-  model: z.enum(DECISION_MODEL_IDS).nullable().prefault(null),
-  /** Platform spend per 24h window (opened by the first call), in USD, at each call's worst-case cost. */
-  dailyBudgetUsd: z.number().min(0).max(1000).prefault(0),
-  /** Provider calls per 24h window (opened by the first call). */
-  maxCallsPerDay: z.number().int().min(0).max(10_000).prefault(100),
-  /** Provider calls in flight at once, across all instances. */
-  maxConcurrency: z.number().int().min(1).max(10).prefault(1),
-  /** Holds assessed per triage run (every 10 minutes). */
-  maxAssessmentsPerRun: z.number().int().min(1).max(100).prefault(20),
-  /** Least confidence in an `abuse` verdict that confirms the hold; anything lower leaves it pending. */
-  minConfirmConfidence: z.number().min(0.5).max(1).prefault(0.9),
+  model: z.enum(DECISION_MODEL_IDS).nullable().prefault(null).meta({
+    title: 'Model',
+    description: 'Decisions model to ask; it must be served here and have a platform key. None means no calls.',
+  }),
+  dailyBudgetUsd: z.number().min(0).max(1000).prefault(0).meta({
+    title: 'Daily budget (USD)',
+    description: "Platform spend per 24h window (opened by the first call), at each call's worst-case cost.",
+  }),
+  maxCallsPerDay: z.number().int().min(0).max(10_000).prefault(100).meta({
+    title: 'Calls per day',
+    description: 'Provider calls per 24h window (opened by the first call).',
+  }),
+  maxConcurrency: z.number().int().min(1).max(10).prefault(1).meta({
+    title: 'Concurrent calls',
+    description: 'Provider calls in flight at once, across all instances.',
+  }),
+  maxAssessmentsPerRun: z.number().int().min(1).max(100).prefault(20).meta({
+    title: 'Holds per run',
+    description: 'Holds assessed per triage run (every 10 minutes).',
+  }),
+  minConfirmConfidence: z.number().min(0.5).max(1).prefault(0.9).meta({
+    title: 'Confirm confidence',
+    description: 'Least confidence in an abuse verdict that confirms the hold; anything lower leaves it pending.',
+  }),
 });
 
 export type SignupDomainHoldAssessmentConfig = z.infer<typeof SignupDomainHoldAssessmentConfigSchema>;
