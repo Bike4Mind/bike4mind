@@ -128,7 +128,7 @@ const ONE_MINUTE_MS = 60 * 1000;
 export const EVENT_METRICS_RATE_LIMIT = 30;
 
 // Chained after adminApi so auth has run and the limiter keys on req.user.id rather than the
-// client IP. The requiredScopes gate below only constrains API-key callers; browser/JWT admins are unaffected.
+// client IP. requiredScopes only constrains API-key callers; browser/JWT admins are unaffected.
 const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: EVENT_METRICS_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'admin-event-metrics' }))
   .get(async (req: Request<{}, {}, {}, EventMetricsQuery>, res) => {
