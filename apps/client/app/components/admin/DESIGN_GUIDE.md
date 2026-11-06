@@ -148,7 +148,7 @@ Inside that frame, every page uses one of three skeletons, so admins always know
 **List page**
 
 1. `AdminPageHeader`: title, count, page actions (one primary button).
-2. Anomaly banner: only when something is wrong (signup spike, key-creation spike). Today it is `Users/AnomalyBanner.tsx`; move it to `shared/` when a second list needs it.
+2. Anomaly banner: only when something is wrong (signup spike, key-creation spike). Use `shared/AnomalyBanner`; a list wraps it with its own headline, as `Users/AnomalyBanner.tsx` does.
 3. `ViewTabs` or `SavedViews`.
 4. `FilterBar`: search, filter chips, Group by.
 5. `DataTable`: selection, sortable columns, row opens the detail page.
