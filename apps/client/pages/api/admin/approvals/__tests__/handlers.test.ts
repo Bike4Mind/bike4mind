@@ -106,7 +106,7 @@ describe('approval routes', () => {
     expect(mocks.reject).toHaveBeenCalledWith(expect.anything(), 'x', 'Not justified by the ticket');
   });
 
-  it('approve and reject share one per-admin decision bucket, checked before step-up', async () => {
+  it('approve and reject share one per-admin decision bucket, checked after step-up', async () => {
     await load('approve', () => import('../[id]/approve'));
     await load('reject', () => import('../[id]/reject'));
     const limiterOf = (route: string) =>
@@ -116,7 +116,8 @@ describe('approval routes', () => {
     expect(limiterOf('reject')).toEqual(approveLimit);
     for (const route of ['approve', 'reject']) {
       const chain = mocks.middleware[route] ?? [];
-      expect(chain.indexOf(limiterOf(route))).toBeLessThan(chain.indexOf(mocks.stepUp));
+      expect(chain.indexOf(mocks.stepUp)).toBeGreaterThanOrEqual(0);
+      expect(chain.indexOf(mocks.stepUp)).toBeLessThan(chain.indexOf(limiterOf(route)));
     }
   });
 });

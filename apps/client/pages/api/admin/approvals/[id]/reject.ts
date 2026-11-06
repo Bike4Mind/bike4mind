@@ -6,9 +6,9 @@ import { rejectApproval } from '@server/admin/approvals/service';
 
 /** Rejects, or lets the requester withdraw, a pending request. */
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'support:read' } })
+  .use(stepUpGate())
   // Shared with the sibling approve/reject route so one bucket caps an admin's decisions.
   .use(rateLimit({ limit: 20, windowMs: 60 * 1000, bucket: 'admin-approval-decision' }))
-  .use(stepUpGate())
   .post(async (req, res) => {
     const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
     const approval = await rejectApproval(req, String(req.query.id), reason);
