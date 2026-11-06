@@ -2324,7 +2324,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     });
 
     it('does NOT override for an expired CALLER key on a keyed stage', async () => {
-      // The regression this pins: `resolveEmbeddingConfig` returns an empty config for an expired
+      // The regression this pins: `resolveEmbeddingCredentials` returns an empty config for an expired
       // personal key too, and an empty config makes the embedding registry report Titan - so deriving
       // keylessness from the factory embedded this one caller's query in Titan space against a
       // production ada-002 corpus. Silently zero results, and the expired-key error that would have
@@ -2348,7 +2348,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     });
 
     it('does NOT override when a Bedrock model was ASKED for rather than substituted', async () => {
-      // `resolveEmbeddingConfig`'s Bedrock arm returns `{ config: {}, missing: null }` for a Bedrock
+      // `resolveEmbeddingCredentials`' Bedrock arm returns `{ config: {}, missing: null }` for a Bedrock
       // model it was handed directly, so "missing === null and the provider is Bedrock" is also true
       // on a fully keyed stage where an admin or caller simply named Titan. Without the
       // `model !== requested` test that case overrides the configured model with the wrong vector

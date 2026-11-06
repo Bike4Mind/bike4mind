@@ -9,7 +9,7 @@ const {
   mockFindUserById,
   mockGetSettingsValue,
   mockResolveSearchBudgets,
-  mockGetProviderFromModel,
+  mockEmbeddingBackendForModel,
   mockFindOrgById,
   mockFindAccessibleOrgById,
   mockGetSettingsMap,
@@ -25,7 +25,7 @@ const {
   mockFindUserById: vi.fn(),
   mockGetSettingsValue: vi.fn(),
   mockResolveSearchBudgets: vi.fn(),
-  mockGetProviderFromModel: vi.fn(),
+  mockEmbeddingBackendForModel: vi.fn(),
   mockFindOrgById: vi.fn(),
   mockFindAccessibleOrgById: vi.fn(),
   mockGetSettingsMap: vi.fn(async () => ({}) as Record<string, unknown>),
@@ -60,7 +60,7 @@ vi.mock('@server/dataLakes/resolveRetrievalLakeScope', () => ({ resolveRetrieval
 vi.mock('@server/entitlements/activeSubscriptions', () => ({
   activePlanResolver: { hasActivePlan: async () => true },
 }));
-// getProviderFromModel is stubbed so a test can choose the provider, but resolveEmbeddingConfig
+// embeddingBackendForModel is stubbed so a test can choose the provider, but resolveEmbeddingCredentials
 // is the real one: which credential a provider needs is the behaviour under test here.
 
 vi.mock('@bike4mind/utils', () => ({
@@ -273,7 +273,7 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'test-openai-key' });
     mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
-    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockEmbeddingBackendForModel.mockReturnValue(ModelBackend.OpenAI);
     // Null user short-circuits the best-effort usage recording, keeping these tests on the
     // search path only.
     mockFindUserById.mockResolvedValue(null);
@@ -733,7 +733,7 @@ describe('POST /api/data-lakes/semantic-search keyless embedding providers', () 
     mockSemanticSearch.mockResolvedValue(EMPTY_RESULT);
     mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
     mockGetSettingsValue.mockResolvedValue(BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2);
-    mockGetProviderFromModel.mockReturnValue(ModelBackend.Bedrock);
+    mockEmbeddingBackendForModel.mockReturnValue(ModelBackend.Bedrock);
     mockFindUserById.mockResolvedValue(null);
     // This route runs in the Next server Lambda. hasKeylessCloudEmbedder wants positive evidence
     // of an execution role, so the hosted runtime is stated here rather than inherited from the
@@ -784,7 +784,7 @@ describe('POST /api/data-lakes/semantic-search keyless embedding providers', () 
     const originalEnv = { ...process.env };
     process.env.B4M_SELF_HOST = 'true';
     try {
-      mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+      mockEmbeddingBackendForModel.mockReturnValue(ModelBackend.OpenAI);
       mockGetSettingsValue.mockResolvedValue('text-embedding-3-small');
       mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: null });
       const res = makeRes();
@@ -802,7 +802,7 @@ describe('POST /api/data-lakes/semantic-search keyless embedding providers', () 
     // On a cloud stage the vectorizer already fell back to Bedrock when it wrote this corpus, so
     // failing the query is answering from a space nothing was written into. The search has to run,
     // and it has to run under the model that was actually reachable.
-    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockEmbeddingBackendForModel.mockReturnValue(ModelBackend.OpenAI);
     mockGetSettingsValue.mockResolvedValue('text-embedding-3-small');
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: null });
     const res = makeRes();
@@ -816,7 +816,7 @@ describe('POST /api/data-lakes/semantic-search keyless embedding providers', () 
   it('says in the log which model it substituted, so an empty result is distinguishable', async () => {
     // A stage that HAD a key and lost it searches a corpus it cannot match and returns nothing.
     // This line is the only thing separating that from a genuine no-hits answer.
-    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockEmbeddingBackendForModel.mockReturnValue(ModelBackend.OpenAI);
     mockGetSettingsValue.mockResolvedValue('text-embedding-3-small');
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: null });
     const req = makeReq({ query: 'onboarding' });
@@ -837,7 +837,7 @@ describe('POST /api/data-lakes/semantic-search keyless embedding providers', () 
     // provider-naming 500 - in the one case where the message is the whole point. The resolver
     // normalizes it to absent AND refuses to substitute for it (one caller's expiry says nothing
     // about the deployment's keys), so `missing` comes back 'openai' even on a keyless cloud stage.
-    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockEmbeddingBackendForModel.mockReturnValue(ModelBackend.OpenAI);
     mockGetSettingsValue.mockResolvedValue('text-embedding-3-small');
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'expired' });
     const res = makeRes();
@@ -852,7 +852,7 @@ describe('POST /api/data-lakes/semantic-search keyless embedding providers', () 
     // A caller who passed embedding_model asked about one specific vector space. Silently
     // answering out of a different one is worse than telling them it is unreachable - the
     // fallback covers the deployment default only.
-    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockEmbeddingBackendForModel.mockReturnValue(ModelBackend.OpenAI);
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: null });
     const res = makeRes();
 
@@ -873,7 +873,7 @@ describe('POST /api/data-lakes/semantic-search alternate-model billing', () => {
     mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'k-openai', voyageai: 'k-voyage' });
     mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
-    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockEmbeddingBackendForModel.mockReturnValue(ModelBackend.OpenAI);
     // A real user (with no organizationId) so recordEmbeddingUsage's short-circuit doesn't skip
     // recording - the opposite of every OTHER describe block's null-user setup here.
     mockFindUserById.mockResolvedValue({ id: 'u1' });
@@ -949,7 +949,7 @@ describe('POST /api/data-lakes/semantic-search mixed-model payload shape', () =>
     mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'k' });
     mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
-    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockEmbeddingBackendForModel.mockReturnValue(ModelBackend.OpenAI);
     mockFindUserById.mockResolvedValue(null);
   });
 
@@ -1034,7 +1034,7 @@ describe('POST /api/data-lakes/semantic-search access-event audit', () => {
     vi.clearAllMocks();
     mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'k' });
-    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockEmbeddingBackendForModel.mockReturnValue(ModelBackend.OpenAI);
     mockGetSettingsValue.mockResolvedValue(undefined);
     mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
     mockFindUserById.mockResolvedValue(null); // billing resolution is not under test here
@@ -1186,7 +1186,7 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
     mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'test-openai-key' });
     mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
-    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockEmbeddingBackendForModel.mockReturnValue(ModelBackend.OpenAI);
     mockGetSettingsMap.mockResolvedValue(BILLING_ON);
     mockFindUserById.mockResolvedValue(user());
     mockFindAccessibleOrgById.mockResolvedValue(null);
@@ -1316,7 +1316,7 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
   it('does not refuse a zero-cost embedder to a caller with no credits', async () => {
     // Ollama models are priced at exactly 0, so they settle 0 credits; gating on
     // usdToCredits' 1-credit floor would refuse a search that costs the operator nothing.
-    mockGetProviderFromModel.mockReturnValue(ModelBackend.Ollama);
+    mockEmbeddingBackendForModel.mockReturnValue(ModelBackend.Ollama);
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ ollama: 'http://localhost:11434' });
     mockFindUserById.mockResolvedValue(user({ currentCredits: 0 }));
 
@@ -1326,7 +1326,7 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
   });
 
   it('does not refuse a zero-cost embedder to a member already at their cap', async () => {
-    mockGetProviderFromModel.mockReturnValue(ModelBackend.Ollama);
+    mockEmbeddingBackendForModel.mockReturnValue(ModelBackend.Ollama);
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ ollama: 'http://localhost:11434' });
     mockFindUserById.mockResolvedValue(user({ organizationId: 'org1' }));
     mockFindAccessibleOrgById.mockResolvedValue({
@@ -1388,7 +1388,7 @@ describe('POST /api/data-lakes/semantic-search budget scope (#2709)', () => {
     mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'test-openai-key' });
     mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
-    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockEmbeddingBackendForModel.mockReturnValue(ModelBackend.OpenAI);
     mockFindUserById.mockResolvedValue(null);
     // clearAllMocks keeps the last-set implementation, so without this the no-org case inherits the
     // membership set of whichever case ran before it.
@@ -1473,5 +1473,5 @@ describe('POST /api/data-lakes/semantic-search budget scope (#2709)', () => {
 
 vi.mock('@bike4mind/utils/embeddingProviders', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils/embeddingProviders')>()),
-  embeddingBackendForModel: mockGetProviderFromModel,
+  embeddingBackendForModel: mockEmbeddingBackendForModel,
 }));

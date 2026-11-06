@@ -26,14 +26,12 @@ const { mockCosine, mockCreateEmbeddingService, mockGenerateEmbedding } = vi.hoi
   mockGenerateEmbedding: vi.fn(),
 }));
 
-// Mock only the embedding/provider helpers from the utils barrel; keep the real
+// Mock only computeCosineSimilarity from the utils barrel; keep the real
 // `@bike4mind/utils/retrievalExclusion` subpath so filterRetrievalExcluded runs for real.
 //
-// getProviderFromModel branches on a 'voyage-' prefix (not a hardcoded 'openai') and
-// createEmbeddingService returns a vector that ENCODES the model, so a mixed-model test can prove
-// each ANN call embedded the query under its OWN model rather than reusing the primary embed.
-// This does not affect scoring: computeCosineSimilarity is mocked separately below and the ANN
-// path never calls it (adapter mocks supply raw hit scores directly).
+// The bindEmbeddingModel mock above returns a vector that ENCODES the model, so a mixed-model test
+// can prove each ANN call embedded the query under its OWN model rather than reusing the primary
+// embed. The ANN path never calls computeCosineSimilarity (adapter mocks supply raw hit scores).
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
   return {
