@@ -62,6 +62,7 @@ const summary = (id: string, title: string, model: string, updatedAt: string): C
 const SESSIONS = [
   summary('s-qwen', 'Qwen chat', QWEN, '2026-10-01T00:00:02.000Z'),
   summary('s-gemma', 'Gemma chat', GEMMA, '2026-10-01T00:00:01.000Z'),
+  summary('s-qwen-notes', 'Qwen notes', QWEN, '2026-10-01T00:00:00.000Z'),
 ];
 
 function quietBridge(overrides: Record<string, unknown>) {
@@ -118,6 +119,7 @@ beforeEach(() => {
     }
   );
   closeModels = undefined;
+  window.localStorage.clear();
   getModelSettings.mockReset();
   stubBridge();
 });
@@ -276,5 +278,27 @@ describe('a failed read of the model defaults', () => {
     await roundTripModels();
     expect(readError()).toBeNull();
     expect(await defaultLabel()).toBe('Default (High)');
+  });
+
+  it('drops a stored failure for a model once another chat reads it fine, and keeps one for another model', async () => {
+    const pending = () => new Promise<ModelSettings>(() => undefined);
+    const reads = { qwen: 0, gemma: 0 };
+    getModelSettings.mockImplementation(id => {
+      if (id === GEMMA) return ++reads.gemma === 1 ? Promise.reject(new Error('gemma unreadable')) : pending();
+      if (++reads.qwen === 1) return Promise.reject(new Error('store unreadable'));
+      return reads.qwen === 2 ? Promise.resolve({ effort: 'high' }) : pending();
+    });
+    await openShell();
+    await openSession('Qwen chat');
+    expect(readError()).toContain('store unreadable');
+    await openSession('Gemma chat');
+    expect(readError()).toContain('gemma unreadable');
+    await openSession('Qwen notes');
+    expect(readError()).toBeNull();
+
+    await openSession('Qwen chat');
+    expect(readError()).toBeNull();
+    await openSession('Gemma chat');
+    expect(readError()).toContain('gemma unreadable');
   });
 });

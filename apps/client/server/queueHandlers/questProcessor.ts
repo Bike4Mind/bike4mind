@@ -35,6 +35,7 @@ import {
   usageEventRepository,
 } from '@bike4mind/database';
 import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
+import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
@@ -115,6 +116,7 @@ export const getStaticOptions = () => {
       organizations: organizationRepository,
       mcpServers: mcpServerRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+      recordLimitEvent: recordUserLimitEvent,
       creditTransactions: creditTransactionRepository,
       usageEvents: usageEventRepository,
       operationalBilling: operationalBillingAdapters,

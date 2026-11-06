@@ -1,4 +1,4 @@
-import type { ISpendAlert, SpendRuleId } from '@bike4mind/common';
+import { escapeSlackLine, type ISpendAlert, type SpendRuleId } from '@bike4mind/common';
 import {
   ADMIN_LINKS,
   composeAlarmMessage,
@@ -38,8 +38,31 @@ const PLATFORM_RULES: ReadonlySet<SpendRuleId> = new Set(['platform_spike', 'pla
 
 const safe = escapeMrkdwn;
 
+/** A key name is user text on a single labeled line: no line breaks, bounded length. */
+const KEY_NAME_MAX = 60;
+const keyName = (name: string) =>
+  escapeSlackLine(name.length > KEY_NAME_MAX ? `${name.slice(0, KEY_NAME_MAX)}...` : name);
+
+const SLACK_FIELD_MAX = 2000;
+
+function foldedKeysField(names: string[]): string {
+  const heading = '*Via API keys*\n';
+  const listed: string[] = [];
+  for (const name of names) {
+    const formattedName = keyName(name);
+    const candidate = [...listed, formattedName];
+    const remaining = names.length - candidate.length;
+    const suffix = remaining > 0 ? `, +${remaining} more` : '';
+    if (heading.length + candidate.join(', ').length + suffix.length > SLACK_FIELD_MAX) break;
+    listed.push(formattedName);
+  }
+  const remaining = names.length - listed.length;
+  return `${heading}${listed.join(', ')}${remaining > 0 ? `, +${remaining} more` : ''}`;
+}
+
 const formatCredits = (credits: number) => Math.round(credits).toLocaleString('en-US');
 const formatUsd = (usd: number) => `$${usd.toFixed(2)}`;
+const listPriceNote = (creditUsd: number) => `approx. at list price, ${formatUsd(creditUsd * 1000)} per 1,000 credits`;
 
 function formatDuration(ms: number): string {
   const minutes = Math.max(1, Math.round(ms / 60_000));
@@ -60,7 +83,7 @@ function formatAmount(rule: SpendRuleId, amount: number, creditUsd: number): str
 
 function listPriceContext(stage: string, rule: SpendRuleId, creditUsd: number): string[] {
   const context = [safe(stage)];
-  if (rule !== 'platform_cost_spike') context.push(`approx. at list price, ${formatUsd(creditUsd)} per credit`);
+  if (rule !== 'platform_cost_spike') context.push(listPriceNote(creditUsd));
   return context;
 }
 
@@ -104,6 +127,10 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
     `*Ratio*\n${ratio === null ? 'n/a' : `x${ratio.toFixed(1)}`}`,
   ];
   if (scope.paidBy) fields.push(`*Paid by*\n${safe(scope.paidBy)}`);
+  const viaKeys = Array.isArray(alert.context.viaKeys)
+    ? alert.context.viaKeys.filter((name): name is string => typeof name === 'string')
+    : [];
+  if (viaKeys.length > 0) fields.push(foldedKeysField(viaKeys));
   // Platform ratios and floors are judged without trusted accounts; the reported total still includes them.
   if (trustedExcluded !== null) {
     const estimate = isCost ? ' (est.)' : '';
@@ -135,7 +162,7 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
 
   const context = [safe(stage), `${kind === 'escalate' ? 'escalated, ' : ''}${alert.severity}`];
   if (trusted) context.push('trusted-account limits');
-  if (!isCost) context.push(`approx. at list price, ${formatUsd(creditUsd)} per credit`);
+  if (!isCost) context.push(listPriceNote(creditUsd));
 
   return composeAlarmMessage({
     stage,

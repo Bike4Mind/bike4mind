@@ -476,11 +476,16 @@ export class ChatCompletionInvoke {
         freeTierAllowedModels,
       });
       for (const gatedModelId of [originalModel, ...researchModelIds]) {
-        await admission.assert(gatedModelId).catch(err => {
+        await admission.assert(gatedModelId).catch(async err => {
           // A free-tier caller picking a paid model is their plan, not a fault: warn, still refuse.
           const message = `Model ${gatedModelId} is not admitted: ${(err as Error).message}`;
-          if (isModelRequiresSubscriptionError(err)) this.logger.warn(message);
-          else this.logger.error(message);
+          if (isModelRequiresSubscriptionError(err)) {
+            this.logger.warn(message);
+            // Best-effort: a failed record must never replace the refusal rethrown below.
+            await this.db
+              .recordLimitEvent({ userId: this.user.id, kind: 'model_requires_paid_plan', model: gatedModelId })
+              .catch(recordError => this.logger.warn('[USER_LIMIT_EVENT] failed to record', recordError));
+          } else this.logger.error(message);
           throw err;
         });
       }

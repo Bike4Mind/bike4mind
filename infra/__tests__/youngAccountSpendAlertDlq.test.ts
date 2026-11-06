@@ -12,6 +12,12 @@ const declaration = cronSource.slice(
   cronSource.indexOf('// Signup Grant Held Release')
 );
 
+/** What alarmSlackMentionFunctionArgs() returns on a monitored stage; declared above the sliced source. */
+const MENTION = {
+  environment: { ALARM_SLACK_MENTION_PARAMETER: '/bike4mind/production/alarm-slack-mention' },
+  permissions: [{ actions: ['ssm:GetParameter'], resources: ['alarm-slack-mention-arn'] }],
+};
+
 function output<T>(value: T) {
   return { value, apply: <Result>(callback: (input: T) => Result) => callback(value) };
 }
@@ -36,6 +42,7 @@ function loadCron(source = declaration, runsScheduledJobs = true) {
   runInNewContext(source, {
     runsScheduledJobs,
     youngAccountSpendAlertDeadLetter: deadLetter,
+    youngAccountSpendAlertMention: MENTION,
     sst: { aws: { Cron: cron } },
     lambdaVpc: {},
     allSecrets: [],
@@ -58,7 +65,8 @@ function verifyDeadLetters(source = declaration) {
       schedule: 'rate(1 hour)',
       transform: { target: { deadLetterConfig: { arn: 'spend-alert-dlq' }, input: undefined } },
       function: expect.objectContaining({
-        permissions: [{ actions: ['sqs:SendMessage'], resources: ['spend-alert-dlq'] }],
+        environment: expect.objectContaining(MENTION.environment),
+        permissions: [{ actions: ['sqs:SendMessage'], resources: ['spend-alert-dlq'] }, ...MENTION.permissions],
         transform: { function: { deadLetterConfig: { targetArn: 'spend-alert-dlq' } } },
       }),
     })
@@ -103,7 +111,7 @@ describe('young-account spend alert failure recovery', () => {
   });
 
   it.each([
-    'permissions: [youngAccountSpendAlertDeadLetter.sendPermission],',
+    'permissions: [youngAccountSpendAlertDeadLetter.sendPermission, ...youngAccountSpendAlertMention.permissions],',
     'transform: youngAccountSpendAlertDeadLetter.functionTarget,',
     '...youngAccountSpendAlertDeadLetter.ruleTarget.target,',
     'youngAccountSpendAlertDeadLetter.allowRules([$util.output(youngAccountSpendAlert)]);',

@@ -54,6 +54,7 @@ import {
 import {
   activeParamsFraction,
   fitMarginBytes,
+  hubLicenseLabel,
   memoryBudgets,
   ollamaBuildBytes,
   ollamaBuildDraftMax,
@@ -1150,7 +1151,8 @@ export class ModelHubService {
         name: entry.name,
         why: entry.why,
         params: paramsLabel(entry),
-        licenseName: entry.license.id,
+        // Desktop reads the v2 list, which has no labels, so this maps the id; v3 labels are not used here.
+        licenseName: hubLicenseLabel(entry.license),
         licenseUrl: entry.license.source,
         licenseKind: permissive(entry) ? 'permissive' : 'restricted',
         thinking: entry.capabilities.thinking,
