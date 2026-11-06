@@ -231,5 +231,6 @@ describe('turntablePath', () => {
   it('names the clip after the model and its lighting', () => {
     expect(turntablePath(join('/p', 'chest.model.js'), 'studio')).toBe(join('/p', 'chest-turntable.webm'));
     expect(turntablePath(join('/p', 'Lamp.GLB'), 'night')).toBe(join('/p', 'Lamp-night-turntable.webm'));
+    expect(turntablePath(join('/p', 'Lamp.GLB'), 'sunset')).toBe(join('/p', 'Lamp-sunset-turntable.webm'));
   });
 });

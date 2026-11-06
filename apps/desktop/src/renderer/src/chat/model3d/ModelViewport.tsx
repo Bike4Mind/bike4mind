@@ -5,7 +5,14 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { ModelJoint, ModelView } from '@shared/model3d';
 import { newPartNames, startBuildIn } from './buildIn';
 import { explodeModel, frameCamera, poseJoints, VIEW_DIRECTIONS } from './modelScene';
-import { addGlowLights, enableShadows, ModelComposer, ModelStage, type StageLighting } from './modelStage';
+import {
+  addGlowLights,
+  enableShadows,
+  lightingGlows,
+  ModelComposer,
+  ModelStage,
+  type StageLighting,
+} from './modelStage';
 import {
   recordCanvas,
   swing,
@@ -36,7 +43,7 @@ type Props = {
   wireframe: boolean;
   /** A faded measuring grid on the floor; the floor itself is a shadow catcher either way. */
   grid: boolean;
-  /** Studio softboxes, or night: moonlight, with glowing parts blooming and lighting what is near. */
+  /** The studio softboxes or another preset; LIGHTING in modelStage.ts says what each one does. */
   lighting: StageLighting;
   dark: boolean;
   /** Dims the model while its latest build has failed. */
@@ -362,7 +369,7 @@ export function ModelViewport({
       });
       highlightPart(shown, pickedRef.current);
       enableShadows(shown);
-      if (lighting === 'night') addGlowLights(shown, current.stage.radius);
+      if (lightingGlows(lighting)) addGlowLights(shown, current.stage.radius);
       current.content.add(shown);
       // Re-frame only when a different model opens, so a rebuild keeps the user's camera.
       if (framedFor.current !== frameKey) {

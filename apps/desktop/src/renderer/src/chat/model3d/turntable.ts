@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { ModelJoint, ModelLighting } from '@shared/model3d';
 import { explodeModel, frameCamera, openPose, poseJoints, sceneJoints, VIEW_DIRECTIONS } from './modelScene';
-import { addGlowLights, enableShadows, ModelComposer, ModelStage } from './modelStage';
+import { addGlowLights, enableShadows, lightingGlows, ModelComposer, ModelStage } from './modelStage';
 
 /**
  * A turntable clip of the model pane: one full orbit while every joint swings through its range and
@@ -270,7 +270,7 @@ export async function renderTurntable(
     poseJoints(subject, {});
     const iso = VIEW_DIRECTIONS.iso;
     const shots = turntableShots(camera, subject, new THREE.Vector3(iso[0], iso[1], iso[2]), {});
-    if (lighting === 'night') addGlowLights(subject, stage.radius);
+    if (lightingGlows(lighting)) addGlowLights(subject, stage.radius);
     const joints = sceneJoints(subject);
     return await recordCanvas(renderer.domElement, progress => {
       const shot = turntableCamera(shots, progress);

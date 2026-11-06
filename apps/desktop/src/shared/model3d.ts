@@ -74,8 +74,11 @@ export const MAX_IOR = 2.333;
 export const MODEL_MOTIONS = ['turn', 'slide'] as const;
 export type ModelMotion = (typeof MODEL_MOTIONS)[number];
 
-/** How the pane lights a model: the softbox studio, or moonlight in which glowing parts light the scene. */
-export const MODEL_LIGHTINGS = ['studio', 'night'] as const;
+/**
+ * How the pane lights a model: the softbox studio, a low warm sun with long shadows, a tungsten
+ * workshop lamp, or moonlight. In the workshop and at night, glowing parts light the scene.
+ */
+export const MODEL_LIGHTINGS = ['studio', 'sunset', 'workshop', 'night'] as const;
 export type ModelLighting = (typeof MODEL_LIGHTINGS)[number];
 
 /**
