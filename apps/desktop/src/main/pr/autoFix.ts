@@ -262,20 +262,27 @@ const FORCE_PUSH = /(^|\s)(--force(-with-lease|-if-includes)?(=\S*)?|-[A-Za-z]*f
 const MERGE = /\bgh\s+pr\s+merge\b|\/pulls\/\d+\/merge\b|\bmergePullRequest\b|\benablePullRequestAutoMerge\b/;
 
 /**
- * Why a shell command is refused inside an auto-fix turn, or null. The prompt already asks the
- * agent not to, and this is what makes it so: a force-push or a merge is the one outcome of an
- * unattended turn that cannot be taken back.
+ * Whether a shell command force-pushes or merges a PR, or null. Shared by the auto-fix and loop
+ * runner guards: either is the one outcome of an unattended turn that cannot be taken back.
  *
  * Read per command segment, so `git add . && git push --force` is caught. A script file that
  * force-pushes is beyond a textual check; the approval gate still sees it in 'ask' mode.
  */
-export function autoFixRefusal(command: string): string | null {
+export function shellGuardViolation(command: string): 'force-push' | 'merge' | null {
   for (const segment of command.split(/&&|\|\||[;|\n]/)) {
     if (/\bgit\b.*\bpush\b/.test(segment) && FORCE_PUSH.test(segment.replace(/^.*?\bpush\b/, ' '))) {
-      return 'An auto-fix turn may not force-push. Push a new commit on top instead.';
+      return 'force-push';
     }
-    if (MERGE.test(segment)) return 'An auto-fix turn may not merge the pull request; the user decides that.';
+    if (MERGE.test(segment)) return 'merge';
   }
+  return null;
+}
+
+/** Why a shell command is refused inside an auto-fix turn, or null. */
+export function autoFixRefusal(command: string): string | null {
+  const violation = shellGuardViolation(command);
+  if (violation === 'force-push') return 'An auto-fix turn may not force-push. Push a new commit on top instead.';
+  if (violation === 'merge') return 'An auto-fix turn may not merge the pull request; the user decides that.';
   return null;
 }
 

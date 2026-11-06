@@ -98,6 +98,26 @@ describe('agentExecutor toolDeps wiring', () => {
     );
   });
 
+  // The loop ticket tools are not in b4mTools, so dropping either spread typechecks and every loop run
+  // silently loses them. The gate reads the persisted doc, so a continuation keeps them.
+  it('offers the loop ticket tools to loop runs after the profile, from the persisted execution', () => {
+    expect(source).toMatch(/resolveLoopTicketTools\(\{\s*loopId: execution\.loopId,/);
+    expect(source).toMatch(
+      /applySessionToolPolicy\(\{\s*toolNames: \[[^\]]*\.\.\.profileEnabledTools,[^\]]*\.\.\.loopTicketEnabledTools,/
+    );
+    expect(source).toMatch(/externalTools: \{[^}]*\.\.\.loopTicketExternalTools,/);
+  });
+
+  // Same shape for the directive tools; the overseer pair is offered only when the loop has `oversees`
+  // (agentExecutor.loopDirectiveTools.test.ts).
+  it('offers the loop directive tools to loop runs after the profile, from the persisted execution', () => {
+    expect(source).toMatch(/resolveLoopDirectiveTools\(\{\s*loopId: execution\.loopId,/);
+    expect(source).toMatch(
+      /applySessionToolPolicy\(\{\s*toolNames: \[[^\]]*\.\.\.loopTicketEnabledTools,\s*\.\.\.loopDirectiveEnabledTools,/
+    );
+    expect(source).toMatch(/externalTools: \{[^}]*\.\.\.loopDirectiveExternalTools,/);
+  });
+
   it('subtracts the persisted scope denials in the final tool policy pass', () => {
     expect(source).toMatch(/applySessionToolPolicy\(\{[^}]*scopeDeniedTools: execution\.scopeDeniedTools,/);
   });

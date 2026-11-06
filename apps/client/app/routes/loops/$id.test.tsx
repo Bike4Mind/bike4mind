@@ -1,0 +1,356 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import React from 'react';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes';
+
+const {
+  navigate,
+  search,
+  loopState,
+  actions,
+  eventsState,
+  ticketsState,
+  loopsState,
+  overrideDirective,
+  resolveUnsure,
+  config,
+  toast,
+  runInfo,
+} = vi.hoisted(() => ({
+  runInfo: { data: undefined as unknown },
+  toast: { info: vi.fn() },
+  resolveUnsure: { mutate: vi.fn(), isPending: false, variables: undefined },
+  config: { toolAvailability: undefined as Record<string, boolean> | undefined },
+  navigate: vi.fn(),
+  loopsState: { data: [] as unknown[] },
+  overrideDirective: { mutate: vi.fn() },
+  eventsState: { data: undefined as unknown },
+  ticketsState: { data: undefined as unknown },
+  search: { run: undefined as string | undefined },
+  loopState: { data: undefined as unknown, isLoading: false, error: null as unknown },
+  actions: { onDeleted: undefined as (() => void) | undefined },
+}));
+
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => navigate,
+  useParams: () => ({ id: 'l1' }),
+  useSearch: () => search,
+}));
+vi.mock('sonner', () => ({ toast }));
+vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: () => {} }));
+vi.mock('@client/app/components/Agent/AgentPageHeader', () => ({
+  default: ({ rightActions }: { rightActions?: React.ReactNode }) => <div>{rightActions}</div>,
+}));
+vi.mock('@client/app/components/Loops/LoopActions', () => ({
+  default: ({ onDeleted }: { onDeleted?: () => void }) => {
+    actions.onDeleted = onDeleted;
+    return null;
+  },
+}));
+vi.mock('@client/app/components/Loops/LoopTicketBoard', () => ({
+  default: ({ onViewRun }: { onViewRun: (id: string) => void }) => (
+    <button data-testid="loop-ticket-view-run-link" onClick={() => onViewRun('ticket-run')} />
+  ),
+}));
+vi.mock('@client/app/components/Session/AgentExecution/AgentRunViewer', () => ({
+  default: ({ executionId }: { executionId: string }) => <div data-testid="agent-run-viewer">{executionId}</div>,
+}));
+vi.mock('@client/app/hooks/data/loops', async importOriginal => ({
+  countNeedsYou: (await importOriginal<typeof import('@client/app/hooks/data/loops')>()).countNeedsYou,
+  useLoop: () => loopState,
+  useLoopTickets: () => ticketsState,
+  useLoopEvents: () => eventsState,
+  useLoops: () => loopsState,
+  useOverrideDirective: () => overrideDirective,
+  useResolveUnsure: () => resolveUnsure,
+  useLoopRunInfo: () => runInfo,
+}));
+vi.mock('@client/app/hooks/data/settings', () => ({ useConfig: () => ({ data: config }) }));
+
+import LoopDetailPage from './$id';
+
+const appTheme = extendTheme({ ...getThemeConfig() });
+const renderPage = () =>
+  render(
+    <CssVarsProvider theme={appTheme}>
+      <LoopDetailPage />
+    </CssVarsProvider>
+  );
+
+const loop = (overrides: Record<string, unknown> = {}) => ({
+  id: 'l1',
+  name: 'Digest',
+  model: 'm1',
+  sessionId: 's1',
+  intervalMinutes: 30,
+  stages: ['todo', 'done'],
+  tools: ['web_search', 'github__create_issue'],
+  status: 'live',
+  memory: { notes: '', nextAction: '' },
+  runCount: 2,
+  creditsUsed: 0,
+  creditsToday: 0,
+  lastExecutionId: 'last-run',
+  ...overrides,
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  search.run = undefined;
+  loopState.data = loop();
+  loopState.error = null;
+  eventsState.data = undefined;
+  ticketsState.data = undefined;
+  loopsState.data = [];
+  config.toolAvailability = undefined;
+});
+
+describe('LoopDetailPage states', () => {
+  it('shows spend today against the budget', () => {
+    loopState.data = loop({ creditsToday: 5, budgetCreditsPerDay: 10 });
+    renderPage();
+    expect(screen.getByTestId('loop-detail-spend-today')).toHaveTextContent('5 / 10 credits today');
+  });
+
+  it('names the loop tools this server cannot run, and shows nothing when all are available', () => {
+    config.toolAvailability = { web_search: true };
+    const { unmount } = renderPage();
+    expect(screen.queryByTestId('loop-detail-unavailable-tools')).not.toBeInTheDocument();
+    unmount();
+
+    config.toolAvailability = { web_search: false };
+    renderPage();
+    expect(screen.getByTestId('loop-detail-unavailable-tools')).toHaveTextContent(
+      "Web Search isn't available on this server, so runs skip it."
+    );
+  });
+
+  it('renders the memory as markdown', () => {
+    loopState.data = loop({
+      memory: { notes: '**done** - a\n\n- one\n- two', nextAction: 'check [x](https://e.com)' },
+    });
+    renderPage();
+    const notes = screen.getByTestId('loop-detail-memory-notes');
+    expect(notes.querySelector('strong')).toHaveTextContent('done');
+    expect(notes.querySelectorAll('li')).toHaveLength(2);
+    expect(screen.getByTestId('loop-detail-memory-next-action').querySelector('a')).toHaveAttribute('target', '_blank');
+  });
+
+  it('says not found on a 404 and links back to the list', () => {
+    loopState.data = undefined;
+    loopState.error = Object.assign(new Error('nope'), { isAxiosError: true, response: { status: 404 } });
+    renderPage();
+    expect(screen.getByTestId('loop-detail-not-found')).toHaveTextContent('Loop not found.');
+    fireEvent.click(screen.getByTestId('loop-detail-back-btn'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/loops' });
+  });
+
+  it('does not call a failed load "not found"', () => {
+    loopState.data = undefined;
+    loopState.error = Object.assign(new Error('boom'), { isAxiosError: true, response: { status: 500 } });
+    renderPage();
+    expect(screen.getByTestId('loop-detail-not-found')).toHaveTextContent("Couldn't load this loop.");
+  });
+
+  it('returns to the list after the loop is deleted', () => {
+    renderPage();
+    actions.onDeleted?.();
+    expect(navigate).toHaveBeenCalledWith({ to: '/loops' });
+  });
+});
+
+describe('LoopDetailPage run drawer', () => {
+  it('opens a ticket run in the drawer via ?run=', () => {
+    renderPage();
+    expect(screen.queryByTestId('agent-run-viewer')).toBeNull();
+    fireEvent.click(screen.getByTestId('loop-ticket-view-run-link'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/loops/$id', params: { id: 'l1' }, search: { run: 'ticket-run' } });
+  });
+
+  it('opens the newest run from "Latest run"', () => {
+    loopState.data = loop();
+    renderPage();
+    fireEvent.click(screen.getByTestId('loop-detail-latest-run-link'));
+    expect(navigate).toHaveBeenLastCalledWith(expect.objectContaining({ search: { run: 'last-run' } }));
+    expect(screen.queryByTestId('loop-detail-active-runs')).toBeNull();
+    expect(screen.queryByTestId('loop-detail-lanes')).toBeNull();
+  });
+
+  it('lists each active run with View run, by ticket title or as a goal run', () => {
+    loopState.data = loop({ status: 'live', maxConcurrent: 3, activeExecutionIds: ['run-a', 'run-b'] });
+    ticketsState.data = {
+      stages: [{ stage: 'todo', tickets: [{ id: 't1', title: 'Fix login', executionId: 'run-a' }] }],
+      runLimit: 3,
+    };
+    renderPage();
+    expect(screen.getByTestId('loop-detail-lanes').textContent).toContain('2/3 running');
+    expect(screen.getByTestId('loop-detail-active-run-run-a').textContent).toContain('Fix login');
+    expect(screen.getByTestId('loop-detail-active-run-run-b').textContent).toContain('Goal run');
+    fireEvent.click(screen.getByTestId('loop-detail-active-run-view-run-b'));
+    expect(navigate).toHaveBeenLastCalledWith(expect.objectContaining({ search: { run: 'run-b' } }));
+    fireEvent.click(screen.getByTestId('loop-detail-active-run-view-run-a'));
+    expect(navigate).toHaveBeenLastCalledWith(expect.objectContaining({ search: { run: 'run-a' } }));
+  });
+
+  it('labels an active run "Run" until the tickets load', () => {
+    loopState.data = loop({ status: 'live', activeExecutionIds: ['run-a'] });
+    ticketsState.data = undefined;
+    renderPage();
+    expect(screen.getByTestId('loop-detail-active-run-run-a').textContent).toContain('Run');
+    expect(screen.getByTestId('loop-detail-active-run-run-a').textContent).not.toContain('Goal run');
+  });
+
+  it('links an errored loop to its failed run, and only an errored loop', () => {
+    loopState.data = loop({ status: 'error', statusReason: 'Run failed' });
+    const { unmount } = renderPage();
+    expect(screen.getByTestId('loop-status-reason').textContent).toBe('Run failed');
+    fireEvent.click(screen.getByTestId('loop-last-error-run-link'));
+    expect(navigate).toHaveBeenLastCalledWith(expect.objectContaining({ search: { run: 'last-run' } }));
+    unmount();
+
+    loopState.data = loop();
+    renderPage();
+    expect(screen.queryByTestId('loop-last-error-run-link')).toBeNull();
+  });
+
+  it('says why a live loop is held back, and shows its alarm', () => {
+    loopState.data = loop({
+      hold: { kind: 'capacity', at: new Date() },
+      alarm: { kind: 'idle_with_work', reason: 'Ready tickets waiting', since: new Date() },
+    });
+    renderPage();
+    expect(screen.getByTestId('loop-hold-reason').textContent).toBe('Waiting for a free run slot (server-wide limit)');
+    expect(screen.getByTestId('loop-alarm-reason').textContent).toBe('Ready tickets waiting');
+  });
+
+  it('renders the viewer for ?run= and clears the param on close', () => {
+    search.run = 'ticket-run';
+    renderPage();
+    expect(screen.getByTestId('loop-run-drawer')).toBeInTheDocument();
+    expect(screen.getByTestId('agent-run-viewer')).toHaveTextContent('ticket-run');
+    fireEvent.click(screen.getByTestId('loop-run-drawer-close-btn'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/loops/$id', params: { id: 'l1' }, search: {} });
+  });
+
+  it("shows the run's model, and marks an escalated or a triage run", () => {
+    search.run = 'ticket-run';
+    try {
+      runInfo.data = { model: 'strong', escalated: true };
+      const { unmount } = renderPage();
+      expect(screen.getByTestId('loop-run-model')).toHaveTextContent('strong');
+      expect(screen.getByTestId('loop-run-escalated')).toBeInTheDocument();
+      expect(screen.queryByTestId('loop-run-triage')).toBeNull();
+      unmount();
+
+      runInfo.data = { model: 'cheap', loopRunKind: 'triage' };
+      renderPage();
+      expect(screen.getByTestId('loop-run-triage')).toBeInTheDocument();
+      expect(screen.queryByTestId('loop-run-escalated')).toBeNull();
+    } finally {
+      runInfo.data = undefined;
+    }
+  });
+});
+
+describe('LoopDetailPage log', () => {
+  const unsure = (id: string, resolution?: unknown) => ({
+    id,
+    kind: 'unsure',
+    executionId: `run-${id}`,
+    iteration: 1,
+    confidence: 0.3,
+    reason: 'thin',
+    createdAt: '2026-10-29T10:00:00.000Z',
+    ...(resolution ? { resolution } : {}),
+  });
+
+  it('counts the unsure runs that need the owner', () => {
+    renderPage();
+    expect(screen.queryByTestId('loop-detail-needs-you')).toBeNull();
+
+    eventsState.data = [unsure('a'), unsure('b'), unsure('c', { outcome: 'resumed', at: '2026-10-29T11:00:00.000Z' })];
+    renderPage();
+    expect(screen.getByTestId('loop-detail-needs-you')).toHaveTextContent('2 need you');
+  });
+
+  it('opens a logged run in the drawer', () => {
+    eventsState.data = [unsure('a')];
+    renderPage();
+    fireEvent.click(screen.getByTestId('loop-log-view-run-btn'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/loops/$id', params: { id: 'l1' }, search: { run: 'run-a' } });
+  });
+});
+
+describe('LoopDetailPage oversight', () => {
+  it('links the loops this one oversees and the loops overseeing it', () => {
+    loopState.data = loop({ oversees: ['w1'] });
+    loopsState.data = [
+      { id: 'l1', name: 'Self', oversees: ['w1'] },
+      { id: 'w1', name: 'Closer' },
+      { id: 'o1', name: 'Lead', oversees: ['l1'] },
+      { id: 'x1', name: 'Unrelated' },
+    ];
+    renderPage();
+    const line = screen.getByTestId('loop-detail-oversight');
+    expect(line.textContent).toBe('Oversees: CloserOverseen by: Lead');
+    fireEvent.click(screen.getByRole('button', { name: 'Lead' }));
+    expect(navigate).toHaveBeenCalledWith({ to: '/loops/$id', params: { id: 'o1' } });
+  });
+
+  it('shows nothing for a loop outside any oversight', () => {
+    renderPage();
+    expect(screen.queryByTestId('loop-detail-oversight')).toBeNull();
+  });
+
+  it('wires the log override to the mutation', () => {
+    eventsState.data = [
+      {
+        id: 'd1',
+        kind: 'directive',
+        loopId: 'l1',
+        fromLoopId: 'o1',
+        fromLoopName: 'Lead',
+        executionId: 'x',
+        instruction: 'Do X',
+        reason: 'Y',
+        state: 'open',
+        replies: [],
+        createdAt: '2026-10-29T10:00:00.000Z',
+      },
+    ];
+    renderPage();
+    fireEvent.click(screen.getByTestId('loop-log-directive-withdraw-btn'));
+    fireEvent.click(screen.getByTestId('loop-log-directive-confirm-btn'));
+    expect(overrideDirective.mutate).toHaveBeenCalledWith({ loopId: 'l1', eventId: 'd1', action: 'withdraw' });
+  });
+
+  it('tells the owner when their answer was saved but the ticket had moved on', () => {
+    eventsState.data = [
+      {
+        id: 'u1',
+        kind: 'unsure',
+        source: 'asked',
+        executionId: 'x',
+        workItemId: 't1',
+        ticketTitle: 'Pick a region',
+        reason: 'EU or US?',
+        createdAt: '2026-10-29T10:00:00.000Z',
+      },
+    ];
+    renderPage();
+    fireEvent.change(screen.getByTestId('loop-log-unsure-answer-input'), {
+      target: { value: 'EU' },
+    });
+    fireEvent.click(screen.getByTestId('loop-log-unsure-resume-btn'));
+    expect(resolveUnsure.mutate).toHaveBeenCalledWith(
+      { loopId: 'l1', eventId: 'u1', outcome: 'resumed', note: 'EU' },
+      expect.any(Object)
+    );
+    const { onSuccess } = resolveUnsure.mutate.mock.calls[0][1];
+    onSuccess({});
+    expect(toast.info).not.toHaveBeenCalled();
+    onSuccess({ ticketSkipped: true });
+    expect(toast.info).toHaveBeenCalledWith(expect.stringContaining('left as it is'));
+  });
+});

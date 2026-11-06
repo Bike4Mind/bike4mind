@@ -18,8 +18,14 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
 import { assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
 import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
 import { creditService, organizationService } from '@bike4mind/services';
-import { CreditHolderType, MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import {
+  canAdministerOrganization,
+  CreditHolderType,
+  isOrgMember,
+  MAX_STORAGE_LIMIT_MB,
+  toSafeOrganization,
+} from '@bike4mind/common';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { Request } from 'express';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
@@ -37,6 +43,7 @@ const updateOrgBodySchema = z.object({
   systemPrompt: z.string().max(10000).optional(),
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
   storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
+  loopsGreenCiMergeDisabled: z.boolean().optional(),
 });
 
 /**
@@ -111,7 +118,17 @@ const handler = baseApi()
         throw new BadRequestError('Invalid organization id');
       }
 
-      const { currentCredits, ...profile } = updateOrgBodySchema.parse(req.body);
+      const { currentCredits, loopsGreenCiMergeDisabled, ...profile } = updateOrgBodySchema.parse(req.body);
+      // Org admins only, checked here: organizationService.update admits write-ACL members and 404s
+      // appointed admins (see findUpdateAccessById).
+      if (loopsGreenCiMergeDisabled !== undefined) {
+        const org = await organizationRepository.findById(orgId);
+        // A non-member gets the same 404 as for a missing org.
+        if (!org || !isOrgMember(req.user!, org)) throw new NotFoundError('Organization not found');
+        if (!canAdministerOrganization(req.user!, org)) {
+          throw new ForbiddenError('Only an organization admin can change its loop merge setting');
+        }
+      }
       // Non-admins cannot move credits here; their value is ignored, as before.
       const updateProfile = () =>
         organizationService.update(
@@ -124,13 +141,23 @@ const handler = baseApi()
           }
         );
 
-      const updatedOrganization =
-        req.user!.isAdmin && currentCredits !== undefined
+      const profileSent =
+        loopsGreenCiMergeDisabled === undefined ||
+        currentCredits !== undefined ||
+        Object.values(profile).some(value => value !== undefined);
+      let updatedOrganization = !profileSent
+        ? null
+        : req.user!.isAdmin && currentCredits !== undefined
           ? await withTransaction(async () => {
               await applyAdminCreditEdit(req, orgId, currentCredits);
               return updateProfile();
             })
           : await updateProfile();
+      if (loopsGreenCiMergeDisabled !== undefined) {
+        await organizationRepository.update({ id: orgId, loopsGreenCiMergeDisabled });
+        updatedOrganization = await organizationRepository.findById(orgId);
+        if (!updatedOrganization) throw new NotFoundError('Organization not found');
+      }
 
       return res.json(toSafeOrganization(updatedOrganization, { userId: req.user!.id, isAdmin: req.user!.isAdmin }));
     })

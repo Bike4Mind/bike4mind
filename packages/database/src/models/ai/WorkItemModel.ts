@@ -6,12 +6,19 @@ import {
   IWorkItemGraphEdge,
   IWorkItemReadyResult,
   IWorkItemRepository,
+  WORK_ITEM_BLOCKERS,
+  WORK_ITEM_PRIORITIES,
+  WORK_ITEM_PRIORITY_SETTERS,
+  WorkItemPriority,
   WORK_ITEM_STATUSES,
   WorkItemPatch,
+  WorkItemStatus,
+  workItemPriorityRank,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { softDeletePlugin } from '../../utils/mongo';
+import { Loop } from './LoopModel';
 
 const ModelName = 'WorkItem';
 
@@ -26,6 +33,16 @@ const ModelName = 'WorkItem';
  * (`truncated`) rather than hidden.
  */
 export const MAX_GRAPH_ITEMS = 2000;
+
+/**
+ * ponytail: candidate window for `listReadyForLoop`, cut after the priority sort and before the dependency
+ * filter. Lower priorities starve only while 200+ higher-or-equal open tickets fill it (even ones still waiting on
+ * open deps), and finish-first applies within the window.
+ */
+const LOOP_READY_CANDIDATES = 200;
+
+/** ponytail: pages of parked tickets `reopenSatisfiedBlocks` reads per call; ones further on wait until earlier ones move. */
+const REOPEN_SCAN_PAGES = 25;
 
 export interface IWorkItemModel extends Model<IWorkItem> {}
 
@@ -71,12 +88,17 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     return results.map(doc => doc.toJSON());
   }
 
-  async listReadyForUser(userId: string): Promise<IWorkItemReadyResult> {
-    const { items, truncated } = await this.loadAllForUser(userId);
+  async listReadyForUser(userId: string, loopId?: string): Promise<IWorkItemReadyResult> {
+    // Closed loop tickets pile up; leaving them out keeps them from crowding plain items out of the
+    // window, and a missing dependency already counts as satisfied below.
+    const { items, truncated } = await this.loadAllForUser(userId, { skipClosedLoopTickets: true });
     const statusById = new Map(items.map(item => [item.id, item.status]));
 
+    // Readiness is computed over every item so a dependency on a loop ticket is honoured, but loop
+    // tickets themselves are worked by their loop, so they show only when asked for by loopId.
     const data = items.filter(
       item =>
+        (loopId ? item.loopId === loopId : !item.loopId) &&
         item.status === 'open' &&
         item.dependencies.every(depId => {
           const depStatus = statusById.get(depId);
@@ -108,19 +130,305 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     };
   }
 
-  async updateForUser(id: string, userId: string, patch: WorkItemPatch): Promise<IWorkItem | null> {
+  async findNextReadyForLoop(
+    userId: string,
+    loopId: string,
+    stages: string[],
+    skipStages: string[] = []
+  ): Promise<IWorkItem | null> {
+    return (await this.listReadyForLoop(userId, loopId, stages, skipStages))[0] ?? null;
+  }
+
+  /**
+   * A loop's open tickets whose dependencies are closed, in the order its runs take them: highest priority,
+   * then finish first (a later stage before an earlier one), then oldest first.
+   */
+  async listReadyForLoop(
+    userId: string,
+    loopId: string,
+    stages: string[],
+    skipStages: string[] = [],
+    opts: { onlyPriorities?: WorkItemPriority[] } = {}
+  ): Promise<IWorkItem[]> {
+    return this.listReady(userId, loopId, stages, { $nin: [stages.at(-1) ?? '', ...skipStages] }, opts.onlyPriorities);
+  }
+
+  async listUntriagedForLoop(userId: string, loopId: string, limit: number): Promise<IWorkItem[]> {
+    const results = await this.workItemModel
+      .find({ userId, loopId, deletedAt: null, status: 'open', priority: { $exists: false }, epic: { $ne: true } })
+      .sort({ createdAt: 1, _id: 1 })
+      .limit(limit);
+    return results.map(doc => doc.toJSON());
+  }
+
+  async defaultUntriaged(ids: string[], now: Date): Promise<number> {
+    if (ids.length === 0) return 0;
+    const result = await this.workItemModel.updateMany(
+      { _id: { $in: ids }, deletedAt: null, status: 'open', priority: { $exists: false }, epic: { $ne: true } },
+      { $set: { priority: 'p2', prioritySetAt: now, prioritySetBy: 'agent' } }
+    );
+    return result.modifiedCount;
+  }
+
+  async demoteIfAgentSet(id: string, now: Date): Promise<boolean> {
+    const result = await this.workItemModel.updateOne(
+      { _id: id, priority: 'p2', prioritySetBy: { $ne: 'owner' }, deletedAt: null },
+      { $set: { priority: 'p3', prioritySetAt: now, prioritySetBy: 'demote' } }
+    );
+    return result.modifiedCount > 0;
+  }
+
+  async listUrgentForLoops(limit: number): Promise<IWorkItem[]> {
+    const results = await this.workItemModel
+      .find({
+        priority: { $in: ['p0', 'p1'] },
+        status: { $in: ['open', 'in_progress', 'blocked'] },
+        loopId: { $exists: true },
+        deletedAt: null,
+      })
+      .limit(limit);
+    return results.map(doc => doc.toJSON());
+  }
+
+  async listReadyInStages(userId: string, loopId: string, stages: string[], inStages: string[]): Promise<IWorkItem[]> {
+    const last = stages.at(-1);
+    return this.listReady(userId, loopId, stages, { $in: inStages.filter(stage => stage !== last) });
+  }
+
+  private async listReady(
+    userId: string,
+    loopId: string,
+    stages: string[],
+    stageFilter: Record<string, string[]>,
+    onlyPriorities?: WorkItemPriority[]
+  ): Promise<IWorkItem[]> {
+    // Stages are filtered and priority is sorted in the query, so neither excluded stages nor a backlog of
+    // lower-priority tickets can push a p0 out of the candidate window. An untriaged ticket (no priority) waits
+    // for its triage run.
+    const docs = await this.workItemModel.aggregate([
+      {
+        $match: {
+          userId,
+          loopId,
+          deletedAt: null,
+          status: 'open',
+          stage: stageFilter,
+          priority: onlyPriorities ? { $in: onlyPriorities } : { $exists: true },
+        },
+      },
+      { $sort: { priority: 1, createdAt: 1 } },
+      { $limit: LOOP_READY_CANDIDATES },
+    ]);
+    const candidates: IWorkItem[] = docs.map(doc => this.workItemModel.hydrate(doc).toJSON());
+    const depIds = [...new Set(candidates.flatMap(item => item.dependencies))];
+    const deps = await this.findManyByIdsForUser(depIds, userId);
+    const open = new Set(deps.filter(dep => dep.status !== 'closed').map(dep => dep.id));
+    const stageIndex = (item: IWorkItem) => stages.indexOf(item.stage ?? '');
+    // Array.prototype.sort is stable, so equal keys keep the createdAt order.
+    return candidates
+      .filter(item => item.dependencies.every(depId => !open.has(depId)))
+      .sort(
+        (a, b) => workItemPriorityRank(a.priority) - workItemPriorityRank(b.priority) || stageIndex(b) - stageIndex(a)
+      );
+  }
+
+  async claimForRun(id: string, loopId: string): Promise<IWorkItem | null> {
+    const result = await this.workItemModel.findOneAndUpdate(
+      { _id: id, loopId, deletedAt: null, status: 'open' },
+      { $set: { status: 'in_progress' }, $inc: { runCount: 1 } },
+      { new: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  async claimForRunner(
+    id: string,
+    userId: string,
+    loopId: string,
+    inStages: string[],
+    executionId: string
+  ): Promise<IWorkItem | null> {
+    const result = await this.workItemModel.findOneAndUpdate(
+      { _id: id, userId, loopId, deletedAt: null, status: 'open', stage: { $in: inStages } },
+      { $set: { status: 'in_progress', executionId }, $inc: { runCount: 1 } },
+      { new: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  /** Tickets of a loop created or changed in [from, to]; a run that touched none changed nothing on the board. */
+  async countTouchedForLoop(userId: string, loopId: string, from: Date, to: Date): Promise<number> {
+    return this.workItemModel.countDocuments({ userId, loopId, updatedAt: { $gte: from, $lte: to } });
+  }
+
+  async setExecution(id: string, executionId: string): Promise<void> {
+    await this.workItemModel.updateOne({ _id: id }, { $set: { executionId } });
+  }
+
+  async releaseClaim(id: string): Promise<void> {
+    await this.workItemModel.updateOne(
+      { _id: id, status: 'in_progress' },
+      { $set: { status: 'open' }, $unset: { executionId: '' }, $inc: { runCount: -1 } }
+    );
+  }
+
+  async listInProgressForLoops(limit: number): Promise<IWorkItem[]> {
+    const results = await this.workItemModel
+      .find({ status: 'in_progress', loopId: { $exists: true }, deletedAt: null })
+      .sort({ updatedAt: 1 })
+      .limit(limit);
+    return results.map(doc => doc.toJSON());
+  }
+
+  async releaseStranded(id: string, executionId?: string): Promise<boolean> {
+    const result = await this.workItemModel.updateOne(
+      { _id: id, status: 'in_progress', executionId: executionId ?? { $exists: false } },
+      { $set: { status: 'open' }, $unset: { executionId: '' }, $inc: { runCount: -1 } }
+    );
+    return result.modifiedCount > 0;
+  }
+
+  async findByExecutionId(executionId: string): Promise<IWorkItem | null> {
+    const result = await this.workItemModel.findOne({ executionId, deletedAt: null });
+    return result?.toJSON() ?? null;
+  }
+
+  async foldTicketRun(id: string, executionId: string, patch: WorkItemPatch, uncount = false): Promise<boolean> {
+    const { set, unset } = splitPatch(patch);
+    const result = await this.workItemModel.updateOne(
+      { _id: id, executionId, status: 'in_progress', deletedAt: null },
+      {
+        ...(Object.keys(set).length > 0 && { $set: set }),
+        ...(Object.keys(unset).length > 0 && { $unset: unset }),
+        ...(uncount && { $inc: { runCount: -1 } }),
+      }
+    );
+    return result.modifiedCount > 0;
+  }
+
+  async resumeBlockedRun(id: string, executionId: string): Promise<boolean> {
+    const result = await this.workItemModel.updateOne(
+      // A ticket its run parked on dependencies stays parked; the sweep reopens it.
+      { _id: id, executionId, status: 'blocked', blockedOn: { $exists: false }, deletedAt: null },
+      { $set: { status: 'in_progress' }, $unset: { statusReason: '' } }
+    );
+    return result.modifiedCount > 0;
+  }
+
+  async listForLoop(userId: string, loopId: string, closedLimit: number): Promise<IWorkItem[]> {
+    const scope = { userId, loopId, deletedAt: null };
+    const [active, closed] = await Promise.all([
+      this.workItemModel.find({ ...scope, status: { $ne: 'closed' } }).sort({ createdAt: 1 }),
+      this.workItemModel
+        .find({ ...scope, status: 'closed' })
+        .sort({ closedAt: -1 })
+        .limit(closedLimit),
+    ]);
+    return [...active, ...closed].map(doc => doc.toJSON());
+  }
+
+  async softDeleteByLoop(userId: string, loopId: string): Promise<number> {
+    const result = await this.workItemModel.updateMany(
+      { userId, loopId, deletedAt: null },
+      { $set: { deletedAt: new Date() } }
+    );
+    return result.modifiedCount;
+  }
+
+  async reopenSatisfiedBlocks(limit: number): Promise<IWorkItem[]> {
+    const reopened: IWorkItem[] = [];
+    // Paged by _id: a still-waiting ticket is not written, so a read capped at `limit` would rescan the same ones.
+    let after: string | undefined;
+    for (let page = 0; page < REOPEN_SCAN_PAGES && reopened.length < limit; page++) {
+      const parked = (
+        await this.workItemModel
+          .find({
+            blockedOn: 'dependencies',
+            status: 'blocked',
+            loopId: { $exists: true },
+            deletedAt: null,
+            ...(after && { _id: { $gt: after } }),
+          })
+          .sort({ _id: 1 })
+          .limit(limit)
+      ).map(doc => doc.toJSON());
+      if (parked.length === 0) break;
+      after = parked.at(-1)!.id;
+      const depIds = [...new Set(parked.flatMap(item => item.dependencies))].filter(id => mongoose.isValidObjectId(id));
+      // Not user-scoped: deps are always the owner's own (assertDependenciesUsable). A foreign one counts as open.
+      const deps = await this.workItemModel.find({ _id: { $in: depIds }, deletedAt: null });
+      const depById = new Map(deps.map(doc => [String(doc._id), doc]));
+      const epicLoopIds = [...new Set(parked.filter(item => item.epic).map(item => item.loopId!))].filter(id =>
+        mongoose.isValidObjectId(id)
+      );
+      const loops = epicLoopIds.length > 0 ? await Loop.find({ _id: { $in: epicLoopIds } }, { stages: 1 }) : [];
+      const lastStage = new Map(loops.map(loop => [String(loop._id), loop.stages.at(-1)]));
+      for (const item of parked) {
+        if (reopened.length >= limit) break;
+        const waiting = item.dependencies.some(depId => {
+          const dep = depById.get(depId);
+          return dep !== undefined && (dep.userId !== item.userId || dep.status !== 'closed');
+        });
+        if (waiting) continue;
+        // An epic's work was its children, so it closes in its loop's last stage (as ticketMovePatch closes one).
+        const last = item.epic ? lastStage.get(item.loopId!) : undefined;
+        if (item.epic && !last) continue;
+        // Matching the deps read above, so a dependency added meanwhile keeps the ticket parked.
+        const result = await this.workItemModel.findOneAndUpdate(
+          {
+            _id: item.id,
+            status: 'blocked',
+            blockedOn: 'dependencies',
+            dependencies: item.dependencies,
+            deletedAt: null,
+          },
+          {
+            $set: last ? { status: 'closed', stage: last, closedAt: new Date() } : { status: 'open' },
+            $unset: { statusReason: '', blockedOn: '' },
+          },
+          { new: true }
+        );
+        if (result) reopened.push(result.toJSON());
+      }
+    }
+    return reopened;
+  }
+
+  async countBlockedByLoop(userId: string, loopIds: string[]): Promise<Record<string, number>> {
+    const rows = await this.workItemModel.aggregate<{ _id: string; count: number }>([
+      {
+        $match: {
+          userId,
+          loopId: { $in: loopIds },
+          deletedAt: null,
+          status: 'blocked',
+          blockedOn: { $exists: false },
+        },
+      },
+      { $group: { _id: '$loopId', count: { $sum: 1 } } },
+    ]);
+    return Object.fromEntries(rows.map(row => [row._id, row.count]));
+  }
+
+  async updateForUser(
+    id: string,
+    userId: string,
+    patch: WorkItemPatch,
+    expectedStatus?: WorkItemStatus,
+    guard?: { statusReason?: string; loopId?: string }
+  ): Promise<IWorkItem | null> {
     if (!mongoose.isValidObjectId(id)) return null;
 
-    // A `null` in the patch means "clear this field", which only $unset can do.
-    const set: Record<string, unknown> = {};
-    const unset: Record<string, ''> = {};
-    for (const [key, value] of Object.entries(patch)) {
-      if (value === null) unset[key] = '';
-      else if (value !== undefined) set[key] = value;
-    }
-
+    const { set, unset } = splitPatch(patch);
     const result = await this.workItemModel.findOneAndUpdate(
-      { _id: id, userId, deletedAt: null },
+      {
+        _id: id,
+        userId,
+        deletedAt: null,
+        ...(expectedStatus && { status: expectedStatus }),
+        ...(guard?.statusReason !== undefined && { statusReason: guard.statusReason }),
+        ...(guard?.loopId && { loopId: guard.loopId }),
+      },
       {
         ...(Object.keys(set).length > 0 && { $set: set }),
         ...(Object.keys(unset).length > 0 && { $unset: unset }),
@@ -161,6 +469,8 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     if (filters.organizationId) {
       conditions.organizationId = filters.organizationId;
     }
+    // `null` also matches a missing field, so plain items list as before and loop tickets stay out.
+    conditions.loopId = filters.loopId ?? null;
     if (filters.search) {
       // Escape metacharacters: `search` comes straight off the query string, and
       // a pattern like `(a+)+$` would hang the Lambda on backtracking.
@@ -174,13 +484,33 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     return conditions;
   }
 
-  private async loadAllForUser(userId: string): Promise<{ items: IWorkItem[]; truncated: boolean }> {
+  // ponytail: /graph and the cycle check still count closed loop tickets toward MAX_GRAPH_ITEMS; they need
+  // them to see every edge. Page the graph if a user's loops ever fill the window.
+  private async loadAllForUser(
+    userId: string,
+    { skipClosedLoopTickets = false } = {}
+  ): Promise<{ items: IWorkItem[]; truncated: boolean }> {
     const results = await this.workItemModel
-      .find({ userId, deletedAt: null })
+      .find({
+        userId,
+        deletedAt: null,
+        ...(skipClosedLoopTickets && { $or: [{ loopId: null }, { status: { $ne: 'closed' } }] }),
+      })
       .sort({ createdAt: 1 })
       .limit(MAX_GRAPH_ITEMS);
     return { items: results.map(doc => doc.toJSON()), truncated: results.length === MAX_GRAPH_ITEMS };
   }
+}
+
+/** A `null` in a patch means "clear this field", which only $unset can do. */
+function splitPatch(patch: WorkItemPatch): { set: Record<string, unknown>; unset: Record<string, ''> } {
+  const set: Record<string, unknown> = {};
+  const unset: Record<string, ''> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) unset[key] = '';
+    else if (value !== undefined) set[key] = value;
+  }
+  return { set, unset };
 }
 
 /** Stand-in node id for a dependency set proposed by a create that has no id yet. */
@@ -246,6 +576,16 @@ export const WorkItemSchema = new Schema<IWorkItem, IWorkItemModel>(
     status: { type: String, enum: WORK_ITEM_STATUSES, required: true, default: 'open' },
     dependencies: { type: [String], default: [] },
     closedAt: { type: Date },
+    loopId: { type: String },
+    stage: { type: String },
+    executionId: { type: String },
+    statusReason: { type: String },
+    runCount: { type: Number, default: 0 },
+    priority: { type: String, enum: WORK_ITEM_PRIORITIES },
+    prioritySetAt: { type: Date },
+    prioritySetBy: { type: String, enum: WORK_ITEM_PRIORITY_SETTERS },
+    epic: { type: Boolean },
+    blockedOn: { type: String, enum: WORK_ITEM_BLOCKERS },
   },
   {
     timestamps: { createdAt: true, updatedAt: true },
@@ -260,6 +600,17 @@ WorkItemSchema.plugin(softDeletePlugin);
 // the bottom, never as `index: true` on field definitions.
 WorkItemSchema.index({ userId: 1, deletedAt: 1, status: 1 });
 WorkItemSchema.index({ userId: 1, deletedAt: 1, updatedAt: -1 });
+WorkItemSchema.index(
+  { loopId: 1, deletedAt: 1, status: 1, stage: 1 },
+  { partialFilterExpression: { loopId: { $exists: true } } }
+);
+// The loop notice sweep's global read of blocked loop tickets (apps/workers/src/cron/loopNotices.ts).
+WorkItemSchema.index({ status: 1, loopId: 1 }, { partialFilterExpression: { loopId: { $exists: true } } });
+// The scheduler's reopen sweep over tickets parked on a testable condition (reopenSatisfiedBlocks).
+WorkItemSchema.index({ blockedOn: 1, status: 1 }, { partialFilterExpression: { blockedOn: { $exists: true } } });
+// The loop notice sweep's service-level read of p0/p1 loop tickets (listUrgentForLoops).
+WorkItemSchema.index({ priority: 1, status: 1 }, { partialFilterExpression: { loopId: { $exists: true } } });
+WorkItemSchema.index({ executionId: 1 }, { partialFilterExpression: { executionId: { $exists: true } } });
 
 export const WorkItem: IWorkItemModel =
   (mongoose.models[ModelName] as unknown as IWorkItemModel) ??

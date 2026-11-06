@@ -8,6 +8,7 @@ import {
 import {
   DEFAULT_LAMBDA_ENVIRONMENT,
   PRODUCTION_STAGES,
+  runsLoopScheduler,
   SINGLE_RECORD_BATCH,
   TEST_GENERATION_PROVIDER_ENVIRONMENT,
 } from './constants';
@@ -1314,6 +1315,19 @@ const tavernHeartbeatQueue = new sst.aws.Queue('tavernHeartbeatQueue', {
   },
 });
 
+// Loop Dispatch Queue
+// One message asks to start one loop's next run now (a ticket moved, a run ended, Run now), so a loop does
+// not wait for the 5-minute scheduler tick. Only on the loop scheduler's stages. Subscribed in infra/cron.ts
+// next to the scheduler: its consumer links the AgentExecutor, which imports this file.
+const loopDispatchQueueDLQ = runsLoopScheduler ? new sst.aws.Queue('loopDispatchQueueDLQ', {}) : undefined;
+const loopDispatchQueue = loopDispatchQueueDLQ
+  ? new sst.aws.Queue('loopDispatchQueue', {
+      // At least the consumer's timeout, or a message is redelivered while it still runs.
+      visibilityTimeout: '2 minutes',
+      dlq: { queue: loopDispatchQueueDLQ.arn, retry: 3 },
+    })
+  : undefined;
+
 // Deep Agent Wake Queue
 // One message → one wake cycle for one long-horizon agent (orient → act →
 // reflect → groom). See apps/workers/src/deepAgent/wakeHandler.ts and
@@ -1817,6 +1831,7 @@ export {
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
+  loopDispatchQueue,
   sreFixQueue,
   sreJobQueue,
   secopsTriageQueue,
@@ -1856,6 +1871,7 @@ export {
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
+  loopDispatchQueueDLQ,
   sreFixQueueDLQ,
   sreJobQueueDLQ,
   secopsTriageQueueDLQ,

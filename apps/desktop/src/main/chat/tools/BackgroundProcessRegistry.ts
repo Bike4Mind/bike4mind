@@ -7,6 +7,7 @@ import { OutputBuffer, type OutputStream } from './outputBuffer';
 import { commandEnv, launchCommand, spawnsDetached } from './commandLaunch';
 import { commandExit, signalCommandTree, signalCommandTreesSync, type CommandTree } from './commandTree';
 import type { SandboxedCommand } from './sandbox';
+import { lowerPriority } from './lowPriority';
 
 /** Retained per process. The tail is what matters for a watcher; see OutputBuffer. */
 const MAX_BUFFERED_CHARS = 200_000;
@@ -47,6 +48,8 @@ export interface StartRequest {
   protectedPaths: readonly string[];
   /** The agent started it, so its exit is worth telling the conversation about. See `exited`. */
   wakeOnExit?: boolean;
+  /** See ToolContext.lowPriority. */
+  lowPriority?: boolean;
 }
 
 /**
@@ -168,6 +171,7 @@ export class BackgroundProcessRegistry {
         stdio: watchIndex === 0 ? ['pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe', 'pipe'],
         env,
       });
+      if (request.lowPriority) lowerPriority(child.pid);
     } catch (err) {
       await launch.cleanup();
       throw err;

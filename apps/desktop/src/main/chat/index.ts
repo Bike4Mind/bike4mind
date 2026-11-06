@@ -404,6 +404,10 @@ export function registerChat(
     cancelModelPull?(key: string): Promise<boolean>;
     /** The curated list's projector sizes, so chat sizes a vision model the way the Models screen does. */
     pinnedProjectors?(): ReadonlyMap<string, number>;
+    /** A card in a loop runner session was denied unanswered; see ApprovalGate.setUnattended. */
+    loopUnattended?(sessionId: string): void;
+    /** loop_merge_pr. Called only once the runner is registered, after this returns. */
+    loopMerge?(sessionId: string, prUrl: string): Promise<string>;
     /** The curated family sampling for an installed local model; see ModelHubService.catalogSampling. */
     catalogSampling?: CatalogSamplingHook;
   } = {}
@@ -647,6 +651,7 @@ export function registerChat(
   const approvals = new ApprovalGate({
     requested: sessionId => activity.approvalRequested(sessionId),
     settled: sessionId => activity.approvalSettled(sessionId),
+    unattended: sessionId => hooks.loopUnattended?.(sessionId),
   });
 
   // Output and status go out on the same channel as reply tokens: a background process is
@@ -715,6 +720,7 @@ export function registerChat(
   const service = new ChatService({
     store,
     access,
+    ...(hooks.loopMerge ? { loopMerge: hooks.loopMerge } : {}),
     attachments,
     models,
     modelSettings,

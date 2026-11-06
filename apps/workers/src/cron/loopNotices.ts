@@ -1,0 +1,205 @@
+import {
+  InboxType,
+  loopStatusNeedsOwner,
+  serviceLevelBreach,
+  type ILoop,
+  type IWorkItem,
+  type LoopAlarmKind,
+  type LoopStatus,
+} from '@bike4mind/common';
+import { inboxRepository, loopRepository, usableObjectIds, workItemRepository } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
+
+const KEY_PREFIX = 'loop:';
+/** Set on every live loop of a user when their all-loops daily budget runs out; one notice covers them all. */
+export const USER_BUDGET_PAUSE_REASON = 'All-loops daily budget reached; resumes 00:00 UTC';
+const TITLE_CHARS = 120;
+const MESSAGE_CHARS = 1000;
+/** ponytail: p0/p1 loop tickets the service-level check reads per tick across all users; past it some go unflagged. */
+export const MAX_URGENT_TICKETS_READ = 500;
+
+const STATUS_TITLES: Partial<Record<LoopStatus, string>> = {
+  needs_you: 'needs you',
+  error: 'stopped with an error',
+  paused: 'paused',
+};
+
+export interface LoopNotice {
+  sourceKey: string;
+  receiverId: string;
+  title: string;
+  message: string;
+  link: string;
+}
+
+type BlockedTicket = Pick<IWorkItem, 'id' | 'loopId' | 'title' | 'statusReason' | 'executionId'>;
+type UrgentTicket = Pick<
+  IWorkItem,
+  'id' | 'loopId' | 'title' | 'priority' | 'status' | 'blockedOn' | 'epic' | 'prioritySetAt' | 'createdAt'
+>;
+
+const NEXT_STEP: Record<NonNullable<ILoop['autoResume']> | 'owner', string> = {
+  budget: 'Raise the budget and set it live to run sooner.',
+  credits: 'It resumes by itself once the account has credits.',
+  owner: 'Open the loop and set it live again once fixed.',
+};
+
+const ALARM_TITLES: Record<LoopAlarmKind, string> = {
+  idle_with_work: 'is idle with ready tickets',
+  long_run: 'run going much longer than usual',
+};
+
+const ALARM_NEXT_STEP: Record<LoopAlarmKind, string> = {
+  idle_with_work: 'Open the loop to see why it is not running.',
+  long_run: 'Open the run to check on it; abort it there if it is stuck.',
+};
+
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 3)}...` : text);
+
+/**
+ * The notices that should be open right now: one per loop whose status needs its owner
+ * (`loopStatusNeedsOwner`, shared with the loop list marker) and one per blocked ticket of a loop
+ * that still exists. The status is part of the key, so `paused` -> `error` replaces the notice.
+ * Loops paused by their owner's all-loops budget share one notice per user instead. A loop with a
+ * liveness alarm (set by the scheduler) gets one more, keyed by the alarm kind, and each of `urgent` past its
+ * loop's service level (`serviceLevelBreach`) one keyed `:stale`; a new priority restarts its clock and clears it.
+ */
+export function desiredLoopNotices(
+  loops: ILoop[],
+  tickets: BlockedTicket[],
+  loopsById: Map<string, ILoop>,
+  urgent: UrgentTicket[] = [],
+  now = new Date()
+): LoopNotice[] {
+  const userBudget = (loop: ILoop) => loop.status === 'paused' && loop.statusReason === USER_BUDGET_PAUSE_REASON;
+  const budgetUsers = new Set(loops.filter(userBudget).map(loop => loop.userId));
+  const notices: LoopNotice[] = [...budgetUsers].map(userId => ({
+    sourceKey: `${KEY_PREFIX}user:${userId}:budget`,
+    receiverId: userId,
+    title: 'Your loops paused: all-loops daily budget reached',
+    message: `${USER_BUDGET_PAUSE_REASON}.\nRaise "All loops: max credits per day" on the loops page to run sooner.`,
+    link: '/loops',
+  }));
+  const perLoop = loops
+    .filter(loop => loopStatusNeedsOwner(loop) && !userBudget(loop))
+    .map(loop => ({
+      sourceKey: `${KEY_PREFIX}${loop.id}:status:${loop.status}`,
+      receiverId: loop.userId,
+      title: clip(`Loop "${loop.name}" ${STATUS_TITLES[loop.status]}`, TITLE_CHARS),
+      message: clip(
+        `${loop.statusReason ?? 'The loop stopped.'}\n${NEXT_STEP[loop.autoResume ?? 'owner']}`,
+        MESSAGE_CHARS
+      ),
+      link: `/loops/${loop.id}`,
+    }));
+  notices.push(...perLoop);
+
+  for (const loop of loops) {
+    if (!loop.alarm) continue;
+    const { kind, reason, executionId } = loop.alarm;
+    notices.push({
+      sourceKey: `${KEY_PREFIX}${loop.id}:alarm:${kind}`,
+      receiverId: loop.userId,
+      title: clip(
+        kind === 'idle_with_work'
+          ? `Loop "${loop.name}" ${ALARM_TITLES[kind]}`
+          : `Loop "${loop.name}": ${ALARM_TITLES[kind]}`,
+        TITLE_CHARS
+      ),
+      message: clip(`${reason}\n${ALARM_NEXT_STEP[kind]}`, MESSAGE_CHARS),
+      link: kind === 'long_run' && executionId ? `/loops/${loop.id}?run=${executionId}` : `/loops/${loop.id}`,
+    });
+  }
+
+  for (const ticket of tickets) {
+    const loop = loopsById.get(ticket.loopId!);
+    if (!loop) continue;
+    notices.push({
+      sourceKey: `${KEY_PREFIX}${loop.id}:ticket:${ticket.id}`,
+      receiverId: loop.userId,
+      title: clip(`Loop "${loop.name}": ticket blocked - ${ticket.title}`, TITLE_CHARS),
+      message: clip(
+        `${ticket.statusReason ?? 'Blocked.'}\nOpen the loop, sort it out, then unblock or close the ticket.`,
+        MESSAGE_CHARS
+      ),
+      link: ticket.executionId ? `/loops/${loop.id}?run=${ticket.executionId}` : `/loops/${loop.id}`,
+    });
+  }
+
+  for (const ticket of urgent) {
+    const loop = loopsById.get(ticket.loopId!);
+    const breach = loop && serviceLevelBreach(ticket, loop, now);
+    if (!loop || !breach) continue;
+    const hours = Math.floor(breach.hours);
+    notices.push({
+      sourceKey: `${KEY_PREFIX}${loop.id}:ticket:${ticket.id}:stale`,
+      receiverId: loop.userId,
+      title: clip(`Loop "${loop.name}": ${ticket.priority} ticket waiting ${hours}h - ${ticket.title}`, TITLE_CHARS),
+      message: clip(
+        `This ${ticket.priority} ticket has waited ${hours}h, past the loop's ${breach.threshold}h service level.\nOpen the loop to see what is holding it up.`,
+        MESSAGE_CHARS
+      ),
+      link: `/loops/${loop.id}`,
+    });
+  }
+  return notices;
+}
+
+/**
+ * Reconciles the owner inbox with loop state: opens a notice for every desired key that has none and
+ * resolves every keyed `loop:` notice no longer desired (loop live again, ticket unblocked, closed or
+ * deleted, loop deleted). Idempotent per tick; the inbox's unique `sourceKey` index dedupes overlapping
+ * ticks. A changed reason on an unchanged key does not re-notify, and a notice the owner deleted keeps its
+ * key (so is not re-sent) until its cause clears.
+ *
+ * Global, but bounded by what currently needs an owner rather than by all loops: each query reads
+ * through an index and returns only loops in needs_you/error/paused ({status, nextRunAt}), blocked loop
+ * tickets (the partial {status, loopId} index, entered at status 'blocked'), p0/p1 loop tickets not closed (the
+ * partial {priority, status} index, bounded by MAX_URGENT_TICKETS_READ), alarmed loops (the partial
+ * {alarm.kind} index) and held `loop:` notices (the partial
+ * unique sourceKey index, which `listKeyed` states `$exists` for). Live loops and open or closed tickets
+ * are never read.
+ */
+export async function syncLoopNotices(logger: Logger): Promise<void> {
+  const [statusLoops, tickets, held, alarmed, urgent] = await Promise.all([
+    loopRepository.find({ status: { $in: ['needs_you', 'error', 'paused'] } }),
+    workItemRepository.find({
+      loopId: { $exists: true },
+      deletedAt: null,
+      status: 'blocked',
+      blockedOn: { $exists: false },
+    }),
+    inboxRepository.listKeyed(KEY_PREFIX),
+    loopRepository.listAlarmed(),
+    workItemRepository.listUrgentForLoops(MAX_URGENT_TICKETS_READ),
+  ]);
+  const candidates = [...new Map([...statusLoops, ...alarmed].map(loop => [loop.id, loop])).values()];
+  const loopsById = new Map(candidates.map(loop => [loop.id, loop]));
+  const missing = [...new Set([...tickets, ...urgent].map(ticket => ticket.loopId!))].filter(id => !loopsById.has(id));
+  const loopIds = usableObjectIds(missing, 'loopNotices', logger);
+  if (loopIds.length > 0) {
+    for (const loop of await loopRepository.find({ _id: { $in: loopIds } })) loopsById.set(loop.id, loop);
+  }
+
+  const desired = desiredLoopNotices(candidates, tickets, loopsById, urgent);
+  const desiredKeys = new Set(desired.map(notice => notice.sourceKey));
+  const heldKeys = new Set(held.map(notice => notice.sourceKey));
+
+  let created = 0;
+  for (const notice of desired) {
+    if (heldKeys.has(notice.sourceKey)) continue;
+    if (await inboxRepository.createKeyedNotice({ ...notice, userId: 'SYSTEM', type: InboxType.LOOP })) created++;
+  }
+  // A full urgent read may have left a breaching ticket out; its overdue notice then waits for a later sweep
+  // rather than flapping resolved and re-opened.
+  const urgentTruncated = urgent.length >= MAX_URGENT_TICKETS_READ;
+  const stale = held
+    .filter(notice => !desiredKeys.has(notice.sourceKey))
+    .filter(notice => !(urgentTruncated && notice.sourceKey.endsWith(':stale')))
+    .map(notice => notice.id);
+  await inboxRepository.resolveKeyed(stale);
+
+  if (created > 0 || stale.length > 0) {
+    logger.info(`[Loops] Notices: ${created} opened, ${stale.length} resolved`);
+  }
+}

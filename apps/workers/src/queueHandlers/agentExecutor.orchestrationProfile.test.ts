@@ -345,6 +345,21 @@ describe('pickEffectiveEnabledTools', () => {
     };
     expect(pickEffectiveEnabledTools(undefined, profileWithDenied)).toEqual(['web_search', 'file_read']);
   });
+
+  // A loop run is headless: startAgentExecution sets approvedTools to the raw enabledTools, so an
+  // MCP tool the loop names is both offered (kept by the belt) and allowed (approved before the
+  // mcp__ needs_approval rule).
+  it('offers and allows an mcp__ tool named in a headless payload', () => {
+    const payload = ['web_search', 'mcp__srv__do_thing'];
+    expect(pickEffectiveEnabledTools(payload, profile)).toEqual(payload);
+    expect(classifyToolPermission('mcp__srv__do_thing', payload, [])).toBe('allowed');
+    expect(classifyToolPermission('mcp__srv__other', payload, [])).toBe('needs_approval');
+  });
+
+  it('drops a payload mcp__ tool when the agent profile is exclusive', () => {
+    const exclusive: ResolvedOrchestrationProfile = { ...profile, toolsetIsExclusive: true };
+    expect(pickEffectiveEnabledTools(['mcp__srv__do_thing'], exclusive)).toEqual(profile.allowedTools);
+  });
 });
 
 describe('pickEffectiveEnabledTools - ambient payload union', () => {

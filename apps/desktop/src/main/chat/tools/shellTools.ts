@@ -18,6 +18,7 @@ import {
 import { commandEnv, launchCommand, spawnsDetached } from './commandLaunch';
 import { commandExit, signalCommandTree } from './commandTree';
 import type { SandboxedCommand } from './sandbox';
+import { lowerPriority } from './lowPriority';
 import { shownPath, wslLocation } from '../../wsl/wslPath';
 import {
   capOutputMiddle,
@@ -76,6 +77,8 @@ export interface RunOptions {
   offerMove?(move: () => BackgroundProcessInfo | null): () => void;
   /** Perform the handover. Required alongside `offerMove`; throwing leaves the command running. */
   adopt?(handover: Handover): BackgroundProcessInfo;
+  /** See ToolContext.lowPriority. */
+  lowPriority?: boolean;
 }
 
 /**
@@ -201,6 +204,7 @@ function runCommand(
       stdio: ['ignore', 'pipe', 'pipe'],
       env,
     });
+    if (options.lowPriority) lowerPriority(child.pid);
 
     const stdout = new CappedOutput();
     const stderr = new CappedOutput();
@@ -679,6 +683,7 @@ export const bashExecute: ToolDefinition = {
       const outcome = await runCommand(launch, cwd, env, timeoutMs, context.signal, {
         ...bashExecuteRunOptions,
         ...movableOptions(context, { command, cwd, startedAt, launch }),
+        ...(context.lowPriority ? { lowPriority: true } : {}),
       });
 
       if (outcome.movedToBackground) {

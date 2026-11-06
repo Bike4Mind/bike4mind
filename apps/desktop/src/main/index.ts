@@ -13,6 +13,7 @@ import { closeBrowsersOnScopeChange } from './chat/browser/browserScope';
 import { resolveUserPath } from './chat/tools/userPath';
 import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlog';
 import { registerFleet } from './fleet';
+import { registerLoopRunner } from './loops';
 import { registerModels } from './models';
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
 import { registerModelScheme } from './chat/model3d/engineProtocol';
@@ -152,13 +153,19 @@ void app.whenReady().then(async () => {
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
     releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
-    observeStream: event => fleet.observe(event),
+    observeStream: event => {
+      fleet.observe(event);
+      loops.runner.observe(event);
+    },
+    loopUnattended: sessionId => loops.runner.unattended(sessionId),
+    loopMerge: (sessionId, prUrl) => loops.runner.merge(sessionId, prUrl),
     observeSessionStatus: event => needsYou.observe(event),
     cancelModelPull: key => models.stop(key),
     pinnedProjectors: () => models.pinnedProjectors(),
     catalogSampling: ({ name, modelBlob, parameters, hasAdapter }) =>
       models.catalogSampling(name, modelBlob, parameters, hasAdapter),
   });
+  const loops = registerLoopRunner(auth, chat, background);
   const models = registerModels(
     modelServers,
     { localContext: () => localContext.read(), modelSettings: modelId => modelSettings.get(modelId) },
@@ -211,6 +218,7 @@ void app.whenReady().then(async () => {
     prepareQuit: async () => {
       quitting = true;
       await Promise.all([
+        loops.runner.releaseAll(),
         background.shutdown(),
         mcp.shutdown(),
         terminals.shutdown(),
@@ -245,6 +253,7 @@ void app.whenReady().then(async () => {
     // The imported cookies go too. They have no expiry and so were never written to disk, but
     // this is the pass that can await, and the guarantee is worth holding in two places.
     void Promise.all([
+      loops.runner.releaseAll(),
       background.shutdown(),
       mcp.shutdown(),
       terminals.shutdown(),
@@ -259,6 +268,7 @@ void app.whenReady().then(async () => {
   app.once('will-quit', () => {
     auth.dispose();
     fleet.dispose();
+    loops.runner.dispose();
     models.dispose();
     chat.dispose();
     stopModelServers();
@@ -290,6 +300,7 @@ void app.whenReady().then(async () => {
   claudeImport.start();
   app.on('browser-window-focus', () => claudeImport.onWindowFocus());
   onAuthStateChanged(closeBrowsersOnScopeChange(auth.getState(), () => browser.closeAll()));
+  onAuthStateChanged(() => void loops.sync());
   let importScope = sessionScopeKeyOf(auth.getState());
   onAuthStateChanged(state => {
     const next = sessionScopeKeyOf(state);

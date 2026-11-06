@@ -7,6 +7,7 @@ import type { ChatSessionSummary, ChatSpawnSuggestion, ChatStreamEvent, SpawnSug
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService, MAX_CONCURRENT_SPAWNED } from './ChatService';
 import type { ModelMemory } from './ModelPreference';
+import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
@@ -58,6 +59,7 @@ describe('ChatService spawn caps', () => {
 
     service = new ChatService({
       store,
+      queue: new MessageQueue(() => undefined),
       access: { list: async () => [] } as unknown as AccessStore,
       modelMemory,
       logger: { debug: vi.fn(), warn: vi.fn() },
@@ -284,6 +286,24 @@ describe('ChatService spawn caps', () => {
     const child = (await store.list()).find(session => session.origin);
     expect(child?.model).toBe('parent-model');
     expect(modelMemory.record).not.toHaveBeenCalled();
+  });
+
+  it("marks a loop runner session's child as working for the same run", async () => {
+    const parent = await codeSession();
+    await service.startAutomaticTurn(parent.id, 'go', {
+      kind: 'loop-runner',
+      loopId: 'loop-1',
+      ticketId: 'ticket-1',
+      runId: 'run-1',
+      summary: 'Fix the docs',
+    });
+    await awaitStream(0);
+    requestSpawns(streams[0], 1, 'loop');
+    await startSuggested(parent.id, ['loop-0']);
+
+    const child = (await store.list()).find(session => session.origin);
+    expect(child && service.loopRunOf(child.id)).toBe('run-1');
+    expect(service.loopRunSessions('run-1').sort()).toEqual([parent.id, child?.id].sort());
   });
 
   it('gives a spawned session exactly its parent grants, with no way to name others', async () => {
