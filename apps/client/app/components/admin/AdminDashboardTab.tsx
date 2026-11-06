@@ -55,12 +55,8 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
   const { data: activity, isLoading, isFetching, isError, refetch } = useAdminActivitySummary();
 
   return (
-    // overflowX clip: the Joy Grid negative gutters stick out of this wrapper at xs, where it has no padding
-    <Stack
-      spacing={3}
-      sx={{ p: { xs: 0, sm: 2 }, maxWidth: 1440, mx: 'auto', overflowX: 'clip' }}
-      data-testid="admin-dashboard"
-    >
+    // overflowX clip: the Joy Grid negative gutters stick out of this wrapper
+    <Stack spacing={3} sx={{ maxWidth: 1440, mx: 'auto', overflowX: 'clip' }} data-testid="admin-dashboard">
       <Box>
         <Typography level="h1">Admin dashboard</Typography>
         <Typography level="body-md" sx={{ mt: 1 }}>

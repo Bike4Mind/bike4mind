@@ -125,7 +125,7 @@ const AdminReleaseNotesTab: React.FC = () => {
     );
 
   return (
-    <Stack spacing={3} sx={{ p: { xs: 1, sm: 2 } }}>
+    <Stack spacing={3}>
       <Typography level="h3">Release notes</Typography>
       <Alert color="neutral" variant="soft" data-testid="release-notes-cache-note">
         Customer-facing release notes generated from each production release and served by GET /api/v1/whats-new. This

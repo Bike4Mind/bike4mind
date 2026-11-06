@@ -67,7 +67,7 @@ Shared terms: **Suspended** (not "banned"), **Restricted** (not "moderated"), **
 
 ### Data visualization
 
-Charts use `accent` for the primary series and `inkMuted` at 40% for comparisons; categorical charts take the status tones only when the categories are statuses. Inline bars (spend, risk, storage) are 6 px tall with a 3 px radius on a `selection` fill track. Gridlines use `border`; axis labels use `inkMuted` 12 px.
+Charts read every color from the admin tokens (no hex in a chart config), so they work in both themes. They use `accent` for the primary series and `inkMuted` at 40% for comparisons; categorical charts take the status tones only when the categories are statuses. Inline bars (spend, risk, storage) are 6 px tall with a 3 px radius on a `selection` fill track. Gridlines use `border`; axis labels use `inkMuted` 12 px.
 
 ### Type (Inter, IDs in JetBrains Mono)
 
@@ -85,7 +85,7 @@ There are only these seven levels. Headings are never larger than the page title
 
 ### Space and shape
 
-- 4 px grid: 8 inside controls, 16 between cards, 20 to 24 between page regions, 32 page gutter (16 on phones).
+- 4 px grid: 8 inside controls and between toolbar items, 16 between cards, 24 between page regions (`ADMIN_REGION_GAP`), 32 page gutter (16 on phones).
 - Radius: 6 small controls, 8 buttons and inputs, 12 cards, 16 dialogs.
 - Targets: at least 36 px on desktop, 44 px on touch.
 
@@ -111,7 +111,17 @@ The sidebar is the frame of every admin page, so it sets the tone. Calm, scannab
 
 ### Page skeletons
 
-Inside that layout, every page uses one of two skeletons, so admins always know where to look. The content frame has a 32 px gutter (16 on phones), a 1280 px max width for detail and settings pages, and full width for list pages.
+Inside that layout, every page uses one of two skeletons, so admins always know where to look.
+
+### Page frame
+
+The shell owns the frame, so every page lines up with every other page:
+
+- **Gutter.** `adminPageFrame` (`shared/adminStyles.ts`): 32 px left and right (16 on phones), 24 px above the page header (16 on phones), 32 px below the last region. `AdminPage` applies it to every tab panel; a detail route outside `AdminPage` spreads it on its root. A page **never sets its own outer padding** (`p`, `px`, `py` on its root), and never `minHeight: 100vh`: the layout already fills the window and scrolls.
+- **Width.** List pages and dashboards are full width. Detail and settings pages cap their content at `ADMIN_DETAIL_MAX_WIDTH` (1280 px), left-aligned so the page header stays on the same line as every other page. No other max width, and no centered column.
+- **Rhythm.** The page root is a `Stack` with `gap: ADMIN_REGION_GAP` (24 px) between regions (header, banner, views, filters, table, section grid). Cards inside a region sit 16 px apart.
+- **Header first.** The first element of every page is `AdminPageHeader`: the page title (24 / 600, `h1`), an optional count, a one-line description in `inkMuted`, and the page actions top-right. Nothing sits above it. The title names the page in sentence case ("Rate limits", not "Rate Limits Dashboard"), and is the only `h1` on the page; sections inside the page use the 15 / 600 section level.
+- **Horizontal overflow.** The page itself never scrolls sideways. A wide table scrolls inside its own container (`DataTable` does this), and a dialog never sets a `minWidth` wider than a phone; Joy already caps its width at the viewport.
 
 **List page**
 
@@ -181,7 +191,7 @@ Build new admin pages from these, in `apps/client/app/components/admin/shared/`.
 | `StatStrip` / `StatTile` | 3 to 5 key numbers | Label, value, comparison line. Optional sparkline, and an optional `help` control beside the label that defines the term (16 px icon). No decorative icons. |
 | `SectionCard` | A group of facts | Title, optional ghost action, definition list. No form inputs inside. |
 | `DataTable` | Every admin list | Sticky header, sortable columns, row selection, horizontal scroll on mobile, skeleton, empty and error states. Page sizes 25, 50, 100. |
-| `FilterBar` / `SavedViews` | Narrowing a list | Every filter is kept in the URL. Dashed chip = unset, solid chip = set and removable. |
+| `FilterBar` / `SavedViews` | Narrowing a list | Every filter is kept in the URL. Dashed chip = unset, solid chip = set and removable. Controls are 32 px, 8 px apart, centered on one line, and wrap as a whole on narrow screens; the search field comes first. |
 | `FilterChip` | One filter in a `FilterBar` | Dashed with just the label while unset; "Label: Value" in the `selection` tint with a remove button once set. Picking a value opens a menu. |
 | `ViewTabs` | Built-in and saved views above a list | The active tab is ink-filled. Each tab may carry a count. A view is its filters, so matching filters light its tab. |
 | `SegmentedControl` | 2 to 4 mutually exclusive modes | Toggle buttons on a `hover` track, e.g. Group by None / Email domain. Not for filters with many values. |
@@ -222,7 +232,7 @@ Definition of done for any admin UI:
 - Focus is always visible: one 2 px accent ring per control. A field (input, textarea, select, autocomplete) draws it on its rounded root; the native control inside never adds an outline of its own.
 - Dialogs trap focus, close on Esc and return focus to the button that opened them.
 - Icon-only buttons have an `aria-label`. Status is never shown by color alone.
-- Loading uses a skeleton shaped like the content. Empty, filtered-empty and error states each offer a next step.
+- Loading uses a skeleton shaped like the content (`LoadingState`), never a bare spinner in the middle of a blank page. Empty, filtered-empty and error states each offer a next step (`EmptyState`, `ErrorState`).
 - The page works at 375 px wide: tables scroll, menus stack.
 - Interactive elements carry a `data-testid` (`component-action-element`), per the repo testing guidelines.
 

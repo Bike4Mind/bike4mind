@@ -150,7 +150,7 @@ const ToolDefinitionsTab: React.FC = () => {
   };
 
   return (
-    <Sheet sx={{ p: { xs: 1, sm: 2 }, width: '100%', overflow: 'auto' }}>
+    <Sheet sx={{ width: '100%', overflow: 'auto' }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: { xs: 1.5, sm: 3 } }}>
         <Stack direction="row" alignItems="center" spacing={1}>
           <Typography level="h2">Tool Definitions</Typography>

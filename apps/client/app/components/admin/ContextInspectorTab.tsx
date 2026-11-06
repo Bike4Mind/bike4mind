@@ -1643,7 +1643,7 @@ export function ContextInspectorTab() {
   const totalPages = data ? Math.ceil(data.total / pageSize) : 0;
 
   return (
-    <Box sx={{ p: 2 }}>
+    <Box>
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
         <Typography level="h4">Context Telemetry Inspector</Typography>
         <Stack direction="row" spacing={2} alignItems="center">

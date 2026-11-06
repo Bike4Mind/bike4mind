@@ -181,7 +181,7 @@ const EventMetricsTab: React.FC = () => {
   const view = state.filters.view === EVENTS_VIEW_BY_USER ? EVENTS_VIEW_BY_USER : 'events';
 
   return (
-    <Box sx={{ p: { xs: 1.5, sm: 3 } }}>
+    <Box>
       <Box sx={{ mb: 2 }}>
         <SegmentedControl
           options={VIEW_OPTIONS}
