@@ -274,6 +274,11 @@ describe('BFLImageService - request body', () => {
     expect(submittedBody().safety_tolerance).toBe(BFL_SAFETY_TOLERANCE.DEFAULT);
   });
 
+  it('generate() rounds a fractional safety_tolerance to the integer BFL documents', async () => {
+    await service.generate('a prompt', { model: ImageModels.FLUX_3_IMAGE, safety_tolerance: 1.4 });
+    expect(postSpy.mock.calls[0][1]).toMatchObject({ safety_tolerance: 1 });
+  });
+
   it('generate() clamps negative safety_tolerance up to MIN', async () => {
     await service.generate('a friendly cat', { safety_tolerance: -3 });
 

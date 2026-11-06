@@ -40,7 +40,7 @@ export const FIELD_TOOLTIPS = {
   unsupportedByGeminiImage: 'Gemini image models do not accept this setting, so it has no effect on the result.',
   unsupportedByFlux3Image: 'FLUX 3 Image does not accept this setting, so it has no effect on the result.',
   aspectRatioUnsupportedByFluxPro:
-    'Flux Pro models size images from Image Size (width and height), so this has no effect on the result.',
+    'This model sizes images from Image Size (width and height), so this has no effect on the result.',
 } as const;
 
 export type FieldTooltipKey = keyof typeof FIELD_TOOLTIPS;

@@ -51,9 +51,10 @@ export function isBflUltraImageModel(model?: string | null): boolean {
 }
 
 /**
- * FLUX.2 endpoints take a reference image as `input_image`; every FLUX.1 model takes
- * `image_prompt`. Must stay in sync with the body builder in `BFLImageService.generate`, which
- * picks the field from this predicate and redacts whichever one it sent.
+ * FLUX.2 endpoints take their reference images as `input_image`, `input_image_2`, ...; FLUX 3 takes
+ * one `images` array (isFlux3ImageModel), and every FLUX.1 model takes `image_prompt`. Must stay in
+ * sync with the body builder in `BFLImageService.generate`, which picks the field from these
+ * predicates and redacts whichever one it sent.
  */
 export function isFlux2ImageModel(model?: string | null): boolean {
   return typeof model === 'string' && model.startsWith('flux-2-');
@@ -94,9 +95,9 @@ export function supportsBflOutputFormat(model?: string | null): boolean {
 
 /**
  * Image models sized by discrete `width`/`height` rather than a size string or an aspect ratio.
- * The Flux Pro generation pair and the FLUX.2 and FLUX 3 Image families take width/height (FLUX 3
- * also offers resolution tiers, which are not used); Ultra takes an
- * aspect ratio, and Fill and Kontext are dispatched through the edit path, which reads neither.
+ * The Flux Pro generation pair and the FLUX.2 and FLUX 3 Image families take width/height (FLUX 3's
+ * resolution tiers are not used); Ultra takes an aspect ratio, and Fill and Kontext are dispatched
+ * through the edit path, which reads neither.
  * The settings UI and the generation dispatch both key off this, so they cannot disagree about
  * which controls matter.
  */
@@ -107,8 +108,8 @@ export function usesDiscreteImageDimensions(model?: string | null): boolean {
 /**
  * Image models offering a prompt-enhancement toggle in the UI, where the provider is meant to
  * rewrite and expand the prompt before generating. BFL takes `prompt_upsampling` or its inverse
- * `disable_pup`; FLUX.2 Klein has neither, and FLUX 3 has no toggle (Klein always upsamples). Gemini is included for historical/UI-grouping reasons, but
- * GeminiImageService.buildGenerationConfig() deliberately never forwards this to Google's API -
+ * `disable_pup`; FLUX.2 Klein and FLUX 3 define neither (BFL runs FLUX 3 Image Klein's upsampler on
+ * every request). Gemini is included for historical/UI-grouping reasons, but GeminiImageService.buildGenerationConfig() deliberately never forwards this to Google's API -
  * `generateImages` rejects the mere presence of `enhancePrompt`, so the toggle is a no-op for
  * Gemini today. Do not reintroduce a Gemini enhancePrompt mapping without confirming Google's API
  * accepts it. OpenAI discards the parameter, so GPT-Image and DALL-E are excluded.

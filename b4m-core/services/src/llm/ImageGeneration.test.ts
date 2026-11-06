@@ -461,15 +461,30 @@ describe('ImageGenerationService.selectInputImage reference images (#2744)', () 
     expect(result.referenceImages).toHaveLength(MAX_REFERENCE_IMAGES);
   });
 
-  it('uses all FLUX.2 workbench images and deduplicates an explicit primary reference', async () => {
-    const { service } = makeService({ a: cleanImage('a'), b: cleanImage('b') });
-    const result = await select(service, {
-      model: ImageModels.FLUX_2_PRO,
-      fabFileIds: ['a', 'b'],
-      referenceImageFabFileIds: ['a', 'b'],
-    });
-    expect(result.fileImage.id).toBe('a');
-    expect(result.referenceImages.map((file: FakeFile) => file.id)).toEqual(['b']);
+  it.each([ImageModels.FLUX_2_PRO, ImageModels.FLUX_3_IMAGE])(
+    'uses all %s workbench images and deduplicates an explicit primary reference',
+    async model => {
+      const { service } = makeService({ a: cleanImage('a'), b: cleanImage('b') });
+      const result = await select(service, {
+        model,
+        fabFileIds: ['a', 'b'],
+        referenceImageFabFileIds: ['a', 'b'],
+      });
+      expect(result.fileImage.id).toBe('a');
+      expect(result.referenceImages.map((file: FakeFile) => file.id)).toEqual(['b']);
+    }
+  );
+
+  it('counts the primary against the FLUX 3 input limit of ten', async () => {
+    const ids = Array.from({ length: 11 }, (_, index) => `ref-${index}`);
+    const { service } = makeService(Object.fromEntries(ids.map(id => [id, cleanImage(id)])));
+    await expect(
+      select(service, {
+        model: ImageModels.FLUX_3_IMAGE_KLEIN,
+        fabFileIds: [ids[0]],
+        referenceImageFabFileIds: ids.slice(1),
+      })
+    ).rejects.toThrow(/At most 10 input images/);
   });
 
   it('preserves FLUX.2 attachment order when the database returns files in reverse order', async () => {
@@ -1413,19 +1428,22 @@ describe('ImageGenerationService.process (size normalization)', () => {
 
   const refs = [cleanFile('a'), cleanFile('b')];
 
-  it('forwards both attached FLUX.2 images to the BFL service', async () => {
-    const { rendered } = await generateWith(
-      ImageModels.FLUX_2_PRO,
-      ModelBackend.BFL,
-      undefined,
-      { fabFileIds: ['a', 'b'] },
-      { files: refs, supportsImageVariation: true }
-    );
-    expect(rendered).toMatchObject({
-      reference_images: [Buffer.from('fab/a').toString('base64'), Buffer.from('fab/b').toString('base64')],
-    });
-    expect(rendered).not.toHaveProperty('image_prompt');
-  });
+  it.each([ImageModels.FLUX_2_PRO, ImageModels.FLUX_3_IMAGE])(
+    'forwards both attached %s images to the BFL service',
+    async model => {
+      const { rendered } = await generateWith(
+        model,
+        ModelBackend.BFL,
+        undefined,
+        { fabFileIds: ['a', 'b'] },
+        { files: refs, supportsImageVariation: true }
+      );
+      expect(rendered).toMatchObject({
+        reference_images: [Buffer.from('fab/a').toString('base64'), Buffer.from('fab/b').toString('base64')],
+      });
+      expect(rendered).not.toHaveProperty('image_prompt');
+    }
+  );
 
   it('forwards explicit FLUX.2 references without a primary image', async () => {
     const { rendered } = await generateWith(
