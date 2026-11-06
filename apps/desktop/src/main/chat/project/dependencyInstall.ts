@@ -84,8 +84,6 @@ interface Install {
   command: string;
 }
 
-export type InstallWait = 'done' | 'failed' | 'timeout' | 'none';
-
 export interface InstallRequest {
   sessionId: string;
   workingDirectory: string;
@@ -103,11 +101,11 @@ export interface InstallRequest {
  */
 export class DependencyInstaller {
   private readonly installs = new Map<string, Install>();
-  /** A start still planning, so waitFor called right after maybeStart does not see 'none'. */
+  /** A start still planning, so isInstalling called right after maybeStart does not see 'none'. */
   private readonly starting = new Map<string, Promise<void>>();
 
   constructor(
-    private readonly registry: Pick<BackgroundProcessRegistry, 'start' | 'get' | 'tail' | 'settle'>,
+    private readonly registry: Pick<BackgroundProcessRegistry, 'start' | 'get' | 'tail'>,
     private readonly now: () => number = Date.now
   ) {}
 
@@ -126,20 +124,6 @@ export class DependencyInstaller {
     await this.starting.get(sessionId)?.catch(() => undefined);
     const install = this.installs.get(sessionId);
     return install ? this.registry.get(install.processId, sessionId)?.status === 'running' : false;
-  }
-
-  /** Wait up to `ms` (ms) for this session's install to end; 'none' when there is no install. */
-  async waitFor(sessionId: string, ms: number): Promise<InstallWait> {
-    const startedAt = this.now();
-    // A start that threw leaves no install behind, which is what the lookup below reports.
-    await this.starting.get(sessionId)?.catch(() => undefined);
-    const install = this.installs.get(sessionId);
-    if (!install) return 'none';
-    await this.registry.settle(install.processId, Math.max(0, ms - (this.now() - startedAt)));
-    const info = this.registry.get(install.processId, sessionId);
-    if (!info) return 'none';
-    if (info.status === 'running') return 'timeout';
-    return info.status === 'exited' && info.exitCode === 0 ? 'done' : 'failed';
   }
 
   private async start(request: InstallRequest): Promise<void> {

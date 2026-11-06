@@ -92,7 +92,6 @@ function fakeRegistry(initial: Partial<BackgroundProcessInfo> = {}) {
     start: vi.fn(async () => ({ ...info })),
     get: vi.fn((_id: string, _sessionId: string) => ({ ...info })),
     tail: vi.fn((_id: string, _sessionId: string, _max: number) => 'ERR_PNPM_BOOM'),
-    settle: vi.fn(async (_id: string, _ms: number) => {}),
   };
 }
 
@@ -197,48 +196,6 @@ describe('DependencyInstaller', () => {
       await installer.maybeStart({ sessionId: 's1', workingDirectory: dir, outcome: 'created' });
       Object.assign(registry.info, { status: 'exited', exitCode: 0, endedAt: new Date().toISOString() });
       expect(await installer.isInstalling('s1')).toBe(false);
-    });
-  });
-
-  describe('waitFor', () => {
-    it('reports none when nothing is installing', async () => {
-      const { registry, installer } = await setup();
-      expect(await installer.waitFor('s1', 1_000)).toBe('none');
-      expect(registry.settle).not.toHaveBeenCalled();
-    });
-
-    it('reports done once the install exits cleanly', async () => {
-      const { registry, installer } = await setup();
-      registry.settle.mockImplementation(async () => {
-        Object.assign(registry.info, { status: 'exited', exitCode: 0, endedAt: new Date().toISOString() });
-      });
-      await installer.maybeStart({ sessionId: 's1', workingDirectory: dir, outcome: 'created' });
-      expect(await installer.waitFor('s1', 1_000)).toBe('done');
-      expect(registry.settle).toHaveBeenCalledWith('abc12345', expect.any(Number));
-    });
-
-    it('reports failed for a non-zero exit', async () => {
-      const { registry, installer } = await setup();
-      registry.settle.mockImplementation(async () => {
-        Object.assign(registry.info, { status: 'exited', exitCode: 1, endedAt: new Date().toISOString() });
-      });
-      await installer.maybeStart({ sessionId: 's1', workingDirectory: dir, outcome: 'created' });
-      expect(await installer.waitFor('s1', 1_000)).toBe('failed');
-    });
-
-    it('reports timeout when the install is still running at the cap', async () => {
-      const { registry, installer } = await setup();
-      await installer.maybeStart({ sessionId: 's1', workingDirectory: dir, outcome: 'created' });
-      expect(await installer.waitFor('s1', 1_000)).toBe('timeout');
-      const waited = registry.settle.mock.calls[0]?.[1];
-      expect(waited).toBeLessThanOrEqual(1_000);
-    });
-
-    it('sees an install whose start is still being planned', async () => {
-      const { installer } = await setup();
-      const started = installer.maybeStart({ sessionId: 's1', workingDirectory: dir, outcome: 'created' });
-      expect(await installer.waitFor('s1', 1_000)).toBe('timeout');
-      await started;
     });
   });
 });

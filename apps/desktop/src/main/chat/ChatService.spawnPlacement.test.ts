@@ -18,7 +18,7 @@ import { AttachmentStore } from './AttachmentStore';
 import { MessageQueue } from './MessageQueue';
 import { git, listWorktrees } from './project/git';
 import { appWorktreeRoot, prefetchBase, releaseBranchName, reserveBranchName } from './project/workspace';
-import { DependencyInstaller, type InstallWait } from './project/dependencyInstall';
+import { DependencyInstaller } from './project/dependencyInstall';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
@@ -587,15 +587,6 @@ describe('ChatService spawn placement', () => {
     if (!spawned) throw new Error('Child missing');
     return { release, parent, spawned };
   }
-
-  it("starts a spawned agent's first turn without waiting on its dependency install", async () => {
-    const waitFor = vi.spyOn(dependencies, 'waitFor').mockReturnValue(new Promise<InstallWait>(() => {}));
-    await spawnWith({ placement: 'worktree', branch: 'agent/install-running' });
-    const worktree = await worktreeOf('agent/install-running');
-
-    await vi.waitUntil(() => seedPosted(worktree), { timeout: 5000, interval: 5 });
-    expect(waitFor).not.toHaveBeenCalled();
-  });
 
   it("tells a spawned agent's first turn that its install is running, even when the install is slow to start", async () => {
     // Upstream, since a worktree is cut from the freshly fetched base rather than local main.

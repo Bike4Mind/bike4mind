@@ -677,7 +677,6 @@ export class ChatService {
 
   private readonly launching = new Set<string>();
 
-  /** Ends a spawned agent's wait for its install early, when it is stopped or deleted meanwhile. */
   /** Parents an agent worktree was cut for during this run; see mayHaveAgentWorktrees. */
   private readonly agentParents = new Set<string>();
   /** A stop or delete that reached a spawn still preparing; read before its first turn is sent. */
