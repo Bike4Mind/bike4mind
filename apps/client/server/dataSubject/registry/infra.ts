@@ -1,6 +1,11 @@
 import type { DataHolderRegistry } from '../types';
 
 export const infraHolders = {
+  // `requestedBy` is the admin who ran the assessment (null for scheduled runs).
+  AbuseAssessment: {
+    kind: 'holder',
+    references: [{ path: 'requestedBy', matchBy: 'userId', action: 'anonymize' }],
+  },
   AdminAuditAlertState: {
     kind: 'holder',
     references: [{ path: 'openBursts.actorUserId', matchBy: 'userId', action: 'pullFromArray' }],
@@ -27,6 +32,11 @@ export const infraHolders = {
     ],
     unrelatedPaths: ['actor.email'],
   },
+  // A reviewer's sign-off on an audit entry: the sign-off stays, the link to the reviewer goes.
+  AdminAuditReview: {
+    kind: 'holder',
+    references: [{ path: 'reviewer.userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['reviewer.name'] }],
+  },
   AdminSavedView: {
     kind: 'holder',
     references: [{ path: 'ownerId', matchBy: 'userId', action: 'deleteDocument' }],
@@ -47,6 +57,18 @@ export const infraHolders = {
         alsoRedact: ['actorIp', 'actorUserAgent', 'actorApiKeyId'],
       },
       { path: 'targetUserId', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
+  // Kept so a re-run cannot act twice on one detection revision, like the detection it acts on.
+  AutoContainmentDecision: {
+    kind: 'holder',
+    references: [
+      {
+        path: 'userIds',
+        matchBy: 'userId',
+        action: 'retain',
+        reason: 'Fraud containment record kept to prevent repeat abuse (GDPR Art. 17(3)(e) / Art. 6(1)(f))',
+      },
     ],
   },
   BusinessMetricState: {
