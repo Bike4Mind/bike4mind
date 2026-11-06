@@ -10,6 +10,7 @@ import {
   updateSessionMessageContract,
   type IChatHistoryItem,
 } from '@bike4mind/common';
+import { canAccessSession } from '@bike4mind/server-utils/utils/sessionAccess';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
@@ -18,14 +19,14 @@ import { respond } from '@server/utils/respond';
 // Reading history is not a metered action; only the per-minute burst limit applies.
 const getHandler = nextRouteForContract(getSessionMessageContract, { exemptReadsFromDailyRateLimit: true }).get(
   async (req, res) => {
-    const { id: sessionId, messageId } = req.validatedParams;
+    const { id: requestedSessionId, messageId } = req.validatedParams;
     const userId = req.user.id;
 
-    const session = await sessionRepository.findById(sessionId);
+    const session = await sessionRepository.findById(requestedSessionId);
     if (!session) throw new NotFoundError('Session not found');
+    const sessionId = session.id;
 
-    const userHasAccess = session.userId === userId || session.users?.some(userShare => userShare.userId === userId);
-    if (!userHasAccess) throw new ForbiddenError('Not authorized to access this session');
+    if (!canAccessSession(session, userId)) throw new ForbiddenError('Not authorized to access this session');
 
     // Bound to sessionId, not a bare findById(messageId): the access check above only proves the caller
     // belongs to the session in the URL, not that messageId is one of ITS quests. A bare lookup would let
@@ -38,18 +39,20 @@ const getHandler = nextRouteForContract(getSessionMessageContract, { exemptReads
     const isOwner = session.userId === userId;
     return respond(res, chatMessageResponseSchema, {
       ...message,
+      pendingAction: isOwner ? message.pendingAction : undefined,
       promptMeta: redactPromptMetaForViewer(message.promptMeta, isOwner),
     });
   }
 );
 
 const putHandler = nextRouteForContract(updateSessionMessageContract).put(async (req, res) => {
-  const { id: sessionId, messageId } = req.validatedParams;
+  const { id: requestedSessionId, messageId } = req.validatedParams;
   const updates = req.validated;
   const userId = req.user.id;
 
-  const session = await sessionRepository.findById(sessionId);
+  const session = await sessionRepository.findById(requestedSessionId);
   if (!session) throw new NotFoundError('Session not found');
+  const sessionId = session.id;
 
   // Update-level, not any-share: rewriting a stored reply is a write to the owner's notebook, so a
   // read-only share must not reach it. The GET above stays read-level on purpose.
@@ -97,7 +100,11 @@ const putHandler = nextRouteForContract(updateSessionMessageContract).put(async 
   return respond(res, updateChatMessageResponseSchema, {
     success: true,
     message: 'Message updated successfully',
-    data: { ...updatedMessage, promptMeta: redactPromptMetaForViewer(updatedMessage.promptMeta, isOwner) },
+    data: {
+      ...updatedMessage,
+      pendingAction: isOwner ? updatedMessage.pendingAction : undefined,
+      promptMeta: redactPromptMetaForViewer(updatedMessage.promptMeta, isOwner),
+    },
   });
 });
 

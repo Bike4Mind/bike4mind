@@ -11,7 +11,8 @@ import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
 const PATH = '/api/v1/sessions/{id}/messages/{messageId}';
 const READ_SCOPES = [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS];
 const NOT_VISIBLE = 'No session or message with those ids is visible to the caller.';
-const SHARED_NOTE = 'A message of a session shared with you reads without the owner-only fields of `promptMeta`.';
+const SHARED_NOTE =
+  'A message of a session shared with you reads without `pendingAction` or the owner-only fields of `promptMeta`.';
 
 /**
  * Contracts for GET/PUT/DELETE /api/v1/sessions/{id}/messages/{messageId}. A "message" is one turn

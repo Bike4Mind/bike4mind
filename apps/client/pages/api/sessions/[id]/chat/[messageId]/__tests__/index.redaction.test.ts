@@ -76,6 +76,7 @@ const messageWithFunctionCalls = () => ({
   sessionId: 'sess-1',
   reply: 'hi',
   replies: ['hi'],
+  pendingAction: { tool: 'create_document', params: { body: 'PRIVATE DRAFT' }, ts: 1 },
   promptMeta: {
     functionCalls: [
       { name: 'web_search', parameters: {}, id: 'call_1', returnValue: 'PRIVATE TOOL OUTPUT', success: true },
@@ -111,7 +112,42 @@ describe('GET/PUT /api/sessions/[id]/chat/[messageId] - non-owner redaction', ()
     expect(res._getStatusCode()).toBe(200);
     const body = res._getJSONData();
     expect(JSON.stringify(body)).not.toContain('PRIVATE TOOL OUTPUT');
+    expect(JSON.stringify(body)).not.toContain('PRIVATE DRAFT');
     expect(body.promptMeta.functionCalls[0]).toMatchObject({ name: 'web_search', id: 'call_1', success: true });
+  });
+
+  it.each(['isGlobalRead', 'isGlobalWrite'] as const)('GET accepts %s and redacts owner-only fields', async flag => {
+    mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'owner', users: [], [flag]: true });
+    const { req, res } = fire();
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockQuestFindBySessionIdAndId).toHaveBeenCalledWith('sess-1', 'quest-1');
+    const body = res._getJSONData();
+    expect(JSON.stringify(body)).not.toContain('PRIVATE TOOL OUTPUT');
+    expect(body).not.toHaveProperty('pendingAction');
+  });
+
+  it('GET rejects an unrelated user before reading the message', async () => {
+    mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'owner', users: [{ userId: 'someone-else' }] });
+    const { req, res } = fire();
+
+    await expect(handler(req, res)).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockQuestFindBySessionIdAndId).not.toHaveBeenCalled();
+  });
+
+  it.each(['GET', 'PUT'])('%s binds messages to the resolved session id', async method => {
+    const sessionId = 'abcdef0123456789abcdef01';
+    mockSessionFindById.mockResolvedValue({ id: sessionId, userId: 'jwt-user', users: [] });
+    const { req, res } = fire({ method });
+    req.query.id = sessionId.toUpperCase();
+    await handler(req, res);
+
+    expect(mockSessionFindById).toHaveBeenCalledWith(sessionId.toUpperCase());
+    expect(mockQuestFindBySessionIdAndId).toHaveBeenCalledWith(sessionId, 'quest-1');
+    if (method === 'PUT') {
+      expect(mockQuestUpdate).toHaveBeenCalledWith(sessionId, expect.objectContaining({ id: 'quest-1' }));
+    }
   });
 
   it('GET leaves returnValue untouched for the session owner', async () => {
@@ -122,6 +158,7 @@ describe('GET/PUT /api/sessions/[id]/chat/[messageId] - non-owner redaction', ()
     expect(res._getStatusCode()).toBe(200);
     const body = res._getJSONData();
     expect(JSON.stringify(body)).toContain('PRIVATE TOOL OUTPUT');
+    expect(JSON.stringify(body)).toContain('PRIVATE DRAFT');
   });
 
   it('PUT strips returnValue for a sharee', async () => {
@@ -138,6 +175,7 @@ describe('GET/PUT /api/sessions/[id]/chat/[messageId] - non-owner redaction', ()
     expect(res._getStatusCode()).toBe(200);
     const body = res._getJSONData();
     expect(JSON.stringify(body)).not.toContain('PRIVATE TOOL OUTPUT');
+    expect(JSON.stringify(body)).not.toContain('PRIVATE DRAFT');
     expect(body.data.promptMeta.functionCalls[0]).toMatchObject({ name: 'web_search', id: 'call_1', success: true });
   });
 
@@ -149,6 +187,7 @@ describe('GET/PUT /api/sessions/[id]/chat/[messageId] - non-owner redaction', ()
     expect(res._getStatusCode()).toBe(200);
     const body = res._getJSONData();
     expect(JSON.stringify(body)).toContain('PRIVATE TOOL OUTPUT');
+    expect(JSON.stringify(body)).toContain('PRIVATE DRAFT');
   });
 });
 

@@ -27,6 +27,19 @@ describe('deleteSessionMessage', () => {
     expect(result.deletedAt).not.toBeNull();
   });
 
+  it('uses the resolved session id when the URL id has uppercase hex characters', async () => {
+    const { db } = makeAdapters();
+    const sessionId = 'abcdef0123456789abcdef01';
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({ id: sessionId });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', deletedAt: null });
+    db.chatHistories.update.mockResolvedValueOnce({ id: 'm1' });
+
+    await deleteSessionMessage('caller-1', { sessionId: sessionId.toUpperCase(), messageId: 'm1' }, { db });
+
+    expect(db.sessions.findByIdAndUserId).toHaveBeenCalledWith(sessionId.toUpperCase(), 'caller-1');
+    expect(db.chatHistories.findBySessionIdAndId).toHaveBeenCalledWith(sessionId, 'm1');
+  });
+
   it('throws NotFoundError when the message does not exist or belongs to a different session', async () => {
     const { db } = makeAdapters();
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce(null);

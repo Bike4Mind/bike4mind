@@ -687,12 +687,12 @@ export interface paths {
     };
     /**
      * Get a message of a session
-     * @description Reads one turn of a session conversation: the prompt, the reply, attachments, status and cost. Works for a session you own or one shared with you. A message of a session shared with you reads without the owner-only fields of `promptMeta`. A session or message that does not exist or was deleted is `404`. An API key needs `notebooks:read` or `notebooks:write`.
+     * @description Reads one turn of a session conversation: the prompt, the reply, attachments, status and cost. Works for a session you own or one shared with you. A message of a session shared with you reads without `pendingAction` or the owner-only fields of `promptMeta`. A session or message that does not exist or was deleted is `404`. An API key needs `notebooks:read` or `notebooks:write`.
      */
     get: operations['getSessionMessage'];
     /**
      * Update a message of a session
-     * @description Edits one turn of a session conversation: replaces `reply` or `replies`, pins it, or records which suggested choice was picked. Only those fields are writable; any other key is ignored. Needs write access to the session: the owner, or a user or group it was shared with at the update level. A message of a session shared with you reads without the owner-only fields of `promptMeta`. A session or message that does not exist or was deleted is `404`. An API key needs `notebooks:write`.
+     * @description Edits one turn of a session conversation: replaces `reply` or `replies`, pins it, or records which suggested choice was picked. Only those fields are writable; any other key is ignored. Needs write access to the session: the owner, or a user or group it was shared with at the update level. A message of a session shared with you reads without `pendingAction` or the owner-only fields of `promptMeta`. A session or message that does not exist or was deleted is `404`. An API key needs `notebooks:write`.
      */
     put: operations['updateSessionMessage'];
     post?: never;
