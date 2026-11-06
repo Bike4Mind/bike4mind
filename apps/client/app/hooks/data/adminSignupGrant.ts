@@ -1,6 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import type { AdminSignupGrantPending } from '@bike4mind/common';
+import type {
+  AdminSignupGrantPending,
+  AdminSignupGrantPendingList,
+  AdminSignupGrantPendingSummary,
+} from '@bike4mind/common';
 
 const userPath = (userId: string) => `/api/admin/users/${encodeURIComponent(userId)}`;
 
@@ -53,3 +57,39 @@ export const useAdminSignupGrantAction = (userId: string) => {
       ]),
   });
 };
+
+export type PendingListFilters = {
+  status?: 'held' | 'dripping' | 'blocked';
+  heldReason?: 'budget_exhausted' | 'risk_review';
+  source?: 'default' | 'package';
+  sort: 'oldest' | 'remaining';
+};
+
+/** Every pending-grant read sits under this prefix, so one invalidation refreshes the list and the summary. */
+export const PENDING_GRANTS_QUERY_KEY = ['admin', 'signup-grants'] as const;
+
+export const useAdminSignupGrantPendingList = (filters: PendingListFilters) =>
+  useInfiniteQuery({
+    queryKey: [...PENDING_GRANTS_QUERY_KEY, 'pending', filters],
+    queryFn: async ({ pageParam }): Promise<AdminSignupGrantPendingList> => {
+      const params: Record<string, string> = Object.fromEntries(
+        Object.entries(filters).filter((entry): entry is [string, string] => entry[1] !== undefined)
+      );
+      if (pageParam) params.cursor = pageParam;
+      const response = await api.get<AdminSignupGrantPendingList>('/api/admin/signup-grants/pending', { params });
+      return response.data;
+    },
+    getNextPageParam: lastPage => lastPage.nextCursor ?? undefined,
+    initialPageParam: undefined as string | undefined,
+    staleTime: 1000 * 30,
+  });
+
+export const useAdminSignupGrantPendingSummary = () =>
+  useQuery({
+    queryKey: [...PENDING_GRANTS_QUERY_KEY, 'pending-summary'],
+    queryFn: async (): Promise<AdminSignupGrantPendingSummary> => {
+      const response = await api.get<AdminSignupGrantPendingSummary>('/api/admin/signup-grants/pending-summary');
+      return response.data;
+    },
+    staleTime: 1000 * 30,
+  });

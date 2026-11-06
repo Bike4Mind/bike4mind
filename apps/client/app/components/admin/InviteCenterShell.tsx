@@ -14,6 +14,7 @@ import { useAdminModal } from './useAdminModal';
 import { AdminPageHeader } from './shared/AdminPageHeader';
 import { EmptyState } from './shared/EmptyState';
 import GrantPackagesTab from './InviteCenter/Packages/GrantPackagesTab';
+import { PendingSection } from './InviteCenter/Pending/PendingSection';
 import { ViewTabs } from './shared/ViewTabs';
 
 type SectionLink = { label: string; tab: AdminTab; testId: string };
@@ -36,24 +37,12 @@ const parseSection = INVITE_CENTER_SEARCH_PARSERS[INVITE_CENTER_SECTION_PARAM];
 
 const VIEWS = INVITE_CENTER_SECTION_IDS.map(id => ({ id, label: SECTION_LABELS[id] }));
 
-const STUB_SECTIONS: Record<Exclude<InviteCenterSectionId, 'waitlist' | 'packages'>, StubSection> = {
+const STUB_SECTIONS: Record<Exclude<InviteCenterSectionId, 'waitlist' | 'packages' | 'pending'>, StubSection> = {
   schedule: {
     title: 'The signup credit schedule is coming here',
     description:
       'The initial grant, daily credits, drip cap, invite bonus and the signup and trickle pools will be set in this section.',
     links: [],
-  },
-  pending: {
-    title: 'Pending grants are coming here',
-    description:
-      'Held grants, remaining-to-drip and blocked signups, with bulk release and block, will live in this section. Until then, use the Held signup grants page.',
-    links: [
-      {
-        label: 'Open Held signup grants',
-        tab: AdminTab.HeldSignupGrants,
-        testId: 'invite-center-open-held-grants-btn',
-      },
-    ],
   },
   rewards: {
     title: 'Rewards are coming here',
@@ -158,6 +147,8 @@ export function InviteCenterShell({ waitlist }: { waitlist: ReactNode }) {
           waitlist
         ) : section === 'packages' ? (
           <PackagesSection />
+        ) : section === 'pending' ? (
+          <PendingSection />
         ) : (
           <StubSectionBody section={STUB_SECTIONS[section]} />
         )}
