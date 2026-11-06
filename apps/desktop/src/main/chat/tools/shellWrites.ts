@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { lstat, readFile, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import { gitArgumentPath, gitCommand, gitCommandEnv, hostGitArgs, quickGitTimeout } from '../../git/hostGitArgs';
@@ -389,9 +389,15 @@ export async function repositoryRoot(directory: string): Promise<string> {
 
 const GIT_OUTPUT_BYTES = 4 * 1024 * 1024;
 
-/** The output of a git query run in `directory` with hooks and fsmonitor off; null on an error, a timeout or an overrun. */
-async function gitQuery(directory: string, args: readonly string[]): Promise<string | null> {
-  const env = await gitCommandEnv(directory);
+/**
+ * A git query run in `directory` with hooks and fsmonitor off and no inherited GIT_* setting, so it reads the
+ * repository the folder names. Its exit code and output; null when it could not run, timed out or overran.
+ */
+async function gitRun(directory: string, args: readonly string[]): Promise<{ code: number; stdout: string } | null> {
+  const inherited = await gitCommandEnv(directory);
+  const env = Object.fromEntries(
+    Object.entries(inherited ?? process.env).filter(([name]) => !name.toUpperCase().startsWith('GIT_'))
+  );
   const command = await gitCommand(
     directory,
     hostGitArgs(['-C', gitArgumentPath(directory, directory), ...args], directory)
@@ -401,10 +407,25 @@ async function gitQuery(directory: string, args: readonly string[]): Promise<str
     execFile(
       command.file,
       command.args,
-      { cwd: command.cwd, env, timeout: quickGitTimeout(env), maxBuffer: GIT_OUTPUT_BYTES, windowsHide: true },
-      (error, stdout) => done(error ? null : stdout)
+      { cwd: command.cwd, env, timeout: quickGitTimeout(inherited), maxBuffer: GIT_OUTPUT_BYTES, windowsHide: true },
+      (error, stdout) => {
+        if (!error) done({ code: 0, stdout });
+        else done(typeof error.code === 'number' && !error.killed ? { code: error.code, stdout } : null);
+      }
     );
   });
+}
+
+/** Whether the branch checked out in `cwd` tracks an upstream, which a bare `git rebase` or `git merge` needs; null when git cannot tell. */
+async function upstreamTracked(cwd: string): Promise<boolean | null> {
+  const tracked = await gitRun(cwd, ['rev-parse', '--verify', '-q', '@{u}']);
+  return tracked === null ? null : tracked.code === 0;
+}
+
+/** The output of a git query; null on an error, a timeout or an overrun. */
+async function gitQuery(directory: string, args: readonly string[]): Promise<string | null> {
+  const result = await gitRun(directory, args);
+  return result?.code === 0 ? result.stdout : null;
 }
 
 /** What `git rev-parse --show-toplevel` prints in `directory` (a Linux path in a WSL folder), or null when git fails. */
@@ -578,26 +599,30 @@ const TREE_GRAMMARS: Readonly<Record<string, GitGrammar>> = {
     flags: ['all', 'force', 'no-create', 'quiet', 'index', 'temp'],
     long: ['stage'],
   },
-  pull: {
-    letters: 'qvr',
+  clone: {
+    letters: 'qvlns',
+    valued: 'bo',
     flags: [
       'quiet',
       'verbose',
-      'rebase',
-      'no-rebase',
-      'ff',
-      'no-ff',
-      'ff-only',
-      'autostash',
-      'no-autostash',
-      'stat',
-      'no-stat',
       'progress',
       'no-progress',
-      'commit',
-      'no-commit',
-      'no-edit',
+      'local',
+      'no-local',
+      'no-hardlinks',
+      'shared',
+      'no-checkout',
+      'bare',
+      'mirror',
+      'single-branch',
+      'no-single-branch',
+      'tags',
+      'no-tags',
+      'reject-shallow',
+      'no-reject-shallow',
+      'dissociate',
     ],
+    long: ['branch', 'origin', 'depth', 'shallow-since', 'shallow-exclude', 'filter', 'reference'],
   },
   rebase: {
     letters: 'qvfn',
@@ -680,8 +705,8 @@ interface TreeWrite {
 const UNREAD_TREE: TreeWrite = { files: [], links: false, unread: true };
 const NO_TREE: TreeWrite = { files: [], links: false, unread: false };
 
-/** Whether a path git prints from the top of a work tree is under a `.claude` folder. */
-const inSettings = (path: string): boolean => path.split('/').includes('.claude');
+/** Whether a path git prints from the top of a work tree is under a `.claude` folder, in any case. */
+const inSettings = (path: string): boolean => path.toLowerCase().split('/').includes('.claude');
 
 /**
  * What changes in the work tree at `top` when it is made to match each target (null for the index): the `.claude`
@@ -726,9 +751,59 @@ async function treeDiff(
   return { files: [...files], links, unread: false };
 }
 
+/**
+ * What checking out `target` of the repository at `repository` into the new folder `destination` writes: the
+ * `.claude` files and the symlinks of its whole tree, as a fresh checkout has nothing to compare against.
+ */
+async function treeListing(repository: string, target: string, destination: string): Promise<TreeWrite> {
+  if (!REVISION.test(target) || target.startsWith('-')) return UNREAD_TREE;
+  const raw = await gitQuery(repository, ['ls-tree', '-r', '-z', '--full-tree', target]);
+  if (raw === null) return UNREAD_TREE;
+  const files: string[] = [];
+  let links = false;
+  for (const entry of raw.split('\0')) {
+    if (entry === '') continue;
+    const [, mode, path] = /^(\d+) \w+ [0-9a-f]+\t(.*)$/s.exec(entry) ?? [];
+    if (mode === undefined || path === undefined) return UNREAD_TREE;
+    const symlink = mode === '120000';
+    if (!symlink && !inSettings(path)) continue;
+    links ||= symlink;
+    files.push(`${destination}/${path}`);
+  }
+  return { files, links, unread: false };
+}
+
+const WORKTREE_ADD: GitGrammar = {
+  letters: 'fdq',
+  valued: 'bB',
+  flags: [
+    'force',
+    'detach',
+    'checkout',
+    'no-checkout',
+    'lock',
+    'orphan',
+    'quiet',
+    'track',
+    'no-track',
+    'guess-remote',
+    'no-guess-remote',
+    'relative-paths',
+    'no-relative-paths',
+  ],
+  long: ['reason'],
+};
+
+/** A clone source the scan can list: a folder on this machine, not a URL or `host:path`. */
+async function localRepository(cwd: string, source: string): Promise<string | null> {
+  if (/^[\w+.-]+:\/\//.test(source) || /^[^/\\]*:/.test(source.replace(/^[A-Za-z]:[\\/]/, ''))) return null;
+  const path = resolveOperand(cwd, source);
+  return (await stat(path).catch(() => null))?.isDirectory() ? path : null;
+}
+
 /** Each listed path under a `.claude` folder, from the top of the work tree; null when git fails. */
 async function settingsListed(top: string, args: readonly string[]): Promise<string[] | null> {
-  const listed = await gitQuery(top, [...args, '-z', '--', '.claude', '*/.claude/*']);
+  const listed = await gitQuery(top, [...args, '-z', '--', ':(icase).claude', ':(icase)*/.claude/*']);
   return listed === null ? null : listed.split('\0').filter(path => path !== '' && inSettings(path));
 }
 
@@ -793,8 +868,13 @@ async function gitTreeWrites(
       if (read.positionals.length === 0 && !has(read, 'b', 'B', 'c', 'C', 'create', 'force-create')) return NO_TREE;
       return against([previous(read.positionals[0] ?? 'HEAD')]);
     }
-    case 'merge':
+    case 'merge': {
+      if (read.positionals.length === 0 && !(moved || read.unknown)) {
+        const tracked = await upstreamTracked(cwd);
+        if (tracked !== true) return tracked === null ? UNREAD_TREE : NO_TREE;
+      }
       return against(read.positionals.length > 0 ? read.positionals : ['@{u}']);
+    }
     case 'cherry-pick':
     case 'revert': {
       if (read.positionals.length === 0 || read.positionals.some(target => target.includes('..'))) return UNREAD_TREE;
@@ -823,11 +903,13 @@ async function gitTreeWrites(
     case 'update-index':
       script.unknownIndex = true;
       return NO_TREE;
-    case 'pull':
-      return read.positionals.length > 0 ? UNREAD_TREE : against(['@{u}']);
     case 'rebase': {
       const [upstream, branch] = read.positionals;
       const onto = read.given.get('onto');
+      if (upstream === undefined && typeof onto !== 'string' && !(moved || read.unknown)) {
+        const tracked = await upstreamTracked(cwd);
+        if (tracked !== true) return tracked === null ? UNREAD_TREE : NO_TREE;
+      }
       const base = typeof onto === 'string' ? onto : (upstream ?? '@{u}');
       return against(branch === undefined ? [base] : [base, branch]);
     }
@@ -838,7 +920,8 @@ async function gitTreeWrites(
         const ref = rest[0] ?? 'stash@{0}';
         if (!REVISION.test(ref)) return UNREAD_TREE;
         // A stash holding untracked files writes them too, which the diff below does not list.
-        if ((await gitQuery(cwd, ['rev-parse', '--verify', '-q', `${ref}^3`])) !== null) return UNREAD_TREE;
+        const untracked = await gitRun(cwd, ['rev-parse', '--verify', '-q', `${ref}^3`]);
+        if (untracked === null || untracked.code === 0) return UNREAD_TREE;
         return against([ref]);
       }
       if (action !== 'push' && action !== 'save') return UNREAD_TREE;
@@ -862,6 +945,26 @@ async function gitTreeWrites(
     }
     case 'clean':
       return moved || read.unknown ? UNREAD_TREE : cleanWrites(read, cwd);
+    case 'worktree': {
+      // `move` carries the tree's relative links to a new place, like mv.
+      if (args[0] === 'move') return UNREAD_TREE;
+      if (args[0] !== 'add') return null;
+      const add = gitArgs(args.slice(1), WORKTREE_ADD);
+      const [path, target] = add.positionals;
+      if (moved || add.unknown || path === undefined || add.paths.length > 0) return UNREAD_TREE;
+      if (has(add, 'no-checkout', 'orphan')) return NO_TREE;
+      return treeListing(cwd, target ?? 'HEAD', resolveOperand(cwd, path));
+    }
+    case 'clone': {
+      const [source, folder] = read.positionals;
+      if (moved || read.unknown || source === undefined) return UNREAD_TREE;
+      if (has(read, 'n', 'no-checkout', 'bare', 'mirror')) return NO_TREE;
+      const repository = await localRepository(cwd, source);
+      if (repository === null) return UNREAD_TREE;
+      const name = folder ?? basename(repository.replace(/[\\/]+$/, '')).replace(/\.git$/, '');
+      const branch = read.given.get('b') ?? read.given.get('branch');
+      return treeListing(repository, typeof branch === 'string' ? branch : 'HEAD', resolveOperand(cwd, name));
+    }
     case 'sparse-checkout': {
       if (['list', 'check-rules'].includes(args[0] ?? '')) return NO_TREE;
       const root = moved ? null : await top();
@@ -1011,7 +1114,15 @@ async function writesOf(
     const moved = git.moved || context.env;
     const relocate = (path: string): string => resolveOperand(git.cwd, path);
     if (git.sub === 'apply') return { ...(await gitApplyWrites(git.rest, node, git.cwd)), links: true };
-    const restored = git.sub === 'checkout' || git.sub === 'restore' ? gitRestored(git.sub, git.rest) : null;
+    let restored = git.sub === 'checkout' || git.sub === 'restore' ? gitRestored(git.sub, git.rest) : null;
+    if (git.sub === 'checkout' && restored?.source && !git.rest.includes('--') && !moved) {
+      // As git does: a first word that names no commit but an existing file is a path to restore from the index.
+      const commit = await gitRun(git.cwd, ['rev-parse', '--verify', '-q', `${restored.source}^{commit}`]);
+      const file = await lstat(resolveOperand(git.cwd, restored.source)).catch(() => null);
+      if (commit !== null && commit.code !== 0 && file !== null && REVISION.test(restored.source)) {
+        restored = { paths: [restored.source, ...restored.paths], source: null };
+      }
+    }
     if (restored && restored.paths.length > 0) {
       if (git.sub === 'restore' && restored.source !== null) context.script.staged.push(restored.source);
       const root = moved ? null : await gitToplevel(git.cwd);
