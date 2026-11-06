@@ -43,13 +43,17 @@ const flagValue = (argv: string[], name: string): string | undefined => {
  * at most one `@` and, if it has one, that `@` comes before any `?`: userinfo holding a raw `@` or `?`
  * cannot be told from the host or the query, so nothing between the scheme and the credential `@` is
  * ever returned. The cost is a legitimate `@` in a query option, which must be written `%40`. After
- * that, the query goes first and the last `@` ends the userinfo, so a raw `/` in the password is
- * dropped too.
+ * that, userinfo outside the RFC 3986 userinfo set is refused too: the driver quotes a bad username and
+ * connectDB logs it. After that, the query goes first and the last `@` ends the userinfo,.
  */
+const USERINFO_OK = /^[A-Za-z0-9\-._~!$&'()*+,;=:%]*$/;
+
 const parseMongoUri = (uri: string): { host: string; db: string } | undefined => {
   const m = /^mongodb(?:\+srv)?:\/\/(.*)$/.exec(uri);
   if (!m) return undefined;
   if (m[1].split('@').length > 2) return undefined;
+  const userinfo = m[1].includes('@') ? m[1].slice(0, m[1].lastIndexOf('@')) : '';
+  if (!USERINFO_OK.test(userinfo)) return undefined;
   const [rest, ...query] = m[1].split('?');
   if (!rest.includes('@') && query.join('?').includes('@')) return undefined;
   const [host, ...path] = rest.slice(rest.lastIndexOf('@') + 1).split('/');

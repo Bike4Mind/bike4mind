@@ -350,16 +350,26 @@ describe('records source flags', () => {
   });
 
   it('prints no part of a password holding a raw slash', () => {
-    const out = describeMongoTarget('mongodb://admin:ab/cd@db.example:27017/prod');
-    expect(out).toBe('db.example:27017/prod');
-    expect(out).not.toMatch(/ab|cd/);
+    expect(describeMongoTarget('mongodb://admin:ab/cd@db.example:27017/prod')).toBe('(unparseable uri)');
   });
 
-  it('prints no password fragment on the records line and still names the database', () => {
+  it('refuses userinfo the driver would quote back', () => {
+    for (const uri of [
+      'mongodb://USRX/k:PWDY@h1/db',
+      'mongodb://USRX#k:PWDY@h1/db',
+      'mongodb://USRX[k:PWDY@h1/db',
+      'mongodb://USRX]k:PWDY@h1/db',
+      'mongodb+srv://USRX/k:PWDY@c0.example.net/db',
+      'mongodb://user:PW/D#Y@h1/db',
+    ]) {
+      expect(describeMongoTarget(uri)).toBe('(unparseable uri)');
+      expect(() => assertUriDescribable(uri, 'MONGODB_URI')).toThrow(/^MONGODB_URI could not be parsed/);
+    }
+  });
+
+  it('names no database for a records uri whose password holds a raw slash', () => {
     const raw = 'mongodb://user:pa/ss@h1:27017,h2:27017/prod?replicaSet=rs0';
-    const source = parseRecordsSource(['--records-uri', raw]);
-    expect(source).toMatchObject({ dbName: 'prod' });
-    expect(describeRecordsSource(source)).toBe('h1:27017,h2:27017/prod');
+    expect(() => parseRecordsSource(['--records-uri', raw])).toThrow(/names no database/);
   });
 
   it('prints no userinfo when the password holds a raw question mark', () => {
