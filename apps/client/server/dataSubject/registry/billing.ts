@@ -1,6 +1,8 @@
 import type { DataHolderRegistry } from '../types';
 
 const FINANCIAL_RECORD_REASON = 'Financial record kept for accounting and tax obligations (GDPR Art. 17(3)(b))';
+const PAYMENT_DISPUTE_REASON =
+  'Payment dispute kept to establish and defend a legal claim against the chargeback (GDPR Art. 17(3)(e))';
 
 export const billingHolders = {
   // Mostly conversation content (query, checkpoint, result, tool inputs). Its charge is already on
@@ -176,6 +178,21 @@ export const billingHolders = {
       },
     ],
   },
+  // A dispute against an organization's or an unmatched charge is not a person.
+  StripeDispute: {
+    kind: 'holder',
+    references: [
+      {
+        path: 'subjectId',
+        matchBy: 'userId',
+        where: { subject: 'user' },
+        action: 'retain',
+        reason: PAYMENT_DISPUTE_REASON,
+      },
+      { path: 'resolution.resolvedBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'contain.undoneBy', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
   Subscription: {
     kind: 'holder',
     references: [
@@ -204,6 +221,10 @@ export const billingHolders = {
         reason: FINANCIAL_RECORD_REASON,
       },
     ],
+  },
+  UserLimitEvent: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
   UserSubscription: {
     kind: 'holder',
