@@ -1,4 +1,9 @@
-import { usableEvidenceConfidence, type AgentStep, type ScoredToolCall } from '@bike4mind/agents';
+import {
+  usableEvidenceConfidence,
+  type AgentStep,
+  type LowConfidenceCompletionMode,
+  type ScoredToolCall,
+} from '@bike4mind/agents';
 
 /**
  * Consecutive low-confidence iterations before the gate pauses. One weak tool result
@@ -161,4 +166,40 @@ export function formatConfidenceGateReason(confidence: number, threshold: number
   const pct = (value: number) => (value * 100).toFixed(0);
   const below = `below the ${pct(threshold)}% confidence threshold`;
   return `${lowConfidenceStreak} iterations in a row ${below} (latest ${pct(confidence)}%)`;
+}
+
+/** Used when the orchestration profile does not set `lowConfidenceCompletion`. */
+export const DEFAULT_LOW_CONFIDENCE_COMPLETION: LowConfidenceCompletionMode = 'annotate';
+
+export interface LowConfidenceCompletion {
+  mode: Exclude<LowConfidenceCompletionMode, 'off'>;
+  confidence: number;
+  reason: string;
+}
+
+/**
+ * Whether a run that just produced its final answer did so on low confidence. A final-answer
+ * iteration runs no tools, so the gate never evaluates it; the signal is the persisted streak
+ * left by the last evaluated iteration (`recordIterationConfidence`), which `setPendingGate`
+ * clears - an answer that follows a human review is never flagged. Null for `off`, a clean
+ * streak, or a run whose confidence was never recorded.
+ */
+export function evaluateLowConfidenceCompletion({
+  mode,
+  lowConfidenceStreak,
+  lastConfidence,
+  threshold,
+}: {
+  mode: LowConfidenceCompletionMode;
+  lowConfidenceStreak: number | undefined;
+  lastConfidence: number | undefined;
+  threshold: number;
+}): LowConfidenceCompletion | null {
+  if (mode === 'off' || (lowConfidenceStreak ?? 0) < 1 || lastConfidence === undefined) return null;
+  const pct = (value: number) => (value * 100).toFixed(0);
+  return {
+    mode,
+    confidence: lastConfidence,
+    reason: `Answered after an iteration below the ${pct(threshold)}% confidence threshold (latest ${pct(lastConfidence)}%)`,
+  };
 }

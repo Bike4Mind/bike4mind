@@ -1,4 +1,4 @@
-import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
+import type { ChatSessionStatus, ChatSessionSummary, SessionSetupStep } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
 import { OrchestratorStage, type OrchestratorStageProps } from './OrchestratorStage';
 import { useOrchestratorRoster } from './useOrchestrator';
@@ -7,7 +7,7 @@ interface OrchestratorSurfaceProps extends Omit<OrchestratorStageProps, 'agents'
   rootId: string;
   sessions: readonly ChatSessionSummary[];
   statuses: ReadonlyMap<string, ChatSessionStatus>;
-  preparing?: ReadonlySet<string>;
+  preparing?: ReadonlyMap<string, SessionSetupStep>;
   prSummaries: ReadonlyMap<string, PrSummary>;
 }
 

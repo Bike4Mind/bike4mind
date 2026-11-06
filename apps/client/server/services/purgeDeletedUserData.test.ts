@@ -12,6 +12,7 @@ const {
   deleteAuthEventsMock,
   retainTracesMock,
   removeFromDetectionsMock,
+  deleteLimitEventsMock,
 } = vi.hoisted(() => ({
   deleteEmbedMock: vi.fn(),
   deleteRequestsMock: vi.fn(),
@@ -24,6 +25,7 @@ const {
   deleteAuthEventsMock: vi.fn(),
   retainTracesMock: vi.fn(),
   removeFromDetectionsMock: vi.fn(),
+  deleteLimitEventsMock: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -33,6 +35,7 @@ vi.mock('@bike4mind/database', () => ({
   integrationRequestRepository: { deleteAllForUser: deleteRequestsMock },
   hideDeletedAuthorAnnotations: hideAnnotationsMock,
   shadowDetectionRepository: { removeUser: removeFromDetectionsMock },
+  userLimitEventRepository: { deleteAllForUser: deleteLimitEventsMock },
 }));
 vi.mock('@server/auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: retainTracesMock }));
 vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
@@ -78,6 +81,7 @@ describe('purgeDeletedUserData', () => {
     expect(withdrawListingsMock).toHaveBeenCalledWith('u1');
     expect(deleteAuthEventsMock).toHaveBeenCalledWith('u1');
     expect(removeFromDetectionsMock).toHaveBeenCalledWith('u1');
+    expect(deleteLimitEventsMock).toHaveBeenCalledWith('u1');
     expect(logger.error).not.toHaveBeenCalled();
   });
 

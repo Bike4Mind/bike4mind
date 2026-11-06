@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  DOCK_DEFAULT_WIDTH,
+  DOCK_MIN_WIDTH,
   ORCHESTRATOR_VIEWS,
+  clampDockWidth,
+  dockMaxWidth,
+  readDockWidth,
+  writeDockWidth,
   forgetSessionPrefs,
   readDockOpen,
   readFinaleSeen,
@@ -101,5 +107,45 @@ describe('orchestratorPrefs', () => {
       throw new Error('blocked');
     });
     expect(() => forgetSessionPrefs('gone')).not.toThrow();
+  });
+
+  describe('dock width', () => {
+    it('defaults to 380px and keeps at least 300px', () => {
+      expect(readDockWidth()).toBe(DOCK_DEFAULT_WIDTH);
+      expect(DOCK_DEFAULT_WIDTH).toBe(380);
+      expect(clampDockWidth(120)).toBe(DOCK_MIN_WIDTH);
+      expect(clampDockWidth(512.6)).toBe(513);
+      expect(clampDockWidth(Number.NaN)).toBe(DOCK_DEFAULT_WIDTH);
+    });
+
+    it('caps the dock at half the window, letting the cap win in a tiny window', () => {
+      expect(dockMaxWidth(1441)).toBe(720);
+      expect(clampDockWidth(900, dockMaxWidth(1440))).toBe(720);
+      expect(clampDockWidth(400, dockMaxWidth(1440))).toBe(400);
+      expect(clampDockWidth(400, dockMaxWidth(500))).toBe(250);
+    });
+
+    it('round-trips a width, clamped only to the minimum on the way back in', () => {
+      writeDockWidth(640);
+      expect(window.localStorage.getItem('b4m.orchestrator.dockWidth')).toBe('640');
+      expect(readDockWidth()).toBe(640);
+      window.localStorage.setItem('b4m.orchestrator.dockWidth', '2000');
+      expect(readDockWidth()).toBe(2000);
+      window.localStorage.setItem('b4m.orchestrator.dockWidth', '10');
+      expect(readDockWidth()).toBe(DOCK_MIN_WIDTH);
+      window.localStorage.setItem('b4m.orchestrator.dockWidth', 'wide');
+      expect(readDockWidth()).toBe(DOCK_DEFAULT_WIDTH);
+    });
+
+    it('falls back to the default and does not throw when storage throws', () => {
+      vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+        throw new Error('blocked');
+      });
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+        throw new Error('blocked');
+      });
+      expect(readDockWidth()).toBe(DOCK_DEFAULT_WIDTH);
+      expect(() => writeDockWidth(500)).not.toThrow();
+    });
   });
 });

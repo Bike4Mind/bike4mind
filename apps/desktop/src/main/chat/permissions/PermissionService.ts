@@ -10,7 +10,14 @@ import {
 } from '@shared/permissions';
 import type { ClaudeCodeFile, ClaudeCodeSettings } from './ClaudeCodeSettings';
 import type { PermissionRuleStore } from './PermissionRuleStore';
-import { type CompiledRule, PermissionRuleSet, type RuleSource, compileRule, parseRule } from './rules';
+import {
+  type CompiledRule,
+  PermissionRuleSet,
+  type ProtectedRoots,
+  type RuleSource,
+  compileRule,
+  parseRule,
+} from './rules';
 
 export interface PermissionScopeKey {
   /** The folder the user picked for the session's project; desktop project rules are keyed on it. */
@@ -26,7 +33,9 @@ export interface PermissionServiceOptions {
   isTrusted(directory: string): Promise<boolean>;
   home: string;
   /** Folders whose contents no allow rule may cover: the app's own data and Claude Code's settings. */
-  protectedRoots: readonly string[];
+  protectedRoots: ProtectedRoots;
+  /** Protected folders not resolvable yet; while any remain, no allow rule applies. */
+  unresolvedProtected?: () => readonly string[];
   logger: { warn(message: string): void };
 }
 
@@ -159,7 +168,7 @@ export class PermissionService {
   }
 
   private async compile(scope: PermissionScopeKey): Promise<PermissionRuleSet> {
-    const { home, store, claudeCode, protectedRoots } = this.options;
+    const { home, store, claudeCode, protectedRoots, unresolvedProtected } = this.options;
     const stored = await store.read();
     const project = scope.project ? resolve(scope.project) : null;
     const working = scope.workingDirectory ? resolve(scope.workingDirectory) : null;
@@ -199,7 +208,7 @@ export class PermissionService {
     }
     if (project && stored.projects[project]) add(stored.projects[project], desktopProject(project), true, project);
     add(stored.user, DESKTOP_USER, true, home);
-    return new PermissionRuleSet(rules, protectedRoots);
+    return new PermissionRuleSet(rules, protectedRoots, unresolvedProtected);
   }
 
   private warnOnce(source: RuleSource, text: string, reason: string): void {

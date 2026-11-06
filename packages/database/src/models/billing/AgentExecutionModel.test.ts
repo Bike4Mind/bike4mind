@@ -1588,6 +1588,17 @@ describe('AgentExecutionRepository', () => {
       expect(updated?.gateHistory).toBeUndefined();
     });
 
+    it('records the latest evaluated confidence on the doc, whether or not it was below threshold', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      expect((await agentExecutionRepository.findById(exec.id))?.lastConfidence).toBeUndefined();
+
+      await agentExecutionRepository.recordIterationConfidence(exec.id, 0.3, { belowThreshold: true });
+      expect((await agentExecutionRepository.findById(exec.id))?.lastConfidence).toBe(0.3);
+
+      await agentExecutionRepository.recordIterationConfidence(exec.id, 0.8, { belowThreshold: false });
+      expect((await agentExecutionRepository.findById(exec.id))?.lastConfidence).toBe(0.8);
+    });
+
     it('advances only the streak when told not to record telemetry (a scripted score)', async () => {
       const exec = await agentExecutionRepository.create(makeBaseExecution());
       const scripted = (confidence: number, belowThreshold: boolean) =>

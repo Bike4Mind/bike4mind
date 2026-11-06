@@ -89,54 +89,58 @@ async function sendOnce(
   release: () => Promise<void>,
   build: () => Promise<(EmailContent & { to: string }) | null>,
   logger: Logger
-): Promise<void> {
+): Promise<boolean> {
   let claimed = false;
   try {
     claimed = await claim();
     if (!claimed) {
       logger.info(`Billing notice ${kind} for ${subscriptionId} already sent, skipping`);
-      return;
+      return false;
     }
     const email = await build();
     if (!email) {
       // The claim is kept: a retry would find no one to send to either.
       logger.warn(`No owner email for subscription ${subscriptionId}; billing notice ${kind} not sent`);
-      return;
+      return false;
     }
     await EmailEvents.Send.publish({ to: email.to, subject: email.subject, body: email.body });
     logger.info(`Sent billing notice ${kind} to the owner of ${subscriptionId}`);
+    return true;
   } catch (error) {
     logger.error(`Failed to send billing notice ${kind} for ${subscriptionId}`, { error });
     await emitMetric('Lumina5/Billing', 'BillingNoticeFailed', 1, { kind });
-    if (!claimed) return;
-    try {
-      await release();
-    } catch (releaseError) {
-      logger.warn(`Could not release the ${kind} claim for ${subscriptionId}; the notice will not retry`, {
-        error: releaseError,
-      });
+    if (claimed) {
+      try {
+        await release();
+      } catch (releaseError) {
+        logger.warn(`Could not release the ${kind} claim for ${subscriptionId}; the notice will not retry`, {
+          error: releaseError,
+        });
+      }
     }
+    return false;
   }
 }
 
 /**
  * Email the owner that a renewal charge failed, once per invoice. Renewals only: a declined
  * proration (an org adding seats) or a one-off invoice is not "your renewal failed", and the
- * first invoice fails inside checkout, where the user already sees the error.
+ * first invoice fails inside checkout, where the user already sees the error. Resolves true only
+ * when this call sent the email.
  */
 export async function notifyPaymentFailed(
   subscription: ISubscription,
   invoice: Pick<Stripe.Invoice, 'id' | 'next_payment_attempt' | 'billing_reason'>,
   logger: Logger
-): Promise<void> {
+): Promise<boolean> {
   const subscriptionId = subscription.subscriptionId;
-  if (!subscriptionId) return;
+  if (!subscriptionId) return false;
   if (invoice.billing_reason !== 'subscription_cycle') {
     logger.debug(`Invoice ${invoice.id} is ${invoice.billing_reason}, not a renewal; no payment-failed email`);
-    return;
+    return false;
   }
 
-  await sendOnce(
+  return sendOnce(
     'payment_failed',
     subscriptionId,
     () => subscriptionRepository.claimPaymentFailureNotice(subscriptionId, invoice.id),

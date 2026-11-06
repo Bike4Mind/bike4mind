@@ -33,6 +33,7 @@ import {
   fallbackLakeSettingsRepository,
 } from '@bike4mind/database';
 import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
+import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import {
   ChatModels,
@@ -155,6 +156,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       organizations: organizationRepository,
       mcpServers: mcpServerRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+      recordLimitEvent: recordUserLimitEvent,
       creditTransactions: creditTransactionRepository,
       usageEvents: usageEventRepository,
       operationalBilling: operationalBillingAdapters,

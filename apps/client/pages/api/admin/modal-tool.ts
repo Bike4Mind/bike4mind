@@ -2,7 +2,9 @@ import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Logger } from '@bike4mind/observability';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, HTTPError } from '@bike4mind/common';
+import { meterCompletionBackend, type CompletionMeter } from '@bike4mind/services';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import {
   collectModalChanges,
   createModal,
@@ -45,7 +47,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 
     try {
       // Parse the natural language query to determine intent and parameters
-      const toolParams = await parseNaturalLanguageQuery(query, context);
+      const toolParams = await parseNaturalLanguageQuery(
+        query,
+        context,
+        createRequestCompletionMeter(req, 'admin modal tool', { systemModel: true })
+      );
       logger.info(`Parsed tool params - Action: ${toolParams.action}`, toolParams);
 
       // Execute the appropriate action based on parsed parameters
@@ -76,6 +82,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       logger.info(`Modal tool result - Success: ${result.success}, Message: ${result.message}`);
       return res.json(result);
     } catch (error) {
+      // Credit and admission refusals keep their status (422) instead of becoming a 500.
+      if (error instanceof HTTPError) throw error;
       logger.error('Modal tool error:', error);
       return res.status(500).json({
         success: false,
@@ -88,16 +96,18 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 /**
  * Use LLM to intelligently parse natural language query into tool parameters
  */
-export async function parseNaturalLanguageQueryDirect(query: string, context?: any) {
-  return parseNaturalLanguageQuery(query, context);
+export async function parseNaturalLanguageQueryDirect(query: string, context: any, meter: CompletionMeter) {
+  return parseNaturalLanguageQuery(query, context, meter);
 }
 
-async function parseNaturalLanguageQuery(query: string, context?: any) {
+async function parseNaturalLanguageQuery(query: string, context: any, meter: CompletionMeter) {
   try {
     // Dynamically import OperationsModelService only when needed (server-side only)
     const { OperationsModelService } = await import('@bike4mind/server-utils/services/operationsModelService');
     // Get the operations model for LLM processing
-    const { modelId, llm } = await OperationsModelService.getOperationsModel();
+    const operations = await OperationsModelService.getOperationsModel();
+    const { modelId } = operations;
+    const llm = meterCompletionBackend(operations.llm, meter, operations.modelInfo);
 
     logger.info(`Using LLM model ${modelId} for intent recognition`);
 
@@ -414,6 +424,8 @@ What is the user's intent?`;
       return fallbackParsing(query, context);
     }
   } catch (error) {
+    // A credit or admission refusal must reach the admin, not degrade silently to pattern matching.
+    if (error instanceof HTTPError) throw error;
     logger.error('Error in LLM intent recognition:', error);
     // Fallback to simple pattern matching
     return fallbackParsing(query, context);

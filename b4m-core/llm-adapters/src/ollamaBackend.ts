@@ -20,7 +20,7 @@ import {
   ICompletionOptions,
   ICompletionOptionTools,
 } from './backend';
-import { Ollama, Message as OllamaMessage, Options as OllamaOptions, Tool, ToolCall } from 'ollama';
+import { Ollama, type ChatRequest, Message as OllamaMessage, Options as OllamaOptions, Tool, ToolCall } from 'ollama';
 import { ILogger, Logger } from '@bike4mind/observability';
 import { Agent } from 'undici';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
@@ -66,6 +66,42 @@ function toOllamaToolArguments(args: unknown): Record<string, unknown> {
   return { _raw: args };
 }
 
+/** What `/api/show` said about a model, for the per-model request settings. */
+export interface OllamaModelFacts {
+  capabilities: string[];
+  modelInfo: Record<string, unknown>;
+  parameters?: string;
+  modelfile?: string;
+  /** `/api/show`'s `thinking.values`: booleans, or effort names such as gpt-oss's; absent when Ollama does not say. */
+  thinkingValues?: unknown[];
+  /** The trained length; absent when `/api/show` reported none. */
+  trainedContext?: number;
+  /** The num_ctx this backend sends for the model without per-model settings. */
+  defaultNumCtx: number;
+}
+
+/** One request's per-model fields; anything absent keeps this backend's own behavior. */
+export interface OllamaRequestSettings {
+  numCtx?: number;
+  /** Seconds; -1 keeps the model loaded until Ollama stops. */
+  keepAlive?: number;
+  /** Merged into `options` over the caller's temperature: sampling fields and draft_num_predict. */
+  options?: Record<string, number>;
+  /** num_predict for a call that sets no maxTokens. */
+  maxOutputTokens?: number;
+  /** Sent when the caller leaves `thinking` unset. */
+  think?: boolean | string;
+}
+
+/** Read on every request; a rejection fails that request, so settings that cannot be read never become defaults. */
+export type OllamaRequestSettingsReader = (model: string, facts: OllamaModelFacts) => Promise<OllamaRequestSettings>;
+
+interface OllamaModelDetails {
+  capabilities: string[];
+  contextWindow: number;
+  facts: Omit<OllamaModelFacts, 'defaultNumCtx'>;
+}
+
 export interface OllamaModelInfo {
   name: string;
   modified_at: Date;
@@ -92,12 +128,28 @@ export class OllamaBackend implements ICompletionBackend {
   private _clientHeaders: Record<string, string>;
   private _agent: Agent;
   private _fetch?: typeof globalThis.fetch;
+  private _requestSettings?: OllamaRequestSettingsReader;
+  private _settingsWarning: (message: string) => void;
   public currentModel: string = '';
 
-  /** `options.fetch` replaces the default transport, for servers that need credentials the host URL cannot carry. */
-  constructor(host?: string, logger?: ILogger, options: { fetch?: typeof globalThis.fetch } = {}) {
+  /**
+   * `options.fetch` replaces the default transport, for servers that need credentials the host URL cannot carry.
+   * `options.requestSettings` supplies per-model fields, such as the CLI's reading of Desktop's model settings.
+   * `options.settingsWarning` takes a mid-turn warning about those settings in place of `logger.warn`.
+   */
+  constructor(
+    host?: string,
+    logger?: ILogger,
+    options: {
+      fetch?: typeof globalThis.fetch;
+      requestSettings?: OllamaRequestSettingsReader;
+      settingsWarning?: (message: string) => void;
+    } = {}
+  ) {
     this._fetch = options.fetch;
+    this._requestSettings = options.requestSettings;
     this._logger = logger ?? new Logger();
+    this._settingsWarning = options.settingsWarning ?? (message => this._logger.warn(message));
     this._host = host ?? 'http://localhost:11434';
     const url = new URL(this._host);
     const headers: Record<string, string> = {};
@@ -140,6 +192,8 @@ export class OllamaBackend implements ICompletionBackend {
   /** Rejects when Ollama is unreachable; getAvailableModels needs a down host to differ from an empty one. */
   async getModelInfo(): Promise<ModelInfo[]> {
     const models = await this._api.list();
+    this._listedNumCtx.clear();
+    this._numCtxChangeWarned.clear();
 
     // In self-host, Ollama runs on the operator's own hardware, so describe
     // it as local; otherwise it is served remotely by the hosted platform.
@@ -153,12 +207,13 @@ export class OllamaBackend implements ICompletionBackend {
     // like Qwen) and a placeholder context size.
     return await Promise.all(
       models.models.map(async model => {
-        const { capabilities, contextWindow: reportedContextWindow } = await this.getModelDetailsCached(model.name);
+        const details = await this.getModelDetailsCached(model.name);
+        const { capabilities } = details;
         // Advertise the window we will actually allocate, not the one the
         // model was trained for: callers size history against this number, so
         // publishing an uncapped 262K would have them build prompts Ollama
         // then truncates from the front.
-        const contextWindow = ollamaNumCtx(reportedContextWindow);
+        const contextWindow = await this.listedNumCtx(model.name, details);
         const modelInfo = {
           id: model.name,
           type: 'text',
@@ -218,9 +273,9 @@ export class OllamaBackend implements ICompletionBackend {
   }
 
   /** Per-model /api/show results, so the tool-call recursion shows once, not per round. */
-  private readonly _modelDetails = new Map<string, Promise<{ capabilities: string[]; contextWindow: number }>>();
+  private readonly _modelDetails = new Map<string, Promise<OllamaModelDetails>>();
 
-  private getModelDetailsCached(model: string): Promise<{ capabilities: string[]; contextWindow: number }> {
+  private getModelDetailsCached(model: string): Promise<OllamaModelDetails> {
     let details = this._modelDetails.get(model);
     if (!details) {
       // getModelDetails never rejects (it falls back on error), so caching the
@@ -238,7 +293,7 @@ export class OllamaBackend implements ICompletionBackend {
    * "qwen2.context_length"). Returns safe defaults on any error so a transient
    * show() failure degrades gracefully instead of dropping the whole list.
    */
-  private async getModelDetails(model: string): Promise<{ capabilities: string[]; contextWindow: number }> {
+  private async getModelDetails(model: string): Promise<OllamaModelDetails> {
     try {
       const info = await this._api.show({ model });
       const capabilities = info.capabilities ?? [];
@@ -249,14 +304,66 @@ export class OllamaBackend implements ICompletionBackend {
       const entries: [string, unknown][] =
         raw instanceof Map ? Array.from(raw.entries()) : Object.entries((raw ?? {}) as Record<string, unknown>);
       const ctx = entries.find(([k]) => k.endsWith('.context_length'))?.[1];
-      const contextWindow = typeof ctx === 'number' && ctx > 0 ? ctx : OllamaBackend.DEFAULT_CONTEXT_WINDOW;
+      const trainedContext = typeof ctx === 'number' && Number.isSafeInteger(ctx) && ctx > 0 ? ctx : undefined;
+      const contextWindow = trainedContext ?? OllamaBackend.DEFAULT_CONTEXT_WINDOW;
+      // Newer Ollama reports the `think` values a template honors; the client library does not type it yet.
+      const thinking = (info as { thinking?: { values?: unknown } }).thinking;
 
-      return { capabilities, contextWindow };
+      return {
+        capabilities,
+        contextWindow,
+        facts: {
+          capabilities,
+          modelInfo: Object.fromEntries(entries),
+          ...(typeof info.parameters === 'string' && { parameters: info.parameters }),
+          ...(typeof info.modelfile === 'string' && { modelfile: info.modelfile }),
+          ...(Array.isArray(thinking?.values) && { thinkingValues: thinking.values }),
+          ...(trainedContext !== undefined && { trainedContext }),
+        },
+      };
     } catch (error) {
       this._logger.debug(`[OllamaBackend] Could not fetch details for ${model}:`, error);
       this._detailsFailed.add(model);
-      return { capabilities: [], contextWindow: OllamaBackend.DEFAULT_CONTEXT_WINDOW };
+      return {
+        capabilities: [],
+        contextWindow: OllamaBackend.DEFAULT_CONTEXT_WINDOW,
+        facts: { capabilities: [], modelInfo: {} },
+      };
     }
+  }
+
+  private requestSettings(model: string, details: OllamaModelDetails): Promise<OllamaRequestSettings> {
+    if (!this._requestSettings) return Promise.resolve({});
+    return this._requestSettings(model, { ...details.facts, defaultNumCtx: ollamaNumCtx(details.contextWindow) });
+  }
+
+  // Callers size history from the listed contextWindow, so requests keep sending it until the next listing.
+  private readonly _listedNumCtx = new Map<string, number>();
+  private readonly _numCtxChangeWarned = new Set<string>();
+
+  /** The num_ctx a listing advertises: the model's own setting, or the default when it has none or it cannot be read. */
+  private async listedNumCtx(model: string, details: OllamaModelDetails): Promise<number> {
+    // Listing does not fail with the settings: the model's turns read them strictly and fail with the reason.
+    const settings = await this.requestSettings(model, details).catch((error: unknown) => {
+      this._logger.debug(`[OllamaBackend] Settings for ${model} not read while listing:`, error);
+      return undefined;
+    });
+    // Unread settings pin the advertised fallback, so a later fix still waits for a listing like any other change.
+    const numCtx = settings?.numCtx ?? ollamaNumCtx(details.contextWindow);
+    this._listedNumCtx.set(model, numCtx);
+    return numCtx;
+  }
+
+  private sentNumCtx(model: string, wanted: number): number {
+    const listed = this._listedNumCtx.get(model);
+    if (listed === undefined) return wanted;
+    if (wanted !== listed && !this._numCtxChangeWarned.has(model)) {
+      this._numCtxChangeWarned.add(model);
+      this._settingsWarning(
+        `[OllamaBackend] ${model}: context size changed from ${listed} to ${wanted}; the context change applies after the model list is refreshed or the CLI restarts.`
+      );
+    }
+    return listed;
   }
 
   private readonly _detailsFailed = new Set<string>();
@@ -275,20 +382,29 @@ export class OllamaBackend implements ICompletionBackend {
    * model's own reported window keeps that consistent with the context length
    * the picker advertises.
    */
-  private async buildModelOptions(
+  private async buildRequestFields(
     model: string,
     options: Partial<ICompletionOptions>
-  ): Promise<Partial<OllamaOptions>> {
-    const { contextWindow } = await this.getModelDetailsCached(model);
-    const numCtx = ollamaNumCtx(contextWindow);
+  ): Promise<Pick<ChatRequest, 'options' | 'keep_alive' | 'think'>> {
+    const details = await this.getModelDetailsCached(model);
+    const settings = await this.requestSettings(model, details);
+    const numCtx = this.sentNumCtx(model, settings.numCtx ?? ollamaNumCtx(details.contextWindow));
+    const maxTokens = options.maxTokens ?? settings.maxOutputTokens;
+    // A caller's thinking choice wins; the model's own setting stands in only when it leaves thinking unset.
+    const think = typeof options.thinking?.enabled === 'boolean' ? options.thinking.enabled : settings.think;
 
     return {
-      num_ctx: numCtx,
-      ...(typeof options.temperature === 'number' && { temperature: options.temperature }),
-      // A caller can still ask for more than the catalogue advertises - a stale
-      // persisted setting, or a direct API request - so cap the output budget at
-      // what we actually allocated.
-      ...(typeof options.maxTokens === 'number' && { num_predict: Math.min(options.maxTokens, numCtx) }),
+      options: {
+        num_ctx: numCtx,
+        ...(typeof options.temperature === 'number' && { temperature: options.temperature }),
+        ...settings.options,
+        // A caller can still ask for more than the catalogue advertises - a stale
+        // persisted setting, or a direct API request - so cap the output budget at
+        // what we actually allocated.
+        ...(typeof maxTokens === 'number' && { num_predict: Math.min(maxTokens, numCtx) }),
+      },
+      ...(settings.keepAlive !== undefined && { keep_alive: settings.keepAlive }),
+      ...(think !== undefined && { think: think as ChatRequest['think'] }),
     };
   }
 
@@ -333,12 +449,11 @@ export class OllamaBackend implements ICompletionBackend {
       // This backend withholds tools in place rather than recursing, so the strip has to track
       // `offerTools` here: prompts ordering the model to use a tool must not outlive the tools.
       messages: this.buildMessages(requestMessages),
-      options: await this.buildModelOptions(model, options),
-      ...(formattedTools.length > 0 && { tools: formattedTools }),
       // Drive Ollama's reasoning from the Thinking toggle. Gated upstream by
       // can_think, so think:true only reaches thinking-capable models (a
       // non-thinking model 400s on think:true; think:false is always accepted).
-      ...(typeof options.thinking?.enabled === 'boolean' && { think: options.thinking.enabled }),
+      ...(await this.buildRequestFields(model, options)),
+      ...(formattedTools.length > 0 && { tools: formattedTools }),
     };
 
     try {
@@ -559,7 +674,8 @@ export class OllamaBackend implements ICompletionBackend {
       messages: OllamaMessage[];
       options?: Partial<OllamaOptions>;
       tools?: Tool[];
-      think?: boolean;
+      keep_alive?: ChatRequest['keep_alive'];
+      think?: ChatRequest['think'];
     },
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo?: CompletionInfo) => Promise<void>,

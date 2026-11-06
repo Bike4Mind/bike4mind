@@ -300,3 +300,36 @@ describe('AdminAuditLogRepository.findByIds', () => {
     await expect(adminAuditLogRepository.findByIds(['not-an-id'])).resolves.toEqual([]);
   });
 });
+
+describe('AdminAuditLogRepository.listForSubscriptionOrOwner', () => {
+  setupMongoTest();
+
+  it('returns entries about the owner or naming the subscription, and nothing else', async () => {
+    await adminAuditLogRepository.append(
+      entry({ details: { subscriptionId: 'sub_b' }, summary: 'owner, other sub' }, new Date('2026-01-01T00:00:00Z'))
+    );
+    await adminAuditLogRepository.append(
+      entry(
+        {
+          details: { subscriptionId: 'sub_a' },
+          target: { kind: 'user', id: 'someone-else', displayName: 'x' },
+          summary: 'this sub, other target',
+        },
+        new Date('2026-02-01T00:00:00Z')
+      )
+    );
+    await adminAuditLogRepository.append(
+      entry(
+        { details: {}, target: { kind: 'user', id: 'someone-else', displayName: 'x' }, summary: 'unrelated' },
+        new Date('2026-03-01T00:00:00Z')
+      )
+    );
+
+    const page = await adminAuditLogRepository.listForSubscriptionOrOwner(
+      { owner: { kind: 'user', id: USER_ID }, subscriptionIds: ['sub_a'] },
+      { limit: 10 }
+    );
+
+    expect(page.entries.map(item => item.summary)).toEqual(['this sub, other target', 'owner, other sub']);
+  });
+});

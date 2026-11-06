@@ -3,8 +3,6 @@ import { type IAdminSettings, resolveSignupGrantSettings, settingsMap } from '@b
 
 const STARTER_CREDIT_SETTINGS: IAdminSettings['settingName'][] = [
   'allowOpenRegistration',
-  'defaultFreeCredits',
-  'stagedSignupGrantEnabled',
   'signupGrantCredits',
   'signupGrantInitialCredits',
 ];

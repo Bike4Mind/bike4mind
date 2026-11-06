@@ -11,12 +11,21 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { AnalyticsOverview } from '@client/app/utils/analyticsOverview';
+import type { AnalyticsOverview, AnalyticsTopAccounts } from '@client/app/utils/analyticsOverview';
 import { parseAdminSearch } from '../adminTabParams';
 
-const mocks = vi.hoisted(() => ({ get: vi.fn() }));
+const mocks = vi.hoisted(() => {
+  const overview = vi.fn();
+  const topAccounts = vi.fn();
+  const get = vi.fn((url: string, config?: unknown) =>
+    url.endsWith('/top-accounts') ? topAccounts(url, config) : overview(url, config)
+  );
+  return { get, overview, topAccounts, download: vi.fn(), toastError: vi.fn() };
+});
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get } }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
+vi.mock('sonner', () => ({ toast: { error: mocks.toastError } }));
+vi.mock('./analyticsExport', () => ({ downloadAnalyticsExport: mocks.download }));
 // The cohorts section fetches on its own and is tested in CohortsSection.test.tsx; here only what the page hands it.
 vi.mock('./CohortsSection', () => ({
   CohortsSection: ({ signups }: { signups: string }) => <div data-testid="cohorts-stub" data-signups={signups} />,
@@ -97,6 +106,62 @@ const overview = (patch: Partial<AnalyticsOverview> = {}): AnalyticsOverview => 
     totals: { legit: 3, suspected: 1, unclassified: 2 },
     bySignal: [{ signal: 'domainBurst', count: 1 }],
   },
+  usage: {
+    features: ['chat', 'image_generation', 'other'],
+    days: [
+      { day: '2026-06-14', partial: false, byFeature: { chat: 25, image_generation: 4, other: 1 }, credits: 300 },
+      { day: '2026-06-15', partial: true, byFeature: { chat: 3, image_generation: 0, other: 0 }, credits: 20 },
+    ],
+    models: [
+      { model: 'gpt-4.1', requests: 20, share: 66.67 },
+      { model: 'claude-sonnet', requests: 8, share: 26.67 },
+    ],
+    otherModelRequests: 2,
+    totals: { requests: 30, credits: 300 },
+    summaryDays: 27,
+  },
+  ...patch,
+});
+
+const topAccounts = (patch: Partial<AnalyticsTopAccounts> = {}): AnalyticsTopAccounts => ({
+  covered: { from: '2026-05-19', to: '2026-06-14' },
+  missingDays: [],
+  users: [
+    {
+      id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+      name: 'Ada',
+      plan: 'PaidUser',
+      activeDays: 20,
+      requests: 90,
+      credits: 900,
+      share: 60,
+      known: true,
+    },
+    {
+      id: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+      name: 'Ben',
+      plan: 'DemoUser',
+      activeDays: 3,
+      requests: 10,
+      credits: 50,
+      share: 6.7,
+      // A deleted account: listed, but there is no page to open.
+      known: false,
+    },
+  ],
+  orgs: [
+    {
+      id: 'cccccccccccccccccccccccc',
+      name: 'Acme',
+      plan: 'Paid',
+      activeDays: 22,
+      requests: 95,
+      credits: 950,
+      share: 63,
+      known: true,
+    },
+  ],
+  excluded: { suspected: 3, suspended: 1 },
   ...patch,
 });
 
@@ -123,11 +188,17 @@ async function renderPage(url: string) {
   return router;
 }
 
-const lastParams = () => mocks.get.mock.calls.at(-1)?.[1]?.params;
+const lastParams = () => (mocks.overview.mock.calls.at(-1)?.[1] as { params?: unknown } | undefined)?.params;
 
 beforeEach(() => {
-  mocks.get.mockReset();
-  mocks.get.mockResolvedValue({ data: overview() });
+  mocks.get.mockClear();
+  mocks.overview.mockReset();
+  mocks.overview.mockResolvedValue({ data: overview() });
+  mocks.topAccounts.mockReset();
+  mocks.topAccounts.mockResolvedValue({ data: topAccounts() });
+  mocks.download.mockReset();
+  mocks.download.mockResolvedValue(undefined);
+  mocks.toastError.mockClear();
 });
 
 describe('analytics URL state', () => {
@@ -212,12 +283,12 @@ describe('AnalyticsTab', () => {
   });
 
   it('says in the footer which accounts are counted and tells missing rollups from missing internal counts', async () => {
-    mocks.get.mockResolvedValue({
+    mocks.overview.mockResolvedValue({
       data: overview({ accounts: 'internal', missingDays: ['2026-06-03'], internalMissingDays: ['2026-06-01'] }),
     });
     await renderPage('/admin?tab=analytics&accounts=internal');
     expect(await screen.findByTestId('analytics-footer')).toHaveTextContent(
-      'Active users count only admin, system, flagged test and staff-domain accounts; signups always exclude them.'
+      'Active users count only admin, system, flagged test and staff-domain accounts; signups, usage and top accounts always exclude them.'
     );
     expect(await screen.findByTestId('analytics-missing-rollup')).toHaveTextContent(
       'Rollup is missing for 1 day; those days show as gaps.'
@@ -269,7 +340,8 @@ describe('AnalyticsTab', () => {
   });
 
   it('shows skeletons while loading', async () => {
-    mocks.get.mockReturnValue(new Promise(() => {}));
+    mocks.overview.mockReturnValue(new Promise(() => {}));
+    mocks.topAccounts.mockReturnValue(new Promise(() => {}));
     await renderPage('/admin?tab=analytics');
     expect(await screen.findByTestId('analytics-active-users-skeleton')).toBeInTheDocument();
     expect(screen.getByTestId('analytics-signups-skeleton')).toBeInTheDocument();
@@ -277,10 +349,12 @@ describe('AnalyticsTab', () => {
   });
 
   it('shows an error with Try again in each section and recovers', async () => {
-    mocks.get.mockRejectedValueOnce(new Error('boom'));
+    mocks.overview.mockRejectedValueOnce(new Error('boom'));
     await renderPage('/admin?tab=analytics');
     const retries = await screen.findAllByTestId('admin-error-retry-btn');
-    expect(retries).toHaveLength(2);
+    // Active users, Signups and the three usage cards; the top-account tables load separately.
+    expect(retries).toHaveLength(5);
+    expect(screen.getByTestId('analytics-top-users-table')).toBeInTheDocument();
     fireEvent.click(retries[0]);
     expect(await screen.findByText('Active users (MAU)')).toBeInTheDocument();
   });
@@ -289,15 +363,24 @@ describe('AnalyticsTab', () => {
     const empty = overview();
     empty.activeUsers.days = empty.activeUsers.days.map(day => ({ ...day, dau: 0 }));
     empty.signups.totals = { legit: 0, suspected: 0, unclassified: 0 };
-    mocks.get.mockResolvedValue({ data: empty });
+    empty.usage = {
+      features: [],
+      days: [],
+      models: [],
+      otherModelRequests: 0,
+      totals: { requests: 0, credits: 0 },
+      summaryDays: 0,
+    };
+    mocks.overview.mockResolvedValue({ data: empty });
+    mocks.topAccounts.mockResolvedValue({ data: topAccounts({ users: [], orgs: [] }) });
     const router = await renderPage('/admin?tab=analytics');
-    expect(await screen.findAllByText('No activity in this range')).toHaveLength(2);
+    expect(await screen.findAllByText('No activity in this range')).toHaveLength(7);
     fireEvent.click(screen.getByTestId('analytics-active-users-show-90d-btn'));
     await waitFor(() => expect(router.state.location.search.range).toBe('90d'));
   });
 
   it('flags missing rollup days and a stale rollup', async () => {
-    mocks.get.mockResolvedValue({ data: overview({ missingDays: ['2026-06-01', '2026-06-02'], stale: true }) });
+    mocks.overview.mockResolvedValue({ data: overview({ missingDays: ['2026-06-01', '2026-06-02'], stale: true }) });
     await renderPage('/admin?tab=analytics');
     expect(await screen.findByTestId('analytics-missing-banner')).toHaveTextContent(
       'Rollup is missing for 2 days; those days show as gaps.'
@@ -385,7 +468,7 @@ describe('AnalyticsTab', () => {
       });
 
     it('draws a dot for it in the Active users view', async () => {
-      mocks.get.mockResolvedValue({ data: loneDay() });
+      mocks.overview.mockResolvedValue({ data: loneDay() });
       await renderPage('/admin?tab=analytics&range=7d');
       const chart = await screen.findByTestId('analytics-active-users-chart');
       await waitFor(() =>
@@ -394,7 +477,7 @@ describe('AnalyticsTab', () => {
     });
 
     it('draws sized bars for it in the By surface view', async () => {
-      mocks.get.mockResolvedValue({ data: loneDay() });
+      mocks.overview.mockResolvedValue({ data: loneDay() });
       await renderPage('/admin?tab=analytics&range=7d');
       fireEvent.click(await screen.findByTestId('analytics-active-users-mode-surface'));
       const chart = await screen.findByTestId('analytics-surface-chart');
@@ -407,6 +490,154 @@ describe('AnalyticsTab', () => {
           expect(Math.abs(Number(height))).toBeGreaterThan(0);
         });
       });
+    });
+  });
+
+  describe('usage and top accounts', () => {
+    it('shows usage by feature, model shares and credits, with the totals in the captions', async () => {
+      await renderPage('/admin?tab=analytics');
+      expect(await screen.findByTestId('analytics-usage-features-caption')).toHaveTextContent(
+        '30 AI requests over the 27 complete UTC days; Chat leads.'
+      );
+      expect(screen.getByTestId('analytics-usage-models-caption')).toHaveTextContent(
+        'gpt-4.1 takes 66.7% of requests. 2 requests on other models.'
+      );
+      expect(screen.getByTestId('analytics-credits-caption')).toHaveTextContent('300 credits consumed');
+
+      fireEvent.click(screen.getByTestId('analytics-usage-features-table-toggle-btn'));
+      const features = await screen.findByTestId('analytics-usage-features-table');
+      expect(within(features).getByText('Image generation (requests)')).toBeInTheDocument();
+      expect(within(features).getByText('Other (requests)')).toBeInTheDocument();
+    });
+
+    it('links the model and credit cards to their pages', async () => {
+      const router = await renderPage('/admin?tab=analytics&range=7d');
+      fireEvent.click(await screen.findByTestId('analytics-usage-models-open-btn'));
+      await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: 'model-metrics' }));
+      expect(router.state.location.search.range).toBeUndefined();
+      fireEvent.click(await screen.findByTestId('analytics-credits-open-btn'));
+      await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: 'credit-analytics' }));
+    });
+
+    it('enables Export once both requests have loaded', async () => {
+      let resolveTop: (value: { data: AnalyticsTopAccounts }) => void = () => {};
+      mocks.topAccounts.mockReturnValue(new Promise(resolve => (resolveTop = resolve)));
+      await renderPage('/admin?tab=analytics');
+      await screen.findByTestId('analytics-active-users-chart');
+      expect(screen.getByTestId('analytics-export-btn')).toBeDisabled();
+
+      resolveTop({ data: topAccounts() });
+      await waitFor(() => expect(screen.getByTestId('analytics-export-btn')).not.toBeDisabled());
+      fireEvent.click(screen.getByTestId('analytics-export-btn'));
+      await waitFor(() => expect(mocks.download).toHaveBeenCalledWith(overview(), topAccounts()));
+    });
+
+    it('disables Export while a new range loads, so the zip never mixes two ranges', async () => {
+      const router = await renderPage('/admin?tab=analytics');
+      await waitFor(() => expect(screen.getByTestId('analytics-export-btn')).not.toBeDisabled());
+
+      mocks.topAccounts.mockReturnValue(new Promise(() => {}));
+      fireEvent.click(screen.getByTestId('analytics-range-7d'));
+      await waitFor(() => expect(router.state.location.search.range).toBe('7d'));
+      await waitFor(() => expect(mocks.topAccounts.mock.calls.at(-1)?.[1]).toEqual({ params: { range: '7d' } }));
+      expect(screen.getByTestId('analytics-export-btn')).toBeDisabled();
+    });
+
+    it('says so when the export fails', async () => {
+      mocks.download.mockRejectedValue(new Error('chunk failed'));
+      await renderPage('/admin?tab=analytics');
+      await waitFor(() => expect(screen.getByTestId('analytics-export-btn')).not.toBeDisabled());
+      fireEvent.click(screen.getByTestId('analytics-export-btn'));
+      await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith("Couldn't export the analytics. Try again."));
+      expect(screen.getByTestId('analytics-export-btn')).not.toBeDisabled();
+    });
+
+    it('disables Export while top accounts have failed, so the zip never drops their files', async () => {
+      mocks.topAccounts.mockRejectedValue(new Error('boom'));
+      await renderPage('/admin?tab=analytics');
+      await screen.findByText('Could not load top users.');
+      expect(screen.getByTestId('analytics-export-btn')).toBeDisabled();
+    });
+
+    it('requests the top accounts for the range only', async () => {
+      await renderPage('/admin?tab=analytics&range=90d&signups=all');
+      await screen.findByTestId('analytics-top-users-table');
+      expect(mocks.topAccounts.mock.calls.at(-1)?.[1]).toEqual({ params: { range: '90d' } });
+    });
+
+    it('lists top users and orgs with plan chips and says who was left out', async () => {
+      await renderPage('/admin?tab=analytics');
+      const users = await screen.findByTestId('analytics-top-users');
+      expect(await within(users).findByText('Ada')).toBeInTheDocument();
+      expect(within(users).getByTestId('analytics-top-users-plan-aaaaaaaaaaaaaaaaaaaaaaaa')).toHaveTextContent('Paid');
+      expect(within(users).getByText('60.0%')).toBeInTheDocument();
+      expect(screen.getByTestId('analytics-top-users-caption')).toHaveTextContent(
+        'Ranked by active days, then AI requests, over 2026-05-19 to 2026-06-14 (complete UTC days). 3 suspected and 1 suspended accounts left out.'
+      );
+      expect(within(screen.getByTestId('analytics-top-orgs')).getByText('Acme')).toBeInTheDocument();
+      expect(screen.getByTestId('analytics-top-orgs-caption')).toHaveTextContent(
+        'Org numbers add up only the usage members billed to the org.'
+      );
+    });
+
+    it('says which covered days have no rollup yet, in the top tables and the usage captions', async () => {
+      mocks.topAccounts.mockResolvedValue({ data: topAccounts({ missingDays: ['2026-06-14'] }) });
+      const base = overview();
+      mocks.overview.mockResolvedValue({ data: overview({ usage: { ...base.usage, summaryDays: 26 } }) });
+      await renderPage('/admin?tab=analytics');
+      expect(await screen.findByTestId('analytics-top-users-caption')).toHaveTextContent(
+        '(complete UTC days). 1 day has no rollup yet and is not counted. 3 suspected'
+      );
+      expect(screen.getByTestId('analytics-usage-features-caption')).toHaveTextContent(
+        '30 AI requests over 26 of the 27 complete UTC days (the rest have no rollup yet); Chat leads.'
+      );
+    });
+
+    it('says the usage covers today alone when no complete day has a rollup yet', async () => {
+      const base = overview();
+      mocks.overview.mockResolvedValue({ data: overview({ usage: { ...base.usage, summaryDays: 0 } }) });
+      await renderPage('/admin?tab=analytics');
+      expect(await screen.findByTestId('analytics-usage-features-caption')).toHaveTextContent(
+        'over today so far (no complete day has a rollup yet); Chat leads.'
+      );
+    });
+
+    it('does not open a row whose account no longer exists', async () => {
+      const router = await renderPage('/admin?tab=analytics');
+      fireEvent.click(await screen.findByTestId('analytics-top-users-row-bbbbbbbbbbbbbbbbbbbbbbbb'));
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(router.state.location.pathname).toBe('/admin');
+      expect(router.state.location.search).toMatchObject({ tab: 'analytics' });
+    });
+
+    it('opens a user profile or an org from its row', async () => {
+      const root = createRootRoute();
+      const admin = createRoute({
+        getParentRoute: () => root,
+        path: '/admin',
+        validateSearch: parseAdminSearch,
+        component: AnalyticsTab,
+      });
+      const profile = createRoute({ getParentRoute: () => root, path: '/admin/users/$userId', component: () => null });
+      const router = createRouter({
+        routeTree: root.addChildren([admin, profile]),
+        history: createMemoryHistory({ initialEntries: ['/admin?tab=analytics'] }),
+      });
+      await router.load();
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <CssVarsProvider theme={theme}>
+            <RouterProvider router={router} />
+          </CssVarsProvider>
+        </QueryClientProvider>
+      );
+      fireEvent.click(await screen.findByTestId('analytics-top-orgs-row-cccccccccccccccccccccccc'));
+      await waitFor(() =>
+        expect(router.state.location.search).toMatchObject({ tab: 'organizations', orgId: 'cccccccccccccccccccccccc' })
+      );
+      fireEvent.click(await screen.findByTestId('analytics-top-users-row-aaaaaaaaaaaaaaaaaaaaaaaa'));
+      await waitFor(() => expect(router.state.location.pathname).toBe('/admin/users/aaaaaaaaaaaaaaaaaaaaaaaa'));
     });
   });
 });

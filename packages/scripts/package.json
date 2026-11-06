@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/scripts",
-  "version": "0.1.98",
+  "version": "0.1.99",
   "private": true,
   "type": "module",
   "main": "index.ts",
@@ -44,6 +44,7 @@
     "test:api-usage": "tsx test-api-usage-monitoring.ts",
     "smoke:selfhost-agent-run": "tsx src/smoke-selfhost-agent-run.ts",
     "test:agent-execute-ws": "tsx testAgentExecuteWs.ts",
+    "smoke:selfhost-history-import": "tsx src/smoke-selfhost-history-import.ts",
     "test:kb-refusal": "tsx testKnowledgeToolRefusal.ts",
     "eval:tool-calling": "tsx toolCallingScorecard.ts",
     "create-prod-release": "tsx src/createProductionRelease.ts",
@@ -93,6 +94,7 @@
     "curated:sign": "tsx src/curatedCatalog/signCurated.ts",
     "curated:publish": "tsx src/curatedCatalog/publishCurated.ts",
     "curated:schema": "tsx src/curatedCatalog/curatedSchema.ts",
+    "curated:v2": "tsx src/curatedCatalog/curatedV2.ts",
     "curated:check-build": "tsx src/curatedCatalog/checkDesktopBuild.ts"
   },
   "dependencies": {
@@ -137,6 +139,7 @@
     "aws-sdk-client-mock": "^4.1.0",
     "mailparser": "^3.12.4",
     "ora": "^9.4.1",
+    "prettier": "^3.9.6",
     "tsx": "^4.23.0",
     "vitest": "^4.1.12"
   }

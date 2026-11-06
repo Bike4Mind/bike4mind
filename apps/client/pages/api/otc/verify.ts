@@ -1,4 +1,5 @@
 import { issueSessionForRequest } from '@server/auth/issueSession';
+import { blockedSignInMessage } from '@server/auth/blockedSignIn';
 import { signupProtection } from '@server/auth/signupProtection';
 import {
   AuthEvents,
@@ -235,6 +236,10 @@ const handler = baseApi({ auth: false })
       }
       if (existingUser.isBanned) {
         return res.status(403).json({ error: 'This account has been suspended.' });
+      }
+      const blockedMessage = blockedSignInMessage(existingUser);
+      if (blockedMessage) {
+        return res.status(403).json({ error: blockedMessage });
       }
 
       // A configured bootstrap admin whose account was created but never promoted (a write failed

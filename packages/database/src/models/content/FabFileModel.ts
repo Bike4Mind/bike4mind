@@ -4022,6 +4022,8 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     moderationLastAttemptAt: { type: Date, required: false },
     // See IFabFile.storageChargedAt and packages/server-utils/src/s3/storageCharge.ts.
     storageChargedAt: { type: Date, required: false },
+    // Server-stamped only; claimStorageCharge never charges an exempt row (see IFabFile.storageExempt).
+    storageExempt: { type: Boolean, required: false },
     error: { type: String, required: false },
     presignedUrl: { type: String },
     fileUrl: { type: String },
@@ -4279,6 +4281,17 @@ FabFileSchema.index({ userId: 1, moderationStatus: 1 });
 FabFileSchema.index(
   { organizationId: 1, deletedAt: 1 },
   { partialFilterExpression: { organizationId: { $type: 'string' } } }
+);
+
+// An org pool's recent client uploads (apps/client/server/files/pendingUploads.ts), including
+// completed rows whose charge transaction has not committed. Pre-built by
+// 20260921239800_ensure-fabfile-pending-upload-index.
+FabFileSchema.index(
+  { organizationId: 1, createdAt: 1 },
+  {
+    name: 'organizationId_1_createdAt_1_clientUpload',
+    partialFilterExpression: { organizationId: { $type: 'string' }, clientUpload: true },
+  }
 );
 
 // Public v1 file list (listOwnedBeforeId): equality on the owned/live/unarchived filter, then the

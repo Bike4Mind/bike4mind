@@ -29,6 +29,7 @@ import type { ModelSettings } from '@shared/modelSettings';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
 import type {
   ModelServerAddInput,
+  ModelServerLaunchAction,
   ModelServerProbeInput,
   ModelServerUpdateInput,
   ModelServerView,
@@ -194,6 +195,8 @@ const api: DesktopApi = {
     setSessionGeneration: (sessionId: string, generation: GenerationSettings) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionGeneration, sessionId, generation),
     getModelSettings: (modelId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetModelSettings, modelId),
+    getUnsupportedModelSettings: (modelId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatGetUnsupportedModelSettings, modelId),
     setModelSettings: (modelId: string, settings: ModelSettings) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetModelSettings, modelId, settings),
     getModelLoadOffer: (modelId: string, draftTokens?: number) =>
@@ -425,6 +428,8 @@ const api: DesktopApi = {
     remove: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.modelServersRemove, id),
     check: (id?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelServersCheck, id),
     probedHardware: () => ipcRenderer.invoke(IPC_CHANNELS.modelServersProbedHardware),
+    launch: (id: string, action: ModelServerLaunchAction) =>
+      ipcRenderer.invoke(IPC_CHANNELS.modelServersLaunch, id, action),
     onChanged: listener => {
       const handler = (_event: unknown, servers: ModelServerView[]) => listener(servers);
       ipcRenderer.on(IPC_CHANNELS.modelServersChanged, handler);
@@ -517,6 +522,7 @@ const api: DesktopApi = {
       ipcRenderer.on(IPC_CHANNELS.attentionOpen, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.attentionOpen, handler);
     },
+    takePendingOpen: () => ipcRenderer.invoke(IPC_CHANNELS.attentionTakePendingOpen),
   },
   devLog: {
     getSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.devLogGetSnapshot),

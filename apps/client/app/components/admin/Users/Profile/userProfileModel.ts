@@ -1,6 +1,7 @@
 import {
   DEVELOPER_USER_TAGS,
   hasDeveloperUserTag,
+  type AccountDeletionSource,
   type ILoginRecord,
   type IUserDocument,
   type OrganizationMemberRole,
@@ -14,7 +15,17 @@ import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
  * list projection leaves out (signup channel, internal notes) are there too. List rows lack them.
  */
 export type AdminUserProfile = AdminUserListItem &
-  Partial<Pick<IUserDocument, 'acquisition' | 'userNotes' | 'emailVerifiedAt'>>;
+  Partial<Pick<IUserDocument, 'acquisition' | 'userNotes' | 'emailVerifiedAt' | 'deletion'>>;
+
+export const DELETION_SOURCE_LABELS: Readonly<Record<AccountDeletionSource, string>> = {
+  self: 'Self-serve',
+  support: 'Support',
+  admin: 'Admin',
+};
+
+/** A calendar day in UTC, matching the (UTC) dates the user is emailed. */
+export const formatDeletionDay = (value: Date | string): string =>
+  `${new Date(value).toLocaleDateString('en-US', { dateStyle: 'medium', timeZone: 'UTC' })} (UTC)`;
 
 export type AccountStatus = { label: 'Active' | 'Suspended' | 'Restricted'; tone: AdminStatusTone };
 

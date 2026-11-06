@@ -131,7 +131,7 @@ docker compose -f compose.selfhost.yaml --env-file .env.selfhost build minio cre
 docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d minio createbuckets
 ```
 
-For updates, record the current checkout commit with `git rev-parse HEAD`, back up the `minio-data` volume, update the checkout, and repeat those commands. The bucket initializer runs again and preserves existing buckets and objects. A new source pin takes effect only after rebuilding and recreating the services. Upstream MinIO and `mc` are archived and these pins are their final releases, so expect no further upstream pin bumps.
+For updates, record the current checkout commit with `git rev-parse HEAD`, take a [backup](#backup-and-restore), update the checkout, and repeat those commands. The bucket initializer runs again and preserves existing buckets and objects. A new source pin takes effect only after rebuilding and recreating the services. Upstream MinIO and `mc` are archived and these pins are their final releases, so expect no further upstream pin bumps.
 
 To roll back the container code, restore the previous checkout commit and repeat the same build and start commands. Keep the data volume. Before downgrading across MinIO versions, check upstream storage-format compatibility; restoring the corresponding backup may be necessary. Do not use `docker compose down -v` for an update or rollback.
 
@@ -656,7 +656,16 @@ Without a key the command throws rather than skipping. Set `HELP_EMBEDDINGS_REQU
 
 **You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Profile menu -> More -> API Keys**) as well as at build time.
 
-This is also the one place OpenAI specifically is required: help vectors are always embedded with `text-embedding-3-small`, whatever **Default Embedding Model** you picked for your own files, because the corpus and the query have to share a vector space.
+This is also the one place OpenAI specifically is required: Help panel vectors are always embedded with `text-embedding-3-small`, whatever **Default Embedding Model** you picked for your own files, because the corpus and the query have to share a vector space.
+
+### Help in any chat (the `system-help` data lake)
+
+Separately from the Help panel, the public help articles are mirrored into a data lake named `system-help`, so any chat can search them through the knowledge base. The `worker` keeps it in sync: it runs on startup and every 6 hours, using the help corpus built into the worker image and your **Default Embedding Model**.
+
+- **First run.** On an install where the lake has never existed, the worker creates it, owned by the oldest admin account. Until an admin exists, each run logs that it is waiting and does nothing. The lake owner's keys (or your instance-wide keys) pay for the embeddings.
+- **Steady state.** Re-runs are differential: an unchanged corpus writes nothing and embeds nothing. Rebuilding the image after a docs change re-embeds only the articles that changed.
+- **Missing embedding key.** If the Default Embedding Model's provider has no API key, the run fails and the worker logs `scheduled task "helpDatalakeIngest" failed` on startup and every 6 hours. Add the key or pick a local embedder under **Settings -> AI -> Default Embedding Model**.
+- **Turning it off.** Delete the `system-help` lake, and purge it if you want its files gone too. The worker records the first help lake it sees, so it never recreates one that was deleted or purged. On a fresh install, lake creation and this marker commit together in a Mongo transaction; an interrupted bootstrap can retry without losing the deletion safeguard. To turn it back on, run `help:ingest-datalake`.
 
 ## Background worker
 
@@ -664,7 +673,8 @@ The `worker` service is the self-host replacement for the hosted background infr
 
 - **consumes queues** - research tasks, image generation and image edit, the RAG ingestion pipeline (`fabFileChunkQueue` -> `fabFileVectorizeQueue`), and the Google Drive and GitHub data-lake syncs (`driveLakeIngestQueue`, `githubLakeIngestQueue`, `githubLakeRevokeQueue`, `driveDisconnectPurgeQueue`);
 - **consumes enrichment events** - memento creation, session auto-naming, summaries, and tagging, delivered via `SELF_HOST_EVENT_QUEUE`;
-- **runs the scheduler** - the task scheduler (research follow-ups) every 5 minutes, plus a safety-net scan that re-enqueues any uploaded file whose chunking never started.
+- **runs the scheduler** - the task scheduler (research follow-ups) every 5 minutes, plus a safety-net scan that re-enqueues any uploaded file whose chunking never started;
+- **keeps the help lake in sync** - see [Help in any chat](#help-in-any-chat-the-system-help-data-lake).
 
 It comes up automatically with the stack. To watch it:
 
@@ -782,6 +792,69 @@ python3 scripts/verify-compose-queue-durability.py
 
 The drill derives its broker image, configuration mount, and storage mounts from the actual `sqs` service. It uses random project names and loopback ports, starts no application or worker, and reads no `.env.selfhost`. Replacement renews anonymous volumes so a missing named-volume mount cannot accidentally pass. It proves that the same pending message ID and body survive replacement, then deletes that message and proves it stays absent after another replacement and its visibility timeout. A second project overrides only `messages-storage.enabled = false` and must lose its pending message after replacement. The script prints the UTC date, source revision, configuration hashes, image ID, commands, and outcomes, and removes only its disposable projects and volumes on exit. Run it again after changing the broker image or storage configuration.
 
+## Backup and restore
+
+`scripts/selfhost_backup.py` backs up the durable user state of the Compose stack while it is running, and restores it into a fresh project. Python 3 and Docker Compose are required; run it from the repository root with the same `-f`, `--env-file`, and `--profile` flags you use to run the stack.
+
+**What is backed up:** the whole MongoDB instance (`mongodump --oplog`, a point-in-time-consistent archive) and all seven MinIO buckets (`APP_FILES`, `EMAIL_INGESTION`, `FAB_FILE`, `GENERATED_IMAGES`, `HISTORY_IMPORT`, `PUBLISHED_ARTIFACTS`, `SLACK_EXPORT`), mirrored with `mc mirror`. Bucket names and the Mongo URI come from your resolved Compose configuration. Mongo is dumped first, so a file may exist without a database row (harmless); the reverse is rare and needs an object deleted or expired during the backup window. A `manifest.json` records timing, revision, the archive checksum, and per-bucket object counts; restore refuses a backup whose archive checksum or per-bucket file counts do not match it. The counts come from the backup copy: they detect missing files, but do not verify object bytes or prove every source object was captured. After restoring, the tool re-counts each target bucket and fails if it differs from the manifest.
+
+**Requirements:**
+
+- Mongo and object storage must be the bundled `mongo` and `minio` services. The tool refuses an external `MONGODB_URI` or `AWS_ENDPOINT_URL_S3`; back those up with your provider's tooling.
+- The user in `MONGODB_URI` must hold the `root` role (or a role granting `anyAction` on `anyResource`, which `--oplogReplay` requires), because it takes a whole-instance `--oplog` dump and replays the oplog on restore. If the URI has credentials and no `authSource`, the database in its path is used as the auth database.
+- The `mongodump` and `mongorestore` run inside the `mongo` container. The URI is read from a 0600 temp file there, so the password is not in any process argv.
+
+**What is not backed up:**
+
+- `.env.selfhost`. Keep a copy somewhere separate, encrypted, and off the host. `SECRET_ENCRYPTION_KEY` (and `SECRET_ENCRYPTION_KEY_PREVIOUS` if set) encrypts admin settings, API keys, and OAuth tokens stored in Mongo; a restore without the original key cannot decrypt them.
+- `sqs-data`: restoring stale pending messages can replay old work. See [Queue storage and container replacement](#queue-storage-and-container-replacement).
+- `opensearch-data`: an optional, rebuildable index; the app falls back to a scan while it is rebuilt.
+- `ollama-data`, `imagegen-*` and other model volumes: re-pullable.
+- MinIO user metadata and object tags (only object bytes are mirrored; content types are re-derived from file extensions on restore) and bucket versions.
+
+### Back up
+
+```bash
+python3 scripts/selfhost_backup.py -f compose.selfhost.yaml --env-file .env.selfhost \
+  backup --dest /srv/backups/b4m-$(date -u +%Y%m%dT%H%M%SZ)
+```
+
+`--dest` must be empty or absent and is created `0700`, owned by you. The archive is not encrypted: protect it like the database, and encrypt any off-host copy. If a backup fails, the tool names the failed step and the directory is incomplete: remove it before retrying.
+
+### Restore into a fresh project
+
+```bash
+python3 scripts/selfhost_backup.py -f compose.selfhost.yaml --env-file .env.selfhost \
+  -p b4m-restored restore --from /srv/backups/b4m-20260101T000000Z
+```
+
+Before you restore:
+
+- Put the original `.env.selfhost` in place.
+- `-p b4m-restored` builds the `minio` and `createbuckets` images from source (they are named per project), which needs network access on a DR host. Build or tag them first if it is offline.
+- If the original stack is still running on this host, set `MONGO_HOST_PORT`, `MINIO_HOST_PORT` and `MINIO_CONSOLE_HOST_PORT` in `.env.selfhost` to free ports.
+- With MongoDB authentication, the fresh project's `mongo` needs the same root user and replica-set bootstrap as the original (and a healthcheck that authenticates) before you run restore. `scripts/verify-compose-backup-restore.py --auth` shows a working override.
+
+Restore starts `mongo` and `minio`, runs `mongorestore --oplogReplay`, runs the `createbuckets` job (buckets, upload webhooks, lifecycle rules), then mirrors the objects back. It refuses a target that already holds data, in Mongo or in any bucket, unless you pass `--yes`.
+
+Then bring up the rest of the stack with the same `-p`.
+
+To restore over the original project, stop every service except `mongo` and `minio` first (the workers and app also write, and the upload webhook re-queues every restored object), for example `docker compose -f compose.selfhost.yaml --env-file .env.selfhost ps --services | grep -vx -e mongo -e minio | xargs docker compose -f compose.selfhost.yaml --env-file .env.selfhost stop`, then pass `--yes`. This drops every non-system database (`admin`, `config` and `local` are kept) and removes objects that are not in the backup, so everything written since is lost. It connects with the target's current `MONGODB_URI` credentials. Mongo users and roles are merged, not rolled back: users deleted since the backup are re-created with their old passwords, and users that exist keep their current credentials.
+
+### Recovery point and retention
+
+- **Recovery point:** Mongo is consistent as of the end of its dump; objects are a slightly later, non-atomic view. Use the manifest start time as a conservative recovery point, rather than its finish time. Database writes made during the object mirror are not included.
+- **Retention:** the tool does no scheduling or rotation. Assumed policy: run it daily from cron, keep 7 daily and 4 weekly copies, and copy each off the host. If you need a tighter recovery point, use a managed MongoDB with point-in-time recovery and an S3-compatible store with versioning.
+- **Alternative:** operators who already snapshot volumes can stop the stack and snapshot `mongo-data` and `minio-data` together. That copy is tied to the exact MongoDB and MinIO on-disk format and needs downtime.
+
+### Prove it restores
+
+```bash
+python3 scripts/verify-compose-backup-restore.py          # add --auth for a Mongo with a root user and keyFile
+```
+
+With built `minio` and `createbuckets` images (see the storage build steps above) and `.env.selfhost`, the drill starts disposable `mongo` and `minio` projects, seeds one user, one 64 KiB file and one object in each of the seven buckets, keeps writing to Mongo so the dump has an oplog slice, runs a backup, deletes the source project, restores into a second fresh project, and prints `PASS user` and `PASS file sha256` only if the same user `_id` and the same file bytes come back. It also checks that a restore without `--yes` refuses a populated target and leaves it untouched. It starts no application, publishes no ports, and removes only its own projects and volumes. Run your own restore of a real backup before relying on it: the drill proves the tool, not your data.
+
 ## Troubleshooting
 
 - **`docker pull` fails with `unauthorized` / `manifest unknown`** - the prebuilt image isn't available to your account (or isn't published yet). Build it from source instead - see "Building from source" in step 3.
@@ -839,6 +912,14 @@ docker compose -f compose.selfhost.yaml --env-file .env.selfhost logs -f minio a
 Confirm both registrations include the `put` event and webhook target. If one is missing, correct the bucket environment values and rerun `createbuckets` with the same Compose files and environment. During a fresh import through the UI, inspect MinIO delivery failures and the app's webhook/import logs. Check that `INTERNAL_S3_WEBHOOK_SECRET` agrees between MinIO and the app, and that MinIO can reach the configured endpoint. When using host-side `next dev`, repoint the webhook as described in [Frontend dev mode](#frontend-dev-mode-host-next-dev); delivery to the stopped Compose app cannot trigger imports.
 
 The FabFile safety-net filter in `apps/workers/src/s3/chunkScan.ts` (`buildFabFileChunkScanFilter`) scans FabFile records only. It does **not** recover history or notebook imports from missed notifications. A successful registration listing or notification delivered to a diagnostic sink proves configuration or delivery only. To prove a completed import, check its terminal application status and read the expected imported content after refreshing the app.
+
+To run that proof as one command, mint an API key (`b4m_live_...`) with the `notebooks:read` scope and run the history-import check. It uploads a small Claude-format export through the app's upload proxy, so MinIO's webhook starts the import exactly as a UI upload does. It then waits for the new import job to reach `completed` and reads the conversations back through `GET /api/v1/sessions` and `GET /api/v1/sessions/{id}/quests`. It passes only when the conversation count and every prompt and reply match the export:
+
+```sh
+BASE_URL=https://your-host B4M_API_KEY=b4m_live_... pnpm --filter @bike4mind/scripts smoke:selfhost-history-import
+```
+
+Set `BROKEN_EXPORT=bad-json` or `BROKEN_EXPORT=invalid-conversation` to upload a deliberately broken export; the check must then fail. `invalid-conversation` is the case a job status alone misses: the importer skips conversations that do not match the export schema and still marks the job `completed`. The check refuses to start while another import of the key owner is pending or processing, because the webhook drops a second upload. A timeout with no job means the upload landed but the webhook never reached the app; use the checks above. Optional: `RUN_TIMEOUT_MS` (default 300000), `POLL_INTERVAL_MS` (default 3000). Exit code 0 is pass, 1 is fail, 2 is bad configuration. Each passing run leaves two small conversations named after its run token in the key owner's history.
 
 ## Security notes
 
@@ -899,7 +980,7 @@ Whichever path you choose, do the checklist first.
 
 - [ ] **Use a real SMTP provider.** Mailpit is local-only, so remote friends cannot read their sign-in codes from it. Point `MAIL_*` at a real provider (port 587 STARTTLS or 465 implicit TLS).
 - [ ] **Keep sign-up invite-only and cap per-user usage.** Registration is invite-only by default (`allowOpenRegistration` is OFF; the account matching `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes admin, or the first account created if it is unset). Leave it off and invite friends explicitly from the admin settings. Self-host also defaults credit enforcement OFF - as admin, turn on **Enforce Credits** and give each friend a finite credit budget so a runaway (or a shared key) cannot burn your LLM spend. Per-key API rate limits default to 60/min and 1000/day.
-- [ ] **Back up `SECRET_ENCRYPTION_KEY`.** It encrypts other secrets in the database and losing it makes that data unrecoverable. Rotation is not automated for self-host: if you ever change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and keep it configured permanently so existing ciphertext still decrypts.
+- [ ] **Back up `SECRET_ENCRYPTION_KEY`** (see [Backup and restore](#backup-and-restore)). It encrypts other secrets in the database and losing it makes that data unrecoverable. Rotation is not automated for self-host: if you ever change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and keep it configured permanently so existing ciphertext still decrypts.
 
 ### Read-only production configuration preflight
 
@@ -913,7 +994,7 @@ python3 scripts/selfhost_production_preflight.py \
 
 The checks cover selected services: browser HTTPS/WSS URLs, missing/template secrets, encryption-key format, internal shared secrets, development mail catchers and SMTP settings, local Mongo auth flags and client credentials, local MinIO defaults, and non-loopback internal port publishes. External databases do not require a local Mongo service, but an active local Mongo is still checked. Non-root MinIO client accounts and SMTP relays without authentication are supported; their permissions and delivery are not tested. Custom Mongo entrypoints/config files and non-password local authentication require separate verification and fail this bounded check.
 
-The base stack and the Caddy override still fail these checks until their development settings are replaced. Caddy alone does not configure database authentication or mail. Exit codes are `0` for passed checks, `1` for configuration findings, and `2` when Compose configuration cannot be inspected. Success prints `preflight checks passed; live TLS/mail/auth/restore not proven`. This is not a production-readiness certification: independently test DNS/TLS, browser login and mail delivery, database/storage permissions, registration policy, backups and a restore, resource limits, and reachability from another machine. The script does not inspect proxy routing, mounted configuration contents, firewall rules, or live application settings.
+The base stack and the Caddy override still fail these checks until their development settings are replaced. Caddy alone does not configure database authentication or mail. Exit codes are `0` for passed checks, `1` for configuration findings, and `2` when Compose configuration cannot be inspected. Success prints `preflight checks passed; live TLS/mail/auth not proven; restore with scripts/selfhost_backup.py (SELF_HOST.md#backup-and-restore)`. This is not a production-readiness certification: independently test DNS/TLS, browser login and mail delivery, database/storage permissions, registration policy, backups and a restore, resource limits, and reachability from another machine. The script does not inspect proxy routing, mounted configuration contents, firewall rules, or live application settings.
 
 Run the checks' tests, including real Compose config/profile resolution against disposable example configuration, with:
 

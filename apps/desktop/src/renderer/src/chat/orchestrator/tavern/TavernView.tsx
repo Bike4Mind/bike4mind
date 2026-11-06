@@ -1,11 +1,12 @@
 import Box from '@mui/joy/Box';
 import { keyframes } from '@mui/system';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { SESSION_SETUP_LABEL } from '@shared/chat';
 import { activityLabel, toolKind, type ToolKind } from '../activity';
 import { prefersReducedMotion } from '../motion';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
 import { AGENT_STATE_LABEL, spawnerName, type AgentView, type ParentView } from '../roster';
-import type { AgentPersona } from './agentPersona';
+import type { AgentPersona } from '@shared/agentPersona';
 import { innkeeperAct, innkeeperBubble } from './innkeeper';
 import {
   DOOR_POINT,
@@ -80,7 +81,7 @@ const truncate = (text: string, max: number) => (text.length > max ? `${text.sli
 
 function bubbleText(agent: AgentView): string | undefined {
   if (agent.state === 'needs-you') return 'Needs you!';
-  if (agent.state === 'working' && agent.preparing) return 'Preparing\u2026';
+  if (agent.state === 'working' && agent.preparing) return `${SESSION_SETUP_LABEL[agent.preparing]}\u2026`;
   if (agent.state === 'working' && agent.activity) return truncate(activityLabel(agent.activity), BUBBLE_MAX);
   return undefined;
 }

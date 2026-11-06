@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentView } from './roster';
-import { assignPersonas } from './tavern/agentPersona';
+import { assignPersonas } from '@shared/agentPersona';
 import { TableView } from './TableView';
 import { agentFixture, createThemedMount, el } from './testUtils';
 
@@ -38,8 +38,9 @@ describe('TableView', () => {
   ];
 
   it('labels a preparing agent Preparing and a plain working one Working', async () => {
-    await renderTable([agentFixture('a', 'working', { preparing: true }), agentFixture('b')]);
+    await renderTable([agentFixture('a', 'working', { preparing: 'worktree' }), agentFixture('b')]);
     expect(el('orchestrator-state-chip-preparing').textContent).toBe('Preparing');
+    expect(document.body.textContent).toContain('Creating worktree');
     expect(el('orchestrator-state-chip-working').textContent).toBe('Working');
   });
 

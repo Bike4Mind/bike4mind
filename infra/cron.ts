@@ -127,8 +127,9 @@ const signupBaselineReport = runsScheduledJobs
     })
   : undefined;
 
-// Auto-confirms Signup Domain Holds that need no judgment (it never releases one). A failed hold
-// throws so signupDomainHoldTriageLambdaErrors in alarms.ts sees it; the next run retries.
+// Auto-confirms Signup Domain Holds that need no judgment, then runs the advisory assessment of
+// young-domain holds, which may also only confirm (neither ever releases one).
+// A failed hold throws so signupDomainHoldTriageLambdaErrors in alarms.ts sees it; the next run retries.
 const signupDomainHoldTriageCron = runsScheduledJobs
   ? new sst.aws.Cron('signupDomainHoldTriage', {
       schedule: 'rate(10 minutes)',
@@ -136,7 +137,9 @@ const signupDomainHoldTriageCron = runsScheduledJobs
         vpc: lambdaVpc,
         handler: 'apps/workers/src/cron/signupDomainHoldTriage.handler',
         runtime: 'nodejs24.x',
-        timeout: '2 minutes',
+        // Room for the advisory assessment (site probe and one Decisions call per hold); it stops
+        // starting new holds a minute before the timeout.
+        timeout: '5 minutes',
         memory: '512 MB',
         retries: 0,
         link: [...allSecrets],
@@ -174,6 +177,7 @@ const disposableDomainRefreshCron = runsScheduledJobs
     })
   : undefined;
 
+const youngAccountSpendAlertMention = alarmSlackMentionFunctionArgs();
 const youngAccountSpendAlert =
   runsScheduledJobs && youngAccountSpendAlertDeadLetter
     ? new sst.aws.Cron('youngAccountSpendAlert', {
@@ -189,8 +193,9 @@ const youngAccountSpendAlert =
             ...DEFAULT_LAMBDA_ENVIRONMENT,
             YOUNG_ACCOUNT_SPEND_ALERT_CREDITS: process.env.YOUNG_ACCOUNT_SPEND_ALERT_CREDITS || '',
             YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS: process.env.YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS || '',
+            ...youngAccountSpendAlertMention.environment,
           },
-          permissions: [youngAccountSpendAlertDeadLetter.sendPermission],
+          permissions: [youngAccountSpendAlertDeadLetter.sendPermission, ...youngAccountSpendAlertMention.permissions],
           transform: youngAccountSpendAlertDeadLetter.functionTarget,
           logging: {
             retention: '1 week',

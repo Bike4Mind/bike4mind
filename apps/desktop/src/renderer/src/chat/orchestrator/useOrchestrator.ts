@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
+import type { ChatSessionStatus, ChatSessionSummary, SessionSetupStep } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
 import { bufferUntrackedActivity, foldActivity, type AgentActivity } from './activity';
 import {
@@ -89,7 +89,7 @@ export function useOrchestratorRoster(
   sessions: readonly ChatSessionSummary[],
   statuses: ReadonlyMap<string, ChatSessionStatus>,
   prSummaries: ReadonlyMap<string, PrSummary>,
-  preparing?: ReadonlySet<string>
+  preparing?: ReadonlyMap<string, SessionSetupStep>
 ): OrchestratorScene {
   const trackedIds = useMemo(() => {
     const ids = descendantIds(sessions, rootId);

@@ -50,6 +50,10 @@ export const USER_SECRET_FIELDS = [
   'loginRecords',
   'signupMeta',
   'riskScore',
+  'riskReviewAutoApproval',
+  'riskReviewReopenedAt',
+  'paymentRiskEventAt',
+  'riskReviewAutoCheckedAt',
   'riskEvidence',
   'freeCreditClaimEmail',
   'grantPackageId',
@@ -57,6 +61,7 @@ export const USER_SECRET_FIELDS = [
   'userNotes',
   'throttle',
   'riskSignals',
+  'signupLanding',
   'stripeCustomerId',
   // Server-side lease against an export racing account cleanup; never client state.
   'accountDataExportLease',

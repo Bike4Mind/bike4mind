@@ -13,9 +13,9 @@ const settings = (values: Record<string, unknown>) =>
   }) as unknown as Parameters<typeof newSignupGrant>[0];
 
 describe('signup grant configuration', () => {
-  it('enrolls with the retired staged flag off, locking nothing when the drip cap is 0', async () => {
+  it('ignores the retired staged flag and defaultFreeCredits, locking nothing when the drip cap is 0', async () => {
     const offEnv = { stagedSignupGrantEnabled: 'false', defaultFreeCredits: '75', signupGrantDripCap: '0' };
-    expect(await newSignupGrant(settings(offEnv))).toMatchObject({ signupCredits: 75, unlockCredits: 0 });
+    expect(await newSignupGrant(settings(offEnv))).toMatchObject({ signupCredits: 0, unlockCredits: 0 });
     expect(await newSignupGrant(settings(offEnv), 60)).toMatchObject({ signupCredits: 60, unlockCredits: 0 });
   });
 
@@ -36,12 +36,12 @@ describe('signup grant configuration', () => {
   });
 
   it.each(['0', '75', '-1', 'invalid'])(
-    'preserves a restricted legacy setting %s and locks nothing without a verification unlock row',
+    'ignores the retired defaultFreeCredits %s and locks nothing without a verification unlock row',
     async value => {
       const result = await resolveSignupGrantSettings(
         settings({ stagedSignupGrantEnabled: 'true', defaultFreeCredits: value })
       );
-      expect(result.signupCredits).toBe(value === '75' ? 75 : 0);
+      expect(result.signupCredits).toBe(0);
       expect(result.unlockCredits).toBe(0);
     }
   );
@@ -167,7 +167,7 @@ describe('signup grant schedule', () => {
     });
   });
 
-  it('pays the flat grant with no drip while the schedule keys are unset and the retired toggles are off', async () => {
+  it('ignores the retired toggles and defaultFreeCredits while the schedule keys are unset', async () => {
     const preMigration = {
       stagedSignupGrantEnabled: 'false',
       signupGrantActivityEnabled: 'false',
@@ -178,17 +178,21 @@ describe('signup grant schedule', () => {
       signupGrantActivityMaxCredits: '9000',
     };
     expect(await resolveSignupGrantSchedule(settings(preMigration))).toEqual({
-      initialCredits: 10000,
+      initialCredits: 1000,
       dailyCredits: 0,
-      dripCap: 0,
-      unlockCredits: 0,
-      paysFlat: true,
+      dripCap: 9000,
+      unlockCredits: 9000,
+      paysFlat: false,
       inviteBonusCredits: 0,
       dripCapSource: 'legacy',
     });
-    expect(await newSignupGrant(settings(preMigration))).toMatchObject({ signupCredits: 10000, unlockCredits: 0 });
-    expect(await newSignupGrant(settings(preMigration), 200)).toMatchObject({ signupCredits: 200, unlockCredits: 0 });
-    expect(await resolveSignupGrantSchedule(settings({}))).toMatchObject({ dripCap: 0, dripCapSource: 'legacy' });
+    expect(await newSignupGrant(settings(preMigration))).toMatchObject({ signupCredits: 1000, unlockCredits: 9000 });
+    expect(await resolveSignupGrantSchedule(settings({}))).toMatchObject({
+      initialCredits: 0,
+      dripCap: 0,
+      paysFlat: false,
+      dripCapSource: 'default',
+    });
   });
 
   it('keeps the legacy daily amount only while the retired activity toggle is on', async () => {

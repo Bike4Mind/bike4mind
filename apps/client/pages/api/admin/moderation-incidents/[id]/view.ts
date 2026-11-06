@@ -53,6 +53,10 @@ const handler = adminApi({
     questId: incident.questId ?? null,
     fabFileId: incident.fabFileId ?? null,
     ncmecReportId: incident.ncmecReportId ?? null,
+    alertedAt: incident.alertedAt ?? null,
+    lastReminderAt: incident.lastReminderAt ?? null,
+    reportedAt: incident.reportedAt ?? null,
+    falsePositiveAt: incident.falsePositiveAt ?? null,
     image,
   });
 });

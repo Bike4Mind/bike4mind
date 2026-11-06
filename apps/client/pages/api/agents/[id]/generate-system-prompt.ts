@@ -8,6 +8,8 @@ import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAl
 import { agentRepository } from '@bike4mind/database';
 import { ForbiddenError, BadRequestError } from '@bike4mind/utils';
 import { generateAgentSystemPrompt } from '@server/agents/authoring/generateAgentSystemPrompt';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { HTTPError } from '@bike4mind/common';
 import { logSystemPromptGenerationFailure } from '@server/agents/systemPromptRateLimit';
 
 interface GenerateSystemPromptResponse {
@@ -35,7 +37,12 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
     assertAgentAccess(agent, userId, 'own');
 
     try {
-      const systemPrompt = await generateAgentSystemPrompt(agent, userId, req.logger);
+      const systemPrompt = await generateAgentSystemPrompt(
+        agent,
+        userId,
+        req.logger,
+        createRequestCompletionMeter(req, 'agent system prompt', { systemModel: true })
+      );
 
       res.json({
         success: true,
@@ -44,6 +51,11 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
       });
     } catch (error) {
       logSystemPromptGenerationFailure(req.logger, 'Error generating system prompt:', error);
+
+      // Credit and admission refusals keep their status; the 400 body below is for the other errors.
+      if (error instanceof HTTPError && !(error instanceof BadRequestError || error instanceof ForbiddenError)) {
+        throw error;
+      }
 
       // Provide user-friendly error messages
       let errorMessage = 'Failed to generate system prompt. Please try again.';

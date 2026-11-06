@@ -1,4 +1,9 @@
-import type { SignupRiskReviewDecision, SignupRiskReviewDecisionResult, SignupRiskReviewItem } from '@bike4mind/common';
+import type {
+  SignupRiskAutoApprovalItem,
+  SignupRiskReviewDecision,
+  SignupRiskReviewDecisionResult,
+  SignupRiskReviewItem,
+} from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -11,11 +16,21 @@ export type SignupRiskReviewRow = Omit<SignupRiskReviewItem, 'createdAt' | 'comp
   computedAt: string;
 };
 
+/** An automatic approval as it arrives over JSON. */
+export type SignupRiskAutoApprovalRow = Omit<SignupRiskAutoApprovalItem, 'decidedAt'> & { decidedAt: string };
+
 export function useSignupRiskReviews() {
   return useQuery({
     queryKey: SIGNUP_RISK_REVIEWS_QUERY_KEY,
     queryFn: async () =>
-      (await api.get<{ data: SignupRiskReviewRow[]; truncated: boolean; reviewThreshold: number }>(ENDPOINT)).data,
+      (
+        await api.get<{
+          data: SignupRiskReviewRow[];
+          autoApproved: SignupRiskAutoApprovalRow[];
+          truncated: boolean;
+          reviewThreshold: number;
+        }>(ENDPOINT)
+      ).data,
   });
 }
 

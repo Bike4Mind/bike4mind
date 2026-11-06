@@ -2,6 +2,7 @@ import { CreditHolderType, type UserModerationStatus } from '@bike4mind/common';
 import {
   User,
   UserApiKey,
+  adminAuditLogRepository,
   cacheRepository,
   creditTransactionRepository,
   mongoose,
@@ -10,18 +11,24 @@ import {
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { authSessionService, creditService, type adminAuditService } from '@bike4mind/services';
+import { adminAuditService, authSessionService, creditService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { adminUsersPipeline } from '@server/admin/usersList/listAdminUsers';
 import { LIVE_API_KEY_STATUS } from '@server/admin/usersList/adminUsersQuery';
-import { loadCreditGrantPolicy, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import {
+  loadCreditGrantPolicy,
+  requestAuditWriter,
+  systemAuditActor,
+  type AdminAuditWriter,
+  type recordAdminActionFromRequest,
+} from '@server/utils/adminAudit';
 import {
   addBlockedEmailDomains,
   readBlockedEmailDomains,
   removeBlockedEmailDomains,
 } from '@server/admin/blockedEmailDomains';
 import { cancelAccountSubscriptions, subscriptionCancellationAudit } from '@server/billing/cancelAccountSubscriptions';
-import type { ExecuteDeps } from './execute';
+import type { ApplyDeps, ExecuteDeps } from './execute';
 import type { UsersBulkAuditEntry, UsersBulkDb } from './ports';
 import type { BulkUser, PreviewDeps, ResolveDeps } from './resolve';
 import type { UndoDeps } from './undo';
@@ -156,11 +163,10 @@ function oncePerBatchPolicy(): () => Promise<adminAuditService.CreditGrantPolicy
     }));
 }
 
-const auditFor = (req: AuditRequest, reason: string) => {
+const auditFor = (write: AdminAuditWriter, reason: string) => {
   const creditGrantPolicy = oncePerBatchPolicy();
   return ({ action, user, summary, changes, details, related }: UsersBulkAuditEntry) =>
-    recordAdminActionFromRequest(
-      req,
+    write(
       {
         action,
         target: { kind: 'user', id: user.id, displayName: user.email ?? user.username ?? user.id },
@@ -179,16 +185,96 @@ const runInTransaction =
   <T>(fn: () => Promise<T>) =>
     withTransaction(() => fn(), { logger });
 
+const endUserRealtimeConnections = (logger?: Logger) => (userId: string) =>
+  authSessionService.endRealtimeConnections(
+    { userId },
+    { db: { realtimeConnections: realtimeConnectionRepository }, logger }
+  );
+
+type SubscriptionCancelAuditEntry = NonNullable<ReturnType<typeof subscriptionCancellationAudit>> & {
+  target: { kind: 'user'; id: string; displayName: string };
+};
+
+/**
+ * The cancelSubscriptions dep shared by the admin bulk path and the system path; `record` writes the
+ * audit entry with that path's actor. Best-effort per the catalogue: the ban is committed, so a lost
+ * entry must not fail the user.
+ */
+const cancelUserSubscriptions =
+  (
+    logger: Logger | undefined,
+    record: (entry: SubscriptionCancelAuditEntry) => Promise<unknown>
+  ): ExecuteDeps['cancelSubscriptions'] =>
+  async (user, action, batchId, deadline) => {
+    const cancelReason = action === 'contain' ? 'contained' : 'suspended';
+    const result = await cancelAccountSubscriptions(
+      { userId: user.id, reason: cancelReason, deadline },
+      logger ?? console
+    );
+    const entry = subscriptionCancellationAudit(result, cancelReason);
+    if (entry) {
+      await record({
+        ...entry,
+        target: { kind: 'user', id: user.id, displayName: user.email ?? user.username ?? user.id },
+        details: { ...entry.details, batchId },
+      });
+    }
+    return result;
+  };
+
+/**
+ * Deps for one user's steps run by the platform itself (no request, see applyActionToUser): entries
+ * carry a system actor named `actorName` and the given reason.
+ */
+export function usersBulkSystemApplyDeps(actorName: string, reason: string, logger?: Logger): ApplyDeps {
+  return {
+    db: usersBulkDb,
+    store: cacheRepository,
+    withTransaction: runInTransaction(logger),
+    audit: ({ action, user, summary, changes, details, related }) =>
+      adminAuditService.recordAdminAction(
+        {
+          action,
+          actor: systemAuditActor(actorName),
+          target: { kind: 'user', id: user.id, displayName: user.email ?? user.username ?? user.id },
+          summary,
+          reason,
+          context: { source: 'worker' },
+          changes,
+          details,
+          related,
+        },
+        { db: { adminAuditLog: adminAuditLogRepository }, logger }
+      ),
+    endRealtimeConnections: endUserRealtimeConnections(logger),
+    cancelSubscriptions: cancelUserSubscriptions(logger, entry =>
+      adminAuditService.recordAdminAction(
+        { ...entry, actor: systemAuditActor(actorName), reason, context: { source: 'worker' } },
+        { db: { adminAuditLog: adminAuditLogRepository }, logger }
+      )
+    ),
+    logger,
+  };
+}
+
 /** Execute deps whose audit entries carry the request's actor and the admin's reason. */
 export function usersBulkExecuteDeps(req: AuditRequest, reason: string, logger?: Logger): ExecuteDeps {
+  return usersBulkExecuteDepsFor(requestAuditWriter(req), reason, logger);
+}
+
+/**
+ * Execute deps whose every audit entry (users, domains, subscriptions) goes through `write`, so the
+ * same Contain path runs from an admin request or a job with a system actor.
+ */
+export function usersBulkExecuteDepsFor(write: AdminAuditWriter, reason: string, logger?: Logger): ExecuteDeps {
   return {
     ...usersBulkResolveDeps,
     db: usersBulkDb,
     store: cacheRepository,
     withTransaction: runInTransaction(logger),
-    audit: auditFor(req, reason),
+    audit: auditFor(write, reason),
     auditSummary: ({ summary, details }) =>
-      recordAdminActionFromRequest(req, {
+      write({
         action: 'user.bulk.executed',
         target: { kind: 'system', id: 'admin-users-bulk', displayName: 'Users bulk action' },
         summary,
@@ -197,46 +283,30 @@ export function usersBulkExecuteDeps(req: AuditRequest, reason: string, logger?:
       }),
     blockEmailDomains: (domains, batchId) =>
       addBlockedEmailDomains(
-        req,
+        write,
         domains,
         added => `blocked signups from ${added.join(', ')} in bulk contain batch ${batchId}`
       ),
-    endRealtimeConnections: userId =>
-      authSessionService.endRealtimeConnections(
-        { userId },
-        { db: { realtimeConnections: realtimeConnectionRepository }, logger }
-      ),
-    cancelSubscriptions: async (user, action, batchId, deadline) => {
-      const cancelReason = action === 'contain' ? 'contained' : 'suspended';
-      const result = await cancelAccountSubscriptions(
-        { userId: user.id, reason: cancelReason, deadline },
-        logger ?? console
-      );
-      const entry = subscriptionCancellationAudit(result, cancelReason);
-      // Best-effort per the catalogue: the ban is committed, so a lost entry must not fail the user.
-      if (entry) {
-        await recordAdminActionFromRequest(req, {
-          ...entry,
-          target: { kind: 'user', id: user.id, displayName: user.email ?? user.username ?? user.id },
-          reason,
-          details: { ...entry.details, batchId },
-        });
-      }
-      return result;
-    },
+    endRealtimeConnections: endUserRealtimeConnections(logger),
+    cancelSubscriptions: cancelUserSubscriptions(logger, entry => write({ ...entry, reason })),
     logger,
   };
 }
 
-export function usersBulkUndoDeps(req: AuditRequest, logger?: Logger): UndoDeps {
+export function usersBulkUndoDeps(
+  req: AuditRequest,
+  logger?: Logger,
+  reason = 'Undo of a bulk action within its undo window'
+): UndoDeps {
+  const write = requestAuditWriter(req);
   return {
     db: usersBulkDb,
     store: cacheRepository,
     withTransaction: runInTransaction(logger),
-    audit: auditFor(req, 'Undo of a bulk action within its undo window'),
+    audit: auditFor(write, reason),
     unblockEmailDomains: (domains, batchId) =>
       removeBlockedEmailDomains(
-        req,
+        write,
         domains,
         removed => `unblocked signups from ${removed.join(', ')} undoing bulk batch ${batchId}`
       ),

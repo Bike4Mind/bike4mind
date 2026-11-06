@@ -81,8 +81,13 @@ export function resolveFieldLimits(
       signupGrantAssessment: false,
       riskScore: false,
       riskEvidence: false,
+      riskReviewAutoApproval: false,
+      riskReviewReopenedAt: false,
+      paymentRiskEventAt: false,
+      riskReviewAutoCheckedAt: false,
       throttle: false,
       riskSignals: false,
+      signupLanding: false,
     };
   }
   if (collectionName === questCollectionName) {

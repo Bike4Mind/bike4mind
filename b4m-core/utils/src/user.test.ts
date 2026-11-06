@@ -153,3 +153,40 @@ describe('checkStorageLimitForOwner', () => {
     ).rejects.toThrow('File size exceeds storage limit');
   });
 });
+
+describe('pending (reserved) bytes', () => {
+  it('counts reserved bytes as used for a personal file and reports them in used_bytes', async () => {
+    await expect(
+      checkStorageLimit(user({ storageLimit: 10, currentStorageSize: 5 * MB }), 2 * MB, 3 * MB + 1)
+    ).rejects.toMatchObject({
+      info: { errorCode: 'storage_limit_exceeded', used_bytes: 8 * MB + 1, requested_bytes: 2 * MB },
+    });
+    await expect(
+      checkStorageLimit(user({ storageLimit: 10, currentStorageSize: 5 * MB }), 2 * MB, 3 * MB)
+    ).resolves.toBe(undefined);
+  });
+
+  it('counts reserved bytes as used for an org file and reports them in used_bytes', async () => {
+    await expect(
+      checkOrganizationStorageLimit(org({ storageLimit: 5, currentStorageSize: 1 * MB }), 1 * MB, 3 * MB + 1)
+    ).rejects.toMatchObject({ info: { errorCode: 'org_storage_limit_exceeded', used_bytes: 4 * MB + 1 } });
+    await expect(
+      checkOrganizationStorageLimit(org({ storageLimit: 5, currentStorageSize: 1 * MB }), 1 * MB, 3 * MB)
+    ).resolves.toBe(undefined);
+  });
+
+  it('routes pendingBytes to the pool the file bills to', async () => {
+    const getOrganization = vi.fn().mockResolvedValue(org({ storageLimit: 5 }));
+
+    await expect(
+      checkStorageLimitForOwner({ user: user(), organizationId: 'org-1', pendingBytes: 5 * MB }, 1, getOrganization)
+    ).rejects.toMatchObject({ info: { owner: 'org', used_bytes: 5 * MB } });
+    await expect(
+      checkStorageLimitForOwner({ user: user({ storageLimit: 1 }), pendingBytes: 1 * MB }, 1)
+    ).rejects.toMatchObject({ info: { owner: 'user', used_bytes: 1 * MB } });
+  });
+
+  it('keeps the existing behavior when no pendingBytes are passed', async () => {
+    await expect(checkStorageLimitForOwner({ user: user({ storageLimit: 1 }) }, 1 * MB)).resolves.toBe(undefined);
+  });
+});

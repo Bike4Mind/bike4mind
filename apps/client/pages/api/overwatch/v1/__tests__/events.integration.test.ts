@@ -310,7 +310,7 @@ describe('POST /api/overwatch/v1/events (integration — real middleware chain)'
       await handler(req, res);
       expect(res._getStatusCode()).toBe(403);
       // distinguish from the scope-check 403 above (message is the dispute one)
-      expect(res._getJSONData().error).toMatch(/dispute/i);
+      expect(res._getJSONData().error).toMatch(/payment review/i);
       expect(mockRateLimit).not.toHaveBeenCalled();
       expect(mockSendBatch).not.toHaveBeenCalled();
     });

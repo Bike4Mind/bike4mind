@@ -1295,6 +1295,32 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
       );
     });
 
+    it('adds the signup risk review the ban settled to the suspend entry', async () => {
+      mockUserFindById.mockReturnValue(target({ isBanned: false }));
+      mockAdminUpdateUser.mockResolvedValue({
+        user: target({ isBanned: true }),
+        creditAdjustment: undefined,
+        bannedRiskReviewFrom: 'pending',
+      });
+      const { promise } = run({
+        user: ADMIN,
+        userId: 'other-user',
+        body: { isBanned: true, statusChangeReason: STATUS_REASON },
+      });
+      await promise;
+
+      expect(mockRecord).toHaveBeenCalledExactlyOnceWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.suspended',
+          changes: [
+            { field: 'isBanned', before: false, after: true },
+            { field: 'riskScore.reviewState', before: 'pending', after: 'banned' },
+          ],
+        })
+      );
+    });
+
     it.each([
       ['isBanned', { isBanned: true }],
       ['isModerated', { isModerated: true }],

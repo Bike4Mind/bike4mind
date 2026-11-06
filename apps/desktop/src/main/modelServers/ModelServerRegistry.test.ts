@@ -6,6 +6,7 @@ import type { ChatModelOption } from '@shared/chat';
 import type { ModelServerProbeResult } from '@shared/modelServers';
 import { LISTED_FRESH_MS, ModelServerRegistry, PICKER_CHECK_WAIT_MS, PICKER_LIST_WAIT_MS } from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';
+import { inertLaunchers } from './testLaunchers';
 import {
   describeSshFailure,
   SshConnectionError,
@@ -98,6 +99,7 @@ function registry(
   const listedLate = vi.fn();
   const edited = vi.fn();
   const instance = new ModelServerRegistry({
+    launchers: inertLaunchers(),
     store,
     logger: options.logger ?? { debug: () => undefined, warn: () => undefined },
     platform: options.platform,
@@ -155,6 +157,7 @@ describe('ModelServerRegistry', () => {
     const quiet = { debug: () => undefined, warn: () => undefined };
     const localSpecsChanged = vi.fn();
     const servers = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store: new ModelServerStore(cipher, file, quiet),
       logger: { debug: () => undefined, warn: () => undefined },
       fetchFor: fake.fetchFor,
@@ -189,6 +192,7 @@ describe('ModelServerRegistry', () => {
     // A restart reads this computer's specs back and says so, since sizing may have run on the probe alone.
     const restarted = vi.fn();
     const again = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store: new ModelServerStore(cipher, file, quiet),
       logger: quiet,
       fetchFor: fake.fetchFor,
@@ -196,44 +200,6 @@ describe('ModelServerRegistry', () => {
     });
     expect((await again.views())[0].specs).toEqual(local);
     expect(restarted).toHaveBeenCalledTimes(1);
-  });
-
-  it("offers a saved Ollama server's models with the KV cache type entered for it, as last saved", async () => {
-    const fake = fakeOllama();
-    const { registry: servers } = registry(fake);
-    const [, added] = await servers.add({
-      address: 'http://192.168.1.20:11434',
-      credential: none,
-      name: 'gpu box',
-      kind: 'ollama',
-      access: 'chat',
-    });
-    const chat = servers.chatFor(`srv-${added.id}`)!;
-    const model = `local:srv-${added.id}:qwen2.5:0.5b`;
-    expect((await chat.loadOffer!(model)).kvCache).toEqual({ type: 'f16' });
-
-    const specs = { ramGiB: 64, gpuMemoryGiB: 24, bandwidthGBps: null, unified: false };
-    await servers.update(added.id, { specs: { ...specs, kvCacheType: 'q8_0' } });
-    expect((await chat.loadOffer!(model)).kvCache).toEqual({ type: 'q8_0' });
-    await servers.update(added.id, { specs });
-    expect((await chat.loadOffer!(model)).kvCache).toEqual({ type: 'f16' });
-  });
-
-  it("reads the KV cache type entered for this computer's Ollama, not a saved server's", async () => {
-    const { registry: servers } = registry(fakeOllama());
-    expect(servers.localKvCacheType()).toBeUndefined();
-    const [, added] = await servers.add({
-      address: 'http://192.168.1.20:11434',
-      credential: none,
-      name: 'gpu box',
-      kind: 'ollama',
-      access: 'chat',
-    });
-    const specs = { ramGiB: 64, gpuMemoryGiB: null, bandwidthGBps: null, unified: false };
-    await servers.update(added.id, { specs: { ...specs, kvCacheType: 'q4_0' } });
-    expect(servers.localKvCacheType()).toBeUndefined();
-    await servers.update('local', { specs: { ...specs, kvCacheType: 'q8_0' } });
-    expect(servers.localKvCacheType()).toBe('q8_0');
   });
 
   it('detects Ollama by what it answers and marks plain http on a private address unencrypted', async () => {
@@ -345,6 +311,7 @@ describe('ModelServerRegistry', () => {
       { type: 'bearer', token: TOKEN }
     );
     const servers = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store: new ModelServerStore(noKeyring, file, silent),
       logger: silent,
       fetchFor: fake.fetchFor,
@@ -464,6 +431,7 @@ describe('ModelServerRegistry', () => {
     };
     const holder: { catalog?: ModelCatalog } = {};
     const servers = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store: new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined }),
       logger: { debug: () => undefined, warn: () => undefined },
       changed: () => holder.catalog?.expireLocal(),
@@ -1518,6 +1486,7 @@ describe('ModelServerRegistry', () => {
     };
     const store = new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined });
     const servers = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store,
       logger: { debug: () => undefined, warn: () => undefined },
       fetchFor,
@@ -1555,6 +1524,7 @@ describe('ModelServerRegistry', () => {
     };
     const store = new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined });
     const servers = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store,
       logger: { debug: () => undefined, warn: () => undefined },
       fetchFor,
@@ -1617,6 +1587,7 @@ describe('ModelServerRegistry', () => {
     const quiet = { debug: () => undefined, warn: () => undefined };
     const open = () =>
       new ModelServerRegistry({
+        launchers: inertLaunchers(),
         store: new ModelServerStore(cipher, file, quiet),
         logger: quiet,
         fetchFor,
@@ -1742,6 +1713,7 @@ describe('ModelServerRegistry SSH servers', () => {
       };
     const store = new ModelServerStore(cipher, file, { debug: () => undefined, warn: () => undefined });
     const instance = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store,
       logger: { debug: () => undefined, warn: () => undefined },
       fetchFor: fake.fetchFor,

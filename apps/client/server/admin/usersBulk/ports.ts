@@ -63,7 +63,7 @@ const RevokedApiKeySchema = z.object({ id: z.string(), status: z.enum(ApiKeyStat
 export type RevokedApiKey = z.infer<typeof RevokedApiKeySchema>;
 
 /** Exactly what one batch changed for one user, so undo reverts that and nothing else. */
-const UserUndoSnapshotSchema = z.object({
+export const UserUndoSnapshotSchema = z.object({
   userId: z.string(),
   /** This batch set isBanned / isModerated from false to true. */
   banned: z.literal(true).optional(),

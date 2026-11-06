@@ -1,7 +1,12 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
-import type { AuditLogPage } from '@bike4mind/common';
+import type {
+  AuditLogPage,
+  SubscriptionTimelineItem,
+  SubscriptionTimelineKind,
+  SubscriptionTimelinePage,
+} from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import type {
@@ -16,6 +21,7 @@ import { reviveAuditEntry, type WireAuditEntry } from './adminAuditLog';
 import { ADMIN_GRANTS_KEY } from './adminOrganizations';
 
 const ADMIN_LOG_PAGE_SIZE = 50;
+const TIMELINE_PAGE_SIZE = 100;
 const MAX_RETRIES = 3;
 
 export const isNotFoundError = (error: unknown): boolean => isAxiosError(error) && error.response?.status === 404;
@@ -31,6 +37,8 @@ export const isSubscriptionObjectId = (value: string): boolean => /^[0-9a-f]{24}
 // write does) refreshes the detail, its admin log and the list together.
 export const adminSubscriptionDetailKey = (id: string) => ['admin', 'subscriptions', 'detail', id] as const;
 export const adminSubscriptionAdminLogKey = (id: string) => [...adminSubscriptionDetailKey(id), 'admin-log'] as const;
+export const adminSubscriptionTimelineKey = (id: string, kind: SubscriptionTimelineKind | undefined) =>
+  [...adminSubscriptionDetailKey(id), 'timeline', kind ?? 'all'] as const;
 const adminSubscriptionByStripeIdKey = (stripeSubscriptionId: string) =>
   ['admin', 'subscriptions', 'by-stripe', stripeSubscriptionId] as const;
 
@@ -70,6 +78,38 @@ export const useAdminSubscriptionAdminLog = (id: string) =>
         { params }
       );
       return { ...response.data, entries: response.data.entries.map(reviveAuditEntry) };
+    },
+    getNextPageParam: lastPage => lastPage.nextCursor ?? undefined,
+    initialPageParam: undefined as string | undefined,
+    enabled: isSubscriptionObjectId(id),
+  });
+
+type WireTimelineItem = Omit<SubscriptionTimelineItem, 'occurredAt' | 'audit'> & {
+  occurredAt: string | Date;
+  audit?: WireAuditEntry;
+};
+
+/** Dates arrive as ISO strings; admin items carry an audit row that needs the same revival. */
+export const reviveSubscriptionTimelineItem = (item: WireTimelineItem): SubscriptionTimelineItem =>
+  ({
+    ...item,
+    occurredAt: new Date(item.occurredAt),
+    ...(item.audit ? { audit: reviveAuditEntry(item.audit) } : {}),
+  }) as SubscriptionTimelineItem;
+
+/** The merged Timeline feed; `kind` undefined means every source. */
+export const useAdminSubscriptionTimeline = (id: string, kind: SubscriptionTimelineKind | undefined) =>
+  useInfiniteQuery({
+    queryKey: adminSubscriptionTimelineKey(id, kind),
+    queryFn: async ({ pageParam }): Promise<SubscriptionTimelinePage> => {
+      const params: Record<string, string> = { limit: String(TIMELINE_PAGE_SIZE) };
+      if (kind) params.kind = kind;
+      if (pageParam) params.cursor = pageParam;
+      const response = await api.get<{ items: WireTimelineItem[]; nextCursor: string | null }>(
+        `${subscriptionPath(id)}/timeline`,
+        { params }
+      );
+      return { ...response.data, items: response.data.items.map(reviveSubscriptionTimelineItem) };
     },
     getNextPageParam: lastPage => lastPage.nextCursor ?? undefined,
     initialPageParam: undefined as string | undefined,

@@ -51,6 +51,7 @@ describe('resolveScopes', () => {
     const result = await resolveScopes([{ scopeType: 'apiKey', scopeId: 'k1' }], makeDeps());
     expect(result.get('apiKey:k1')).toEqual({
       label: 'ci-key (ada@example.com)',
+      name: 'ci-key',
       payerType: 'User',
       payerId: 'u1',
       adminPath: '/admin/users/u1',
@@ -61,6 +62,7 @@ describe('resolveScopes', () => {
     const result = await resolveScopes([{ scopeType: 'apiKey', scopeId: 'k2' }], makeDeps());
     expect(result.get('apiKey:k2')).toEqual({
       label: 'org-key (bob@example.com)',
+      name: 'org-key',
       payerType: 'Organization',
       payerId: 'o1',
       adminPath: '/admin/users/u2',
@@ -72,6 +74,7 @@ describe('resolveScopes', () => {
     const result = await resolveScopes([{ scopeType: 'Agent', scopeId: 'a1' }], makeDeps());
     expect(result.get('Agent:a1')).toEqual({
       label: 'agent Helper of ada@example.com',
+      name: 'Helper',
       payerType: 'User',
       payerId: 'u1',
       adminPath: '/admin/users/u1',
@@ -82,6 +85,7 @@ describe('resolveScopes', () => {
     const result = await resolveScopes([{ scopeType: 'Agent', scopeId: 'a2' }], makeDeps());
     expect(result.get('Agent:a2')).toEqual({
       label: 'agent Shared',
+      name: 'Shared',
       payerType: 'Organization',
       payerId: 'o1',
       adminPath: null,

@@ -181,6 +181,11 @@ describe('getImageModelCapabilities', () => {
       });
     });
 
+    it('lists FLUX.2 as edit-capable and a FLUX.1 generator as not', () => {
+      expect(getImageModelCapabilities(ImageModels.FLUX_2_PRO).supports.edit).toBe(true);
+      expect(getImageModelCapabilities(ImageModels.FLUX_PRO_1_1).supports.edit).toBe(false);
+    });
+
     it('Gemini edits but takes no seed', () => {
       const { supports } = getImageModelCapabilities(ImageModels.GEMINI_3_PRO_IMAGE);
       expect(supports.edit).toBe(true);

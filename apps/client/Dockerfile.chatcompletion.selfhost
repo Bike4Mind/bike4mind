@@ -64,6 +64,16 @@ RUN B4M_SELF_HOST=true node scripts/link-premium-overlays.mjs \
 #    the alias hook redirects to). `^...` builds the client's deps without the Next.js app.
 RUN pnpm turbo build --filter=@bike4mind/client^... --filter=@bike4mind/workers^...
 
+# 5) Help corpus for the worker's 6-hour help-lake ingest (apps/workers/src/selfhost/helpDatalakeIngest.ts),
+#    in the layout infra/cron.ts copies into the hosted Lambda bundle: help-corpus/docs plus
+#    help-index.json. It sits under the worker's working directory, /app/apps/workers in both
+#    compose.selfhost.yaml and the Kubernetes chart. The index is generated, not committed, and only
+#    covers the two docs-site categories .dockerignore re-admits.
+RUN pnpm --filter @bike4mind/scripts help:build-index \
+    && mkdir -p apps/workers/help-corpus \
+    && cp -r docs-site/docs apps/workers/help-corpus/docs \
+    && cp apps/client/app/generated/help-index.json apps/workers/help-corpus/help-index.json
+
 ENV NODE_ENV=production
 ENV B4M_SELF_HOST=true
 ENV PORT=8080

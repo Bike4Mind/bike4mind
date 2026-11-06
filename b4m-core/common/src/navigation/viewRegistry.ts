@@ -719,6 +719,17 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.stripe_disputes',
+    section: 'admin',
+    label: 'Disputes',
+    description:
+      'Resolve Stripe disputes on organization or unmatched payments and undo an automatic account containment',
+    navigationType: 'tab',
+    target: '75', // AdminTab.StripeDisputes
+    keywords: ['disputes', 'chargebacks', 'stripe', 'lost dispute', 'contain'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.held_signup_grants',
     section: 'admin',
     label: 'Held signup grants',

@@ -8,6 +8,8 @@ import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAl
 import { agentRepository } from '@bike4mind/database';
 import { NotFoundError, ForbiddenError, BadRequestError } from '@bike4mind/utils';
 import { enhanceAgentField } from '@server/agents/authoring/enhanceAgentField';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { HTTPError } from '@bike4mind/common';
 
 interface EnhanceFieldRequest {
   fieldName: string;
@@ -50,7 +52,13 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
     assertAgentAccess(agent, userId, 'own');
 
     try {
-      const enhancedValue = await enhanceAgentField(agent, userId, { fieldName, currentValue, agentName }, req.logger);
+      const enhancedValue = await enhanceAgentField(
+        agent,
+        userId,
+        { fieldName, currentValue, agentName },
+        req.logger,
+        createRequestCompletionMeter(req, 'agent field enhancement', { systemModel: true })
+      );
 
       res.json({
         success: true,
@@ -61,7 +69,12 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
       req.logger.error('Error enhancing field:', error);
 
       // Re-throw known error types to let baseApi handle them with correct status codes
-      if (error instanceof BadRequestError || error instanceof NotFoundError || error instanceof ForbiddenError) {
+      if (
+        error instanceof HTTPError ||
+        error instanceof BadRequestError ||
+        error instanceof NotFoundError ||
+        error instanceof ForbiddenError
+      ) {
         throw error;
       }
 

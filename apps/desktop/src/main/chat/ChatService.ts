@@ -394,12 +394,6 @@ type SendOptions = {
 export const MAX_CONCURRENT_SPAWNED = 10;
 
 /**
- * How long a spawned agent's first turn waits for its new worktree's dependency install (ms).
- * It cannot wait out an install itself: ending its turn reads as the agent having finished.
- */
-export const SPAWN_INSTALL_WAIT_MS = 10 * 60_000;
-
-/**
  * How long a title request may take before it is dropped.
  *
  * Short on purpose: the sidebar row already reads acceptably, so a slow answer is worth less
@@ -557,6 +551,8 @@ export interface ChatServiceDeps {
   local?: LocalChat;
   /** Paths kept out of reach of shell commands whatever the user granted. Enforced by the file tools, and by the shell only when SANDBOX_SHELL_COMMANDS is on. */
   protectedPaths?: readonly string[];
+  /** Protected folders not yet resolved; the file tools refuse every write while any is. */
+  unresolvedProtectedPaths?: readonly string[];
   /**
    * Where the user's own CLAUDE.md lives. Overridden only by tests, which must not read - or
    * depend on the contents of - the real ~/.claude of whoever runs them.
@@ -684,10 +680,10 @@ export class ChatService {
 
   private readonly launching = new Set<string>();
 
-  /** Ends a spawned agent's wait for its install early, when it is stopped or deleted meanwhile. */
   /** Parents an agent worktree was cut for during this run; see mayHaveAgentWorktrees. */
   private readonly agentParents = new Set<string>();
-  private readonly installWaits = new Map<string, (reason: 'stopped' | 'deleted') => void>();
+  /** A stop or delete that reached a spawn still preparing; read before its first turn is sent. */
+  private readonly launchInterrupts = new Map<string, 'stopped' | 'deleted'>();
 
   /** Startup has failed; no new input may race its preservation or deletion. */
   private readonly abandoning = new Set<string>();
@@ -1417,6 +1413,7 @@ export class ChatService {
       // A folder shared while the worktree was being cut lives in the store, not in `project`.
       session.project = summary.project;
       this.startDependencyInstall(session.id, resolved.workingDirectory, resolved.outcome);
+      this.deps.activity?.preparingStep(sessionId, 'starting');
       return null;
     } catch (err) {
       return { error: err instanceof Error ? err.message : 'Could not prepare the workspace.' };
@@ -1944,8 +1941,8 @@ export class ChatService {
     this.deps.approvals?.forgetSession(sessionId);
     this.loopRuns.delete(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
-    // Ahead of stop(), so a spawn waiting on its install reads this as the delete it is.
-    this.installWaits.get(sessionId)?.('deleted');
+    // Ahead of stop(), so a spawn still preparing reads this as the delete it is.
+    if (this.launching.has(sessionId)) this.launchInterrupts.set(sessionId, 'deleted');
     this.stop(sessionId);
     await this.deps.capabilities
       ?.revokeMatching(
@@ -2010,7 +2007,9 @@ export class ChatService {
    * server it started. `bash_kill` and the panel's Stop button are how those end.
    */
   stop(sessionId: string): void {
-    this.installWaits.get(sessionId)?.('stopped');
+    if (this.launching.has(sessionId) && !this.launchInterrupts.has(sessionId)) {
+      this.launchInterrupts.set(sessionId, 'stopped');
+    }
     this.active.get(sessionId)?.abort();
   }
 
@@ -2197,7 +2196,7 @@ export class ChatService {
     this.accepting.add(sessionId);
     // Held past startReply for the reason launchSpawned holds its own: no 'done' blink between.
     const cutsWorktree = awaitsWorktree(existing.project);
-    if (cutsWorktree) this.deps.activity?.preparingStarted(sessionId);
+    if (cutsWorktree) this.deps.activity?.preparingStarted(sessionId, 'worktree');
     try {
       return await this.startAcceptedTurn(
         sessionId,
@@ -4287,6 +4286,8 @@ export class ChatService {
             if (signal.aborted) throw new Error(STOPPED_BEFORE_CHANGE);
             writing = true;
           },
+          // Read first: once it is empty, protectedPaths holds every spelling.
+          unresolvedProtectedPaths: this.deps.unresolvedProtectedPaths,
           protectedPaths: this.deps.protectedPaths,
           sessionId,
           callId: call.id,
@@ -5389,7 +5390,7 @@ export class ChatService {
     }
   ): Promise<void> {
     this.launching.add(child.id);
-    this.deps.activity?.preparingStarted(child.id);
+    this.deps.activity?.preparingStarted(child.id, worktree ? 'worktree' : 'starting');
     let failure: string | null = null;
     let deleted = false;
     let stopped = false;
@@ -5406,14 +5407,19 @@ export class ChatService {
           const workingDirectory = child.project.workingDirectory;
           text = `${worktreePreamble(projectDirectory, { ...worktree, workingDirectory })}\n\n${seed}`;
         }
-        if (!unprepared) {
-          const waited = await this.awaitSpawnInstall(child.id);
-          if (waited !== 'ready') failure = 'It was stopped before its first turn.';
-          deleted = waited === 'deleted';
-          stopped = waited === 'stopped';
-        }
+      }
+      // The dependency install keeps running in the background: the turn starts now, and its
+      // prompt says how to block on the install (bash_output wait_seconds) when node_modules is needed.
+      // Awaiting only the install's planning, so that first prompt already knows one is running.
+      if (!failure) {
+        await this.deps.dependencies?.isInstalling(child.id);
+        const interrupted = await this.launchInterruption(child.id);
+        if (interrupted) failure = 'It was stopped before its first turn.';
+        deleted = interrupted === 'deleted';
+        stopped = interrupted === 'stopped';
       }
       if (!failure) {
+        this.deps.activity?.preparingStep(child.id, 'starting');
         const sent = await this.send(child.id, text, [], { seedHops, spawnSeed: true });
         timer.lap('send');
         if (!sent.ok) failure = `The new session could not start: ${sent.error}`;
@@ -5437,6 +5443,7 @@ export class ChatService {
     } finally {
       if (reservation) releaseBranchName(reservation);
       this.launching.delete(child.id);
+      this.launchInterrupts.delete(child.id);
       this.deps.activity?.preparingEnded(child.id);
       if (!failure) this.flushQueue(child.id);
     }
@@ -5448,34 +5455,16 @@ export class ChatService {
     }
   }
 
-  /**
-   * Hold a spawned agent's first turn until its worktree's install settles, or the cap passes.
-   * A timeout or failure still starts the turn, whose prompt then says the install is running or
-   * failed; only a stop or a delete meanwhile does not.
-   */
-  private async awaitSpawnInstall(sessionId: string): Promise<'ready' | 'stopped' | 'deleted'> {
-    const installer = this.deps.dependencies;
-    if (!installer) return 'ready';
-    let interrupted: 'stopped' | 'deleted' | null = null;
-    const stopped = new Promise<null>(resolve =>
-      this.installWaits.set(sessionId, reason => {
-        interrupted ??= reason;
-        resolve(null);
-      })
-    );
-    try {
-      const outcome = await Promise.race([installer.waitFor(sessionId, SPAWN_INSTALL_WAIT_MS), stopped]);
-      if (outcome && outcome !== 'none') this.deps.logger.debug(`CHAT: spawn ${sessionId} install wait: ${outcome}`);
-    } finally {
-      this.installWaits.delete(sessionId);
-    }
-    if (interrupted) return interrupted;
+  /** A stop or delete that arrived while the spawn was preparing, or a session gone meanwhile. */
+  private async launchInterruption(sessionId: string): Promise<'stopped' | 'deleted' | null> {
+    const flagged = this.launchInterrupts.get(sessionId);
+    if (flagged) return flagged;
     if (this.abandoning.has(sessionId) || !(await this.deps.store.get(sessionId))) return 'deleted';
-    return 'ready';
+    return null;
   }
 
   /**
-   * A spawned agent the user stopped while its install ran: keep the session and its worktree,
+   * A spawned agent the user stopped while it was preparing: keep the session and its worktree,
    * and hand the seed back unsent, since stopping is their call rather than a startup failure.
    */
   private async keepStoppedSpawn(parentId: string, child: ChatSessionSummary): Promise<void> {
@@ -6670,10 +6659,10 @@ export class ChatService {
     return resolveDefaultModel(models, [remembered, this.deps.preferredModel]);
   }
 
-  /** A device-side model's defaults from the Models screen; none for a hosted model, or when they cannot be read. */
+  /** A device-side model's defaults from the Models screen; none for a hosted model. Rejects when they cannot be read. */
   private async modelDefaults(model: string): Promise<ModelSettings | undefined> {
     if (!isLocalModel(model) || !this.deps.modelSettings) return undefined;
-    return this.deps.modelSettings.get(model).catch(() => undefined);
+    return this.deps.modelSettings.get(model);
   }
 
   /** Auxiliary generations honor the same device-local boundary as the main reply. */
@@ -6687,7 +6676,9 @@ export class ChatService {
       const thinking = createThinkFilter();
       const listed = this.deps.models?.lastLocal?.() ?? this.deps.models?.cached() ?? undefined;
       const option = findModelOption(listed, request.model);
-      const sampling = auxiliaryGeneration(await this.modelDefaults(option?.id ?? request.model), option);
+      // A title or suggestion has no place to show the read error; the conversation's own turn shows it.
+      const defaults = await this.modelDefaults(option?.id ?? request.model).catch(() => undefined);
+      const sampling = auxiliaryGeneration(defaults, option);
       await (this.deps.local ?? new OllamaLocal()).stream(
         { ...request, thinking: false, ...(Object.keys(sampling).length > 0 ? { generation: sampling } : {}) },
         event =>

@@ -4,6 +4,7 @@ import { SIGNUP_RISK_REVIEW_TAB_PARAMS } from './signupRiskReviewSearch';
 import { ANALYTICS_TAB_PARAMS } from './Analytics/analyticsTabSearch';
 import { EVENTS_TAB_PARAMS } from './EventMetrics/eventsTabSearch';
 import { SHADOW_DETECTION_TAB_PARAMS } from './shadowDetectionSearch';
+import { STRIPE_DISPUTE_TAB_PARAMS } from './stripeDisputeSearch';
 import {
   SECURITY_DASHBOARD_SEARCH_PARSERS,
   SECURITY_DASHBOARD_TAB_PARAMS,
@@ -62,6 +63,7 @@ export const ADMIN_EVENTS_TAB_SLUG = 'event-metrics';
 export const ADMIN_SECURITY_DASHBOARD_TAB_SLUG = 'security-dashboard';
 export const ADMIN_SHADOW_DETECTIONS_TAB_SLUG = 'shadow-detections';
 export const ADMIN_WAITLIST_TAB_SLUG = 'waitlist';
+export const ADMIN_STRIPE_DISPUTES_TAB_SLUG = 'disputes';
 export { ADMIN_ORGANIZATIONS_TAB_SLUG, ADMIN_SUBSCRIPTIONS_TAB_SLUG };
 
 const EMERGENCY_ACCESS_PARAM = 'emergency_access';
@@ -95,6 +97,7 @@ export const ADMIN_TAB_PARAMS = {
   [ADMIN_SHADOW_DETECTIONS_TAB_SLUG]: SHADOW_DETECTION_TAB_PARAMS,
   [ADMIN_MODERATION_INCIDENTS_TAB_SLUG]: [MODERATION_INCIDENT_ID_PARAM],
   [ADMIN_WAITLIST_TAB_SLUG]: INVITE_CENTER_TAB_PARAMS,
+  [ADMIN_STRIPE_DISPUTES_TAB_SLUG]: STRIPE_DISPUTE_TAB_PARAMS,
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 type AdminTabParam = (typeof ADMIN_TAB_PARAMS)[keyof typeof ADMIN_TAB_PARAMS][number];

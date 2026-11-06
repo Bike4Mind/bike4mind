@@ -118,7 +118,9 @@ describe('GenerationJobEngine', () => {
   });
 
   it('fails a pending job whose requester is blocked before the provider is called, and settles the hold', async () => {
-    const aiAccessDenial = vi.fn(async () => 'Account suspended pending dispute resolution. Please contact support.');
+    const aiAccessDenial = vi.fn(
+      async () => 'Your account is on hold pending a payment review. Please contact support.'
+    );
     const t = setup({ aiAccessDenial });
     const job = await t.create();
 
@@ -128,7 +130,7 @@ describe('GenerationJobEngine', () => {
     expect(t.handler.submit).not.toHaveBeenCalled();
     const final = t.repository.jobs.get(job.id)!;
     expect(final.state).toBe('failed');
-    expect(final.error).toEqual({ code: 'account_blocked', message: expect.stringContaining('dispute') });
+    expect(final.error).toEqual({ code: 'account_blocked', message: expect.stringContaining('payment review') });
     expect(final.submitAttemptedAt).toBeFalsy();
     expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
   });

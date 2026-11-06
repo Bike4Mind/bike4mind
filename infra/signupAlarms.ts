@@ -100,6 +100,19 @@ if (isMonitoredStage) {
     },
   });
 
+  // Sign-in codes issued but not mailed because the address was refused (pages/api/otc/send.ts).
+  new aws.cloudwatch.LogMetricFilter('signupCodeSuppressedFilter', {
+    name: `${$app.name}-${$app.stage}-signup-code-suppressed`,
+    logGroupName: serverLogGroupName,
+    pattern: messageFilterPattern('otc-code-suppressed'),
+    metricTransformation: {
+      name: 'SignupCodeSuppressed',
+      namespace: metricNamespace,
+      value: '1',
+      unit: 'Count',
+    },
+  });
+
   if (hourlyThreshold !== undefined) {
     new aws.cloudwatch.MetricAlarm('signupCodeSendRate', {
       name: `${$app.name}-${$app.stage}-signup-code-send-rate`,

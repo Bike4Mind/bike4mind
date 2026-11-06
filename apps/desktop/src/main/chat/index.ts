@@ -104,11 +104,14 @@ import { captureHistoryPage } from './captureHistoryPage';
 import { forgetLocalContexts, forgetLocalContextOf, OllamaLocal } from './OllamaLocal';
 import { registerModelServersIpc } from '../modelServers/ipc';
 import { LocalModels, optionCatalogSampling, type CatalogSamplingHook } from '../modelServers/LocalModels';
+import { hostLaunchers } from '../modelServers/LocalServerSupervisor';
 import { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
 import { ModelServerStore } from '../modelServers/ModelServerStore';
+import { readHostOllamaEnv } from '../modelServers/observedOllama';
 import { withEnteredSpecs } from '../models/enteredHardware';
 import { machineView } from '../models/fit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
+import { MODEL_SETTINGS_FILE_NAME } from '@shared/modelSettings';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
@@ -142,7 +145,7 @@ import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
-import { permissionProtectedRoots, toolProtectedPaths } from './protectedLocations';
+import { permissionProtectedLocations, toolProtectedLocations } from './protectedLocations';
 import { keepSessionWritesIn } from './tools/sessionScripts';
 import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
@@ -304,6 +307,8 @@ export interface RegisteredChat {
   modelServers: ModelServerRegistry;
   /** Stops their health checks and any pending model list reload, on quit. */
   stopModelServers(): void;
+  /** Stops the servers Desktop started, on the quit pass that can wait. */
+  stopLocalServers(): Promise<void>;
   /** The Settings choice of local model context, which the Models screen's fit badges also plan for. */
   localContext: LocalContextPreference;
   /** Per-model defaults; the fit badges plan for each model's own context and draft too. */
@@ -388,6 +393,8 @@ export function registerChat(
   auth: AuthService,
   hooks: Pick<ChatServiceDeps, 'sessionClosed' | 'releaseSessionTerminals'> & {
     observeStream?(event: ChatStreamEvent): void;
+    /** Every session status push, as the renderers get it; main's needs-you watch reads these. */
+    observeSessionStatus?(event: ChatSessionStatusEvent): void;
     /** Revoking a model-pull grant in Settings stops that download; true once it no longer runs. */
     cancelModelPull?(key: string): Promise<boolean>;
     /** The curated list's projector sizes, so chat sizes a vision model the way the Models screen does. */
@@ -457,12 +464,15 @@ export function registerChat(
   // are folders no allow rule may cover, since a call writing there would grant itself more.
   const home = app.getPath('home');
   const claudeCode = new ClaudeCodeSettings({ home, logger, onChange: () => permissions.invalidate() });
+  const permissionProtected = permissionProtectedLocations(userData, home, dirname(MANAGED_SETTINGS_PATH), logger);
+  const toolProtected = toolProtectedLocations(userData, logger);
   const permissions: PermissionService = new PermissionService({
     store: new PermissionRuleStore(join(userData, 'permission-rules.json')),
     claudeCode,
     isTrusted: directory => projectTrust.isTrusted(directory),
     home,
-    protectedRoots: permissionProtectedRoots(userData, home, dirname(MANAGED_SETTINGS_PATH)),
+    protectedRoots: () => permissionProtected.paths(),
+    unresolvedProtected: () => permissionProtected.unresolved(),
     logger,
   });
   void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
@@ -502,13 +512,16 @@ export function registerChat(
     setting: () => localContext.read(),
     pinnedProjectors: () => hooks.pinnedProjectors?.() ?? new Map(),
     kvCacheType: () => modelServers.localKvCacheType(),
+    flashAttention: () => modelServers.flashAttention(LOCAL_SERVER_ID),
   });
   const lateReload = createLateReload(() => {
     models.forgetLocal();
     send(IPC_CHANNELS.chatModelsChanged, undefined);
   }, LATE_RELOAD_DEBOUNCE_MS);
-  const modelSettings = new ModelSettingsStore(join(userData, 'model-settings.json'), message => logger.warn(message));
-  const loadSettings = (modelId: string) => modelSettings.getStrict(modelId);
+  const modelSettings = new ModelSettingsStore(join(userData, MODEL_SETTINGS_FILE_NAME), message =>
+    logger.warn(message)
+  );
+  const loadSettings = (modelId: string) => modelSettings.get(modelId);
   // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
   const modelServers = new ModelServerRegistry({
     loadSettings,
@@ -520,6 +533,12 @@ export function registerChat(
     },
     edited: () => models.forgetLocal(),
     listedLate: lateReload.notify,
+    readOllamaEnv: url => readHostOllamaEnv(url),
+    launchers: hostLaunchers({
+      unifiedMemory: async () => (await localHardware.profile())?.memoryKind === 'unified',
+    }),
+    ownedServers: privateFile(join(userData, 'local-servers.json')),
+    ownedCipher: safeStorage,
     localSpecsChanged: () => {
       forgetLocalContexts();
       localSizing.forget?.();
@@ -614,6 +633,7 @@ export function registerChat(
   // replying, and this turns the pair into the one status a sidebar row draws.
   const activity = new SessionActivity((event: ChatSessionStatusEvent) => {
     send(IPC_CHANNELS.chatSessionStatus, event);
+    hooks.observeSessionStatus?.(event);
     // Only reached once a turn has run, long after pullRequests below exists.
     if (event.status === 'done') pullRequests.turnSettled(event.sessionId);
   });
@@ -721,7 +741,12 @@ export function registerChat(
     skills,
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which breaks the rule that tokens never leave the main process.
-    protectedPaths: toolProtectedPaths(userData),
+    get protectedPaths() {
+      return toolProtected.paths();
+    },
+    get unresolvedProtectedPaths() {
+      return toolProtected.unresolved();
+    },
     get deferredTools() {
       return deferredTools.current();
     },
@@ -1445,6 +1470,7 @@ export function registerChat(
       lateReload.stop();
       modelServers.stop();
     },
+    stopLocalServers: () => modelServers.stopLocalServers(),
     localContext,
     modelSettings,
     capabilityLedger,

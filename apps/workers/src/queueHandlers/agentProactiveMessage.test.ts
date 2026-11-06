@@ -7,7 +7,8 @@
  * real here (not mocked) - only its inputs (the session doc) are controlled per test.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { insufficientCreditsError, TooManyRequestsError } from '@bike4mind/common';
+import { ForbiddenError, insufficientCreditsError, TooManyRequestsError } from '@bike4mind/common';
+import { ACCOUNT_BANNED_MESSAGE } from '@bike4mind/services/userService/accountState';
 
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: h.getUserEntitlements }));
 
@@ -77,7 +78,7 @@ vi.mock('sst', () => ({
 
 import { dispatch } from './agentProactiveMessage';
 
-const logger = { info: vi.fn(), error: vi.fn() } as never;
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
 const makeEvent = (body: unknown) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
 const payload = { sessionAgentConfigId: 'config-1' };
 
@@ -179,6 +180,19 @@ describe('agentProactiveMessage consumer', () => {
 
     await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
     expect(h.sendToClient).not.toHaveBeenCalled();
+  });
+
+  it('skips without retrying or notifying when the owner account is suspended', async () => {
+    h.generateAndSendProactiveMessage.mockRejectedValue(new ForbiddenError(ACCOUNT_BANNED_MESSAGE));
+
+    await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
+    expect(h.sendToClient).not.toHaveBeenCalled();
+  });
+
+  it('still rethrows an unrelated forbidden error', async () => {
+    h.generateAndSendProactiveMessage.mockRejectedValue(new ForbiddenError('Unauthorized. Admin access required.'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, logger)).rejects.toThrow('Unauthorized');
   });
 
   it('still rethrows an unrelated generation failure', async () => {

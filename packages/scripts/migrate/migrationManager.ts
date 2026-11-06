@@ -57,6 +57,7 @@ export class MigrationManager {
     this.logger.log(`Migrations to run: ${migrations.length}`);
     this.logger.log('');
 
+    const startedAt = new Date();
     for (const migration of migrations) {
       const logger = this.logger.withMetadata({
         migrationId: migration.id,
@@ -65,7 +66,11 @@ export class MigrationManager {
 
       logger.log(`Running migration ${migration.id}: ${migration.name}`);
       try {
-        await migration.up();
+        const result = await migration.up({ startedAt });
+        if (result?.incomplete) {
+          logger.warn(`Migration ${migration.id} ${migration.name} incomplete, left pending: ${result.reason}`);
+          continue;
+        }
         await Migration.create({ id: migration.id, name: migration.name });
         logger.log(`Migration ${migration.id} ${migration.name} completed`);
       } catch (error: unknown) {

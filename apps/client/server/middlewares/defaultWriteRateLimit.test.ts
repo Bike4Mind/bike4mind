@@ -70,6 +70,7 @@ describe('defaultWriteRateLimit', () => {
     ['an anonymous request', { user: undefined }],
     ['an API-key request', { apiKeyInfo: { keyId: 'k1' } }],
     ['an admin', { user: { id: 'a1', isAdmin: true, tags: [] } }],
+    ['a delegated admin', { user: { id: 'a2', isAdmin: false, adminPermissions: ['support:read'], tags: [] } }],
     ['a developer-tagged user', { user: { id: 'd1', isAdmin: false, tags: ['developer'] } }],
   ])('does not count %s', async (_, overrides) => {
     const { next } = await run(overrides as Partial<Request>);

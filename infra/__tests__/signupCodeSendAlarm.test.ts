@@ -137,6 +137,28 @@ describe('signup code send alarm wiring', () => {
     ).toBe(false);
   });
 
+  it('counts sign-in codes held back from refused addresses', async () => {
+    await loadAlarms();
+    expect(callFor(resources.filter, 'signupCodeSuppressedFilter')).toMatchObject({
+      name: 'test-app-production-signup-code-suppressed',
+      pattern: '{ $.message = "otc-code-suppressed" }',
+      metricTransformation: {
+        name: 'SignupCodeSuppressed',
+        namespace: 'test-app/production/Signup',
+        value: '1',
+        unit: 'Count',
+      },
+    });
+    const pattern = callFor(resources.filter, 'signupCodeSuppressedFilter')?.pattern;
+    if (typeof pattern !== 'string') throw new Error('Missing metric filter pattern');
+    const prefix = '2026-10-23T00:00:00.000Z request-id INFO ';
+    const line = JSON.stringify({ message: 'otc-code-suppressed', reason: 'blocked-domain', domain: 'example.com' });
+    expect(matchesMessageFilterPattern(pattern, prefix + line)).toBe(true);
+    expect(matchesMessageFilterPattern(pattern, prefix + JSON.stringify({ message: 'otc-code-dispatched' }))).toBe(
+      false
+    );
+  });
+
   it('alarms on the hourly sum and routes ALARM and OK to Slack and email', async () => {
     await loadAlarms();
     expect(resources.alarm).toHaveBeenCalledWith('signupCodeSendRate', {

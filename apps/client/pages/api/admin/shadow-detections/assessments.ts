@@ -11,6 +11,7 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { assessShadowDetection } from '@server/security/abuseAssessment/abuseAssessment';
+import { linkedAccountGroupEvidence } from '@server/security/abuseAssessment/linkedAccountEvidence';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { respond } from '@server/utils/respond';
 
@@ -47,6 +48,8 @@ const handler = adminApi({
         trigger: 'admin',
         requestedBy: req.user.id,
         logger: req.logger,
+        // Same evidence as the sweep, so both paths share one cached judgment per evidence.
+        deps: { groupEvidence: linkedAccountGroupEvidence },
       });
 
       if (outcome.status === 'assessed' && !outcome.cached) {

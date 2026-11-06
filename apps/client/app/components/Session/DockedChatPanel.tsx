@@ -56,7 +56,8 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
           // three top bars line up across the app chrome.
           height: '56px',
           padding: '0 16px',
-          backgroundColor: theme.palette.background.level1,
+          // The sidenav's own ground, so the header bars read as one with it.
+          backgroundColor: theme.palette.background.surface2,
           borderBottom: '1px solid',
           borderColor: theme.palette.divider,
           userSelect: 'none',

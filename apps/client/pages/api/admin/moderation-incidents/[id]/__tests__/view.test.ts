@@ -54,6 +54,7 @@ const INCIDENT = {
   sessionId: 'dddddddddddddddddddddddd',
   questId: 'eeeeeeeeeeeeeeeeeeeeeeee',
   labels: [{ name: 'Explicit Nudity', parentName: 'Explicit', confidence: 97.5 }],
+  alertedAt: new Date('2026-10-30T10:01:00Z'),
 };
 const READY = { availability: 'ready', url: 'https://signed.example/img', expiresAt: '2026-10-30T10:05:00.000Z' };
 
@@ -105,8 +106,22 @@ describe('admin/moderation-incidents/[id]/view', () => {
       questId: INCIDENT.questId,
       fabFileId: null,
       ncmecReportId: null,
+      alertedAt: INCIDENT.alertedAt,
+      lastReminderAt: null,
+      reportedAt: null,
+      falsePositiveAt: null,
       image: READY,
     });
+  });
+
+  it('returns the times a reminder and a prior verdict were recorded', async () => {
+    const lastReminderAt = new Date('2026-10-31T08:00:00Z');
+    const reportedAt = new Date('2026-10-31T09:00:00Z');
+    const falsePositiveAt = new Date('2026-10-30T12:00:00Z');
+    m.findById.mockResolvedValue({ ...INCIDENT, lastReminderAt, reportedAt, falsePositiveAt });
+    const res = makeRes();
+    await runHandler(makeReq(), res);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ lastReminderAt, reportedAt, falsePositiveAt }));
   });
 
   it('keeps the user id when the account is gone, and nulls what the incident never had', async () => {

@@ -25,7 +25,18 @@ export type SpendBreach = {
   ratio: number | null;
   /** Set on account-level breaches of a trusted scope. */
   trusted?: true;
+  /** Names of API keys whose own breach was folded into this payer's, and their ids. */
+  viaKeys?: string[];
+  viaKeyIds?: string[];
+  /** Platform breaches only: the part of `value` spent by trusted accounts, left out of the ratio and floors. */
+  trustedExcluded?: number;
 };
+
+/**
+ * A platform metric for one window. `value` and `baseline` are standard-tier spend, which the floors
+ * and the ratio are judged on; `total` is what the window really spent, which the alert reports.
+ */
+export type PlatformObservation = ScopeObservation & { total: number };
 
 export type ScopeObservation = {
   scopeType: SpendRollupScopeType;
@@ -63,21 +74,33 @@ function breach(
 
 function evaluatePlatformMetric(
   rule: SpendRuleId,
-  obs: ScopeObservation,
+  obs: PlatformObservation,
   floor: number,
   t: SpendThresholds
 ): SpendBreach[] {
   const ratio = ratioOf(obs);
   if (!isSpike(obs, ratio, t.platformSpikeRatio, floor)) return [];
   const severity = ratio !== null && ratio >= t.platformCriticalRatio ? 'critical' : 'warning';
-  return [breach(rule, obs, severity, ratio)];
+  const trustedExcluded = obs.total - obs.value;
+  return [
+    {
+      ...breach(rule, obs, severity, ratio),
+      value: obs.total,
+      ...(trustedExcluded > 0 ? { trustedExcluded } : {}),
+    },
+  ];
 }
 
+/**
+ * A platform alert needs standard-tier spend over BOTH floors: enough credits and enough provider cost.
+ * Either metric alone is too easy to trip (a cheap model run at volume, a few costly calls).
+ */
 export function evaluatePlatform(
-  credits: ScopeObservation,
-  costUsd: ScopeObservation,
+  credits: PlatformObservation,
+  costUsd: PlatformObservation,
   t: SpendThresholds
 ): SpendBreach[] {
+  if (credits.value < t.platformSpikeFloorCredits || costUsd.value < t.platformCostFloorUsd) return [];
   return [
     ...evaluatePlatformMetric('platform_spike', credits, t.platformSpikeFloorCredits, t),
     ...evaluatePlatformMetric('platform_cost_spike', costUsd, t.platformCostFloorUsd, t),
@@ -96,14 +119,12 @@ export function evaluateScope(
   const spikeFloor = trusted ? t.trustedAccountSpikeFloorCredits : t.accountSpikeFloorCredits;
   const ceiling = trusted ? t.trustedAccountCeilingCredits : t.accountCeilingCredits;
   const ratio = ratioOf(obs);
-  const breaches: SpendBreach[] = [];
+  const mark = (b: SpendBreach): SpendBreach => (trusted ? { ...b, trusted: true as const } : b);
+  if (obs.value >= ceiling) return [mark(breach(rules.ceiling, obs, 'critical', ratio))];
   if (isSpike(obs, ratio, t.accountSpikeRatio, spikeFloor)) {
-    breaches.push(breach(rules.spike, obs, 'warning', ratio));
+    return [mark(breach(rules.spike, obs, 'warning', ratio))];
   }
-  if (obs.value >= ceiling) {
-    breaches.push(breach(rules.ceiling, obs, 'critical', ratio));
-  }
-  return trusted ? breaches.map(b => ({ ...b, trusted: true as const })) : breaches;
+  return [];
 }
 
 function scopeRules(scopeType: SpendRollupScopeType): { spike: SpendRuleId; ceiling: SpendRuleId } | null {

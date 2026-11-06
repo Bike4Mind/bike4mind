@@ -9,13 +9,17 @@ import {
   type HardwareProfile,
   type ModelArch,
 } from '@bike4mind/common';
-import type { QuantizedKvCacheType } from '@shared/modelServers';
+import type { FlashAttention, QuantizedKvCacheType } from '@shared/modelServers';
 import { formatMemory, type FitLevel, type MachineView, type ModelFit } from '@shared/models';
 
-// Desktop chats through Ollama with one slot; its KV type is daemon-wide, so plan the one entered in Settings.
-const ollamaRuntime = (draftMax: number, kv: QuantizedKvCacheType | undefined): FitRuntime => ({
+// Desktop chats through Ollama with one slot; its KV type and flash attention are daemon-wide, as the server runs them.
+const ollamaRuntime = (
+  draftMax: number,
+  kv: QuantizedKvCacheType | undefined,
+  flashAttention: FlashAttention | undefined
+): FitRuntime => ({
   kind: 'ollama',
-  flashAttn: 'auto',
+  flashAttn: flashAttention ?? 'auto',
   slots: 1,
   draftMax,
   ...(draftMax > 0 ? { speculative: true } : {}),
@@ -88,6 +92,8 @@ type ModelExtras = Pick<FitModel, 'mmprojBytes' | 'expertBytesPerLayer' | 'activ
   draftMax?: number;
   /** The server's OLLAMA_KV_CACHE_TYPE as entered; absent is f16. */
   kvCacheType?: QuantizedKvCacheType;
+  /** The server's OLLAMA_FLASH_ATTENTION when Desktop knows it; absent is auto. */
+  flashAttention?: FlashAttention;
 };
 
 function plan(
@@ -95,13 +101,13 @@ function plan(
   weightsBytes: number,
   hardware: HardwareProfile,
   context: number,
-  { draftMax = 0, kvCacheType, ...extras }: ModelExtras
+  { draftMax = 0, kvCacheType, flashAttention, ...extras }: ModelExtras
 ): Plan {
   const fit = estimateFit({
     model: { arch, weightsBytes, ...extras },
     hardware,
     mode: 'chat',
-    runtime: ollamaRuntime(draftMax, kvCacheType),
+    runtime: ollamaRuntime(draftMax, kvCacheType, flashAttention),
     context: Math.min(Math.max(1, Math.round(context)), arch.contextMax),
   });
   if (!fit.requested) throw new Error('estimateFit returned no plan for the requested context');

@@ -467,11 +467,14 @@ export const SettingKeySchema = z.enum([
   'usagePatternSignalsConfig',
   'abuseAssessmentEnabled',
   'abuseAssessmentConfig',
+  'autoContainmentConfig',
   'thinkingVisibilityFree',
   'thinkingVisibilityPaid',
   'otcLimitSendPerEmailPerIp',
   'otcLimitSendPerEmailPerIpDaily',
   'otcLimitSendPerEmail',
+  'otcLimitSendPerEmailDaily',
+  'otcLimitSendGlobalHourly',
   'otcLimitRegisterPerDomainHourly',
   'otcLimitRegisterPerDomainDaily',
   'otcLimitSendPerIpDistinctEmails',
@@ -491,6 +494,8 @@ export const SettingKeySchema = z.enum([
   'enableDomainIntelligence',
   'holdSignupsFromDomainsYoungerThanDays',
   'autoConfirmDisposableAggregateHolds',
+  'signupDomainHoldAssessmentEnabled',
+  'signupDomainHoldAssessmentConfig',
   'domainIntelligenceTimeoutMs',
   'paymentRiskAlertsEnabled',
   'paymentRiskYoungAccountMinutes',
@@ -561,6 +566,7 @@ export const SettingKeySchema = z.enum([
   'turnstileFailClosed',
   'turnstileSiteKey',
   'signupRiskScoring',
+  'signupRiskAutoApproval',
   'preferenceArenaEnabled',
   'preferenceArenaCreditsPerVote',
   'preferenceArenaDailyVoteCap',
@@ -737,6 +743,7 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitDefaultWriteMode',
   'fileUploadLimitFreePerHour',
   'fileUploadLimitPaidPerHour',
+  'pendingUploadLimit',
   'imageModerationLimitFreePerDay',
   'imageModerationLimitPaidPerDay',
   'apiKeyAccess',
@@ -816,6 +823,9 @@ export const IntentClassifierConfigSchema = z.object({
 });
 
 export type IntentClassifierConfig = z.infer<typeof IntentClassifierConfigSchema>;
+
+export const LOW_CONFIDENCE_COMPLETION_MODES = ['block', 'annotate', 'off'] as const;
+export type LowConfidenceCompletionMode = (typeof LOW_CONFIDENCE_COMPLETION_MODES)[number];
 
 export const OrchestrationDefaultsSchema = z.object({
   /**
@@ -919,6 +929,12 @@ export const OrchestrationDefaultsSchema = z.object({
   dagEnabled: z.boolean().default(true),
   /** LLM intent-classifier configuration. */
   intentClassifier: IntentClassifierConfigSchema.default(IntentClassifierConfigSchema.parse({})),
+  /**
+   * What the agent executor does when a run's final answer follows a below-threshold iteration:
+   * `annotate` emits `low_confidence_completion` and completes, `block` also pauses for review,
+   * `off` does neither. Omitted => `annotate`.
+   */
+  lowConfidenceCompletion: z.enum(LOW_CONFIDENCE_COMPLETION_MODES).optional(),
 });
 
 export type OrchestrationDefaults = z.infer<typeof OrchestrationDefaultsSchema>;
@@ -1180,6 +1196,12 @@ export const DEFAULT_WRITE_RATE_LIMIT_PER_MIN = 120;
  */
 export const FILE_UPLOAD_LIMIT_FREE_PER_HOUR = 300;
 export const FILE_UPLOAD_LIMIT_PAID_PER_HOUR = 3000;
+
+/**
+ * Default cap on a user's presigned client uploads whose bytes have not landed yet. Also the value
+ * apps/client/server/files/pendingUploads.ts applies when the setting cannot be read.
+ */
+export const PENDING_UPLOAD_LIMIT = 250;
 
 /**
  * Default daily uploaded-image moderation allowances, in detector calls. The free one is also the
@@ -1461,6 +1483,54 @@ export const AbuseAssessmentConfigSchema = z.object({
 
 export type AbuseAssessmentConfig = z.infer<typeof AbuseAssessmentConfigSchema>;
 
+/** off: no decisions. shadow: decide and record, change nothing. enforce: contain the accounts. */
+export const AUTO_CONTAINMENT_MODES = ['off', 'shadow', 'enforce'] as const;
+export type AutoContainmentMode = (typeof AUTO_CONTAINMENT_MODES)[number];
+
+/**
+ * Automated containment from abuse assessments (apps/client/server/security/autoContainment). Acts
+ * only on an `abuse` judgment at or above minConfidence, through the admin bulk Contain path.
+ */
+export const AutoContainmentConfigSchema = z.object({
+  mode: z.enum(AUTO_CONTAINMENT_MODES).prefault('shadow'),
+  /** The judgment's confidence (0-1) at or above which an `abuse` verdict is acted on. */
+  minConfidence: z.number().min(0.5).max(1).prefault(0.9),
+  /** Containment decisions per fixed one-hour window, shadow included, so shadow measures the real cap. */
+  maxPerHour: z.number().int().min(0).max(100).prefault(5),
+  /** A detection naming more accounts than this goes to an admin instead, so one call never contains a crowd. */
+  maxAccountsPerDetection: z.number().int().min(1).max(25).prefault(5),
+  /** Also adds the accounts' owned email domains (never public mailbox providers) to blockedEmailDomains. */
+  blockEmailDomains: z.boolean().prefault(false),
+  /**
+   * A new account that signed up from the same IP as a blocked account, within this many hours of
+   * it, is assessed at once instead of at the next sweep. 0 turns the rule off.
+   */
+  strongLinkWindowHours: z.number().int().min(0).max(720).prefault(72),
+});
+export type AutoContainmentConfig = z.infer<typeof AutoContainmentConfigSchema>;
+
+/**
+ * Operator limits for the advisory assessment of young-domain signup holds
+ * (apps/client/server/security/signupDomainHoldAssessment). Every default spends nothing: no model and
+ * a zero budget. `signupDomainHoldAssessmentEnabled` gates all provider egress on top of this.
+ */
+export const SignupDomainHoldAssessmentConfigSchema = z.object({
+  /** Decisions model to ask; must be served here and have a platform key. Null means no calls. */
+  model: z.enum(DECISION_MODEL_IDS).nullable().prefault(null),
+  /** Platform spend per 24h window (opened by the first call), in USD, at each call's worst-case cost. */
+  dailyBudgetUsd: z.number().min(0).max(1000).prefault(0),
+  /** Provider calls per 24h window (opened by the first call). */
+  maxCallsPerDay: z.number().int().min(0).max(10_000).prefault(100),
+  /** Provider calls in flight at once, across all instances. */
+  maxConcurrency: z.number().int().min(1).max(10).prefault(1),
+  /** Holds assessed per triage run (every 10 minutes). */
+  maxAssessmentsPerRun: z.number().int().min(1).max(100).prefault(20),
+  /** Least confidence in an `abuse` verdict that confirms the hold; anything lower leaves it pending. */
+  minConfirmConfidence: z.number().min(0.5).max(1).prefault(0.9),
+});
+
+export type SignupDomainHoldAssessmentConfig = z.infer<typeof SignupDomainHoldAssessmentConfigSchema>;
+
 export enum ServerStatusEnum {
   Live = 'live',
   Maintenance = 'maintenance',
@@ -1510,6 +1580,41 @@ export const SignupRiskScoringSchema = z
   .strict();
 
 export type SignupRiskScoring = z.infer<typeof SignupRiskScoringSchema>;
+
+/**
+ * Rules that approve a pending signup risk review without an admin
+ * (apps/client/server/security/riskReviewAutoApproval.ts). Both only move pending to approved, which
+ * an admin can reopen; a model verdict never approves.
+ */
+export const SignupRiskAutoApprovalSchema = z
+  .object({
+    settledPayment: z
+      .object({
+        enabled: z.boolean().prefault(true),
+        /**
+         * Hours a successful payment must have stood, leaving time for an early fraud warning or dispute;
+         * 0 approves as the payment succeeds. Any refund, dispute or early fraud warning on the account,
+         * a partial or goodwill refund included, reopens this approval and rules the account out for good.
+         */
+        minPaymentAgeHours: z.number().int().min(0).max(720).prefault(24),
+      })
+      .strict()
+      .prefault({}),
+    quietAccount: z
+      .object({
+        enabled: z.boolean().prefault(false),
+        minAccountAgeDays: z.number().int().min(1).max(365).prefault(14),
+        /** Only accounts scoring at most this; set it near the review threshold to cover borderline rows only. */
+        maxScore: z.number().min(1).max(100).prefault(60),
+        /** Days since the score was last recomputed (by email verification or a new API key). */
+        minQuietDays: z.number().int().min(1).max(365).prefault(7),
+      })
+      .strict()
+      .prefault({}),
+  })
+  .strict();
+
+export type SignupRiskAutoApproval = z.infer<typeof SignupRiskAutoApprovalSchema>;
 
 export const CUSTOM_MCP_POLICY_MODES = ['off', 'presets_only', 'allowlist', 'any'] as const;
 export type CustomMcpPolicyMode = (typeof CUSTOM_MCP_POLICY_MODES)[number];
@@ -2386,10 +2491,13 @@ export const API_SERVICE_GROUPS = {
       { key: 'signupBurstWindowHours', order: 25 },
       { key: 'signupBurstAutoHold', order: 26 },
       { key: 'signupRiskScoring', order: 27 },
+      { key: 'signupRiskAutoApproval', order: 27.5 },
       { key: 'signupAnomaly', order: 28 },
       { key: 'enableDomainIntelligence', order: 29 },
       { key: 'holdSignupsFromDomainsYoungerThanDays', order: 30 },
       { key: 'autoConfirmDisposableAggregateHolds', order: 30.5 },
+      { key: 'signupDomainHoldAssessmentEnabled', order: 30.6 },
+      { key: 'signupDomainHoldAssessmentConfig', order: 30.7 },
       { key: 'domainIntelligenceTimeoutMs', order: 31 },
       { key: 'paymentRiskAlertsEnabled', order: 32 },
       { key: 'paymentRiskYoungAccountMinutes', order: 33 },
@@ -2524,9 +2632,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiRateLimitDefaultWriteMode', order: 6 },
       { key: 'fileUploadLimitFreePerHour', order: 7 },
       { key: 'fileUploadLimitPaidPerHour', order: 8 },
-      { key: 'imageModerationLimitFreePerDay', order: 9 },
-      { key: 'imageModerationLimitPaidPerDay', order: 10 },
-      { key: 'apiKeyAccess', order: 11 },
+      { key: 'pendingUploadLimit', order: 9 },
+      { key: 'imageModerationLimitFreePerDay', order: 10 },
+      { key: 'imageModerationLimitPaidPerDay', order: 11 },
+      { key: 'apiKeyAccess', order: 12 },
     ],
   },
   API_KEY_TRUST: {
@@ -2584,6 +2693,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'otcLimitVerifyPerEmailPerIp', order: 9 },
       { key: 'otcLimitVerifyPerIp', order: 10 },
       { key: 'otcLimitFormTokenPerIp', order: 11 },
+      { key: 'otcLimitSendPerEmailDaily', order: 12 },
+      { key: 'otcLimitSendGlobalHourly', order: 13 },
     ],
   },
   SUBSCRIBER_LIMITS: {
@@ -2656,6 +2767,7 @@ export const API_SERVICE_GROUPS = {
     settings: [
       { key: 'abuseAssessmentEnabled', order: 1 },
       { key: 'abuseAssessmentConfig', order: 2 },
+      { key: 'autoContainmentConfig', order: 3 },
     ],
   },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
@@ -3622,6 +3734,20 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 8,
   }),
+  // Read by apps/client/server/files/pendingUploads.ts.
+  pendingUploadLimit: makeNumberSetting({
+    key: 'pendingUploadLimit',
+    name: 'Pending Upload Limit (files)',
+    defaultValue: PENDING_UPLOAD_LIMIT,
+    min: 0,
+    max: 1000000,
+    int: true,
+    description:
+      'Max presigned file uploads a user may have waiting for their bytes at once, on every tier. An upload stops counting when its bytes land or 30 minutes after it was requested. Admins and developer-tagged users are not limited. Set to 0 to block presigned uploads.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 9,
+  }),
   // Both read by apps/client/server/s3/imageModerationBudget.ts.
   imageModerationLimitFreePerDay: makeNumberSetting({
     key: 'imageModerationLimitFreePerDay',
@@ -3634,7 +3760,7 @@ export const settingsMap = {
       "Max content-moderation scans a Free-tier user's uploaded images may use per 24 hours. A still image is one scan; an animated image is one scan per sampled frame (at most 10). Images over the limit stay pending (not shown) until the window resets and they are scanned. Admin-restricted users get this limit too. Set to 0 to hold every uploaded image for these users.",
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
-    order: 9,
+    order: 10,
   }),
   imageModerationLimitPaidPerDay: makeNumberSetting({
     key: 'imageModerationLimitPaidPerDay',
@@ -3647,7 +3773,7 @@ export const settingsMap = {
       "Max content-moderation scans a Basic or Pro subscriber's uploaded images may use per 24 hours, counted like the Free limit. Admins and developer-tagged users are not limited. Set to 0 to hold every uploaded image for these users.",
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
-    order: 10,
+    order: 11,
   }),
   // Enforced at mint AND on every key-authenticated request (apiKeyAccessGate.ts), so
   // tightening it also cuts off keys that already exist.
@@ -3662,7 +3788,7 @@ export const settingsMap = {
     options: ['all', 'paid', 'disabled'],
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
-    order: 11,
+    order: 12,
   }),
   // Auto-block of IPs with repeated failed OAuth sign-ins, plus per-IP limits on the OAuth routes.
   oauthAbuseAutoBlockEnabled: makeBooleanSetting({
@@ -3834,7 +3960,8 @@ export const settingsMap = {
     key: 'ReferralCreditsAmount',
     name: 'Referral Credits Amount',
     defaultValue: 10000,
-    description: 'Credits to give to the referred user.',
+    description:
+      'Credits a user who signs up with a referral invite receives, as a floor: a larger amount on the invite wins. Other self-serve signups receive the signup grant schedule (Signup Grant Initial Credits) instead.',
     category: 'Referrals',
     // ReferralModal renders this for every non-admin sender - no secret, just the number
     // displayed in the "invited person gets N credits" line.
@@ -4368,7 +4495,7 @@ export const settingsMap = {
     name: 'Allow Open Registration',
     defaultValue: false,
     description:
-      'Master switch for self-serve signup. When OFF (default), a valid invite code is required to register. When ON, users may register without an invite code; the Default Free Credits grant is then applied after they verify their email (anti-spam — see Default Free Credits). Safe to enable: the pre-request credit reservation caps every free user at the credits they are granted.',
+      'Master switch for self-serve signup. When OFF (default), a valid invite code is required to register. When ON, users may register without an invite code; the signup grant (Signup Grant Initial Credits) is then released after they verify their email (anti-spam). Safe to enable: the pre-request credit reservation caps every free user at the credits they are granted.',
     category: 'Users',
   }),
   // New-account trust gate for API keys and outbound actions (see assertOutboundActionAllowed). A trusted
@@ -4524,6 +4651,18 @@ export const settingsMap = {
     dependsOn: 'abuseAssessmentEnabled',
     schema: AbuseAssessmentConfigSchema,
   }),
+  autoContainmentConfig: makeObjectSetting({
+    key: 'autoContainmentConfig',
+    name: 'Automated Containment from Abuse Assessments',
+    defaultValue: AutoContainmentConfigSchema.parse({}),
+    description:
+      "What happens when an abuse assessment judges a detection as abuse at or above minConfidence (0.5-1). mode: off (nothing), shadow (records the decision for grading against the detection's admin verdict and changes no account; the default) or enforce (contains the accounts through the bulk Contain path: suspended, Stripe subscriptions canceled, positive balance removed, API keys revoked, sessions ended, attributed to the system with the evidence as the reason). Unsuspend on the user profile reverses the suspension; revoked keys stay revoked and a removed balance is not restored. maxPerHour caps decisions per hour, counted per mode (over it, the decision is recorded as capped and re-evaluated after the hour); maxAccountsPerDetection sends larger detections to an admin; blockEmailDomains also blocks the accounts' owned email domains, which refuses every new signup on that domain, so one false positive on a shared corporate or campus network blocks the whole domain (leave it off until shadow precision is known); strongLinkWindowHours assesses a new account at once when it signed up from the same IP as a blocked account within that many hours (0 turns the rule off). Needs the advisory assessment on.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.ABUSE_ASSESSMENT.id,
+    order: 3,
+    dependsOn: 'abuseAssessmentEnabled',
+    schema: AutoContainmentConfigSchema,
+  }),
   // Enforced by createModelAdmission (b4m-core/services/src/llm/modelAdmission.ts) and mirrored in
   // the model picker (apps/client/server/utils/callerModelList.ts).
   freeTierModelGateEnabled: makeBooleanSetting({
@@ -4632,6 +4771,34 @@ export const settingsMap = {
     category: 'SecOps',
     group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
     order: 3,
+  }),
+  otcLimitSendPerEmailDaily: makeNumberSetting({
+    key: 'otcLimitSendPerEmailDaily',
+    name: 'Sign-in Codes: Send: Per Inbox Before Challenge (per day)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 20,
+    int: true,
+    description:
+      'Codes one inbox may receive in a day before further requests must pass a Turnstile challenge. Never refuses on its own: without a Turnstile secret and site key it only logs. Built-in: 20. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 12,
+  }),
+  otcLimitSendGlobalHourly: makeNumberSetting({
+    key: 'otcLimitSendGlobalHourly',
+    name: 'Sign-in Codes: Send: All Inboxes Before Challenge (per hour)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 1000,
+    int: true,
+    description:
+      'Codes the whole deployment may send in an hour before every further request must pass a Turnstile challenge. Never refuses on its own: without a Turnstile secret and site key it only logs. Built-in: 1000. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 13,
   }),
   otcLimitRegisterPerDomainHourly: makeNumberSetting({
     key: 'otcLimitRegisterPerDomainHourly',
@@ -4806,7 +4973,7 @@ export const settingsMap = {
     defaultValue: false,
     userReadable: true,
     description:
-      'Legacy fallback: every new signup is enrolled in a staged grant regardless of this switch. It only decides which older keys apply while Signup Grant Initial Credits or Signup Grant Drip Cap is unset (OFF keeps the flat grant: Default Free Credits, nothing locked).',
+      'Retired: no longer read. Every new signup is enrolled in a staged grant, and Signup Grant Initial Credits and Signup Grant Drip Cap decide what it pays (a drip cap of 0 locks nothing).',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4818,7 +4985,7 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Credits released after email verification for newly enrolled staged accounts. Copied once from Default Free Credits when staged grants were installed; later changes to Default Free Credits do not update it. 0 grants nothing.',
+      'Credits released after email verification for newly enrolled staged accounts. Used only while Signup Grant Initial Credits is unset. 0 grants nothing.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4949,7 +5116,7 @@ export const settingsMap = {
     // The client resolves the legacy drip cap from it while signupGrantDripCap is unset.
     userReadable: true,
     description:
-      'Legacy fallback: while Signup Grant Drip Cap is unset and Staged Signup Grants is ON, the drip cap is the smaller of this and Verified Unlock Credits (an unset Verified Unlock Credits counts as 0, so nothing drips). With staging OFF the cap is 0. Set Signup Grant Drip Cap instead.',
+      'Legacy fallback: while Signup Grant Drip Cap is unset, the drip cap is the smaller of this and Verified Unlock Credits (an unset Verified Unlock Credits counts as 0, so nothing drips). Set Signup Grant Drip Cap instead.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4983,7 +5150,7 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Credits a new account receives after email verification. While unset, Signup Grant Credits applies if staged signup grants are enabled, then the default free credits.',
+      'Credits a new account receives after email verification. While unset, Signup Grant Credits applies, else 0.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -5049,12 +5216,11 @@ export const settingsMap = {
   }),
   defaultFreeCredits: makeNumberSetting({
     key: 'defaultFreeCredits',
-    // Read by the new-user welcome to state the amount an unverified sign-up is about to unlock.
     userReadable: true,
     name: 'Default Free Credits',
     defaultValue: 0,
     description:
-      'Legacy fallback: the credits a signup WITHOUT an invite code receives after email verification while Signup Grant Initial Credits is unset and either Staged Signup Grants is OFF or Signup Grant Credits is unset. Once Signup Grant Initial Credits is set, editing this no longer changes open-signup grants. Includes eligible partner signups when Allow Open Registration is OFF; partner-rule credits are added on top. 0 grants nothing. An unverified account receives no credits.',
+      'Retired: no longer sizes any signup grant. A self-serve signup receives Signup Grant Initial Credits after email verification; set that instead. Kept only so a stored value stays visible.',
     category: 'Users',
   }),
   preferenceArenaEnabled: makeBooleanSetting({
@@ -5439,17 +5605,15 @@ export const settingsMap = {
       'When Cloudflare verification cannot be reached, refuse the request instead of letting it through. Off keeps sign-in available during a Cloudflare outage.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
-    dependsOn: 'turnstileEnabled',
   }),
   turnstileSiteKey: makeStringSetting({
     key: 'turnstileSiteKey',
     name: 'Turnstile Site Key',
     defaultValue: '',
     description:
-      'The public Cloudflare Turnstile site key shown to the sign-in form. The secret key is never stored here.',
+      'The public Cloudflare Turnstile site key shown to the sign-in form. With the toggle above off, a set key still challenges sign-in code requests past the send budgets (see Sign-in Code Limits). The secret key is never stored here.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
-    dependsOn: 'turnstileEnabled',
   }),
   signupBurstThreshold: makeNumberSetting({
     key: 'signupBurstThreshold',
@@ -5493,6 +5657,24 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
     schema: SignupRiskScoringSchema,
+  }),
+  signupRiskAutoApproval: makeObjectSetting({
+    key: 'signupRiskAutoApproval',
+    name: 'Signup Risk Auto-Approval',
+    defaultValue: SignupRiskAutoApprovalSchema.parse({}),
+    description:
+      'Approves a pending signup risk review without an admin. settledPayment: a successful card payment ' +
+      '(credit pack or subscription) that Stripe Radar rated normal, on a card no other account paid with in ' +
+      'the payment-attempt retention window, at least minPaymentAgeHours old. quietAccount (off by default): an account at least ' +
+      'minAccountAgeDays old, scoring at most maxScore, not rescored for minQuietDays and named in no open ' +
+      'shadow detection. Neither applies to a banned, suspended or disputed account, one whose payment unlock ' +
+      'was forfeited, one with a signup tranche held for review, or one an admin reopened. Each approval is ' +
+      'audited and listed in Risk review, where it can be reopened; a refund, dispute or early fraud warning ' +
+      'reopens a settledPayment approval automatically. A stored value that fails to parse turns ' +
+      'both rules off.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    schema: SignupRiskAutoApprovalSchema,
   }),
   signupAnomaly: makeObjectSetting({
     key: 'signupAnomaly',
@@ -5542,6 +5724,26 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
       'Confirm Signup Domain Holds whose reason is disposable-aggregate without waiting for an admin, keeping their free credits held. Runs every 10 minutes on stages with scheduled jobs. Each one is recorded in the Admin Audit Log as a system action, and an admin can still Release it from Signup Domain Holds.',
+  }),
+  signupDomainHoldAssessmentEnabled: makeBooleanSetting({
+    key: 'signupDomainHoldAssessmentEnabled',
+    name: 'Advisory Assessment of Young-Domain Holds',
+    defaultValue: false,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Lets a Decisions model judge pending young-domain Signup Domain Holds (abuse, legitimate or insufficient evidence) from a summary of counts and flags: domain age, mail provider class, whether the site answers with content, signup timing and network spread. It never sees emails, IPs, the domain name or site text. It only ever confirms a hold (keeps free credits held) on a confident abuse verdict, recorded in the Admin Audit Log as a system action; it never releases one, and every other verdict leaves the hold for an admin. Paid from the platform key and budget. Off means no provider calls.',
+  }),
+  signupDomainHoldAssessmentConfig: makeObjectSetting({
+    key: 'signupDomainHoldAssessmentConfig',
+    name: 'Advisory Assessment of Young-Domain Holds: Model and Limits',
+    defaultValue: SignupDomainHoldAssessmentConfigSchema.parse({}),
+    description:
+      'The Decisions model to ask (it must have a platform key), the daily USD budget and call cap, concurrent calls, holds per 10-minute run, and the least confidence in an abuse verdict that confirms a hold. The defaults make no calls. The assessment only ever confirms; it never releases a hold.',
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    dependsOn: 'signupDomainHoldAssessmentEnabled',
+    schema: SignupDomainHoldAssessmentConfigSchema,
   }),
   domainIntelligenceTimeoutMs: makeNumberSetting({
     key: 'domainIntelligenceTimeoutMs',

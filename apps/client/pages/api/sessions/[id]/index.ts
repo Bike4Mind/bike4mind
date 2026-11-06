@@ -14,7 +14,6 @@ import {
   userRepository,
   organizationRepository,
   fabFileRepository,
-  cacheRepository,
   sessionAgentConfigRepository,
   withTransaction,
 } from '@bike4mind/database';
@@ -22,7 +21,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
-import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { buildSessionUpdateAdapters } from '@server/sessions/sessionUpdateAdapters';
 
 // Each verb's auth mode, required scope, and path/body validation come from its contract
 // (sessionGetContract, sessionUpdateContract, sessionDeleteContract), the single source of truth
@@ -94,26 +93,7 @@ const putHandler = nextRouteForContract(sessionUpdateContract).put(async (req, r
   const updatedSession = await sessionService.updateSession(
     req.user!,
     { ...req.validated, id },
-    {
-      db: {
-        sessions: sessionRepository,
-        projects: projectRepository,
-        fabFiles: fabFileRepository,
-        caches: cacheRepository,
-      },
-      logger: req.logger,
-      // Lets the lake-tag derivation see lake-membership files: the ownership reader alone cannot,
-      // so attaching a teammate's org-lake file would otherwise derive nothing and leave the
-      // session unscoped. Same resolver the chat tool runs on, so the two cannot drift.
-      // Imported at CALL time - see the create route for why (the resolver's graph reaches the
-      // Mongoose models, and it is only needed when files are actually attached).
-      resolveLakeAccess: async () =>
-        (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
-      // The attachment door's lake arms, so an added lake file passes the access check.
-      resolveAttachmentLakeAccess: async () =>
-        (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(req.user!, req.logger)(),
-      storage: getFilesStorage(),
-    }
+    buildSessionUpdateAdapters(req, req.user!, req.logger)
   );
 
   await logEvent(

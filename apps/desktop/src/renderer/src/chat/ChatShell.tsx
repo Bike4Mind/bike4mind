@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { SxProps } from '@mui/joy/styles/types';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -40,6 +39,7 @@ import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
 import type { ModelsInUse } from '../models/InstalledTab';
 import { ModelsScreen } from '../models/ModelsScreen';
+import { ComposerOllamaNotice } from '../models/OllamaNotRunning';
 import { useModelServers } from '../models/useModelHub';
 import { GlobeIcon, PanelRightIcon, PhoneIcon, SearchIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
@@ -111,6 +111,7 @@ import { TavernView } from './orchestrator/tavern/TavernView';
 import { latestQuestReport } from './orchestrator/finale';
 import { agentStates } from './orchestrator/roster';
 import { prefersReducedMotion } from './orchestrator/motion';
+import { ThreadDock, type ThreadDockMode } from './orchestrator/ThreadDock';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
 import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
 
@@ -204,8 +205,6 @@ export type AccountStrip = (status: ReactNode) => ReactNode;
 
 /** How long the first-run tavern intro plays before it is marked seen (ms). */
 const ORCHESTRATOR_INTRO_MS = 1500;
-/** The conversation docked beside the orchestrator stage (px). */
-const DOCK_WIDTH = 380;
 
 /**
  * 'playing' while the first-run intro runs, then 'shown' until the user picks a view: the intro is
@@ -534,6 +533,12 @@ export function ChatShell({
           if (!current()) return;
           setStoredDefaults(stored => new Map(stored).set(defaultsModelId, settings ?? null));
           clearDefaultsReadFailure(defaultsSessionId);
+          // Also drop this model's failures stored for other chats: the read they report has since succeeded.
+          setDefaultsReadFailures(failures => {
+            const next = new Map(failures);
+            for (const [id, failure] of failures) if (failure.modelId === defaultsModelId) next.delete(id);
+            return next.size === failures.size ? failures : next;
+          });
         },
         error => {
           if (!current()) return;
@@ -580,6 +585,15 @@ export function ChatShell({
   const blockedReason = block.reason;
   const blockedAction =
     block.action === 'open-models' ? { label: 'Open Models', onClick: () => setScreen('models') } : null;
+  const reloadCatalog = catalog.reload;
+  const blockedNotice =
+    noLocal?.fix === 'start-ollama' ? (
+      <ComposerOllamaNotice
+        sessionId={activeId}
+        launch={modelServers?.find(server => server.id === LOCAL_SERVER_ID)?.launch}
+        reload={() => void reloadCatalog()}
+      />
+    ) : null;
 
   // Main saves the model a send would use as soon as one is listed, so the picker shows it.
   const settleLocalModel = conversation.settleLocalModel;
@@ -1317,25 +1331,7 @@ export function ChatShell({
   );
 
   const orchestratorShown = orchestrating && activeId !== null;
-  const dockHidden = orchestratorShown && !orchestratorPrefs.dockOpen;
-  const threadHostTestId = dockHidden
-    ? 'orchestrator-dock-hidden'
-    : orchestratorShown
-      ? 'orchestrator-dock'
-      : undefined;
-  // A hidden dock stays laid out (visibility, not display), so the thread keeps its scroll offset.
-  const threadHostSx: SxProps = !orchestratorShown
-    ? { flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }
-    : {
-        width: DOCK_WIDTH,
-        flexShrink: 0,
-        minHeight: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        ...(dockHidden
-          ? { position: 'absolute', top: 0, right: 0, bottom: 0, visibility: 'hidden' }
-          : { borderLeft: '1px solid', borderColor: 'divider' }),
-      };
+  const threadDockMode: ThreadDockMode = !orchestratorShown ? 'chat' : orchestratorPrefs.dockOpen ? 'docked' : 'hidden';
 
   return (
     <Box sx={chatShellRootSx} {...drop.handlers} data-testid="chat-shell">
@@ -1628,9 +1624,9 @@ export function ChatShell({
                   }
                 />
               )}
-              <Box ref={threadHost} data-testid={threadHostTestId} sx={threadHostSx}>
+              <ThreadDock mode={threadDockMode} hostRef={threadHost}>
                 {thread}
-              </Box>
+              </ThreadDock>
             </Box>
 
             {panelShown && panelProject && conversation.session && (
@@ -1814,6 +1810,7 @@ export function ChatShell({
             attachments={draft}
             blockedReason={blockedReason}
             blockedAction={blockedAction}
+            blockedNotice={blockedNotice}
             // Blocked rather than refused: a refused send has already cleared the box.
             notReady={
               auth?.reauthRequired && !(conversation.session && isLocalModel(conversation.session.model))

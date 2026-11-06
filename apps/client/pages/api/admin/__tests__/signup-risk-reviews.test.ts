@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => Promise<void>>,
   baseOptions: vi.fn(),
   findPending: vi.fn(),
+  findAutoApprovals: vi.fn(),
   setState: vi.fn(),
   creditsSpent: vi.fn(),
   keysCreated: vi.fn(),
@@ -38,7 +39,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  userRepository: { findPendingRiskReviews: h.findPending, setRiskReviewState: h.setState },
+  userRepository: {
+    findPendingRiskReviews: h.findPending,
+    findRiskAutoApprovals: h.findAutoApprovals,
+    setRiskReviewState: h.setState,
+  },
   usageEventRepository: { creditsSpentByUsers: h.creditsSpent },
   userApiKeyRepository: { countCreatedByUserIds: h.keysCreated },
   adminSettingsRepository: {},
@@ -86,6 +91,7 @@ const pendingUser = (id: string, email: string, score: number) => ({
 
 beforeEach(() => {
   h.findPending.mockReset().mockResolvedValue([]);
+  h.findAutoApprovals.mockReset().mockResolvedValue([]);
   h.setState.mockReset().mockResolvedValue(true);
   h.settings.mockReset().mockResolvedValue({});
   h.creditsSpent.mockReset().mockResolvedValue({});
@@ -108,6 +114,34 @@ describe('signup risk review queue', () => {
 
     expect(h.findPending).not.toHaveBeenCalled();
     expect(h.setState).not.toHaveBeenCalled();
+  });
+
+  it('lists recent automatic approvals so a reviewer can reopen them', async () => {
+    const decidedAt = new Date('2026-11-01T09:00:00Z');
+    h.findAutoApprovals.mockResolvedValue([
+      {
+        id: USER_A,
+        email: 'payer@example.org',
+        username: 'payer',
+        riskScore: { score: 62, signals: [], computedAt: decidedAt, reviewState: 'approved' },
+        riskReviewAutoApproval: { policy: 'settled_payment', decidedAt },
+      },
+    ]);
+    const { req, res } = request('GET');
+
+    await h.handlers.get(req, res);
+
+    expect(h.findAutoApprovals).toHaveBeenCalledWith({ since: expect.any(Date), limit: 200 });
+    expect(res._getJSONData().autoApproved).toEqual([
+      {
+        userId: USER_A,
+        email: 'payer@example.org',
+        username: 'payer',
+        score: 62,
+        policy: 'settled_payment',
+        decidedAt: decidedAt.toISOString(),
+      },
+    ]);
   });
 
   it('lists pending accounts with their registrable domain, spend and key count', async () => {
