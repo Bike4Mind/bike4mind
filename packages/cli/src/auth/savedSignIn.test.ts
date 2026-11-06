@@ -572,14 +572,16 @@ describe('ConfigStore saves across processes', () => {
   );
 
   it('upgrades an old config from a fresh read, keeping a sign-in saved since load() first read it', async () => {
-    await writeFile(configPath, JSON.stringify({ auth: stale }));
+    await new ConfigStore(configPath).save({});
+    const { version: _version, ...old } = JSON.parse(await readFile(configPath, 'utf-8')) as Record<string, unknown>;
+    await writeFile(configPath, JSON.stringify({ ...old, auth: stale }));
     const realRead = fsPromises.readFile.bind(fsPromises);
     let interleaved = false;
     vi.spyOn(fsPromises, 'readFile').mockImplementation((async (...args: Parameters<typeof realRead>) => {
       const text = await realRead(...args);
       if (!interleaved && String(args[0]) === configPath) {
         interleaved = true;
-        await writeFile(configPath, JSON.stringify({ auth: newer }));
+        await writeFile(configPath, JSON.stringify({ ...old, auth: newer }));
       }
       return text;
     }) as typeof fsPromises.readFile);
@@ -663,8 +665,8 @@ describe('concurrent refreshes across b4m processes', () => {
     expect(JSON.parse(await readFile(path.join(lockPath(), 'owner'), 'utf-8'))).toMatchObject({ nonce: 'other' });
   });
 
-  it('breaks at once a fresh lock whose holder on this host has exited', async () => {
-    await lockHeldBy({ pid: 2_147_483_646, hostname: os.hostname(), nonce: 'gone' });
+  it('breaks at once a lock whose holder on this host has exited and missed a heartbeat', async () => {
+    await lockHeldBy({ pid: 2_147_483_646, hostname: os.hostname(), nonce: 'gone' }, 21_000);
 
     expect(await new ConfigStore(configPath).withRefreshLock(async () => 'ran', 300)).toBe('ran');
   });
@@ -684,7 +686,7 @@ describe('concurrent refreshes across b4m processes', () => {
       }
     }) as typeof fsPromises.writeFile);
 
-    await expect(store.save({ defaultModel: 'x' })).rejects.toThrow('took over');
+    await expect(store.save({ defaultModel: 'x' })).rejects.toThrow('Lost the lock');
     expect(await readFile(configPath, 'utf-8')).toBe(before);
   });
 

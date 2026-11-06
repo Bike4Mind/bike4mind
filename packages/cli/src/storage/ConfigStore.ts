@@ -436,6 +436,10 @@ const CONFIG_LOCK_STALE_MS = 10_000;
 const CONFIG_LOCK_WAIT_MS = 15_000;
 const CONFIG_LOCK_POLL_MS = 10;
 
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /** The sign-in and backend fields as written to the file; read from it, each may be in any shape. */
 interface DiskAuthFields {
   auth: unknown;
@@ -910,6 +914,8 @@ export class ConfigStore {
   private serial: Promise<unknown> = Promise.resolve();
   /** The config write lock while this store holds it; checked right before each rename onto the file. */
   private configLock: HeldLock | null = null;
+  /** The global snapshot is DEFAULT_CONFIG standing in for a file that failed validation; it must never be saved over it. */
+  private globalFailedValidation = false;
   /** Canonicalized (realpath'd) discovered project root, or null. */
   private projectRealPath: string | null = null;
   /** Whether the discovered project root is in the global `trustedProjects`. */
@@ -953,6 +959,7 @@ export class ConfigStore {
     try {
       // Load global config
       let globalConfig: CliConfig;
+      let globalFailedValidation = false;
 
       try {
         // Check file permissions for security
@@ -1034,6 +1041,7 @@ export class ConfigStore {
         } else if (error instanceof z.ZodError) {
           console.error('Global config validation error:', error.issues);
           console.error('Using default configuration');
+          globalFailedValidation = true;
           // structuredClone, not a spread: a shallow spread would share
           // DEFAULT_CONFIG's mutable arrays (trustedTools/trustedProjects/...),
           // so a later trustTool()/trustProject() would mutate the module
@@ -1048,6 +1056,7 @@ export class ConfigStore {
       // ONLY from here, never from the merged effective config, so repo layers
       // can't be laundered into ~/.bike4mind/config.json.
       this.globalConfig = globalConfig;
+      this.globalFailedValidation = globalFailedValidation;
 
       // Reset per-load project state, then discover + realpath the project root.
       this.projectConfigDir = null;
@@ -1433,7 +1442,8 @@ export class ConfigStore {
     const temp = `${target}.${process.pid}.${uuidv4()}.tmp`;
     try {
       await fs.writeFile(temp, contents, { encoding: 'utf-8', mode: 0o600 });
-      await this.configLock?.assertHeld();
+      if (!this.configLock) throw new Error(`Refusing to write ${this.configPath} without holding its write lock`);
+      await this.configLock.assertHeld();
       await fs.rename(temp, target);
     } catch (error) {
       await fs.rm(temp, { force: true });
@@ -1453,7 +1463,8 @@ export class ConfigStore {
       migrateApiConfig(raw);
       if (raw.version !== CONFIG_SCHEMA_VERSION) {
         upgradeConfig(raw);
-        await this.writeConfigFile(JSON.stringify(raw, null, 2));
+        // A file this build cannot validate is left as it is; load() then runs on defaults without saving over it.
+        if (CliConfigSchema.safeParse(raw).success) await this.writeConfigFile(JSON.stringify(raw, null, 2));
       }
       return raw;
     });
@@ -1574,6 +1585,11 @@ export class ConfigStore {
     config?: GlobalConfigPatch,
     opts?: { clearFeatures?: boolean; authFields?: DiskAuthFields }
   ): Promise<void> {
+    if (this.globalFailedValidation) {
+      throw new Error(
+        `Could not save settings: ${this.configPath} failed validation, so it was left unchanged. Fix the file, or remove it to start over.`
+      );
+    }
     const global = this.globalConfig!;
     const authFields = opts?.authFields ?? (await this.diskAuthFields());
 
@@ -1662,6 +1678,7 @@ export class ConfigStore {
   async reset(): Promise<CliConfig> {
     // structuredClone so reset never shares DEFAULT_CONFIG's mutable arrays.
     this.globalConfig = { ...structuredClone(DEFAULT_CONFIG), userId: uuidv4() };
+    this.globalFailedValidation = false;
     this.projectTrusted = false;
     this.rawProjectConfig = null;
     this.rawProjectLocalConfig = null;
@@ -2013,15 +2030,63 @@ export class ConfigStore {
     if (this.globalConfig!.apiConfig?.endpointChosen) return;
     await this.lockedWrite(async () => {
       const g = this.globalConfig!;
-      const disk = await this.diskAuthFields();
       g.apiConfig = { ...g.apiConfig, endpointChosen: true };
-      const onDisk =
-        typeof disk.apiConfig === 'object' && disk.apiConfig !== null && !Array.isArray(disk.apiConfig)
-          ? (disk.apiConfig as Record<string, unknown>)
-          : {};
-      if (onDisk.endpointChosen === true) return;
-      await this.writeGlobal(undefined, { authFields: { ...disk, apiConfig: { ...onDisk, endpointChosen: true } } });
+      if (this.config) this.config.apiConfig = g.apiConfig;
+      // Patched in the raw file, so it also lands on a config this build cannot validate (startup calls this).
+      const patched = await this.patchConfigText(raw => {
+        const onDisk = isJsonObject(raw.apiConfig) ? raw.apiConfig : {};
+        if (onDisk.endpointChosen === true) return false;
+        raw.apiConfig = { ...onDisk, endpointChosen: true };
+        return true;
+      });
+      if (!patched) {
+        await this.writeGlobal(undefined, {
+          authFields: { auth: undefined, authByEnv: undefined, apiConfig: { endpointChosen: true } },
+        });
+      }
     });
+  }
+
+  /**
+   * Saves the launch auto-update choice by setting only `preferences.autoUpdate` in the raw file, without load()'s
+   * schema pass, so a config this build cannot validate (one written by a newer b4m) keeps every other key. Rejects
+   * when the file cannot be read or does not hold a JSON object.
+   */
+  async saveAutoUpdatePreference(value: boolean): Promise<void> {
+    await this.init();
+    const patched = await this.exclusive(() =>
+      this.withConfigWriteLock(() =>
+        this.patchConfigText(raw => {
+          const preferences = raw.preferences ?? {};
+          if (!isJsonObject(preferences)) {
+            throw new Error(
+              `Could not save the auto-update choice: preferences in ${this.configPath} is not an object`
+            );
+          }
+          raw.preferences = { ...preferences, autoUpdate: value };
+          return true;
+        })
+      )
+    );
+    if (!patched) {
+      await this.save({ preferences: { autoUpdate: value } });
+      return;
+    }
+    if (this.globalConfig) this.globalConfig.preferences.autoUpdate = value;
+    if (this.config) this.config.preferences.autoUpdate = value;
+  }
+
+  /**
+   * Applies `mutate` to the config file's raw JSON and writes it back when `mutate` returns true. The caller holds
+   * the config write lock. Returns false when there is no file; rejects when it cannot be read or is not an object.
+   */
+  private async patchConfigText(mutate: (raw: Record<string, unknown>) => boolean): Promise<boolean> {
+    const text = await this.readConfigText();
+    if (text === null) return false;
+    const raw = this.parseConfigText(text);
+    if (!raw) throw new Error(`Could not update ${this.configPath}: it does not hold a JSON object`);
+    if (mutate(raw)) await this.writeConfigFile(JSON.stringify(raw, null, 2));
+    return true;
   }
 
   /**

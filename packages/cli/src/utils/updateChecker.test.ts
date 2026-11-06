@@ -31,7 +31,7 @@ vi.mock('child_process', () => ({
 const mockedSave = vi.hoisted(() => vi.fn());
 vi.mock('../storage/ConfigStore.js', () => ({
   ConfigStore: vi.fn(function ConfigStore() {
-    return { save: mockedSave };
+    return { saveAutoUpdatePreference: mockedSave };
   }),
 }));
 
@@ -355,9 +355,9 @@ describe('updateChecker', () => {
   });
 
   describe('setAutoUpdatePreference', () => {
-    it.each([true, false])('saves autoUpdate=%s as a preferences-only patch through ConfigStore', async value => {
+    it.each([true, false])('saves autoUpdate=%s through ConfigStore', async value => {
       await setAutoUpdatePreference(value);
-      expect(mockedSave).toHaveBeenCalledWith({ preferences: { autoUpdate: value } });
+      expect(mockedSave).toHaveBeenCalledWith(value);
       expect(mockedWriteFile).not.toHaveBeenCalled();
     });
 

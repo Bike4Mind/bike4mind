@@ -58,3 +58,49 @@ describe('setAutoUpdatePreference on a real config file', () => {
     expect(await readFile(configPath, 'utf-8')).toBe(contents);
   });
 });
+
+describe('a config this build cannot validate', () => {
+  // As a newer b4m might leave it: a preference value and a key this build does not accept.
+  const invalid = {
+    userId: 'user-1',
+    defaultModel: 'some-model',
+    preferences: { temperature: 'warm', theme: 'light', autoSave: true, exportFormat: 'markdown' },
+    mcpServers: [{ name: 'files', command: 'mcp-files', args: [], env: {}, enabled: true }],
+    trustedTools: ['bash'],
+    toolApiKeys: { serper: 'key-1' },
+    tools: { disabled: ['web_search'] },
+    auth: signIn,
+    newerSetting: { level: 3 },
+  };
+
+  beforeEach(async () => {
+    await writeFile(configPath, JSON.stringify(invalid, null, 2), { mode: 0o600 });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('gets the auto-update choice and keeps every other key exactly as it was', async () => {
+    await setAutoUpdatePreference(true, configPath);
+
+    expect(await readFile(configPath, 'utf-8')).toBe(
+      JSON.stringify({ ...invalid, preferences: { ...invalid.preferences, autoUpdate: true } }, null, 2)
+    );
+  });
+
+  it('refuses a settings save, naming the file, and leaves the file unchanged', async () => {
+    const before = await readFile(configPath, 'utf-8');
+
+    await expect(new ConfigStore(configPath).save({ defaultModel: 'x' })).rejects.toThrow(
+      `${configPath} failed validation`
+    );
+    expect(await readFile(configPath, 'utf-8')).toBe(before);
+  });
+
+  it('records the chosen backend without touching any other key', async () => {
+    await new ConfigStore(configPath).markEndpointChosen();
+
+    expect(JSON.parse(await readFile(configPath, 'utf-8'))).toEqual({
+      ...invalid,
+      apiConfig: { endpointChosen: true },
+    });
+  });
+});

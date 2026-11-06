@@ -94,15 +94,15 @@ export async function getAutoUpdatePreference(): Promise<AutoUpdatePreference> {
 }
 
 /**
- * Persist the user's `autoUpdate` choice (`true` = always, `false` = never) as a preferences patch through
- * ConfigStore.save(), which writes only the global layer (never project overrides) under the config write lock,
+ * Persist the user's `autoUpdate` choice (`true` = always, `false` = never) through
+ * ConfigStore.saveAutoUpdatePreference, which sets only that key in the global file under the config write lock,
  * and rejects rather than writing over a file it could not read. Best-effort: a failure is swallowed (we simply ask
  * again next launch rather than blocking). ConfigStore is imported lazily to keep the bin bootstrap light.
  */
 export async function setAutoUpdatePreference(value: boolean, configPath?: string): Promise<void> {
   try {
     const { ConfigStore } = await import('../storage/ConfigStore.js');
-    await new ConfigStore(configPath).save({ preferences: { autoUpdate: value } });
+    await new ConfigStore(configPath).saveAutoUpdatePreference(value);
   } catch {
     // Best-effort - persisting the preference is non-critical.
   }

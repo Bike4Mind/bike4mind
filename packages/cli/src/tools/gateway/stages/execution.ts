@@ -1,6 +1,7 @@
 import { realpathSync } from 'fs';
 import path from 'path';
 import { getProcessHooks } from '../../../utils/processHooks.js';
+import { logger } from '../../../utils/Logger.js';
 import type { ApiClient } from '../../../auth/ApiClient.js';
 import type { CheckpointStore } from '../../../storage/CheckpointStore.js';
 import type { SandboxOrchestrator } from '../../../sandbox/SandboxOrchestrator.js';
@@ -185,8 +186,11 @@ async function retryPathAccessDenial(
   if (response.action === 'allow-always') {
     try {
       await configStore.addDirectory(resolvedGrantDir);
-    } catch {
+    } catch (error) {
       // Best-effort persistence - the session grant above is already applied.
+      logger.warn(
+        `Allowed ${resolvedGrantDir} for this session only; could not save it: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
   }
 
