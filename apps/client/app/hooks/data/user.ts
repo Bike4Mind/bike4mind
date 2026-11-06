@@ -12,6 +12,11 @@ import {
   WithOrgRef,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import {
+  isApprovalPending,
+  notifyApprovalSubmitted,
+  type ApprovalPendingResponse,
+} from '@client/app/hooks/data/adminApprovals';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
 import { useUser } from '@client/app/contexts/UserContext';
 import { ErrorResponse } from '@client/app/utils/error';
@@ -189,7 +194,8 @@ export function useDeleteUser() {
       const { data } = await api.delete(`/api/users/${id}/delete`, { data: { reason } });
       return data;
     },
-    onSuccess: () => {
+    onSuccess: data => {
+      if (isApprovalPending(data)) return notifyApprovalSubmitted(queryClient);
       toast.success('User deleted successfully');
       queryClient.invalidateQueries({ queryKey: ['users'] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
@@ -464,14 +470,26 @@ export function useLoginAsUser() {
   const { setCurrentUser } = useUser();
 
   return useMutation({
-    mutationFn: async ({ id, mfaToken, reason }: { id: string; mfaToken: string; reason: string }) => {
-      const { data } = await api.post<{ user: IUserDocument; accessToken: string }>(`/api/users/${id}/loginAs`, {
-        mfaToken,
-        reason,
-      });
+    mutationFn: async ({
+      id,
+      mfaToken,
+      reason,
+      approvalId,
+    }: {
+      id: string;
+      mfaToken: string;
+      reason: string;
+      approvalId?: string;
+    }) => {
+      const { data } = await api.post<{ user: IUserDocument; accessToken: string } | ApprovalPendingResponse>(
+        `/api/users/${id}/loginAs`,
+        { mfaToken, reason, ...(approvalId && { approvalId }) }
+      );
       return data;
     },
     onSuccess: async data => {
+      // Impersonating an admin waits for a second admin; nothing about this session changes yet.
+      if (isApprovalPending(data)) return notifyApprovalSubmitted(queryClient);
       // Cancel any in-flight queries (e.g. the app-wide admin-settings query) BEFORE
       // clearing caches, so a request dispatched under the admin token can't resolve
       // and re-persist admin data into IndexedDB after clearClientCaches() deletes it.

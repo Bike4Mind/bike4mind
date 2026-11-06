@@ -7,6 +7,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { ACCOUNT_DELETION_GRACE_DAYS, isThrottleExempt } from '@bike4mind/common';
 import { useDeleteUser, useLoginAsUser } from '@client/app/hooks/data/user';
+import { isApprovalPending } from '@client/app/hooks/data/adminApprovals';
 import { useForceResetMFA } from '@client/app/hooks/data/mfa';
 import { useSendSystemMessage } from '@client/app/hooks/data/inbox';
 import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, undoAdminReason, useUndoToast } from '../../../shared';
@@ -353,6 +354,7 @@ export const DeleteUserDialog: React.FC<ProfileDialogProps & { onDeleted: () => 
   const handleConfirm = async (reason: string) => {
     const response = await deleteUser.mutateAsync({ id: user.id, reason });
     onClose();
+    if (isApprovalPending(response)) return;
     warnSubscriptionCancelFailures(response);
     onDeleted();
   };

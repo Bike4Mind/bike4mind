@@ -17,6 +17,7 @@ import { ActionDialog } from '../../shared/ActionDialog';
 import { ADMIN_REASON_PRESETS } from '../../shared/adminReason';
 import { SegmentedControl } from '../../shared/SegmentedControl';
 import { useUndoToast } from '../../shared/UndoToast';
+import { APPROVAL_SUBMITTED_MESSAGE, isApprovalPending } from '@client/app/hooks/data/adminApprovals';
 import { useAdminUsersBulkExecute, useAdminUsersBulkPreview, useAdminUsersBulkUndo } from './useAdminUsersBulk';
 
 type CreditMode = 'set' | 'add' | 'subtract';
@@ -252,6 +253,10 @@ export function UsersBulkActionDialog({
       });
       onDone();
       onClose();
+      if (isApprovalPending(result)) {
+        toast.info(`${APPROVAL_SUBMITTED_MESSAGE} No users were changed yet.`);
+        return;
+      }
       if (result.failed.length > 0)
         toast.warning(`${result.failed.length.toLocaleString()} users could not be changed.`);
       if (result.partial)
