@@ -11,26 +11,34 @@ import { createMocks } from 'node-mocks-http';
 // for that method and returns the SAME router, so they chain (.get(a).put(b).delete(c)), and the
 // final router itself is invoked as `handler(req, res)`, dispatching on req.method. Mocked here
 // closely enough to support that shape rather than a bare `(fn) => fn`, which breaks the chain.
-vi.mock('@server/middlewares/baseApi', () => {
-  function createRouter() {
-    const handlers: Record<string, any> = {};
-    const router: any = (req: any, res: any) => handlers[req.method?.toUpperCase()](req, res);
-    router.get = (fn: any) => {
-      handlers.GET = fn;
-      return router;
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: () => {
+    type Mw = (req: unknown, res: unknown, next: () => void) => unknown;
+    const used: Mw[] = [];
+    const compose =
+      (...handlers: Mw[]) =>
+      async (req: unknown, res: unknown) => {
+        for (const handler of [...used, ...handlers]) {
+          let advanced = false;
+          await handler(req, res, () => {
+            advanced = true;
+          });
+          if (!advanced) return;
+        }
+      };
+    const chain: Record<string, unknown> = {};
+    chain.use = (mw: Mw) => {
+      used.push(mw);
+      return chain;
     };
-    router.put = (fn: any) => {
-      handlers.PUT = fn;
-      return router;
-    };
-    router.delete = (fn: any) => {
-      handlers.DELETE = fn;
-      return router;
-    };
-    return router;
-  }
-  return { baseApi: () => createRouter() };
-});
+    chain.get = compose;
+    chain.put = compose;
+    chain.delete = compose;
+    return chain;
+  },
+  methodNotAllowedHandler: () => (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) =>
+    res.status(405).json({ error: 'Method not allowed' }),
+}));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: any) => fn,
@@ -90,10 +98,9 @@ describe('GET/PUT /api/sessions/[id]/chat/[messageId] - non-owner redaction', ()
     mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'jwt-user', users: [] });
     mockQuestFindBySessionIdAndId.mockResolvedValue(null);
     const { req, res } = fire();
-    await handler(req, res);
 
+    await expect(handler(req, res)).rejects.toMatchObject({ statusCode: 404 });
     expect(mockQuestFindBySessionIdAndId).toHaveBeenCalledWith('sess-1', 'quest-1');
-    expect(res._getStatusCode()).toBe(404);
   });
 
   it('GET strips returnValue for a sharee (jwt-user is not session.userId)', async () => {
