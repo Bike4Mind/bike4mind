@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn(async () => 'raw') }));
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
@@ -22,7 +22,22 @@ const h = vi.hoisted(() => ({
   llmTurns: 0,
   // Turns that call the probe before the model answers; set by the test.
   probeTurns: 1,
+  // Profile `lowConfidenceCompletion` the executor resolves; undefined keeps the executor default.
+  lowConfidenceMode: undefined as 'block' | 'annotate' | 'off' | undefined,
 }));
+
+vi.mock('./agentExecutor.orchestrationProfile', async () => {
+  const actual = await vi.importActual<typeof import('./agentExecutor.orchestrationProfile')>(
+    './agentExecutor.orchestrationProfile'
+  );
+  return {
+    ...actual,
+    resolveTopLevelProfile: async (args: Parameters<typeof actual.resolveTopLevelProfile>[0]) => ({
+      ...(await actual.resolveTopLevelProfile(args)),
+      lowConfidenceCompletion: h.lowConfidenceMode,
+    }),
+  };
+});
 
 vi.mock('sst', () => ({
   Resource: new Proxy({} as Record<string, unknown>, {
@@ -144,8 +159,8 @@ async function seedRun(confidenceOverrides: number[]) {
   const sessionId = new mongoose.Types.ObjectId();
   await User.collection.insertOne({
     _id: userId,
-    username: 'gate-e2e',
-    email: 'gate@e2e.test',
+    username: `gate-e2e-${userId}`,
+    email: `gate-${userId}@e2e.test`,
     currentCredits: 10_000,
   });
   await Session.collection.insertOne({ _id: sessionId, userId: userId.toString(), name: 'Gate e2e' });
@@ -172,6 +187,14 @@ async function seedRun(confidenceOverrides: number[]) {
 }
 
 describe('confidence gate, end to end', () => {
+  beforeEach(() => {
+    h.wsEvents.length = 0;
+    h.dispatched.length = 0;
+    h.llmTurns = 0;
+    h.probeTurns = 1;
+    h.lowConfidenceMode = undefined;
+  });
+
   it('pauses on a streak of low overrides, resumes through a gate response, and completes', async () => {
     const { agentExecutionRepository } = await import('@bike4mind/database');
     const { handler } = await import('./agentExecutor');
@@ -226,5 +249,96 @@ describe('confidence gate, end to end', () => {
     expect(completed?.result).toMatchObject({ answer: FINAL_ANSWER });
     expect(h.llmTurns).toBe(LOW_CONFIDENCE_STREAK_TO_PAUSE + 1);
     expect(h.wsEvents).toContainEqual(expect.objectContaining({ action: 'completed', executionId }));
+  });
+
+  describe('a final answer after one low iteration', () => {
+    async function runToAnswer(confidence: number) {
+      const { handler } = await import('./agentExecutor');
+      const run = await seedRun([confidence]);
+      await handler(
+        {
+          executionId: run.executionId,
+          userId: run.userId,
+          sessionId: run.sessionId,
+          query: 'Run the probe, then report',
+          model: 'test-model',
+          connectionId: 'conn-1',
+        } as never,
+        lambdaContext
+      );
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      return { ...run, execution: await agentExecutionRepository.findById(run.executionId) };
+    }
+    const actions = () => h.wsEvents.map(event => event.action);
+
+    it('annotate (the default) keeps the answer, emits low_confidence_completion, and completes', async () => {
+      const { executionId, execution } = await runToAnswer(0.1);
+
+      expect(execution?.status).toBe('completed');
+      expect(execution?.result).toMatchObject({ answer: FINAL_ANSWER });
+      expect(h.wsEvents).toContainEqual(
+        expect.objectContaining({ action: 'low_confidence_completion', executionId, confidence: 0.1, mode: 'annotate' })
+      );
+      expect(actions()).not.toContain('confidence_gate');
+      expect(actions().indexOf('low_confidence_completion')).toBeLessThan(actions().indexOf('completed'));
+    });
+
+    it('block pauses the run, keeps the answer in the checkpoint, and Stop accepts it', async () => {
+      h.lowConfidenceMode = 'block';
+      const { executionId, userId, execution } = await runToAnswer(0.1);
+
+      expect(execution?.status).toBe('paused');
+      expect(execution?.pendingGate).toMatchObject({ confidence: 0.1 });
+      expect(execution?.lowConfidenceStreak).toBe(0);
+      // The score was scripted, so the pause stays out of the fire-rate counters like any scripted gate.
+      expect(execution?.confidenceTelemetry).toMatchObject({ evaluatedCount: 0, emittedCount: 0 });
+      expect(actions()).toEqual(expect.arrayContaining(['low_confidence_completion', 'confidence_gate']));
+      expect(actions()).not.toContain('completed');
+
+      const { handleGateResponse } = await import('@server/websocket/agentExecute');
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      await handleGateResponse(
+        { accessToken: 'unused', action: 'agent_execute', command: 'gate_response', executionId, decision: 'stop' },
+        userId,
+        'conn-1',
+        'https://ws.test/stage',
+        logger as never
+      );
+      const stopped = await agentExecutionRepository.findById(executionId);
+      expect(stopped?.status).toBe('completed');
+      expect(stopped?.result).toMatchObject({ answer: FINAL_ANSWER, stoppedByGate: true });
+    });
+
+    it('takes the mode from admin orchestration defaults when the profile sets none', async () => {
+      const { AdminSettings } = await import('@bike4mind/database');
+      await AdminSettings.create({
+        settingName: 'orchestrationDefaults',
+        settingValue: { lowConfidenceCompletion: 'block' } as never,
+      });
+      try {
+        const { execution } = await runToAnswer(0.1);
+
+        expect(execution?.status).toBe('paused');
+        expect(actions()).toContain('low_confidence_completion');
+      } finally {
+        await AdminSettings.deleteOne({ settingName: 'orchestrationDefaults' });
+      }
+    });
+
+    it('off completes with no low_confidence_completion event', async () => {
+      h.lowConfidenceMode = 'off';
+      const { execution } = await runToAnswer(0.1);
+
+      expect(execution?.status).toBe('completed');
+      expect(execution?.result).toMatchObject({ answer: FINAL_ANSWER });
+      expect(actions()).not.toContain('low_confidence_completion');
+    });
+
+    it('emits nothing when the iteration before the answer cleared the threshold', async () => {
+      const { execution } = await runToAnswer(0.9);
+
+      expect(execution?.status).toBe('completed');
+      expect(actions()).not.toContain('low_confidence_completion');
+    });
   });
 });
