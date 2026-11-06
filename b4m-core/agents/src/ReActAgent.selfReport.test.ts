@@ -165,6 +165,36 @@ describe('ReActAgent self-reported confidence', () => {
       expect(logOf(agent)).toEqual([{ confidence: 0.4, source: 'llm_self_report', reason: 'thin' }]);
     });
 
+    it('hides a tag that follows an empty think block and emits no placeholder thought', async () => {
+      const { deltas, agent, steps } = await deltasOf([
+        '<think>',
+        '</think>',
+        '<confid',
+        'ence score="0.4">thin</confid',
+        'ence>\nChecking',
+      ]);
+
+      expect(deltas).toBe('Checking');
+      expect(logOf(agent)).toEqual([{ confidence: 0.4, source: 'llm_self_report', reason: 'thin' }]);
+      expect(steps.find(s => s.type === 'thought')?.content).toBe('Checking');
+    });
+
+    it('emits no thought at all when the turn is only an empty think block and a tag', async () => {
+      const { deltas, agent, steps } = await deltasOf(['<think></think><confidence score="0.4">thin</confidence>']);
+
+      expect(deltas).toBe('');
+      expect(steps.some(s => s.type === 'thought')).toBe(false);
+      expect(logOf(agent)).toEqual([{ confidence: 0.4, source: 'llm_self_report', reason: 'thin' }]);
+    });
+
+    it('emits no placeholder thought when the model sends the empty block but no tag', async () => {
+      const { deltas, agent, steps } = await deltasOf(['<think></think>']);
+
+      expect(deltas).toBe('');
+      expect(steps.some(s => s.type === 'thought')).toBe(false);
+      expect(logOf(agent)).toEqual([{ confidence: 0.7, source: 'default', reason: undefined }]);
+    });
+
     it('leaves the stream untouched when the flag is off', async () => {
       const { deltas } = await deltasOf(['<confid', 'ence score="0.4">thin</confidence>Checking'], {});
 
