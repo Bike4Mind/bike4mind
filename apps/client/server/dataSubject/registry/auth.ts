@@ -85,14 +85,6 @@ export const authHolders = {
   DisposableDomainSource: { kind: 'noUserData', note: 'Sync status of the disposable-domain feeds.' },
   DomainIntelligence: { kind: 'noUserData', note: 'Cached DNS/MX lookups keyed by email domain, not by person.' },
   // The claim is what stops one GitHub account unlocking credits twice; deleting it would re-open that.
-  GithubUnlockClaim: {
-    kind: 'holder',
-    references: [
-      // The claim stays keyed by `githubId`, which is what blocks a repeat unlock; the link back to
-      // the person is not needed for that.
-      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
-    ],
-  },
   IdentityProvider: {
     kind: 'holder',
     references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
@@ -135,6 +127,11 @@ export const authHolders = {
     kind: 'holder',
     references: [{ path: 'email', matchBy: 'email', action: 'deleteDocument' }],
     secretPaths: ['nonce', 'codes.nonce', 'codes.otcHash', 'debugCode'],
+  },
+  PushToken: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    secretPaths: ['token', 'sid'],
   },
   // A chat message: it follows its notebook. The flagged paths are the notebook owner or free-text attribution.
   Quest: {
