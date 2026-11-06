@@ -21,7 +21,7 @@ const handler = nextRouteForContract(listArtifactTypesContract, {
   exemptReadsFromDailyRateLimit: true,
   rateLimit: perUserRateLimit('GET /api/v1/artifacts/types'),
 }).get(async (_req, res) => {
-  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.setHeader('Cache-Control', 'private, no-store');
   return res.json({ types: TYPES, categories: [...ARTIFACT_CATEGORIES] });
 });
 
