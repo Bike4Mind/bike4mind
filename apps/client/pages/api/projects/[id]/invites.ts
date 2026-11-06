@@ -138,7 +138,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
         );
       }
 
-      // Token, not `_id` - see generateInviteLink in pages/api/[type]/[id]/invites/index.ts for why.
+      // Token, not `_id` - see generateInviteLink in server/managers/createDocumentInvite.ts for why.
       const generateInviteLink = (invite: { id: string; token?: string }) => {
         return `${process.env.APP_URL}/share/${invite.token ?? invite.id}`;
       };

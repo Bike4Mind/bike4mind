@@ -22,6 +22,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'DELETE /api/sessions',
     'GET|PUT|DELETE /api/sessions/:id',
     'PATCH /api/sessions/:id/surface',
+    'POST /api/sessions/bulk',
     'GET|POST /api/v1/artifacts',
     'GET|PATCH|DELETE /api/v1/artifacts/:id',
     'GET /api/v1/artifacts/:id/versions',

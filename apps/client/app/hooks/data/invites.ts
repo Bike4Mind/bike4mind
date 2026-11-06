@@ -17,8 +17,9 @@ import {
 } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
-import { InviteType } from '@bike4mind/common';
+import { InviteType, MAX_BULK_ITEMS } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
+import { getServerErrorField } from '@client/app/utils/error';
 
 function invalidateOrganizationInviteeSearch(queryClient: QueryClient, organizationId?: string) {
   return queryClient.invalidateQueries({
@@ -110,6 +111,30 @@ export function useShareDocument({
   });
 }
 
+export type BatchShareResponse = {
+  results: { id: string; ok: boolean; link?: string; error?: string; rateLimited?: boolean }[];
+  okCount: number;
+  rateLimitMessage?: string;
+};
+
+/** One POST /api/invites/batch for up to MAX_BULK_ITEMS files or notebooks; the caller chunks. */
+export function useBatchShare() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (data: {
+      type: InviteType.FabFile | InviteType.Session;
+      ids: string[];
+      recipients: string[];
+      description?: string;
+      permissions: string[];
+    }) => (await api.post<BatchShareResponse>('/api/invites/batch', data)).data,
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['invites/share'] });
+    },
+  });
+}
+
 export function useAcceptDocument({
   onSuccess,
   onSettled,
@@ -184,6 +209,71 @@ export function useRefuseDocument({
       toast.error('Failed to refuse shared document');
     },
     onSettled: () => onSettled(),
+  });
+}
+
+type BulkInviteResponse = {
+  results: { id: string; ok: boolean; type?: InviteType; invite?: { documentId?: string }; error?: string }[];
+  okCount: number;
+};
+
+/** Accepts or refuses several invites with one POST /api/invites/bulk per MAX_BULK_ITEMS ids. */
+export function useRespondToInvites({ onSettled }: { onSettled?: () => void } = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ action, ids }: { action: 'accept' | 'refuse'; ids: string[] }) => {
+      let okCount = 0;
+      const organizationIds = new Set<string>();
+      let failureMessage: string | undefined;
+      for (let i = 0; i < ids.length; i += MAX_BULK_ITEMS) {
+        try {
+          const { data } = await api.post<BulkInviteResponse>('/api/invites/bulk', {
+            action,
+            ids: ids.slice(i, i + MAX_BULK_ITEMS),
+          });
+          okCount += data.okCount;
+          for (const result of data.results) {
+            if (result.ok && result.type === InviteType.Organization && result.invite?.documentId) {
+              organizationIds.add(result.invite.documentId);
+            }
+          }
+          failureMessage ??= data.results.find(result => !result.ok)?.error;
+        } catch (error) {
+          // Earlier chunks are committed server-side, so report them as a partial result.
+          if (okCount === 0) throw error;
+          failureMessage = getServerErrorField(error) ?? `Failed to ${action} the remaining shared documents`;
+          break;
+        }
+      }
+      return { action, okCount, total: ids.length, failureMessage, organizationIds: [...organizationIds] };
+    },
+    onSuccess: ({ action, okCount, total, failureMessage, organizationIds }) => {
+      if (okCount > 0) {
+        queryClient.invalidateQueries({ queryKey: [action === 'accept' ? 'invites/accept' : 'invites/refuse'] });
+        if (action === 'refuse') invalidateOrganizationInviteeSearch(queryClient);
+        for (const organizationId of organizationIds) {
+          invalidateOrganizationInviteeSearch(queryClient, organizationId);
+          queryClient.invalidateQueries({ queryKey: ['organizations', organizationId] });
+          queryClient.invalidateQueries({ queryKey: ['users', 'organization', organizationId] });
+        }
+      }
+      const verb = action === 'accept' ? 'accepted' : 'refused';
+      if (okCount === total) toast.success(`${total} document shares ${verb}`);
+      else if (okCount > 0) toast.warning(`${okCount} of ${total} document shares ${verb}`);
+      else toast.error(failureMessage ?? `Failed to ${action} the shared documents`);
+      if (okCount > 0 && okCount < total && failureMessage) toast.error(failureMessage);
+    },
+    onError: (error, { action }) => {
+      console.error(error);
+      let message = `Failed to ${action} the shared documents`;
+      if (isAxiosError(error)) message = error.response?.data?.error || error.response?.data?.message || message;
+      toast.error(message);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['invites', 'inbox'] });
+      onSettled?.();
+    },
   });
 }
 
