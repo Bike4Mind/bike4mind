@@ -14,13 +14,14 @@ type AnalyticsSectionProps = {
   empty: boolean;
   onShowDefaultRange?: () => void;
   chart: ReactNode;
-  table: ReactNode;
+  /** The chart's data as a table; without it there is no "View as table" toggle (the body is a table already). */
+  table?: ReactNode;
   /** Below the chart or table, e.g. the signal rows. */
   footer?: ReactNode;
   testId: string;
 };
 
-/** A SectionCard holding one chart, with its own loading, error, empty and table states (spec 4.9, 4.11). */
+/** A SectionCard holding one chart (or one table), with its own loading, error, empty and table states (spec 4.9, 4.11). */
 export function AnalyticsSection({
   title,
   caption,
@@ -59,7 +60,7 @@ export function AnalyticsSection({
       />
     );
   } else {
-    body = asTable ? table : chart;
+    body = asTable && table ? table : chart;
   }
 
   return (
@@ -70,7 +71,7 @@ export function AnalyticsSection({
       action={
         <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
           {action}
-          {ready && (
+          {ready && table && (
             <Button
               size="sm"
               variant="plain"

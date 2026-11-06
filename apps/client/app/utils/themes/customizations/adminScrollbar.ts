@@ -18,5 +18,14 @@ export const adminScrollbar = {
   '&:is(:hover, :focus-within)::-webkit-scrollbar-thumb': { backgroundColor: thumb },
 } as const;
 
+/**
+ * Keeps the thumb shown without hover, for a short scroll area whose overflow is easy to miss. `&&`
+ * outranks the global hidden-thumb rule in adminSkin.ts.
+ */
+export const adminScrollbarVisible = {
+  '@supports not selector(::-webkit-scrollbar)': { '&&': { scrollbarColor: `${thumb} transparent` } },
+  '&&::-webkit-scrollbar-thumb': { backgroundColor: thumb },
+} as const;
+
 /** Reserves the scrollbar gutter, so content does not shift when the area starts to overflow. */
 export const adminScrollGutter = { scrollbarGutter: 'stable' } as const;
