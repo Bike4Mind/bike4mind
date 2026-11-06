@@ -17,6 +17,7 @@ import {
   type UsersBulkLogger,
   type UsersBulkStore,
 } from './ports';
+import type { BulkUser } from './resolve';
 
 export type UndoDeps = {
   db: UsersBulkDb;
@@ -43,8 +44,11 @@ const parseRecord = (value: unknown): UndoRecord => {
   return parsed.data;
 };
 
+/** What reverting one user needs: the batch-level seams (domains, budget) are not used. */
+export type RevertDeps = Pick<UndoDeps, 'db' | 'store' | 'withTransaction' | 'audit'>;
+
 /** Reverts one user's snapshot inside its transaction and writes the strict `user.bulk.undone` entry. */
-async function revertUser(snapshot: UserUndoSnapshot, record: UndoRecord, deps: UndoDeps): Promise<void> {
+async function revertUser(snapshot: UserUndoSnapshot, record: UndoRecord, deps: RevertDeps): Promise<void> {
   const { db, store } = deps;
   const { userId } = snapshot;
   // A newer batch that changed this user owns it: reverting ours would also revert part of theirs.
@@ -168,6 +172,27 @@ export async function undoAdminUsersBulk(
       .filter(user => !failedUserIds.has(user.userId))
       .flatMap(user => user.canceledSubscriptions ?? []),
   };
+}
+
+/**
+ * Reverts one user's snapshot outside any batch, for a system action that keeps its own durable undo
+ * record (`record.adminId` is the admin undoing it). `assertRevertable` sees the user inside the
+ * transaction before anything is written and throws to refuse. `onReverted` runs in the same
+ * transaction, so that record is marked undone with the revert or not at all. Throws when the revert fails.
+ */
+export async function revertUserSnapshot(
+  snapshot: UserUndoSnapshot,
+  record: UndoRecord,
+  deps: RevertDeps,
+  hooks: { assertRevertable: (user: BulkUser) => Promise<void> | void; onReverted: () => Promise<void> }
+): Promise<void> {
+  await deps.withTransaction(async () => {
+    const user = await deps.db.findUser(snapshot.userId);
+    if (!user) throw new Error('User not found');
+    await hooks.assertRevertable(user);
+    await revertUser(snapshot, record, deps);
+    await hooks.onReverted();
+  });
 }
 
 async function revertWithin(
