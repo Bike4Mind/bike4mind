@@ -163,6 +163,8 @@ describe('ModelPane', () => {
     expect(byTestId('model-pane-error')?.textContent).toBe('Line 7: width is not defined');
     expect(byTestId('model-pane-viewport')?.dataset.dimmed).toBe('true');
     expect(byTestId('model-pane-export-btn')?.hasAttribute('disabled')).toBe(false);
+    // A clip of the dimmed stale model would pass for the broken one.
+    expect(byTestId('model-pane-record-btn')?.hasAttribute('disabled')).toBe(true);
   });
 
   it('says which params could not be written back', () => {

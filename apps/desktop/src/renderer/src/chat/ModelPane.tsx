@@ -221,6 +221,8 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
   const name = state.path ? (state.path.split(/[\\/]/).pop() ?? state.path) : null;
   const paramEntries = Object.entries(params);
   const canExport = !!object && status !== 'building';
+  // A failed build leaves the last good model on show, dimmed; a clip of it would pass for the current one.
+  const canRecord = canExport && status !== 'error';
   const savedNote = (saved: string | null): Note =>
     saved ? { kind: 'success', text: `Saved ${saved.split(/[\\/]/).pop()}` } : null;
 
@@ -714,7 +716,13 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
           Open
         </Button>
         <Box sx={{ flex: 1 }} />
-        <Tooltip title={`Save an ${TURNTABLE_SECONDS} s turntable video`} size="sm" variant="solid">
+        <Tooltip
+          title={
+            status === 'error' ? 'Fix the build error to record' : `Save an ${TURNTABLE_SECONDS} s turntable video`
+          }
+          size="sm"
+          variant="solid"
+        >
           <Button
             size="sm"
             variant="outlined"
@@ -724,7 +732,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
                 <RecordIcon />
               </Box>
             }
-            disabled={!canExport || recording}
+            disabled={!canRecord || recording}
             aria-busy={recording}
             onClick={() => void runRecord()}
             sx={{ fontVariantNumeric: 'tabular-nums' }}
