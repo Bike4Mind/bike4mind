@@ -24,7 +24,13 @@ vi.mock('./executor', () => ({
 
 import type { Logger } from '@bike4mind/observability';
 import { getSettingsMap } from '@bike4mind/utils';
-import { checkDeviceLink, liveDeviceLinkDeps, sweepDeviceLinks, type DeviceLinkDeps } from './deviceLink';
+import {
+  checkDeviceLink,
+  DeviceLinkAssessError,
+  liveDeviceLinkDeps,
+  sweepDeviceLinks,
+  type DeviceLinkDeps,
+} from './deviceLink';
 import { loadAutoContainmentConfig } from './executor';
 import { evaluateDeviceLinks } from './deviceLinkEvaluation';
 
@@ -196,24 +202,28 @@ describe('sweepDeviceLinks', () => {
       linked: 2,
       recorded: 1,
       alreadyRecorded: 0,
+      assessFailed: 0,
       failed: 1,
     });
     expect(onError).toHaveBeenCalledWith('second-user', expect.any(Error));
   });
 
-  it('counts an assessment failure as failed and still processes later accounts', async () => {
+  it('counts an assessment failure separately from a record failure and still processes later accounts', async () => {
     const assessAndContain = vi
       .fn()
       .mockRejectedValueOnce(new Error('model down'))
       .mockResolvedValue({ assessed: true, containment: null });
     const deps = makeDeps({ assessAndContain });
 
+    const onError = vi.fn();
     const report = await sweepDeviceLinks({
       ...deps,
+      onError,
       loadRecent: vi.fn(async () => ({ rows: [newcomer, row('second-user')], truncated: false })),
     });
 
-    expect(report).toMatchObject({ linked: 2, recorded: 1, failed: 1 });
+    expect(report).toMatchObject({ linked: 2, recorded: 1, assessFailed: 1, failed: 0 });
+    expect(onError).toHaveBeenCalledWith('new-user', expect.any(DeviceLinkAssessError));
     expect(deps.recordDetection).toHaveBeenCalledTimes(2);
     expect(deps.releaseClaim).not.toHaveBeenCalled();
   });

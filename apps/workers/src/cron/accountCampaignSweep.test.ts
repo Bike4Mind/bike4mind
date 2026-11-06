@@ -31,6 +31,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 vi.mock('@server/security/autoContainment/deviceLink', () => ({
   sweepDeviceLinks,
   liveDeviceLinkDeps: () => ({}),
+  DeviceLinkAssessError: class DeviceLinkAssessError extends Error {},
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://%STAGE%' } }));
 
@@ -72,7 +73,7 @@ beforeEach(() => {
   findSignupFingerprintClusters.mockResolvedValue([]);
   recordCampaignGroup.mockResolvedValue('created');
   getSettingsMap.mockResolvedValue({});
-  sweepDeviceLinks.mockResolvedValue({ status: 'done', failed: 0 });
+  sweepDeviceLinks.mockResolvedValue({ status: 'done', failed: 0, assessFailed: 0 });
 });
 
 describe('toCampaignAccount', () => {
@@ -151,6 +152,12 @@ describe('handler', () => {
     sweepDeviceLinks.mockResolvedValue({ status: 'done', failed: 2 });
 
     await expect(handler({}, context)).rejects.toThrow('Device-link sweep failed to record 2 account(s)');
+  });
+
+  it('fails the invocation when a device-link detection was recorded but failed to assess', async () => {
+    sweepDeviceLinks.mockResolvedValue({ status: 'done', failed: 0, assessFailed: 3 });
+
+    await expect(handler({}, context)).rejects.toThrow('Device-link sweep recorded but failed to assess 3 account(s)');
   });
 
   it('fails the invocation when the device-link pass cannot read, after campaign groups are recorded', async () => {
