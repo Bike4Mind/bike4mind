@@ -8,15 +8,17 @@ import {
   evaluateDeviceLinks,
   liveDeviceLinkReaders,
 } from '@server/security/autoContainment/deviceLinkEvaluation';
+import { loadAutoContainmentConfig } from '@server/security/autoContainment/executor';
 import type { AbuseAssessmentGroupEvidenceSource } from './abuseAssessment';
 
 /**
  * Group evidence for an abuse assessment from what the detection's accounts signed up and paid with:
  * the accounts sharing their signup IP or card (and whether any is already blocked), an OAuth signup
  * that landed on another account's notebook, banned accounts used from the same uncommon device
- * (the ban-evasion device rule, autoContainment/deviceLinkEvaluation.ts, at its default policy), the
- * turn that settled furthest above its credit hold, and how and from what network they signed up. Counts and flags only; members are referenced by
- * the assessment's own refs, so no id, IP or email reaches the provider.
+ * (the ban-evasion device rule, autoContainment/deviceLinkEvaluation.ts, at the configured policy), the
+ * turn that settled furthest above its credit hold, and how and from what network they signed up.
+ * Counts and flags only; members are referenced by the assessment's own refs, so no id, IP or email
+ * reaches the provider.
  */
 
 export const LINKED_ACCOUNT_EVIDENCE_SOURCE = 'linkedAccounts';
@@ -48,9 +50,14 @@ const liveDeps: LinkedAccountEvidenceDeps = {
   },
   largestSettlementOverHold: (ids, since) => usageEventRepository.largestSettlementOverHold(ids, since),
   bannedDeviceLinks: async ids => {
+    const config = await loadAutoContainmentConfig();
+    // A zero window means the rule is off; evidence is still useful at the default window.
     const results = await evaluateDeviceLinks(
       await loadDeviceLinkAccounts(ids),
-      DEFAULT_DEVICE_LINK_CONFIG,
+      {
+        windowHours: config.deviceLinkWindowHours || DEFAULT_DEVICE_LINK_CONFIG.windowHours,
+        commonNetworks: config.deviceLinkCommonNetworks,
+      },
       liveDeviceLinkReaders
     );
     return new Map([...results].map(([id, result]) => [id, result.linked ? result.matches : []]));
