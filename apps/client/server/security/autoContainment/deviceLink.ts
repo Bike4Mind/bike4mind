@@ -41,6 +41,7 @@ export type DeviceLinkResult =
         | 'disabled'
         | 'not_found'
         | 'already_recorded'
+        | 'already_banned'
         | Extract<userService.BanEvasionResult, { linked: false }>['reason'];
     }
   | { status: 'recorded'; detectionId: string; assessed: boolean; contained: boolean };
@@ -165,6 +166,7 @@ export async function checkDeviceLink(userId: string, deps: DeviceLinkDeps): Pro
   if (!config) return { status: 'skipped', reason: 'disabled' };
   const rows = await deps.loadAccounts([userId]);
   if (rows.length === 0) return { status: 'skipped', reason: 'not_found' };
+  if (rows.some(row => row.isBanned)) return { status: 'skipped', reason: 'already_banned' };
   const result = (await evaluateDeviceLinks(rows, config, deps)).get(userId);
   if (!result) return { status: 'skipped', reason: 'no_device' };
   if (!result.linked) return { status: 'skipped', reason: result.reason };
@@ -213,7 +215,11 @@ export async function sweepDeviceLinks(
   });
   report.scanned = recent.rows.length;
   report.scanTruncated = recent.truncated;
-  const results = await evaluateDeviceLinks(recent.rows, config, deps);
+  const results = await evaluateDeviceLinks(
+    recent.rows.filter(row => !row.isBanned),
+    config,
+    deps
+  );
   for (const [userId, result] of results) {
     if (!result.linked) continue;
     report.linked += 1;
