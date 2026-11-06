@@ -3,7 +3,9 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { AnalyticsDaily, AnalyticsUserDay, UsageEvent, User, UserApiKey } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { rollupDay, runNightlyRollup } from './analyticsRollup';
+import { classifyRealSignups, signupVerdictUserIds } from './realSignup';
+import { reevaluateRecentSignups, rollupDay, runNightlyRollup } from './analyticsRollup';
+import { getAnalyticsOverview, loadLiveDay } from './analyticsOverview';
 import { UNCLASSIFIED_SOURCE } from '@bike4mind/common';
 import { TIMESERIES_SCAN_LIMIT } from '../users/signupTimeseries';
 
@@ -173,6 +175,73 @@ describe('rollupDay', () => {
     expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({ dau: 0, wau: 0, mau: 0 });
   });
 
+  it('counts only first-party internal activity while retaining API requests in the surface breakdown', async () => {
+    await seedEvent(users.admin, `${DAY}T10:00:00Z`, { source: 'api' });
+    await seedEvent(users.system, `${DAY}T10:00:00Z`, { source: 'system' });
+    const allAccounts = () =>
+      getAnalyticsOverview(
+        { range: 'custom', from: DAY, to: DAY, compare: 'off', signups: 'all', accounts: 'all' },
+        NOW
+      );
+
+    const inactive = { dau: 0, wau: 0, mau: 0, allWau: 0, allMau: 0, requestsBySource: { api: 1 } };
+    expect((await loadLiveDay(DAY, NOW)).internal).toMatchObject(inactive);
+    await rollupDay(DAY, { now: NOW });
+    expect((await AnalyticsDaily.findOne({ day: DAY }).lean())?.internal).toMatchObject({
+      ...inactive,
+      userIds: [],
+    });
+    expect((await allAccounts()).activeUsers.days[0]).toMatchObject({ dau: 0, wau: 0, mau: 0 });
+
+    await seedEvent(users.staff, `${DAY}T11:00:00Z`, { source: 'web' });
+    await seedEvent(users.staff, `${DAY}T12:00:00Z`, { source: 'api' });
+    await seedEvent(users.synthetic, `${DAY}T11:00:00Z`, { source: undefined });
+    const active = {
+      dau: 2,
+      wau: 2,
+      mau: 2,
+      allWau: 2,
+      allMau: 2,
+      requestsBySource: { web: 1, api: 2, [UNCLASSIFIED_SOURCE]: 1 },
+    };
+    expect((await loadLiveDay(DAY, NOW)).internal).toMatchObject(active);
+    await rollupDay(DAY, { now: NOW });
+    expect((await AnalyticsDaily.findOne({ day: DAY }).lean())?.internal).toMatchObject({
+      ...active,
+      userIds: [users.staff, users.synthetic].map(String).sort(),
+    });
+    expect((await allAccounts()).activeUsers.days[0]).toMatchObject({ dau: 2, wau: 2, mau: 2 });
+  });
+
+  it('excludes banned and AI-held internal accounts from live, rolled-up and all-account activity', async () => {
+    const holds = [
+      { isBanned: true },
+      { isModerated: true },
+      { riskScore: { reviewState: 'pending' } },
+      { deletion: { scheduledFor: new Date('2026-06-10T09:00:00Z') } },
+    ];
+    for (const hold of holds) {
+      const id = oid();
+      await seedUser(id, { isAdmin: true, ...hold });
+      await seedEvent(id, `${DAY}T10:00:00Z`);
+      await seedEvent(id, `${DAY}T11:00:00Z`, { source: 'api' });
+    }
+    const internal = { dau: 0, wau: 0, mau: 0, allWau: 0, allMau: 0, requestsBySource: {} };
+    expect((await loadLiveDay(DAY, NOW)).internal).toEqual({ ...internal, windowComplete: true });
+
+    await rollupDay(DAY, { now: NOW });
+    expect((await AnalyticsDaily.findOne({ day: DAY }).lean())?.internal).toEqual({
+      ...internal,
+      windowComplete: true,
+      userIds: [],
+    });
+    const all = await getAnalyticsOverview(
+      { range: 'custom', from: DAY, to: DAY, compare: 'off', signups: 'all', accounts: 'all' },
+      NOW
+    );
+    expect(all.activeUsers.days[0]).toMatchObject({ dau: 0, wau: 0, mau: 0 });
+  });
+
   it('counts a user whose flags changed inside the window once in the all-accounts WAU and MAU', async () => {
     await seedEvent(users.b, '2026-05-30T10:00:00Z');
     await rollupDay('2026-05-30', { now: NOW });
@@ -211,6 +280,95 @@ describe('rollupDay', () => {
     await seedEvent(users.admin, '2026-05-30T10:00:00Z');
     await rollupDay('2026-05-30', { now: NOW });
     expect((await AnalyticsDaily.findOne({ day: DAY }).lean())?.internal).toBeUndefined();
+  });
+
+  it('DAU counts first-party requests only; API users get their own series; system-only users get no row', async () => {
+    const [web, cli, desktop, agent, apiOnly, systemOnly, mixed] = Array.from({ length: 7 }, oid);
+    for (const id of [web, cli, desktop, agent, apiOnly, systemOnly, mixed]) await seedUser(id);
+    await seedEvent(web, `${DAY}T10:00:00Z`, { source: 'web' });
+    await seedEvent(cli, `${DAY}T10:00:00Z`, { source: 'cli' });
+    await seedEvent(desktop, `${DAY}T10:00:00Z`, { source: 'desktop' });
+    await seedEvent(agent, `${DAY}T10:00:00Z`, { source: 'agent' });
+    await seedEvent(apiOnly, `${DAY}T10:00:00Z`, { source: 'api' });
+    await seedEvent(systemOnly, `${DAY}T10:00:00Z`, { source: 'system' });
+    await seedEvent(mixed, `${DAY}T10:00:00Z`, { source: 'api' });
+    await seedEvent(mixed, `${DAY}T11:00:00Z`, { source: 'web' });
+
+    await rollupDay(DAY, { now: NOW });
+
+    expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({ dau: 5, api: { dau: 2 } });
+    const rows = await AnalyticsUserDay.find({ day: DAY }).lean();
+    expect(rows.map(r => r.userId)).not.toContain(String(systemOnly));
+    expect(rows.find(r => r.userId === String(apiOnly))?.active).toBe(false);
+    expect(rows.find(r => r.userId === String(mixed))?.active).toBe(true);
+  });
+
+  it('removes internal, banned and AI-held accounts from DAU, the API series and the user-day rows', async () => {
+    const cases: Record<string, Record<string, unknown>> = {
+      developer: { tags: ['Developer'] },
+      persona: { username: 'persona-checkout' },
+      banned: { isBanned: true },
+      moderated: { isModerated: true },
+      reviewPending: { riskScore: { reviewState: 'pending' } },
+    };
+    const ids = Object.fromEntries(Object.keys(cases).map(key => [key, oid()]));
+    for (const [key, extra] of Object.entries(cases)) {
+      await seedUser(ids[key], extra);
+      await seedEvent(ids[key], `${DAY}T10:00:00Z`, { source: 'web' });
+      await seedEvent(ids[key], `${DAY}T11:00:00Z`, { source: 'api' });
+    }
+    await seedEvent(users.a, `${DAY}T10:00:00Z`);
+
+    await rollupDay(DAY, { now: NOW });
+
+    expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({ dau: 1, api: { dau: 0 } });
+    expect((await AnalyticsUserDay.find({ day: DAY }).lean()).map(r => r.userId)).toEqual([String(users.a)]);
+  });
+
+  it('excludes accounts scheduled for deletion from live and rolled-up activity and real signups', async () => {
+    const held = oid();
+    const createdAt = new Date(`${DAY}T09:00:00Z`);
+    await seedUser(held, {
+      createdAt,
+      emailVerified: true,
+      deletion: { scheduledFor: new Date('2026-06-10T09:00:00Z') },
+    });
+    await seedEvent(held, `${DAY}T10:00:00Z`);
+    await seedEvent(held, `${DAY}T11:00:00Z`, { source: 'api' });
+    await seedEvent(users.a, `${DAY}T10:00:00Z`);
+
+    const live = await loadLiveDay(DAY, NOW);
+    expect(live).toMatchObject({ dau: 1, api: { dau: 0 }, signups: { legit: 0, suspected: 1 } });
+
+    await rollupDay(DAY, { now: NOW });
+    expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({
+      dau: 1,
+      api: { dau: 0 },
+      signups: { legit: 0, suspected: 1 },
+    });
+    expect(await AnalyticsUserDay.exists({ userId: String(held) })).toBeNull();
+    const window = { start: new Date(`${DAY}T00:00:00Z`), end: new Date('2026-06-02T00:00:00Z') };
+    expect(await signupVerdictUserIds({ ...window, verdict: 'legit' }, { deadlineMs: 30_000 })).toEqual([]);
+    expect(await signupVerdictUserIds({ ...window, verdict: 'suspected' }, { deadlineMs: 30_000 })).toEqual([
+      String(held),
+    ]);
+  });
+
+  it('WAU and MAU count active days only; API users are in api.wau and api.mau', async () => {
+    const [mixedDays, apiOnly, webOnly1, webOnly2] = [oid(), oid(), oid(), oid()];
+    for (const id of [mixedDays, apiOnly, webOnly1, webOnly2]) await seedUser(id);
+    await seedEvent(webOnly1, '2026-05-31T10:00:00Z', { source: 'web' });
+    await seedEvent(webOnly2, '2026-05-31T10:00:00Z', { source: 'web' });
+    await seedEvent(mixedDays, '2026-05-31T10:00:00Z', { source: 'api' });
+    await seedEvent(mixedDays, `${DAY}T10:00:00Z`, { source: 'web' });
+    await seedEvent(apiOnly, '2026-05-31T10:00:00Z', { source: 'api' });
+    for (const d of ['2026-05-31', DAY]) await rollupDay(d, { now: NOW });
+    expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({
+      dau: 1,
+      wau: 3,
+      mau: 3,
+      api: { dau: 0, wau: 2, mau: 2 },
+    });
   });
 
   it('writes a zero row for an empty day', async () => {
@@ -257,10 +415,22 @@ describe('rollupDay', () => {
   it('refreshes WAU/MAU of later days when an earlier day lands afterwards', async () => {
     await seedEvent(users.a, `${DAY}T10:00:00Z`);
     await seedEvent(users.b, '2026-05-30T10:00:00Z');
+    const apiUser = oid();
+    await seedUser(apiUser);
+    await seedEvent(apiUser, '2026-05-30T10:00:00Z', { source: 'api' });
     await rollupDay(DAY, { now: NOW });
-    expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({ wau: 1, mau: 1 });
+    expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({
+      wau: 1,
+      mau: 1,
+      api: { wau: 0, mau: 0 },
+    });
     await rollupDay('2026-05-30', { now: NOW });
-    expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({ dau: 1, wau: 2, mau: 2 });
+    expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({
+      dau: 1,
+      wau: 2,
+      mau: 2,
+      api: { wau: 1, mau: 1 },
+    });
     await AnalyticsUserDay.deleteMany({});
     await seedEvent(users.c, '2026-05-31T10:00:00Z');
     await rollupDay('2026-05-31', { now: NOW });
@@ -301,15 +471,81 @@ describe('rollupDay', () => {
     expect(daily?.signups.bySignal.signupSpike).toBe(12);
   });
 
-  it('counts accounts that signed up on the day and never calls an unevaluable one legit', async () => {
-    const fresh = oid();
-    await seedUser(fresh, { createdAt: new Date(`${DAY}T09:00:00Z`) });
-    await seedEvent(fresh, `${DAY}T10:00:00Z`);
+  it('splits the day signups into real and suspected with nothing unclassified', async () => {
+    const real = oid();
+    const unverified = oid();
+    const idle = oid();
+    const at = new Date(`${DAY}T09:00:00Z`);
+    await seedUser(real, { createdAt: at, emailVerified: true });
+    await seedUser(unverified, { createdAt: at });
+    await seedUser(idle, { createdAt: at, emailVerified: true });
+    await seedEvent(real, `${DAY}T10:00:00Z`);
+    await seedEvent(unverified, `${DAY}T10:00:00Z`);
     await rollupDay(DAY, { now: new Date(`${DAY}T12:00:00Z`) });
     const daily = await AnalyticsDaily.findOne({ day: DAY }).lean();
-    expect(daily?.signups.legit).toBe(0);
-    expect(daily?.signups.unclassified).toBe(1);
-    expect(await AnalyticsUserDay.findOne({ userId: String(fresh) }).lean()).toMatchObject({ signupDay: DAY });
+    expect(daily?.signups).toMatchObject({ legit: 1, suspected: 2, unclassified: 0 });
+    expect(await AnalyticsUserDay.findOne({ userId: String(real) }).lean()).toMatchObject({
+      signupDay: DAY,
+      suspected: false,
+    });
+    expect(await AnalyticsUserDay.findOne({ userId: String(unverified) }).lean()).toMatchObject({ suspected: true });
+  });
+
+  it('only counts a request that is successful, non-system and inside 7 days, and the drill-down agrees with the bars', async () => {
+    const at = new Date(`${DAY}T00:00:00Z`);
+    const ids = { real: oid(), system: oid(), failed: oid(), late: oid(), unverified: oid(), banned: oid() };
+    for (const [key, id] of Object.entries(ids)) {
+      await seedUser(id, {
+        createdAt: at,
+        emailVerified: key !== 'unverified',
+        ...(key === 'banned' ? { isBanned: true } : {}),
+      });
+    }
+    await seedEvent(ids.real, '2026-06-07T23:59:00Z');
+    await seedEvent(ids.system, `${DAY}T10:00:00Z`, { source: 'system' });
+    await seedEvent(ids.failed, `${DAY}T10:00:00Z`, { status: 'error' });
+    await seedEvent(ids.late, '2026-06-08T00:00:00Z');
+    await seedEvent(ids.unverified, `${DAY}T10:00:00Z`);
+    await seedEvent(ids.banned, `${DAY}T10:00:00Z`);
+
+    await rollupDay(DAY, { now: NOW });
+
+    const window = { start: at, end: new Date('2026-06-02T00:00:00Z') };
+    const real = await signupVerdictUserIds({ ...window, verdict: 'legit' }, { deadlineMs: 30_000 });
+    const suspected = await signupVerdictUserIds({ ...window, verdict: 'suspected' }, { deadlineMs: 30_000 });
+    expect(real).toEqual([String(ids.real)]);
+    expect(suspected.sort()).toEqual([ids.system, ids.failed, ids.late, ids.unverified, ids.banned].map(String).sort());
+    expect((await AnalyticsDaily.findOne({ day: DAY }).lean())?.signups).toMatchObject({ legit: 1, suspected: 5 });
+  });
+
+  it('refuses a window holding more accounts than maxUsers, counting every account it scans', async () => {
+    const window = [new Date('2026-01-01T00:00:00Z'), new Date('2026-01-02T00:00:00Z')] as const;
+    await expect(classifyRealSignups(...window, { deadlineMs: 30_000, maxUsers: 2 })).rejects.toThrow(
+      'More than 2 signups in this window'
+    );
+    await expect(classifyRealSignups(...window, { deadlineMs: 30_000, maxUsers: 100 })).resolves.toBeDefined();
+  });
+
+  it('a request after the signup day flips a suspected signup to real on re-evaluation', async () => {
+    const late = oid();
+    await seedUser(late, { createdAt: new Date(`${DAY}T09:00:00Z`), emailVerified: true });
+    await seedEvent(late, `${DAY}T10:00:00Z`, { status: 'error' });
+    await seedEvent(users.a, `${DAY}T10:00:00Z`);
+    await rollupDay(DAY, { now: NOW });
+    expect((await AnalyticsDaily.findOne({ day: DAY }).lean())?.signups).toMatchObject({ legit: 0, suspected: 1 });
+
+    await seedEvent(late, '2026-06-04T10:00:00Z');
+    await seedEvent(late, '2026-06-04T11:00:00Z', { source: 'system' });
+    await rollupDay('2026-06-04', { now: NOW });
+    expect(await AnalyticsUserDay.findOne({ userId: String(late), day: '2026-06-04' }).lean()).toMatchObject({
+      suspected: false,
+    });
+    await reevaluateRecentSignups('2026-06-04', { now: NOW });
+    expect((await AnalyticsDaily.findOne({ day: DAY }).lean())?.signups).toMatchObject({
+      legit: 1,
+      suspected: 0,
+      unclassified: 0,
+    });
   });
 
   it('rejects a malformed day', async () => {
@@ -336,9 +572,32 @@ describe('rollupDay', () => {
     const row = await AnalyticsUserDay.findOne({ userId: String(users.a) }).lean();
     expect(row).toMatchObject({ requests: 6, creditsCharged: 18, orgId: 'globex' });
     expect(row?.orgs).toEqual([
-      { orgId: 'globex', requests: 2, creditsCharged: 10 },
-      { orgId: 'acme', requests: 1, creditsCharged: 2 },
+      { orgId: 'globex', requests: 2, creditsCharged: 10, active: true },
+      { orgId: 'acme', requests: 1, creditsCharged: 2, active: true },
     ]);
+  });
+
+  it('records activity per billed org while retaining API-only org usage', async () => {
+    const org = (ownerId: string, source: 'web' | 'api') => ({ ownerType: 'Organization', ownerId, source });
+    await seedEvent(users.a, `${DAY}T10:00:00Z`);
+    await seedEvent(users.a, `${DAY}T11:00:00Z`, org('api-only', 'api'));
+    await seedEvent(users.a, `${DAY}T12:00:00Z`, org('mixed', 'web'));
+    await seedEvent(users.a, `${DAY}T13:00:00Z`, org('mixed', 'api'));
+
+    await rollupDay(DAY, { now: NOW });
+
+    const row = await AnalyticsUserDay.findOne({ userId: String(users.a), day: DAY }).lean();
+    expect(row).toMatchObject({ active: true, requests: 4, creditsCharged: 8 });
+    expect(row?.orgs).toEqual([
+      { orgId: 'mixed', requests: 2, creditsCharged: 4, active: true },
+      { orgId: 'api-only', requests: 1, creditsCharged: 2, active: false },
+    ]);
+    expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({
+      dau: 1,
+      api: { dau: 1 },
+      requestsByFeature: { chat: 4 },
+      creditsConsumed: 8,
+    });
   });
 
   it('clears stale organization attribution when a day is recomputed with only personal usage', async () => {
@@ -353,7 +612,7 @@ describe('rollupDay', () => {
     expect(row?.orgs).toEqual([]);
   });
 
-  it('counts signups outside the scan cap as unclassified and preserves their existing verdict', async () => {
+  it('splits signups exactly even when the candidate scan truncates', async () => {
     await usersCol().updateOne({ _id: users.a }, { $set: { createdAt: new Date(`${DAY}T09:00:00Z`) } });
     await usersCol().updateMany(
       { _id: { $in: [users.admin, users.staff, users.system, users.synthetic] } },
@@ -377,14 +636,20 @@ describe('rollupDay', () => {
     await rollupDay(DAY, { now: NOW, logger: { warn } });
     expect((await AnalyticsDaily.findOne({ day: DAY }).lean())?.signups).toMatchObject({
       legit: 0,
-      suspected: 0,
-      unclassified: 1,
+      suspected: 1,
+      unclassified: 0,
     });
     expect(warn).toHaveBeenCalled();
+    expect(
+      await signupVerdictUserIds(
+        { start: new Date(`${DAY}T00:00:00Z`), end: new Date('2026-06-02T00:00:00Z'), verdict: 'suspected' },
+        { deadlineMs: 30_000 }
+      )
+    ).toEqual([String(users.a)]);
     expect(await AnalyticsUserDay.findOne({ userId: String(users.a) }).lean()).toMatchObject({ suspected: true });
   });
 
-  it('uses API activity from keys created after the signup scan window', async () => {
+  it('decides a signup from verification and activity, not from abuse signals', async () => {
     await usersCol().updateOne(
       { _id: users.a },
       {
@@ -394,12 +659,8 @@ describe('rollupDay', () => {
         },
       }
     );
-    await UserApiKey.collection.insertOne({
-      userId: String(users.a),
-      keyPrefix: String(oid()),
-      createdAt: new Date('2026-06-04T10:00:00Z'),
-      lastUsedAt: new Date('2026-06-04T11:00:00Z'),
-    });
+    await usersCol().updateOne({ _id: users.a }, { $set: { emailVerified: true } });
+    await seedEvent(users.a, '2026-06-03T10:00:00Z', { source: 'api' });
     await rollupDay(DAY, { now: NOW });
     expect((await AnalyticsDaily.findOne({ day: DAY }).lean())?.signups).toMatchObject({
       legit: 1,

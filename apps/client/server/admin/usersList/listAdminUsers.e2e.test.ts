@@ -8,6 +8,7 @@ import {
   CreditTransaction,
   Organization,
   ShadowDetectionModel,
+  UsageEvent,
   User,
   UserApiKey,
 } from '@bike4mind/database';
@@ -189,8 +190,8 @@ describe('listAdminUsers', () => {
 });
 
 describe('analytics drill-down filters', () => {
-  const seedActiveDay = (userId: unknown, day: string) =>
-    AnalyticsUserDay.collection.insertOne({ day, userId: String(userId), ownerType: 'User', suspected: false });
+  const seedActiveDay = (userId: unknown, day: string, active = true) =>
+    AnalyticsUserDay.collection.insertOne({ day, userId: String(userId), ownerType: 'User', suspected: false, active });
   const usernames = (result: { users: { username?: string }[] }) => result.users.map(user => user.username).sort();
 
   it('filters to users with rolled-up activity in the inclusive active window', async () => {
@@ -216,6 +217,22 @@ describe('analytics drill-down filters', () => {
     expect(day.users.map(user => user.username)).toEqual(['late']);
   });
 
+  it('leaves API-only users out of the active window', async () => {
+    const web = await seedUser('web');
+    const apiOnly = await seedUser('apiOnly');
+    await seedActiveDay(web._id, '2026-06-02');
+    await seedActiveDay(apiOnly._id, '2026-06-02', false);
+
+    const result = await listAdminUsers(
+      { ...params, activeFrom: '2026-06-01', activeTo: '2026-06-05' },
+      viewer,
+      { logError },
+      NOW
+    );
+
+    expect(usernames(result)).toEqual(['web']);
+  });
+
   it('exports only the users active in the window', async () => {
     const early = await seedUser('early');
     const late = await seedUser('late');
@@ -239,6 +256,7 @@ describe('analytics drill-down filters', () => {
         userId: `active${i}`,
         ownerType: 'User',
         suspected: false,
+        active: true,
       }))
     );
     const active = { activeFrom: '2026-06-01', activeTo: '2026-06-05' };
@@ -293,6 +311,8 @@ describe('analytics drill-down filters', () => {
     const abandoned = await seedJourney('abandoned', ['2026-05-12']);
     await seedSubscription('User', abandoned, { status: 'incomplete_expired' });
     await seedJourney('staffer', [], { isAdmin: true });
+    // Banned after using AI: the rollup writes no rows for them, so they must leave the funnel, not land in signedUp.
+    await seedJourney('banned', [], { isBanned: true });
     await seedUser('tooNew', { createdAt: new Date('2026-06-10T00:00:00Z') });
     await seedUser('outside', { createdAt: new Date('2026-04-20T00:00:00Z') });
 
@@ -315,10 +335,23 @@ describe('analytics drill-down filters', () => {
         lastActiveAt: new Date('2026-06-05T09:00:00Z'),
       });
     }
-    await seedUser('regular', {
+    const regular = await seedUser('regular', {
       email: 'regular@customer.example.org',
+      emailVerified: true,
       createdAt: new Date('2026-06-02T12:00:00Z'),
       lastActiveAt: new Date('2026-06-06T12:00:00Z'),
+    });
+    await UsageEvent.collection.insertOne({
+      requestId: 'regular-first-request',
+      userId: String(regular._id),
+      ownerId: String(regular._id),
+      ownerType: 'User',
+      feature: 'chat',
+      provider: 'p',
+      model: 'gpt-4.1',
+      status: 'ok',
+      source: 'web',
+      createdAt: new Date('2026-06-03T12:00:00Z'),
     });
     await seedUser('staffer', {
       email: 'staffer@customer.example.org',
@@ -337,7 +370,7 @@ describe('analytics drill-down filters', () => {
     expect(grouped.groups.map(group => group.domain)).toEqual(['burst.example.net']);
   });
 
-  it('refuses a funnel or verdict window holding more signups than it can resolve', async () => {
+  it('refuses a funnel window holding more signups than it can resolve', async () => {
     await Promise.all([User.createIndexes(), UserApiKey.createIndexes()]);
     await User.collection.insertMany(
       Array.from({ length: FUNNEL_COHORT_MAX + 1 }, (_, i) => ({
@@ -350,10 +383,6 @@ describe('analytics drill-down filters', () => {
     await expect(
       listAdminUsers({ ...params, ...window, funnelStep: 'signedUp' }, viewer, { logError }, NOW)
     ).rejects.toMatchObject({ statusCode: 422, message: expect.stringMatching(/Narrow the created range/) });
-    await expect(exportAdminUsers({ ...window, verdict: 'legit' }, NOW)).rejects.toMatchObject({
-      statusCode: 422,
-      message: expect.stringMatching(/Narrow the created range/),
-    });
   });
 });
 

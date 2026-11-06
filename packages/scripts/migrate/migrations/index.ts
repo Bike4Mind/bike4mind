@@ -293,6 +293,7 @@ import EnsureReferralInviterIndexes from './20260921239500_ensure-referral-invit
 import EnsureHeldCreditRewardUserStatusIndex from './20260921239600_ensure-heldcreditreward-user-status-index';
 import DropRetiredUnlockSettings from './20260921239700_drop-retired-unlock-settings';
 import EnsureFabFilePendingUploadIndex from './20260921239800_ensure-fabfile-pending-upload-index';
+import BackfillAnalyticsUserDayActive from './20260921239850_backfill-analytics-user-day-active';
 import EnsureOverwatchUserDayInternalIndex from './20260921239900_ensure-overwatch-user-day-internal-index';
 import EnsureUserDeletionScheduledForIndex from './20260921239970_ensure-user-deletion-scheduledfor-index';
 import EnsureBillingMismatchIndexes from './20260921239985_ensure-billing-mismatch-indexes';
@@ -528,6 +529,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureHeldCreditRewardUserStatusIndex,
   DropRetiredUnlockSettings,
   EnsureFabFilePendingUploadIndex,
+  BackfillAnalyticsUserDayActive,
   EnsureOverwatchUserDayInternalIndex,
   EnsureAutoContainmentDecisionIndexes,
   EnsureUserDeletionScheduledForIndex,
