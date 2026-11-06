@@ -1,4 +1,4 @@
-import { ApiKeyScope, ForbiddenError } from '@bike4mind/common';
+import { ForbiddenError } from '@bike4mind/common';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { AdminSearchQuerySchema } from '@client/app/utils/adminEntitySearch';
@@ -10,7 +10,6 @@ import { searchAdminEntities } from '@server/admin/search/searchEntities';
 const handler = adminApi({
   auth: 'jwtOnly',
   adminPermissions: { GET: 'support:read' },
-  requiredScopes: [ApiKeyScope.ADMIN],
 })
   .use(rateLimit({ limit: 30, windowMs: 60_000, bucket: 'admin-entity-search' }))
   .get(async (req, res) => {
