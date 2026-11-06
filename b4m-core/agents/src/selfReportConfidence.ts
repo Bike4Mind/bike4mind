@@ -29,6 +29,7 @@ export const SELF_REPORT_CONFIDENCE_REMINDER =
 
 const OPEN = '<confidence';
 const CLOSE = '</confidence>';
+const CLOSING_TAG = /<\/confidence\s*>/gi;
 // Models given this prompt open a turn with an empty reasoning block before the tag. It carries
 // nothing, and left in it surfaces as a literal "<think></think>" thought.
 const EMPTY_THINK = '<think></think>';
@@ -44,16 +45,20 @@ const MAX_HELD_LENGTH = 600;
  * Keeps a leading `<confidence>` tag out of a live text stream. The prompt puts the tag first in the
  * turn (after an empty reasoning block, if the model sends one), so only that position is held back:
  * the tag is withheld until it closes and the text after it flows through. Anything else passes
- * straight through, as does a tag that never closes (`flush()` returns whatever is still held).
+ * straight through, as does a tag that never closes (`flush()` returns whatever is still held). When a
+ * tag is given up on for being too long, its closing tag is still dropped if it turns up later, so the
+ * live text keeps matching what `parseSelfReport` stores.
  * Empty reasoning blocks at the start are dropped, as `parseSelfReport` drops them from the final text.
  */
 export class SelfReportStreamFilter {
   private held = '';
   private settled = false;
+  private dropClosing = false;
+  private carry = '';
 
   /** The part of `delta` that is safe to show now. */
   push(delta: string): string {
-    if (this.settled) return delta;
+    if (this.settled) return this.dropClosing ? this.withoutClosingTag(delta) : delta;
     this.held += delta;
     const rest = this.held.slice(LEADING_FILLER.exec(this.held)![0].length);
     const lower = rest.toLowerCase();
@@ -62,7 +67,7 @@ export class SelfReportStreamFilter {
     if (lower === '' || OPEN.startsWith(lower) || EMPTY_THINK.startsWith(compact)) return '';
     if (!lower.startsWith(OPEN)) return this.release();
     const end = lower.indexOf(CLOSE);
-    if (end === -1) return this.held.length > MAX_HELD_LENGTH ? this.release() : '';
+    if (end === -1) return this.held.length > MAX_HELD_LENGTH ? this.release(true) : '';
     this.settled = true;
     this.held = '';
     return rest.slice(end + CLOSE.length).trimStart();
@@ -70,14 +75,31 @@ export class SelfReportStreamFilter {
 
   /** Whatever the stream ended while still holding back. */
   flush(): string {
-    return this.settled ? '' : this.release();
+    if (!this.settled) return this.release();
+    const carried = this.carry;
+    this.carry = '';
+    return carried;
   }
 
-  private release(): string {
+  private release(dropClosing = false): string {
     const held = this.held.replace(EMPTY_THINK_BLOCKS, '').replace(DANGLING_TAG, '');
     this.settled = true;
+    this.dropClosing = dropClosing;
     this.held = '';
     return held;
+  }
+
+  /** `delta` without closing tags, holding back a trailing fragment that may still become one. */
+  private withoutClosingTag(delta: string): string {
+    const text = (this.carry + delta).replace(CLOSING_TAG, '');
+    for (let keep = Math.min(text.length, CLOSE.length - 1); keep > 0; keep--) {
+      if (CLOSE.startsWith(text.slice(-keep).toLowerCase())) {
+        this.carry = text.slice(-keep);
+        return text.slice(0, -keep);
+      }
+    }
+    this.carry = '';
+    return text;
   }
 }
 
