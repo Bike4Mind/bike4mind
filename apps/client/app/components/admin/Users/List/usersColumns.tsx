@@ -212,13 +212,16 @@ export function usersColumns({
       id: 'spend',
       label: '30d spend',
       numeric: true,
-      width: '7rem',
+      // Fits a 7-char count + gap + 56px InlineBar inside the 12px cell padding.
+      width: '9rem',
       render: row =>
         row.spend30d === null ? (
           <Dash />
         ) : (
           <Stack direction="row" alignItems="center" justifyContent="flex-end" gap={1}>
-            <span>{formatNumber(row.spend30d)}</span>
+            <Box component="span" sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
+              {formatNumber(row.spend30d)}
+            </Box>
             <InlineBar value={row.spend30d} max={maxSpend} />
           </Stack>
         ),
