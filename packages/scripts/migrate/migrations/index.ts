@@ -300,6 +300,7 @@ import EnsureStripeDisputeIndexes from './20260921239980_ensure-stripe-dispute-i
 import ConvertLegacyQuestPlansToFiles from './20260921239990_convert-legacy-quest-plans-to-files';
 import EnsureUserLimitEventIndexes from './20260921240010_ensure-user-limit-event-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import EncryptOAuthProviderTokens from './20260921240020_encrypt-oauth-provider-tokens';
 import EnsureBillingEventIndexes from './20260921240030_ensure-billing-event-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
@@ -527,6 +528,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureStripeDisputeIndexes,
   ConvertLegacyQuestPlansToFiles,
   EnsureUserLimitEventIndexes,
+  EncryptOAuthProviderTokens,
   EnsureBillingEventIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
