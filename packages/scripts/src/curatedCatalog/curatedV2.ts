@@ -109,10 +109,10 @@ export async function bumpCuratedV2(root: string = REPO_ROOT): Promise<number> {
   const text = start < 0 ? '' : await format(edited, { ...(await resolveConfig(file)), parser: 'json' });
   if (!text || !isDeepStrictEqual(JSON.parse(text), v3))
     throw new Error(`could not edit v2Channel in ${CATALOG_V3_PATH} in place; bump it by hand`);
+  // Built before either write, so a v2 that fails to generate leaves both files untouched.
+  const v2Text = await formatJson(curatedV2FromV3(v3), file);
   await writeFile(file, text);
-  const generated = await generateCuratedV2(root);
-  if (generated.problem) throw new Error(generated.problem);
-  await writeFile(path.join(root, CATALOG_PATH), generated.text);
+  await writeFile(path.join(root, CATALOG_PATH), v2Text);
   return next;
 }
 
