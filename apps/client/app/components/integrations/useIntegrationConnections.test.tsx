@@ -173,6 +173,18 @@ describe('useIntegrationConnections', () => {
       expect(result.current.airtable).toEqual({ connected: false, needsReconnect: false });
       expect(result.current['custom-mcp']).toEqual({ connected: false, needsReconnect: false });
     });
+
+    it('stops reading cached connections once the switch is turned off mid-session', async () => {
+      h.flags = new Set(['EnableCustomMcpConnectors']);
+      vi.mocked(api.get).mockResolvedValue({ data: [conn({ presetId: 'linear', status: 'connected' })] });
+      const { result, rerender } = renderConnections();
+      await waitFor(() => expect(result.current.linear).toEqual({ connected: true, needsReconnect: false }));
+
+      h.flags = new Set();
+      rerender();
+
+      expect(result.current.linear).toEqual({ connected: false, needsReconnect: false });
+    });
   });
 
   describe('Jupyter, whose settings live in this browser rather than on the account', () => {

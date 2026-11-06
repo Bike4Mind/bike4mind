@@ -71,8 +71,8 @@ export interface ToolDraft {
 }
 
 /**
- * The review form's starting point. A tool pending review starts off whatever its stored flag
- * says, so saving without touching it never turns on a tool nobody looked at.
+ * The review form's starting point. A tool pending review always starts switched off, whatever
+ * its stored `enabled` flag says, so saving without touching it never turns on a tool nobody looked at.
  */
 export const initialToolDrafts = (tools: readonly McpConnectionTool[]): Record<string, ToolDraft> =>
   Object.fromEntries(

@@ -23,7 +23,11 @@ const APPROVAL_LABELS: Record<McpToolApprovalMode, string> = {
  * a new or changed tool is not offered to the model.
  */
 const McpToolReview = ({ connection, onDone }: { connection: IMcpConnectionPublic; onDone: () => void }) => {
-  const [drafts, setDrafts] = useState<Record<string, ToolDraft>>(() => initialToolDrafts(connection.tools));
+  // The tools as they were when the review opened. A refetch while it is open (Refresh tools, window
+  // focus) must not swap in versions the user never saw: saving names these versions, so a change made
+  // since fails with tool_version_conflict instead of being approved unseen.
+  const [tools] = useState(() => connection.tools);
+  const [drafts, setDrafts] = useState<Record<string, ToolDraft>>(() => initialToolDrafts(tools));
   const update = useUpdateMcpConnection();
   const queryClient = useQueryClient();
   const testId = `custom-mcp-review-${connection.id}`;
@@ -31,9 +35,9 @@ const McpToolReview = ({ connection, onDone }: { connection: IMcpConnectionPubli
   const setDraft = (name: string, patch: Partial<ToolDraft>) =>
     setDrafts(current => ({ ...current, [name]: { ...current[name]!, ...patch } }));
 
-  const entries = toReviewEntries(connection.tools, drafts);
+  const entries = toReviewEntries(tools, drafts);
   // A tool stored before versions were recorded cannot be reviewed until discovery runs again.
-  const unversioned = connection.tools.length - entries.length;
+  const unversioned = tools.length - entries.length;
 
   const save = () =>
     update.mutate(
@@ -55,7 +59,7 @@ const McpToolReview = ({ connection, onDone }: { connection: IMcpConnectionPubli
       }
     );
 
-  if (connection.tools.length === 0) {
+  if (tools.length === 0) {
     return (
       <Typography level="body-sm" data-testid={`${testId}-empty`} sx={{ color: 'text.secondary' }}>
         This server lists no tools yet. Refresh the tools once it has some.
@@ -70,7 +74,7 @@ const McpToolReview = ({ connection, onDone }: { connection: IMcpConnectionPubli
         claim.
       </Typography>
       <Stack divider={<Divider />} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: '8px' }}>
-        {connection.tools.map(tool => {
+        {tools.map(tool => {
           const draft = drafts[tool.name]!;
           const readOnly = isReadOnlyTool(tool);
           const toolTestId = `${testId}-tool-${tool.name}`;

@@ -27,9 +27,10 @@ export function useIntegrationConnections(): Connections {
   const { data: mcpServers } = useMcpServers();
   // The route answers an empty list while custom connectors are off, so skip the request then.
   const { isFeatureEnabled } = useAdminSettingsCache();
-  const { data: mcpConnections = [] } = useMcpConnections({
-    enabled: isFeatureEnabled('EnableCustomMcpConnectors'),
-  });
+  const customMcpOn = isFeatureEnabled('EnableCustomMcpConnectors');
+  const { data } = useMcpConnections({ enabled: customMcpOn });
+  // A disabled query keeps its cached list, so a flag turned off mid-session must not leave presets Connected.
+  const mcpConnections = customMcpOn ? (data ?? []) : [];
   // Same key and fetcher as BlogIntegrationSection, so the two share one cache entry. Admins
   // only: the section, and so the Blog card, renders for nobody else.
   const { data: blog } = useQuery({

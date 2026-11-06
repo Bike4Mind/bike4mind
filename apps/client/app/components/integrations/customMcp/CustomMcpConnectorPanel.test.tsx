@@ -8,13 +8,14 @@ import type { IMcpConnectionPublic } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { api } from '@client/app/contexts/ApiContext';
 
-const h = vi.hoisted(() => ({ confirm: vi.fn() }));
+const h = vi.hoisted(() => ({ confirm: vi.fn(), impersonating: false }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
 }));
 vi.mock('@client/app/hooks/useAccessToken', () => ({
-  useAccessToken: (selector: (s: { impersonating: boolean }) => unknown) => selector({ impersonating: false }),
+  useAccessToken: (selector: (s: { impersonating: boolean }) => unknown) =>
+    selector({ impersonating: h.impersonating }),
 }));
 vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => h.confirm }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
@@ -71,9 +72,19 @@ const listReturns = (connections: IMcpConnectionPublic[]) =>
 beforeEach(() => {
   vi.clearAllMocks();
   h.confirm.mockImplementation(({ onOk }: { onOk: () => void }) => onOk());
+  h.impersonating = false;
 });
 
 describe('CustomMcpConnectorPanel', () => {
+  it('shows a note instead of a loading state while impersonating, and asks for nothing', () => {
+    h.impersonating = true;
+    renderPanel();
+
+    expect(screen.getByTestId('custom-mcp-panel-impersonating')).toBeInTheDocument();
+    expect(screen.queryByTestId('custom-mcp-panel-loading')).not.toBeInTheDocument();
+    expect(api.get).not.toHaveBeenCalled();
+  });
+
   describe('adding a connector', () => {
     it('shows the add form with the unreviewed-server warning when there is no connection yet', async () => {
       listReturns([]);
@@ -127,6 +138,39 @@ describe('CustomMcpConnectorPanel', () => {
 
       expect(await screen.findByTestId('custom-mcp-add-error')).toHaveTextContent('Bad URL');
       expect(screen.getByTestId('custom-mcp-add-form')).toBeInTheDocument();
+    });
+
+    it('sends the advanced settings and refuses a reserved tool prefix before submitting', async () => {
+      listReturns([]);
+      vi.mocked(api.post).mockResolvedValueOnce({ data: connection() });
+      renderPanel();
+
+      await userEvent.type(await screen.findByTestId('custom-mcp-add-name-input'), 'Docs server');
+      await userEvent.type(screen.getByTestId('custom-mcp-add-url-input'), 'https://mcp.example.test/mcp');
+      await userEvent.click(screen.getByTestId('custom-mcp-add-auth-api_key'));
+      await userEvent.type(screen.getByTestId('custom-mcp-add-api-key-input'), 'secret-key-abcdef');
+      await userEvent.click(screen.getByTestId('custom-mcp-add-advanced-btn'));
+
+      await userEvent.type(screen.getByTestId('custom-mcp-add-slug-input'), 'github');
+      expect(screen.getByTestId('custom-mcp-add-submit-btn')).toBeDisabled();
+
+      await userEvent.clear(screen.getByTestId('custom-mcp-add-slug-input'));
+      await userEvent.type(screen.getByTestId('custom-mcp-add-slug-input'), 'docs');
+      await userEvent.clear(screen.getByTestId('custom-mcp-add-header-input'));
+      await userEvent.type(screen.getByTestId('custom-mcp-add-header-input'), 'X-Api-Key');
+      await userEvent.click(screen.getByTestId('custom-mcp-add-scheme'));
+      await userEvent.click(await screen.findByRole('option', { name: 'Key only' }));
+      await userEvent.click(screen.getByTestId('custom-mcp-add-transport'));
+      await userEvent.click(await screen.findByRole('option', { name: 'Streamable HTTP' }));
+      await userEvent.click(screen.getByTestId('custom-mcp-add-submit-btn'));
+
+      expect(api.post).toHaveBeenCalledWith('/api/mcp-connections', {
+        url: 'https://mcp.example.test/mcp',
+        displayName: 'Docs server',
+        slug: 'docs',
+        transport: 'streamable-http',
+        auth: { kind: 'api_key', value: 'secret-key-abcdef', headerName: 'X-Api-Key', scheme: 'raw' },
+      });
     });
 
     it('fixes the server URL and API-key sign-in for a preset and names the preset on create', async () => {
@@ -192,6 +236,34 @@ describe('CustomMcpConnectorPanel', () => {
       await waitFor(() => expect(screen.queryByTestId('custom-mcp-review-c1')).not.toBeInTheDocument());
     });
 
+    it('keeps reviewing the versions it opened with when a refresh brings new or changed tools', async () => {
+      const opened = connection({ tools: [tool('search')] });
+      listReturns([opened]);
+      vi.mocked(api.post).mockResolvedValueOnce({
+        data: {
+          connection: { ...opened, tools: [tool('search', { versionHash: 'v-search-2' }), tool('added')] },
+          discovery: { added: ['added'], changed: ['search'], removed: [], dropped: 0 },
+        },
+      });
+      vi.mocked(api.patch).mockResolvedValueOnce({ data: opened });
+      renderPanel();
+
+      await userEvent.click(await screen.findByTestId('custom-mcp-connection-c1-review-btn'));
+      await userEvent.click(screen.getByTestId('custom-mcp-connection-c1-refresh-btn'));
+
+      expect(api.post).toHaveBeenCalledWith('/api/mcp-connections/c1/refresh-tools');
+      await waitFor(() =>
+        expect(screen.getByTestId('custom-mcp-connection-c1-summary')).toHaveTextContent('of 2 tools')
+      );
+      expect(screen.getByTestId('custom-mcp-review-c1')).toBeInTheDocument();
+      expect(screen.queryByTestId('custom-mcp-review-c1-tool-added')).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByTestId('custom-mcp-review-c1-save-btn'));
+      expect(api.patch).toHaveBeenCalledWith('/api/mcp-connections/c1', {
+        tools: [{ name: 'search', versionHash: 'v-search', enabled: false, approval: 'default', state: 'active' }],
+      });
+    });
+
     it('closes the review and re-reads the connection when a tool changed meanwhile', async () => {
       listReturns([connection({ tools: [tool('search')] })]);
       vi.mocked(api.patch).mockRejectedValueOnce(
@@ -234,6 +306,38 @@ describe('CustomMcpConnectorPanel', () => {
       expect(h.confirm).toHaveBeenCalledWith(expect.objectContaining({ type: 'danger', okLabel: 'Remove' }));
       expect(api.delete).toHaveBeenCalledWith('/api/mcp-connections/c1');
       await waitFor(() => expect(screen.queryByTestId('custom-mcp-connection-c1')).not.toBeInTheDocument());
+    });
+
+    it('keeps the connector when the removal is cancelled', async () => {
+      listReturns([connection()]);
+      h.confirm.mockImplementation(() => undefined);
+      renderPanel();
+
+      await userEvent.click(await screen.findByTestId('custom-mcp-connection-c1-delete-btn'));
+
+      expect(h.confirm).toHaveBeenCalledTimes(1);
+      expect(api.delete).not.toHaveBeenCalled();
+      expect(screen.getByTestId('custom-mcp-connection-c1')).toBeInTheDocument();
+    });
+
+    it('replaces the API key and shows the new status', async () => {
+      const keyed = connection({
+        status: 'needs_reconnect',
+        auth: { kind: 'api_key', apiKey: { headerName: 'Authorization', scheme: 'Bearer', last4: 'abcd' } },
+      });
+      listReturns([keyed]);
+      vi.mocked(api.post).mockResolvedValueOnce({ data: { ...keyed, status: 'connected' } });
+      renderPanel();
+
+      expect(await screen.findByTestId('custom-mcp-connection-c1-status')).toHaveTextContent('Needs reconnect');
+      expect(screen.queryByTestId('custom-mcp-connection-c1-sign-in-btn')).not.toBeInTheDocument();
+      await userEvent.click(screen.getByTestId('custom-mcp-connection-c1-api-key-btn'));
+      await userEvent.type(screen.getByTestId('custom-mcp-connection-c1-api-key-input'), 'new-secret-key-1234');
+      await userEvent.click(screen.getByTestId('custom-mcp-connection-c1-api-key-save-btn'));
+
+      expect(api.post).toHaveBeenCalledWith('/api/mcp-connections/c1/api-key', { value: 'new-secret-key-1234' });
+      await waitFor(() => expect(screen.getByTestId('custom-mcp-connection-c1-status')).toHaveTextContent('Connected'));
+      expect(screen.queryByTestId('custom-mcp-connection-c1-api-key-input')).not.toBeInTheDocument();
     });
 
     it('starts sign-in for a server waiting for it and leaves for the provider', async () => {

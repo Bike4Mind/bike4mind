@@ -3,6 +3,7 @@ import { Box, Button, Skeleton, Stack, Typography } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import type { IMcpConnectionPublic, McpPresetId } from '@bike4mind/common';
 import { useMcpConnections } from '@client/app/hooks/data/mcpConnections';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import AddMcpConnectorForm from './AddMcpConnectorForm';
 import McpConnectionItem from './McpConnectionItem';
 import { connectionsFor } from './customMcpModel';
@@ -13,12 +14,21 @@ import { connectionsFor } from './customMcpModel';
  * offers the add form while there is none.
  */
 const CustomMcpConnectorPanel = ({ presetId, presetName }: { presetId?: McpPresetId; presetName?: string }) => {
+  const impersonating = useAccessToken(s => s.impersonating);
   const { data, isPending, isError, refetch } = useMcpConnections();
   const connections = connectionsFor(data ?? [], presetId);
   const [adding, setAdding] = useState(false);
   // The connection just added: it opens on its tool review.
   const [justAdded, setJustAdded] = useState<string | null>(null);
 
+  // The list query is off while impersonating, so it would stay pending forever.
+  if (impersonating) {
+    return (
+      <Typography level="body-sm" sx={{ color: 'text.secondary' }} data-testid="custom-mcp-panel-impersonating">
+        Custom connectors are not shown while impersonating a user.
+      </Typography>
+    );
+  }
   if (isPending) {
     return (
       <Stack gap="8px" data-testid="custom-mcp-panel-loading">
