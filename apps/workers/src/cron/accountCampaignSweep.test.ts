@@ -153,6 +153,13 @@ describe('handler', () => {
     await expect(handler({}, context)).rejects.toThrow('Device-link sweep failed to record 2 account(s)');
   });
 
+  it('fails the invocation when the device-link pass cannot read, after campaign groups are recorded', async () => {
+    sweepDeviceLinks.mockRejectedValue(new Error('read down'));
+
+    await expect(handler({}, context)).rejects.toThrow('read down');
+    expect(recordCampaignGroup).toHaveBeenCalledTimes(1);
+  });
+
   it('fails the invocation after the run when a group failed to record', async () => {
     recordCampaignGroup.mockRejectedValue(new Error('write failed'));
 
