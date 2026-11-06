@@ -1,6 +1,6 @@
+// @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-const captured = vi.hoisted(() => ({ handlers: {} as Record<string, any> }));
+import { createMocks } from 'node-mocks-http';
 
 vi.mock('@bike4mind/database', () => ({
   sessionRepository: { findById: vi.fn(), shareable: { findUpdateAccessById: vi.fn() } },
@@ -11,45 +11,47 @@ vi.mock('@bike4mind/services', () => ({
   sessionService: { deleteSessionMessage: vi.fn() },
 }));
 
-vi.mock('@server/middlewares/asyncHandler', () => ({
-  asyncHandler: (handler: unknown) => handler,
-}));
-
+// The legacy URL serves the v1 contract handler, so the real contract adapter runs; only baseApi is stubbed.
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const chain: Record<string, unknown> = {};
-    for (const method of ['get', 'put', 'post', 'delete', 'patch']) {
-      chain[method] = (handler: unknown) => {
-        captured.handlers[method] = handler;
-        return chain;
+    type Mw = (req: unknown, res: unknown, next: () => void) => unknown;
+    const used: Mw[] = [];
+    const compose =
+      (...handlers: Mw[]) =>
+      async (req: unknown, res: unknown) => {
+        for (const handler of [...used, ...handlers]) {
+          let advanced = false;
+          await handler(req, res, () => {
+            advanced = true;
+          });
+          if (!advanced) return;
+        }
       };
-    }
+    const chain: Record<string, unknown> = {};
+    chain.use = (mw: Mw) => {
+      used.push(mw);
+      return chain;
+    };
+    for (const method of ['get', 'put', 'post', 'delete', 'patch']) chain[method] = compose;
     return chain;
   },
+  methodNotAllowedHandler: () => (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) =>
+    res.status(405).json({ error: 'Method not allowed' }),
 }));
 
-import '../../pages/api/sessions/[id]/chat/[messageId]/index';
+import handler from '../../pages/api/sessions/[id]/chat/[messageId]/index';
 import { questRepository, sessionRepository } from '@bike4mind/database';
 
 const OWNER = 'user-owner';
 const SHAREE = 'user-sharee';
 const EDITOR = 'user-editor';
 
-// `res.status().json()` chains, so the object must return itself from both.
-const makeRes = () => {
-  const out = { statusCode: 200, body: undefined as unknown };
-  const api: any = {
-    status: vi.fn((code: number) => {
-      out.statusCode = code;
-      return api;
-    }),
-    json: vi.fn((payload: unknown) => {
-      out.body = payload;
-      return api;
-    }),
-  };
-  api.out = out;
-  return api;
+const run = async (userId: string, body: Record<string, unknown>) => {
+  const { req, res } = createMocks({ method: 'PUT', query: { id: 'session-1', messageId: 'msg-1' }, body });
+  Object.assign(req, { user: { id: userId }, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the contract router's param type carries prelude-only fields
+  await (handler as any)(req, res);
+  return res;
 };
 
 describe('PUT /api/sessions/[id]/chat/[messageId] authorization', () => {
@@ -76,46 +78,26 @@ describe('PUT /api/sessions/[id]/chat/[messageId] authorization', () => {
   });
 
   it('refuses a read-only sharee rewriting a reply, and does not write the message', async () => {
-    const response = makeRes();
-    await captured.handlers.put(
-      { query: { id: 'session-1', messageId: 'msg-1' }, body: { reply: 'pwned' }, user: { id: SHAREE } },
-      response
-    );
-
-    expect(response.out.statusCode).toBe(403);
+    await expect(run(SHAREE, { reply: 'pwned' })).rejects.toMatchObject({ statusCode: 403 });
     expect(questRepository.updateInSession).not.toHaveBeenCalled();
   });
 
   it('still allows a sharee holding update to edit the reply', async () => {
-    const response = makeRes();
-    await captured.handlers.put(
-      { query: { id: 'session-1', messageId: 'msg-1' }, body: { reply: 'fixed' }, user: { id: EDITOR } },
-      response
-    );
+    const response = await run(EDITOR, { reply: 'fixed' });
 
-    expect(response.out.statusCode).toBe(200);
+    expect(response._getStatusCode()).toBe(200);
     expect(questRepository.updateInSession).toHaveBeenCalled();
   });
 
   it('writes only the edited fields, scoped to the session in the URL', async () => {
-    const response = makeRes();
-    await captured.handlers.put(
-      { query: { id: 'session-1', messageId: 'msg-1' }, body: { reply: 'fixed' }, user: { id: EDITOR } },
-      response
-    );
+    await run(EDITOR, { reply: 'fixed' });
 
     expect(questRepository.updateInSession).toHaveBeenCalledWith('session-1', { id: 'msg-1', reply: 'fixed' });
   });
 
   it('refuses and writes nothing when update access is revoked right before the write', async () => {
     vi.mocked(sessionRepository.shareable.findUpdateAccessById).mockResolvedValue(null as never);
-    const response = makeRes();
-    await captured.handlers.put(
-      { query: { id: 'session-1', messageId: 'msg-1' }, body: { reply: 'fixed' }, user: { id: EDITOR } },
-      response
-    );
-
-    expect(response.out.statusCode).toBe(403);
+    await expect(run(EDITOR, { reply: 'fixed' })).rejects.toMatchObject({ statusCode: 403 });
     expect(questRepository.updateInSession).not.toHaveBeenCalled();
   });
 });
