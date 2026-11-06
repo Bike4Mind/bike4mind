@@ -50,6 +50,7 @@ vi.mock('@server/users/sharedWorkspaceUserIds', () => ({
   findSharedWorkspaceUserIds: vi.fn().mockResolvedValue(new Set(['u1'])),
 }));
 vi.mock('@server/users/pendingProjectInviteeIds', () => ({ findPendingProjectInviteeIds: vi.fn() }));
+vi.mock('@server/users/pendingOrganizationInviteeIds', () => ({ findPendingOrganizationInviteeIds: vi.fn() }));
 vi.mock('@server/users/signupAnomaly', () => ({ getDomainGroups: vi.fn(), SIGNUP_SCAN_LIMIT: 5000 }));
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
 vi.mock('@bike4mind/utils/escapeRegex', () => ({ escapeRegex: (s: string) => s }));

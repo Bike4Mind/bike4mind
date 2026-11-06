@@ -29,7 +29,9 @@ const h = vi.hoisted(() => ({
   startAgentExecution: vi.fn(),
   getAvailableModels: vi.fn(),
   nextIterationCredits: vi.fn(),
+  pushLoopChanged: vi.fn(),
 }));
+vi.mock('@server/utils/loopDispatch', () => ({ pushLoopChanged: h.pushLoopChanged, requestLoopDispatch: vi.fn() }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: {} }));
 vi.mock('@server/utils/startAgentExecution', () => ({ startAgentExecution: h.startAgentExecution }));
@@ -44,11 +46,15 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 
 import {
   BUDGET_PAUSE_REASON,
+  dispatchLoopNow,
   LOOP_LEASE_MS,
   MAX_CONSECUTIVE_FAILURES,
   runLoopSchedulerTick,
   USER_BUDGET_PAUSE_REASON,
 } from './loopScheduler';
+
+/** The default LoopsMaxActiveRuns. */
+const MAX_ACTIVE_LOOP_RUNS = 4;
 import { STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import { makeDueIfReady } from '@server/utils/loopTickets';
 import { buildLoopQuery } from '@server/utils/loopMemory';
@@ -90,6 +96,7 @@ afterEach(async () => {
   h.startAgentExecution.mockReset();
   h.getAvailableModels.mockReset();
   h.nextIterationCredits.mockReset();
+  h.pushLoopChanged.mockReset();
 });
 
 const createLoop = async (overrides: Record<string, unknown> = {}) =>
@@ -384,6 +391,7 @@ describe('runLoopSchedulerTick - tickets', () => {
         stage: 'todo',
         status: 'open',
         dependencies: [],
+        priority: 'p2',
         ...overrides,
       })
     ).toJSON();
@@ -562,6 +570,7 @@ describe('runLoopSchedulerTick - unsure', () => {
         status: 'in_progress',
         executionId: 'exec-0',
         dependencies: [],
+        priority: 'p2',
         ...overrides,
       })
     ).toJSON();
@@ -644,10 +653,15 @@ describe('runLoopSchedulerTick - unsure', () => {
     expect((await eventsOf(loop.id))[0].foldedAt).toBeUndefined();
 
     executions['exec-0'] = { userId: 'user-1', status: 'completed', result: { answer: 'done' } };
+    h.pushLoopChanged.mockClear();
     await runLoopSchedulerTick(NOW, logger);
 
     expect(await ticketOf(ticket.id)).toMatchObject({ stage: 'doing' });
     expect((await eventsOf(loop.id))[0].foldedAt).toBeInstanceOf(Date);
+    // The fold's own push, before the dispatch the advanced ticket triggers.
+    expect(h.pushLoopChanged.mock.invocationCallOrder[0]).toBeLessThan(
+      h.startAgentExecution.mock.invocationCallOrder[0] ?? Infinity
+    );
     expect(await reload(loop.id)).toMatchObject({ runCount: 0, memory: { notes: '', nextAction: '' } });
   });
 
@@ -843,6 +857,7 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
       stage: 'todo',
       status: 'open',
       dependencies: [],
+      priority: 'p2',
     });
     spentToday = 10;
 
@@ -919,9 +934,14 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
     expect(await openNotices()).toHaveLength(1);
 
     balance = { currentCredits: 5 };
+    h.pushLoopChanged.mockClear();
     await runLoopSchedulerTick(NOW, logger);
 
     expect(await reload(loop.id)).toMatchObject({ status: 'live', activeExecutionIds: ['exec-1'] });
+    // The resume's own push, before the dispatch's.
+    expect(h.pushLoopChanged.mock.invocationCallOrder[0]).toBeLessThan(
+      h.startAgentExecution.mock.invocationCallOrder[0]
+    );
     expect(await eventsOf(loop.id)).toMatchObject([{ kind: 'auto_resumed', reason: 'Credits available again' }]);
     expect(await openNotices()).toHaveLength(0);
   });
@@ -1045,6 +1065,7 @@ describe('runLoopSchedulerTick - stage config', () => {
         stage: 'todo',
         status: 'open',
         dependencies: [],
+        priority: 'p2',
         ...overrides,
       })
     ).toJSON();
@@ -1279,6 +1300,7 @@ describe('runLoopSchedulerTick - safety and pacing', () => {
         stage: 'todo',
         status: 'open',
         dependencies: [],
+        priority: 'p2',
         ...overrides,
       })
     ).toJSON();
@@ -1584,6 +1606,7 @@ describe('runLoopSchedulerTick - liveness', () => {
         stage: 'todo',
         status: 'open',
         dependencies: [],
+        priority: 'p2',
         ...overrides,
       })
     ).toJSON();
@@ -1906,7 +1929,9 @@ describe('runLoopSchedulerTick - parallel lanes', () => {
       .mocked(adminSettingsRepository.getSettingsValue)
       .mockImplementation((async (key: string) => (key === 'EnableLoops' ? true : values[key])) as never);
   const createTicket = async (loopId: string, title: string, userId = 'user-1') =>
-    (await WorkItem.create({ userId, loopId, title, stage: 'todo', status: 'open', dependencies: [] })).toJSON();
+    (
+      await WorkItem.create({ userId, loopId, title, stage: 'todo', status: 'open', dependencies: [], priority: 'p2' })
+    ).toJSON();
   const ticketOf = async (id: string) => (await WorkItem.findById(id))!.toJSON();
   const loopWithTickets = async (count: number, overrides: Record<string, unknown> = {}) => {
     const loop = await createLoop({ maxConcurrent: 3, ...overrides });
@@ -1932,6 +1957,7 @@ describe('runLoopSchedulerTick - parallel lanes', () => {
         iterationBilling: [],
         totalCreditsUsed: 0,
         ...(params.creditCap !== undefined && { creditCap: params.creditCap }),
+        ...(params.loopRunKind !== undefined && { loopRunKind: params.loopRunKind }),
         lambdaInvocationCount: 1,
         childExecutionIds: [],
         createdAt: NOW,
@@ -1940,6 +1966,33 @@ describe('runLoopSchedulerTick - parallel lanes', () => {
       return { ok: true, executionId: doc.id };
     });
   const caps = () => h.startAgentExecution.mock.calls.map(call => call[0].creditCap as number);
+
+  it('runs one triage in a lane, and while it runs the other lanes work only tickets with a priority', async () => {
+    persistRuns();
+    const { loop, tickets } = await loopWithTickets(1);
+    const untriaged = (
+      await WorkItem.create({
+        userId: 'user-1',
+        loopId: loop.id,
+        title: 'New',
+        stage: 'todo',
+        status: 'open',
+        dependencies: [],
+      })
+    ).toJSON();
+
+    await runLoopSchedulerTick(NOW, logger);
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect(h.startAgentExecution.mock.calls[0][0]).toMatchObject({ loopRunKind: 'triage' });
+
+    await Loop.updateOne({ _id: loop.id }, { $set: { nextRunAt: NOW } });
+    await runLoopSchedulerTick(NOW, logger);
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(2);
+    expect(h.startAgentExecution.mock.calls[1][0]).toMatchObject({ workItemId: tickets[0].id });
+    expect(h.startAgentExecution.mock.calls[1][0]).not.toHaveProperty('loopRunKind');
+    expect((await ticketOf(untriaged.id)).status).toBe('open');
+    expect((await reload(loop.id)).activeExecutionIds).toHaveLength(2);
+  });
 
   it('waits an interval after an unconfirmed dispatch on a multi-lane loop', async () => {
     const { loop } = await loopWithTickets(2);
@@ -2087,5 +2140,462 @@ describe('runLoopSchedulerTick - parallel lanes', () => {
     await runLoopSchedulerTick(NOW, logger);
     expect(caps()).toHaveLength(1);
     expect(caps()[0]).toBeCloseTo(13);
+  });
+});
+
+describe('runLoopSchedulerTick - priority policy', () => {
+  const STAGES = ['todo', 'review', 'done'];
+  const createTicket = async (loopId: string, overrides: Record<string, unknown> = {}) =>
+    (
+      await WorkItem.create({
+        userId: 'user-1',
+        loopId,
+        title: 'Write the summary',
+        stage: 'todo',
+        status: 'open',
+        dependencies: [],
+        priority: 'p2',
+        prioritySetBy: 'agent',
+        ...overrides,
+      })
+    ).toJSON();
+  const ticketOf = async (id: string) => (await WorkItem.findById(id))!.toJSON();
+  const minutesAgo = (minutes: number) => new Date(NOW.getTime() - minutes * 60_000);
+  const MIDNIGHT = new Date('2026-10-30T00:00:00Z');
+  /** A run of a p2 ticket already started today: a desktop run doc, which counts like a cloud one. */
+  const p2RunToday = (loopId: string) =>
+    agentExecutionRepository.createRunnerRun(new mongoose.Types.ObjectId().toString(), {
+      userId: 'user-1',
+      sessionId: 'session-1',
+      questId: 'session-1',
+      query: 'q',
+      model: 'claude-sonnet-5',
+      status: 'running',
+      connectionId: 'headless',
+      approvedTools: [],
+      deniedTools: [],
+      iterationBilling: [],
+      totalCreditsUsed: 0,
+      lambdaInvocationCount: 0,
+      childExecutionIds: [],
+      loopId,
+      workItemId: 'some-ticket',
+      ticketPriority: 'p2',
+      checkpoint: { steps: [], iteration: 0, pendingText: '', seq: 0 },
+      runnerLeaseUntil: NOW,
+    } as never);
+
+  describe('triage', () => {
+    it('runs an untriaged ticket through a triage run on triageModel, claiming nothing', async () => {
+      const loop = await createLoop({ stages: STAGES, triageModel: 'cheap' });
+      const untriaged = await createTicket(loop.id, { priority: undefined, prioritySetBy: undefined });
+      await createTicket(loop.id, { priority: 'p0' });
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+      const input = h.startAgentExecution.mock.calls[0][0];
+      expect(input).toMatchObject({ model: 'cheap', loopRunKind: 'triage', enabledTools: [], loopId: loop.id });
+      expect(input).not.toHaveProperty('workItemId');
+      expect(input.query).toContain(`Ticket id: ${untriaged.id}`);
+      expect(await ticketOf(untriaged.id)).toMatchObject({ status: 'open', runCount: 0 });
+      expect(await ticketOf(untriaged.id)).not.toHaveProperty('executionId');
+    });
+
+    it("tells a triage run not to split the tickets in the loop's desktop stages", async () => {
+      const loop = await createLoop({ stages: STAGES, stageConfig: [{ stage: 'review', runner: 'desktop' }] });
+      await createTicket(loop.id, { priority: undefined, stage: 'review' });
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(h.startAgentExecution.mock.calls[0][0].query).toContain(
+        `Tickets in the "review" stage(s) are worked by the\nowner's desktop app: only set their priority, never split them.`
+      );
+    });
+
+    it('prices a triage run on triageModel', async () => {
+      h.getAvailableModels.mockResolvedValue([{ id: 'claude-sonnet-5' }, { id: 'cheap' }]);
+      h.nextIterationCredits.mockImplementation((model: { id: string }) => (model.id === 'cheap' ? 20 : 1));
+      const loop = await createLoop({ stages: STAGES, triageModel: 'cheap', budgetCreditsPerDay: 10 });
+      await createTicket(loop.id, { priority: undefined });
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(h.startAgentExecution).not.toHaveBeenCalled();
+      expect(await reload(loop.id)).toMatchObject({ status: 'paused', statusReason: BUDGET_PAUSE_REASON });
+    });
+
+    it("folds a triage run without touching the loop's memory", async () => {
+      const memory = { notes: 'kept', nextAction: 'keep going' };
+      const loop = await createLoop({ stages: STAGES, activeExecutionIds: ['exec-t'], memory });
+      executions['exec-t'] = {
+        status: 'completed',
+        loopRunKind: 'triage',
+        createdAt: minutesAgo(5),
+        completedAt: NOW,
+        result: { answer: 'Set 2.\n```loop-memory\n{ "notes": "overwritten", "nextAction": "x" }\n```' },
+      };
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      const folded = await reload(loop.id);
+      expect(folded.memory).toMatchObject(memory);
+      expect(folded.activeExecutionIds ?? []).toEqual([]);
+      expect(folded.lastRunAt).toEqual(NOW);
+    });
+
+    it('sets p2 at the fold on a ticket the triage run was shown but left, so ticket work goes on', async () => {
+      const loop = await createLoop({ stages: STAGES, activeExecutionIds: ['exec-t'] });
+      const skipped = await createTicket(loop.id, { priority: undefined, prioritySetBy: undefined });
+      const unseen = await createTicket(loop.id, { priority: undefined, prioritySetBy: undefined });
+      const owned = await createTicket(loop.id, { priority: 'p1', prioritySetBy: 'owner' });
+      executions['exec-t'] = {
+        status: 'completed',
+        loopRunKind: 'triage',
+        triageWorkItemIds: [skipped.id, owned.id],
+        createdAt: minutesAgo(5),
+        completedAt: NOW,
+        result: { answer: 'Could not decide.' },
+      };
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(await ticketOf(skipped.id)).toMatchObject({ priority: 'p2', prioritySetBy: 'agent' });
+      expect(await ticketOf(owned.id)).toMatchObject({ priority: 'p1', prioritySetBy: 'owner' });
+      expect(await ticketOf(unseen.id)).not.toHaveProperty('priority');
+      // It set nothing itself, so it still folds as idle.
+      expect((await reload(loop.id)).idleStreak).toBe(1);
+    });
+
+    it('dispatches ticket work unchanged when nothing is untriaged', async () => {
+      const loop = await createLoop({ stages: STAGES, triageModel: 'cheap' });
+      const ticket = await createTicket(loop.id, { priority: 'p1' });
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      const input = h.startAgentExecution.mock.calls[0][0];
+      expect(input).toMatchObject({ model: 'claude-sonnet-5', workItemId: ticket.id, ticketPriority: 'p1' });
+      expect(input).not.toHaveProperty('loopRunKind');
+    });
+  });
+
+  describe('p2 daily cap', () => {
+    it('claims a p1 over an older p2 once the p2 runs are used up', async () => {
+      const loop = await createLoop({ stages: STAGES, p2RunsPerDay: 1 });
+      await createTicket(loop.id, { title: 'Older p2' });
+      const p1 = await createTicket(loop.id, { title: 'p1', priority: 'p1' });
+      await p2RunToday(loop.id);
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(h.startAgentExecution.mock.calls[0][0]).toMatchObject({ workItemId: p1.id, ticketPriority: 'p1' });
+    });
+
+    it('holds the loop until 00:00 UTC instead of a goal run when only p2/p3 are ready, and does not flag it idle', async () => {
+      const loop = await createLoop({ stages: STAGES, p2RunsPerDay: 1, nextRunAt: minutesAgo(50) });
+      const p2 = await createTicket(loop.id, { prioritySetBy: 'owner' });
+      await createTicket(loop.id, { title: 'p3', priority: 'p3' });
+      await p2RunToday(loop.id);
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(h.startAgentExecution).not.toHaveBeenCalled();
+      const held = await reload(loop.id);
+      expect(held).toMatchObject({
+        status: 'live',
+        nextRunAt: MIDNIGHT,
+        hold: { kind: 'priority_budget', until: MIDNIGHT, at: NOW },
+      });
+      expect(held.leaseUntil).toBeUndefined();
+      expect(held.alarm).toBeUndefined();
+      expect(await ticketOf(p2.id)).toMatchObject({ status: 'open', priority: 'p2', runCount: 0 });
+
+      // A new p1 makes it due early, and the run clears the hold.
+      const p1 = await createTicket(loop.id, { title: 'Urgent', priority: 'p1' });
+      await makeDueIfReady(await reload(loop.id), NOW);
+      await runLoopSchedulerTick(new Date(NOW.getTime() + 60_000), logger);
+      expect(h.startAgentExecution.mock.calls[0][0]).toMatchObject({ workItemId: p1.id });
+      expect((await reload(loop.id)).hold).toBeUndefined();
+    });
+
+    it('runs the goal, not a hold, when the only ready cloud ticket over the cap is a p0 at its run limit', async () => {
+      const loop = await createLoop({ stages: STAGES, p2RunsPerDay: 1 });
+      const spent = await createTicket(loop.id, { priority: 'p0', runCount: 6 });
+      await p2RunToday(loop.id);
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(await ticketOf(spent.id)).toMatchObject({ status: 'blocked' });
+      expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+      expect(h.startAgentExecution.mock.calls[0][0]).not.toHaveProperty('workItemId');
+      expect((await reload(loop.id)).hold).toBeUndefined();
+    });
+
+    it('blocks a p2 at its run limit over the cap now, rather than holding the loop until 00:00 UTC', async () => {
+      const loop = await createLoop({ stages: STAGES, p2RunsPerDay: 1 });
+      const spent = await createTicket(loop.id, { prioritySetBy: 'owner', runCount: 6 });
+      await p2RunToday(loop.id);
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(await ticketOf(spent.id)).toMatchObject({ status: 'blocked' });
+      expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+      expect(h.startAgentExecution.mock.calls[0][0]).not.toHaveProperty('workItemId');
+      expect((await reload(loop.id)).hold).toBeUndefined();
+    });
+
+    it('demotes the newest agent-set p2s beyond the day, never an owner-set one, and keeps an owner reset', async () => {
+      refuseStartsForCap();
+      const loop = await createLoop({ stages: STAGES, p2RunsPerDay: 1 });
+      const oldest = await createTicket(loop.id, { title: 'Oldest' });
+      const middle = await createTicket(loop.id, { title: 'Middle' });
+      const owner = await createTicket(loop.id, { title: 'Owner', prioritySetBy: 'owner' });
+      const newest = await createTicket(loop.id, { title: 'Newest' });
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect((await ticketOf(oldest.id)).priority).toBe('p2');
+      expect(await ticketOf(owner.id)).toMatchObject({ priority: 'p2', prioritySetBy: 'owner' });
+      for (const demoted of [middle, newest]) {
+        expect(await ticketOf(demoted.id)).toMatchObject({ priority: 'p3', prioritySetBy: 'demote' });
+      }
+
+      // The owner sets one back to p2: it is sticky from then on.
+      await WorkItem.updateOne({ _id: newest.id }, { $set: { priority: 'p2', prioritySetBy: 'owner' } });
+      await Loop.updateOne({ _id: loop.id }, { $set: { nextRunAt: PAST } });
+      await runLoopSchedulerTick(new Date(NOW.getTime() + 60_000), logger);
+      expect(await ticketOf(newest.id)).toMatchObject({ priority: 'p2', prioritySetBy: 'owner' });
+    });
+
+    it('changes nothing with p2RunsPerDay unset', async () => {
+      const loop = await createLoop({ stages: STAGES });
+      const p2 = await createTicket(loop.id);
+      await createTicket(loop.id, { title: 'Newer' });
+      await p2RunToday(loop.id);
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(h.startAgentExecution.mock.calls[0][0]).toMatchObject({ workItemId: p2.id, ticketPriority: 'p2' });
+      expect(await WorkItem.countDocuments({ priority: 'p3' })).toBe(0);
+    });
+
+    /** A start the user's concurrent-run limit refuses, so a tick runs the demote pass but starts nothing. */
+    function refuseStartsForCap() {
+      h.startAgentExecution.mockResolvedValue({ ok: false, reason: 'concurrent_limit', message: 'busy' });
+    }
+  });
+
+  describe('escalation', () => {
+    // Three stages: a run limit of 6, so the run from runCount 5 is the last.
+    it("runs a ticket's last run on the escalation model, marked escalated, and earlier runs on the stage model", async () => {
+      const stageConfig = [{ stage: 'todo', model: 'stage-model' }];
+      const loop = await createLoop({ stages: STAGES, stageConfig, escalationModel: 'strong' });
+      const last = await createTicket(loop.id, { runCount: 5 });
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(h.startAgentExecution.mock.calls[0][0]).toMatchObject({
+        model: 'strong',
+        escalated: true,
+        workItemId: last.id,
+      });
+
+      const other = await createLoop({ stages: STAGES, stageConfig, escalationModel: 'strong', sessionId: 's-2' });
+      // Older, so tried first: blocked at its limit, and the next ticket is worked.
+      const spent = await createTicket(other.id, { title: 'Spent', runCount: 6 });
+      await createTicket(other.id, { runCount: 4 });
+      await runLoopSchedulerTick(NOW, logger);
+      const input = h.startAgentExecution.mock.calls[1][0];
+      expect(input).toMatchObject({ model: 'stage-model', loopId: other.id });
+      expect(input).not.toHaveProperty('escalated');
+      expect(await ticketOf(spent.id)).toMatchObject({
+        status: 'blocked',
+        statusReason: 'Ran 6 times without finishing',
+      });
+    });
+
+    it("prefers the stage's escalation model, and prices admission on it", async () => {
+      h.getAvailableModels.mockResolvedValue([{ id: 'claude-sonnet-5' }, { id: 'strong' }, { id: 'stage-strong' }]);
+      h.nextIterationCredits.mockImplementation((model: { id: string }) => (model.id === 'stage-strong' ? 20 : 1));
+      const loop = await createLoop({
+        stages: STAGES,
+        stageConfig: [{ stage: 'todo', escalationModel: 'stage-strong' }],
+        escalationModel: 'strong',
+        budgetCreditsPerDay: 10,
+      });
+      const ticket = await createTicket(loop.id, { runCount: 5 });
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(h.startAgentExecution).not.toHaveBeenCalled();
+      expect(await reload(loop.id)).toMatchObject({ status: 'paused', statusReason: BUDGET_PAUSE_REASON });
+      expect(await ticketOf(ticket.id)).toMatchObject({ status: 'open', runCount: 5 });
+    });
+
+    it('caps an escalated run from the escalation model', async () => {
+      h.getAvailableModels.mockResolvedValue([{ id: 'claude-sonnet-5' }, { id: 'strong' }]);
+      h.nextIterationCredits.mockImplementation((model: { id: string }) => (model.id === 'strong' ? 3 : 1));
+      const loop = await createLoop({ stages: STAGES, escalationModel: 'strong', budgetCreditsPerDay: 10 });
+      await createTicket(loop.id, { runCount: 5 });
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      const input = h.startAgentExecution.mock.calls[0][0];
+      expect(input).toMatchObject({ model: 'strong', escalated: true });
+      expect(input.creditCap).toBeGreaterThan(0);
+    });
+  });
+});
+
+describe('dispatchLoopNow', () => {
+  const createTicket = async (loopId: string, overrides: Record<string, unknown> = {}) =>
+    (
+      await WorkItem.create({
+        userId: 'user-1',
+        loopId,
+        title: 'Write the summary',
+        stage: 'todo',
+        status: 'open',
+        dependencies: [],
+        priority: 'p2',
+        ...overrides,
+      })
+    ).toJSON();
+  const ticketOf = async (id: string) => (await WorkItem.findById(id))!.toJSON();
+  const LATER = new Date(NOW.getTime() + 60 * 60_000);
+
+  it('starts a due live loop on its ready ticket and pushes the change to its page', async () => {
+    const loop = await createLoop();
+    const ticket = await createTicket(loop.id);
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'in_progress', executionId: 'exec-1' });
+    expect(await reload(loop.id)).toMatchObject({ activeExecutionIds: ['exec-1'] });
+    expect(h.pushLoopChanged).toHaveBeenCalledWith('user-1', loop.id, logger);
+  });
+
+  it('is a no-op for a loop that is not due, with no push', async () => {
+    const loop = await createLoop({ nextRunAt: LATER });
+    await createTicket(loop.id);
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    expect(h.pushLoopChanged).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when EnableLoops is off', async () => {
+    vi.mocked(adminSettingsRepository.getSettingsValue).mockResolvedValue(false as never);
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'] });
+    executions['exec-0'] = { status: 'completed', result: { answer: 'done' } };
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    expect(await reload(loop.id)).toMatchObject({ activeExecutionIds: ['exec-0'] });
+  });
+
+  it('starts nothing while every loop run slot is taken', async () => {
+    for (let i = 0; i < MAX_ACTIVE_LOOP_RUNS; i++)
+      await createLoop({ activeExecutionIds: [`busy-${i}`], nextRunAt: LATER });
+    const loop = await createLoop();
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    expect((await reload(loop.id)).leaseUntil).toBeUndefined();
+  });
+
+  it('folds a finished run, advances its ticket and starts the next run in the same call', async () => {
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: LATER });
+    const ticket = await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0' });
+    executions['exec-0'] = { status: 'completed', result: { answer: 'done' } };
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(await ticketOf(ticket.id)).toMatchObject({ stage: 'doing', status: 'in_progress', executionId: 'exec-1' });
+    expect(await reload(loop.id)).toMatchObject({ activeExecutionIds: ['exec-1'], runCount: 1 });
+  });
+
+  it('gives a freed slot to the longest-due loop, not back to the loop whose run ended', async () => {
+    for (let i = 0; i < MAX_ACTIVE_LOOP_RUNS - 1; i++)
+      await createLoop({ activeExecutionIds: [`busy-${i}`], nextRunAt: LATER });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: LATER });
+    await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0' });
+    executions['exec-0'] = { status: 'completed', result: { answer: 'done' } };
+    const waiting = await createLoop({ userId: 'user-2', nextRunAt: new Date(PAST.getTime() - 60_000) });
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect(await reload(waiting.id)).toMatchObject({ activeExecutionIds: ['exec-1'] });
+    expect((await reload(loop.id)).activeExecutionIds ?? []).toEqual([]);
+    // The fold still shows on the ended loop's page.
+    expect(h.pushLoopChanged).toHaveBeenCalledWith('user-1', loop.id, logger);
+  });
+
+  it('with free slots, still starts this loop after an older due loop takes the first one', async () => {
+    const waiting = await createLoop({ userId: 'user-2', nextRunAt: new Date(PAST.getTime() - 60_000) });
+    const loop = await createLoop();
+    const ticket = await createTicket(loop.id);
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(2);
+    expect((await reload(waiting.id)).activeExecutionIds).toEqual(['exec-1']);
+    expect((await reload(loop.id)).activeExecutionIds).toEqual(['exec-2']);
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'in_progress', executionId: 'exec-2' });
+  });
+
+  it('is a no-op for a loop that does not exist', async () => {
+    await dispatchLoopNow(new mongoose.Types.ObjectId().toString(), NOW, logger);
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+  });
+
+  it('never starts a run on a desktop-stage ticket', async () => {
+    const loop = await createLoop({
+      stages: ['todo', 'review', 'done'],
+      stageConfig: [{ stage: 'review', runner: 'desktop' }],
+    });
+    const ticket = await createTicket(loop.id, { stage: 'review' });
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    // The loop still runs, as a plain goal run; the desktop ticket waits for its runner.
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect(h.startAgentExecution.mock.calls[0][0].query).not.toContain('Ticket id:');
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'open' });
+  });
+
+  it('with the tick and events firing together, starts one run and claims the ticket once', async () => {
+    const loop = await createLoop();
+    const ticket = await createTicket(loop.id);
+
+    await Promise.all([
+      runLoopSchedulerTick(NOW, logger),
+      dispatchLoopNow(loop.id, NOW, logger),
+      dispatchLoopNow(loop.id, NOW, logger),
+    ]);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'in_progress', runCount: 1 });
+  });
+
+  it('with the tick and events firing together on a finished run, folds it once and starts one next run', async () => {
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: LATER });
+    const ticket = await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0' });
+    executions['exec-0'] = { status: 'completed', result: { answer: 'done' } };
+
+    await Promise.all([
+      runLoopSchedulerTick(NOW, logger),
+      dispatchLoopNow(loop.id, NOW, logger),
+      dispatchLoopNow(loop.id, NOW, logger),
+    ]);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect(await ticketOf(ticket.id)).toMatchObject({ stage: 'doing', status: 'in_progress', executionId: 'exec-1' });
+    expect(await reload(loop.id)).toMatchObject({ activeExecutionIds: ['exec-1'], runCount: 1 });
   });
 });

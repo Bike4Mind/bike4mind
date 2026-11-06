@@ -23,6 +23,7 @@ import {
 import { withSafeOrganization } from '@server/utils/toSafeOrganizationSubdocument';
 import { findSharedWorkspaceUserIds } from '@server/users/sharedWorkspaceUserIds';
 import { findPendingProjectInviteeIds } from '@server/users/pendingProjectInviteeIds';
+import { findPendingOrganizationInviteeIds } from '@server/users/pendingOrganizationInviteeIds';
 import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '@server/users/signupAnomaly';
 import * as z from 'zod';
 import qs from 'qs';
@@ -69,6 +70,10 @@ const querySchema = z.object({
     .string()
     .regex(/^[0-9a-fA-F]{24}$/)
     .optional(),
+  pendingInviteOrganizationId: z
+    .string()
+    .regex(/^[0-9a-fA-F]{24}$/)
+    .optional(),
   publicView: z
     .string()
     .optional()
@@ -93,6 +98,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
       downloadAll,
       projectId,
       pendingInviteProjectId,
+      pendingInviteOrganizationId,
       recentSignups,
       createdFrom,
       createdTo,
@@ -419,17 +425,21 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
       const total = results[0].totalCount[0]?.count || 0;
       const users: IUserObject[] = results[0].paginatedResults;
 
-      // Project invites store recipients as emails, which the picker never returns, so the
-      // "already invited" match is made here instead of in the modal. A caller without share
-      // access gets no flag at all (null -> undefined) rather than an error: the flag is an
-      // annotation on the search, and must not break the search itself.
-      const pendingInviteeIds = pendingInviteProjectId
-        ? ((await findPendingProjectInviteeIds(
+      // Invite recipients are emails, which the picker never returns, so pending matches happen
+      // here. Unauthorized contexts omit the annotation without preventing the normal search.
+      const pendingInviteeIds = pendingInviteOrganizationId
+        ? ((await findPendingOrganizationInviteeIds(
             req.user,
-            pendingInviteProjectId,
+            pendingInviteOrganizationId,
             users.map(user => String(user._id))
           )) ?? undefined)
-        : undefined;
+        : pendingInviteProjectId
+          ? ((await findPendingProjectInviteeIds(
+              req.user,
+              pendingInviteProjectId,
+              users.map(user => String(user._id))
+            )) ?? undefined)
+          : undefined;
 
       const pagination = {
         currentPage: page,

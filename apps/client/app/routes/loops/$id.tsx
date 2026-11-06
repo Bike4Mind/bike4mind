@@ -36,6 +36,7 @@ import {
   countNeedsYou,
   useLoop,
   useLoopEvents,
+  useLoopRunInfo,
   useLoops,
   useLoopTickets,
   useOverrideDirective,
@@ -59,6 +60,7 @@ export default function LoopDetailPage() {
   const { data: loop, isLoading, error } = useLoop(id);
   const { data: tickets } = useLoopTickets(id);
   const { data: events } = useLoopEvents(id);
+  const { data: runInfo } = useLoopRunInfo(run);
   const { data: loops = [] } = useLoops();
   const overrideDirective = useOverrideDirective();
   const resolveUnsure = useResolveUnsure();
@@ -217,7 +219,30 @@ export default function LoopDetailPage() {
         data-testid="loop-run-drawer"
       >
         <Stack direction="row" alignItems="center" justifyContent="space-between">
-          <DialogTitle>Run</DialogTitle>
+          <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
+            <DialogTitle>Run</DialogTitle>
+            {runInfo?.model && (
+              <Typography level="body-sm" data-testid="loop-run-model">
+                {runInfo.model}
+              </Typography>
+            )}
+            {runInfo?.escalated && (
+              <Chip
+                size="sm"
+                variant="soft"
+                color="warning"
+                title="The ticket's last run before its run limit, on the escalation model"
+                data-testid="loop-run-escalated"
+              >
+                Escalated
+              </Chip>
+            )}
+            {runInfo?.loopRunKind === 'triage' && (
+              <Chip size="sm" variant="soft" color="neutral" data-testid="loop-run-triage">
+                Triage
+              </Chip>
+            )}
+          </Stack>
           <IconButton
             size="sm"
             variant="plain"

@@ -2,7 +2,7 @@ import { Request } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { workItemRepository } from '@bike4mind/database';
-import { DEFAULT_WORK_ITEM_PRIORITY, IWorkItem } from '@bike4mind/common';
+import { IWorkItem } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { assertDependenciesUsable } from '@server/utils/workItemDependencies';
@@ -10,8 +10,10 @@ import {
   assertBlockedOnSatisfiable,
   assertLoopTicketAccess,
   makeDueIfReady,
+  priorityPatch,
   ticketMovePatch,
 } from '@server/utils/loopTickets';
+import { requestLoopDispatch } from '@server/utils/loopDispatch';
 import {
   parseStatusFilter,
   validateWorkItemDependencies,
@@ -87,7 +89,8 @@ const handler = baseApi()
     for (const field of ['stage', 'priority', 'blockedOn'] as const) {
       if (!loop && body[field] != null) throw new BadRequestError(`${field} is only valid on a loop ticket`);
     }
-    const priority = validateWorkItemPriority(body.priority) ?? DEFAULT_WORK_ITEM_PRIORITY;
+    // No priority leaves the ticket untriaged: the loop's next triage run sets one.
+    const priority = validateWorkItemPriority(body.priority);
     const ticket =
       loop &&
       ticketMovePatch(loop, undefined, {
@@ -114,12 +117,12 @@ const handler = baseApi()
       status,
       dependencies,
       ...(status === 'closed' && { closedAt: new Date() }),
-      ...(loop && { loopId: loop.id, stage: ticket!.stage, priority }),
+      ...(loop && { loopId: loop.id, stage: ticket!.stage, ...(priority && priorityPatch(priority, 'owner')) }),
       ...(ticket?.statusReason && { statusReason: ticket.statusReason }),
       ...(ticket?.blockedOn && { blockedOn: ticket.blockedOn }),
     } as Omit<IWorkItem, 'id' | 'createdAt' | 'updatedAt'>);
 
-    if (loop) await makeDueIfReady(loop);
+    if (loop && (await makeDueIfReady(loop))) await requestLoopDispatch(loop.id, req.logger);
     res.status(201).json(created);
   });
 

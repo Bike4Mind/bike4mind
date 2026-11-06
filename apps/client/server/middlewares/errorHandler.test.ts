@@ -43,6 +43,19 @@ describe('errorHandler — request_id in the error envelope', () => {
   });
 });
 
+describe('errorHandler - logged URL', () => {
+  it('logs the path without its query string', () => {
+    const { req, res } = makeReqRes();
+    req.url = '/api/auth/google?inviteCode=REF-123';
+    errorHandler('totally unknown', req, res);
+    expect(req.logger.error).toHaveBeenCalledWith(
+      expect.stringMatching(/^POST \/api\/auth\/google /),
+      'totally unknown'
+    );
+    expect(JSON.stringify(req.logger.error.mock.calls)).not.toContain('REF-123');
+  });
+});
+
 describe('errorHandler - the body carries no keys the envelope does not document', () => {
   // The gate for CONVENTIONS.md section 1. errorHandler serves every route, so an
   // undocumented key it adds ships on the public surface with no contract declaring

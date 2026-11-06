@@ -144,6 +144,7 @@ void app.whenReady().then(async () => {
     modelServers,
     stopModelServers,
     localContext,
+    modelSettings,
     capabilityLedger,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
@@ -160,7 +161,11 @@ void app.whenReady().then(async () => {
       models.catalogSampling(name, modelBlob, parameters, hasAdapter),
   });
   const loops = registerLoopRunner(auth, chat, background);
-  const models = registerModels(modelServers, { localContext: () => localContext.read() }, capabilityLedger);
+  const models = registerModels(
+    modelServers,
+    { localContext: () => localContext.read(), modelSettings: modelId => modelSettings.get(modelId) },
+    capabilityLedger
+  );
   fleet.setDirectoryResolver(async sessionId => {
     const session = await chat.getSession(sessionId);
     return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;

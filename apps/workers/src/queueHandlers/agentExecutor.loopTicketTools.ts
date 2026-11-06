@@ -9,7 +9,6 @@
  * Headless loop runs pre-approve them in `startAgentExecution`. Stage rule: `@server/utils/loopTickets`.
  */
 import {
-  DEFAULT_WORK_ITEM_PRIORITY,
   desktopStagesOf,
   LOOP_TICKET_TOOL_NAMES,
   WORK_ITEM_BLOCKERS,
@@ -28,11 +27,14 @@ import {
   assertBlockedOnSatisfiable,
   assertCloudRunMayChange,
   makeDueIfReady,
+  priorityPatch,
   ticketMovePatch,
   UNSURE_PREFIX,
   unsureReason,
 } from '@server/utils/loopTickets';
 import { assertDependenciesUsable } from '@server/utils/workItemDependencies';
+import { pushLoopChanged, requestLoopDispatch } from '@server/utils/loopDispatch';
+import { Logger } from '@bike4mind/observability';
 import {
   validateWorkItemDependencies,
   validateWorkItemDescription,
@@ -48,7 +50,13 @@ const LIST_LIMIT = 100;
 /** Same text for another user's loop and a missing one, so a refusal never confirms a foreign loop exists. */
 export const LOOP_NOT_FOUND = 'loop not found';
 const TICKET_NOT_FOUND = 'ticket not found';
+// Only for the best-effort dispatch and push warnings; the tools have no request logger in scope.
+const logger = new Logger();
 const QUESTION_MAX = 1000;
+const SPLIT_MIN = 2;
+const SPLIT_MAX = 20;
+/** A split child's dependency on an earlier sibling: `$0` is the first child. */
+const SIBLING_REF = /^\$(\d+)$/;
 
 interface LoopTicketScope {
   userId: string;
@@ -88,7 +96,9 @@ const summarize = (ticket: IWorkItem, desktopStages: string[] = []) => ({
   status: ticket.status,
   ...(ticket.statusReason && { statusReason: ticket.statusReason }),
   ...(ticket.blockedOn && { blockedOn: ticket.blockedOn }),
-  priority: ticket.priority ?? DEFAULT_WORK_ITEM_PRIORITY,
+  // Absent: untriaged, waiting for a triage run to set it.
+  ...(ticket.priority && { priority: ticket.priority }),
+  ...(ticket.epic && { epic: true }),
   dependencies: ticket.dependencies,
   ...(ticket.stage && desktopStages.includes(ticket.stage) && { desktopRunner: true }),
 });
@@ -96,7 +106,8 @@ const summarize = (ticket: IWorkItem, desktopStages: string[] = []) => ({
 const PRIORITY_PARAM = {
   type: 'string',
   enum: [...WORK_ITEM_PRIORITIES],
-  description: 'p0 is worked first, p3 last. Defaults to p2.',
+  description:
+    'p0: drop everything, p1: next up, p2: normal, p3: someday. p0 is worked first, p3 last. Without one the ticket waits for a triage run to set it.',
 };
 const BLOCKED_ON_PARAM = {
   type: 'string',
@@ -119,6 +130,12 @@ export async function asToolResult(run: () => Promise<unknown>): Promise<string>
 
 export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicketScope): Record<string, ToolDefinition> {
   let creates = 0;
+
+  /** After a ticket write: make the loop due if it has a ready ticket, ask for a dispatch, refresh its open page. */
+  const ticketsChanged = async (loop: ILoop) => {
+    if (await makeDueIfReady(loop)) await requestLoopDispatch(loop.id, logger);
+    await pushLoopChanged(userId, loop.id, logger);
+  };
 
   const ownLoop = async (id: unknown): Promise<ILoop> => {
     const loop = typeof id === 'string' ? await loopRepository.findByIdAndUserId(id, userId) : null;
@@ -199,7 +216,7 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
           const description = validateWorkItemDescription(params.description);
           const dependencies = validateWorkItemDependencies(params.dependencies) ?? [];
           await assertDependenciesUsable(userId, dependencies);
-          const priority = validateWorkItemPriority(params.priority) ?? DEFAULT_WORK_ITEM_PRIORITY;
+          const priority = validateWorkItemPriority(params.priority);
           const move = ticketMovePatch(loop, undefined, {
             stage: params.stage,
             status: params.status as WorkItemStatus | undefined,
@@ -217,12 +234,12 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
             dependencies,
             stage: move.stage!,
             status: move.status!,
-            priority,
+            ...(priority && priorityPatch(priority, 'agent')),
             ...(move.closedAt && { closedAt: move.closedAt }),
             ...(move.statusReason && { statusReason: move.statusReason }),
             ...(move.blockedOn && { blockedOn: move.blockedOn }),
           } as Omit<IWorkItem, 'id' | 'createdAt' | 'updatedAt'>);
-          await makeDueIfReady(loop);
+          await ticketsChanged(loop);
           return summarize(created);
         }),
       toolSchema: {
@@ -279,7 +296,11 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
 
           const movesLoop = params.loopId !== undefined && params.loopId !== existing.loopId;
           const current = await ownLoop(existing.loopId);
-          assertCloudRunMayChange(current, existing);
+          // Setting only the priority does not work the ticket, so a triage run may set it in a desktop stage too.
+          const onlyPriority = Object.entries(params).every(
+            ([key, v]) => v === undefined || ['id', 'priority'].includes(key)
+          );
+          if (!onlyPriority) assertCloudRunMayChange(current, existing);
           const loop = movesLoop ? await ownLoop(params.loopId) : current;
           if (params.status !== undefined && !['open', 'blocked', 'closed'].includes(params.status as string)) {
             throw new BadRequestError('status must be one of: open, blocked, closed');
@@ -292,7 +313,7 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
             ...(params.title !== undefined && { title: validateWorkItemTitle(params.title) }),
             ...(params.description !== undefined && { description: validateWorkItemDescription(params.description) }),
             ...(dependencies && { dependencies }),
-            ...(priority && { priority }),
+            ...(priority && priorityPatch(priority, 'agent')),
             ...((movesLoop ||
               params.stage !== undefined ||
               params.status !== undefined ||
@@ -310,7 +331,7 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
           // Conditional on the status the patch was computed from, so a concurrent fold is not overwritten.
           const updated = await workItemRepository.updateForUser(existing.id, userId, patch, existing.status);
           if (!updated) throw new ConflictError('ticket changed while saving; list it again and retry');
-          await makeDueIfReady(loop);
+          await ticketsChanged(loop);
           return summarize(updated);
         }),
       toolSchema: {
@@ -378,7 +399,7 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
           const updated = await workItemRepository.updateForUser(existing.id, userId, patch, existing.status);
           // Not an error: the question is already recorded, and a retry would ask it twice.
           if (!updated) return 'Question recorded for the owner. The ticket changed meanwhile, so it was not parked.';
-          await makeDueIfReady(loop);
+          await ticketsChanged(loop);
           return summarize(updated);
         }),
       toolSchema: {
@@ -397,7 +418,138 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
     }),
   };
 
+  const split: ToolDefinition = {
+    name: 'loop_ticket_split',
+    implementation: () => ({
+      toolFn: async value =>
+        asToolResult(async () => {
+          const params = (value ?? {}) as { id?: unknown; children?: unknown };
+          const existing =
+            typeof params.id === 'string' ? await workItemRepository.findByIdForUser(params.id, userId) : null;
+          if (!existing?.loopId) throw new NotFoundError(TICKET_NOT_FOUND);
+          const loop = await ownLoop(existing.loopId);
+          assertCloudRunMayChange(loop, existing);
+          if (existing.status !== 'open' || existing.epic)
+            throw new BadRequestError('only an open, unsplit ticket can be split');
+          const raw = params.children;
+          if (!Array.isArray(raw) || raw.length < SPLIT_MIN || raw.length > SPLIT_MAX) {
+            throw new BadRequestError(`children must be an array of ${SPLIT_MIN} to ${SPLIT_MAX} tickets`);
+          }
+          if (creates + raw.length > MAX_TICKET_CREATES_PER_INVOCATION) {
+            throw new BadRequestError(`at most ${MAX_TICKET_CREATES_PER_INVOCATION} tickets can be created per run`);
+          }
+
+          // Every child is checked before anything is written.
+          const children = raw.map((entry: unknown, index) => {
+            const child = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+            const priority = validateWorkItemPriority(child.priority);
+            if (!priority) throw new BadRequestError(`children[${index}].priority is required`);
+            const refs = Array.isArray(child.dependencies) ? (child.dependencies as unknown[]) : [];
+            const isSibling = (dep: unknown) => typeof dep === 'string' && SIBLING_REF.test(dep);
+            const siblings = refs.filter(isSibling).map(dep => {
+              const sibling = Number(SIBLING_REF.exec(dep as string)![1]);
+              if (sibling >= index) throw new BadRequestError(`children[${index}] can only depend on earlier children`);
+              return sibling;
+            });
+            const dependencies =
+              validateWorkItemDependencies(
+                Array.isArray(child.dependencies) ? refs.filter(dep => !isSibling(dep)) : child.dependencies
+              ) ?? [];
+            const move = ticketMovePatch(loop, undefined, { stage: child.stage });
+            // A child placed in the last stage would be closed on arrival, so the epic's split would mean nothing.
+            if (move.status === 'closed') {
+              throw new BadRequestError(`children[${index}] cannot start in the last stage`);
+            }
+            return {
+              title: validateWorkItemTitle(child.title),
+              description: validateWorkItemDescription(child.description),
+              stage: move.stage!,
+              priority,
+              siblings,
+              // The epic's own dependencies still hold for the work it is split into.
+              external: [...new Set([...existing.dependencies, ...dependencies])],
+            };
+          });
+          // With the epic's id, so a child cannot depend on the epic it unblocks (directly or through another ticket).
+          await assertDependenciesUsable(userId, [...new Set(children.flatMap(child => child.external))], existing.id);
+
+          creates += children.length;
+          const ids: string[] = [];
+          const now = new Date();
+          try {
+            for (const child of children) {
+              const created = await workItemRepository.create({
+                userId,
+                loopId: loop.id,
+                title: child.title,
+                ...(child.description ? { description: child.description } : {}),
+                dependencies: [...child.external, ...child.siblings.map(sibling => ids[sibling])],
+                stage: child.stage,
+                status: 'open',
+                ...priorityPatch(child.priority, 'agent', now),
+              } as Omit<IWorkItem, 'id' | 'createdAt' | 'updatedAt'>);
+              ids.push(created.id);
+            }
+            // Conditional on 'open', so a ticket a fold or the owner changed meanwhile is not turned into an epic.
+            const epic = await workItemRepository.updateForUser(
+              existing.id,
+              userId,
+              {
+                status: 'blocked',
+                blockedOn: 'dependencies',
+                dependencies: ids,
+                epic: true,
+                statusReason: `Epic: waiting on ${ids.length} child tickets`,
+                ...priorityPatch(null, 'agent'),
+              },
+              'open'
+            );
+            if (!epic) throw new ConflictError('ticket changed while splitting; list it again and retry');
+            await makeDueIfReady(loop);
+            return { epic: summarize(epic), children: ids };
+          } catch (error) {
+            // ponytail: not a transaction; a crash between the creates and the epic write leaves the children behind.
+            // Best effort, so a failed cleanup does not hide why the split failed.
+            await Promise.all(ids.map(id => workItemRepository.softDeleteForUser(id, userId))).catch(() => undefined);
+            throw error;
+          }
+        }),
+      toolSchema: {
+        name: 'loop_ticket_split',
+        description:
+          'Split a ticket too big for one pass through the loop\'s stages into 2-20 child tickets in the same loop. The ticket becomes an epic: it waits on its children and closes on its own once they all close. Give every child a priority. A child may depend on an earlier child by its index ("$0" is the first) or on existing ticket ids.',
+        parameters: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', description: 'Id of an open ticket to split.' },
+            children: {
+              type: 'array',
+              description: `${SPLIT_MIN} to ${SPLIT_MAX} child tickets.`,
+              items: {
+                type: 'object',
+                properties: {
+                  title: { type: 'string', description: 'Short title (300 characters max).' },
+                  description: { type: 'string', description: 'What needs doing (10,000 characters max).' },
+                  stage: { type: 'string', description: "One of the loop's stages. Defaults to its first stage." },
+                  priority: PRIORITY_PARAM,
+                  dependencies: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Earlier children as "$<index>", or existing ticket ids.',
+                  },
+                },
+                required: ['title', 'priority'],
+              },
+            },
+          },
+          required: ['id', 'children'],
+        },
+      },
+    }),
+  };
+
   return {
+    loop_ticket_split: split,
     loop_ticket_list: list,
     loop_ticket_create: create,
     loop_ticket_update: update,

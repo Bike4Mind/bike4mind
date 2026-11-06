@@ -132,6 +132,15 @@ describe('Register', () => {
     expect(mocks.startOAuthSignIn).toHaveBeenCalledWith(startUrl);
   });
 
+  it('carries a typed invite code into the provider start URL', async () => {
+    mocks.startOAuthSignIn.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderRegister();
+    await user.type(within(screen.getByTestId('register-invite-input')).getByRole('textbox'), ' REF 1&x ');
+    await user.click(screen.getByTestId('register-google-btn'));
+    expect(mocks.startOAuthSignIn).toHaveBeenCalledWith('/api/auth/google?inviteCode=REF%201%26x');
+  });
+
   it('hides the Apple sign-up button unless the deployment enables it', () => {
     renderRegister();
     expect(screen.queryByTestId('register-apple-btn')).toBeNull();

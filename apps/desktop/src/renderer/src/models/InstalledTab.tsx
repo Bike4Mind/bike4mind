@@ -388,7 +388,7 @@ export function InstalledTab({
         </>
       )}
 
-      <ModelDefaultsDialog option={settingsFor} onClose={() => setSettingsFor(null)} />
+      <ModelDefaultsDialog option={settingsFor} onClose={() => setSettingsFor(null)} onSaved={onRetry} />
 
       <Modal open={canManage && confirming !== null} onClose={() => !removing && setConfirming(null)}>
         <ModalDialog size="sm" role="alertdialog" data-testid="models-remove-dialog">

@@ -18,7 +18,7 @@ import { allSecrets, contributedSecretEnvironment, secrets } from './secrets';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { cdnUrlForLambdaEnv } from './router';
-import { agentContinuationQueue, generationJobQueue } from './queues';
+import { agentContinuationQueue, generationJobQueue, loopDispatchQueue } from './queues';
 import { toolRuntimeAssets } from './toolRuntimeAssets';
 
 // Re-export websocketApi route setup for the agent_execute route.
@@ -49,6 +49,8 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
     // (infra/chatCompletion.ts). resolveGenerationJobQueueUrl reads this direct link; the
     // sourceQueueUrls registry it falls back to is only linked on the web function.
     generationJobQueue,
+    // A loop run's end asks for the loop's next run (requestLoopDispatch); absent off the scheduler's stages.
+    ...(loopDispatchQueue ? [loopDispatchQueue] : []),
   ],
   environment: {
     // First, so a core variable of the same name always wins.

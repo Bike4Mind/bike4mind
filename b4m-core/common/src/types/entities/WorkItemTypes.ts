@@ -26,6 +26,13 @@ export const DEFAULT_WORK_ITEM_PRIORITY: WorkItemPriority = 'p2';
 export const workItemPriorityRank = (priority?: WorkItemPriority): number =>
   WORK_ITEM_PRIORITIES.indexOf(priority ?? DEFAULT_WORK_ITEM_PRIORITY);
 
+/**
+ * Who last set a loop ticket's priority. Only an `owner` priority is sticky: the scheduler's p2 cap may demote an
+ * agent-set p2 to p3 (`demote`), never an owner-set one.
+ */
+export const WORK_ITEM_PRIORITY_SETTERS = ['owner', 'agent', 'demote'] as const;
+export type WorkItemPrioritySetter = (typeof WORK_ITEM_PRIORITY_SETTERS)[number];
+
 /** Conditions the loop scheduler can test, so a ticket blocked on one reopens on its own once it holds. */
 export const WORK_ITEM_BLOCKERS = ['dependencies'] as const;
 export type WorkItemBlocker = (typeof WORK_ITEM_BLOCKERS)[number];
@@ -54,8 +61,16 @@ export interface IWorkItem {
   statusReason?: string;
   /** Loop runs that claimed this ticket since its owner last moved it; the scheduler blocks it at its limit. */
   runCount?: number;
-  /** Loop tickets only; absent reads as DEFAULT_WORK_ITEM_PRIORITY. */
+  /**
+   * Loop tickets only. Absent means untriaged: the scheduler never picks such a ticket and a triage run sets
+   * it. Display-only callers rank a missing one as DEFAULT_WORK_ITEM_PRIORITY.
+   */
   priority?: WorkItemPriority;
+  /** Set with every `priority` write (`priorityPatch` in apps/client/server/utils/loopTickets.ts); starts the service-level clock. */
+  prioritySetAt?: Date;
+  prioritySetBy?: WorkItemPrioritySetter;
+  /** Split into child tickets (its `dependencies`); parked on them and closed by the scheduler once they all close. */
+  epic?: boolean;
   /**
    * Set only while `blocked` on a condition the scheduler tests each tick; it reopens the ticket once the
    * condition holds. A block without it is a human one and is never reopened automatically.
@@ -85,6 +100,9 @@ export type WorkItemPatch = Partial<Pick<IWorkItem, 'title' | 'status' | 'depend
   statusReason?: string | null;
   executionId?: string | null;
   priority?: WorkItemPriority | null;
+  prioritySetAt?: Date | null;
+  prioritySetBy?: WorkItemPrioritySetter | null;
+  epic?: boolean | null;
   blockedOn?: WorkItemBlocker | null;
 };
 
@@ -189,7 +207,28 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
    * The loop's `open` tickets outside its last stage and `skipStages` (desktop stages) whose dependencies
    * are all closed or gone: highest priority first, then furthest stage, then oldest.
    */
-  listReadyForLoop(userId: string, loopId: string, stages: string[], skipStages?: string[]): Promise<IWorkItem[]>;
+  listReadyForLoop(
+    userId: string,
+    loopId: string,
+    stages: string[],
+    skipStages?: string[],
+    opts?: { onlyPriorities?: WorkItemPriority[] }
+  ): Promise<IWorkItem[]>;
+
+  /** The loop's open, non-epic tickets with no priority (any stage), oldest first: what a triage run sets. */
+  listUntriagedForLoop(userId: string, loopId: string, limit: number): Promise<IWorkItem[]>;
+
+  /**
+   * Sets p2 (agent-set) on those of `ids` still untriaged: what a triage run was shown but left, so one ticket the
+   * triage model skips (or cannot set) does not hold every later dispatch on triage. Returns how many changed.
+   */
+  defaultUntriaged(ids: string[], now: Date): Promise<number>;
+
+  /** Sets a p2 that its owner did not set to p3 (`prioritySetBy: 'demote'`); false when it no longer matched. */
+  demoteIfAgentSet(id: string, now: Date): Promise<boolean>;
+
+  /** Live p0/p1 loop tickets that are open, in progress or blocked, across all users: the service-level sweep. */
+  listUrgentForLoops(limit: number): Promise<IWorkItem[]>;
 
   /** `open -> in_progress`, conditional on still being `open`; null when another tick won the claim. */
   claimForRun(id: string, loopId: string): Promise<IWorkItem | null>;
@@ -246,7 +285,8 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
   /**
    * Reopens up to `limit` tickets (across all users) parked with `blockedOn: 'dependencies'` whose dependencies
    * are all closed or gone. Only status, statusReason and blockedOn change; runCount and executionId are kept.
-   * Returns the reopened tickets.
+   * An `epic` is closed in its loop's last stage instead (a deleted loop keeps it parked).
+   * Returns the reopened and closed tickets.
    */
   reopenSatisfiedBlocks(limit: number): Promise<IWorkItem[]>;
 

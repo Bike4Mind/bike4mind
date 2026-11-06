@@ -110,6 +110,7 @@ const createTicket = async (loopId: string, overrides: Record<string, unknown> =
       status: 'open',
       stage: 'build',
       dependencies: [],
+      priority: 'p2',
       ...overrides,
     })
   ).toJSON();
@@ -319,6 +320,67 @@ describe('claimRunnerTicket', () => {
       status: 'blocked',
       statusReason: 'Ran 9 times without finishing',
     });
+  });
+});
+
+describe('claimRunnerTicket priority policy', () => {
+  const p2RunToday = (loopId: string) =>
+    AgentExecution.create({
+      userId: USER,
+      sessionId: 'session-1',
+      questId: 'session-1',
+      query: 'q',
+      model: 'm',
+      status: 'completed',
+      loopId,
+      ticketPriority: 'p2',
+    });
+
+  it("omits p2/p3 and refuses a p2 claim once the loop's p2 runs are used up, still serving p0/p1", async () => {
+    const loop = await createLoop({ p2RunsPerDay: 1 });
+    const p2 = await createTicket(loop.id, { title: 'p2' });
+    await createTicket(loop.id, { title: 'p3', priority: 'p3' });
+    const p1 = await createTicket(loop.id, { title: 'p1', priority: 'p1' });
+    expect(await listRunnerTickets(USER, NOW)).toHaveLength(3);
+
+    await p2RunToday(loop.id);
+
+    expect((await listRunnerTickets(USER, NOW)).map(ticket => ticket.ticketId)).toEqual([p1.id]);
+    expect(await claimRunnerTicket(USER, p2.id, NOW, logger)).toMatchObject({ status: 409, reason: 'p2_budget' });
+    expect(await ticketOf(p2.id)).toMatchObject({ status: 'open', runCount: 0 });
+    const { runId } = await claim(p1.id);
+    expect(await runOf(runId)).toMatchObject({ workItemId: p1.id, ticketPriority: 'p1' });
+  });
+
+  it('counts its own p2 run toward the cap', async () => {
+    const loop = await createLoop({ p2RunsPerDay: 1 });
+    const { runId } = await claim((await createTicket(loop.id)).id);
+    expect(await runOf(runId)).toMatchObject({ ticketPriority: 'p2' });
+    expect(await claimRunnerTicket(USER, (await createTicket(loop.id)).id, NOW, logger)).toMatchObject({
+      reason: 'p2_budget',
+    });
+  });
+
+  it('neither lists nor claims an untriaged ticket', async () => {
+    const loop = await createLoop();
+    const untriaged = await createTicket(loop.id, { priority: undefined });
+    expect(await listRunnerTickets(USER, NOW)).toEqual([]);
+    expect(await claimRunnerTicket(USER, untriaged.id, NOW, logger)).toMatchObject({
+      status: 409,
+      reason: 'untriaged',
+    });
+  });
+
+  it("runs a ticket's last run before its limit on the escalation model, marked escalated", async () => {
+    // Four stages: a run limit of 9, so the claim from runCount 8 is the last.
+    const loop = await createLoop({ escalationModel: 'strong' });
+    const last = await claim((await createTicket(loop.id, { runCount: 8 })).id);
+    expect(last.model).toBe('strong');
+    expect(await runOf(last.runId)).toMatchObject({ model: 'strong', escalated: true });
+
+    const earlier = await claim((await createTicket(loop.id, { runCount: 7 })).id);
+    expect(earlier.model).toBe('stage-model');
+    expect(await runOf(earlier.runId)).not.toHaveProperty('escalated');
   });
 });
 

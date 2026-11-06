@@ -50,4 +50,10 @@ describe('runsLoopScheduler', () => {
     expect(readInfra('loopSchedulerDeadLetter.ts')).toMatch(/const loopSchedulerDlq = runsLoopScheduler\b/);
     expect(readInfra('cron.ts')).toMatch(/const loopSchedulerCron =\s*runsLoopScheduler && loopSchedulerDeadLetter/);
   });
+
+  it('gates the loop dispatch queue on it, and subscribes its consumer only where the queue exists', () => {
+    expect(readInfra('queues.ts')).toMatch(/const loopDispatchQueueDLQ = runsLoopScheduler \?/);
+    expect(readInfra('queues.ts')).toMatch(/const loopDispatchQueue = loopDispatchQueueDLQ\s*\?/);
+    expect(readInfra('cron.ts')).toMatch(/const loopDispatchSubscription = loopDispatchQueue\?\.subscribe\(/);
+  });
 });

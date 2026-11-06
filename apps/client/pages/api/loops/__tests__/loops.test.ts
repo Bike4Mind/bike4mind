@@ -40,6 +40,8 @@ const repo = vi.hoisted(() => ({
   create: vi.fn(),
   removeFromOversees: vi.fn(),
   makeDueNow: vi.fn(),
+  countInFlight: vi.fn(),
+  countLanesForUser: vi.fn(),
 }));
 const tickets = vi.hoisted(() => ({
   softDeleteByLoop: vi.fn(),
@@ -48,6 +50,8 @@ const tickets = vi.hoisted(() => ({
   countBlockedByLoop: vi.fn(),
   updateForUser: vi.fn(),
   findNextReadyForLoop: vi.fn(),
+  listUntriagedForLoop: vi.fn(),
+  listReadyForLoop: vi.fn(),
 }));
 const loopEvents = vi.hoisted(() => ({
   listForLoop: vi.fn(),
@@ -85,6 +89,17 @@ vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
 
 const getOrCreateSession = vi.hoisted(() => vi.fn());
 vi.mock('@server/managers/sessionCrud', () => ({ getOrCreateSession }));
+
+const dispatch = vi.hoisted(() => ({ requestLoopDispatch: vi.fn(), pushLoopChanged: vi.fn() }));
+vi.mock('@server/utils/loopDispatch', () => dispatch);
+
+const loopAdmission = vi.hoisted(() => vi.fn());
+const p2RunsLeft = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/loopBudget', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/loopBudget')>()),
+  loopAdmission,
+  p2RunsLeft,
+}));
 
 const resolveDefaultChatModel = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/chatCompletionDefaults', () => ({ resolveDefaultChatModel }));
@@ -146,6 +161,13 @@ beforeEach(() => {
   settings.LoopsDailyCreditsPerUser = 0;
   users.findById.mockResolvedValue({});
   executions.sumLoopCreditsForUser.mockResolvedValue(0);
+  repo.countInFlight.mockResolvedValue(0);
+  repo.countLanesForUser.mockResolvedValue(0);
+  repo.makeDueNow.mockResolvedValue(true);
+  loopAdmission.mockResolvedValue({ ok: true });
+  p2RunsLeft.mockResolvedValue(Infinity);
+  tickets.listUntriagedForLoop.mockResolvedValue([]);
+  tickets.listReadyForLoop.mockResolvedValue([]);
 });
 
 it.each(['collection', 'item', 'run', 'budget'])('%s route refuses API keys (jwtOnly)', mod => {
@@ -212,10 +234,41 @@ describe('POST /api/loops', () => {
     [{ ...validBody, tools: Array.from({ length: 51 }, (_, i) => `t${i}`) }, /tools/],
     [{ ...validBody, budgetCreditsPerDay: 0 }, /budgetCreditsPerDay/],
     [{ ...validBody, budgetCreditsPerDay: -5 }, /budgetCreditsPerDay/],
+    [{ ...validBody, serviceLevelHours: { p0: 0 } }, /serviceLevelHours.p0/],
+    [{ ...validBody, serviceLevelHours: { p1: 721 } }, /serviceLevelHours.p1/],
+    [{ ...validBody, serviceLevelHours: 4 }, /serviceLevelHours/],
+    [{ ...validBody, p2RunsPerDay: -1 }, /p2RunsPerDay/],
+    [{ ...validBody, p2RunsPerDay: 1.5 }, /p2RunsPerDay/],
+    [{ ...validBody, p2RunsPerDay: 1001 }, /p2RunsPerDay/],
+    [{ ...validBody, triageModel: '' }, /triageModel/],
+    [{ ...validBody, escalationModel: 'x'.repeat(201) }, /escalationModel/],
+    [{ ...validBody, stageConfig: [{ stage: 'todo', escalationModel: 5 }] }, /escalationModel/],
   ])('rejects an invalid body (%#)', async (body, message) => {
     await expect(call('collection', 'post', { body }).result).rejects.toThrow(message);
     expect(repo.create).not.toHaveBeenCalled();
     expect(getOrCreateSession).not.toHaveBeenCalled();
+  });
+
+  it('stores the priority settings and a stage escalation model', async () => {
+    await call('collection', 'post', {
+      body: {
+        ...validBody,
+        serviceLevelHours: { p0: 0.05, p1: 12 },
+        p2RunsPerDay: 0,
+        triageModel: 'cheap',
+        escalationModel: 'strong',
+        stageConfig: [{ stage: 'todo', escalationModel: 'stage-strong' }],
+      },
+    }).result;
+    expect(repo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serviceLevelHours: { p0: 0.05, p1: 12 },
+        p2RunsPerDay: 0,
+        triageModel: 'cheap',
+        escalationModel: 'strong',
+        stageConfig: [{ stage: 'todo', escalationModel: 'stage-strong' }],
+      })
+    );
   });
 
   it('stores an organizationId the caller may bill to', async () => {
@@ -339,6 +392,23 @@ describe('PATCH /api/loops/:id status transitions', () => {
     expect(patch).toMatchObject({ status: 'live', consecutiveFailures: 0 });
   });
 
+  it.each(['error', 'needs_you'])('%s -> live runs now, not an interval after the last run', async from => {
+    const before = Date.now();
+    const patch = await patchStatus({ status: from, lastRunAt: new Date() }, 'live');
+    expect(patch.nextRunAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(patch.nextRunAt.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(dispatch.requestLoopDispatch).toHaveBeenCalledWith(OID, expect.anything());
+  });
+
+  it('asks for a dispatch only when the loop goes live', async () => {
+    await patchStatus({ status: 'paused' }, 'live');
+    expect(dispatch.requestLoopDispatch).toHaveBeenCalledTimes(1);
+
+    vi.clearAllMocks();
+    await patchStatus({ status: 'live' }, 'paused');
+    expect(dispatch.requestLoopDispatch).not.toHaveBeenCalled();
+  });
+
   it('live -> paused', async () => {
     expect(await patchStatus({ status: 'live' }, 'paused')).toMatchObject({ status: 'paused' });
   });
@@ -436,6 +506,19 @@ describe('PATCH /api/loops/:id status transitions', () => {
     expect(repo.updateForUser.mock.calls[0][2]).toEqual({ agentId: null, budgetCreditsPerDay: null });
   });
 
+  it('sets and clears the priority settings', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    await call('item', 'patch', { query: { id: OID }, body: { p2RunsPerDay: 2, serviceLevelHours: { p1: 6 } } }).result;
+    expect(repo.updateForUser.mock.calls[0][2]).toEqual({ p2RunsPerDay: 2, serviceLevelHours: { p1: 6 } });
+
+    const nulls = { serviceLevelHours: null, p2RunsPerDay: null, triageModel: null, escalationModel: null };
+    await call('item', 'patch', { query: { id: OID }, body: nulls }).result;
+    expect(repo.updateForUser.mock.calls[1][2]).toEqual(nulls);
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { p2RunsPerDay: -1 } }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
   it('refuses fewer than two stages, which could not hold a ticket', async () => {
     repo.findByIdAndUserId.mockResolvedValue(loop());
     await expect(
@@ -457,15 +540,73 @@ describe('PATCH /api/loops/:id status transitions', () => {
 });
 
 describe('POST /api/loops/:id/run', () => {
-  it('makes a live loop due now', async () => {
+  const run = async (fields: Record<string, unknown> = {}) => {
     repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live', stages: ['todo', 'done'] }));
-    await call('run', 'post', { query: { id: OID } }).result;
+    repo.updateForUser.mockImplementation(async (_id: string, _u: string, patch: Record<string, unknown>) =>
+      loop({ status: 'live', ...fields, ...patch })
+    );
+    const { res, result } = call('run', 'post', { query: { id: OID } });
+    await result;
+    return res._getJSONData();
+  };
+
+  it('makes a live loop due now and asks for a dispatch', async () => {
+    const body = await run();
     expect(repo.updateForUser).toHaveBeenCalledWith(
       OID,
       'u1',
       { nextRunAt: expect.any(Date), idleStreak: 0, idleResetAt: expect.any(Date) },
       'live'
     );
+    expect(dispatch.requestLoopDispatch).toHaveBeenCalledWith(OID, expect.anything());
+    expect(body).not.toHaveProperty('waitingReason');
+  });
+
+  it.each([
+    ['a run is in flight', { activeExecutionIds: ['x1'] }, () => undefined, /Already running/],
+    ['every run slot is busy', {}, () => repo.countInFlight.mockResolvedValue(4), /run slots are busy/],
+    [
+      "the owner's cloud runs are busy",
+      {},
+      () => repo.countLanesForUser.mockResolvedValue(2),
+      /cloud loop runs are all busy/,
+    ],
+    [
+      'the loop budget is spent',
+      {},
+      () => loopAdmission.mockResolvedValue({ ok: false, kind: 'loop_budget' }),
+      /daily budget is spent/,
+    ],
+    [
+      'pacing defers it',
+      {},
+      () => loopAdmission.mockResolvedValue({ ok: false, kind: 'paced', readyAt: new Date('2026-11-05T14:30:00Z') }),
+      /Paced.*14:30 UTC/,
+    ],
+    [
+      "today's p2 runs are used up and only p2/p3 tickets are ready",
+      {},
+      () => {
+        p2RunsLeft.mockResolvedValue(0);
+        tickets.listReadyForLoop.mockResolvedValue([{ id: 't1', priority: 'p2' }]);
+      },
+      /p2 runs are used up/,
+    ],
+  ])('says why it waits when %s, and still asks for a dispatch', async (_case, fields, arrange, reason) => {
+    arrange();
+    const body = await run(fields);
+    expect(body.waitingReason).toMatch(reason);
+    expect(dispatch.requestLoopDispatch).toHaveBeenCalledWith(OID, expect.anything());
+  });
+
+  it.each([
+    ['a p0/p1 ticket is ready', () => tickets.listReadyForLoop.mockResolvedValue([{ id: 't1', priority: 'p1' }])],
+    ['an untriaged ticket waits', () => tickets.listUntriagedForLoop.mockResolvedValue([{ id: 't2' }])],
+  ])('does not report the p2 cap when %s', async (_case, arrange) => {
+    p2RunsLeft.mockResolvedValue(0);
+    tickets.listReadyForLoop.mockResolvedValue([{ id: 't1', priority: 'p3' }]);
+    arrange();
+    expect(await run()).not.toHaveProperty('waitingReason');
   });
 
   it('is a 409 when the loop stopped being live mid-request', async () => {
@@ -605,6 +746,8 @@ describe('GET /api/loops/:id/tickets', () => {
     title: 'T',
     status: 'open',
     dependencies: [],
+    priority: 'p2',
+    createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
   });
@@ -637,11 +780,15 @@ describe('GET /api/loops/:id/tickets', () => {
     expect(tickets.listForLoop).toHaveBeenCalledWith('u1', OID, 50);
   });
 
-  it('returns each ticket priority (p2 when unset) and blockedOn', async () => {
+  it('returns each ticket priority (absent: untriaged, never ready), blockedOn, demoted, epic and stale', async () => {
     repo.findByIdAndUserId.mockResolvedValue(loop({ stages: ['todo', 'done'] }));
+    const hoursAgo = (hours: number) => new Date(Date.now() - hours * 60 * 60 * 1000);
     tickets.listForLoop.mockResolvedValue([
-      ticket({ id: 'a', stage: 'todo', priority: 'p0' }),
-      ticket({ id: 'b', stage: 'todo', status: 'blocked', blockedOn: 'dependencies' }),
+      ticket({ id: 'a', stage: 'todo', priority: 'p0', prioritySetAt: hoursAgo(1) }),
+      ticket({ id: 'b', stage: 'todo', status: 'blocked', blockedOn: 'dependencies', epic: true, priority: undefined }),
+      ticket({ id: 'c', stage: 'todo', priority: undefined }),
+      ticket({ id: 'd', stage: 'todo', priority: 'p3', prioritySetBy: 'demote' }),
+      ticket({ id: 'e', stage: 'todo', priority: 'p0', prioritySetAt: hoursAgo(5) }),
     ]);
     tickets.findManyByIdsForUser.mockResolvedValue([]);
 
@@ -649,9 +796,14 @@ describe('GET /api/loops/:id/tickets', () => {
     await result;
 
     const [todo] = res._getJSONData().stages;
-    expect(todo.tickets[0]).toMatchObject({ id: 'a', priority: 'p0' });
+    expect(todo.tickets[0]).toMatchObject({ id: 'a', priority: 'p0', stale: false, demoted: false, epic: false });
     expect(todo.tickets[0]).not.toHaveProperty('blockedOn');
-    expect(todo.tickets[1]).toMatchObject({ id: 'b', priority: 'p2', blockedOn: 'dependencies' });
+    expect(todo.tickets[1]).toMatchObject({ id: 'b', blockedOn: 'dependencies', epic: true });
+    expect(todo.tickets[1]).not.toHaveProperty('priority');
+    expect(todo.tickets[2]).toMatchObject({ id: 'c', ready: false });
+    expect(todo.tickets[2]).not.toHaveProperty('priority');
+    expect(todo.tickets[3]).toMatchObject({ id: 'd', demoted: true });
+    expect(todo.tickets[4]).toMatchObject({ id: 'e', stale: true, ready: true });
   });
 
   it('does not mark an open ticket in a desktop stage as ready', async () => {
@@ -1070,6 +1222,7 @@ describe('POST /api/loops/:id/events/:eventId/resolve', () => {
       loopId: OID,
     });
     expect(repo.makeDueNow).toHaveBeenCalledWith(OID, expect.any(Date));
+    expect(dispatch.requestLoopDispatch).toHaveBeenCalledWith(OID, expect.anything());
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ source: 'asked', resolution: { outcome: 'resumed', note: 'EU' } });
     expect(res._getJSONData()).not.toHaveProperty('userId');

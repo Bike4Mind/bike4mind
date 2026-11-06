@@ -84,10 +84,11 @@ const HOLD_LABELS: Record<LoopHoldKind, (hold: ILoopHold, loop: Pick<ILoop, 'max
     `Paced: next run at ${new Date(hold.until!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} to spread the daily budget`,
   // A capacity hold from before lanes has no limit; it was the server-wide one.
   capacity: (hold, loop) => CAPACITY_LABELS[hold.limit ?? 'server'](loop),
+  priority_budget: () => 'p2 budget used for today; next p2 at 00:00 UTC',
 };
 
 /**
- * Why a live loop is held back on purpose: the scheduler's pacing or run-cap hold (`ILoop.hold`, set in
+ * Why a live loop is held back on purpose: the scheduler's pacing, run-cap or p2-cap hold (`ILoop.hold`, set in
  * apps/workers/src/cron/loopScheduler.ts), else its idle back-off. Null when nothing holds it.
  */
 export function holdLabel(
@@ -96,15 +97,14 @@ export function holdLabel(
 ): string | null {
   if (loop.status !== 'live') return null;
   const { hold } = loop;
-  // A pacing hold lapses once its deferred run is due, or once the owner reschedules (nextRunAt moves off `until`).
-  // A hold shows beside running lanes: it holds the free ones.
-  const pacingLive =
-    hold?.kind === 'pacing' &&
-    !!hold.until &&
+  // A deferring hold (pacing, priority_budget) lapses once its deferred run is due, or once the loop is made due or
+  // rescheduled (nextRunAt moves off `until`). A hold shows beside running lanes: it holds the free ones.
+  const deferLive =
+    !!hold?.until &&
     new Date(hold.until).getTime() > now &&
     !!loop.nextRunAt &&
     new Date(loop.nextRunAt).getTime() === new Date(hold.until).getTime();
-  if (hold && (hold.kind !== 'pacing' || pacingLive)) {
+  if (hold && (!hold.until || deferLive)) {
     return HOLD_LABELS[hold.kind](hold, loop);
   }
   return backoffLabel(loop, now);

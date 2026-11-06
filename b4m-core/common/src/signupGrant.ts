@@ -59,6 +59,11 @@ export interface SignupGrant {
   /** A disputed, refunded or fraud-warned payment: only an admin can release more of the grant. */
   unlockForfeited?: { cause: SignupUnlockForfeitCause; at: Date };
   /**
+   * Invite bonus paid on top of the grant (payInviteBonus). Never counted in creditsReleased, so the
+   * unlock remainder and the drip cap are computed as if no bonus were paid.
+   */
+  inviteBonusPaid?: number;
+  /**
    * An admin stopped every grant and reward for this account; nothing already granted is taken back.
    * Only the time lives here: the reason and the acting admin are in the audit entry. redactUserSecretsForSelf
    * (REST) and the users websocket field limits remove this field from every user-facing copy, admin views of
@@ -249,7 +254,8 @@ export async function resolveSignupGrantSettings(adminSettings: ScheduleSettings
  * `totalCredits` sets the enrolled entitlement (tranche first, remainder locked) instead of the signup settings.
  * It is a floor, not a ceiling: the drip and verification unlocks still grow the pool to the live drip cap
  * (signupGrantUnlockCredits, the drip branch in stagedSignupGrant.ts), so an invitee gets the larger of
- * `totalCredits` and the open-signup schedule. signupGrantInviteBonusCredits is the planned on-top bonus.
+ * `totalCredits` and the open-signup schedule. signupGrantInviteBonusCredits is the on-top invite bonus
+ * (payInviteBonus).
  */
 export async function newSignupGrant(adminSettings: ScheduleSettingsReader, totalCredits?: number) {
   const schedule = await resolveSignupGrantSchedule(adminSettings);

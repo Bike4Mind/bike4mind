@@ -288,7 +288,7 @@ export class LoopRunner {
    */
   private async run(claim: RunnerClaim, policy: LoopPolicy): Promise<void> {
     const { runId } = claim;
-    let sessionId: string;
+    let sessionId: string | undefined;
     try {
       const created = await this.deps.chat.createCodeSession({ directory: policy.directory, workspace: true });
       if (!created.ok) {
@@ -299,6 +299,8 @@ export class LoopRunner {
       await this.deps.chat.setApprovalMode(sessionId, policy.approvalMode);
       if (claim.model) await this.deps.chat.setLoopRunModel(sessionId, claim.model);
     } catch (err) {
+      // No turn has run, so no worktree exists yet: only the empty conversation is left to remove.
+      if (sessionId) await this.deps.chat.deleteSession(sessionId).catch(() => undefined);
       await this.report(runId, this.now(), { outcome: 'released', reason: `could not start: ${String(err)}` });
       return;
     }
@@ -337,7 +339,9 @@ export class LoopRunner {
 
   private laneOf(sessionId: string): Lane | undefined {
     const runId = this.deps.chat.loopRunOf(sessionId);
-    return runId ? this.lanes.get(runId) : undefined;
+    if (runId) return this.lanes.get(runId);
+    // Deleting a session drops its marking before its turn stops, so the turn's last event arrives unmarked.
+    return [...this.lanes.values()].find(lane => lane.sessionId === sessionId);
   }
 
   /** Every chat stream event, from the main-process observer. */
@@ -353,7 +357,11 @@ export class LoopRunner {
       this.creditStop(lane.claim.ticket.loopId);
       void this.finish(lane, { outcome: 'released', reason: 'out of credits' });
     } else if (event.type === 'error') void this.finish(lane, { outcome: 'failed', reason: event.message });
-    if (event.type === 'done') void this.turnDone(lane, event.content);
+    if (event.type !== 'done') return;
+    // The user pressed Stop (or deleted the conversation): the work is unfinished, and theirs now.
+    if (event.stopReason === 'aborted')
+      void this.finish(lane, { outcome: 'blocked', reason: 'Stopped on the desktop' });
+    else void this.turnDone(lane, event.content);
   }
 
   /** ApprovalGate closed a card in a runner session: nobody can answer it, so the user gets the ticket. */
@@ -381,13 +389,14 @@ export class LoopRunner {
   /** After a merge: the stage's deploy workflow, then its smoke check. Either failing blocks the ticket. */
   private async postTurnChecks(lane: Lane, answer: string): Promise<Outcome> {
     const guards = lane.claim.stage.guards ?? lane.policy.guards;
-    if (lane.merged && guards?.deployWorkflow) {
+    // No merge sha means the PR went to the merge queue, which may still drop it: wait for it to land.
+    if (lane.merged && (guards?.deployWorkflow || !lane.merged.mergeSha)) {
       const deployed = await runDeployCheck(
         this.deps.gh,
         {
           pr: lane.merged.pr,
           mergeSha: lane.merged.mergeSha,
-          workflow: guards.deployWorkflow,
+          ...(guards?.deployWorkflow ? { workflow: guards.deployWorkflow } : {}),
           cwd: lane.policy.directory,
         },
         { now: this.now, sleep: this.sleep }
