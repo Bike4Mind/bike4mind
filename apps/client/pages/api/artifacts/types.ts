@@ -1,4 +1,4 @@
-import { ArtifactTypeSchema, ARTIFACT_TYPE_REGISTRY, ARTIFACT_CATEGORIES } from '@bike4mind/common';
+import { ApiKeyScope, ArtifactTypeSchema, ARTIFACT_TYPE_REGISTRY, ARTIFACT_CATEGORIES } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 
@@ -8,7 +8,8 @@ const ARTIFACT_TYPES = ArtifactTypeSchema.options.map(type => ({
   ...ARTIFACT_TYPE_REGISTRY[type],
 }));
 
-const handler = baseApi()
+// Artifacts reuse the notebooks scopes; write is accepted for reads so a key that writes can read back.
+const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS] })
   /**
    * GET /api/artifacts/types
    * Get available artifact types and their metadata
