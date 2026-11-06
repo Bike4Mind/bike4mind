@@ -118,6 +118,7 @@ import {
   LOCAL_SERVER_NAME,
   serverRuntimeId,
   specsRate,
+  type FlashAttention,
   type ModelServerSpecs,
   type QuantizedKvCacheType,
 } from '@shared/modelServers';
@@ -204,6 +205,10 @@ export interface ModelHubServiceDeps {
   hardware: () => Promise<HardwareProfile>;
   /** Hardware entered in Settings by server id, `local` for this computer; read fresh for every call. */
   specs?: (serverId: string) => ModelServerSpecs | null;
+  /** The OLLAMA_KV_CACHE_TYPE a server's Ollama runs with, `local` for this computer; undefined is f16. */
+  kvCacheType?: (serverId: string) => QuantizedKvCacheType | undefined;
+  /** The OLLAMA_FLASH_ATTENTION a server's Ollama runs with when known, `local` for this computer; undefined is auto. */
+  flashAttention?: (serverId: string) => FlashAttention | undefined;
   /** The Settings choice local chat sizes its context with; fit badges plan for that same context. */
   localContext: () => Promise<LocalContextSetting>;
   /** A model's load settings by chat model id; its own context and draft count replace the above in its badge. */
@@ -716,13 +721,15 @@ interface Sizing {
   rating: 'probe' | 'entered';
   /** Whose memory `hardware` is, for the verdict's wording. */
   where: FitWhere;
-  /** The server's OLLAMA_KV_CACHE_TYPE as entered in Settings; absent is f16. */
+  /** The OLLAMA_KV_CACHE_TYPE the server runs with, when Desktop knows it; absent is f16. */
   kvCacheType?: QuantizedKvCacheType;
+  /** The OLLAMA_FLASH_ATTENTION the server runs with, when Desktop knows it; absent is auto. */
+  flashAttention?: FlashAttention;
 }
 
 /** The num_ctx OllamaLocal would send this model with, so a badge rates the load chat makes. */
 function chatContext(
-  { chatHardware, setting, kvCacheType }: Sizing,
+  { chatHardware, setting, kvCacheType, flashAttention }: Sizing,
   arch: LocalModelFootprint['arch'],
   weightsBytes: number,
   bounds: { modelLimit?: number; configured?: number; projectorBytes?: number; draftMax?: number }
@@ -730,7 +737,7 @@ function chatContext(
   const { projectorBytes, draftMax, ...limits } = bounds;
   return chatContextTokens({
     setting,
-    footprint: { arch, weightsBytes, projectorBytes, hardware: chatHardware, draftMax, kvCacheType },
+    footprint: { arch, weightsBytes, projectorBytes, hardware: chatHardware, draftMax, kvCacheType, flashAttention },
     ...limits,
   });
 }
@@ -748,6 +755,7 @@ function reviewedFit(entry: HubEntry, build: HubBuild, sizing: Sizing): ModelFit
     mmprojBytes,
     draftMax,
     kvCacheType: sizing.kvCacheType,
+    flashAttention: sizing.flashAttention,
     where: sizing.where,
     expertBytesPerLayer: build.tensorStats?.expertBytesPerLayer,
     activeParamsFraction: activeParamsFraction(entry.params),
@@ -821,7 +829,8 @@ export class ModelHubService {
       chatHardware: hardware,
       rating: specsRate(specs) ? 'entered' : 'probe',
       where: 'local',
-      kvCacheType: specs?.kvCacheType,
+      kvCacheType: this.#deps.kvCacheType?.(LOCAL_SERVER_ID),
+      flashAttention: this.#deps.flashAttention?.(LOCAL_SERVER_ID),
     };
   }
 
@@ -893,7 +902,8 @@ export class ModelHubService {
           chatHardware: null,
           rating: 'entered',
           where: 'server',
-          kvCacheType: specs?.kvCacheType,
+          kvCacheType: this.#deps.kvCacheType?.(target.id),
+          flashAttention: this.#deps.flashAttention?.(target.id),
         }
       : null;
   }
@@ -962,6 +972,7 @@ export class ModelHubService {
           expertBytesPerLayer: inspection?.expertBytesPerLayer,
           draftMax,
           kvCacheType: sizing.kvCacheType,
+          flashAttention: sizing.flashAttention,
           where,
         })
       : fitFromSize(model.sizeBytes, hardware, context, { limitKnown: limit !== undefined, where });

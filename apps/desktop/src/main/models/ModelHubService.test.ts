@@ -30,7 +30,7 @@ import {
 import { estimateFit, ollamaBuildBytes, type HubBuild, type HubManifest } from '@bike4mind/common';
 import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
 import { pullKey, type ModelPull } from '@shared/models';
-import type { ModelServerSpecs } from '@shared/modelServers';
+import type { ModelServerSpecs, QuantizedKvCacheType } from '@shared/modelServers';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@bike4mind/common', async importOriginal => {
@@ -1284,7 +1284,9 @@ describe('ModelHubService entered hardware', () => {
   /** This computer is a 62 GB CPU-only box with chat fixed at 32K; server `a` has whatever `specs.a` says. */
   function rated(
     specs: Record<string, ModelServerSpecs | null>,
-    setting: LocalContextSetting = { mode: 'fixed', tokens: 32768 }
+    setting: LocalContextSetting = { mode: 'fixed', tokens: 32768 },
+    kv: Record<string, QuantizedKvCacheType> = {},
+    flash: Record<string, 'on' | 'off'> = {}
   ) {
     const local = harness({ hardware: machine('cpu', 62) });
     const remote = harness();
@@ -1296,6 +1298,8 @@ describe('ModelHubService entered hardware', () => {
       libraryLayers: local.libraryLayers,
       hardware: local.hardware,
       specs: id => specs[id] ?? null,
+      kvCacheType: id => kv[id],
+      flashAttention: id => flash[id],
       localContext: async () => setting,
       curated: () => CURATED,
       onPullsChanged: () => {},
@@ -1432,32 +1436,56 @@ describe('ModelHubService entered hardware', () => {
     expect(curatedFit(list, 'gemma-4-26b')?.detail).not.toContain('Replies');
   });
 
-  it('sizes the KV cache with the type entered for the server, this computer included', async () => {
-    const blank = { ramGiB: null, gpuMemoryGiB: null, bandwidthGBps: null, unified: false };
+  it('sizes the KV cache with the type the server runs with, this computer included', async () => {
     const need = (detail = '') => Number(/about (\d+(?:\.\d+)?) GiB/.exec(detail)?.[1]);
     const f16 = await rated({}).service.curated();
-    const q8 = await rated({ local: { ...blank, kvCacheType: 'q8_0' } }).service.curated();
+    const q8 = await rated({}, undefined, { local: 'q8_0' }).service.curated();
     expect(q8.rating).toBe('probe');
     expect(curatedFit(f16, 'qwen3-8-27b')?.detail).not.toContain('KV cache');
     expect(curatedFit(q8, 'qwen3-8-27b')?.detail).toContain('the 32K context chat will use with a q8_0 KV cache');
     expect(need(curatedFit(q8, 'qwen3-8-27b')?.detail)).toBeLessThan(need(curatedFit(f16, 'qwen3-8-27b')?.detail));
-    const server = rated({ a: { ...GPU_16, kvCacheType: 'q4_0' } });
+    const server = rated({ a: GPU_16 }, undefined, { a: 'q4_0' });
     expect(curatedFit(await server.service.curated('a'), 'gemma-4-12b')?.detail).toContain('with a q4_0 KV cache');
     server.remote.runtime.list.mockResolvedValue([installedModel]);
     const installed = await server.service.installed('a');
     expect(installed.ok && installed.models[0].fit?.detail).toContain('with a q4_0 KV cache');
   });
 
+  it('sizes with the flash attention the server runs with, this computer included', async () => {
+    const need = (detail = '') => Number(/about (\d+(?:\.\d+)?) GiB/.exec(detail)?.[1]);
+    const auto = await rated({}, undefined, { local: 'q8_0' }).service.curated();
+    const off = await rated({}, undefined, { local: 'q8_0' }, { local: 'off' }).service.curated();
+    expect(curatedFit(off, 'qwen3-8-27b')?.detail).not.toContain('q8_0 KV cache');
+    expect(need(curatedFit(off, 'qwen3-8-27b')?.detail)).toBeGreaterThan(need(curatedFit(auto, 'qwen3-8-27b')?.detail));
+    const server = rated({ a: GPU_16 }, undefined, { a: 'q4_0' }, { a: 'off' });
+    expect(curatedFit(await server.service.curated('a'), 'gemma-4-12b')?.detail).not.toContain('q4_0 KV cache');
+    server.remote.runtime.list.mockResolvedValue([installedModel]);
+    const installed = await server.service.installed('a');
+    expect(installed.ok && installed.models[0].fit?.detail).not.toContain('q4_0 KV cache');
+  });
+
   it("rates the larger context Auto gives chat on this computer's GPU with a quantized KV cache", async () => {
     const gpu = { ramGiB: 64, gpuMemoryGiB: 16, bandwidthGBps: null, unified: false };
-    const contexts = async (specs: ModelServerSpecs) =>
-      (await rated({ local: specs }, AUTO_LOCAL_CONTEXT).service.curated()).entries.map(
+    const contexts = async (kv: Record<string, QuantizedKvCacheType>) =>
+      (await rated({ local: gpu }, AUTO_LOCAL_CONTEXT, kv).service.curated()).entries.map(
         entry => entry.builds[0].fit?.context ?? 0
       );
-    const f16 = await contexts(gpu);
-    const q8 = await contexts({ ...gpu, kvCacheType: 'q8_0' });
+    const f16 = await contexts({});
+    const q8 = await contexts({ local: 'q8_0' });
     expect(q8.every((tokens, index) => tokens >= f16[index])).toBe(true);
     expect(q8.some((tokens, index) => tokens > f16[index])).toBe(true);
+  });
+
+  it('rates the smaller context Auto gives chat when the daemon runs with flash attention off', async () => {
+    const gpu = { ramGiB: 64, gpuMemoryGiB: 16, bandwidthGBps: null, unified: false };
+    const contexts = async (flash: Record<string, 'off'>) =>
+      (await rated({ local: gpu }, AUTO_LOCAL_CONTEXT, { local: 'q8_0' }, flash).service.curated()).entries.map(
+        entry => entry.builds[0].fit?.context ?? 0
+      );
+    const auto = await contexts({});
+    const off = await contexts({ local: 'off' });
+    expect(off.every((tokens, index) => tokens <= auto[index])).toBe(true);
+    expect(off.some((tokens, index) => tokens < auto[index])).toBe(true);
   });
 });
 

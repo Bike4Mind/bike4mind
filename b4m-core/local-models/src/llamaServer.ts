@@ -1,4 +1,4 @@
-import { execFile, spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { access, constants, readFile, readdir, readlink, stat } from 'node:fs/promises';
@@ -16,6 +16,7 @@ import {
 import { storageError } from './fileLock';
 import { requestJson, type HttpClient } from './http';
 import { OpenAICompatibleRuntime } from './openaiCompatible';
+import { stopTree, trackChild, trackedChildCount } from './processTree';
 import type { FetchLike } from './types';
 
 /** Used when the caller passes no `contextSize`; callers such as Desktop pass one sized to the hardware. */
@@ -70,6 +71,9 @@ const UNQUANTIZED_CACHE_TYPES = new Set(['f32', 'f16', 'bf16']);
 const BATCH_FILE_RE = /\.(bat|cmd)$/i;
 
 const healthSchema = z.object({ status: z.string() });
+const routerPropsSchema = z.object({ role: z.literal('router') });
+// What llama.cpp prints for a flag it does not know, as a build from before router mode does for --models-dir.
+const NO_ROUTER_RE = /\b(?:invalid|unknown) argument: --models-dir\b/;
 
 export interface LlamaServerBinary {
   path: string;
@@ -263,57 +267,9 @@ export interface LlamaServerProcess {
   stop(): Promise<LlamaServerExit>;
 }
 
-const liveChildren = new Set<ChildProcess>();
-let exitHookInstalled = false;
-
-/** Signals the process and everything it started: its process group on POSIX, its tree on Windows. */
-function signalTree(child: ChildProcess, signal: 'SIGTERM' | 'SIGKILL', sync = false): void {
-  const pid = child.pid;
-  if (pid === undefined) return;
-  if (process.platform === 'win32') {
-    const args = ['/PID', String(pid), '/T', '/F'];
-    if (sync) spawnSync('taskkill', args, { windowsHide: true, stdio: 'ignore' });
-    else spawn('taskkill', args, { windowsHide: true, stdio: 'ignore' }).on('error', () => child.kill(signal));
-    return;
-  }
-  try {
-    process.kill(-pid, signal);
-  } catch {
-    child.kill(signal);
-  }
-}
-
-// An 'exit' listener may only do synchronous work.
-function killLiveChildren(): void {
-  for (const child of liveChildren) signalTree(child, 'SIGKILL', true);
-}
-
-function track(child: ChildProcess): void {
-  if (!exitHookInstalled) {
-    process.on('exit', killLiveChildren);
-    exitHookInstalled = true;
-  }
-  liveChildren.add(child);
-  child.once('exit', () => {
-    liveChildren.delete(child);
-    // A launcher that exits first would leave llama-server running where stop() cannot reach it.
-    if (process.platform !== 'win32' && child.pid !== undefined) {
-      try {
-        process.kill(-child.pid, 'SIGKILL');
-      } catch {
-        // ESRCH: the group is already gone.
-      }
-    }
-  });
-  // A child that never spawned emits 'error' and no 'exit'.
-  child.once('error', () => {
-    if (child.pid === undefined) liveChildren.delete(child);
-  });
-}
-
 /** For tests: whether the parent-exit hook still holds a process. */
 export function trackedLlamaServerCount(): number {
-  return liveChildren.size;
+  return trackedChildCount();
 }
 
 class ManagedLlamaServer implements LlamaServerProcess {
@@ -468,16 +424,24 @@ class ManagedLlamaServer implements LlamaServerProcess {
     return served.some(entry => entry.name === this.model);
   }
 
+  /** Whether `/props`, asked with this server's key, answers as a router. */
+  routes(): Promise<boolean> {
+    const client: HttpClient = {
+      runtimeId: RUNTIME_ID,
+      baseUrl: this.baseUrl,
+      fetch: this.fetchImpl,
+      headers: { authorization: `Bearer ${this.apiKey}` },
+    };
+    return requestJson(client, '/props', routerPropsSchema, { timeoutMs: HEALTH_REQUEST_TIMEOUT_MS }).then(
+      () => true,
+      () => false
+    );
+  }
+
   async stop(): Promise<LlamaServerExit> {
     if (this.exit) return this.exit;
     this.#stopping = true;
-    signalTree(this.child, 'SIGTERM');
-    const timer = setTimeout(() => signalTree(this.child, 'SIGKILL'), this.stopTimeoutMs);
-    try {
-      return await this.exited;
-    } finally {
-      clearTimeout(timer);
-    }
+    return stopTree(this.child, this.exited, this.stopTimeoutMs);
   }
 
   startError(reason: LlamaServerStartError['reason'], message: string): LlamaServerStartError {
@@ -699,6 +663,41 @@ export function listenerProblem(
 
 const delay = (ms: number) => new Promise<void>(done => setTimeout(done, ms).unref());
 
+type LaunchOptions = Pick<StartLlamaServerOptions, 'binaryPath' | 'binaryArgs' | 'build' | 'env' | 'signal'> &
+  LlamaServerTuning;
+
+/** The `-fa` arguments; throws for `off` with a quantized V cache. Only `on` and `off` need the build. */
+async function flashAttentionFor(options: LaunchOptions): Promise<string[]> {
+  const flashAttention = flashAttentionArgs(options, LLAMA_SERVER_FLASH_ATTN_VALUE_BUILD);
+  if (flashAttention.length === 0) return flashAttention;
+  const build =
+    options.build ??
+    (await findLlamaServer({ path: options.binaryPath, binaryArgs: options.binaryArgs, env: options.env }))?.build;
+  options.signal?.throwIfAborted();
+  return flashAttentionArgs(options, build ?? MIN_LLAMA_SERVER_BUILD);
+}
+
+/** Spawns llama-server with its key in the environment, in its own process group, tracked for the parent's exit. */
+function spawnKeyed(options: LaunchOptions, args: string[], apiKey: string): ChildProcess {
+  let child: ChildProcess;
+  try {
+    child = spawn(options.binaryPath, args, {
+      env: { ...childEnv(options.env ?? process.env, options.binaryPath), LLAMA_API_KEY: apiKey },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      // Its own process group, so stop() reaches whatever a launcher started.
+      detached: process.platform !== 'win32',
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new LlamaServerExitError(`could not run ${options.binaryPath}: ${reason}`, null, null, false, [], {
+      cause: error,
+    });
+  }
+  trackChild(child);
+  return child;
+}
+
 /**
  * Starts llama-server on loopback with a fresh API key in its environment. Resolves once it has logged its port,
  * `/health` answers, `/props` refuses a request without the key and `/v1/models` serves the model with it.
@@ -717,34 +716,11 @@ export async function startLlamaServer(options: StartLlamaServerOptions): Promis
     throw storageError(RUNTIME_ID, options.modelPath, error, 'read');
   });
   if (!file?.isFile()) throw new ModelNotFoundError(RUNTIME_ID, options.modelPath);
-  // Throws for `off` with a quantized V cache; only `on` and `off` need the build.
-  let flashAttention = flashAttentionArgs(options, LLAMA_SERVER_FLASH_ATTN_VALUE_BUILD);
-  if (flashAttention.length > 0) {
-    const build =
-      options.build ??
-      (await findLlamaServer({ path: options.binaryPath, binaryArgs: options.binaryArgs, env: options.env }))?.build;
-    flashAttention = flashAttentionArgs(options, build ?? MIN_LLAMA_SERVER_BUILD);
-    options.signal?.throwIfAborted();
-  }
+  const flashAttention = await flashAttentionFor(options);
 
   const apiKey = randomBytes(32).toString('base64url');
   const contextSize = options.contextSize ?? DEFAULT_LLAMA_SERVER_CONTEXT_SIZE;
-  let child: ChildProcess;
-  try {
-    child = spawn(options.binaryPath, serverArgs(options, alias, contextSize, flashAttention), {
-      env: { ...childEnv(options.env ?? process.env, options.binaryPath), LLAMA_API_KEY: apiKey },
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-      // Its own process group, so stop() reaches whatever a launcher started.
-      detached: process.platform !== 'win32',
-    });
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new LlamaServerExitError(`could not run ${options.binaryPath}: ${reason}`, null, null, false, [], {
-      cause: error,
-    });
-  }
-  track(child);
+  const child = spawnKeyed(options, serverArgs(options, alias, contextSize, flashAttention), apiKey);
   const server = new ManagedLlamaServer(
     child,
     apiKey,
@@ -770,10 +746,13 @@ export async function startLlamaServer(options: StartLlamaServerOptions): Promis
   }
 }
 
+type ReadyOptions = Pick<StartLlamaServerOptions, 'binaryPath' | 'port' | 'startTimeoutMs' | 'signal'>;
+
 async function waitUntilReady(
   server: ManagedLlamaServer,
-  options: StartLlamaServerOptions,
-  aborted: Promise<void>
+  options: ReadyOptions,
+  aborted: Promise<void>,
+  router = false
 ): Promise<void> {
   const timeoutMs = options.startTimeoutMs;
   const deadline = timeoutMs === undefined ? Infinity : Date.now() + timeoutMs;
@@ -843,7 +822,123 @@ async function waitUntilReady(
       `llama-server answered /props without its API key (${status ?? 'no answer'}); a launcher must pass LLAMA_API_KEY through`
     );
   }
-  if (!(await server.serves()))
+  if (!(await (router ? server.routes() : server.serves())))
     throw server.startError('wrong-server', `port ${server.port} answered, but not as the llama-server just started`);
   check();
+}
+
+export interface StartLlamaRouterOptions extends Pick<LlamaServerTuning, 'flashAttention' | 'extraArgs'> {
+  binaryPath: string;
+  /** As for `startLlamaServer`. */
+  binaryArgs?: readonly string[];
+  build?: number;
+  /** The GGUF files it serves, each loaded on its first request. */
+  modelsDir: string;
+  /** The loopback port it listens on. */
+  port: number;
+  /** How many models it keeps loaded at once (`--models-max`); default llama-server's. */
+  modelsMax?: number;
+  startTimeoutMs?: number;
+  stopTimeoutMs?: number;
+  signal?: AbortSignal;
+  onLog?: (line: string) => void;
+  onExit?: (exit: LlamaServerExit) => void;
+  fetch?: FetchLike;
+  env?: NodeJS.ProcessEnv;
+}
+
+/** A llama-server in router mode: one address for every model in `modelsDir`, each run by a server it starts. */
+export interface LlamaRouterProcess {
+  readonly pid: number;
+  /** `http://127.0.0.1:<port>`; the OpenAI API is under `/v1`. */
+  readonly baseUrl: string;
+  readonly port: number;
+  /** Per-process key, required on every request except `/health`. */
+  readonly apiKey: string;
+  readonly modelsDir: string;
+  readonly exited: Promise<LlamaServerExit>;
+  readonly running: boolean;
+  log(): string[];
+  stop(): Promise<LlamaServerExit>;
+}
+
+/**
+ * Starts llama-server in router mode on a fixed loopback port with a fresh API key, as `startLlamaServer` starts one
+ * model. The flags apply to every model it loads. Resolves once its port is confirmed, `/health` answers and `/props`
+ * answers as a router only with the key. Needs a llama.cpp build with router mode (`--models-dir`).
+ */
+export async function startLlamaRouter(options: StartLlamaRouterOptions): Promise<LlamaRouterProcess> {
+  options.signal?.throwIfAborted();
+  assertBinaryPath(options.binaryPath);
+  assertTuning(options);
+  if (!(Number.isInteger(options.port) && options.port > 0 && options.port < 65536))
+    throw new LocalRuntimeError('port must be an integer from 1 to 65535', RUNTIME_ID);
+  if (options.modelsMax !== undefined && !(Number.isInteger(options.modelsMax) && options.modelsMax >= 0))
+    throw new LocalRuntimeError('modelsMax must be a non-negative integer', RUNTIME_ID);
+  const dir = await stat(options.modelsDir).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw storageError(RUNTIME_ID, options.modelsDir, error, 'read');
+  });
+  if (!dir?.isDirectory()) throw new LocalRuntimeError(`${options.modelsDir} is not a folder`, RUNTIME_ID);
+  const flashAttention = await flashAttentionFor(options);
+
+  const apiKey = randomBytes(32).toString('base64url');
+  const args = [
+    ...(options.binaryArgs ?? []),
+    '--models-dir',
+    options.modelsDir,
+    '--host',
+    LOOPBACK,
+    '--port',
+    String(options.port),
+    ...(options.modelsMax === undefined ? [] : ['--models-max', String(options.modelsMax)]),
+    '--jinja',
+    '--no-webui',
+    '--offline',
+    ...flashAttention,
+    ...(options.extraArgs ?? []),
+  ];
+  const child = spawnKeyed(options, args, apiKey);
+  const server = new ManagedLlamaServer(
+    child,
+    apiKey,
+    '',
+    options.modelsDir,
+    0,
+    options.stopTimeoutMs ?? DEFAULT_LLAMA_SERVER_STOP_TIMEOUT_MS,
+    options.fetch ?? fetch,
+    options.onLog
+  );
+  const aborted = untilAborted(options.signal);
+  try {
+    await waitUntilReady(server, options, aborted.promise, true);
+    options.signal?.throwIfAborted();
+    server.onExit = options.onExit;
+  } catch (error) {
+    await server.stop();
+    options.signal?.throwIfAborted();
+    if (error instanceof LlamaServerExitError && error.log.some(line => NO_ROUTER_RE.test(line))) {
+      const message = `llama-server at ${options.binaryPath} has no router mode (--models-dir); a newer llama.cpp build is needed`;
+      throw new LlamaServerExitError(message, error.code, error.signal, false, error.log, { cause: error });
+    }
+    throw error;
+  } finally {
+    aborted.dispose();
+  }
+  const modelsDir = options.modelsDir;
+  return {
+    get pid() {
+      return server.pid;
+    },
+    baseUrl: server.baseUrl,
+    port: server.port,
+    apiKey,
+    modelsDir,
+    exited: server.exited,
+    get running() {
+      return server.running;
+    },
+    log: () => server.log(),
+    stop: () => server.stop(),
+  };
 }

@@ -23,7 +23,7 @@ export interface ModelServerSpecs {
   gpuMemoryGiB: number | null;
   bandwidthGBps: number | null;
   unified: boolean;
-  /** The server's OLLAMA_KV_CACHE_TYPE as entered; absent is Ollama's f16 default. */
+  /** A remote or SSH Ollama's OLLAMA_KV_CACHE_TYPE as entered; absent is Ollama's f16 default. */
   kvCacheType?: QuantizedKvCacheType;
 }
 

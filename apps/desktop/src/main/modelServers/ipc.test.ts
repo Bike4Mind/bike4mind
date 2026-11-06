@@ -3,7 +3,6 @@ import { IPC_CHANNELS } from '@shared/ipc';
 import { describe, expect, it, vi } from 'vitest';
 import { machineView } from '../models/fit';
 import { registerModelServersIpc, specsInput } from './ipc';
-import type { ModelServerRegistry } from './ModelServerRegistry';
 
 function register(probed?: Parameters<typeof registerModelServersIpc>[2]) {
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
@@ -18,7 +17,10 @@ function register(probed?: Parameters<typeof registerModelServersIpc>[2]) {
     update: vi.fn(async () => []),
     remove: vi.fn(),
     check: vi.fn(),
-  } as unknown as Pick<ModelServerRegistry, 'views' | 'probe' | 'add' | 'update' | 'remove' | 'check'>;
+    startServer: vi.fn(async () => []),
+    stopServer: vi.fn(async () => []),
+    restartServer: vi.fn(async () => []),
+  } as unknown as Parameters<typeof registerModelServersIpc>[1];
   registerModelServersIpc(ipc, registry, probed);
   const invoke = (channel: string, ...args: unknown[]) => handlers.get(channel)?.({}, ...args);
   return { registry, invoke };
@@ -37,11 +39,56 @@ describe('specsInput', () => {
     expect(specsInput('64')).toBeNull();
   });
 
-  it('keeps a quantized KV cache type and drops any other', () => {
+  it('keeps a quantized KV cache type, which a remote Ollama keeps under Hardware, and drops any other', () => {
     const blank = { ramGiB: null, gpuMemoryGiB: null, bandwidthGBps: null, unified: false };
     expect(specsInput({ ...blank, kvCacheType: 'q4_0' })).toEqual({ ...blank, kvCacheType: 'q4_0' });
     expect(specsInput({ ...blank, kvCacheType: 'f16' })).toEqual(blank);
     expect(specsInput({ ...blank, kvCacheType: 'q8_0; rm' })).toEqual(blank);
+  });
+});
+
+describe('registerModelServersIpc launch', () => {
+  it('passes launch settings through their shape and drops anything else', async () => {
+    const { registry, invoke } = register();
+    await invoke(IPC_CHANNELS.modelServersUpdate, 'local', {
+      launch: { kvCacheType: 'q8_0', flashAttention: 'on', modelsDir: ' /m ', extra: 'x' },
+    });
+    await invoke(IPC_CHANNELS.modelServersUpdate, 'local', { launch: { kvCacheType: 'q8_0; rm', flashAttention: 1 } });
+    expect(registry.update).toHaveBeenNthCalledWith(1, 'local', {
+      launch: { kvCacheType: 'q8_0', flashAttention: 'on', modelsDir: '/m' },
+    });
+    expect(registry.update).toHaveBeenNthCalledWith(2, 'local', { launch: {} });
+  });
+
+  it('runs start, stop and restart, and refuses any other action', async () => {
+    const { registry, invoke } = register();
+    expect(await invoke(IPC_CHANNELS.modelServersLaunch, 'abc', 'start')).toEqual({ ok: true, servers: [] });
+    await invoke(IPC_CHANNELS.modelServersLaunch, 'abc', 'stop');
+    await invoke(IPC_CHANNELS.modelServersLaunch, 'abc', 'restart');
+    expect(registry.startServer).toHaveBeenCalledWith('abc');
+    expect(registry.stopServer).toHaveBeenCalledWith('abc');
+    expect(registry.restartServer).toHaveBeenCalledWith('abc');
+    expect(await invoke(IPC_CHANNELS.modelServersLaunch, 'abc', 'kill')).toEqual({
+      ok: false,
+      error: 'Unknown server action.',
+    });
+  });
+
+  it('answers a failed start with its message', async () => {
+    const { registry, invoke } = register();
+    vi.mocked(registry.startServer).mockRejectedValueOnce(new Error('port 11500 is in use'));
+    expect(await invoke(IPC_CHANNELS.modelServersLaunch, 'abc', 'start')).toEqual({
+      ok: false,
+      error: 'port 11500 is in use',
+    });
+  });
+
+  it('passes a launch add through only when asked', async () => {
+    const { registry, invoke } = register();
+    await invoke(IPC_CHANNELS.modelServersAdd, { address: 'http://127.0.0.1:8090', name: 'r', launch: true });
+    await invoke(IPC_CHANNELS.modelServersAdd, { address: 'http://127.0.0.1:8090', name: 'r', launch: 'yes' });
+    expect(registry.add).toHaveBeenNthCalledWith(1, expect.objectContaining({ launch: true }));
+    expect(registry.add).toHaveBeenNthCalledWith(2, expect.not.objectContaining({ launch: expect.anything() }));
   });
 });
 

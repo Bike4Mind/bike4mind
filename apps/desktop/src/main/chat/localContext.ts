@@ -3,7 +3,7 @@ import { estimateFit, isCpuOnly, type FitInput, type HardwareProfile, type Model
 import { OUTPUT_RESERVE_TOKENS, replyRoom } from '@bike4mind/local-models/servers';
 import { estimateTextTokens } from '@shared/contextLimit';
 import { LOCAL_CONTEXT_SIZES, type ModelContextSetting } from '@shared/localContextSetting';
-import type { QuantizedKvCacheType } from '@shared/modelServers';
+import type { FlashAttention, QuantizedKvCacheType } from '@shared/modelServers';
 
 export interface OllamaMessage {
   role: string;
@@ -58,8 +58,10 @@ export interface LocalModelFootprint {
   hardware: HardwareProfile | null;
   /** Draft tokens per step while Ollama speculates (MTP or a draft layer); absent or 0 when it does not. */
   draftMax?: number;
-  /** The daemon's OLLAMA_KV_CACHE_TYPE as entered in Settings; absent is f16. */
+  /** The OLLAMA_KV_CACHE_TYPE the daemon runs with (see ModelServerRegistry.kvCacheType); absent is f16. */
   kvCacheType?: QuantizedKvCacheType;
+  /** The daemon's OLLAMA_FLASH_ATTENTION when Desktop knows it (see ModelServerRegistry.flashAttention); absent is auto. */
+  flashAttention?: FlashAttention;
 }
 
 export interface ChatContextInput {
@@ -81,17 +83,19 @@ function fitInput({
   hardware,
   draftMax = 0,
   kvCacheType,
+  flashAttention,
 }: LocalModelFootprint): SizedInput | null {
   if (!arch || !weightsBytes || !hardware?.totalMemoryBytes) return null;
   const mmprojBytes = projectorBytes < weightsBytes ? projectorBytes : 0;
-  // Ollama's API reports none of its daemon settings: the cache type is the one entered in Settings, and flash
-  // attention off (which fails a quantized cache's load) or num_parallel above 1 makes the real footprint larger.
+  // Ollama's API reports none of its daemon settings, so these are what Desktop started it with or read from its
+  // process; num_parallel above 1 still makes the real footprint larger.
   return {
     model: { arch, weightsBytes: weightsBytes - mmprojBytes, mmprojBytes },
     hardware,
     mode: 'chat',
     runtime: {
       kind: 'ollama',
+      ...(flashAttention ? { flashAttn: flashAttention } : {}),
       ...(draftMax > 0 ? { draftMax, speculative: true } : {}),
       ...(kvCacheType ? { kv: { k: kvCacheType, v: kvCacheType } } : {}),
     },

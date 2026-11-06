@@ -80,6 +80,8 @@ function setup() {
     check: vi.fn(async () => []),
     hubServer: vi.fn(() => null),
     specs: vi.fn(() => null),
+    kvCacheType: vi.fn(() => undefined),
+    flashAttention: vi.fn(() => undefined),
     onServerSaved: vi.fn((listener: (id: string) => void) => {
       saved = listener;
       return () => {};

@@ -266,22 +266,27 @@ export {
   LLAMA_SERVER_TUNING_FLAGS,
   MIN_LLAMA_SERVER_BUILD,
   findLlamaServer,
+  startLlamaRouter,
   startLlamaServer,
   type FindLlamaServerOptions,
+  type LlamaRouterProcess,
   type LlamaServerBinary,
   type LlamaServerExit,
   type LlamaServerFlashAttention,
   type LlamaServerProcess,
   type LlamaServerTuning,
+  type StartLlamaRouterOptions,
   type StartLlamaServerOptions,
 } from './llamaServer';
 export {
   DEFAULT_LLAMA_SERVER_PULL_QUANT,
   LLAMA_SERVER_RUNTIME_ID,
   LlamaServerRuntime,
+  ROUTER_LOG_NAME,
   parseLlamaServerPullRef,
   type LlamaServerRuntimeOptions,
   type StartModelOptions,
+  type StartRouterOptions,
 } from './llamaServerRuntime';
 export {
   gpuQueries,
@@ -332,6 +337,20 @@ export {
   type SystemdUnit,
   type UnitEnvironmentEvent,
 } from './ollamaInstall';
+export {
+  DEFAULT_OLLAMA_SERVE_START_TIMEOUT_MS,
+  DEFAULT_OLLAMA_SERVE_STOP_TIMEOUT_MS,
+  OLLAMA_LAUNCH_KEYS,
+  OllamaServeError,
+  findOllamaBinary,
+  ollamaLaunchEnv,
+  startOllamaServe,
+  type FindOllamaOptions,
+  type OllamaLaunchSettings,
+  type OllamaServeExit,
+  type OllamaServeProcess,
+  type StartOllamaServeOptions,
+} from './ollamaServe';
 export {
   mountFor,
   parseMountinfo,
