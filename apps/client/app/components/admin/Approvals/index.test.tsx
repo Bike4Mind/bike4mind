@@ -91,4 +91,13 @@ describe('Approvals queue', () => {
     expect(screen.getByTestId('admin-approval-start-impersonation-btn')).toBeTruthy();
     expect(screen.queryByTestId('admin-approve-btn')).toBeNull();
   });
+
+  it('shows the action label for a row whose summary and reason are withheld', () => {
+    rows.push(row('hidden', { action: 'user.impersonate_admin', summary: null, reason: null, canDecide: false }));
+    renderQueue();
+
+    const rendered = screen.getByTestId('admin-approval-row-hidden').textContent ?? '';
+    expect(rendered).toContain('Impersonate an admin');
+    expect(rendered).not.toContain('null');
+  });
 });

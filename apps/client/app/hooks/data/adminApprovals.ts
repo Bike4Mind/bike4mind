@@ -11,8 +11,9 @@ export type AdminApprovalStatusFilter = AdminApprovalStatus | 'all';
 export type AdminApprovalRow = {
   id: string;
   action: AdminApprovalAction;
-  summary: string;
-  reason: string;
+  /** null when the caller neither requested the row nor may decide it, like `params`. */
+  summary: string | null;
+  reason: string | null;
   status: AdminApprovalStatus;
   requestedBy: { id: string; name: string; email: string };
   expiresAt: string;

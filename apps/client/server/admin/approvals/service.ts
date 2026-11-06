@@ -217,24 +217,19 @@ export async function approveApproval(req: Request, id: string): Promise<Approve
   }
   if (redeemedByRequester) return { approval: claimed };
 
+  let result: unknown;
+  let executed: AdminApproval | null;
   try {
     // Loaded here so a gated route importing requestApproval does not pull in every executor's dependencies.
     const { approvalExecutors } = await import('./executors');
-    const result = await approvalExecutors[claimed.action](JSON.parse(claimed.paramsJson), {
+    result = await approvalExecutors[claimed.action](JSON.parse(claimed.paramsJson), {
       req,
       approval: claimed,
     });
-    const executed = await adminApprovalRepository.finish(claimed.id, 'executing', 'executed', {
+    executed = await adminApprovalRepository.finish(claimed.id, 'executing', 'executed', {
       executedAt: new Date(),
       result,
     });
-    await recordAdminActionFromRequest(req, {
-      action: 'admin.approval.executed',
-      target,
-      summary: `executed approved request: ${claimed.summary}`,
-      details,
-    });
-    return { approval: executed ?? claimed, result };
   } catch (error) {
     await adminApprovalRepository.finish(claimed.id, 'executing', 'failed', { error: errorMessage(error) });
     await recordAdminActionFromRequest(req, {
@@ -245,6 +240,18 @@ export async function approveApproval(req: Request, id: string): Promise<Approve
     });
     throw error;
   }
+  // The action already ran and the record says executed, so a missing audit row must not report failure.
+  try {
+    await recordAdminActionFromRequest(req, {
+      action: 'admin.approval.executed',
+      target,
+      summary: `executed approved request: ${claimed.summary}`,
+      details,
+    });
+  } catch (error) {
+    req.logger.error('[ADMIN_APPROVAL_EXECUTED_AUDIT_FAILED]', { approvalId: claimed.id, error });
+  }
+  return { approval: executed ?? claimed, result };
 }
 
 /** Another admin rejects, or the requester withdraws, a pending request. */
@@ -323,7 +330,9 @@ export async function redeemApproval(
   return redeemed;
 }
 
-export type ApprovalListRow = Omit<AdminApproval, 'paramsJson'> & {
+export type ApprovalListRow = Omit<AdminApproval, 'paramsJson' | 'summary' | 'reason'> & {
+  summary: string | null;
+  reason: string | null;
   params: unknown;
   stalled: boolean;
   canDecide: boolean;
@@ -333,7 +342,7 @@ export const APPROVAL_LIST_MAX = 100;
 
 /**
  * Pending rows past their expiry are reported as expired; the record itself is closed on its next decision.
- * `params` is null unless the caller requested the row or holds what deciding it needs.
+ * `params`, `summary` and `reason` are null unless the caller requested the row or holds what deciding it needs.
  */
 export async function listApprovals(
   req: Request,
@@ -352,10 +361,13 @@ export async function listApprovals(
       approval.status === 'pending' && isExpired(record, now) ? 'expired' : approval.status;
     const own = isOwnRequest(user, record);
     const mayDecide = canDecideAs(user, record);
+    const visible = own || mayDecide;
     return {
       ...approval,
       status,
-      params: own || mayDecide ? JSON.parse(paramsJson) : null,
+      summary: visible ? approval.summary : null,
+      reason: visible ? approval.reason : null,
+      params: visible ? JSON.parse(paramsJson) : null,
       stalled:
         status === 'executing' &&
         now.getTime() - (approval.decidedAt ?? approval.createdAt).getTime() > APPROVAL_STALLED_AFTER_MS,

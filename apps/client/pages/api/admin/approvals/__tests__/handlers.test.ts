@@ -85,6 +85,11 @@ describe('approval routes', () => {
     expect(res.json).toHaveBeenCalledWith({ approval: { id: 'x' }, result: { updated: 1 } });
   });
 
+  it('reject requires a fresh step-up before it runs anything', async () => {
+    await load('reject', () => import('../[id]/reject'));
+    expect(mocks.middleware.reject).toContain(mocks.stepUp);
+  });
+
   it('reject needs a reason before reaching the service', async () => {
     const reject = await load('reject', () => import('../[id]/reject'));
     await expect(reject(reqOf({ query: { id: 'x' }, body: { reason: '' } }), resMock())).rejects.toMatchObject({

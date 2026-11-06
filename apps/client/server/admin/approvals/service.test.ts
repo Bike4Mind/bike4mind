@@ -182,6 +182,18 @@ describe('approveApproval', () => {
     expect(auditActions()).toEqual(['admin.approval.approved', 'admin.approval.failed']);
   });
 
+  it('still succeeds, and records no failure, when the executed audit write throws', async () => {
+    mocks.record.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('audit down'));
+    const error = vi.fn();
+    const req = { user: { id: APPROVER, name: APPROVER, isAdmin: true }, logger: { error } } as unknown as Request;
+    const outcome = await approveApproval(req, ID);
+    expect(outcome.approval.status).toBe('executed');
+    expect(outcome.result).toEqual({ updated: 2 });
+    expect(mocks.repo.finish).not.toHaveBeenCalledWith(ID, 'executing', 'failed', expect.anything());
+    expect(auditActions()).not.toContain('admin.approval.failed');
+    expect(error).toHaveBeenCalledWith('[ADMIN_APPROVAL_EXECUTED_AUDIT_FAILED]', expect.anything());
+  });
+
   it('only unlocks impersonation of an admin, never running it for the approver', async () => {
     mocks.repo.findById.mockResolvedValue(approvalOf({ action: 'user.impersonate_admin' }));
     await approveApproval(fullAdmin(APPROVER), ID);
@@ -281,5 +293,21 @@ describe('listApprovals', () => {
     expect(requester.map(row => row.params)).toEqual([PARAMS, PARAMS, PARAMS]);
     const reader = await listApprovals(reqAs({ id: APPROVER, adminPermissions: ['support:read'] }), {});
     expect(reader.map(row => row.params)).toEqual([null, null, PARAMS]);
+  });
+
+  it('withholds summary and reason exactly where it withholds params', async () => {
+    mocks.repo.list.mockResolvedValue([
+      approvalOf({ id: '1' }),
+      approvalOf({ id: '2', requiresFullAdmin: true }),
+      approvalOf({ id: '3', requiredPermission: 'support:read' }),
+    ]);
+    const reader = await listApprovals(reqAs({ id: APPROVER, adminPermissions: ['support:read'] }), {});
+    expect(reader.map(({ id, summary, reason }) => ({ id, summary, reason }))).toEqual([
+      { id: '1', summary: null, reason: null },
+      { id: '2', summary: null, reason: null },
+      { id: '3', summary: 'Suspend 2 users', reason: 'spam wave' },
+    ]);
+    const requester = await listApprovals(reqAs({ id: REQUESTER, adminPermissions: ['support:read'] }), {});
+    expect(requester.map(row => row.summary)).toEqual(['Suspend 2 users', 'Suspend 2 users', 'Suspend 2 users']);
   });
 });

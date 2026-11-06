@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Box, Button, FormControl, FormLabel, Input, Option, Select, Stack, Tooltip, Typography } from '@mui/joy';
 import { toast } from 'sonner';
-import type { AdminApprovalStatus } from '@bike4mind/common';
+import type { AdminApprovalAction, AdminApprovalStatus } from '@bike4mind/common';
 import { ActionDialog } from '@client/app/components/admin/shared/ActionDialog';
 import { AdminPageHeader } from '@client/app/components/admin/shared/AdminPageHeader';
 import { DataTable, type DataColumn } from '@client/app/components/admin/shared/DataTable';
@@ -31,6 +31,17 @@ const STATUS_TONES: Record<AdminApprovalStatus, AdminStatusTone> = {
   failed: 'bad',
 };
 
+const ACTION_LABELS: Record<AdminApprovalAction, string> = {
+  'users.bulk': 'Bulk user action',
+  'org.credits.grant': 'Organization credit grant',
+  'org.credits.top_up': 'Organization credit top-up',
+  'user.subscription.grant': 'User subscription grant',
+  'user.impersonate_admin': 'Impersonate an admin',
+  'user.delete_admin': 'Delete an admin',
+};
+
+const summaryOf = (row: AdminApprovalRow) => row.summary ?? ACTION_LABELS[row.action];
+
 const REJECT_PRESETS = ['Not justified', 'Wrong target', 'Needs more detail'] as const;
 const IMPERSONATION_PRESETS = ['Reproducing a customer issue', 'Investigating a reported problem'] as const;
 
@@ -54,7 +65,7 @@ const StartImpersonationDialog: React.FC<{ row: AdminApprovalRow; onClose: () =>
       open
       onClose={onClose}
       title="Start approved impersonation"
-      description={`Uses the approval for "${row.summary}". The session is audited and time-boxed.`}
+      description={`Uses the approval for "${summaryOf(row)}". The session is audited and time-boxed.`}
       reasonPresets={IMPERSONATION_PRESETS}
       confirmLabel="Start impersonation"
       blockedReason={mfaToken.trim() ? null : 'Enter your 6-digit authenticator code.'}
@@ -106,11 +117,13 @@ const Approvals: React.FC = () => {
       render: row => (
         <Stack spacing={0.25}>
           <Typography level="body-sm" fontWeight={500}>
-            {row.summary}
+            {summaryOf(row)}
           </Typography>
-          <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-            {row.reason}
-          </Typography>
+          {row.reason !== null && (
+            <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+              {row.reason}
+            </Typography>
+          )}
         </Stack>
       ),
     },
@@ -226,7 +239,7 @@ const Approvals: React.FC = () => {
           open
           onClose={() => setRejecting(null)}
           title={rejecting.requestedBy.id === currentUser?.id ? 'Withdraw request' : 'Reject request'}
-          description={`Closes "${rejecting.summary}" without running it.`}
+          description={`Closes "${summaryOf(rejecting)}" without running it.`}
           reasonPresets={REJECT_PRESETS}
           confirmLabel={rejecting.requestedBy.id === currentUser?.id ? 'Withdraw request' : 'Reject request'}
           tone="danger"

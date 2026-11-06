@@ -1,7 +1,13 @@
-import { adminSettingsRepository, realtimeConnectionRepository } from '@bike4mind/database';
+import { adminSettingsRepository, realtimeConnectionRepository, userRepository } from '@bike4mind/database';
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { userService } from '@bike4mind/services';
-import { ForbiddenError, type AdminApproval, type IUserDocument } from '@bike4mind/common';
+import {
+  ConflictError,
+  ForbiddenError,
+  canAccessAdmin,
+  type AdminApproval,
+  type IUserDocument,
+} from '@bike4mind/common';
 import { z } from 'zod';
 import type { Request } from 'express';
 import { escapeHtml } from '@client/app/utils/htmlEscape';
@@ -46,6 +52,7 @@ export async function deleteUserAsAdmin(req: Request, userId: string, reason: st
             ...canceledEntry,
             target: deletedUserTarget(userId, target),
             reason,
+            ...(approval && { details: { ...canceledEntry.details, ...approvalDetails(approval) } }),
           });
         }
       },
@@ -93,6 +100,10 @@ export type DeleteAdminParams = z.infer<typeof DeleteAdminParamsSchema>;
 export async function executeApprovedAdminDelete(req: Request, params: DeleteAdminParams, approval: AdminApproval) {
   if (isSelfOrImpersonator(req.user!, params.userId)) {
     throw new ForbiddenError('Admins cannot delete their own account.');
+  }
+  // Approval was only required because the target was an admin; one demoted since then is no longer what was approved.
+  if (!canAccessAdmin(await userRepository.findById(params.userId))) {
+    throw new ConflictError('This user is no longer an admin; request the deletion again.');
   }
   await deleteUserAsAdmin(req, params.userId, params.reason, approval);
   return { deletedUserId: params.userId };
