@@ -85,21 +85,29 @@ function CommandPalette({
   ];
   // A user profile belongs to the Users tab.
   const userId = canOpenTab(AdminTab.Users) ? parseUserId(query.trim()) : undefined;
-  const entityCommands: AdminCommand[] = (entitySearch?.results ?? []).map(result => ({
-    id: `${result.type}-${result.id}`,
-    label: `${result.type === 'user' ? 'Users' : result.type === 'key' ? 'API keys' : 'Organizations'}: ${result.displayName} - ${result.secondary}`,
-    run: () =>
-      result.type === 'organization'
-        ? navigate({ to: adminOrganizationHref(result.id) })
-        : navigate({
+  const entityCommands: AdminCommand[] = (entitySearch?.results ?? []).flatMap(result => {
+    const label = `${result.type === 'user' ? 'Users' : result.type === 'key' ? 'API keys' : 'Organizations'}: ${result.displayName} - ${result.secondary}`;
+    const id = `${result.type}-${result.id}`;
+    if (result.type === 'organization') return [{ id, label, run: () => navigate({ to: adminOrganizationHref(result.id) }) }];
+    // A key without an owner has no profile to open.
+    const ownerId = result.type === 'key' ? result.userId : result.id;
+    if (!ownerId) return [];
+    return [
+      {
+        id,
+        label,
+        run: () =>
+          navigate({
             to: '/admin/users/$userId',
-            params: { userId: result.userId ?? result.id },
+            params: { userId: ownerId },
             search: result.type === 'key' ? { tab: 'keys' } : {},
           }),
-  }));
+      },
+    ];
+  });
   const results: AdminCommand[] = [
     ...entityCommands,
-    ...(userId
+    ...(userId && !entitySearch
       ? [
           {
             id: 'user-id',
@@ -209,7 +217,9 @@ function CommandPalette({
             Admin commands
           </Typography>
           <Typography id="admin-command-description" level="body-sm">
-            Search by email, user or organization ID, key prefix, IP, billing customer ID or exact organization name.
+            {entitySearch
+              ? 'Search by email, user or organization ID, key prefix, IP, billing customer ID or exact organization name.'
+              : 'Navigate or open a current-record action. Paste a user ID to open its profile.'}
           </Typography>
           <Input
             autoFocus
@@ -275,9 +285,16 @@ function CommandPalette({
           )}
           {entitySearch?.validationError && <Typography role="alert">{entitySearch.validationError}</Typography>}
           {/* An empty list only means "no matches" when a search actually completed. */}
-          {!results.length && !entitySearch?.loading && !entitySearch?.error && !entitySearch?.validationError && (
-            <Typography role="status">No matches. Check the identifier or use an exact organization name.</Typography>
-          )}
+          {entitySearch
+            ? !results.length &&
+              !entitySearch.loading &&
+              !entitySearch.error &&
+              !entitySearch.validationError && (
+                <Typography role="status">No matches. Check the identifier or use an exact organization name.</Typography>
+              )
+            : !results.length && (
+                <Typography role="status">No matching commands. Use the Users or Organizations page search.</Typography>
+              )}
         </ModalDialog>
       </Modal>
       <Modal open={help} onClose={() => setHelp(false)}>
