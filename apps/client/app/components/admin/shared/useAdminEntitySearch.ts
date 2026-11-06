@@ -13,7 +13,7 @@ function toSearchError(error: unknown): AdminEntitySearchError {
 export function useAdminEntitySearch(query: string) {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 300);
+    const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 500);
     return () => window.clearTimeout(timer);
   }, [query]);
   const valid = AdminSearchQuerySchema.safeParse({ q: query });
