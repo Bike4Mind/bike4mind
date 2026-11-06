@@ -59,6 +59,7 @@ describe('findRiskReviewAdvisories', () => {
       confidence: 0.7,
       assessedAt: new Date('2026-11-02T00:00:00Z'),
       otherVerdicts: 0,
+      newerVerdicts: 0,
     });
   });
 
@@ -128,10 +129,15 @@ describe('findRiskReviewAdvisories', () => {
     // The user's abuse-judged detection is older than the capped read, so it is never returned.
     const newest = Array.from({ length: 1000 }, (_, i) => detection(`d${i}`, [USER_A]));
     h.findForUsers.mockResolvedValue(newest);
-    h.findLatestJudged.mockResolvedValue([assessment('d0', 'insufficient_evidence', '2026-11-01T00:00:00Z')]);
+    const stored = [
+      assessment('d0', 'insufficient_evidence', '2026-11-01T00:00:00Z'),
+      assessment('d-old', 'abuse', '2026-10-01T00:00:00Z'),
+    ];
+    h.findLatestJudged.mockImplementation(async (ids: string[]) => stored.filter(row => ids.includes(row.detectionId)));
 
     const advisories = await findRiskReviewAdvisories([USER_A], logger);
 
+    expect(h.findLatestJudged.mock.calls[0][0]).not.toContain('d-old');
     expect(advisories.get(USER_A)).toMatchObject({ detectionId: 'd0', result: 'insufficient_evidence' });
     expect(logger.warn).toHaveBeenCalledWith('Signup risk review advisories capped; older detections not read', {
       limit: 1000,
@@ -165,8 +171,20 @@ describe('findRiskReviewAdvisories', () => {
 
     const advisories = await findRiskReviewAdvisories([USER_A, USER_B], logger);
 
-    expect(advisories.get(USER_A)).toMatchObject({ detectionId: 'd1', otherVerdicts: 2 });
-    expect(advisories.get(USER_B)).toMatchObject({ detectionId: 'd1', otherVerdicts: 0 });
+    expect(advisories.get(USER_A)).toMatchObject({ detectionId: 'd1', otherVerdicts: 2, newerVerdicts: 2 });
+    expect(advisories.get(USER_B)).toMatchObject({ detectionId: 'd1', otherVerdicts: 0, newerVerdicts: 0 });
+  });
+
+  it('counts no newer verdicts when the shown verdict is the newest', async () => {
+    h.findForUsers.mockResolvedValue([detection('d1', [USER_A]), detection('d2', [USER_A])]);
+    h.findLatestJudged.mockResolvedValue([
+      assessment('d1', 'insufficient_evidence', '2026-11-01T00:00:00Z'),
+      assessment('d2', 'legitimate_automation', '2026-11-03T00:00:00Z'),
+    ]);
+
+    const advisories = await findRiskReviewAdvisories([USER_A], logger);
+
+    expect(advisories.get(USER_A)).toMatchObject({ detectionId: 'd2', otherVerdicts: 1, newerVerdicts: 0 });
   });
 
   it('skips a detection with no judged assessment', async () => {

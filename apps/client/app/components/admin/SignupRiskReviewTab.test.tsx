@@ -365,6 +365,7 @@ describe('SignupRiskReviewTab', () => {
             confidence: 0.82,
             assessedAt: '2026-11-02T10:00:00.000Z',
             otherVerdicts: 0,
+            newerVerdicts: 0,
           },
         }),
         row({
@@ -377,6 +378,7 @@ describe('SignupRiskReviewTab', () => {
             confidence: null,
             assessedAt: '2026-11-02T10:00:00.000Z',
             otherVerdicts: 0,
+            newerVerdicts: 0,
           },
         }),
         row({
@@ -389,6 +391,7 @@ describe('SignupRiskReviewTab', () => {
             confidence: 0.4,
             assessedAt: '2026-11-02T10:00:00.000Z',
             otherVerdicts: 0,
+            newerVerdicts: 0,
           },
         }),
       ])
@@ -414,6 +417,7 @@ describe('SignupRiskReviewTab', () => {
       confidence: 0.82,
       assessedAt: '2026-11-02T10:00:00.000Z',
       otherVerdicts: 0,
+      newerVerdicts: 0,
     };
 
     const single = advisoryTooltip(advisory, now);
@@ -423,9 +427,31 @@ describe('SignupRiskReviewTab', () => {
     expect(single).toContain('It never approves or blocks an account.');
     expect(advisoryTooltip({ ...advisory, confidence: null }, now)).not.toContain('confident');
 
-    const several = advisoryTooltip({ ...advisory, otherVerdicts: 2 }, now);
-    expect(several).toContain('An abuse verdict is shown over newer ones; 2 other verdicts on this account.');
-    expect(advisoryTooltip({ ...advisory, otherVerdicts: 1 }, now)).toContain('1 other verdict on this account.');
+    const overNewer = advisoryTooltip({ ...advisory, otherVerdicts: 2, newerVerdicts: 1 }, now);
+    expect(overNewer).toContain('This abuse verdict is shown over 1 newer verdict; 2 other verdicts on this account.');
+
+    const abuseIsNewest = advisoryTooltip({ ...advisory, otherVerdicts: 1 }, now);
+    expect(abuseIsNewest).toContain(' 1 other verdict on this account.');
+    expect(abuseIsNewest).not.toContain('shown over');
+  });
+
+  it('never claims an abuse verdict on a non-abuse advisory with other verdicts', () => {
+    const now = new Date('2026-11-02T10:00:00.000Z').getTime();
+    const tooltip = advisoryTooltip(
+      {
+        detectionId: 'd1',
+        detector: 'signupNetworkBurst',
+        result: 'insufficient_evidence',
+        confidence: 0.6,
+        assessedAt: '2026-11-02T10:00:00.000Z',
+        otherVerdicts: 2,
+        newerVerdicts: 0,
+      },
+      now
+    );
+
+    expect(tooltip).toContain(' 2 other verdicts on this account.');
+    expect(tooltip).not.toContain('abuse');
   });
 
   it('shows no advisory chip on a row with no verdict', () => {

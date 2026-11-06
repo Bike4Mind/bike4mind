@@ -27,6 +27,8 @@ export const signupRiskReviewAdvisorySchema = z.object({
   assessedAt: z.date(),
   /** Judged detections naming the account besides the one shown. */
   otherVerdicts: z.number().int().nonnegative(),
+  /** Of otherVerdicts, those assessed after the one shown (non-zero only when an abuse verdict outranks them). */
+  newerVerdicts: z.number().int().nonnegative(),
 });
 export type SignupRiskReviewAdvisory = z.infer<typeof signupRiskReviewAdvisorySchema>;
 

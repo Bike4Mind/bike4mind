@@ -75,10 +75,13 @@ const ADVISORY_DISPLAY: Record<AbuseAssessmentJudgment, { label: string; tone: A
 
 export function advisoryTooltip(advisory: NonNullable<SignupRiskReviewRow['advisory']>, now: number): string {
   const confidence = advisory.confidence === null ? '' : `, ${Math.round(advisory.confidence * 100)}% confident`;
-  const others =
-    advisory.otherVerdicts > 0
-      ? ` An abuse verdict is shown over newer ones; ${plural(advisory.otherVerdicts, 'other verdict')} on this account.`
-      : '';
+  const otherCount = plural(advisory.otherVerdicts, 'other verdict');
+  let others = '';
+  if (advisory.result === 'abuse' && advisory.newerVerdicts > 0) {
+    others = ` This abuse verdict is shown over ${plural(advisory.newerVerdicts, 'newer verdict')}; ${otherCount} on this account.`;
+  } else if (advisory.otherVerdicts > 0) {
+    others = ` ${otherCount} on this account.`;
+  }
   return `Advisory model verdict on a detection (${DETECTOR_LABELS[advisory.detector]})${confidence}, ${relativeTime(
     new Date(advisory.assessedAt),
     now

@@ -26,7 +26,7 @@ export async function findRiskReviewAdvisories(
   const assessments = await abuseAssessmentRepository.findLatestJudgedForDetections(detections.map(d => d.id));
   const assessmentByDetection = new Map(assessments.map(assessment => [assessment.detectionId, assessment]));
   const wanted = new Set(userIds);
-  const judgedCount = new Map<string, number>();
+  const judgedTimes = new Map<string, number[]>();
 
   for (const detection of detections) {
     const assessment = assessmentByDetection.get(detection.id);
@@ -40,6 +40,7 @@ export async function findRiskReviewAdvisories(
       confidence: assessment.confidence,
       assessedAt: assessment.assessedAt,
       otherVerdicts: 0,
+      newerVerdicts: 0,
     });
     if (!parsed.success) {
       logger.warn('Signup risk review advisory dropped: stored values no longer match', {
@@ -52,12 +53,17 @@ export async function findRiskReviewAdvisories(
     const candidate = parsed.data;
     for (const userId of detection.userIds) {
       if (!wanted.has(userId)) continue;
-      judgedCount.set(userId, (judgedCount.get(userId) ?? 0) + 1);
+      judgedTimes.set(userId, [...(judgedTimes.get(userId) ?? []), new Date(candidate.assessedAt).getTime()]);
       const current = advisories.get(userId);
       if (!current || outranks(candidate, current)) advisories.set(userId, { ...candidate });
     }
   }
-  for (const [userId, advisory] of advisories) advisory.otherVerdicts = (judgedCount.get(userId) ?? 1) - 1;
+  for (const [userId, advisory] of advisories) {
+    const times = judgedTimes.get(userId) ?? [];
+    const shownAt = new Date(advisory.assessedAt).getTime();
+    advisory.otherVerdicts = Math.max(times.length - 1, 0);
+    advisory.newerVerdicts = times.filter(time => time > shownAt).length;
+  }
   return advisories;
 }
 
