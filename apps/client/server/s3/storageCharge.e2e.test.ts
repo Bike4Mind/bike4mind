@@ -383,6 +383,26 @@ describe('notebook import storage charge', () => {
     expect(await storedSize()).toBe(BASELINE_BYTES + (await fabFileRepository.sumFileSizeByUserId(USER)));
   });
 
+  it('never claims a storage-exempt row', async () => {
+    await seedUser();
+    const [row] = await FabFile.create([
+      {
+        userId: USER,
+        fileName: 'x',
+        mimeType: 'text/plain',
+        fileSize: 5,
+        filePath: 'knowledge/x',
+        type: 'FILE',
+        storageExempt: true,
+      },
+    ]);
+
+    expect(await s3Event(row._id, new Date(), 5)).toBeNull();
+    const after = await FabFile.collection.findOne({ _id: row._id });
+    expect(after?.storageChargedAt ?? null).toBeNull();
+    expect(await storedSize()).toBe(BASELINE_BYTES);
+  });
+
   it('charges a redelivered S3 event once', async () => {
     const [row] = await FabFile.create([
       { userId: USER, fileName: 'x', mimeType: 'text/plain', fileSize: 5, filePath: 'knowledge/x', type: 'FILE' },

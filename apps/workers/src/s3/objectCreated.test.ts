@@ -575,7 +575,11 @@ describe('objectCreated - storage charge', () => {
 
     const eventTime = new Date('2026-01-01T00:00:00.000Z');
     expect(h.findOneAndUpdate).toHaveBeenCalledWith(
-      { _id: 'ff1', $or: [{ storageChargedAt: null }, { storageChargedAt: { $lt: eventTime } }] },
+      {
+        _id: 'ff1',
+        storageExempt: { $ne: true },
+        $or: [{ storageChargedAt: null }, { storageChargedAt: { $lt: eventTime } }],
+      },
       { $set: { storageChargedAt: eventTime, fileSize: 10 } },
       expect.objectContaining({ new: false })
     );
