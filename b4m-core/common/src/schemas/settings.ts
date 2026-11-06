@@ -818,6 +818,9 @@ export const IntentClassifierConfigSchema = z.object({
 
 export type IntentClassifierConfig = z.infer<typeof IntentClassifierConfigSchema>;
 
+export const LOW_CONFIDENCE_COMPLETION_MODES = ['block', 'annotate', 'off'] as const;
+export type LowConfidenceCompletionMode = (typeof LOW_CONFIDENCE_COMPLETION_MODES)[number];
+
 export const OrchestrationDefaultsSchema = z.object({
   /**
    * Tool names the synthetic profile is allowed to invoke. A DEFAULT toolbelt, not a gate:
@@ -920,6 +923,12 @@ export const OrchestrationDefaultsSchema = z.object({
   dagEnabled: z.boolean().default(true),
   /** LLM intent-classifier configuration. */
   intentClassifier: IntentClassifierConfigSchema.default(IntentClassifierConfigSchema.parse({})),
+  /**
+   * What the agent executor does when a run's final answer follows a below-threshold iteration:
+   * `annotate` emits `low_confidence_completion` and completes, `block` also pauses for review,
+   * `off` does neither. Omitted => `annotate`.
+   */
+  lowConfidenceCompletion: z.enum(LOW_CONFIDENCE_COMPLETION_MODES).optional(),
 });
 
 export type OrchestrationDefaults = z.infer<typeof OrchestrationDefaultsSchema>;
