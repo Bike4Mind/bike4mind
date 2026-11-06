@@ -6,10 +6,12 @@ import {
   bindEmbeddingModel,
   buildEmbeddingRegistry,
   embeddingBackendForModel,
+  getDefaultEmbeddingModel,
   getEmbeddingProviderRegistry,
 } from './runtime';
 import {
   BedrockEmbeddingModel,
+  defaultEmbeddingModelForEnv,
   OllamaEmbeddingModel,
   OpenAIEmbeddingModel,
   VoyageAIEmbeddingModel,
@@ -234,6 +236,43 @@ describe('catalog-backed runtime routing', () => {
       expect(() => embeddingBackendForModel(model)).toThrow(`Unknown embedding model: ${model}`);
     }
   );
+});
+
+describe('getDefaultEmbeddingModel', () => {
+  it('skips a placeholder OpenAI key and falls through to the next provider', () => {
+    expect(
+      getDefaultEmbeddingModel({ openaiApiKey: 'sk-oai-dummy-routing-test', ollamaBaseUrl: 'http://localhost:11434' })
+    ).toBe(OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B);
+  });
+
+  it('returns the local default embedder when only Ollama is configured', () => {
+    expect(getDefaultEmbeddingModel({ ollamaBaseUrl: 'http://localhost:11434' })).toBe(
+      OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B
+    );
+  });
+
+  // Must equal the admin-setting default, or the attached-file query embeds in a different space than the corpus
+  // and RAG silently returns nothing on keyless self-host.
+  it('agrees with defaultEmbeddingModelForEnv on keyless self-host', () => {
+    const saved = {
+      B4M_SELF_HOST: process.env.B4M_SELF_HOST,
+      OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    };
+    try {
+      process.env.B4M_SELF_HOST = 'true';
+      process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
+      delete process.env.OPENAI_API_KEY;
+      const model = getDefaultEmbeddingModel({ ollamaBaseUrl: 'http://localhost:11434' });
+      expect(model).toBe(defaultEmbeddingModelForEnv());
+      expect(model).toBe(OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
 });
 
 describe('bindEmbeddingModel', () => {
