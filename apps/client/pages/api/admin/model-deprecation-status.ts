@@ -63,7 +63,8 @@ const ResolveBody = z.object({
 });
 
 const handler = adminApi({
-  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  // GET fans out to every provider on platform credentials (modelReferenceReport), so it is not a support read.
+  adminPermissions: { GET: 'settings:manage', POST: 'settings:manage' },
   requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(async (req, res) => {
