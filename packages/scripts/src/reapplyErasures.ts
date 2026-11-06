@@ -38,16 +38,17 @@ const flagValue = (argv: string[], name: string): string | undefined => {
   return value;
 };
 
-/**
- * Splits a mongo uri into host and database, credentials dropped. Returns undefined unless the uri has
- * at most one `@` and, if it has one, that `@` comes before any `?`: userinfo holding a raw `@` or `?`
- * cannot be told from the host or the query, so nothing between the scheme and the credential `@` is
- * ever returned. The cost is a legitimate `@` in a query option, which must be written `%40`. After
- * that, userinfo outside the RFC 3986 userinfo set is refused too: the driver quotes a bad username and
- * connectDB logs it. After that, the query goes first and the last `@` ends the userinfo,.
- */
+/** RFC 3986 userinfo characters; anything else in the credentials is refused, never printed. */
 const USERINFO_OK = /^[A-Za-z0-9\-._~!$&'()*+,;=:%]*$/;
 
+/**
+ * Splits a mongo uri into host and database, credentials dropped. Returns undefined, so nothing is ever
+ * printed, unless: the uri has at most one `@`; the userinfo before it is within USERINFO_OK; and every
+ * comma-separated host entry has a hostname. The driver quotes the whole uri in its errors for a bad
+ * username or a missing host, and connectDB logs them. The `@`-count check and the `@`-only-in-query
+ * check below are defense in depth: USERINFO_OK subsumes them. A legitimate `@` in a query option must be
+ * written `%40`.
+ */
 const parseMongoUri = (uri: string): { host: string; db: string } | undefined => {
   const m = /^mongodb(?:\+srv)?:\/\/(.*)$/.exec(uri);
   if (!m) return undefined;
@@ -57,6 +58,7 @@ const parseMongoUri = (uri: string): { host: string; db: string } | undefined =>
   const [rest, ...query] = m[1].split('?');
   if (!rest.includes('@') && query.join('?').includes('@')) return undefined;
   const [host, ...path] = rest.slice(rest.lastIndexOf('@') + 1).split('/');
+  if (host.split(',').some(h => !h || h.startsWith(':'))) return undefined;
   return { host, db: path.join('/') };
 };
 

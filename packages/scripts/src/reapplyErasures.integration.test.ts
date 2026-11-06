@@ -395,6 +395,23 @@ describe('records source flags', () => {
     expect(describeMongoTarget('mongodb://user:p%40ss@h1,h2:27018/prod?replicaSet=rs0')).toBe('h1,h2:27018/prod');
   });
 
+  it('refuses credentials with an empty or port-only host without echoing the uri', () => {
+    for (const uri of [
+      'mongodb://USRX:PWDY@/db',
+      'mongodb://USRX:PWDY@:27017/db',
+      'mongodb://USRX:PWDY@',
+      'mongodb+srv://USRX:PWDY@/db',
+      'mongodb://USRX:PWDY@h1,,h2/db',
+      'mongodb://USRX:PWDY@h1,:27017/db',
+    ]) {
+      expect(describeMongoTarget(uri)).toBe('(unparseable uri)');
+      expect(() => assertUriDescribable(uri, 'MONGODB_URI')).toThrow(/^MONGODB_URI could not be parsed/);
+    }
+    expect(describeMongoTarget('mongodb+srv://user:secret@c0.example.net/prod?x=1')).toBe('c0.example.net/prod');
+    expect(describeMongoTarget('mongodb://127.0.0.1:27017')).toBe('127.0.0.1:27017/(no database)');
+    expect(describeMongoTarget('mongodb://u:p@[::1]:27017/db')).toBe('[::1]:27017/db');
+  });
+
   it('refuses an unparseable target or records uri without echoing it', () => {
     const target = 'mongodb://h1/prod?appName=ops@team';
     expect(() => assertUriDescribable(target, 'MONGODB_URI')).toThrow(/MONGODB_URI.*%40/);
