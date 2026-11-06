@@ -14,8 +14,17 @@ results open the organization profile.
 
 IP searches inspect the latest 100 matching sign-in records and up to 100 distinct
 API users, then resolve the five most recently active owners. They reflect retained
-records, not all historical activity. Searches by IP or key prefix write an audit entry
-containing the identifier type rather than the query. Each admin can make 30 searches per minute.
+records, not all historical activity. Each admin can make 30 searches per minute.
+
+## Privacy
+
+The search value is sent as the `q` query parameter of a GET request. Application logs
+redact it, but edge/CDN and API Gateway access logs and browser devtools or HAR exports
+are outside that redaction.
+
+Audit policy: only IP and key-prefix searches write an `admin.search.performed` audit
+entry. It contains the identifier type, never the query. Email, ID, billing customer ID
+and organization name searches are not audited.
 
 ## Troubleshooting
 
