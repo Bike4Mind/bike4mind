@@ -1,8 +1,13 @@
 # JA4 forwarding for authentication
 
-The hosted router forwards CloudFront-generated JA4 on `/api/auth/*`,
-`/api/otc/*` and `/api/oauth/*`. These paths cover OAuth callbacks, email-code
-verification and OAuth token/device sign-ins.
+The hosted router forwards CloudFront-generated JA4 on the paths listed in
+`AUTH_NETWORK_PATHS` (`infra/authNetworkForwarding.ts`): `/api/auth/*`,
+`/api/otc/*` and `/api/oauth/*` cover OAuth callbacks, email-code verification
+and OAuth token/device sign-ins; `/api/subscriptions/*`,
+`/api/organizations/subscriptions/*` and `/api/stripe/*` cover the checkout
+routes, whose risk checks and Stripe risk metadata read the same network fields.
+`infra/__tests__/authNetworkPathCoverage.test.ts` fails when a route starts
+reading network meta outside those patterns.
 Existing signup and login capture stores the value; no new blocking rule is added.
 Old signup records remain unchanged, and HTTP or otherwise unavailable fingerprints
 remain null. Self-hosted requests do not gain a trusted fingerprint from this change.
@@ -98,4 +103,4 @@ stage and verify all of the following before promoting:
 
 AWS's CloudFront Function test API does not exercise origin modification, so a
 passing function test does not replace this deployed verification. Roll back the
-three authentication behaviors to the default managed policy if routing regresses.
+authentication and checkout behaviors to the default managed policy if routing regresses.

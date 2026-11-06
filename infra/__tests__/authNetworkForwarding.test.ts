@@ -1,6 +1,6 @@
 /** @vitest-environment node */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AUTH_NETWORK_HEADERS } from '../authNetworkForwarding';
+import { AUTH_NETWORK_HEADERS, AUTH_NETWORK_PATHS } from '../authNetworkForwarding';
 
 const mocks = vi.hoisted(() => {
   const defaultBehavior = {
@@ -86,12 +86,15 @@ describe('authentication connection metadata forwarding', () => {
     expect(AUTH_NETWORK_HEADERS).toContain('cloudfront-viewer-ja4-fingerprint');
   });
 
-  it('covers callbacks, email verification and OAuth tokens without changing the S3/default policy', async () => {
+  it('covers sign-in, signup and checkout routes without changing the S3/default policy', async () => {
     await loadRouter();
     expect(mocks.cdn.orderedCacheBehaviors?.map(behavior => behavior.pathPattern)).toEqual([
       '/api/auth/*',
       '/api/otc/*',
       '/api/oauth/*',
+      '/api/subscriptions/*',
+      '/api/organizations/subscriptions/*',
+      '/api/stripe/*',
     ]);
     expect(mocks.cdn.defaultCacheBehavior).toEqual(mocks.defaultBehavior);
     for (const behavior of mocks.cdn.orderedCacheBehaviors ?? []) {
@@ -106,7 +109,7 @@ describe('authentication connection metadata forwarding', () => {
   it('carries the shared cache policy override onto the authentication behaviors', async () => {
     await loadRouter(false, 'shared-prod-cache');
     expect(mocks.cdn.defaultCacheBehavior.cachePolicyId).toBe('shared-prod-cache');
-    expect(mocks.cdn.orderedCacheBehaviors).toHaveLength(3);
+    expect(mocks.cdn.orderedCacheBehaviors).toHaveLength(AUTH_NETWORK_PATHS.length);
     for (const behavior of mocks.cdn.orderedCacheBehaviors ?? []) {
       expect(behavior.cachePolicyId).toBe('shared-prod-cache');
     }
@@ -115,7 +118,7 @@ describe('authentication connection metadata forwarding', () => {
   it('attaches the account-level policy instead of creating one when its id is configured', async () => {
     await loadRouter(false, '', 'shared-auth-network-policy');
     expect(mocks.policy).not.toHaveBeenCalled();
-    expect(mocks.cdn.orderedCacheBehaviors).toHaveLength(3);
+    expect(mocks.cdn.orderedCacheBehaviors).toHaveLength(AUTH_NETWORK_PATHS.length);
     for (const behavior of mocks.cdn.orderedCacheBehaviors ?? []) {
       expect(behavior.originRequestPolicyId).toBe('shared-auth-network-policy');
     }
