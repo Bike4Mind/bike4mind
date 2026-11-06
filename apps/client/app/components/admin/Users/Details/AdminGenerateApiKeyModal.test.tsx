@@ -185,6 +185,7 @@ describe('AdminGenerateApiKeyModal - ingest scopes', () => {
     renderModal();
     fireEvent.click(scopeInput(GENERIC));
     fireEvent.click(scopeInput(ApiKeyScope.QA_INGEST));
+    fireEvent.click(screen.getByTestId('admin-generate-key-reason-preset-1'));
     expect(submitScopes()).toEqual([ApiKeyScope.QA_INGEST]);
   });
 
@@ -193,6 +194,50 @@ describe('AdminGenerateApiKeyModal - ingest scopes', () => {
     fireEvent.click(scopeInput(ApiKeyScope.QA_INGEST));
     fireEvent.click(scopeInput(GENERIC));
     expect(submitScopes()).toEqual([GENERIC]);
+  });
+});
+
+describe('AdminGenerateApiKeyModal - reason for admin-provisioned scopes', () => {
+  const scopeInput = (value: string) => screen.getByTestId(`admin-generate-key-scope-${value}`).querySelector('input')!;
+  const submitButton = () => screen.getByText('Generate API Key').closest('button')!;
+  const nameKey = () =>
+    fireEvent.change(screen.getByPlaceholderText(/Data Lake Upload/i), { target: { value: 'rewards key' } });
+
+  it('asks for no reason while only self-service scopes are selected', () => {
+    renderModal();
+    nameKey();
+    fireEvent.click(scopeInput(GENERIC_MODAL_API_KEY_SCOPES[0].value));
+    expect(screen.queryByTestId('admin-generate-key-reason')).toBeNull();
+
+    fireEvent.click(submitButton());
+    expect(h.mutate.mock.calls[0][0].data.reason).toBeUndefined();
+  });
+
+  it('requires a reason before an admin-provisioned scope can be minted', () => {
+    renderModal();
+    nameKey();
+    fireEvent.click(scopeInput(ApiKeyScope.REWARDS_GRANT));
+
+    expect(screen.getByTestId('admin-generate-key-reason')).toBeTruthy();
+    expect(submitButton()).toBeDisabled();
+
+    fireEvent.change(screen.getByTestId('admin-generate-key-reason'), { target: { value: 'abc' } });
+    expect(submitButton()).toBeDisabled();
+  });
+
+  it('submits the composed reason with the key', () => {
+    renderModal();
+    nameKey();
+    fireEvent.click(scopeInput(ApiKeyScope.REWARDS_GRANT));
+    fireEvent.click(screen.getByTestId('admin-generate-key-reason-preset-0'));
+    fireEvent.change(screen.getByTestId('admin-generate-key-reason'), { target: { value: 'game server' } });
+
+    expect(submitButton()).not.toBeDisabled();
+    fireEvent.click(submitButton());
+    expect(h.mutate.mock.calls[0][0].data).toMatchObject({
+      scopes: [ApiKeyScope.REWARDS_GRANT],
+      reason: 'Partner integration: game server',
+    });
   });
 });
 
