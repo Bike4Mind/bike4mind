@@ -16,7 +16,7 @@ const TAG = /<confidence\s+score\s*=\s*["']?([^"'>\s]*)["']?\s*>([\s\S]*?)<\/con
  * next thought, so it costs no extra call.
  */
 export const SELF_REPORT_CONFIDENCE_PROMPT = `CONFIDENCE REPORTING:
-Start every turn that calls a tool with one line in exactly this form, before anything else:
+Begin EVERY turn that calls a tool with one line in exactly this form, before anything else. This includes each turn that follows a tool result, not only the first one:
 <confidence score="0.8">one short reason</confidence>
 The score is a number from 0 to 1: how confident you are that your work so far is on track and correct. Be honest; a low score pauses the run for human review, which is better than proceeding on a guess.`;
 
