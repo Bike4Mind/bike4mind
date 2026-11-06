@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { Box, Button, Stack, Typography, useTheme } from '@mui/joy';
 import { Bar, BarChart, CartesianGrid, Cell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type { AnalyticsOverview, SignupBucket } from '@client/app/utils/analyticsOverview';
+import type { AdminUsersFilter } from '@client/app/utils/adminUsersFilter';
 import { SIGNUP_SIGNAL_LABELS, type SignupSignal } from '@client/app/utils/signupSignals';
 import { DataTable, InlineBar, type DataColumn } from '../shared';
 import { SIGNUP_STATUS_COLORS } from '../Signups/SignupChart';
@@ -10,6 +11,12 @@ import { formatCount, formatDayLabel } from './analyticsFormat';
 
 const BUCKET_UNIT = { day: 'UTC days', week: 'ISO weeks (Monday, UTC)', month: 'UTC months' } as const;
 
+export type SignupWindowSelection = {
+  createdFrom: string;
+  createdTo: string;
+  verdict?: AdminUsersFilter['verdict'];
+};
+
 type Props = {
   data: AnalyticsOverview | undefined;
   loading: boolean;
@@ -17,7 +24,7 @@ type Props = {
   onRetry: () => void;
   onShowDefaultRange?: () => void;
   /** Opens the Users list for accounts created in [createdFrom, createdTo). */
-  onSelectWindow: (window: { createdFrom: string; createdTo: string }) => void;
+  onSelectWindow: (window: SignupWindowSelection) => void;
 };
 
 const signalLabel = (signal: string) => SIGNUP_SIGNAL_LABELS[signal as SignupSignal]?.label ?? signal;
@@ -33,27 +40,26 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
   const bucket = data?.window.bucket ?? 'day';
   const buckets = useMemo(() => data?.signups.buckets ?? [], [data]);
   const rows = useMemo(() => buckets.map(b => ({ ...b, label: formatDayLabel(b.start, bucket) })), [buckets, bucket]);
-  const totals = data?.signups.totals ?? { legit: 0, suspected: 0, unclassified: 0 };
+  const totals = data?.signups.totals ?? { legit: 0, suspected: 0 };
   const signals = data?.signups.bySignal ?? [];
   const maxSignal = Math.max(0, ...signals.map(row => row.count));
-  const empty = totals.legit + totals.suspected + totals.unclassified === 0;
+  const empty = totals.legit + totals.suspected === 0;
 
-  const caption = `${formatCount(totals.legit)} likely legit, ${formatCount(totals.suspected)} suspected, ${formatCount(
-    totals.unclassified
-  )} not classified yet. Bars are ${BUCKET_UNIT[bucket]}; click one to list its accounts.`;
+  const caption = `${formatCount(totals.legit)} real, ${formatCount(totals.suspected)} suspected. Bars are ${BUCKET_UNIT[bucket]}; click one to list its accounts.`;
   const axisTick = { fontSize: 12, fill: admin.inkMuted };
 
   // Bar entries carry the row they were drawn from, so the click resolves the bucket without tooltip state.
-  const selectBar = (entry: { payload?: { start?: string } }) => {
+  const selectBar = (entry: { payload?: { start?: string } }, verdict: NonNullable<AdminUsersFilter['verdict']>) => {
     const picked = buckets.find(b => b.start === entry.payload?.start);
-    if (picked) onSelectWindow(toWindow(picked));
+    if (picked) onSelectWindow({ ...toWindow(picked), verdict });
   };
 
-  const partialCell = (entry: SignupBucket, fill: string, baseOpacity = 1) => (
+  const partialCell = (entry: SignupBucket, fill: string, verdict: NonNullable<AdminUsersFilter['verdict']>) => (
     <Cell
       key={entry.start}
+      data-testid={`analytics-signups-${verdict}-${entry.start}-bar`}
       fill={fill}
-      fillOpacity={entry.partial ? baseOpacity * 0.45 : baseOpacity}
+      fillOpacity={entry.partial ? 0.45 : 1}
       stroke={entry.partial ? fill : admin.surface}
       strokeDasharray={entry.partial ? '3 2' : undefined}
     />
@@ -62,7 +68,7 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
   const chart = (
     <Box
       role="img"
-      aria-label={`Stacked bar chart of signups per bucket, likely legit versus suspected. ${caption}`}
+      aria-label={`Stacked bar chart of signups per bucket, real versus suspected. ${caption}`}
       data-testid="analytics-signups-chart"
       sx={{ cursor: 'pointer' }}
     >
@@ -86,13 +92,13 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
           <Legend wrapperStyle={{ fontSize: 12, color: admin.inkSecondary }} />
           <Bar
             dataKey="legit"
-            name="Likely legit"
+            name="Real"
             stackId="signups"
             fill={colors.likelyLegit}
             isAnimationActive={false}
-            onClick={selectBar}
+            onClick={entry => selectBar(entry, 'legit')}
           >
-            {rows.map(entry => partialCell(entry, colors.likelyLegit))}
+            {rows.map(entry => partialCell(entry, colors.likelyLegit, 'legit'))}
           </Bar>
           <Bar
             dataKey="suspected"
@@ -100,20 +106,9 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
             stackId="signups"
             fill={colors.suspected}
             isAnimationActive={false}
-            onClick={selectBar}
+            onClick={entry => selectBar(entry, 'suspected')}
           >
-            {rows.map(entry => partialCell(entry, colors.suspected))}
-          </Bar>
-          <Bar
-            dataKey="unclassified"
-            name="Not classified"
-            stackId="signups"
-            fill={admin.inkMuted}
-            fillOpacity={0.4}
-            isAnimationActive={false}
-            onClick={selectBar}
-          >
-            {rows.map(entry => partialCell(entry, admin.inkMuted, 0.4))}
+            {rows.map(entry => partialCell(entry, colors.suspected, 'suspected'))}
           </Bar>
         </BarChart>
       </ResponsiveContainer>
@@ -135,9 +130,8 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
         </Button>
       ),
     },
-    { id: 'legit', label: 'Likely legit', numeric: true, render: row => formatCount(row.legit) },
+    { id: 'legit', label: 'Real', numeric: true, render: row => formatCount(row.legit) },
     { id: 'suspected', label: 'Suspected', numeric: true, render: row => formatCount(row.suspected) },
-    { id: 'unclassified', label: 'Not classified', numeric: true, render: row => formatCount(row.unclassified) },
   ];
   const table = (
     <DataTable

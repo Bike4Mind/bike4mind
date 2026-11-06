@@ -1,6 +1,7 @@
 import {
   AnalyticsDaily,
   AnalyticsUserDay,
+  type IAnalyticsDailyApiUsers,
   type IAnalyticsDailyInternal,
   type IAnalyticsDailySignups,
 } from '@bike4mind/database';
@@ -114,6 +115,8 @@ export type OverviewDailyRow = {
   dau: number;
   wau: number;
   mau: number;
+  /** Absent on rows rolled up before the API series existed. */
+  api?: IAnalyticsDailyApiUsers;
   signups: IAnalyticsDailySignups;
   requestsBySource: Record<string, number>;
   requestsByFeature: Record<string, number>;
@@ -132,7 +135,7 @@ const sum = (values: readonly number[]) => values.reduce((total, value) => total
 const mean = (values: readonly number[]) => (values.length ? sum(values) / values.length : null);
 /** Differs from `cohortSignupCount` (analyticsCohorts.ts), which also counts unclassified signups as legit; keep the two in step. */
 const signupTotal = (signups: IAnalyticsDailySignups, mode: AnalyticsSignupsMode) =>
-  mode === 'legit' ? signups.legit : signups.legit + signups.suspected + signups.unclassified;
+  mode === 'legit' ? signups.legit : signups.legit + signups.suspected;
 
 const ranked = (totals: Map<string, number>) =>
   [...totals.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
@@ -277,6 +280,7 @@ export function buildOverview({
       dau: active?.dau ?? null,
       wau: active?.wau ?? null,
       mau: active?.mau ?? null,
+      apiDau: values ? (values.api?.dau ?? null) : null,
       partial: day === window.partialDay,
       // shiftBack(partialDay) lands on window.from, inside the current range, so today has no comparison point.
       ...(window.previous
@@ -345,7 +349,6 @@ export function buildOverview({
       end: bucketEnd,
       legit: sumSignups(present, s => s.legit),
       suspected: sumSignups(present, s => s.suspected),
-      unclassified: sumSignups(present, s => s.unclassified),
       partial: window.partialDay !== null && inBucket.includes(window.partialDay),
     });
     start = bucketEnd;
@@ -388,7 +391,6 @@ export function buildOverview({
       totals: {
         legit: sum(rangeSignups.map(s => s.legit)),
         suspected: sum(rangeSignups.map(s => s.suspected)),
-        unclassified: sum(rangeSignups.map(s => s.unclassified)),
       },
       bySignal: [...bySignal.entries()]
         .filter(([, count]) => count > 0)
@@ -398,35 +400,52 @@ export function buildOverview({
   };
 }
 
-async function distinctUsersBefore(today: string, windowDays: number): Promise<string[]> {
+type UserDayFilter = { active: true } | { sources: string };
+
+async function distinctUsersBefore(today: string, windowDays: number, filter: UserDayFilter): Promise<string[]> {
   return AnalyticsUserDay.distinct('userId', {
     day: { $gte: shiftDay(today, -(windowDays - 1)), $lt: today },
+    ...filter,
   }).maxTimeMS(LIVE_QUERY_DEADLINE_MS);
 }
 
+type ActiveIds = { active: string[]; api: string[] };
+type YesterdayIds = { external: string[]; api: string[]; internal: string[] };
+
+/** The active and API users of one day's collected usage. */
+const idsOf = ({ perUser }: Awaited<ReturnType<typeof collectDayUsage>>): ActiveIds => ({
+  active: [...perUser].filter(([, acc]) => acc.active).map(([id]) => id),
+  api: [...perUser].filter(([, acc]) => acc.sources.has('api')).map(([id]) => id),
+});
+
 /**
- * Yesterday's active users when its rollup has not run yet (the nightly rollup lands at 04:00 UTC),
- * so today's windows do not drop users seen only yesterday. Empty once the daily row exists.
+ * Yesterday's users when its rollup has not run yet (the nightly rollup lands at 04:00 UTC), so today's
+ * windows do not drop users seen only yesterday. Empty once the daily row exists.
  */
-async function unrolledYesterdayUsers(today: string): Promise<{ external: string[]; internal: string[] }> {
+async function unrolledYesterdayUsers(today: string): Promise<YesterdayIds> {
   const yesterday = shiftDay(today, -1);
   if (await AnalyticsDaily.exists({ day: yesterday }).maxTimeMS(LIVE_QUERY_DEADLINE_MS)) {
-    return { external: [], internal: [] };
+    return { external: [], api: [], internal: [] };
   }
   const usage = await collectDayUsage(yesterday, { maxTimeMS: LIVE_QUERY_DEADLINE_MS });
-  return { external: [...usage.perUser.keys()], internal: usage.internal.userIds };
+  const { active, api } = idsOf(usage);
+  return { external: active, api, internal: usage.internal.userIds };
 }
 
 /** Today so far, with collectDayUsage and classifyCohort so it counts exactly what the nightly rollup will. */
 export async function loadLiveDay(today: string, now: Date): Promise<LiveDay> {
-  const [usage, cohort, weekIds, monthIds, yesterdayIds] = await Promise.all([
+  const active = { active: true } as const;
+  const api = { sources: 'api' } as const;
+  const [usage, cohort, weekIds, monthIds, apiWeekIds, apiMonthIds, yesterdayIds] = await Promise.all([
     collectDayUsage(today, { maxTimeMS: LIVE_QUERY_DEADLINE_MS }),
     classifyCohort(today, { now, maxTimeMS: LIVE_QUERY_DEADLINE_MS }),
-    distinctUsersBefore(today, WAU_WINDOW_DAYS),
-    distinctUsersBefore(today, MAU_WINDOW_DAYS),
+    distinctUsersBefore(today, WAU_WINDOW_DAYS, active),
+    distinctUsersBefore(today, MAU_WINDOW_DAYS, active),
+    distinctUsersBefore(today, WAU_WINDOW_DAYS, api),
+    distinctUsersBefore(today, MAU_WINDOW_DAYS, api),
     unrolledYesterdayUsers(today),
   ]);
-  const todayIds = [...usage.perUser.keys()];
+  const todayIds = idsOf(usage);
   const internal = await internalWindowIds(
     today,
     { day: today, userIds: usage.internal.userIds },
@@ -438,9 +457,14 @@ export async function loadLiveDay(today: string, now: Date): Promise<LiveDay> {
     internal.month.add(id);
   }
   return {
-    dau: todayIds.length,
-    wau: unionSize(weekIds, yesterdayIds.external, todayIds),
-    mau: unionSize(monthIds, yesterdayIds.external, todayIds),
+    dau: usage.activeCount,
+    wau: unionSize(weekIds, yesterdayIds.external, todayIds.active),
+    mau: unionSize(monthIds, yesterdayIds.external, todayIds.active),
+    api: {
+      dau: usage.apiCount,
+      wau: unionSize(apiWeekIds, yesterdayIds.api, todayIds.api),
+      mau: unionSize(apiMonthIds, yesterdayIds.api, todayIds.api),
+    },
     signups: cohort.signups,
     requestsBySource: Object.fromEntries(usage.bySource),
     requestsByFeature: Object.fromEntries(usage.byFeature),
@@ -450,8 +474,8 @@ export async function loadLiveDay(today: string, now: Date): Promise<LiveDay> {
       dau: usage.internal.userIds.length,
       wau: internal.week.size,
       mau: internal.month.size,
-      allWau: unionSize(weekIds, yesterdayIds.external, todayIds, internal.week),
-      allMau: unionSize(monthIds, yesterdayIds.external, todayIds, internal.month),
+      allWau: unionSize(weekIds, yesterdayIds.external, todayIds.active, internal.week),
+      allMau: unionSize(monthIds, yesterdayIds.external, todayIds.active, internal.month),
       windowComplete: internal.complete,
       requestsBySource: Object.fromEntries(usage.internal.bySource),
     },
@@ -467,7 +491,7 @@ export async function getAnalyticsOverview(
   const [rows, live] = await Promise.all([
     AnalyticsDaily.find({ day: { $gte: earliest, $lte: window.to } })
       .select(
-        'day dau wau mau signups requestsBySource requestsByFeature requestsByModel creditsConsumed internal.dau internal.wau internal.mau internal.allWau internal.allMau internal.windowComplete internal.requestsBySource computedAt'
+        'day dau wau mau api signups requestsBySource requestsByFeature requestsByModel creditsConsumed internal.dau internal.wau internal.mau internal.allWau internal.allMau internal.windowComplete internal.requestsBySource computedAt'
       )
       .maxTimeMS(QUERY_DEADLINE_MS)
       .lean<OverviewDailyRow[]>(),

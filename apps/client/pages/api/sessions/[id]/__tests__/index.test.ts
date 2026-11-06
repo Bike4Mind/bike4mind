@@ -31,6 +31,7 @@ const {
   mockWithTransaction,
   mockCreateLakeAccess,
   mockResolveWorkspaceSettings,
+  mockUnpublish,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
@@ -42,6 +43,11 @@ const {
   mockWithTransaction: vi.fn(),
   mockCreateLakeAccess: vi.fn(),
   mockResolveWorkspaceSettings: vi.fn(async () => ({ enabledTools: ['tool_w'] })),
+  mockUnpublish: vi.fn(),
+}));
+
+vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+  unpublishUserArtifactsBySource: (...a: unknown[]) => mockUnpublish(...a),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -458,6 +464,36 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
         expect.objectContaining({ type: SessionEvents.DELETE_SESSION, metadata: { sessionId: 'sess-1' } }),
         expect.anything()
       );
+    });
+
+    it("takes down the owner's pages published from the deleted notebook", async () => {
+      mockDeleteSession.mockResolvedValue({ id: 'other-session' });
+      const { req, res } = fire({ method: 'DELETE' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockUnpublish).toHaveBeenCalledWith(
+        'user-1',
+        { kind: 'reply', sessionIds: ['sess-1'] },
+        expect.anything()
+      );
+    });
+
+    it('still returns 200 with the new last-notebook id when the unpublish fails', async () => {
+      mockDeleteSession.mockResolvedValue({ id: 'other-session' });
+      mockUnpublish.mockRejectedValue(new Error('publish db down'));
+      const { req, res } = fire({ method: 'DELETE' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({ newLastNotebookId: 'other-session' });
+      expect(mockLogEvent).toHaveBeenCalled();
+    });
+
+    it('unpublishes nothing when the delete is refused', async () => {
+      mockDeleteSession.mockRejectedValue(new NotFoundError('Session not found'));
+      const { req, res } = fire({ method: 'DELETE' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(404);
+      expect(mockUnpublish).not.toHaveBeenCalled();
     });
 
     it('returns a null newLastNotebookId when no session remains', async () => {

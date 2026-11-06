@@ -11,31 +11,13 @@ describe('signup activity drip settings', () => {
     expect(SettingKeySchema.parse(setting.key)).toBe(setting.key);
     expect(API_SERVICE_GROUPS.CREDITS.settings).toContainEqual(expect.objectContaining({ key: setting.key }));
   });
-  it('defaults the daily rate off and the cap to 9000, in the credits group', () => {
-    const daily = settingsMap.signupGrantActivityDailyCredits;
-    const max = settingsMap.signupGrantActivityMaxCredits;
-    expect(daily.schema.parse(undefined)).toBe(0);
-    expect(max.schema.parse(undefined)).toBe(9000);
-    for (const entry of [daily, max]) {
-      expect(SettingKeySchema.parse(entry.key)).toBe(entry.key);
-      expect(API_SERVICE_GROUPS.CREDITS.settings).toContainEqual(expect.objectContaining({ key: entry.key }));
-    }
-  });
-
-  it.each([-1, 1.5, 10001])('rejects an out-of-range daily rate %s', value => {
-    expect(settingsMap.signupGrantActivityDailyCredits.schema.safeParse(value).success).toBe(false);
-  });
-
-  it('accepts a daily rate of 1000', () => {
-    expect(settingsMap.signupGrantActivityDailyCredits.schema.parse(1000)).toBe(1000);
-  });
 });
 
 describe('signup grant schedule settings', () => {
   it.each([
     ['signupGrantInitialCredits', 0],
     ['signupGrantDailyCredits', 0],
-    ['signupGrantDripCap', 9000],
+    ['signupGrantDripCap', 0],
     ['signupGrantInviteBonusCredits', 0],
   ] as const)('registers %s as a user-readable credits setting defaulting to %s', (key, fallback) => {
     const setting = settingsMap[key];
@@ -72,5 +54,29 @@ describe('signup grant drip state on the self user schema', () => {
     expect(parse(base).success).toBe(true);
     expect(parse({ ...base, lastDripDay: '10/29/2026' }).success).toBe(false);
     expect(parse({ ...base, dripCredits: -1 }).success).toBe(false);
+  });
+});
+
+describe('retired signup grant settings', () => {
+  const retired = [
+    'signupGrantActivityMinMessages',
+    'signupGrantActivityMinDays',
+    'defaultSeats',
+    'verifiedUnlockCredits',
+    'signupGrantActivityMaxCredits',
+    'signupGrantActivityEnabled',
+    'signupGrantActivityDailyCredits',
+    'stagedSignupGrantEnabled',
+    'defaultFreeCredits',
+    'signupGrantCredits',
+    'signupGrantDailyBudget',
+  ];
+
+  it.each(retired)('%s is gone from the registry, the key schema and every admin group', key => {
+    expect(key in settingsMap).toBe(false);
+    expect(SettingKeySchema.safeParse(key).success).toBe(false);
+    for (const group of Object.values(API_SERVICE_GROUPS)) {
+      expect(group.settings.map(entry => entry.key)).not.toContain(key);
+    }
   });
 });

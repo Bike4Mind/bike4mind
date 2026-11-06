@@ -363,12 +363,8 @@ describe('AdminSettingsTab Credits System group', () => {
 });
 
 describe('AdminSettingsTab stage-hidden settings', () => {
-  const stageGated = [
-    'signupGrantActivityMinMessages',
-    'signupGrantActivityMinDays',
-    'signupGrantActivityPreviewTestMode',
-  ] as const;
-  const renderUsersTab = () => renderTab(findTab(settingsMap.signupGrantActivityMinMessages.category));
+  const stageGated = ['signupGrantActivityPreviewTestMode'] as const;
+  const renderUsersTab = () => renderTab(findTab(settingsMap.signupGrantActivityPreviewTestMode.category));
 
   it('hides the keys the server reports for this stage', () => {
     serverConfig = { hiddenAdminSettingKeys: [...stageGated] };
@@ -396,7 +392,7 @@ describe('AdminSettingsTab stage-hidden settings', () => {
 
   it('keeps them out of an All Tabs search', () => {
     serverConfig = { hiddenAdminSettingKeys: [...stageGated] };
-    router.search = { tab: 'admin-settings', q: 'signup activity' };
+    router.search = { tab: 'admin-settings', q: 'signup' };
     renderSettings();
     fireEvent.click(screen.getByRole('checkbox', { name: 'All Tabs' }));
 

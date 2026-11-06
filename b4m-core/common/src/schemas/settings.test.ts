@@ -7,6 +7,8 @@ import {
   userReadableSettingKeys,
   redactSettingSecrets,
   redactSettingSecretsForBroadcast,
+  broadcastSafeSettingKeys,
+  allSettingDefinitions,
   buildPublicSettingsProjection,
   experimentalFeatureSettingKeys,
   experimentalNonGroupSettingKeys,
@@ -1581,12 +1583,7 @@ describe('preference arena settings exposure', () => {
 
 describe('stageHiddenSettingKeys', () => {
   it('hides the deprecated drip settings and preview test mode on production stages', () => {
-    expect(stageHiddenSettingKeys(true).sort()).toEqual([
-      'signupGrantActivityMinDays',
-      'signupGrantActivityMinMessages',
-      'signupGrantActivityPreviewTestMode',
-      'signupGrantDailyBudget',
-    ]);
+    expect(stageHiddenSettingKeys(true).sort()).toEqual(['signupGrantActivityPreviewTestMode']);
   });
 
   it('hides nothing elsewhere', () => {
@@ -1621,5 +1618,26 @@ describe('per-call provider cost settings (billed web_search / web_fetch)', () =
   it('puts the search cost beside the other search provider settings', () => {
     expect(API_SERVICE_GROUPS.SEARCH.settings.map(s => s.key)).toContain('SerpApiSearchCostUsd');
     expect(settingsMap.SerpApiSearchCostUsd.group).toBe(API_SERVICE_GROUPS.SEARCH.id);
+  });
+});
+
+describe('broadcastSafeSettingKeys', () => {
+  it('withholds every isSensitive setting and the nested-secret sreAgentConfig', () => {
+    const keys = broadcastSafeSettingKeys();
+    expect(keys).not.toContain('openaiDemoKey');
+    expect(keys).not.toContain('sreAgentConfig');
+    const sensitiveKeys = allSettingDefinitions()
+      .filter(definition => definition.isSensitive)
+      .map(definition => definition.key);
+    expect(sensitiveKeys.length).toBeGreaterThan(0);
+    expect(keys.filter(key => sensitiveKeys.includes(key))).toEqual([]);
+  });
+
+  it('keeps the non-sensitive settings clients render live', () => {
+    expect(broadcastSafeSettingKeys()).toEqual(expect.arrayContaining(['EnableQuestMaster', 'EnableArtifacts']));
+  });
+
+  it('never admits a setting name with no definition', () => {
+    expect(broadcastSafeSettingKeys()).not.toContain('someRemovedSettingName');
   });
 });

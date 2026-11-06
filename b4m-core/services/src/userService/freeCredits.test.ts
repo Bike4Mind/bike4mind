@@ -54,11 +54,6 @@ describe('free credits service', () => {
       expect(await resolveFreeCreditAmount(pending, db.adminSettings)).toBe(100);
     });
 
-    it('never sizes the fallback from the retired defaultFreeCredits or staged toggle', async () => {
-      const { db } = buildAdapters(null, { defaultFreeCredits: '5000', stagedSignupGrantEnabled: 'false' });
-      expect(await resolveFreeCreditAmount(null, db.adminSettings)).toBe(0);
-    });
-
     it('returns 0 when the setting is missing or unparseable', async () => {
       expect(await resolveFreeCreditAmount(null, buildAdapters(null).db.adminSettings)).toBe(0);
       expect(await resolveFreeCreditAmount(null, buildAdapters('not-a-number').db.adminSettings)).toBe(0);

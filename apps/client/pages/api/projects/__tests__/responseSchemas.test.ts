@@ -155,7 +155,8 @@ const cases: Case[] = [
     method: 'DELETE',
     load: () => import('@pages/api/projects/[id]/sessions'),
     service: 'removeSessions',
-    returns: project,
+    // The remove services report what they took out; the route answers with the project.
+    returns: { project, removedIds: ['x'] },
     query: { id: 'p1' },
     body: { sessionIds: ['s1'] },
   },
@@ -182,7 +183,8 @@ const cases: Case[] = [
     method: 'DELETE',
     load: () => import('@pages/api/projects/[id]/files'),
     service: 'removeFiles',
-    returns: project,
+    // The remove services report what they took out; the route answers with the project.
+    returns: { project, removedIds: ['x'] },
     query: { id: 'p1' },
     body: { fileIds: ['f1'] },
   },

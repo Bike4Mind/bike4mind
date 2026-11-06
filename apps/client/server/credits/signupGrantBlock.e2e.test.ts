@@ -115,9 +115,8 @@ beforeEach(async () => {
     await model.collection.deleteMany({});
   for (const key of Object.keys(config)) delete config[key];
   Object.assign(config, {
-    stagedSignupGrantEnabled: 'true',
-    signupGrantCredits: '12',
-    verifiedUnlockCredits: '28',
+    signupGrantInitialCredits: '12',
+    signupGrantDripCap: '28',
     signupUnlockPaymentHoldHours: '0',
     signupGrantTricklePoolDaily: '1000',
   });
