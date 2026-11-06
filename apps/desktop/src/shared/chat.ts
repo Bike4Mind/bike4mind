@@ -9,6 +9,7 @@
  * Credential-free like @shared/auth, for the same reason - see src/shared/ipc.ts.
  */
 
+import type { GithubRef } from './githubRefs';
 import type { GenerationJobState, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
 import type { ReasoningEffortSetting } from '@bike4mind/local-models/model-settings';
 import type { ChildOutcome } from './agentOutcome';
@@ -1362,6 +1363,8 @@ export interface ChatSessionSummary extends ChatSessionMeta {
   totalUsdCost?: number;
   /** Sum of usage.creditsUsed over all messages; absent when none reported it. */
   totalCredits?: number;
+  /** Issue and PR refs the transcript mentions, first seen first; absent when none. See githubRefs.ts. */
+  githubRefs?: GithubRef[];
 }
 
 export interface ChatSession extends ChatSessionMeta {

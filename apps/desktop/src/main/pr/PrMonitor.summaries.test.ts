@@ -51,9 +51,9 @@ describe('PrMonitor sidebar summaries', () => {
     await store.set('never-read', bound);
 
     expect(await monitor.summaries()).toEqual([
-      { sessionId: 'open', summary: { number: 611, state: 'open' } },
-      { sessionId: 'draft', summary: { number: 7, state: 'draft' } },
-      { sessionId: 'merged', summary: { number: 611, state: 'merged' } },
+      { sessionId: 'open', summary: { number: 611, state: 'open', repo: 'example-org/widgets' } },
+      { sessionId: 'draft', summary: { number: 7, state: 'draft', repo: 'example-org/widgets' } },
+      { sessionId: 'merged', summary: { number: 611, state: 'merged', repo: 'example-org/widgets' } },
     ]);
     await monitor.idle();
     expect(fake.calls).toEqual([]);
@@ -65,7 +65,9 @@ describe('PrMonitor sidebar summaries', () => {
     const { fake, monitor, pushed } = setup();
     await monitor.bindManual(SESSION, REF.url);
     await monitor.idle();
-    expect(pushed).toEqual([{ sessionId: SESSION, summary: { number: 611, state: 'open' } }]);
+    expect(pushed).toEqual([
+      { sessionId: SESSION, summary: { number: 611, state: 'open', repo: 'example-org/widgets' } },
+    ]);
 
     await monitor.refresh(SESSION);
     expect(pushed).toHaveLength(1);
@@ -126,12 +128,18 @@ describe('PrMonitor sidebar summaries', () => {
 
     await monitor.bindManual(SESSION, REF.url);
     await monitor.idle();
-    expect(pushed[pushed.length - 1]).toEqual({ sessionId: SESSION, summary: { number: 611, state: 'open' } });
+    expect(pushed[pushed.length - 1]).toEqual({
+      sessionId: SESSION,
+      summary: { number: 611, state: 'open', repo: 'example-org/widgets' },
+    });
 
     await monitor.dismiss(SESSION);
     monitor.observeToolEnd(SESSION, shellCall('gh pr create', 'https://github.com/example-org/widgets/pull/700'));
     await monitor.idle();
-    expect(pushed[pushed.length - 1]).toEqual({ sessionId: SESSION, summary: { number: 700, state: 'open' } });
+    expect(pushed[pushed.length - 1]).toEqual({
+      sessionId: SESSION,
+      summary: { number: 700, state: 'open', repo: 'example-org/widgets' },
+    });
     monitor.dispose();
   });
 
@@ -184,7 +192,9 @@ describe('PrMonitor sidebar summaries', () => {
     first.monitor.dispose();
 
     const relaunched = new TrackedMonitor(first.deps);
-    expect(await relaunched.summaries()).toEqual([{ sessionId: SESSION, summary: { number: 611, state: 'open' } }]);
+    expect(await relaunched.summaries()).toEqual([
+      { sessionId: SESSION, summary: { number: 611, state: 'open', repo: 'example-org/widgets' } },
+    ]);
     relaunched.dispose();
   });
 });
