@@ -168,6 +168,97 @@ export const ResponseFormatSchema = z.discriminatedUnion('type', [
 
 export type ResponseFormat = z.infer<typeof ResponseFormatSchema>;
 
+const ImageUrlValueSchema = z.union([z.string(), z.looseObject({ url: z.string(), detail: z.string().optional() })]);
+
+const ImageSourceSchema = z.discriminatedUnion('type', [
+  z.looseObject({ type: z.literal('base64'), media_type: z.string(), data: z.string() }),
+  z.looseObject({ type: z.literal('url'), url: z.string() }),
+]);
+
+/**
+ * The content blocks a completions caller sends, in every dialect the canonicalizer in
+ * utils/multimodalContent.ts accepts. Each known block checks only the fields a provider needs and keeps
+ * any others (`cache_control`, `signature`, ...) so a caller's extras are not stripped.
+ */
+const KnownCompletionContentBlockSchema = z.discriminatedUnion('type', [
+  z.looseObject({ type: z.enum(['text', 'input_text', 'output_text']), text: z.string() }),
+  // The canonicalizer reads `image_url` or `source` for any of these three types, so a caller may mix
+  // dialects (e.g. an Anthropic `image` carrying `image_url`); require one of the two, not a pairing.
+  z
+    .looseObject({
+      type: z.enum(['image', 'image_url', 'input_image']),
+      image_url: ImageUrlValueSchema.optional(),
+      source: ImageSourceSchema.optional(),
+    })
+    .refine(block => block.image_url !== undefined || block.source !== undefined, {
+      message: 'An image block needs `image_url` or `source`',
+      path: ['image_url'],
+      abort: true,
+    }),
+  z.looseObject({
+    type: z.literal('tool_use'),
+    id: z.string(),
+    name: z.string(),
+    input: z.record(z.string(), z.unknown()),
+  }),
+  z.looseObject({
+    type: z.literal('tool_result'),
+    tool_use_id: z.string(),
+    content: z.union([z.string(), z.array(z.unknown())]).optional(),
+  }),
+  z.looseObject({ type: z.literal('thinking'), thinking: z.string() }),
+  z.looseObject({ type: z.literal('redacted_thinking'), data: z.string() }),
+  // Echoed provider blocks (see TOOL_SEARCH_BLOCK_TYPES).
+  z.looseObject({ type: z.literal('server_tool_use'), id: z.string(), name: z.string() }),
+  z.looseObject({ type: z.literal('tool_search_tool_result'), tool_use_id: z.string() }),
+  // Only the `type` is checked here: services/cliCompletionsToolSearch.ts validates the rest of a tool
+  // change block (ToolChangeBlockSchema) and answers a malformed one with its own errorCode, which a
+  // stricter schema here would pre-empt with a generic 400.
+  z.looseObject({ type: z.enum(TOOL_CHANGE_BLOCK_TYPES) }),
+]);
+
+/** Must list every `type` in KnownCompletionContentBlockSchema; the schema tests assert each one rejects a malformed block. */
+export const KNOWN_COMPLETION_CONTENT_BLOCK_TYPES: ReadonlySet<string> = new Set([
+  'text',
+  'input_text',
+  'output_text',
+  'image_url',
+  'input_image',
+  'image',
+  'tool_use',
+  'tool_result',
+  'thinking',
+  'redacted_thinking',
+  'server_tool_use',
+  'tool_search_tool_result',
+  ...TOOL_CHANGE_BLOCK_TYPES,
+]);
+
+/**
+ * A block of a type we do not model. It passes through untouched, as multimodalContent.ts does: a
+ * provider rejecting an unknown block is a better failure than a silently missing one. A known `type`
+ * is excluded so a malformed known block fails here instead of slipping through as "unknown". The known
+ * schema's own issues are re-emitted because this arm's error is the one a union surfaces, and it should
+ * name the field that is wrong rather than the `type`.
+ */
+const UnknownCompletionContentBlockSchema = z.looseObject({ type: z.string() }).superRefine((block, ctx) => {
+  if (!KNOWN_COMPLETION_CONTENT_BLOCK_TYPES.has(block.type)) return;
+  const known = KnownCompletionContentBlockSchema.safeParse(block);
+  if (known.success) return;
+  for (const issue of known.error.issues) {
+    ctx.addIssue({ code: 'custom', message: issue.message, path: issue.path });
+  }
+});
+
+/** A bare string inside the array is a text part, as the canonicalizer treats it. */
+export const CompletionContentBlockSchema = z.union([
+  z.string(),
+  KnownCompletionContentBlockSchema,
+  UnknownCompletionContentBlockSchema,
+]);
+
+export type CompletionContentBlock = z.infer<typeof CompletionContentBlockSchema>;
+
 /**
  * Wire-format message for /api/ai/v1/completions. The optional `cache: true`
  * flag is honored by Anthropic (translated to `cache_control: { type: 'ephemeral' }`
@@ -176,9 +267,11 @@ export type ResponseFormat = z.infer<typeof ResponseFormatSchema>;
 export const CompletionMessageSchema = z.object({
   role: z.enum(['user', 'assistant', 'system']),
   content: z
-    .union([z.string(), z.array(z.any())])
+    .union([z.string(), z.array(CompletionContentBlockSchema)])
     .describe(
-      'A string, or an array of content blocks. A `system` message may instead hold only `tool_addition` / ' +
+      'A string, or an array of content blocks. Known block types (text, image, `tool_use`, `tool_result`, thinking and ' +
+        'the provider blocks echoed back) are validated; a block of any other `type` is forwarded to the provider unchanged. ' +
+        'A `system` message may instead hold only `tool_addition` / ' +
         '`tool_removal` blocks (`{ type, tool: { type: "tool_reference", name } }`) to load or unload a tool named in ' +
         '`tools` mid-conversation without invalidating the prompt cache. It must follow a user turn or an assistant turn ' +
         'ending in a tool search result, and be the last message or precede an assistant turn. Only on models whose ' +
