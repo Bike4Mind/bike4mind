@@ -673,5 +673,6 @@ describe('GET /api/v1/artifacts/types', () => {
       mime_type: 'text/plain',
     });
     expect(body.categories).toContain('visualization');
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
   });
 });
