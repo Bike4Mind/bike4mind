@@ -18,6 +18,7 @@ interface HeartbeatResponse {
   paidToday: boolean;
   withheld: boolean;
   nextEligibleAt?: number;
+  spent?: boolean;
 }
 
 /** Another tab pinged recently, so this one idles; the server throttle remains the real guard. */
@@ -70,6 +71,12 @@ export function useSignupGrantHeartbeat() {
       let delay = HEARTBEAT_INTERVAL_MS;
       try {
         const res = await api.post<HeartbeatResponse>('/api/users/active-session');
+        // Re-arms through the effect deps once the refreshed user (or a raised cap) makes the grant eligible again.
+        if (res.data.spent === true) {
+          stopped = true;
+          queryClient.invalidateQueries({ queryKey: ['identify'] });
+          return;
+        }
         if (res.data.creditsGranted > 0 || res.data.paidToday) {
           queryClient.invalidateQueries({ queryKey: ['identify'] });
         }

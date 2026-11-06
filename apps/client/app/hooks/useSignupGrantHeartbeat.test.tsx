@@ -105,6 +105,20 @@ describe('useSignupGrantHeartbeat', () => {
     expect(h.invalidate).toHaveBeenCalledWith({ queryKey: ['identify'] });
   });
 
+  it('stops pinging for good once the server reports the grant spent, and refreshes the user', async () => {
+    h.post.mockResolvedValueOnce(response({ spent: true }));
+    renderHook(() => useSignupGrantHeartbeat());
+    touch();
+    await advance(HEARTBEAT_INTERVAL_MS);
+    expect(h.post).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 3; i++) {
+      touch();
+      await advance(24 * 60 * 60_000);
+    }
+    expect(h.post).toHaveBeenCalledTimes(1);
+    expect(h.invalidate).toHaveBeenCalledWith({ queryKey: ['identify'] });
+  });
+
   it('backs off to 5 minutes while the budget withholds, then keeps trying', async () => {
     h.post.mockResolvedValue(response({ withheld: true }));
     renderHook(() => useSignupGrantHeartbeat());

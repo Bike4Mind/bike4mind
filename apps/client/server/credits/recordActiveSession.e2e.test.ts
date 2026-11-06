@@ -195,7 +195,9 @@ describe('active session heartbeat', () => {
   it('pays on the second 60s ping at the default 60 second minimum', async () => {
     delete config.signupGrantActivityMinActiveSeconds;
     const user = await createSignupStageUser();
-    expect(await ping(user.id, 0)).toMatchObject({ activeSeconds: 0, paidToday: false, creditsGranted: 0 });
+    const first = await ping(user.id, 0);
+    expect(first).toMatchObject({ activeSeconds: 0, paidToday: false, creditsGranted: 0 });
+    expect(first).not.toHaveProperty('spent');
     expect(await ping(user.id, 60)).toMatchObject({ activeSeconds: 60, paidToday: true, creditsGranted: 1000 });
     expect(await dripRows(user.id)).toHaveLength(1);
   });
@@ -320,7 +322,7 @@ describe('active session heartbeat', () => {
   it('does nothing for a user without a grant or before the tranche is released, and when the daily amount is 0', async () => {
     const plain = await User.create({ username: 'plain', name: 'Plain', email: 'plain@example.test' });
     const plainResult = await ping(plain.id, 0);
-    expect(plainResult).toMatchObject({ activeSeconds: 0 });
+    expect(plainResult).toMatchObject({ activeSeconds: 0, spent: true });
     expect(plainResult).not.toHaveProperty('requiredSeconds');
     expect((await User.findById(plain.id))?.signupGrant).toBeUndefined();
     const user = await createSignupStageUser(1);
@@ -363,10 +365,12 @@ describe('active session heartbeat', () => {
     const user = await createSignupStageUser();
     config.signupGrantDripCap = '1000';
     await User.updateOne({ _id: user.id }, { 'signupGrant.dripCredits': 1000 });
-    expect(await pingEvery60s(user.id, 0, 600)).toMatchObject({ creditsGranted: 0, activeSeconds: 0 });
+    expect(await pingEvery60s(user.id, 0, 600)).toMatchObject({ creditsGranted: 0, activeSeconds: 0, spent: true });
     expect(await activityOf(user.id)).toBeUndefined();
     config.signupGrantDripCap = '9000';
-    expect(await pingEvery60s(user.id, 660, 1260)).toMatchObject({ creditsGranted: 1000, paidToday: true });
+    const resumed = await pingEvery60s(user.id, 660, 1260);
+    expect(resumed).toMatchObject({ creditsGranted: 1000, paidToday: true });
+    expect(resumed).not.toHaveProperty('spent');
   });
 
   it('reopens a drip-completed grant through the heartbeat when the live cap is raised', async () => {
@@ -398,7 +402,7 @@ describe('active session heartbeat', () => {
       }
     );
     config.signupGrantDripCap = '20000';
-    expect(await pingEvery60s(user.id, 0, 600)).toMatchObject({ creditsGranted: 0, activeSeconds: 0 });
+    expect(await pingEvery60s(user.id, 0, 600)).toMatchObject({ creditsGranted: 0, activeSeconds: 0, spent: true });
     expect(await activityOf(user.id)).toBeUndefined();
     expect(await dripRows(user.id)).toHaveLength(0);
   });
