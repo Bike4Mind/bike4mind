@@ -39,6 +39,37 @@ const cancelAccountSubscriptions = vi.hoisted(() =>
     failed: [] as { customerId: string; subscriptionId: string | null; reason: string }[],
   }))
 );
+// Lets a test fail the first transaction attempt of a Contain with a transient error, as the driver retries.
+const retryContain = vi.hoisted(() => ({ before: null as null | (() => Promise<void>) }));
+vi.mock('@server/admin/usersBulk/adapters', async importOriginal => {
+  const original = await importOriginal<typeof import('@server/admin/usersBulk/adapters')>();
+  return {
+    ...original,
+    usersBulkSystemApplyDeps: (...args: Parameters<typeof original.usersBulkSystemApplyDeps>) => {
+      const deps = original.usersBulkSystemApplyDeps(...args);
+      if (!retryContain.before) return deps;
+      return {
+        ...deps,
+        withTransaction: (async (fn: () => Promise<unknown>) => {
+          let attempt = 0;
+          return deps.withTransaction(async () => {
+            attempt += 1;
+            if (attempt === 2) await retryContain.before?.();
+            const result = await fn();
+            if (attempt === 1) {
+              const { MongoServerError } = await import('mongodb');
+              const error = new MongoServerError({ message: 'transient' });
+              error.addErrorLabel('TransientTransactionError');
+              throw error;
+            }
+            return result;
+          });
+        }) as typeof deps.withTransaction,
+      };
+    },
+  };
+});
+
 vi.mock('@server/billing/cancelAccountSubscriptions', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/billing/cancelAccountSubscriptions')>()),
   cancelAccountSubscriptions,
@@ -224,6 +255,26 @@ describe('resolveLostUserDispute', () => {
     const user = await User.findById(userId).lean();
     expect(user).toMatchObject({ isBanned: false, currentCredits: 500 });
     expect(await AdminAuditLogModel.countDocuments({ action: 'user.bulk.contained' })).toBe(0);
+  });
+
+  it('does not report a Contain from a rolled-back attempt when the retry finds nothing left to apply', async () => {
+    const userId = await seedUser();
+    const record = await closeFor(userId);
+    // Between attempts the account becomes contained by another path, so the retry applies no steps.
+    retryContain.before = async () => {
+      await User.collection.updateOne(
+        { _id: new mongoose.Types.ObjectId(userId) },
+        { $set: { isBanned: true, currentCredits: 0 } }
+      );
+    };
+    try {
+      const outcome = await resolveLostUserDispute(record, { id: userId }, logger);
+
+      expect(outcome.status).toBe('resolved_without_contain');
+      if (outcome.status === 'resolved_without_contain') expect(outcome.item.contain).toBeNull();
+    } finally {
+      retryContain.before = null;
+    }
   });
 
   it('resolves without a Contain when the account is already contained', async () => {

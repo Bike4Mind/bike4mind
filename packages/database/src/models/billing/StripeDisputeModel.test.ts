@@ -47,6 +47,41 @@ describe('StripeDisputeModel', () => {
     expect(closed.closedAt).toBeInstanceOf(Date);
   });
 
+  it('upgrades an open unmatched or organization record to the user a close found, and nothing else', async () => {
+    await stripeDisputeRepository.recordOpened(facts({ subject: 'unmatched', subjectId: null }));
+    const upgraded = await stripeDisputeRepository.recordClosed(
+      facts({ stripeStatus: 'lost', subject: 'user', subjectId: 'u1' }),
+      new Date()
+    );
+    expect(upgraded).toMatchObject({ subject: 'user', subjectId: 'u1', state: 'open' });
+
+    await stripeDisputeRepository.recordOpened(
+      facts({ stripeDisputeId: 'dp_test_2', subject: 'user', subjectId: 'u1' })
+    );
+    const kept = await stripeDisputeRepository.recordClosed(
+      facts({ stripeDisputeId: 'dp_test_2', stripeStatus: 'lost', subject: 'user', subjectId: 'u2' }),
+      new Date()
+    );
+    expect(kept).toMatchObject({ subject: 'user', subjectId: 'u1' });
+  });
+
+  it('leaves a resolved record untouched when a later close finds a user', async () => {
+    const opened = await stripeDisputeRepository.recordOpened(facts());
+    await stripeDisputeRepository.resolveByAdmin({ id: opened.id, adminId: 'admin1', note: 'Handled' });
+
+    const closed = await stripeDisputeRepository.recordClosed(
+      facts({ stripeStatus: 'lost', subject: 'user', subjectId: 'u1' }),
+      new Date()
+    );
+
+    expect(closed).toMatchObject({
+      state: 'resolved',
+      subject: 'organization',
+      subjectId: 'org1',
+      resolution: { outcome: 'admin' },
+    });
+  });
+
   it('flags a close it already holds as redelivered, but not a first close or a changed status', async () => {
     await stripeDisputeRepository.recordOpened(facts());
     const first = await stripeDisputeRepository.recordClosed(facts({ stripeStatus: 'lost' }), new Date());
@@ -152,6 +187,18 @@ describe('StripeDisputeModel', () => {
     const refused = await stripeDisputeRepository.resolveByAdmin({ id: user.id, adminId: 'admin1', note: 'x' });
 
     expect(refused).toMatchObject({ status: 'conflict', item: { state: 'open', stripeStatus: 'lost' } });
+  });
+
+  it('refuses an admin resolve of a user dispute Stripe closed as won', async () => {
+    const user = await stripeDisputeRepository.recordOpened(facts({ subject: 'user', subjectId: 'u1' }));
+    await stripeDisputeRepository.recordClosed(
+      facts({ subject: 'user', subjectId: 'u1', stripeStatus: 'won' }),
+      new Date()
+    );
+
+    const refused = await stripeDisputeRepository.resolveByAdmin({ id: user.id, adminId: 'admin1', note: 'x' });
+
+    expect(refused).toMatchObject({ status: 'conflict', item: { state: 'open', stripeStatus: 'won' } });
   });
 
   it('marks a Contain undone once', async () => {

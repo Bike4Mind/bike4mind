@@ -684,9 +684,31 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         break;
       }
 
+      if (record.subject === 'user' && record.subjectId !== user.id) {
+        // Containing the close's user would hit an account the record does not name.
+        if (!record.redelivered) {
+          await postMessageToSlack(
+            `\u26A0\uFE0F *Stripe Dispute Lost* \u2014 dispute ${dispute.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n${amountLine}\nThe record names a different account, so nothing was contained. Review it in Admin > Disputes.`
+          );
+        }
+        req.logger.warn(
+          `Lost dispute ${dispute.id} names a different user than the close found, left open for an admin`
+        );
+        break;
+      }
+
       const outcome = await resolveLostUserDispute(record, user, req.logger);
       if (outcome.status === 'already_resolved') {
-        req.logger.info(`Lost dispute ${dispute.id} already resolved, no action taken`);
+        if (record.resolution?.outcome === 'admin') {
+          if (!record.redelivered) {
+            await postMessageToSlack(
+              `\u26A0\uFE0F *Stripe Dispute Lost* \u2014 dispute ${dispute.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n${amountLine}\nAn admin resolved this dispute before the close arrived, so the account was not contained. Review it in Admin > Disputes.`
+            );
+          }
+          req.logger.warn(`Lost dispute ${dispute.id} was resolved by an admin first, account not contained`);
+        } else {
+          req.logger.info(`Lost dispute ${dispute.id} already resolved, no action taken`);
+        }
         break;
       }
       const contain = outcome.item.contain;

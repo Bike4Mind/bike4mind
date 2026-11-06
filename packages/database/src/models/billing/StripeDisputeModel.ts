@@ -1,6 +1,6 @@
 import mongoose, { Document, Model, model, Schema, Types } from 'mongoose';
 import {
-  isStripeDisputeAdminResolvable,
+  STRIPE_DISPUTE_ADMIN_RESOLVABLE,
   STRIPE_DISPUTE_OUTCOMES,
   STRIPE_DISPUTE_STATES,
   STRIPE_DISPUTE_SUBJECTS,
@@ -170,6 +170,14 @@ class StripeDisputeRepository {
       { $setOnInsert: insertOnly(facts), $set: { stripeStatus: facts.stripeStatus, closedAt } },
       { upsert: true, new: false }
     ).lean<LeanStripeDispute>();
+    // A close that found the user upgrades a still-open org/unmatched row, so the lost handler contains
+    // the account the close names. Anything else keeps the subject the record was created with.
+    if (facts.subject === 'user' && before && before.subject !== 'user' && before.state === 'open') {
+      await StripeDisputeModel.updateOne(
+        { stripeDisputeId: facts.stripeDisputeId, state: 'open' },
+        { $set: { subject: facts.subject, subjectId: facts.subjectId } }
+      );
+    }
     const doc = await StripeDisputeModel.findOne({ stripeDisputeId: facts.stripeDisputeId }).lean<LeanStripeDispute>();
     const redelivered = before?.closedAt != null && before.stripeStatus === facts.stripeStatus;
     return { ...toItem(doc as LeanStripeDispute), redelivered };
@@ -214,12 +222,9 @@ class StripeDisputeRepository {
     return doc ? toItem(doc) : null;
   }
 
-  /** An admin closes a dispute isStripeDisputeAdminResolvable allows; anything else is a conflict. */
+  /** An admin closes a dispute isStripeDisputeAdminResolvable allows (the same rule, as one conditional write); anything else is a conflict. */
   async resolveByAdmin(input: { id: string; adminId: string; note: string }): Promise<AdminStripeDisputeUpdateResult> {
     if (!Types.ObjectId.isValid(input.id)) return { status: 'not_found' };
-    const current = await StripeDisputeModel.findById(input.id).lean<LeanStripeDispute>();
-    if (!current) return { status: 'not_found' };
-    if (!isStripeDisputeAdminResolvable(toItem(current))) return { status: 'conflict', item: toItem(current) };
     const resolution: StripeDisputeResolution = {
       outcome: 'admin',
       resolvedBy: input.adminId,
@@ -227,8 +232,14 @@ class StripeDisputeRepository {
       resolvedAt: new Date(),
     };
     const updated = await StripeDisputeModel.findOneAndUpdate(
-      // The subject never changes and closedAt is only ever set, so only `open` can be lost meanwhile.
-      { _id: input.id, state: 'open' },
+      {
+        _id: input.id,
+        state: 'open',
+        $or: [
+          { subject: { $in: STRIPE_DISPUTE_ADMIN_RESOLVABLE } },
+          { closedAt: { $ne: null }, stripeStatus: { $nin: ['won', 'lost'] } },
+        ],
+      },
       { $set: { state: 'resolved', resolution } },
       { new: true }
     ).lean<LeanStripeDispute>();

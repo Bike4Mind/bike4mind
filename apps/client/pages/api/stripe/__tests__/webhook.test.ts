@@ -834,6 +834,43 @@ describe('charge.dispute.closed', () => {
     expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
   });
 
+  it('alerts and warns when an admin resolved the dispute before the lost close arrived', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+    mocks.recordDisputeClosed.mockImplementation(async (facts: object) => ({
+      ...facts,
+      state: 'resolved',
+      resolution: { outcome: 'admin' },
+    }));
+    mocks.resolveLostUserDispute.mockResolvedValue({ status: 'already_resolved' });
+
+    const res = await deliver(closed('lost'));
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('resolved by an admin first'));
+    expect(mocks.postMessageToSlack).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining('An admin resolved this dispute before the close arrived')
+    );
+  });
+
+  it('does not contain when the record names a different user than the close found', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+    mocks.recordDisputeClosed.mockImplementation(async (facts: object) => ({
+      ...facts,
+      subject: 'user',
+      subjectId: 'user_other',
+      state: 'open',
+    }));
+
+    const res = await deliver(closed('lost'));
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.resolveLostUserDispute).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('names a different user'));
+    expect(mocks.postMessageToSlack).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining('The record names a different account')
+    );
+  });
+
   it('fails the delivery when the Contain throws, so Stripe retries it', async () => {
     mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
     mocks.resolveLostUserDispute.mockRejectedValue(new Error('contain failed'));

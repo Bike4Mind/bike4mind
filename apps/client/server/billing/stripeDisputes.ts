@@ -163,6 +163,16 @@ export async function resolveLostUserDispute(
   if (!user.isAdmin) {
     const batchId = `stripe-dispute:${stripeDisputeId}`;
     const reason = `Lost Stripe dispute ${stripeDisputeId}`;
+    const baseDeps = usersBulkSystemApplyDeps(SYSTEM_ACTOR_NAME, reason, logger);
+    // Each transaction attempt starts clean: a retry may roll back an attempt that set the holder.
+    const applyDeps: typeof baseDeps = {
+      ...baseDeps,
+      withTransaction: fn =>
+        baseDeps.withTransaction(() => {
+          contained.item = null;
+          return fn();
+        }),
+    };
     try {
       const snapshot = await applyActionToUser(
         user.id,
@@ -173,7 +183,7 @@ export async function resolveLostUserDispute(
           batchId,
           cancelDeadline: Date.now() + SUBSCRIPTION_CANCEL_GRACE_MS,
         },
-        usersBulkSystemApplyDeps(SYSTEM_ACTOR_NAME, reason, logger),
+        applyDeps,
         async snapshot => {
           contained.item = await stripeDisputeRepository.resolveBySystem(
             stripeDisputeId,
@@ -185,8 +195,6 @@ export async function resolveLostUserDispute(
           await keepBlocked(user.id);
         }
       );
-      // A transaction retry can roll back an attempt that set the holder and then commit with no steps.
-      if (!snapshot) contained.item = null;
       // Canceled after the commit, so the undo snapshot written inside it does not hold them yet. Best-effort:
       // the Contain stands, and a redelivered close would find the dispute resolved and never retry this.
       if (contained.item && snapshot?.canceledSubscriptions) {
