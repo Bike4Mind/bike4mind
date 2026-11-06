@@ -102,6 +102,25 @@ describe('TurnCreditLimiter.beginRound', () => {
     expect(limiter.stoppedForCredits).toBe(false);
   });
 
+  it('remembers the lowest budget the cap set, and nothing while it never bound', () => {
+    const round = (maxOutputTokens: number) => ({
+      modelInfo: MODEL,
+      inputTokens: 10_000,
+      inputUsd,
+      spentUsd: 0,
+      maxOutputTokens,
+    });
+    const rich = new TurnCreditLimiter(1_000_000, 0);
+    rich.beginRound(round(4_000));
+    expect(rich.cappedOutputTokens).toBeUndefined();
+
+    const limiter = new TurnCreditLimiter(1_427, 0);
+    const first = limiter.beginRound(round(128_000));
+    if (!first.affordable) throw new Error('expected an affordable round');
+    limiter.beginRound(round(1_000_000));
+    expect(limiter.cappedOutputTokens).toBe(first.outputTokens);
+  });
+
   it('affords exactly the remaining output at the boundary', () => {
     const outputTokens = 2_000;
     const limit = worstCaseCredits(inputUsd, outputTokens);

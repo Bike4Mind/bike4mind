@@ -97,6 +97,7 @@ export const handler = withEventContext(async (event, logger) => {
     factStyle: writeV2,
     onUsage: ({ modelInfo, completionInfo, startTime }) =>
       recordSessionOperationalUsage({
+        operation: 'memento',
         userId,
         sessionId,
         modelId: model,

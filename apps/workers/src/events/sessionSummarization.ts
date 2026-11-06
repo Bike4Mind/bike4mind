@@ -204,6 +204,7 @@ export const handler = withEventContext(async (event, logger) => {
   });
 
   await recordSessionOperationalUsage({
+    operation: 'notebook_summary',
     user: payer,
     sessionId,
     modelId,

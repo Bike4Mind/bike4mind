@@ -203,6 +203,7 @@ import {
   estimateAddedInputTokens,
   outOfCreditsNotice,
 } from './chatCreditCap';
+import { buildChatRequestMeta } from './chatRequestMeta';
 import { capRoundOutput, gateEveryRound } from '../completionCreditBudget';
 import {
   executedModelFields,
@@ -7184,6 +7185,16 @@ export class ChatCompletionProcess {
               // (the provider tokens were really spent) but has to be findable for a refund.
               status: usageEventStatusForFinish(providerStopReason),
               latencyMs: Date.now() - processStartTime,
+              requestMeta: buildChatRequestMeta({
+                stopReason: providerStopReason,
+                maxOutputTokens: safeMaxTokens,
+                limiter: this.turnCreditLimiter,
+                reasoningEffort: explicitReasoningEffort ?? (queryComplexity ? `auto:${queryComplexity}` : undefined),
+                thinkingBudgetTokens:
+                  thinking?.enabled && currentModel.can_think ? (thinking.budget_tokens ?? 16000) : undefined,
+                functionCalls: quest.promptMeta?.functionCalls,
+                attachedFiles: quest.promptMeta?.context?.attachedFiles,
+              }),
             })
             .catch((usageEventError: unknown) => {
               logger.warn('Failed to record usage event', usageEventError);

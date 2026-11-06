@@ -144,6 +144,7 @@ Format: Dense bullet points. Preserve all technical specifics. No word limit.`,
 
   // The context-summarize event carries no userId; attribute to the session's owner.
   await recordSessionOperationalUsage({
+    operation: 'context_summary',
     user,
     sessionId,
     modelId,

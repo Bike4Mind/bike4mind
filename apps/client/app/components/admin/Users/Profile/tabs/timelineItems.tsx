@@ -1,5 +1,5 @@
 import React from 'react';
-import type { AuditEntry, UserTimelineEntry, UserTimelineType } from '@bike4mind/common';
+import type { AdminUsageReceiptQuery, AuditEntry, UserTimelineEntry, UserTimelineType } from '@bike4mind/common';
 import { RelativeTime } from '../../../shared';
 import { describeAuditEntry } from './auditSentence';
 import type { TimelineItem, TimelineTile } from './TimelineList';
@@ -53,6 +53,8 @@ export const adminMeta = (audit: AuditEntry): string =>
 export type TimelineHandlers = {
   onOpenAudit: (entry: AuditEntry) => void;
   onOpenCredits?: () => void;
+  /** Opens the usage receipt of a single-charge spend row; other spend rows open the Credits tab. */
+  onOpenReceipt?: (target: AdminUsageReceiptQuery) => void;
 };
 
 export const timelineItem = (entry: UserTimelineEntry, handlers: TimelineHandlers): TimelineItem => {
@@ -73,8 +75,20 @@ export const timelineItem = (entry: UserTimelineEntry, handlers: TimelineHandler
     case 'signin':
     case 'key':
       return { ...base, summary: entry.summary, meta: entry.detail, onOpen: () => handlers.onOpenAudit(entry.audit) };
+    case 'spend': {
+      const { requestId } = entry;
+      const onOpenReceipt = handlers.onOpenReceipt;
+      return {
+        ...base,
+        summary: entry.summary,
+        meta: entry.detail || undefined,
+        onOpen:
+          requestId && onOpenReceipt
+            ? () => onOpenReceipt({ requestId, at: new Date(entry.at).toISOString() })
+            : handlers.onOpenCredits,
+      };
+    }
     case 'credit':
-    case 'spend':
     case 'payment':
       return { ...base, summary: entry.summary, meta: entry.detail || undefined, onOpen: handlers.onOpenCredits };
     case 'usage':
