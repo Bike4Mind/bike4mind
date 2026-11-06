@@ -199,6 +199,18 @@ describe('artifactService - update (write-time re-check)', () => {
     expect(adapters.db.artifactVersions.createOrUpdate.mock.calls[0][0]).not.toHaveProperty('versionTag');
   });
 
+  it('clears the artifact version tag on a forced version created without one', async () => {
+    await update(writerId, { id: 'artifact-1', content: 'new body', createNewVersion: true }, adapters);
+
+    expect(gate()).toHaveBeenCalledWith(writerId, expect.objectContaining({ version: 2, versionTag: null }));
+  });
+
+  it('keeps the artifact version tag on a plain content edit without one', async () => {
+    await update(writerId, { id: 'artifact-1', content: 'new body' }, adapters);
+
+    expect(gate().mock.calls[0][1]).not.toHaveProperty('versionTag');
+  });
+
   it('makes a single gated write for a metadata-only update', async () => {
     await update(writerId, { id: 'artifact-1', title: 'Renamed' }, adapters);
 

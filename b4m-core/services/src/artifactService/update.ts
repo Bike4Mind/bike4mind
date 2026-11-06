@@ -264,6 +264,9 @@ export const update = async (
     }
   }
 
+  // An explicit new version without a tag must not inherit the previous version's tag on the artifact.
+  if (newVersion && createNewVersion && versionTag === undefined) updateData.versionTag = null;
+
   // One gated write for metadata and the version pointer together.
   const updatedArtifact = await db.artifacts.updateWithWriteAccess(userId, updateData);
   if (!updatedArtifact) {
