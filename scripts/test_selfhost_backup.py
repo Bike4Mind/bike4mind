@@ -324,8 +324,35 @@ class Restore(unittest.TestCase):
     def test_count_script_and_parse(self):
         script = sb.count_script(['a b', 'c'])
         self.assertIn("local/'a b'", script)
-        self.assertIn('2>/dev/null', script)
+        self.assertIn('|| exit 1', script)
+        self.assertNotIn('| wc', script)
         self.assertEqual(sb.parse_counts("a b 3\nc 0\nnoise\n"), {'a b': 3, 'c': 0})
+
+    def run_count_script(self, stub, buckets):
+        with tempfile.TemporaryDirectory() as tmp:
+            mc = Path(tmp) / 'mc'
+            mc.write_text('#!/bin/sh\n' + stub)
+            mc.chmod(0o755)
+            env = {**os.environ, 'PATH': f'{tmp}:{os.environ["PATH"]}'}
+            return subprocess.run(['sh', '-c', sb.count_script(buckets)], env=env,
+                                  capture_output=True, text=True)
+
+    def test_count_script_counts_existing_and_missing_buckets(self):
+        stub = ('case "$1" in alias) exit 0;; stat) [ "$2" = local/there ] || exit 1;; '
+                'ls) printf "a\\nb\\nc\\n";; esac\n')
+        result = self.run_count_script(stub, ['there', 'gone'])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sb.parse_counts(result.stdout), {'there': 3, 'gone': 0})
+
+    def test_count_script_fails_when_listing_errors(self):
+        stub = 'case "$1" in alias|stat) exit 0;; ls) exit 1;; esac\n'
+        result = self.run_count_script(stub, ['there'])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(sb.parse_counts(result.stdout), {})
+
+    def test_count_script_fails_when_alias_fails(self):
+        result = self.run_count_script('exit 1\n', ['there'])
+        self.assertNotEqual(result.returncode, 0)
 
     def test_tampered_backup_aborts_before_touching_the_target(self):
         dest, _ = make_backup_dir(self)

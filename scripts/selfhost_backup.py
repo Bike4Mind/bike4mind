@@ -129,10 +129,12 @@ def mirror_script(buckets, restore, remove=False):
 
 def count_script(buckets):
     """Print `<bucket> <object count>` per bucket; a bucket that does not exist yet counts 0."""
-    lines = [MC_ALIAS]
+    lines = [f'{MC_ALIAS} || exit 1']
     for name in buckets:
         q = shlex.quote(name)
-        lines.append(f'echo {q} $(mc ls --recursive local/{q} 2>/dev/null | wc -l | tr -d " ")')
+        # Listing is a separate statement so a failing mc is not hidden behind the pipe to grep.
+        lines.append(f'if mc stat local/{q} >/dev/null 2>&1; then out=$(mc ls --recursive local/{q}) || exit 1; '
+                     f'echo {q} $(printf "%s\\n" "$out" | grep -c .); else echo {q} 0; fi')
     return '; '.join(lines)
 
 
