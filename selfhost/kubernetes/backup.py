@@ -4,9 +4,10 @@
 Runs from the operator's machine through kubectl and streams both artifacts off the
 cluster into a local directory: mongo.archive.gz (mongodump --oplog) and objects.tar
 (mc mirror of the seven buckets, via a helper pod cloned from the init Job), plus a
-manifest.json. The Secret (SECRET_ENCRYPTION_KEY and friends) is never written or copied; the
-script reads only the bucket names and AWS_ENDPOINT_URL_S3 from the helper's environment, and
-both come from the chart's ConfigMap.
+manifest.json. The Secret (SECRET_ENCRYPTION_KEY and friends) is never written or
+copied; the script reads only the bucket names and AWS_ENDPOINT_URL_S3 from the
+helper's environment. By default both come from the chart's ConfigMap; a runtime
+Secret key of the same name overrides it.
 The ElasticMQ PVC is excluded on purpose. See README.md "Backup and restore".
 """
 import argparse
