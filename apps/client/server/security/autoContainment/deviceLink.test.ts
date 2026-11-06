@@ -18,6 +18,7 @@ vi.mock('./executor', () => ({
 }));
 
 import { checkDeviceLink, sweepDeviceLinks, type DeviceLinkDeps } from './deviceLink';
+import { evaluateDeviceLinks } from './deviceLinkEvaluation';
 
 const HOUR_MS = 60 * 60 * 1000;
 const NOW = new Date('2026-11-05T12:00:00Z');
@@ -101,7 +102,7 @@ describe('checkDeviceLink', () => {
   it('skips an account that is already banned', async () => {
     const deps = makeDeps({ loadAccounts: vi.fn(async () => [{ ...newcomer, isBanned: true }]) });
 
-    expect(await checkDeviceLink('new-user', deps)).toEqual({ status: 'skipped', reason: 'no_device' });
+    expect(await checkDeviceLink('new-user', deps)).toEqual({ status: 'skipped', reason: 'already_banned' });
     expect(deps.recordDetection).not.toHaveBeenCalled();
   });
 
@@ -210,5 +211,20 @@ describe('sweepDeviceLinks', () => {
 
     expect(report.status).toBe('disabled');
     expect(loadRecent).not.toHaveBeenCalled();
+  });
+});
+
+describe('evaluateDeviceLinks', () => {
+  it('still evaluates an account that is banned itself', async () => {
+    const results = await evaluateDeviceLinks(
+      [{ ...newcomer, isBanned: true }],
+      { windowHours: 168, commonNetworks: 5 },
+      {
+        ...makeDeps(),
+        now: () => NOW,
+      }
+    );
+
+    expect(results.get('new-user')?.linked).toBe(true);
   });
 });

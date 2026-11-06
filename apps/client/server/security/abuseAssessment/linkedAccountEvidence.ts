@@ -112,7 +112,10 @@ export async function buildLinkedAccountEvidence(
   const deviceLinks = await deps
     .bannedDeviceLinks(ids)
     .then(links => [...links.values()].flat().filter(match => !members.has(match.blockedUserId)))
-    .catch(() => null);
+    .catch(error => {
+      console.warn('Device-link evidence unavailable for the assessment', error);
+      return null;
+    });
 
   const signals: Signal[] = [
     { key: 'maxSameSignupIpAccounts', value: Math.max(0, ...signupIpLinks.map(links => links.length)) },
@@ -128,7 +131,10 @@ export async function buildLinkedAccountEvidence(
     },
     { key: 'landedOnOtherAccountNotebook', value: landingOwners.length > 0 },
     { key: 'landedOnBlockedAccountNotebook', value: landingOwners.some(owner => ownerBlocked.get(owner) === true) },
-    { key: 'sameDeviceBannedAccounts', value: deviceLinks && new Set(deviceLinks.map(match => match.blockedUserId)).size },
+    {
+      key: 'sameDeviceBannedAccounts',
+      value: deviceLinks && new Set(deviceLinks.map(match => match.blockedUserId)).size,
+    },
     // Hours between a member's signup and the closest banned account on the same device.
     { key: 'hoursToBannedSameDeviceAccount', value: deviceLinks && minOf(deviceLinks.map(match => match.hoursApart)) },
     {
