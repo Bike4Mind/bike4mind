@@ -6053,8 +6053,7 @@ export class ChatCompletionProcess {
               break;
             }
             lastError = attemptError as Error;
-            // Expected provider outcomes are warned by the backend or the attempt summary below.
-            // Other recoverable interruptions keep their stack at warn; unexpected failures page.
+            // Recoverable interruptions keep their stack at warn; unexpected failures page.
             if (isExpectedCompletionError(lastError)) {
               // Already warned by the backend or the attempt summary below.
             } else if (

@@ -1,4 +1,3 @@
-import { isExpectedToolError } from '@bike4mind/common';
 import {
   BadRequestError,
   ChatModels,
@@ -31,7 +30,7 @@ import type {
 } from 'openai/resources/responses/responses';
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
-import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
 import { logToolRound, summarizeToolOutcomes } from './toolRoundTiming';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
@@ -1437,7 +1436,11 @@ export class OpenAIBackend implements ICompletionBackend {
             for (const outcome of outcomes) {
               if (!outcome.ok) {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
-                if (isExpectedToolError(outcome.error)) this.logger.warn('Tool request refused', outcome.error);
+                // The tool layer leaves the failure log to the adapter: warn for expected refusals, error otherwise.
+                this.logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed', {
+                  toolName: outcome.name,
+                  error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+                });
                 const errorMsg = stripToolArtifactMarkup(
                   `Error processing ${outcome.name} tool: ${
                     outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
@@ -1913,7 +1916,11 @@ export class OpenAIBackend implements ICompletionBackend {
         for (const outcome of outcomes) {
           if (!outcome.ok) {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
-            if (isExpectedToolError(outcome.error)) this.logger.warn('Tool request refused', outcome.error);
+            // The tool layer leaves the failure log to the adapter: warn for expected refusals, error otherwise.
+            this.logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed', {
+              toolName: outcome.name,
+              error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+            });
             const errorMsg = stripToolArtifactMarkup(
               `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`,
               ARTIFACT_REMOVED_PLACEHOLDER
@@ -2494,7 +2501,11 @@ export class OpenAIBackend implements ICompletionBackend {
         this.pushToolMessages(messages, { id: r.callId, name: r.name, parameters: r.args }, resultStr);
       } else {
         if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
-        if (isExpectedToolError(outcome.error)) this.logger.warn('Tool request refused', outcome.error);
+        // The tool layer leaves the failure log to the adapter: warn for expected refusals, error otherwise.
+        this.logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed', {
+          toolName: r.name,
+          error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+        });
         const errorMsg = stripToolArtifactMarkup(
           `Error processing ${r.name} tool: ${
             outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
