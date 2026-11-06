@@ -314,10 +314,11 @@ describe('copied file provenance', () => {
     h.findById.mockResolvedValue({ id: 'file-1' });
   });
 
-  it('carries the original generation request and lineage, under a fresh job', async () => {
+  it("returns the caller's own generated file instead of saving a duplicate", async () => {
     h.findOne.mockResolvedValue(ORIGINAL);
 
-    await handler(req('me'), makeRes().res);
+    const { res, json } = makeRes();
+    await handler(req('me'), res);
 
     expect(h.findSessionIdsByImage).toHaveBeenLastCalledWith(KEY);
     expect(h.findOne).toHaveBeenCalledWith(
@@ -329,6 +330,18 @@ describe('copied file provenance', () => {
         deletedAt: null,
       })
     );
+    expect(h.findById).toHaveBeenCalledWith('orig-1');
+    expect(h.saveGeneratedAsset).not.toHaveBeenCalled();
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+    expect(h.download).not.toHaveBeenCalled();
+    expect(json).toHaveBeenCalledWith({ id: 'file-1' });
+  });
+
+  it('carries the original request under a fresh job for a share recipient, without lineage', async () => {
+    h.findOne.mockResolvedValue({ ...ORIGINAL, userId: 'owner' });
+
+    await handler(req('me'), makeRes().res);
+
     const [params] = h.saveGeneratedAsset.mock.calls[0];
     expect(params.generation).toEqual({
       generator: 'image',
@@ -337,17 +350,7 @@ describe('copied file provenance', () => {
       prompt: 'a red fox',
       request: ORIGINAL_REQUEST,
     });
-    expect(params.derivedFrom).toEqual(ORIGINAL.derivedFrom);
     expect(params.generatedOutputKey).toBe(KEY);
-  });
-
-  it("keeps the request but not the owner's lineage for a share recipient", async () => {
-    h.findOne.mockResolvedValue({ ...ORIGINAL, userId: 'owner' });
-
-    await handler(req('me'), makeRes().res);
-
-    const [params] = h.saveGeneratedAsset.mock.calls[0];
-    expect(params.generation.request).toEqual(ORIGINAL_REQUEST);
     expect(params).not.toHaveProperty('derivedFrom');
   });
 
