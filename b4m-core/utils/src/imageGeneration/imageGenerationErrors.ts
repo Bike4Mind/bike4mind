@@ -60,6 +60,19 @@ type FailureLogger = {
 };
 
 /**
+ * Our own post-generation scan blocking the output (the `ImageModerationBlockedError` in
+ * `../imageModeration`, a different class from the provider refusal above). Matched by shape because
+ * that module pulls in the Rekognition SDK and is deliberately kept out of this package's root entry.
+ */
+function isOwnModerationBlock(error: unknown): error is Error & { labels: { name: string }[] } {
+  return (
+    error instanceof Error &&
+    error.name === 'ImageModerationBlockedError' &&
+    Array.isArray((error as { labels?: unknown }).labels)
+  );
+}
+
+/**
  * The one place an image-generation caller reports a failure: expected failures and running out of
  * credits at warn, anything else at error (which pages). `context` is extra caller metadata (ids),
  * never the prompt.
@@ -72,6 +85,15 @@ export function logImageGenerationFailure(
 ): void {
   if (error instanceof ExpectedImageGenerationError) {
     logger.warn(message, { ...context, kind: error.kind, ...error.logContext });
+    return;
+  }
+  if (isOwnModerationBlock(error)) {
+    logger.warn(message, {
+      ...context,
+      kind: 'moderation_blocked',
+      provider: 'rekognition',
+      labels: error.labels.map(label => label.name),
+    });
     return;
   }
   // Out of credits is not an incident either: the user sees the message and the Add Credits CTA.
