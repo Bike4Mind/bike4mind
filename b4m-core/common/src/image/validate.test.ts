@@ -270,10 +270,11 @@ describe('validateImageRequest', () => {
         gemini25
       );
       expect(reasonsOf(editWithReference)).toEqual(['This model takes no reference images when editing']);
-      const flux2 = getImageModelCatalogEntry(ImageModels.FLUX_2_PRO);
-      expect(reasonsOf(validateImageRequest({ mode: 'generate', inputs: [{ role: 'edit_source' }] }, flux2))).toEqual([
-        'This model does not edit images, so it takes no source image',
-      ]);
+      // Synthetic, so the case survives catalog entries gaining an edit mode.
+      const generateOnly = { ...gptImage1, modes: { generate: gptImage1.modes.generate } };
+      expect(
+        reasonsOf(validateImageRequest({ mode: 'generate', inputs: [{ role: 'edit_source' }] }, generateOnly))
+      ).toEqual(['This model does not edit images, so it takes no source image']);
       expect(reasonsOf(validateImageRequest({ mode: 'generate', inputs: [{ role: 'mask' }] }, gptImage1))).toEqual([
         'A mask only applies when editing',
       ]);
