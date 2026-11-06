@@ -36,6 +36,7 @@ const makeItem = (overrides: Partial<AbuseAssessmentRow> = {}): AbuseAssessmentR
       { value: 'insufficient_evidence', probability: 0.1 },
     ],
     confidence: 0.7,
+    reasons: [],
     model: 'jev',
     modelVersion: 'v1',
     policyVersion: 1,
@@ -88,6 +89,32 @@ describe('ShadowDetectionAssessmentPanel', () => {
     expect(list).toContain('Abuse: 70%');
     expect(list).toContain('Legitimate automation: 20%');
     expect(screen.getByTestId('shadow-detection-assessment-confidence').textContent).toContain('70%');
+  });
+
+  it('lists the model reasons in fixed wording beside the label', () => {
+    hooks.useAbuseAssessments.mockReturnValue({
+      data: [
+        makeItem({
+          reasons: [
+            { key: 'anonymizedNetwork', probability: 0.91 },
+            { key: 'rushedOnboarding', probability: 0.8 },
+          ],
+        }),
+      ],
+      isPending: false,
+      error: null,
+    });
+    renderPanel();
+    const reasons = screen.getAllByTestId('abuse-assessment-reason').map(node => node.textContent);
+    expect(reasons).toEqual([
+      'Signed up through a VPN, proxy or hosting network (91%)',
+      'Two-factor or spending started within minutes of signup (80%)',
+    ]);
+  });
+
+  it('shows no reasons block for an assessment without reasons', () => {
+    renderPanel();
+    expect(screen.queryByTestId('abuse-assessment-reasons')).toBeNull();
   });
 
   it('renders unknown with its failure in plain words', () => {

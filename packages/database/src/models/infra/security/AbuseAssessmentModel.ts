@@ -2,6 +2,7 @@ import mongoose, { Document, Model, model, Schema, Types } from 'mongoose';
 import {
   ABUSE_ASSESSMENT_FAILURE_CODES,
   ABUSE_ASSESSMENT_JUDGMENTS,
+  ABUSE_ASSESSMENT_REASON_KEYS,
   ABUSE_ASSESSMENT_RESULTS,
   ABUSE_ASSESSMENT_TRIGGERS,
   DECISION_MODEL_IDS,
@@ -9,6 +10,7 @@ import {
   type AbuseAssessmentFeatureSummary,
   type AbuseAssessmentItem,
   type AbuseAssessmentJudgment,
+  type AbuseAssessmentReason,
   type AbuseAssessmentResult,
   type AbuseAssessmentTrigger,
   type DecisionModelId,
@@ -26,6 +28,8 @@ export interface IAbuseAssessmentDocument extends Document {
   result: AbuseAssessmentResult;
   probabilities: { value: AbuseAssessmentJudgment; probability: number }[];
   confidence: number | null;
+  // Absent on rows written before policy v2.
+  reasons?: AbuseAssessmentReason[];
   // `model` would shadow Document#model.
   decisionModel: DecisionModelId;
   modelVersion: string | null;
@@ -54,6 +58,14 @@ const ProbabilitySchema = new Schema(
   { _id: false }
 );
 
+const ReasonSchema = new Schema(
+  {
+    key: { type: String, enum: ABUSE_ASSESSMENT_REASON_KEYS, required: true },
+    probability: { type: Number, required: true },
+  },
+  { _id: false }
+);
+
 export const AbuseAssessmentSchema = new Schema<IAbuseAssessmentDocument>(
   {
     cacheKey: { type: String, required: true, unique: true },
@@ -61,6 +73,7 @@ export const AbuseAssessmentSchema = new Schema<IAbuseAssessmentDocument>(
     result: { type: String, enum: ABUSE_ASSESSMENT_RESULTS, required: true },
     probabilities: { type: [ProbabilitySchema], default: [] },
     confidence: { type: Number, default: null },
+    reasons: { type: [ReasonSchema], default: undefined },
     decisionModel: { type: String, enum: DECISION_MODEL_IDS, required: true },
     modelVersion: { type: String, default: null },
     policyVersion: { type: Number, required: true },
@@ -94,6 +107,7 @@ const toItem = (doc: LeanAbuseAssessment): AbuseAssessmentItem => ({
   result: doc.result,
   probabilities: doc.probabilities.map(({ value, probability }) => ({ value, probability })),
   confidence: doc.confidence,
+  reasons: (doc.reasons ?? []).map(({ key, probability }) => ({ key, probability })),
   model: doc.decisionModel,
   modelVersion: doc.modelVersion,
   policyVersion: doc.policyVersion,

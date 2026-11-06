@@ -81,6 +81,7 @@ const assessment = (overrides: Partial<AbuseAssessmentItem> = {}): AbuseAssessme
   result: 'abuse',
   probabilities: [{ value: 'abuse', probability: 0.9 }],
   confidence: 0.9,
+  reasons: [],
   model: 'test-decisions',
   modelVersion: null,
   policyVersion: 1,

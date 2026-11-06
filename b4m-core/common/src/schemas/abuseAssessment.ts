@@ -12,8 +12,11 @@ import { SHADOW_DETECTION_VERDICTS, SHADOW_DETECTORS } from './shadowDetection';
  * apps/client/server/security/abuseAssessment/abuseAssessment.ts; stored in the AbuseAssessment collection.
  */
 
-/** Bump when the question, its choices or the summary's meaning changes; cached results key on it. */
-export const ABUSE_ASSESSMENT_POLICY_VERSION = 1;
+/**
+ * Bump when the question, its choices or the summary's meaning changes; cached results key on it.
+ * v2 asks the reason questions (ABUSE_ASSESSMENT_REASON_KEYS) alongside the judgment.
+ */
+export const ABUSE_ASSESSMENT_POLICY_VERSION = 2;
 
 /**
  * The feature summary's shape. v1 carried the stored risk evidence per account; v2 adds each
@@ -208,6 +211,30 @@ export const abuseAssessmentFeatureSummarySchema = z.strictObject({
 });
 export type AbuseAssessmentFeatureSummary = z.infer<typeof abuseAssessmentFeatureSummarySchema>;
 
+/**
+ * The evidence factors the model is asked about, as yes/no questions in the same call as the
+ * judgment. The provider returns only probabilities, so a reason is a fixed key the admin UI words
+ * itself: nothing the model writes is stored or shown. Questions live in abuseAssessment.ts.
+ */
+export const ABUSE_ASSESSMENT_REASON_KEYS = [
+  'anonymizedNetwork',
+  'generatedLookingEmail',
+  'rushedOnboarding',
+  'linkedAccounts',
+  'concentratedExpensiveSpend',
+  'signupBurst',
+  'ordinaryUse',
+] as const;
+export type AbuseAssessmentReasonKey = (typeof ABUSE_ASSESSMENT_REASON_KEYS)[number];
+/** At most this many reasons are stored per assessment, strongest first. */
+export const ABUSE_ASSESSMENT_MAX_REASONS = 3;
+
+export const abuseAssessmentReasonSchema = z.object({
+  key: z.enum(ABUSE_ASSESSMENT_REASON_KEYS),
+  probability: z.number().min(0).max(1),
+});
+export type AbuseAssessmentReason = z.infer<typeof abuseAssessmentReasonSchema>;
+
 export const abuseAssessmentProbabilitySchema = z.object({
   value: z.enum(ABUSE_ASSESSMENT_JUDGMENTS),
   probability: z.number(),
@@ -220,6 +247,8 @@ export const abuseAssessmentItemSchema = z.object({
   /** The model's distribution; empty for unknown. Not calibrated for abuse; read it as a hint. */
   probabilities: z.array(abuseAssessmentProbabilitySchema),
   confidence: z.number().nullable(),
+  /** The factors the model found most present, strongest first; empty for unknown and policy v1 rows. */
+  reasons: z.array(abuseAssessmentReasonSchema).max(ABUSE_ASSESSMENT_MAX_REASONS),
   /** The configured model, and the version the provider reported answering with. */
   model: z.enum(DECISION_MODEL_IDS),
   modelVersion: z.string().nullable(),

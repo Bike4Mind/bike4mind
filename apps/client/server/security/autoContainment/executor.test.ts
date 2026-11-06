@@ -47,6 +47,7 @@ const assessment: AbuseAssessmentItem = {
   result: 'abuse',
   probabilities: [],
   confidence: 0.97,
+  reasons: [],
   model: 'jev-1.13.0',
   modelVersion: null,
   policyVersion: 1,

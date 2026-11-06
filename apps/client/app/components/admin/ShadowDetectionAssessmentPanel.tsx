@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { AbuseAssessmentReasons } from './AbuseAssessmentReasons';
 import { Alert, Box, Button, Stack, Typography } from '@mui/joy';
 import {
   abuseAssessmentAccountProfileSchema,
@@ -142,6 +143,7 @@ const LatestAssessment: React.FC<{ item: AbuseAssessmentRow }> = ({ item }) => (
         </Typography>
       )}
     </Stack>
+    <AbuseAssessmentReasons reasons={item.reasons} />
     {item.result === 'unknown' && (
       <Typography level="body-sm" data-testid="shadow-detection-assessment-failure">
         {item.failure ? FAILURE_MESSAGES[item.failure] : 'No usable answer came back.'}
