@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   options: [] as unknown[],
   handlers: {} as Record<string, (req: Request, res: Response) => Promise<unknown>>,
   current: '',
+  middleware: {} as Record<string, unknown[]>,
+  stepUp: Symbol('stepUpGate'),
   approve: vi.fn(),
   reject: vi.fn(),
   list: vi.fn(),
@@ -15,7 +17,10 @@ vi.mock('@server/middlewares/adminApi', () => ({
   adminApi: (options: unknown) => {
     mocks.options.push(options);
     const chain: Record<string, unknown> = {};
-    chain.use = () => chain;
+    chain.use = (middleware: unknown) => {
+      (mocks.middleware[mocks.current] ??= []).push(middleware);
+      return chain;
+    };
     for (const method of ['get', 'post']) {
       chain[method] = (fn: (req: Request, res: Response) => Promise<unknown>) => {
         mocks.handlers[mocks.current] = fn;
@@ -25,7 +30,7 @@ vi.mock('@server/middlewares/adminApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/auth/stepUp', () => ({ stepUpGate: () => vi.fn() }));
+vi.mock('@server/auth/stepUp', () => ({ stepUpGate: () => mocks.stepUp }));
 vi.mock('@server/admin/approvals/service', () => ({
   APPROVAL_LIST_MAX: 100,
   approveApproval: mocks.approve,
@@ -64,6 +69,11 @@ describe('approval routes', () => {
     await list(reqOf({ query: { status: 'all' } }), resMock());
     expect(mocks.list).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ status: undefined }));
     await expect(list(reqOf({ query: { status: 'bogus' } }), resMock())).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it('approve requires a fresh step-up before it runs anything', async () => {
+    await load('approve', () => import('../[id]/approve'));
+    expect(mocks.middleware.approve).toContain(mocks.stepUp);
   });
 
   it('approve passes the path id to the service', async () => {

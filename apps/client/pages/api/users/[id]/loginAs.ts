@@ -56,10 +56,31 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     }
 
     // Impersonating an admin needs a second admin's approval; the requester then redeems it here.
+    // The admin and MFA checks below run before a request is stored, as they do before a session.
     const policy = await getApprovalPolicy();
     const approvalTarget = policy.enabled ? await userRepository.findById(targetUserId) : null;
     const needsApproval = canAccessAdmin(approvalTarget);
-    if (needsApproval && typeof approvalId !== 'string') {
+    const requestOnly = needsApproval && typeof approvalId !== 'string';
+
+    const targetUser = await adminService.loginAs(
+      adminUser,
+      { targetUserId, mfaToken: mfaToken.trim() },
+      {
+        db: {
+          users: userRepository,
+        },
+        notify: {
+          send: async targetUser => {
+            if (requestOnly) return;
+            req.logger.info(
+              `Admin ${adminUser.name}[${adminUser.email}] logged in as user ${targetUser.name}[${targetUser.email}]`
+            );
+          },
+        },
+      }
+    );
+
+    if (requestOnly) {
       const pending = await requestApproval(
         req,
         {
@@ -75,26 +96,6 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       return res.status(202).json(pending);
     }
 
-    const targetUser = await adminService.loginAs(
-      adminUser,
-      { targetUserId, mfaToken: mfaToken.trim() },
-      {
-        db: {
-          users: userRepository,
-        },
-        notify: {
-          send: async targetUser => {
-            req.logger.info(
-              `Admin ${adminUser.name}[${adminUser.email}] logged in as user ${targetUser.name}[${targetUser.email}]`
-            );
-          },
-        },
-      }
-    );
-    const approval = needsApproval
-      ? await redeemApproval(req, approvalId as string, 'user.impersonate_admin', { targetUserId })
-      : undefined;
-
     // Mint a full session for the impersonated user; its refresh token takes over the primary
     // cookie. The refresh token must belong to the target - if the browser kept the admin's,
     // the first 401-triggered refresh would mint an admin access token and silently flip the
@@ -107,9 +108,12 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     // (revoke-others / the admin force-logout) refuse to run while this claim is present, so an
     // admin can't sign the customer's other devices out from an impersonated session.
     //
-    // The session doc and the started entry commit together; the sid groups everything done in
-    // this impersonation. Cookies are written only after the commit.
+    // The session doc, the started entry and the spent approval commit together; the sid groups
+    // everything done in this impersonation. Cookies are written only after the commit.
     const { accessToken, refreshToken } = await withTransaction(async () => {
+      const approval = needsApproval
+        ? await redeemApproval(req, approvalId as string, 'user.impersonate_admin', { targetUserId })
+        : undefined;
       const startedAt = new Date();
       const expiresAt = new Date(startedAt.getTime() + impersonationLifetimeMs());
       const session = await issueSessionForRequest(req, targetUser.id, {

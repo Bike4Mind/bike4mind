@@ -84,8 +84,10 @@ describe('requestApproval', () => {
       summary: 'Suspend 2 users',
       reason: 'spam wave',
       requiredPermission: 'users:moderate',
+      requiresFullAdmin: true,
     });
     const stored = mocks.repo.create.mock.calls[0]?.[0];
+    expect(stored.requiresFullAdmin).toBe(true);
     expect(stored.paramsJson).toBe(canonicalApprovalJson(PARAMS));
     expect(stored.paramsHash).toBe(approvalParamsHash(stored.paramsJson));
     expect(stored.requestedBy.selfIds).toEqual([REQUESTER, 'dddddddddddddddddddddddd']);
@@ -152,6 +154,14 @@ describe('approveApproval', () => {
     await expect(approveApproval(fullAdmin(APPROVER), ID)).rejects.toMatchObject({ statusCode: 409 });
     expect(mocks.repo.claim).not.toHaveBeenCalled();
     expect(mocks.execute).not.toHaveBeenCalled();
+  });
+
+  it('answers 409 and runs nothing when the params change between the check and the claim', async () => {
+    const changed = approvalOf({ status: 'executing', paramsJson: canonicalApprovalJson({ other: true }) });
+    mocks.repo.claim.mockResolvedValue(changed);
+    await expect(approveApproval(fullAdmin(APPROVER), ID)).rejects.toMatchObject({ statusCode: 409 });
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(mocks.repo.finish).toHaveBeenCalledWith(ID, 'executing', 'failed', expect.anything());
   });
 
   it('answers 409 when another approver claimed it first', async () => {
@@ -252,5 +262,24 @@ describe('listApprovals', () => {
     ]);
     expect(rows[0]).not.toHaveProperty('paramsJson');
     expect(rows[0]?.params).toEqual(PARAMS);
+  });
+
+  it('withholds params from an admin who neither requested nor may decide the row', async () => {
+    mocks.repo.list.mockResolvedValue([
+      approvalOf({ id: '1' }),
+      approvalOf({ id: '2', requiresFullAdmin: true }),
+      approvalOf({ id: '3', requiredPermission: 'support:read' }),
+    ]);
+    const viewer = reqAs({ id: APPROVER, adminPermissions: ['support:read', 'users:moderate'] });
+    const rows = await listApprovals(viewer, {});
+    expect(rows.map(({ id, params }) => ({ id, params }))).toEqual([
+      { id: '1', params: PARAMS },
+      { id: '2', params: null },
+      { id: '3', params: PARAMS },
+    ]);
+    const requester = await listApprovals(reqAs({ id: REQUESTER, adminPermissions: ['support:read'] }), {});
+    expect(requester.map(row => row.params)).toEqual([PARAMS, PARAMS, PARAMS]);
+    const reader = await listApprovals(reqAs({ id: APPROVER, adminPermissions: ['support:read'] }), {});
+    expect(reader.map(row => row.params)).toEqual([null, null, PARAMS]);
   });
 });

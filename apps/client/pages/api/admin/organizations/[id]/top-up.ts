@@ -31,7 +31,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
     const params = { organizationId: id, credits, kind, idempotencyKey, reason };
     const request = req as unknown as Request;
-    const policy = await creditGrantNeedsApproval(credits);
+    const policy = await creditGrantNeedsApproval(credits, req.user.id);
     if (policy) {
       const organization = await organizationRepository.findById(id);
       if (!organization) throw new NotFoundError('Organization not found');
@@ -43,6 +43,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           summary: `${kind === 'refund' ? 'Refund' : 'Top up'} ${credits} credits to org ${organization.name}`,
           reason,
           requiredPermission: 'credits:adjust',
+          requiresFullAdmin: true,
         },
         policy
       );

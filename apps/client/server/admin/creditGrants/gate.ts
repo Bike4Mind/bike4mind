@@ -1,7 +1,18 @@
+import { adminAuditLogRepository } from '@bike4mind/database';
 import { getApprovalPolicy, type ApprovalPolicy } from '@server/admin/approvals/service';
 
-/** The policy when approvals are on and `credits` is over the threshold (equal still runs), else null. */
-export async function creditGrantNeedsApproval(credits: number): Promise<ApprovalPolicy | null> {
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * The policy when approvals are on and `credits`, plus what this admin granted over the approval
+ * expiry window, is over the threshold (equal still runs), else null. Summing the window means a
+ * grant split into smaller ones is held to the same threshold as one large grant.
+ */
+export async function creditGrantNeedsApproval(credits: number, actorUserId: string): Promise<ApprovalPolicy | null> {
   const policy = await getApprovalPolicy();
-  return policy.enabled && credits > policy.creditThreshold ? policy : null;
+  if (!policy.enabled || credits <= 0) return null;
+  if (credits > policy.creditThreshold) return policy;
+  const since = new Date(Date.now() - policy.expiryHours * HOUR_MS);
+  const recent = await adminAuditLogRepository.sumCreditsGranted(actorUserId, since);
+  return credits + recent > policy.creditThreshold ? policy : null;
 }

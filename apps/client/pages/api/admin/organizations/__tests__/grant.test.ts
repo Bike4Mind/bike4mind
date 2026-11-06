@@ -246,6 +246,7 @@ describe('POST /api/admin/organizations/grant - approval gate', () => {
       expect.objectContaining({
         action: 'org.credits.grant',
         requiredPermission: 'credits:adjust',
+        requiresFullAdmin: true,
         params: expect.objectContaining({ ownerEmail: BODY.ownerEmail, initialCredits: 1000, reason: BODY.reason }),
       }),
       POLICY

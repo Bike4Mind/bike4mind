@@ -36,7 +36,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     const request = req as unknown as Request;
 
     const credits = grantSubscriptionCredits(params, teamPlan);
-    const policy = await creditGrantNeedsApproval(credits);
+    const policy = await creditGrantNeedsApproval(credits, req.user.id);
     if (policy) {
       const user = await validateGrantSubscription(params, teamPlan);
       const pending = await requestApproval(
@@ -47,6 +47,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           summary: `Grant ${params.subscriptionType} subscription with ${credits} credits to ${user.email ?? user.username}`,
           reason,
           requiredPermission: 'credits:adjust',
+          requiresFullAdmin: true,
         },
         policy
       );

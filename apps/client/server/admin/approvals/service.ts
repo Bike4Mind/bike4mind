@@ -79,6 +79,9 @@ const approvalTarget = (approval: AdminApproval): AuditTarget => ({
 
 const expiredError = () => new HTTPError(410, 'This approval request has expired. Submit a new request.');
 
+const tamperedError = () =>
+  new ConflictError('The stored request no longer matches what was requested. It was not run.');
+
 const isExpired = (approval: AdminApproval, now: Date) => approval.expiresAt.getTime() <= now.getTime();
 
 /** The requester, or anyone impersonating or impersonated by them, never decides their own request. */
@@ -112,7 +115,8 @@ export type RequestApprovalInput = {
   summary: string;
   reason: string;
   requiredPermission: AdminPermissionId;
-  requiresFullAdmin?: boolean;
+  /** True when the direct route requires raw isAdmin, so a delegated admin cannot approve and run it. */
+  requiresFullAdmin: boolean;
 };
 
 export type ApprovalPendingBody = { approvalId: string; status: 'pending'; expiresAt: Date };
@@ -134,7 +138,7 @@ export async function requestApproval(
     requestedBy: { id: user.id, name: displayNameOf(user), email: user.email ?? '', selfIds: selfIdsOf(user) },
     reason: input.reason,
     requiredPermission: input.requiredPermission,
-    requiresFullAdmin: input.requiresFullAdmin ?? false,
+    requiresFullAdmin: input.requiresFullAdmin,
     expiresAt: new Date(Date.now() + expiryHours * HOUR_MS),
   });
   try {
@@ -180,9 +184,7 @@ export async function approveApproval(req: Request, id: string): Promise<Approve
   }
   const now = new Date();
   await assertPendingAndLive(approval, now);
-  if (approvalParamsHash(approval.paramsJson) !== approval.paramsHash) {
-    throw new ConflictError('The stored request no longer matches what was requested. It was not run.');
-  }
+  if (approvalParamsHash(approval.paramsJson) !== approval.paramsHash) throw tamperedError();
 
   const redeemedByRequester = approval.action === 'user.impersonate_admin';
   const to: AdminApprovalStatus = redeemedByRequester ? 'approved' : 'executing';
@@ -194,6 +196,11 @@ export async function approveApproval(req: Request, id: string): Promise<Approve
     { decidedBy: { id: approver.id, name: displayNameOf(approver) }, decidedAt: now }
   );
   if (!claimed) throw new ConflictError('This request was already decided or has expired.');
+  // The claim re-reads the record, and these are the params that run.
+  if (approvalParamsHash(claimed.paramsJson) !== claimed.paramsHash) {
+    await adminApprovalRepository.finish(claimed.id, to, 'failed', { error: 'stored params changed' });
+    throw tamperedError();
+  }
 
   const details = { approval: approvalAuditDetails(claimed), action: claimed.action };
   try {
@@ -324,7 +331,10 @@ export type ApprovalListRow = Omit<AdminApproval, 'paramsJson'> & {
 
 export const APPROVAL_LIST_MAX = 100;
 
-/** Pending rows past their expiry are reported as expired; the record itself is closed on its next decision. */
+/**
+ * Pending rows past their expiry are reported as expired; the record itself is closed on its next decision.
+ * `params` is null unless the caller requested the row or holds what deciding it needs.
+ */
 export async function listApprovals(
   req: Request,
   query: { status?: AdminApprovalStatus; before?: Date; limit?: number }
@@ -336,20 +346,20 @@ export async function listApprovals(
     before: query.before,
     limit: Math.min(query.limit ?? 50, APPROVAL_LIST_MAX),
   });
-  return approvals.map(({ paramsJson, ...approval }) => {
-    const expired = approval.status === 'pending' && isExpired({ ...approval, paramsJson }, now);
-    const status: AdminApprovalStatus = expired ? 'expired' : approval.status;
+  return approvals.map(record => {
+    const { paramsJson, ...approval } = record;
+    const status: AdminApprovalStatus =
+      approval.status === 'pending' && isExpired(record, now) ? 'expired' : approval.status;
+    const own = isOwnRequest(user, record);
+    const mayDecide = canDecideAs(user, record);
     return {
       ...approval,
       status,
-      params: JSON.parse(paramsJson),
+      params: own || mayDecide ? JSON.parse(paramsJson) : null,
       stalled:
         status === 'executing' &&
         now.getTime() - (approval.decidedAt ?? approval.createdAt).getTime() > APPROVAL_STALLED_AFTER_MS,
-      canDecide:
-        status === 'pending' &&
-        !isOwnRequest(user, { ...approval, paramsJson }) &&
-        canDecideAs(user, { ...approval, paramsJson }),
+      canDecide: status === 'pending' && !own && mayDecide,
     };
   });
 }

@@ -78,7 +78,7 @@ export type ExecuteActor = {
   selfIds: string[];
 };
 
-const AUDIT_ACTION = {
+export const AUDIT_ACTION = {
   suspend: 'user.bulk.suspended',
   restrict: 'user.bulk.restricted',
   adjustCredits: 'user.bulk.credits_adjusted',

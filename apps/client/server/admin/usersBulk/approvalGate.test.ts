@@ -6,6 +6,11 @@ import { cohortHashOf, type BulkUser, type ResolveDeps } from './resolve';
 const mocks = vi.hoisted(() => ({
   policy: vi.fn(),
   requestApproval: vi.fn(),
+  recentCredits: vi.fn(),
+  recentUsers: vi.fn(),
+}));
+vi.mock('@bike4mind/database', () => ({
+  adminAuditLogRepository: { sumCreditsGranted: mocks.recentCredits, countActions: mocks.recentUsers },
 }));
 vi.mock('@server/admin/approvals/service', () => ({
   getApprovalPolicy: mocks.policy,
@@ -59,6 +64,8 @@ const cohort = (count: number, credits = 100) => Array.from({ length: count }, (
 describe('requestUsersBulkApprovalIfNeeded', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.recentCredits.mockResolvedValue(0);
+    mocks.recentUsers.mockResolvedValue(0);
     mocks.policy.mockResolvedValue({ enabled: true, bulkUserThreshold: 2, creditThreshold: 1000, expiryHours: 24 });
     mocks.requestApproval.mockResolvedValue(PENDING);
   });
@@ -72,9 +79,26 @@ describe('requestUsersBulkApprovalIfNeeded', () => {
     expect(await requestUsersBulkApprovalIfNeeded(req, body, depsFor(three))).toBe(PENDING);
     expect(mocks.requestApproval).toHaveBeenCalledWith(
       req,
-      expect.objectContaining({ action: 'users.bulk', requiredPermission: 'users:moderate', reason: body.reason }),
+      expect.objectContaining({
+        action: 'users.bulk',
+        requiredPermission: 'users:moderate',
+        requiresFullAdmin: true,
+        reason: body.reason,
+      }),
       expect.objectContaining({ enabled: true })
     );
+  });
+
+  it('counts the users this admin already moved over the expiry window, so a split batch is held', async () => {
+    const two = cohort(2);
+    mocks.recentUsers.mockResolvedValue(1);
+    expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(two, { type: 'contain' }), depsFor(two))).toBe(
+      PENDING
+    );
+    const [actor, actions, since] = mocks.recentUsers.mock.calls[0] as [string, string[], Date];
+    expect(actor).toBe(ADMIN);
+    expect(actions.sort()).toEqual(['user.bulk.contained', 'user.bulk.credits_adjusted', 'user.bulk.suspended']);
+    expect(Date.now() - since.getTime()).toBeCloseTo(24 * 60 * 60 * 1000, -4);
   });
 
   it('leaves everything to the legacy path when approvals are off', async () => {
@@ -100,9 +124,11 @@ describe('requestUsersBulkApprovalIfNeeded', () => {
     const add = (amount: number): AdminUsersBulkAction => ({ type: 'adjustCredits', mode: 'add', amount });
     expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(users, add(1000)), depsFor(users))).toBeNull();
     expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(users, add(1001)), depsFor(users))).toBe(PENDING);
+    mocks.recentCredits.mockResolvedValueOnce(1);
+    expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(users, add(1000)), depsFor(users))).toBe(PENDING);
     expect(mocks.requestApproval).toHaveBeenCalledWith(
       req,
-      expect.objectContaining({ requiredPermission: 'credits:adjust' }),
+      expect.objectContaining({ requiredPermission: 'credits:adjust', requiresFullAdmin: true }),
       expect.anything()
     );
   });

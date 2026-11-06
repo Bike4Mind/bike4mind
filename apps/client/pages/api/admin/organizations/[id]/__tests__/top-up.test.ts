@@ -355,6 +355,7 @@ describe('POST /api/admin/organizations/[id]/top-up - approval gate', () => {
       expect.objectContaining({
         action: 'org.credits.top_up',
         requiredPermission: 'credits:adjust',
+        requiresFullAdmin: true,
         params: {
           organizationId: 'org-1',
           credits: BODY.credits,

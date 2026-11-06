@@ -226,7 +226,16 @@ describe('POST /api/users/:id/loginAs - admin targets need approval', () => {
     mockSetAdminReturnCookie.mockReset();
   });
 
-  it('answers 202 with a pending request, verifying no MFA and minting no session', async () => {
+  it('answers 202 with a pending request after the admin and MFA check, minting no session', async () => {
+    const order: string[] = [];
+    mockLoginAs.mockImplementation(async () => {
+      order.push('loginAs');
+      return { id: 'target1', name: 'Target Admin' };
+    });
+    mockRequestApproval.mockImplementation(async () => {
+      order.push('request');
+      return { approvalId: 'appr1', status: 'pending', expiresAt: 'later' };
+    });
     const { req, res } = post({ mfaToken: '123456', reason: REASON });
     await (handler as any)(req, res);
 
@@ -243,9 +252,17 @@ describe('POST /api/users/:id/loginAs - admin targets need approval', () => {
       }),
       expect.anything()
     );
-    expect(mockLoginAs).not.toHaveBeenCalled();
+    expect(order).toEqual(['loginAs', 'request']);
     expect(mockIssueSession).not.toHaveBeenCalled();
     expect(mockSetRefreshCookie).not.toHaveBeenCalled();
+  });
+
+  it('stores no request when the admin or MFA check refuses the caller', async () => {
+    mockLoginAs.mockRejectedValue(new ForbiddenError('Admin privileges required'));
+    const { req, res } = post({ mfaToken: '123456', reason: REASON });
+
+    await expect((handler as any)(req, res)).rejects.toThrow('Admin privileges required');
+    expect(mockRequestApproval).not.toHaveBeenCalled();
   });
 
   it('gates a delegated admin target too', async () => {
@@ -263,6 +280,7 @@ describe('POST /api/users/:id/loginAs - admin targets need approval', () => {
     });
     mockRedeem.mockImplementation(async () => {
       order.push('redeem');
+      txEvents.push('redeem');
       return approval;
     });
     const { req, res } = post({ mfaToken: '123456', reason: REASON, approvalId: 'appr1' });
@@ -270,6 +288,8 @@ describe('POST /api/users/:id/loginAs - admin targets need approval', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(order).toEqual(['loginAs', 'redeem']);
+    // Spent inside the transaction that mints the session, so a failed mint leaves it unspent.
+    expect(txEvents).toEqual(['tx:start', 'redeem', 'tx:end']);
     expect(mockRedeem).toHaveBeenCalledWith(req, 'appr1', 'user.impersonate_admin', { targetUserId: 'target1' });
     expect(mockRequestApproval).not.toHaveBeenCalled();
     expect(mockRecord).toHaveBeenCalledWith(

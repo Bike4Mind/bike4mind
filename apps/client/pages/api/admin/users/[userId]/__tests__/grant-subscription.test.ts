@@ -365,6 +365,7 @@ describe('POST /api/admin/users/[userId]/grant-subscription - approval gate', ()
       expect.objectContaining({
         action: 'user.subscription.grant',
         requiredPermission: 'credits:adjust',
+        requiresFullAdmin: true,
         params: expect.objectContaining({ userId: 'user-1', seats: 5, creditsAtRequest: 5000 }),
       }),
       POLICY

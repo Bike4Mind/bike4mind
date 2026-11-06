@@ -333,3 +333,28 @@ describe('AdminAuditLogRepository.listForSubscriptionOrOwner', () => {
     expect(page.entries.map(item => item.summary)).toEqual(['this sub, other target', 'owner, other sub']);
   });
 });
+
+describe('AdminAuditLogRepository.countActions', () => {
+  setupMongoTest();
+
+  it('counts one actor entries under the given actions since the cutoff', async () => {
+    const since = new Date('2026-03-01T00:00:00Z');
+    await adminAuditLogRepository.append(entry({ action: 'user.bulk.suspended' }, new Date('2026-03-02T00:00:00Z')));
+    await adminAuditLogRepository.append(entry({ action: 'user.bulk.contained' }, since));
+    await adminAuditLogRepository.append(entry({ action: 'user.bulk.suspended' }, new Date('2026-02-28T00:00:00Z')));
+    await adminAuditLogRepository.append(entry({ action: 'user.bulk.tagged' }, new Date('2026-03-02T00:00:00Z')));
+    await adminAuditLogRepository.append(
+      entry(
+        {
+          action: 'user.bulk.suspended',
+          actor: { kind: 'user', scope: 'platform', userId: 'admin-2', name: 'Other', wasAdmin: true },
+        },
+        new Date('2026-03-02T00:00:00Z')
+      )
+    );
+
+    await expect(
+      adminAuditLogRepository.countActions('admin-1', ['user.bulk.suspended', 'user.bulk.contained'], since)
+    ).resolves.toBe(2);
+  });
+});

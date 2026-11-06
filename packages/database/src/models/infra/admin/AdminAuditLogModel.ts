@@ -4,6 +4,7 @@ import {
   AUDIT_REVIEW_BASELINE_DAYS,
   IMPERSONATION_ENDED_ACTION,
   IMPERSONATION_STARTED_ACTION,
+  type AdminAuditAction,
   type AuditEntry,
   type AuditLogCursor,
   type AuditLogFilters,
@@ -479,6 +480,12 @@ class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository 
   async countCreditGrants(actorUserId: string, window: { from: Date; to: Date }): Promise<number> {
     return this.auditLogModel
       .countDocuments({ ...creditGrantsBy(actorUserId), occurredAt: { $gt: window.from, $lte: window.to } })
+      .maxTimeMS(LIST_QUERY_MAX_TIME_MS);
+  }
+
+  async countActions(actorUserId: string, actions: readonly AdminAuditAction[], since: Date): Promise<number> {
+    return this.auditLogModel
+      .countDocuments({ 'actor.userId': actorUserId, action: { $in: [...actions] }, occurredAt: { $gte: since } })
       .maxTimeMS(LIST_QUERY_MAX_TIME_MS);
   }
 

@@ -745,6 +745,7 @@ apps/client/pages/api/subscriptions/own.ts
 apps/client/pages/api/subscriptions/stats.ts
 apps/client/pages/api/subscriptions/subscribe.ts
 apps/client/pages/api/system-prompts/activatable.ts
+apps/client/pages/api/test/admin-approval.ts  # deliberately unauthenticated (auth: false) like the other api/test routes: E2E stages only, gated by the x-e2e-cleanup-secret header and -e2e@test.com requesters
 apps/client/pages/api/test/cleanup.ts
 apps/client/pages/api/test/create-user.ts
 apps/client/pages/api/test/expire-account-deletion.ts  # deliberately unauthenticated (auth: false) like the other api/test routes: E2E stages only, gated by the x-e2e-cleanup-secret header and -e2e@test.com emails

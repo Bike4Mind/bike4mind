@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { AdminAuditCategory, AdminAuditSeverity } from './adminAuditCatalogue';
+import type { AdminAuditAction, AdminAuditCategory, AdminAuditSeverity } from './adminAuditCatalogue';
 import type { AuditLogCursor, AuditLogFilters, AuditSummary } from './adminAuditQuery';
 import type { ListAuditReviewQueue } from './adminAuditReview';
 
@@ -116,6 +116,8 @@ export interface IAdminAuditLogRepository {
   countCreditGrants(actorUserId: string, window: { from: Date; to: Date }): Promise<number>;
   /** Total credits one actor granted with occurredAt at or after `since`. */
   sumCreditsGranted(actorUserId: string, since: Date): Promise<number>;
+  /** Entries one actor recorded under any of `actions` with occurredAt at or after `since`. */
+  countActions(actorUserId: string, actions: readonly AdminAuditAction[], since: Date): Promise<number>;
 }
 
 /** The subscription Timeline read capability, without extending the base repository's required contract. */
