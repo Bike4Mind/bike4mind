@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { IMAGE_MODELS, ImageModels } from '../models';
 import { getImageModelCapabilities } from '../utils/imageCapabilities';
 import {
+  isFlux2ImageModel,
   isGeminiImageModel,
   isKontextModel,
   rejectsTransparentBackground,
