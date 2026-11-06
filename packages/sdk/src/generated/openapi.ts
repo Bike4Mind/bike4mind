@@ -12568,7 +12568,7 @@ export interface operations {
         /** @description Lists only sessions of this product surface. When omitted, only sessions with no surface are listed. */
         surface?: string;
         /** @description Lists only sessions created through this channel. `web` also matches sessions with no recorded origin. */
-        origin?: 'web' | 'api' | 'slack' | 'cli' | 'agent';
+        origin?: 'web' | 'api' | 'slack' | 'cli' | 'desktop' | 'agent';
       };
       header?: never;
       path?: never;
