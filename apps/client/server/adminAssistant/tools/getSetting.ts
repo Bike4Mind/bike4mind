@@ -1,6 +1,5 @@
 import {
   allSettingDefinitions,
-  isEnforceCreditsLocked,
   redactSettingSecrets,
   resolveSettingDefinition,
   type SettingDefinition,
@@ -14,8 +13,8 @@ const MAX_SEARCH_RESULTS = 20;
 // Some settings hold long prompts or large config objects; past this, send a truncated JSON preview.
 const MAX_VALUE_CHARS = 4_000;
 
-// Models often fill an unused optional parameter with '' or null, so both count as omitted.
-const isGiven = (value: string | null | undefined): value is string => typeof value === 'string' && value !== '';
+// Models often fill an unused optional parameter with '', so it counts as omitted.
+const isGiven = (value: string | undefined): value is string => typeof value === 'string' && value !== '';
 
 const GetSettingInput = z
   .object({
@@ -23,13 +22,13 @@ const GetSettingInput = z
       .string()
       .trim()
       .max(200)
-      .nullish()
+      .optional()
       .describe('The exact setting key, e.g. enforceCredits. Provide exactly one of key or search; omit the other.'),
     search: z
       .string()
       .trim()
       .max(100)
-      .nullish()
+      .optional()
       .describe(
         'Words to find settings by; a setting matches when every word appears in its key, name or description (case-insensitive). Returns keys without values. Provide exactly one of key or search; omit the other.'
       ),
@@ -37,8 +36,6 @@ const GetSettingInput = z
   .refine(input => isGiven(input.key) !== isGiven(input.search), {
     message: 'Provide exactly one of key or search',
   });
-
-type ValueSource = 'locked' | 'stored' | 'default';
 
 // Every value leaves through redactSettingSecrets, so a sensitive setting is only ever a mask.
 const redacted = (key: string, value: unknown): unknown =>
@@ -72,21 +69,10 @@ const searchSettings = (search: string) => {
   };
 };
 
-// Mirrors the branches of adminSettingsRepository.getSettingsValue, which produces the value itself.
-const valueSourceOf = (
-  definition: SettingDefinition<string>,
-  stored: { settingValue: unknown } | null
-): ValueSource => {
-  if (definition.key === 'enforceCredits' && isEnforceCreditsLocked()) return 'locked';
-  return stored && definition.schema.safeParse(stored.settingValue).success ? 'stored' : 'default';
-};
-
 const readSetting = async (definition: SettingDefinition<string>) => {
   const { key } = definition;
-  const stored = await adminSettingsRepository.findOne({ settingName: key });
-  // The value the platform actually runs with; the cast covers contributed keys outside the core
-  // SettingKey union.
-  const effective = await adminSettingsRepository.getSettingsValue(key as SettingKey);
+  // The platform-level value; the cast covers contributed keys outside the core SettingKey union.
+  const { value, source } = await adminSettingsRepository.getSettingsValueWithSource(key as SettingKey);
 
   return {
     ok: true as const,
@@ -97,8 +83,9 @@ const readSetting = async (definition: SettingDefinition<string>) => {
       description: definition.description,
       type: definition.type,
       isSensitive: definition.isSensitive === true,
-      ...bounded(redacted(key, effective)),
-      source: valueSourceOf(definition, stored),
+      ...bounded(redacted(key, value)),
+      source,
+      overridableAt: definition.scope?.settableAt ?? [],
     },
   };
 };
@@ -106,7 +93,7 @@ const readSetting = async (definition: SettingDefinition<string>) => {
 export const getSettingTool = defineAdminTool({
   name: 'admin_get_setting',
   description:
-    "Read an admin setting from the Admin Settings tab. With key: its name, category, description, type, the value currently in effect (a truncated JSON preview when very large) and its source: 'stored', 'default' (nothing valid stored), or 'locked' (forced by the platform whatever is stored). Sensitive values (API keys, secrets) come back masked. With search: up to 20 matching setting keys and descriptions, without values, to find the key to read.",
+    "Read an admin setting from the Admin Settings tab. With key: its name, category, description, type, the platform-level value (a truncated JSON preview when very large), its source: 'stored', 'default' (nothing valid stored), or 'locked' (forced by the platform whatever is stored), and overridableAt: the scopes (organization, owner, lake) that can override it, so for a non-empty list the value for a given org, user or lake may differ. Sensitive values (API keys, secrets) come back masked. With search: up to 20 matching setting keys and descriptions, without values, to find the key to read.",
   input: GetSettingInput,
   run: async ({ key, search }) => {
     if (isGiven(search)) return searchSettings(search);

@@ -1,12 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { allSettingDefinitions } from '@bike4mind/common';
 import type { ToolContext } from '@bike4mind/services/llm/tools';
 
-const findOne = vi.fn();
-const getSettingsValue = vi.fn();
+const getSettingsValueWithSource = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {
-    findOne: (...args: unknown[]) => findOne(...args),
-    getSettingsValue: (...args: unknown[]) => getSettingsValue(...args),
+    getSettingsValueWithSource: (...args: unknown[]) => getSettingsValueWithSource(...args),
   },
 }));
 
@@ -22,21 +21,13 @@ const runTool = async (args: unknown) =>
   JSON.parse(await getSettingTool.implementation(context, undefined).toolFn(args));
 
 describe('getSettingTool', () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
   beforeEach(() => {
-    // Self-host unlocks enforceCredits, so it reads like any other setting.
-    vi.stubEnv('B4M_SELF_HOST', 'true');
-    findOne.mockReset().mockResolvedValue(null);
-    getSettingsValue.mockReset().mockResolvedValue(undefined);
+    getSettingsValueWithSource.mockReset().mockResolvedValue({ value: undefined, source: 'default' });
   });
 
   it('masks a sensitive value down to its last 4 characters', async () => {
     const secret = 'sk-live-abcdefghijklmnop1234';
-    findOne.mockResolvedValue({ settingName: 'openaiDemoKey', settingValue: secret });
-    getSettingsValue.mockResolvedValue(secret);
+    getSettingsValueWithSource.mockResolvedValue({ value: secret, source: 'stored' });
 
     const raw = await getSettingTool.implementation(context, undefined).toolFn({ key: 'openaiDemoKey' });
     const result = JSON.parse(raw);
@@ -51,12 +42,11 @@ describe('getSettingTool', () => {
   });
 
   it('reads the effective value of a stored setting', async () => {
-    findOne.mockResolvedValue({ settingName: 'enforceCredits', settingValue: false });
-    getSettingsValue.mockResolvedValue(false);
+    getSettingsValueWithSource.mockResolvedValue({ value: false, source: 'stored' });
 
     const result = await runTool({ key: 'enforceCredits' });
 
-    expect(getSettingsValue).toHaveBeenCalledWith('enforceCredits');
+    expect(getSettingsValueWithSource).toHaveBeenCalledWith('enforceCredits');
     expect(result).toEqual({
       ok: true,
       data: {
@@ -69,24 +59,24 @@ describe('getSettingTool', () => {
         value: false,
         truncatedPreview: null,
         source: 'stored',
+        overridableAt: [],
       },
     });
   });
 
-  it('reports the default when no row is stored or the stored value fails the schema', async () => {
-    getSettingsValue.mockResolvedValue(true);
-    expect((await runTool({ key: 'enforceCredits' })).data).toMatchObject({ value: true, source: 'default' });
-
-    findOne.mockResolvedValue({ settingName: 'enforceCredits', settingValue: 'not-a-boolean' });
-    expect((await runTool({ key: 'enforceCredits' })).data).toMatchObject({ value: true, source: 'default' });
-  });
-
-  it('reports a locked setting as locked even when a valid row is stored', async () => {
-    vi.stubEnv('B4M_SELF_HOST', 'false');
-    findOne.mockResolvedValue({ settingName: 'enforceCredits', settingValue: false });
-    getSettingsValue.mockResolvedValue(true);
+  it('passes through the source the repository reports', async () => {
+    getSettingsValueWithSource.mockResolvedValue({ value: true, source: 'locked' });
 
     expect((await runTool({ key: 'enforceCredits' })).data).toMatchObject({ value: true, source: 'locked' });
+  });
+
+  it('lists the scopes that can override a scopable setting', async () => {
+    const scopable = allSettingDefinitions().find(definition => definition.scope?.settableAt?.length);
+    expect(scopable).toBeDefined();
+
+    const result = await runTool({ key: scopable!.key });
+
+    expect(result.data.overridableAt).toEqual(scopable!.scope!.settableAt);
   });
 
   it('returns null rather than dropping the value when nothing resolves', async () => {
@@ -96,7 +86,7 @@ describe('getSettingTool', () => {
 
   it('sends a truncated JSON preview instead of a very large value', async () => {
     const huge = 'x'.repeat(10_000);
-    getSettingsValue.mockResolvedValue(huge);
+    getSettingsValueWithSource.mockResolvedValue({ value: huge, source: 'stored' });
 
     const result = await runTool({ key: 'enforceCredits' });
 
@@ -106,8 +96,7 @@ describe('getSettingTool', () => {
 
   it('returns not_found for an unknown key without reading the database', async () => {
     expect(await runTool({ key: 'noSuchSetting' })).toMatchObject({ ok: false, error: 'not_found' });
-    expect(findOne).not.toHaveBeenCalled();
-    expect(getSettingsValue).not.toHaveBeenCalled();
+    expect(getSettingsValueWithSource).not.toHaveBeenCalled();
   });
 
   it('searches definitions case-insensitively and returns keys without values', async () => {
@@ -120,7 +109,7 @@ describe('getSettingTool', () => {
       category: 'AI',
       description: 'The global API Key for OpenAI.',
     });
-    expect(findOne).not.toHaveBeenCalled();
+    expect(getSettingsValueWithSource).not.toHaveBeenCalled();
   });
 
   it('matches every search word anywhere, not the phrase as typed', async () => {
@@ -136,12 +125,16 @@ describe('getSettingTool', () => {
     expect(result.data.truncated).toBe(true);
   });
 
-  it('treats an empty or null parameter as omitted', async () => {
-    getSettingsValue.mockResolvedValue(true);
-
+  it('treats an empty parameter as omitted', async () => {
     expect(await runTool({ key: 'enforceCredits', search: '' })).toMatchObject({ ok: true });
-    expect(await runTool({ key: 'enforceCredits', search: null })).toMatchObject({ ok: true });
-    expect(await runTool({ key: null, search: 'openai' })).toMatchObject({ ok: true });
+    expect(await runTool({ key: '', search: 'openai' })).toMatchObject({ ok: true });
+  });
+
+  it('advertises both parameters as plain optional strings', () => {
+    const { parameters } = getSettingTool.implementation(context, undefined).toolSchema;
+
+    expect(parameters.required ?? []).toEqual([]);
+    expect(parameters.properties).toMatchObject({ key: { type: 'string' }, search: { type: 'string' } });
   });
 
   it('requires exactly one of key or search', async () => {

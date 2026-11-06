@@ -155,13 +155,23 @@ class AdminSettingsRepository extends BaseRepository<IAdminSettings> implements 
   }
 
   async getSettingsValue<K extends SettingKey>(settingName: K): Promise<SettingValue<K> | undefined> {
-    if (settingName === 'enforceCredits' && isEnforceCreditsLocked()) return true as SettingValue<K>;
+    return (await this.getSettingsValueWithSource(settingName)).value;
+  }
+
+  /** The effective value plus where it came from: a platform lock, a valid stored row, or the default. */
+  async getSettingsValueWithSource<K extends SettingKey>(
+    settingName: K
+  ): Promise<{ value: SettingValue<K> | undefined; source: 'locked' | 'stored' | 'default' }> {
+    if (settingName === 'enforceCredits' && isEnforceCreditsLocked()) {
+      return { value: true as SettingValue<K>, source: 'locked' };
+    }
     const setting = await this.findOne({ settingName }); // findOne already decrypts via lean path
     const definition = resolveSettingDefinition(settingName);
-    if (!definition) return undefined;
+    if (!definition) return { value: undefined, source: 'default' };
     const value = definition.schema.safeParse(setting?.settingValue);
 
-    return (value.success ? value.data : definition.defaultValue) as SettingValue<K> | undefined;
+    if (!value.success) return { value: definition.defaultValue as SettingValue<K> | undefined, source: 'default' };
+    return { value: value.data as SettingValue<K>, source: setting ? 'stored' : 'default' };
   }
 }
 
