@@ -18,6 +18,7 @@ import type { ProfileAction } from '../actions/profileActions';
 import { RiskEvidenceCard } from '../RiskEvidenceCard';
 import { UserNotesCard } from './UserNotesCard';
 import { OrganizationsCard } from './OrganizationsCard';
+import { ClientsCard } from './ClientsCard';
 import { HeaderAction, RowAction } from './cardActions';
 import { TimelineList, TimelineSkeleton } from './TimelineList';
 import { timelineItem } from './timelineItems';
@@ -254,6 +255,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onView
       <AccountCard user={user} onAction={onAction} />
       <OrganizationsCard user={user} onAudit={onAudit} />
       <AccessCard user={user} onAction={onAction} />
+      <ClientsCard user={user} />
       <RiskEvidenceCard userId={user.id} />
       <SectionCard
         title="Subscription"

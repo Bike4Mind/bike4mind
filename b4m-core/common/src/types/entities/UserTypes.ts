@@ -11,6 +11,7 @@ import type { SignupRiskSignal } from '../../schemas/settings';
 import type { SignupRiskAutoApprovalPolicy } from '../../schemas/signupRiskReview';
 import type { RiskEvidenceRecord, RiskEvidenceSummary, RiskEvidenceTrigger } from '../../schemas/riskEvidence';
 import type { SignupGrant, SignupGrantAssessment } from '../../signupGrant';
+import type { ClientSurface } from '../analytics';
 import type { AdminPermissionId } from '../../adminPermissions';
 
 export enum CollectionType {
@@ -390,6 +391,13 @@ export interface IUserDeletion {
   purgeLeaseExpiresAt?: Date;
 }
 
+export interface IClientUsageEntry {
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+  /** Last reported client version (desktop and CLI only). */
+  version?: string;
+}
+
 export interface IUser extends ICreditHolder {
   id: string;
   username: string;
@@ -735,6 +743,13 @@ export interface IUser extends ICreditHolder {
   lastActiveAt?: Date;
   /** Tracks if the user is online or not */
   isOnline?: boolean;
+
+  /**
+   * Which first-party clients this user has used, keyed by surface. Stamped at most daily per
+   * surface by apps/client/server/middlewares/clientUsage.ts; absent means not seen since that
+   * shipped, not "never used". Attribution only: the client header behind it is caller-controlled.
+   */
+  clientUsage?: Partial<Record<ClientSurface, IClientUsageEntry>>;
 
   /**
    * Array of memento references belonging to the user

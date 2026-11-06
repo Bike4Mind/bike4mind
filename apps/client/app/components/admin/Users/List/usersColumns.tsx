@@ -22,6 +22,7 @@ import type { DataColumn } from '../../shared/DataTable';
 import type { AiAbuseAdvisoryRow } from '@client/app/hooks/data/aiAdvisory';
 import { AiAdvisoryBadge } from './AiAdvisoryBadge';
 import { formatAccountAge, formatAccountCreatedTitle, formatLastActiveTitle } from '../formatAccountAge';
+import { clientSurfacesSummary } from '../Profile/userProfileModel';
 
 export const PLAN_LABELS: Record<string, string> = {
   DemoUser: 'Demo',
@@ -189,6 +190,15 @@ export function usersColumns({
       render: row => {
         const age = formatAccountAge(row.lastActiveAt, now);
         return age ? <Muted title={formatLastActiveTitle(row.lastActiveAt) ?? undefined}>{age}</Muted> : <Dash />;
+      },
+    },
+    {
+      id: 'clients',
+      label: 'Clients',
+      width: '8rem',
+      render: row => {
+        const summary = clientSurfacesSummary(row);
+        return summary ? <Muted>{summary}</Muted> : <Dash />;
       },
     },
     {

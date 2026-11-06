@@ -1708,6 +1708,14 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     lastActiveAt: { type: Date },
     isOnline: { type: Boolean, default: false },
 
+    // Written by apps/client/server/middlewares/clientUsage.ts; keys must match CLIENT_SURFACES.
+    clientUsage: {
+      web: { firstSeenAt: Date, lastSeenAt: Date, version: String },
+      desktop: { firstSeenAt: Date, lastSeenAt: Date, version: String },
+      cli: { firstSeenAt: Date, lastSeenAt: Date, version: String },
+      api: { firstSeenAt: Date, lastSeenAt: Date, version: String },
+    },
+
     mementos: [
       {
         type: Schema.Types.ObjectId,
