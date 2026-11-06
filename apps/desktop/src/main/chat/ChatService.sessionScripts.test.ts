@@ -243,7 +243,7 @@ describe('ChatService running a script written in the same session', () => {
     await awaitCall('bash_execute', 'awaiting-approval');
   });
 
-  it.each(['git status', 'npm test', 'node --version', 'cat run.sh'])(
+  it.each(['git status', 'npm test', 'node --version', 'sh run.sh'])(
     'runs %s unasked when this session wrote nothing it runs',
     async command => {
       const id = await session('auto');
@@ -254,14 +254,7 @@ describe('ChatService running a script written in the same session', () => {
     }
   );
 
-  it('asks before sh run.sh in full access, since the scan does not read the script', async () => {
-    const id = await session('full');
-    await reply(id, [shell('sh run.sh')]);
-
-    await awaitCall('bash_execute', 'awaiting-approval');
-  });
-
-  it.each(['cat setup.sh', 'git status', 'chmod +x setup.sh', 'npm test'])(
+  it.each(['cat setup.sh', 'git status', 'chmod +x setup.sh', 'bash run.sh'])(
     'runs %s unasked after writing a script it does not run',
     async command => {
       const id = await session('auto');
@@ -349,7 +342,7 @@ describe('ChatService running a script written in the same session', () => {
   it('runs a test runner unasked after only a test file was edited', async () => {
     // Exercise approval without launching npm or a nested test runner from the temporary project.
     const run = vi.spyOn(bashExecute, 'run').mockResolvedValue('ok');
-    const command = 'vitest run src/a.test.ts';
+    const command = 'npx --no-install vitest run src/a.test.ts';
     const id = await session('auto');
     await reply(id, [write('src/a.test.ts', 'export {};\n'), shell(command)]);
 
@@ -359,9 +352,9 @@ describe('ChatService running a script written in the same session', () => {
     expect(run).toHaveBeenCalledExactlyOnceWith({ command, cwd: root }, expect.objectContaining({ sessionId: id }));
   });
 
-  it('runs a formatter unasked after a source edit', async () => {
+  it('runs a formatter through npx unasked after a source edit', async () => {
     const run = vi.spyOn(bashExecute, 'run').mockResolvedValue('ok');
-    const command = 'prettier --check src.ts';
+    const command = 'npx --no-install prettier --check src.ts';
     const id = await session('auto');
     await reply(id, [write('src.ts', 'export {};\n'), shell(command)]);
 
@@ -382,7 +375,7 @@ describe('ChatService running a script written in the same session', () => {
   it('asks before a test runner after its config was edited', async () => {
     const run = vi.spyOn(bashExecute, 'run').mockResolvedValue('ok');
     const id = await session('auto');
-    await reply(id, [write('vitest.config.ts', 'export default {};\n'), shell('vitest run')]);
+    await reply(id, [write('vitest.config.ts', 'export default {};\n'), shell('npx --no-install vitest run')]);
 
     await awaitCall('bash_execute', 'awaiting-approval');
     expect(run).not.toHaveBeenCalled();
@@ -390,20 +383,20 @@ describe('ChatService running a script written in the same session', () => {
 
   it('does not count a script another conversation wrote', async () => {
     const writer = await session('auto');
-    const next = await reply(writer, [write('package.json')]);
+    const next = await reply(writer, [write('setup.sh')]);
     await settled('file_write');
     await finish(next);
 
     events.length = 0;
     const runner = await session('auto');
-    await reply(runner, [shell('npm test')]);
+    await reply(runner, [shell('bash setup.sh')]);
     await settled('bash_execute');
     expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
   });
 
   it('leaves full access alone', async () => {
     const id = await session('full');
-    await reply(id, [write('package.json'), shell('npm test')]);
+    await reply(id, [write('setup.sh'), shell('bash setup.sh')]);
 
     await settled('bash_execute');
     expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);

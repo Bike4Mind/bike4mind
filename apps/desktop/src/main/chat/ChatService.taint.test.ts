@@ -455,8 +455,8 @@ describe('ChatService untrusted content in a reply', () => {
       vi.waitUntil(() => calls(name, 'done')[0] ?? calls(name, 'error')[0], { timeout: 5000, interval: 10 });
 
     const reported = [
-      'VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/llm-adapters run test a.test.ts b.test.ts c.test.ts && VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/client run test --project node d.test.ts',
-      'VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/llm-adapters run test a.test.ts && pnpm --filter @bike4mind/llm-adapters run typecheck && eslint --quiet a.ts b.ts',
+      'VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/llm-adapters exec vitest run a.test.ts b.test.ts c.test.ts && VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/client exec vitest run --project node d.test.ts',
+      'VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/llm-adapters exec vitest run a.test.ts && pnpm --filter @bike4mind/llm-adapters typecheck && pnpm exec eslint --quiet a.ts b.ts',
     ];
 
     it.each(reported)('runs %s unasked in a reply that read nothing untrusted', async command => {
@@ -472,11 +472,11 @@ describe('ChatService untrusted content in a reply', () => {
       const replying = reply(id, [
         fetch,
         ['bash_execute', { command: reported[0], cwd: root }],
-        ['bash_execute', { command: 'VITEST_MAX_WORKERS=50% pnpm --filter @x/y run test e.test.ts', cwd: root }],
+        ['bash_execute', { command: 'VITEST_MAX_WORKERS=50% pnpm --filter @x/y exec vitest run e.test.ts', cwd: root }],
       ]);
       const first = await awaitCall('bash_execute', 'awaiting-approval');
       expect(first.approvalDetail).toContain('(web_fetch)');
-      expect(first.approvalRules).toEqual(['Bash(pnpm run test:*)']);
+      expect(first.approvalRules).toEqual(['Bash(pnpm exec vitest:*)']);
       approvals.resolve(first.approvalId!, { decision: 'always' });
       await replying;
 
@@ -547,15 +547,19 @@ describe('ChatService untrusted content in a reply', () => {
       await reply(id, [['bash_execute', { command: reported[1], cwd: root }]]);
 
       const asked = await awaitCall('bash_execute', 'awaiting-approval');
-      expect(asked.approvalRules).toEqual(['Bash(pnpm run test:*)', 'Bash(pnpm run typecheck:*)', 'Bash(eslint:*)']);
+      expect(asked.approvalRules).toEqual([
+        'Bash(pnpm exec vitest:*)',
+        'Bash(pnpm typecheck:*)',
+        'Bash(pnpm exec eslint:*)',
+      ]);
     });
 
     it('lets "Always allow" on a tainted card cover later commands with the same prefixes', async () => {
       const id = await session('auto');
       const replying = reply(id, [
         fetch,
-        ['bash_execute', { command: 'pnpm run test a', cwd: root }],
-        ['bash_execute', { command: 'pnpm run test b && pnpm run test c', cwd: root }],
+        ['bash_execute', { command: 'make test', cwd: root }],
+        ['bash_execute', { command: 'make test -j2 && make test -k', cwd: root }],
       ]);
       const first = await awaitCall('bash_execute', 'awaiting-approval');
       expect(first.approvalDetail).toContain('(web_fetch)');

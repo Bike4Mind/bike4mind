@@ -298,23 +298,15 @@ describe('ApprovalGate', () => {
       };
     };
     it.each([
+      ['pnpm exec vitest run a.test.ts', 'pnpm exec vitest run b.test.ts'],
       ['pnpm test a', 'pnpm test b'],
+      ['make test -j1', 'make test -j2'],
       ['pnpm run node a', 'pnpm run node b'],
-      ['pnpm run test a.test.ts', 'pnpm run test b.test.ts'],
+      ['bun x vitest run a.test.ts', 'bun x vitest run b.test.ts'],
     ])('carries the bounded prefix from %s over taint', async (first, later) => {
       const gate = new ApprovalGate();
       await allow(gate, await scanned(first), true);
       expect(gate.coversCommands('s', await scanned(later), true)).toBe(true);
-    });
-
-    it.each([
-      ['pnpm exec vitest run a.test.ts', 'pnpm exec vitest run b.test.ts'],
-      ['make test -j1', 'make test -j2'],
-      ['bun x vitest run a.test.ts', 'bun x vitest run b.test.ts'],
-    ])('carries nothing from %s, a runner the scan does not read', async (first, later) => {
-      const gate = new ApprovalGate();
-      await allow(gate, await scanned(first), true);
-      expect(gate.coversCommands('s', await scanned(later), true)).toBe(false);
     });
 
     it.each([

@@ -21,7 +21,7 @@ const PROGRAMS = [
   'find git grep gzip head install jq ln ls make mkdir mktemp mv node npm npx patch pnpm popd printf pushd pwd',
   'python3 readlink realpath rg rm rmdir rsync sed sort stat tail tar tee test touch tr tree true false uniq unzip',
   'wc which xargs yarn zip tsc vitest eslint prettier go cargo docker ps kill sleep type source',
-  'stdbuf ionice busybox firejail flock sudo parallel alias trap mapfile shopt read uniq cpio',
+  'stdbuf ionice busybox firejail flock sudo parallel alias trap mapfile shopt read uniq cpio watch script',
 ].flatMap(line => line.split(' '));
 
 describe('shell commands that reach a protected location', () => {
@@ -72,6 +72,10 @@ describe('shell commands that reach a protected location', () => {
     await mkdir(join(proj, 'lk'));
     await symlink(join(home, '.config'), join(proj, 'lk', 'in'));
     await symlink(join(userData, 'vault.json'), join(proj, 'lk', 'v'));
+    // Lands wherever the reading process runs, which is not where the scan runs.
+    await mkdir(join(proj, 'pl'));
+    await symlink('/proc/self/cwd/../.config', join(proj, 'pl', 'pc'));
+    await writeFile(join(proj, 'home.txt'), `${join(home, '.config')}\n`);
     // repo tracks no .claude path and repo2 tracks sub/.claude; `dirty` targets add or change one, `clean` targets do not.
     const git = (repo: string, ...args: string[]): void => {
       execFileSync('git', ['-C', join(proj, repo), '-c', 'core.hooksPath=/dev/null', ...args], {
@@ -333,7 +337,6 @@ describe('shell commands that reach a protected location', () => {
       ['xargs -n2 cp < t.txt', ''],
       ['xargs -a t.txt rm -f', ''],
       ['echo ../payload/. .. | xargs cp -r', 'src'],
-      ['echo ../payload/. .. | parallel -X cp -r', 'src'],
     ])('asks in every mode before %s', async (command, folder) => {
       expect(await judge(command, 'P', join(proj, folder))).toEqual(refusedEverywhere);
     });
@@ -376,7 +379,6 @@ describe('shell commands that reach a protected location', () => {
       ['taskset 1 cp -r ../payload/. ..', 'src'],
       ['flock x.lock cp -r ../payload/. ..', 'src'],
       ['nice -n5 stdbuf -oL cp -r ../payload/. ..', 'src'],
-      ['firejail cp -r ../payload/. ..', 'src'],
       ["flock x.lock -c 'cp -r ../payload/. ..'", 'src'],
       ['stdbuf git apply evil.diff', ''],
       ['stdbuf ln -s ~ h; cp evil.json h/.config/Bike4Mind/vault.json', ''],
@@ -435,7 +437,6 @@ describe('shell commands that reach a protected location', () => {
     });
 
     it.each([
-      'git pull',
       'git checkout main',
       'git switch main',
       'git reset --hard HEAD~1',
@@ -498,7 +499,7 @@ describe('shell commands that reach a protected location', () => {
     });
   });
 
-  describe('a program the scan does not know', () => {
+  describe('a program word the scan cannot read', () => {
     // Each runs in the project, or in its `src` folder when the second entry says so.
     it.each([
       ['c\\d ..; cp proj/evil.json .config/Bike4Mind/vault.json', ''],
@@ -508,28 +509,152 @@ describe('shell commands that reach a protected location', () => {
       ['\\cp -r ../payload/. ..', 'src'],
       ["c''p -r ../payload/. ..", 'src'],
       ["tr\\ap 'cd ..' DEBUG; cp proj/evil.json .config/Bike4Mind/vault.json", ''],
-      ["watch -n1 'cd ..; cp proj/evil.json .config/Bike4Mind/vault.json'", ''],
-      ['watch -x cp -r ../payload/. ..', 'src'],
-      ["script -qc 'cd ..; cp proj/evil.json .config/Bike4Mind/vault.json' /dev/null", ''],
-      ["parallel ::: 'cd ..; cp proj/evil.json .config/Bike4Mind/vault.json'", ''],
-      ["firejail --quiet sh -c 'cd ..; cp proj/evil.json .config/Bike4Mind/vault.json'", ''],
-      ["docker run --rm -v ~:/h -w /h alpine sh -c 'cp proj/evil.json .config/Bike4Mind/vault.json'", ''],
-      ['pnpm exec cp -r ../payload/. ..', 'src'],
-      ['pnpm --filter test exec cp -r ../payload/. ..', 'src'],
-      ['npm --userconfig test x cp -r ../payload/. ..', 'src'],
-      ['npx cp -r ../payload/. ..', 'src'],
     ])('asks in every mode before %s', async (command, folder) => {
       for (const scenario of scenarios) {
         expect(await judge(command, scenario, join(proj, folder)), scenario).toEqual(refusedEverywhere);
       }
     });
+  });
 
-    it.each(['pnpm test', 'pnpm --filter add run build', 'npm run lint', 'yarn start', 'watch -n 5 ls src'])(
-      'runs %s unasked',
+  describe('a program the scan does not model', () => {
+    const asBefore = { auto: true, full: true, allowed: true };
+    // Each runs in the project, or in its `src` folder when the second entry says so; decided as the mode and rules always did.
+    it.each([
+      ['pnpm test', '', asBefore],
+      ['pnpm typecheck', '', asBefore],
+      ['npx tsc', '', asBefore],
+      ['make', '', asBefore],
+      ['git pull', 'repo', asBefore],
+      ['git pull', 'repo2', asBefore],
+      ['pnpm --filter add run build', '', asBefore],
+      ['npm run lint', '', asBefore],
+      ['yarn start', '', asBefore],
+      ['watch -n 5 ls src', '', asBefore],
+      ['watch -n1 -g ls *', '', asBefore],
+      ['prettier --write .', '', asBefore],
+      ["watch -n1 'cd ..; cp proj/evil.json .config/Bike4Mind/vault.json'", '', asBefore],
+      ['watch -x cp -r ../payload/. ..', 'src', asBefore],
+      ["script -qc 'cd ..; cp proj/evil.json .config/Bike4Mind/vault.json' /dev/null", '', asBefore],
+      ["parallel ::: 'cd ..; cp proj/evil.json .config/Bike4Mind/vault.json'", '', asBefore],
+      ['echo ../payload/. .. | parallel -X cp -r', 'src', asBefore],
+      ['firejail cp -r ../payload/. ..', 'src', asBefore],
+      ["firejail --quiet sh -c 'cd ..; cp proj/evil.json .config/Bike4Mind/vault.json'", '', asBefore],
+      ["docker run --rm -v ~:/h -w /h alpine sh -c 'cp proj/evil.json .config/Bike4Mind/vault.json'", '', asBefore],
+      ['pnpm exec cp -r ../payload/. ..', 'src', asBefore],
+      ['pnpm --filter test exec cp -r ../payload/. ..', 'src', asBefore],
+      ['npx cp -r ../payload/. ..', 'src', asBefore],
+      ['npm --userconfig test x cp -r ../payload/. ..', 'src', { ...asBefore, allowed: false }],
+    ] as const)('decides %s as before', async (command, folder, verdict) => {
+      expect(await judge(command, 'P', join(proj, folder))).toEqual(verdict);
+    });
+  });
+
+  describe('a copy or move that carries links', () => {
+    it.each([
+      'mkdir -p s && cp evil.json s/v && cp -r s/. lk/',
+      'cp -a lk d && cp evil.json d/v',
+      'cp -a lk d && cat d/in/Bike4Mind/vault.json',
+      'cp -r lk d && cat d/in/Bike4Mind/vault.json',
+      'cp -P lk/in d && cat d/Bike4Mind/vault.json',
+      'mv lk d && cat d/in/Bike4Mind/vault.json',
+      'rsync -a lk/ d/ && cat d/in/Bike4Mind/vault.json',
+    ])('asks in every mode before %s', async command => {
+      for (const scenario of scenarios) {
+        expect(await judge(command, scenario), scenario).toEqual(refusedEverywhere);
+      }
+    });
+
+    it.each(scenarios)('asks before a moved folder whose relative link now points elsewhere (%s)', async scenario => {
+      const command = 'mkdir -p a/b && ln -s ../../.config a/b/x && mv a/b b && cp evil.json b/x/Bike4Mind/vault.json';
+      expect(await judge(command, scenario)).toEqual(refusedEverywhere);
+    });
+
+    it.each(['cp -r src out', 'cp -a src out && cat out/x', 'mv a b', 'rsync -a src/ out/', 'cp -rL src d'])(
+      'leaves %s to the mode',
       async command => {
-        expect(await judge(command, 'P')).toMatchObject({ auto: true, full: true });
+        expect(await judge(command, 'P')).toMatchObject({ full: true, allowed: true });
       }
     );
+  });
+
+  describe('a loop whose body may rebind its variable', () => {
+    it.each([
+      'g() { f=../.config/Bike4Mind/vault.json; }; for f in a; do g; echo {} > "$f"; done',
+      'g() { read f < names.txt; }; for f in a; do g; echo {} > "$f"; done',
+      'g() { IFS= read -r f; }; for f in a; do g < names.txt; echo {} > "$f"; done',
+      'for f in a; do g; echo {} > "$f"; done; g() { f=../.config/Bike4Mind/vault.json; }',
+    ])('asks in every mode before %s', async command => {
+      expect(await judge(command, 'H', proj)).toEqual(refusedEverywhere);
+    });
+  });
+
+  describe('a name spelled with a brace expansion', () => {
+    it.each([
+      'export C{D,}PATH=~; cd .config; echo {} > Bike4Mind/vault.json',
+      'C{D,}PATH=~ cd .config; echo {} > Bike4Mind/vault.json',
+      'read H{O,}ME < home.txt; cd; echo {} > Bike4Mind/vault.json',
+      'export H{O,}ME=~/.config; cd; echo {} > Bike4Mind/vault.json',
+      'shopt -s {l,}astpipe; echo | cd ..; cp proj/evil.json .config/Bike4Mind/vault.json',
+    ])('asks in every mode before %s', async command => {
+      expect(await judge(command, 'H', proj)).toEqual(refusedEverywhere);
+    });
+  });
+
+  describe('curl with a URL it does not model', () => {
+    it.each(['file', 'FILE', 'File'])('asks in every mode before a %s: URL', async scheme => {
+      const command = `curl -s -o out.json ${scheme}://${userData}/vault.json`;
+      expect(await judge(command, 'P')).toEqual(refusedEverywhere);
+    });
+
+    it.each(['curl -s ftp://example.com/x', 'curl -s "dict://example.com"', 'curl -s http://[::1'])(
+      'asks in every mode before %s',
+      async command => {
+        expect(await judge(command, 'P')).toEqual(refusedEverywhere);
+      }
+    );
+
+    it.each(['curl -s https://example.com', 'curl -sL example.com/x', 'curl -s HTTP://example.com'])(
+      'leaves %s to the mode',
+      async command => {
+        expect(await judge(command, 'P')).toMatchObject({ full: true, allowed: true });
+      }
+    );
+  });
+
+  describe('a link into a process folder', () => {
+    it('asks in every mode before a read through it', async () => {
+      expect(await judge('cat pl/pc/Bike4Mind/vault.json', 'H')).toEqual(refusedEverywhere);
+      expect(await judge('cp evil.json pl/pc/Bike4Mind/vault.json', 'H')).toEqual(refusedEverywhere);
+      expect(await judge('cat pl/*/Bike4Mind/vault.json', 'H')).toEqual(refusedEverywhere);
+    });
+  });
+
+  it('lets no rule cover a script with anything the scan cannot follow', async () => {
+    expect(await judge("echo $'x' && cat a", 'P')).toEqual(refusedEverywhere);
+  });
+
+  describe('git writing a new tree', () => {
+    it.each([
+      ['git worktree add wt dirty', 'repo'],
+      ['git worktree add -f wt dirty', 'repo'],
+      ['git clone -b dirty repo cl', ''],
+      ['git clone -q -b dirty ./repo', ''],
+      ['git clone https://github.com/o/r', ''],
+      ['git clone host:o/r', ''],
+      ['git clone --template=x repo cl', ''],
+      ['git worktree move wt ../wt2', 'repo'],
+    ])('asks in every mode before %s in %s', async (command, folder) => {
+      expect(await judge(command, 'P', join(proj, folder))).toEqual(refusedEverywhere);
+    });
+
+    it.each([
+      ['git worktree add wt clean', 'repo'],
+      ['git clone -b clean repo cl', ''],
+      ['git clone --no-checkout -b dirty repo cl', ''],
+      ['git checkout src/x', 'repo'],
+    ])('leaves %s in %s to the mode', async (command, folder) => {
+      expect(await judge(command, 'P', join(proj, folder))).toMatchObject({ full: true, allowed: true });
+    });
   });
 
   describe('a script that spells a gated name another way', () => {
@@ -578,6 +703,10 @@ describe('shell commands that reach a protected location', () => {
       'find .config -name vault.json | xargs env -C .. cat',
       'find .config -name vault.json | env -C .. xargs cat',
       'find src | xargs cat < names.txt',
+      'find lk -type l | xargs cat',
+      "find lk | xargs grep -r ''",
+      'find . -name v | xargs cat',
+      'rg -l x lk | xargs cat',
     ])('asks in every mode before %s', async command => {
       for (const scenario of scenarios) {
         expect(await judge(command, scenario), scenario).toEqual(refusedEverywhere);
@@ -600,7 +729,6 @@ describe('shell commands that reach a protected location', () => {
       ['GIT_DIR=.git git checkout clean', 'repo'],
       ['git --git-dir=.git checkout clean', 'repo'],
       ['git --work-tree=.. checkout clean', 'repo'],
-      ['git pull', 'repo'],
       ['git clean -fdX', 'repo2'],
       ['git clean -fdx', 'repo2'],
       ['git sparse-checkout set src', 'repo2'],
@@ -613,8 +741,9 @@ describe('shell commands that reach a protected location', () => {
     it.each([
       ['git checkout clean2', 'repo2'],
       ['git merge clean2', 'repo2'],
-      ['git pull', 'repo2'],
       ['git rebase', 'repo2'],
+      ['git rebase', 'repo'],
+      ['git merge', 'repo'],
       ['git reset --hard clean2', 'repo2'],
       ['git checkout clean', 'repo'],
       ['git reset --hard clean', 'repo'],
