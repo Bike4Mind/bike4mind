@@ -1389,7 +1389,8 @@ export interface ChatSessionSummary extends ChatSessionMeta {
   /** Sum of usage.usdCost over all messages; absent when none reported it. */
   totalUsdCost?: number;
   /** Sum of usage.creditsUsed over all messages; absent when none reported it. */
-  totalCredits?: number; /** Issue and PR refs the transcript mentions, first seen first; absent when none. See githubRefs.ts. */
+  totalCredits?: number;
+  /** Issue and PR refs the transcript mentions, first seen first; absent when none. See githubRefs.ts. */
   githubRefs?: GithubRef[];
 }
 

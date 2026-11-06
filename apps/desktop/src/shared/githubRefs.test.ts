@@ -111,6 +111,12 @@ describe('refsInText', () => {
     ]);
   });
 
+  it('reads closing keywords in linear time on a long run of whitespace', () => {
+    const started = Date.now();
+    refsInText(`gh pr create --body "Closes${' '.repeat(50_000)}x"`);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
   it('does not read closing keywords outside a PR create', () => {
     expect(refsInText('this fixes #321, see github.com docs')).toEqual([]);
   });

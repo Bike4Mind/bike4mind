@@ -1519,7 +1519,8 @@ export function SessionList({
             value={query}
             onChange={event => setQuery(event.target.value)}
             onKeyDown={event => {
-              if (event.key === 'Enter' && ordered[0]) {
+              if (event.nativeEvent.isComposing) return;
+              if (event.key === 'Enter' && query.trim() && ordered[0]) {
                 event.preventDefault();
                 onSelect(ordered[0].id);
               } else if (event.key === 'Escape' && query) {

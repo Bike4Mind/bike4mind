@@ -140,7 +140,7 @@ const GH_COMMAND =
   /\bgh[ \t]+(pr|issue)[ \t]+(view|checkout|merge|comment|edit|close|reopen|review|diff|checks|ready|develop)\b([^\n;&|]*)/gi;
 const REPO_FLAG = new RegExp(`(?:-R|--repo)[ \\t=]+(${OWNER_REPO})`);
 const CLOSING = new RegExp(
-  `\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s*:?\\s+(?:(${OWNER_REPO})#|#|https?://(?:www\\.)?github\\.com/(${OWNER_REPO})/issues/)(\\d+)`,
+  `\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?::\\s*|\\s+)(?:(${OWNER_REPO})#|#|https?://(?:www\\.)?github\\.com/(${OWNER_REPO})/issues/)(\\d+)`,
   'gi'
 );
 
