@@ -443,6 +443,24 @@ describe('runUsagePatternSignals', () => {
       expect(user?.isBanned).toBe(false);
     });
 
+    it('ignores a larger system job when sizing the largest turn', async () => {
+      await seedFreshAccount({
+        mfa: true,
+        activityUnlock: true,
+        turns: [
+          { minute: 8, credits: 1990 },
+          { minute: 8.2, credits: 5000, source: 'system' },
+        ],
+        logoutMinute: 12,
+      });
+
+      await runUsagePatternSignals({ now });
+
+      const [detection] = await ShadowDetectionModel.find({ detector: 'scriptedGrantDrain' }).lean();
+      expect(detection.signals.find(signal => signal.key === 'largestTurnGrantShare')?.observed).toBe(1);
+      expect(detection.signals.find(signal => signal.key === 'turns')?.observed).toBe(1);
+    });
+
     it('does not flag a genuine new user who ran one big premium turn', async () => {
       // OAuth-style signup: no 2FA, no activity unlock, varied use, no logout.
       await seedFreshAccount({
