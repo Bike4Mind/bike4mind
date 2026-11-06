@@ -1,4 +1,3 @@
-import { requestLogUrl } from '../middlewares/requestLogUrl';
 import passport from 'passport';
 // TODO Bring back after we fix facebook secrets
 // import { Strategy as FacebookStrategy } from 'passport-facebook';
@@ -19,6 +18,7 @@ import {
 } from '@node-saml/passport-saml';
 import nc from 'next-connect';
 import { Logger } from '@bike4mind/observability';
+import { requestLogUrl } from '../middlewares/requestLogUrl';
 import { jwtSecretOrKeyProvider } from './jwtSecretOrKeyProvider';
 import { verifyJwtPayload } from './verifyJwtPayload';
 import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
