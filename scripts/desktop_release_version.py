@@ -157,9 +157,31 @@ def release_notes(version, previous, repository, destination):
     return '\n'.join(lines)
 
 
+def split_orphans(releases, head):
+    """Separate unpublished reservations left on an ancestor of HEAD by a run that never published them."""
+    # Main runs share one concurrency group that never cancels, so the run that made such a
+    # reservation has already finished; apps/desktop/scripts/test_release_workflow.py pins that group.
+    kept, orphans = [], {}
+    for release in releases:
+        tag = release['tag_name']
+        if (release.get('draft') and tag not in WITHDRAWN_SOURCE_RELEASES
+                and re.fullmatch(r'desktop-v(' + VERSION.pattern + r')', tag)):
+            sha = git('rev-parse', f'{release["target_commitish"]}^{{commit}}')
+            if sha != head and subprocess.run(['git', 'merge-base', '--is-ancestor', sha, head]).returncode == 0:
+                orphans[tag] = sha
+                continue
+        kept.append(release)
+    return kept, orphans
+
+
 def select_version(releases, baseline, preview='', title='', run=''):
+    """Return (version, publish, previous, reclaim); reclaim is the commit an orphaned reservation of this version holds."""
     if not VERSION.fullmatch(baseline) or not baseline.startswith('0.'):
         raise ValueError('Desktop baseline must be beta SemVer (0.minor.patch)')
+    head = git('rev-parse', 'HEAD')
+    orphans = {}
+    if not preview:
+        releases, orphans = split_orphans(releases, head)
     candidates = []
     for release in releases:
         tag = release['tag_name']
@@ -168,7 +190,6 @@ def select_version(releases, baseline, preview='', title='', run=''):
             if not match[1].startswith('0.'):
                 raise ValueError('Major desktop releases require an explicit beta policy change')
             candidates.append((tuple(map(int, match[1].split('.'))), tag, release))
-    head = git('rev-parse', 'HEAD')
     previous = ''
     if candidates:
         parts, previous, release = max(candidates, key=lambda candidate: (candidate[0], bool(candidate[2].get('draft'))))
@@ -180,7 +201,7 @@ def select_version(releases, baseline, preview='', title='', run=''):
         # Never reuse a version for a different commit or release an older checkout.
         subprocess.run(['git', 'merge-base', '--is-ancestor', released_sha, head], check=True)
         if released_sha == head and not preview:
-            return '.'.join(map(str, parts)), not release.get('withdrawn', False), previous
+            return '.'.join(map(str, parts)), not release.get('withdrawn', False), previous, ''
         if release.get('draft') and not preview:
             raise ValueError('Finish or remove the pending desktop draft release before publishing another commit')
         revision_range = f'{released_sha}..HEAD'
@@ -209,7 +230,10 @@ def select_version(releases, baseline, preview='', title='', run=''):
         if not re.fullmatch(r'[1-9]\d*', preview) or not re.fullmatch(r'[1-9]\d*', run):
             raise ValueError('Preview requires numeric PR and run numbers')
         version += f'-pr.{preview}.{run}'
-    return version, bool(preview or not candidates or level), previous
+    publish = bool(preview or not candidates or level)
+    tag = f'desktop-v{version}'
+    reclaim = orphans.get(tag, '') if publish and all(r['tag_name'] != tag for r in releases) else ''
+    return version, publish, previous, reclaim
 
 
 def with_reservations(releases, source_tags):
@@ -252,17 +276,20 @@ def main():
             releases.append(release)
     releases = with_reservations(releases, source_tags)
     baseline = json.loads(Path('apps/desktop/package.json').read_text())['version']
-    version, publish, previous = select_version(
+    version, publish, previous, reclaim = select_version(
         releases, baseline, os.environ.get('PR_NUMBER', ''),
         os.environ.get('PR_TITLE', ''), os.environ.get('GITHUB_RUN_NUMBER', ''),
     )
-    result = f'version={version}\nrelease={str(publish).lower()}\nprevious={previous}\n'
+    result = f'version={version}\nrelease={str(publish).lower()}\nprevious={previous}\nreclaim={reclaim}\n'
     Path('desktop-release-notes.md').write_text(
         release_notes(version, previous, os.environ['GITHUB_REPOSITORY'], destination))
     with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
         output.write(result)
     with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
         summary.write(f'Desktop version: `{version}`. Build required: `{publish}`.\n')
+        if reclaim:
+            summary.write(f'Reusing `{version}`: its reservation on `{reclaim[:7]}` was never published, '
+                          'so publishing discards that draft and moves the source tag to this commit.\n')
     print(result)
 
 

@@ -52,6 +52,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       release: ${{ steps.version.outputs.release }}
+      reclaim: ${{ steps.version.outputs.reclaim }}
       feed: ${{ steps.feed.outputs.feed }}
       repository-name: ${{ steps.feed.outputs.repository-name }}
       mac-mode: ${{ steps.mac-policy.outputs.mode }}
@@ -370,10 +371,19 @@ jobs:
           test "$GH_REPO" = "$GITHUB_REPOSITORY_OWNER/$DISTRIBUTION_REPOSITORY_NAME"
           python3 apps/desktop/scripts/mac_release_policy.py
           test "$(gh api "repos/$GH_REPO" --jq .private)" = false
+      # A failed publish left this version reserved on an older commit; replace it with this one.
+      - name: Discard orphaned distribution draft
+        if: needs.version.outputs.reclaim != ''
+        env:
+          DESKTOP_VERSION: ${{ needs.validate.outputs.version }}
+          GH_TOKEN: ${{ steps.distribution-token.outputs.token }}
+          GH_REPO: ${{ vars.DESKTOP_RELEASE_REPOSITORY }}
+        run: python3 apps/desktop/scripts/discard-orphaned-draft.py
       - name: Reserve protected source version tag
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
           DESKTOP_VERSION: ${{ needs.validate.outputs.version }}
+          RECLAIM_SHA: ${{ needs.version.outputs.reclaim }}
         run: python3 apps/desktop/scripts/reserve-source-tag.py
       - name: Publish desktop release
         env:
