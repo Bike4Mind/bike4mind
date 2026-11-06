@@ -16,7 +16,8 @@ export const SHADOW_DETECTIONS_RATE_LIMIT = 60;
 
 /**
  * The admin Detections page: what the abuse detectors would have done (shadow detections), newest
- * first, with per-detector, per-policy verdict counts. Read-only; grading is POST ./verdict.
+ * first, with per-detector, per-policy verdict counts and the current state of the accounts they name.
+ * Read-only; grading is POST ./verdict (one) or ./verdicts (several).
  */
 const handler = adminApi({
   auth: 'jwtOnly',
@@ -32,8 +33,9 @@ const handler = adminApi({
         shadowDetectionRepository.list({ ...parsed.data, limit: SHADOW_DETECTION_LIST_LIMIT }),
         shadowDetectionRepository.summarize(),
       ]);
+      const { accounts, burstPeers } = await shadowDetectionRepository.listContext(data);
       res.setHeader('Cache-Control', 'private, no-store');
-      respond(res, shadowDetectionListSchema, { data, truncated, summary });
+      respond(res, shadowDetectionListSchema, { data, truncated, summary, accounts, burstPeers });
     })
   );
 
