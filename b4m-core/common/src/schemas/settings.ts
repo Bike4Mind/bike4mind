@@ -1416,37 +1416,86 @@ export function makeContributedBooleanSetting(
  * placeholders; a deployment tunes the real values in admin settings.
  */
 export const UsagePatternSignalsConfigSchema = z.object({
-  /** Users with usage in this many recent hours are candidates; keep it near the hourly job cadence. */
-  activeWindowHours: z.number().int().min(1).max(720).prefault(2),
-  /** Free-tier users scored per run; the least recently scored go first. */
-  maxUsersPerRun: z.number().int().min(1).max(10_000).prefault(500),
-  /** Window for the cadence and credit-polling signals. */
-  lookbackDays: z.number().int().min(1).max(90).prefault(7),
-  /** Window for the API-only signal. */
-  apiOnlyLookbackDays: z.number().int().min(1).max(365).prefault(30),
-  /** Most recent UsageEvent rows read per user, bounding each user's read. */
-  maxEventsPerUser: z.number().int().min(10).max(50_000).prefault(5000),
+  activeWindowHours: z.number().int().min(1).max(720).prefault(2).meta({
+    title: 'Active window (hours)',
+    description: 'Users with usage in this many recent hours are candidates; keep it near the hourly job cadence.',
+  }),
+  maxUsersPerRun: z.number().int().min(1).max(10_000).prefault(500).meta({
+    title: 'Users per run',
+    description: 'Free-tier users scored per run; the least recently scored go first.',
+  }),
+  lookbackDays: z.number().int().min(1).max(90).prefault(7).meta({
+    title: 'Lookback (days)',
+    description: 'Window for the cadence and credit-polling signals.',
+  }),
+  apiOnlyLookbackDays: z.number().int().min(1).max(365).prefault(30).meta({
+    title: 'API-only lookback (days)',
+    description: 'Window for the API-only signal.',
+  }),
+  maxEventsPerUser: z.number().int().min(10).max(50_000).prefault(5000).meta({
+    title: 'Events per user',
+    description: "Most recent UsageEvent rows read per user, bounding each user's read.",
+  }),
   weights: z
     .object({
-      apiOnlyUsage: z.number().min(0).max(100).prefault(25),
-      regularCadence: z.number().min(0).max(100).prefault(25),
-      creditPolling: z.number().min(0).max(100).prefault(25),
-      quickApiKey: z.number().min(0).max(100).prefault(25),
+      apiOnlyUsage: z.number().min(0).max(100).prefault(25).meta({
+        title: 'API-only usage',
+        description: 'Score added when nearly all completions in the API-only window use an API key.',
+      }),
+      regularCadence: z.number().min(0).max(100).prefault(25).meta({
+        title: 'Regular cadence',
+        description: 'Score added when requests arrive at machine-regular intervals.',
+      }),
+      creditPolling: z.number().min(0).max(100).prefault(25).meta({
+        title: 'Credit polling',
+        description: 'Score added when credit balance checks far outnumber completions.',
+      }),
+      quickApiKey: z.number().min(0).max(100).prefault(25).meta({
+        title: 'Quick API key',
+        description: 'Score added when the first API key is created soon after email verification.',
+      }),
     })
-    .prefault({}),
-  reviewThreshold: z.number().min(1).max(100).prefault(50),
-  apiOnlyMinRequests: z.number().int().min(1).prefault(20),
-  /** Share (0-1) of usage made with an API key at which apiOnlyUsage triggers. */
-  apiOnlyMinShare: z.number().min(0).max(1).prefault(1),
-  /** Requests whose inter-request gaps are measured. */
-  cadenceSampleSize: z.number().int().min(3).max(1000).prefault(30),
-  /** Coefficient of variation of the gaps at or below which regularCadence triggers. */
-  cadenceMaxVariation: z.number().min(0).prefault(0.2),
-  creditPollMinCount: z.number().int().min(1).prefault(20),
-  creditPollMinPerCompletion: z.number().positive().prefault(2),
-  quickApiKeyMinutes: z.number().int().min(1).max(10_080).prefault(30),
-  /** A first key created up to this many days before verification also triggers quickApiKey. */
-  quickApiKeyMaxDaysBeforeVerification: z.number().int().min(0).max(365).prefault(1),
+    .prefault({})
+    .meta({
+      title: 'Signal weights',
+      description: 'Score (0-100) each triggered signal adds; the total is capped at 100.',
+    }),
+  reviewThreshold: z.number().min(1).max(100).prefault(50).meta({
+    title: 'Review threshold',
+    description: 'Total score at or above which an account needs review.',
+  }),
+  apiOnlyMinRequests: z.number().int().min(1).prefault(20).meta({
+    title: 'API-only minimum requests',
+    description: 'API-key requests in the API-only window before apiOnlyUsage can trigger.',
+  }),
+  apiOnlyMinShare: z.number().min(0).max(1).prefault(1).meta({
+    title: 'API-only minimum share',
+    description: 'Share (0-1) of usage made with an API key at which apiOnlyUsage triggers.',
+  }),
+  cadenceSampleSize: z.number().int().min(3).max(1000).prefault(30).meta({
+    title: 'Cadence sample size',
+    description: 'Requests whose inter-request gaps are measured.',
+  }),
+  cadenceMaxVariation: z.number().min(0).prefault(0.2).meta({
+    title: 'Cadence maximum variation',
+    description: 'Coefficient of variation of the gaps at or below which regularCadence triggers.',
+  }),
+  creditPollMinCount: z.number().int().min(1).prefault(20).meta({
+    title: 'Credit checks minimum',
+    description: 'Credit balance checks in the lookback window before creditPolling can trigger.',
+  }),
+  creditPollMinPerCompletion: z.number().positive().prefault(2).meta({
+    title: 'Credit checks per completion',
+    description: 'Credit balance checks per completion at or above which creditPolling triggers.',
+  }),
+  quickApiKeyMinutes: z.number().int().min(1).max(10_080).prefault(30).meta({
+    title: 'Quick API key (minutes)',
+    description: 'A first API key created within this many minutes after email verification triggers quickApiKey.',
+  }),
+  quickApiKeyMaxDaysBeforeVerification: z.number().int().min(0).max(365).prefault(1).meta({
+    title: 'Quick API key before verification (days)',
+    description: 'A first key created up to this many days before verification also triggers quickApiKey.',
+  }),
 });
 
 export type UsagePatternSignalsConfig = z.infer<typeof UsagePatternSignalsConfigSchema>;
@@ -1457,22 +1506,39 @@ export type UsagePatternSignalsConfig = z.infer<typeof UsagePatternSignalsConfig
  * gates all provider egress on top of this.
  */
 export const AbuseAssessmentConfigSchema = z.object({
-  /** Decisions model to ask; must be served here and have a platform key. Null means no calls. */
-  model: z.enum(DECISION_MODEL_IDS).nullable().prefault(null),
-  /** Platform spend per 24h window (opened by the first call), in USD, at each call's worst-case cost. */
-  dailyBudgetUsd: z.number().min(0).max(1000).prefault(0),
-  /** Provider calls per 24h window (opened by the first call), across admin, sweep and replay runs. */
-  maxCallsPerDay: z.number().int().min(0).max(10_000).prefault(100),
-  /** Provider calls in flight at once, across all instances. */
-  maxConcurrency: z.number().int().min(1).max(10).prefault(2),
-  /** Lets the hourly sweep assess unreviewed shadow detections; the admin button works without it. */
-  sweepEnabled: z.boolean().prefault(false),
-  /** Share (0-100) of unreviewed detections the sweep assesses, chosen by a stable hash of the detection. */
-  sweepRolloutPercent: z.number().int().min(0).max(100).prefault(0),
-  /** Detections assessed per sweep run. */
-  maxAssessmentsPerSweep: z.number().int().min(1).max(500).prefault(20),
-  /** How far back the sweep looks for unreviewed detections. */
-  sweepLookbackHours: z.number().int().min(1).max(720).prefault(24),
+  model: z.enum(DECISION_MODEL_IDS).nullable().prefault(null).meta({
+    title: 'Model',
+    description:
+      'Decisions model to ask; it must be served here and have a platform key. None makes no calls. Prefer a pinned id over an alias such as jev-latest.',
+  }),
+  dailyBudgetUsd: z.number().min(0).max(1000).prefault(0).meta({
+    title: 'Daily budget (USD)',
+    description: "Platform spend per 24h window (opened by the first call), at each call's worst-case cost.",
+  }),
+  maxCallsPerDay: z.number().int().min(0).max(10_000).prefault(100).meta({
+    title: 'Calls per day',
+    description: 'Provider calls per 24h window (opened by the first call), across admin, sweep and replay runs.',
+  }),
+  maxConcurrency: z.number().int().min(1).max(10).prefault(2).meta({
+    title: 'Concurrent calls',
+    description: 'Provider calls in flight at once, across all instances.',
+  }),
+  sweepEnabled: z.boolean().prefault(false).meta({
+    title: 'Hourly sweep',
+    description: 'Lets the hourly sweep assess unreviewed shadow detections; the admin button works without it.',
+  }),
+  sweepRolloutPercent: z.number().int().min(0).max(100).prefault(0).meta({
+    title: 'Sweep rollout (%)',
+    description: 'Share (0-100) of unreviewed detections the sweep assesses, chosen by a stable hash of the detection.',
+  }),
+  maxAssessmentsPerSweep: z.number().int().min(1).max(500).prefault(20).meta({
+    title: 'Assessments per sweep',
+    description: 'Detections assessed per sweep run.',
+  }),
+  sweepLookbackHours: z.number().int().min(1).max(720).prefault(24).meta({
+    title: 'Sweep lookback (hours)',
+    description: 'How far back the sweep looks for unreviewed detections.',
+  }),
 });
 
 export type AbuseAssessmentConfig = z.infer<typeof AbuseAssessmentConfigSchema>;
@@ -1486,20 +1552,34 @@ export type AutoContainmentMode = (typeof AUTO_CONTAINMENT_MODES)[number];
  * only on an `abuse` judgment at or above minConfidence, through the admin bulk Contain path.
  */
 export const AutoContainmentConfigSchema = z.object({
-  mode: z.enum(AUTO_CONTAINMENT_MODES).prefault('shadow'),
-  /** The judgment's confidence (0-1) at or above which an `abuse` verdict is acted on. */
-  minConfidence: z.number().min(0.5).max(1).prefault(0.9),
-  /** Containment decisions per fixed one-hour window, shadow included, so shadow measures the real cap. */
-  maxPerHour: z.number().int().min(0).max(100).prefault(5),
-  /** A detection naming more accounts than this goes to an admin instead, so one call never contains a crowd. */
-  maxAccountsPerDetection: z.number().int().min(1).max(25).prefault(5),
-  /** Also adds the accounts' owned email domains (never public mailbox providers) to blockedEmailDomains. */
-  blockEmailDomains: z.boolean().prefault(false),
-  /**
-   * A new account that signed up from the same IP as a blocked account, within this many hours of
-   * it, is assessed at once instead of at the next sweep. 0 turns the rule off.
-   */
-  strongLinkWindowHours: z.number().int().min(0).max(720).prefault(72),
+  mode: z.enum(AUTO_CONTAINMENT_MODES).prefault('shadow').meta({
+    title: 'Mode',
+    description:
+      'off: no decisions. shadow: record each decision and change no account. enforce: contain the accounts (suspend, cancel subscriptions, remove balance, revoke keys, end sessions).',
+  }),
+  minConfidence: z.number().min(0.5).max(1).prefault(0.9).meta({
+    title: 'Minimum confidence',
+    description: "The judgment's confidence (0.5-1) at or above which an abuse verdict is acted on.",
+  }),
+  maxPerHour: z.number().int().min(0).max(100).prefault(5).meta({
+    title: 'Decisions per hour',
+    description: 'Containment decisions per fixed one-hour window, shadow included, so shadow measures the real cap.',
+  }),
+  maxAccountsPerDetection: z.number().int().min(1).max(25).prefault(5).meta({
+    title: 'Accounts per detection',
+    description:
+      'A detection naming more accounts than this goes to an admin instead, so one call never contains a crowd.',
+  }),
+  blockEmailDomains: z.boolean().prefault(false).meta({
+    title: 'Block email domains',
+    description:
+      "Also adds the accounts' owned email domains (never public mailbox providers) to blockedEmailDomains, refusing every new signup on them.",
+  }),
+  strongLinkWindowHours: z.number().int().min(0).max(720).prefault(72).meta({
+    title: 'Strong-link window (hours)',
+    description:
+      'A new account that signed up from the same IP as a blocked account within this many hours is assessed at once. 0 turns the rule off.',
+  }),
 });
 export type AutoContainmentConfig = z.infer<typeof AutoContainmentConfigSchema>;
 
