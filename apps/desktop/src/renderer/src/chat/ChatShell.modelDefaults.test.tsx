@@ -119,6 +119,7 @@ beforeEach(() => {
     }
   );
   closeModels = undefined;
+  window.localStorage.clear();
   getModelSettings.mockReset();
   stubBridge();
 });
