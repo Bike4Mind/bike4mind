@@ -49,7 +49,7 @@ const MODEL_FILE_CONTRACT = [
   'metalness 1, roughness 0.3; wrought iron #3a3a3c, metalness 1, roughness 0.6; oiled wood #7a4a24, roughness 0.7 (add',
   'clearcoat 0.6 for varnished); clear glass #f2f8f8, roughness 0.05, transmission 1, ior 1.5, thickness about its wall depth; black rubber',
   "#1e1e1e, roughness 0.9; velvet sheen 1, roughness 0.9. `texture` adds procedural surface detail tinted by the part's",
-  "colour: 'wood' (grain along the part's longest side; use it on planks and boards, e.g. #9a6a3c) or 'brushed' (brushed",
+  "colour: 'wood' (grain along the part's longest side; use it on planks and boards, e.g. #7a5536) or 'brushed' (brushed",
   'metal with stretched highlights; steel #b8bcc2, metalness 1, roughness 0.35). The pane renders with soft shadows and ambient occlusion, so',
   'real gaps and bevels read: leave a small gap where a lid meets its box rather than fusing them.',
   'Moving parts: give a part `pivot: [x, y, z]` (the point it turns about, e.g. a lid hinge, in model coordinates) and',

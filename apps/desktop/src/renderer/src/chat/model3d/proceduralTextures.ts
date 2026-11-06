@@ -10,7 +10,7 @@ import type { ModelTexture, ModelUnits } from '@shared/model3d';
  * the species or the metal. The roughness map multiplies `roughness` the same way.
  */
 
-/** Texels per side: enough for close-ups, small enough to generate in a few tens of ms. */
+/** Texels per side: about 0.6 mm of wood per texel, sharp enough for seams, quick enough to generate on load. */
 export const TEXTURE_SIZE = 512;
 
 /** How long one repeat of each texture is on the model, in mm: a board's grain, a sheet's brushing. */
@@ -38,9 +38,16 @@ export function tileableNoise(x: number, y: number, periodX: number, periodY: nu
   const y0 = Math.floor(y);
   const tx = fade(x - x0);
   const ty = fade(y - y0);
-  const at = (dx: number, dy: number) => hash(wrap(x0 + dx, periodX), wrap(y0 + dy, periodY), seed);
-  const top = at(0, 0) + (at(1, 0) - at(0, 0)) * tx;
-  const bottom = at(0, 1) + (at(1, 1) - at(0, 1)) * tx;
+  const left = wrap(x0, periodX);
+  const right = left + 1 === periodX ? 0 : left + 1;
+  const near = wrap(y0, periodY);
+  const far = near + 1 === periodY ? 0 : near + 1;
+  const a = hash(left, near, seed);
+  const b = hash(right, near, seed);
+  const c = hash(left, far, seed);
+  const d = hash(right, far, seed);
+  const top = a + (b - a) * tx;
+  const bottom = c + (d - c) * tx;
   return top + (bottom - top) * ty;
 }
 
@@ -48,9 +55,9 @@ export function tileableNoise(x: number, y: number, periodX: number, periodY: nu
 function fbm(u: number, v: number, cellsU: number, cellsV: number, octaves: number, seed: number): number {
   let sum = 0;
   let weight = 0;
-  for (let octave = 0; octave < octaves; octave += 1) {
-    const scale = 2 ** octave;
-    const amplitude = 0.5 ** octave;
+  let scale = 1;
+  let amplitude = 1;
+  for (let octave = 0; octave < octaves; octave += 1, scale *= 2, amplitude *= 0.5) {
     sum +=
       amplitude * tileableNoise(u * cellsU * scale, v * cellsV * scale, cellsU * scale, cellsV * scale, seed + octave);
     weight += amplitude;
@@ -64,20 +71,41 @@ const smoothstep = (edge0: number, edge1: number, value: number) => fade(clamp01
 /** One texel: the tone the colour is multiplied by, the roughness multiplier, and the bump height. */
 type Texel = { tone: number; roughness: number; height: number };
 
-/** Plain-sawn grain: growth rings warped by slow noise, darker late wood, and fine pores along u. */
+/** Boards across one wood tile, so a tile of TILE_MM.wood reads as planks about 37 mm wide. */
+const PLANKS = 8;
+/** Growth ring spacing, in mm. */
+const RING_MM = 1.8;
+
+/**
+ * Plain-sawn planks. Each board across v has its own grain offset, shade and distance from the pith,
+ * with a dark groove at each seam. The rings are cut by the board's flat face, so the grain draws
+ * the arches ("cathedrals") of real plain-sawn wood, with thin, crisp late-wood lines and fine pores.
+ */
 function woodTexel(u: number, v: number): Texel {
-  const RINGS = 16;
-  const warp = fbm(u, v, 2, 3, 4, 11);
-  const ring = v * RINGS + warp * 1.6;
+  const board = v * PLANKS;
+  const plank = Math.floor(board);
+  const across = board - plank;
+  const boardMm = TILE_MM.wood / PLANKS;
+  // Shifting a board along u keeps it periodic, since every noise below repeats once per tile in u.
+  const along = u + hash(plank, 0, 89);
+  const shade = hash(plank, 1, 89);
+  // A deep pith that drifts slowly along the board keeps the arches long and narrow, not loops.
+  const pith = 25 + 40 * hash(plank, 2, 89) + 24 * (fbm(along, plank / PLANKS, 2, PLANKS, 3, 101) - 0.5);
+  const offCentre = (across - 0.5) * boardMm;
+  const warp = 0.3 * (fbm(along, v, 3, PLANKS, 3, 11) - 0.5);
+  // Sawn a little off the tangent, so the arches lean and fine lines run the length of the board.
+  const ring = (Math.hypot(offCentre, pith) + 0.35 * offCentre) / RING_MM + warp;
   const phase = ring - Math.floor(ring);
-  // A thin dark line of late wood with soft edges, not a sawtooth that steps at every ring.
-  const late = smoothstep(0.6, 0.9, phase) * (1 - smoothstep(0.92, 1, phase));
-  const pores = fbm(u, v, 6, 140, 2, 23);
-  const figure = fbm(u, v, 3, 3, 3, 37);
+  const late = smoothstep(0.8, 0.86, phase) * (1 - smoothstep(0.9, 0.95, phase));
+  const pores = fbm(along, v, 4, 320, 2, 23);
+  const seamMm = Math.min(across, 1 - across) * boardMm;
+  const groove = 1 - smoothstep(0.25, 0.9, seamMm);
   return {
-    tone: clamp01(0.97 - 0.26 * late - 0.2 * (pores - 0.5) - 0.1 * (figure - 0.5)),
-    roughness: clamp01(0.85 + 0.15 * late + 0.1 * (pores - 0.5)),
-    height: clamp01(0.55 * (1 - late) + 0.45 * pores),
+    tone: clamp01(
+      (0.88 + 0.12 * shade) * (1 - 0.06 * phase - 0.15 * late - 0.12 * (pores - 0.5)) * (1 - 0.55 * groove)
+    ),
+    roughness: clamp01(0.85 + 0.15 * late + 0.1 * (pores - 0.5) + 0.15 * groove),
+    height: clamp01((0.6 * (1 - late) + 0.4 * pores) * (1 - groove)),
   };
 }
 
@@ -103,7 +131,7 @@ export function textureBytes(kind: ModelTexture): { color: Uint8Array; roughness
   const height = new Uint8Array(count * 4);
   for (let row = 0; row < TEXTURE_SIZE; row += 1) {
     for (let column = 0; column < TEXTURE_SIZE; column += 1) {
-      const { tone, roughness: rough, height: bump } = texel(column / TEXTURE_SIZE, row / TEXTURE_SIZE);
+      const { tone, roughness: rough, height: bump } = texel((column + 0.5) / TEXTURE_SIZE, (row + 0.5) / TEXTURE_SIZE);
       const offset = (row * TEXTURE_SIZE + column) * 4;
       color.fill(Math.round(tone * 255), offset, offset + 3);
       roughness.fill(255, offset, offset + 3);
