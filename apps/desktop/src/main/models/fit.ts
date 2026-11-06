@@ -9,10 +9,18 @@ import {
   type HardwareProfile,
   type ModelArch,
 } from '@bike4mind/common';
+import type { QuantizedKvCacheType } from '@shared/modelServers';
 import { formatMemory, type FitLevel, type MachineView, type ModelFit } from '@shared/models';
 
-// Desktop chats through Ollama with one slot; its KV type is daemon-wide, so plan the f16 default.
-const OLLAMA_RUNTIME: FitRuntime = { kind: 'ollama', flashAttn: 'auto', slots: 1, draftMax: 0 };
+// Desktop chats through Ollama with one slot; its KV type is daemon-wide, so plan the one entered in Settings.
+const ollamaRuntime = (draftMax: number, kv: QuantizedKvCacheType | undefined): FitRuntime => ({
+  kind: 'ollama',
+  flashAttn: 'auto',
+  slots: 1,
+  draftMax,
+  ...(draftMax > 0 ? { speculative: true } : {}),
+  ...(kv ? { kv: { k: kv, v: kv } } : {}),
+});
 // Past this share of the budget a resident model is rated tight: other apps can push it into swap.
 const TIGHT_SHARE = 0.9;
 const CPU_NOTE = 'No GPU memory was detected, so this assumes it runs on the CPU.';
@@ -75,20 +83,25 @@ function tooLarge(needBytes: number, usable: number, machine: number, where: Fit
 const withTightNote = (fit: { level: FitLevel; detail: string }, where: FitWhere) =>
   fit.level === 'tight' ? { ...fit, detail: `${fit.detail} ${WORDS[where].tight}` } : fit;
 
-type ModelExtras = Pick<FitModel, 'mmprojBytes' | 'expertBytesPerLayer' | 'activeParamsFraction'>;
+type ModelExtras = Pick<FitModel, 'mmprojBytes' | 'expertBytesPerLayer' | 'activeParamsFraction'> & {
+  /** Draft tokens per step while the model speculates (MTP or a draft layer); 0 or absent when it does not. */
+  draftMax?: number;
+  /** The server's OLLAMA_KV_CACHE_TYPE as entered; absent is f16. */
+  kvCacheType?: QuantizedKvCacheType;
+};
 
 function plan(
   arch: ModelArch,
   weightsBytes: number,
   hardware: HardwareProfile,
   context: number,
-  extras: ModelExtras
+  { draftMax = 0, kvCacheType, ...extras }: ModelExtras
 ): Plan {
   const fit = estimateFit({
     model: { arch, weightsBytes, ...extras },
     hardware,
     mode: 'chat',
-    runtime: OLLAMA_RUNTIME,
+    runtime: ollamaRuntime(draftMax, kvCacheType),
     context: Math.min(Math.max(1, Math.round(context)), arch.contextMax),
   });
   if (!fit.requested) throw new Error('estimateFit returned no plan for the requested context');
@@ -99,7 +112,8 @@ function describe(plan: Plan, cpuOnly: boolean, where: FitWhere): { level: FitLe
   const { totalBytes, budgetBytes, ramPoolBytes, marginBytes, offloadedBytes, weightsBytes } = plan.memory;
   const { usable, machine } = limits(budgetBytes, ramPoolBytes, marginBytes);
   const need = formatMemory(totalBytes);
-  const ctx = `the ${contextLabel(plan.context)} context chat will use`;
+  const cache = plan.kv.v === 'f16' ? '' : ` with a ${plan.kv.v} KV cache`;
+  const ctx = `the ${contextLabel(plan.context)} context chat will use${cache}`;
   const note = cpuOnly ? ` ${CPU_NOTE}` : '';
   if (!plan.fits) {
     const over = tooLarge(totalBytes, usable, machine, where);

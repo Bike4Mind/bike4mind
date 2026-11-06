@@ -596,6 +596,18 @@ describe('HubEntrySchema cross-field rules', () => {
     ],
     [
       'hybrid-27b',
+      'a pinned draft_num_predict without a params layer',
+      e => {
+        e.builds[2].ollama = {
+          kind: 'hf-pull',
+          modelfile: {},
+          layers: { ...pinned(), params: null, numCtx: null, draftNumPredict: 2 },
+        };
+      },
+      'builds.2.ollama.layers: draftNumPredict needs a params layer',
+    ],
+    [
+      'hybrid-27b',
       'a projector size without a projector layer',
       e => {
         e.builds[2].ollama = { kind: 'hf-pull', modelfile: {}, layers: { ...pinned(), projectorBytes: 1000 } };

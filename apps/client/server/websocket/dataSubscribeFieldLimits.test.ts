@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { CHAT_MESSAGE_WITHHELD_FIELDS, OWNER_ONLY_PROMPT_META_PROJECTION_PATHS } from '@bike4mind/common';
+import {
+  CHAT_MESSAGE_WITHHELD_FIELDS,
+  OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
+  USER_SECRET_FIELDS,
+} from '@bike4mind/common';
 import { findWithheldFilterPaths, resolveFieldLimits, type FieldLimitOptions } from './dataSubscribeFieldLimits';
 
 const opts = (overrides: Partial<FieldLimitOptions> = {}): FieldLimitOptions => ({
@@ -67,7 +71,25 @@ describe('resolveFieldLimits', () => {
       riskEvidence: false,
       throttle: false,
       riskSignals: false,
+      signupLanding: false,
     });
+  });
+
+  it('withholds every abuse-evidence field the REST self-view drops', () => {
+    // Abuse evidence describes the account to admins; a new one must be added to both lists.
+    const abuseEvidence = [
+      'signupGrantAssessment',
+      'riskScore',
+      'riskEvidence',
+      'throttle',
+      'riskSignals',
+      'signupLanding',
+    ] as const;
+    const limits = resolveFieldLimits('users', opts());
+    for (const field of abuseEvidence) {
+      expect(USER_SECRET_FIELDS).toContain(field);
+      expect(limits).toHaveProperty(field, false);
+    }
   });
 
   it('refuses a users subscription filter that probes throttle or riskSignals', () => {
@@ -128,6 +150,7 @@ describe('resolveFieldLimits', () => {
     expect(resolveFieldLimits('organizations', opts())).toEqual({
       stripeCustomerId: false,
       signupGrantUnlockCount: false,
+      signupInviteBonusCount: false,
       billingContact: false,
     });
   });
@@ -138,6 +161,7 @@ describe('resolveFieldLimits', () => {
     expect(resolveFieldLimits('organizations', opts({ isPlatformAdmin: true }))).toEqual({
       stripeCustomerId: false,
       signupGrantUnlockCount: false,
+      signupInviteBonusCount: false,
     });
   });
 
@@ -145,6 +169,7 @@ describe('resolveFieldLimits', () => {
     expect(resolveFieldLimits('orgs_v2', opts({ organizationCollectionName: 'orgs_v2' }))).toEqual({
       stripeCustomerId: false,
       signupGrantUnlockCount: false,
+      signupInviteBonusCount: false,
       billingContact: false,
     });
   });

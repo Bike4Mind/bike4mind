@@ -796,3 +796,46 @@ describe('empty fences in a reply', () => {
     await waitFor(() => expect(writeText.mock.calls).toEqual([[''], ['']]));
   });
 });
+
+describe('deep research panel settle wiring in a rendered reply', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+  const deepResearchState = {
+    // The panel renders nothing without at least one activity or source.
+    activities: [
+      {
+        type: 'search',
+        status: 'pending',
+        message: 'Searching with Engine for: "magnets"',
+        timestamp: '2026-01-01T00:00:01.000Z',
+        depth: 0,
+      },
+    ],
+    sources: [],
+    completedSteps: 1,
+    totalExpectedSteps: 4,
+    completed: false,
+    startTime: Date.parse('2026-01-01T00:00:00.000Z'),
+  };
+
+  const renderStatus = (status: string) => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CssVarsProvider theme={appTheme}>
+          <PromptReplies
+            messageData={{ id: 'quest-1', questMasterReply: 'partial', status, deepResearchState } as never}
+            onSendMessage={async () => {}}
+          />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+    return screen.getByTestId('deep-research-status').textContent ?? '';
+  };
+
+  it('stops the running state once the user stops the turn', () => {
+    expect(renderStatus('stopped')).toMatch(/stopped/i);
+  });
+
+  it('keeps the running state while the turn is streaming', () => {
+    expect(renderStatus('running')).not.toMatch(/stopped|complete/i);
+  });
+});

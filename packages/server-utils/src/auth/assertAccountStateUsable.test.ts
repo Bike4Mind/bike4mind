@@ -20,7 +20,7 @@ describe('assertAccountStateUsable', () => {
 
   it.each([
     ['banned', 'User not found or banned'],
-    ['disputePending', 'Account suspended pending dispute resolution'],
+    ['disputePending', 'on hold pending a payment review'],
     ['suspended', 'Your account is suspended'],
   ])('rejects an account blocked for %s', (reason, message) => {
     expect(() => assertAccountStateUsable({ reason } as never)).toThrow(message);

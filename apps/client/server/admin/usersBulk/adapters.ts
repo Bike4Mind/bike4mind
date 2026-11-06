@@ -15,7 +15,13 @@ import { adminAuditService, authSessionService, creditService } from '@bike4mind
 import type { Logger } from '@bike4mind/observability';
 import { adminUsersPipeline } from '@server/admin/usersList/listAdminUsers';
 import { LIVE_API_KEY_STATUS } from '@server/admin/usersList/adminUsersQuery';
-import { loadCreditGrantPolicy, recordAdminActionFromRequest, systemAuditActor } from '@server/utils/adminAudit';
+import {
+  loadCreditGrantPolicy,
+  requestAuditWriter,
+  systemAuditActor,
+  type AdminAuditWriter,
+  type recordAdminActionFromRequest,
+} from '@server/utils/adminAudit';
 import {
   addBlockedEmailDomains,
   readBlockedEmailDomains,
@@ -157,11 +163,10 @@ function oncePerBatchPolicy(): () => Promise<adminAuditService.CreditGrantPolicy
     }));
 }
 
-const auditFor = (req: AuditRequest, reason: string) => {
+const auditFor = (write: AdminAuditWriter, reason: string) => {
   const creditGrantPolicy = oncePerBatchPolicy();
   return ({ action, user, summary, changes, details, related }: UsersBulkAuditEntry) =>
-    recordAdminActionFromRequest(
-      req,
+    write(
       {
         action,
         target: { kind: 'user', id: user.id, displayName: user.email ?? user.username ?? user.id },
@@ -254,14 +259,22 @@ export function usersBulkSystemApplyDeps(actorName: string, reason: string, logg
 
 /** Execute deps whose audit entries carry the request's actor and the admin's reason. */
 export function usersBulkExecuteDeps(req: AuditRequest, reason: string, logger?: Logger): ExecuteDeps {
+  return usersBulkExecuteDepsFor(requestAuditWriter(req), reason, logger);
+}
+
+/**
+ * Execute deps whose every audit entry (users, domains, subscriptions) goes through `write`, so the
+ * same Contain path runs from an admin request or a job with a system actor.
+ */
+export function usersBulkExecuteDepsFor(write: AdminAuditWriter, reason: string, logger?: Logger): ExecuteDeps {
   return {
     ...usersBulkResolveDeps,
     db: usersBulkDb,
     store: cacheRepository,
     withTransaction: runInTransaction(logger),
-    audit: auditFor(req, reason),
+    audit: auditFor(write, reason),
     auditSummary: ({ summary, details }) =>
-      recordAdminActionFromRequest(req, {
+      write({
         action: 'user.bulk.executed',
         target: { kind: 'system', id: 'admin-users-bulk', displayName: 'Users bulk action' },
         summary,
@@ -270,14 +283,12 @@ export function usersBulkExecuteDeps(req: AuditRequest, reason: string, logger?:
       }),
     blockEmailDomains: (domains, batchId) =>
       addBlockedEmailDomains(
-        req,
+        write,
         domains,
         added => `blocked signups from ${added.join(', ')} in bulk contain batch ${batchId}`
       ),
     endRealtimeConnections: endUserRealtimeConnections(logger),
-    cancelSubscriptions: cancelUserSubscriptions(logger, entry =>
-      recordAdminActionFromRequest(req, { ...entry, reason })
-    ),
+    cancelSubscriptions: cancelUserSubscriptions(logger, entry => write({ ...entry, reason })),
     logger,
   };
 }
@@ -287,14 +298,15 @@ export function usersBulkUndoDeps(
   logger?: Logger,
   reason = 'Undo of a bulk action within its undo window'
 ): UndoDeps {
+  const write = requestAuditWriter(req);
   return {
     db: usersBulkDb,
     store: cacheRepository,
     withTransaction: runInTransaction(logger),
-    audit: auditFor(req, reason),
+    audit: auditFor(write, reason),
     unblockEmailDomains: (domains, batchId) =>
       removeBlockedEmailDomains(
-        req,
+        write,
         domains,
         removed => `unblocked signups from ${removed.join(', ')} undoing bulk batch ${batchId}`
       ),

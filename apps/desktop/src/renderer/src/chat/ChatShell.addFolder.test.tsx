@@ -1775,6 +1775,10 @@ describe('Add folder in a Chat composer', () => {
       await act(async () => undefined);
 
       expect(byTestId(testId)?.textContent).toContain(text);
+      if (testId === 'chat-notice') {
+        // Notices that arrive together are joined with newlines and must render on separate lines.
+        expect(getComputedStyle(byTestId('chat-notice')!).whiteSpace).toBe('pre-line');
+      }
       expect(byTestId('chat-add-folder-error')).toBeNull();
       act(() => root?.unmount());
       host?.remove();

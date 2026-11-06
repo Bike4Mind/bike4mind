@@ -467,6 +467,7 @@ export const SettingKeySchema = z.enum([
   'usagePatternSignalsConfig',
   'abuseAssessmentEnabled',
   'abuseAssessmentConfig',
+  'autoContainmentConfig',
   'thinkingVisibilityFree',
   'thinkingVisibilityPaid',
   'otcLimitSendPerEmailPerIp',
@@ -731,6 +732,7 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitDefaultWriteMode',
   'fileUploadLimitFreePerHour',
   'fileUploadLimitPaidPerHour',
+  'pendingUploadLimit',
   'imageModerationLimitFreePerDay',
   'imageModerationLimitPaidPerDay',
   'apiKeyAccess',
@@ -1176,6 +1178,12 @@ export const FILE_UPLOAD_LIMIT_FREE_PER_HOUR = 300;
 export const FILE_UPLOAD_LIMIT_PAID_PER_HOUR = 3000;
 
 /**
+ * Default cap on a user's presigned client uploads whose bytes have not landed yet. Also the value
+ * apps/client/server/files/pendingUploads.ts applies when the setting cannot be read.
+ */
+export const PENDING_UPLOAD_LIMIT = 250;
+
+/**
  * Default daily uploaded-image moderation allowances, in detector calls. The free one is also the
  * floor that apps/client/server/s3/imageModerationBudget.ts applies when the setting cannot be read.
  */
@@ -1454,6 +1462,32 @@ export const AbuseAssessmentConfigSchema = z.object({
 });
 
 export type AbuseAssessmentConfig = z.infer<typeof AbuseAssessmentConfigSchema>;
+
+/** off: no decisions. shadow: decide and record, change nothing. enforce: contain the accounts. */
+export const AUTO_CONTAINMENT_MODES = ['off', 'shadow', 'enforce'] as const;
+export type AutoContainmentMode = (typeof AUTO_CONTAINMENT_MODES)[number];
+
+/**
+ * Automated containment from abuse assessments (apps/client/server/security/autoContainment). Acts
+ * only on an `abuse` judgment at or above minConfidence, through the admin bulk Contain path.
+ */
+export const AutoContainmentConfigSchema = z.object({
+  mode: z.enum(AUTO_CONTAINMENT_MODES).prefault('shadow'),
+  /** The judgment's confidence (0-1) at or above which an `abuse` verdict is acted on. */
+  minConfidence: z.number().min(0.5).max(1).prefault(0.9),
+  /** Containment decisions per fixed one-hour window, shadow included, so shadow measures the real cap. */
+  maxPerHour: z.number().int().min(0).max(100).prefault(5),
+  /** A detection naming more accounts than this goes to an admin instead, so one call never contains a crowd. */
+  maxAccountsPerDetection: z.number().int().min(1).max(25).prefault(5),
+  /** Also adds the accounts' owned email domains (never public mailbox providers) to blockedEmailDomains. */
+  blockEmailDomains: z.boolean().prefault(false),
+  /**
+   * A new account that signed up from the same IP as a blocked account, within this many hours of
+   * it, is assessed at once instead of at the next sweep. 0 turns the rule off.
+   */
+  strongLinkWindowHours: z.number().int().min(0).max(720).prefault(72),
+});
+export type AutoContainmentConfig = z.infer<typeof AutoContainmentConfigSchema>;
 
 export enum ServerStatusEnum {
   Live = 'live',
@@ -2514,9 +2548,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiRateLimitDefaultWriteMode', order: 6 },
       { key: 'fileUploadLimitFreePerHour', order: 7 },
       { key: 'fileUploadLimitPaidPerHour', order: 8 },
-      { key: 'imageModerationLimitFreePerDay', order: 9 },
-      { key: 'imageModerationLimitPaidPerDay', order: 10 },
-      { key: 'apiKeyAccess', order: 11 },
+      { key: 'pendingUploadLimit', order: 9 },
+      { key: 'imageModerationLimitFreePerDay', order: 10 },
+      { key: 'imageModerationLimitPaidPerDay', order: 11 },
+      { key: 'apiKeyAccess', order: 12 },
     ],
   },
   API_KEY_TRUST: {
@@ -2646,6 +2681,7 @@ export const API_SERVICE_GROUPS = {
     settings: [
       { key: 'abuseAssessmentEnabled', order: 1 },
       { key: 'abuseAssessmentConfig', order: 2 },
+      { key: 'autoContainmentConfig', order: 3 },
     ],
   },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
@@ -3612,6 +3648,20 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 8,
   }),
+  // Read by apps/client/server/files/pendingUploads.ts.
+  pendingUploadLimit: makeNumberSetting({
+    key: 'pendingUploadLimit',
+    name: 'Pending Upload Limit (files)',
+    defaultValue: PENDING_UPLOAD_LIMIT,
+    min: 0,
+    max: 1000000,
+    int: true,
+    description:
+      'Max presigned file uploads a user may have waiting for their bytes at once, on every tier. An upload stops counting when its bytes land or 30 minutes after it was requested. Admins and developer-tagged users are not limited. Set to 0 to block presigned uploads.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 9,
+  }),
   // Both read by apps/client/server/s3/imageModerationBudget.ts.
   imageModerationLimitFreePerDay: makeNumberSetting({
     key: 'imageModerationLimitFreePerDay',
@@ -3624,7 +3674,7 @@ export const settingsMap = {
       "Max content-moderation scans a Free-tier user's uploaded images may use per 24 hours. A still image is one scan; an animated image is one scan per sampled frame (at most 10). Images over the limit stay pending (not shown) until the window resets and they are scanned. Admin-restricted users get this limit too. Set to 0 to hold every uploaded image for these users.",
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
-    order: 9,
+    order: 10,
   }),
   imageModerationLimitPaidPerDay: makeNumberSetting({
     key: 'imageModerationLimitPaidPerDay',
@@ -3637,7 +3687,7 @@ export const settingsMap = {
       "Max content-moderation scans a Basic or Pro subscriber's uploaded images may use per 24 hours, counted like the Free limit. Admins and developer-tagged users are not limited. Set to 0 to hold every uploaded image for these users.",
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
-    order: 10,
+    order: 11,
   }),
   // Enforced at mint AND on every key-authenticated request (apiKeyAccessGate.ts), so
   // tightening it also cuts off keys that already exist.
@@ -3652,7 +3702,7 @@ export const settingsMap = {
     options: ['all', 'paid', 'disabled'],
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
-    order: 11,
+    order: 12,
   }),
   // Auto-block of IPs with repeated failed OAuth sign-ins, plus per-IP limits on the OAuth routes.
   oauthAbuseAutoBlockEnabled: makeBooleanSetting({
@@ -4514,6 +4564,18 @@ export const settingsMap = {
     dependsOn: 'abuseAssessmentEnabled',
     schema: AbuseAssessmentConfigSchema,
   }),
+  autoContainmentConfig: makeObjectSetting({
+    key: 'autoContainmentConfig',
+    name: 'Automated Containment from Abuse Assessments',
+    defaultValue: AutoContainmentConfigSchema.parse({}),
+    description:
+      "What happens when an abuse assessment judges a detection as abuse at or above minConfidence (0.5-1). mode: off (nothing), shadow (records the decision for grading against the detection's admin verdict and changes no account; the default) or enforce (contains the accounts through the bulk Contain path: suspended, Stripe subscriptions canceled, positive balance removed, API keys revoked, sessions ended, attributed to the system with the evidence as the reason). Unsuspend on the user profile reverses the suspension; revoked keys stay revoked and a removed balance is not restored. maxPerHour caps decisions per hour, counted per mode (over it, the decision is recorded as capped and re-evaluated after the hour); maxAccountsPerDetection sends larger detections to an admin; blockEmailDomains also blocks the accounts' owned email domains, which refuses every new signup on that domain, so one false positive on a shared corporate or campus network blocks the whole domain (leave it off until shadow precision is known); strongLinkWindowHours assesses a new account at once when it signed up from the same IP as a blocked account within that many hours (0 turns the rule off). Needs the advisory assessment on.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.ABUSE_ASSESSMENT.id,
+    order: 3,
+    dependsOn: 'abuseAssessmentEnabled',
+    schema: AutoContainmentConfigSchema,
+  }),
   // Enforced by createModelAdmission (b4m-core/services/src/llm/modelAdmission.ts) and mirrored in
   // the model picker (apps/client/server/utils/callerModelList.ts).
   freeTierModelGateEnabled: makeBooleanSetting({
@@ -5008,7 +5070,8 @@ export const settingsMap = {
     min: 0,
     int: true,
     userReadable: true,
-    description: 'Reserved for an invite bonus; not read yet.',
+    description:
+      'Credits paid once, from the signup pool and outside the drip cap, to an account that signed up through a refer-a-friend invite or a paying organization invite, after its initial tranche is paid in full. 0 pays no bonus, and an account that becomes due its bonus while it is 0 is not paid if it is raised later.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),

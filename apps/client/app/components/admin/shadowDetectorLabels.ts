@@ -6,4 +6,5 @@ export const DETECTOR_LABELS: Record<ShadowDetector, string> = {
   accountCampaign: 'Account campaign',
   youngAccountSpend: 'Young-account spend',
   paymentRisk: 'Payment risk',
+  signupIpLinkedToBlocked: 'Signup IP linked to blocked',
 };

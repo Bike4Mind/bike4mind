@@ -17,6 +17,9 @@ vi.mock('@client/app/hooks/data/adminUserCredits', () => ({
   useAdminCreditLedger: mocks.ledger,
   fetchCreditLedgerExport: mocks.exportCsv,
 }));
+vi.mock('./SignupGrantPendingCard', () => ({
+  SignupGrantPendingCard: () => <div data-testid="user-credits-pending" />,
+}));
 vi.mock('sonner', () => ({ toast: { warning: mocks.toastWarning, error: mocks.toastError } }));
 // recharts needs layout jsdom does not have; the stub exposes what the chart was given.
 vi.mock('./SpendChart', () => ({

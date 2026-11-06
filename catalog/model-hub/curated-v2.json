@@ -1,8 +1,16 @@
 {
   "schemaVersion": 2,
-  "sequence": 3,
+  "sequence": 4,
   "updatedAt": "2026-11-04T00:00:00Z",
   "changelog": [
+    {
+      "sequence": 4,
+      "date": "2026-11-04",
+      "added": [],
+      "removed": [],
+      "changed": ["qwen3-5-0-8b"],
+      "notes": "Recorded the build's draft_num_predict so fit checks plan the draft the way Ollama runs it."
+    },
     {
       "sequence": 3,
       "date": "2026-11-04",
@@ -225,7 +233,8 @@
               "numCtx": null,
               "projector": "5ba2eb9bf28c5b5ff7a705f07bd9269f0f2dbd6cb2b4c46d5f98ed8d15d18883",
               "projectorBytes": 207346304,
-              "draft": "b0108ebdcf5adea94899909c0cd6c12565f079f819991e68e464cb2e69a5d93d"
+              "draft": "b0108ebdcf5adea94899909c0cd6c12565f079f819991e68e464cb2e69a5d93d",
+              "draftNumPredict": 2
             }
           },
           "runtimeMin": { "ollama": "0.30.0" },

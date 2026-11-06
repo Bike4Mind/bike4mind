@@ -88,9 +88,31 @@ if (result.kind === 'audio' && result.data.delivery === 'inline') {
 
 `tts` also returns `{ kind: 'saved-too-large', data }` when an older server rejects oversized audio with a 413 but kept a saved copy (`data.fabFileId`). To get binary audio directly, use `raw('synthesizeSpeech', { body: { text, encoding: 'binary' } })`.
 
+## Bill the signed-in user
+
+`exchangeIdToken` trades a user's B4M ID token for a short-lived API key that bills that user's credits. It is **server only**: it sends your client secret.
+
+```ts
+import { createClient, exchangeIdToken } from '@bike4mind/sdk';
+
+const baseUrl = 'https://your-b4m-host';
+const { apiKey, expiresAt } = await exchangeIdToken({
+  baseUrl,
+  clientId,
+  clientSecret,
+  idToken,
+  signal: AbortSignal.timeout(10_000),
+});
+const b4m = createClient({ baseUrl, apiKey });
+```
+
+A failure throws `B4mApiError` with `errorCode` set to the OAuth `error` (`invalid_request`, `invalid_client`, `invalid_grant`, `access_denied`, `invalid_scope`, `subscription_required`, `temporarily_unavailable`) and `message` set to its `error_description`. On a 429, wait `retryAfterSeconds`.
+
+Caching is yours: there is one live key per user and app (each exchange revokes the previous one), so keep the key per user and re-mint shortly before `expiresAt`. See [Bill the user, not yourself](https://docs.bike4mind.com/developers/building-on-b4m#5-bill-the-user-not-yourself) for the full contract.
+
 ## Errors
 
-Any non-2xx response throws `B4mApiError`:
+Any non-2xx response throws `B4mApiError`. An OAuth-style body (a snake_case `error` code and `error_description`) maps `error` to `errorCode` and `error_description` to `message`:
 
 ```ts
 import { B4mApiError } from '@bike4mind/sdk';

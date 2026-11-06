@@ -241,6 +241,60 @@ export function PanelRightIcon() {
   );
 }
 
+/** The Tavern view: a tankard. */
+export function TavernIcon() {
+  return (
+    <Glyph>
+      <path d="M3.5 4.5h7v8a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1z" />
+      <path d="M10.5 6.5h1.5a1.5 1.5 0 0 1 0 3h-1.5" />
+      <path d="M3.5 4.5c0-1.5 1.2-2 2-1.5.6-1 2.4-1 3 0 .8-.5 2 0 2 1.5" />
+    </Glyph>
+  );
+}
+
+/** The orchestrating conversation itself, beside the agents it runs. */
+export function ConversationIcon() {
+  return (
+    <Glyph>
+      <path d="M13.5 7.5c0 2.5-2.5 4.5-5.5 4.5a6.5 6.5 0 0 1-2-.3L3 13l.8-2.5a4.2 4.2 0 0 1-1.3-3C2.5 5 5 3 8 3s5.5 2 5.5 4.5z" />
+    </Glyph>
+  );
+}
+
+/** Agents run from one conversation: a hub and the three it hands work to. */
+export function AgentsIcon() {
+  return (
+    <Glyph>
+      <circle cx="8" cy="8.5" r="1.75" />
+      <circle cx="3.25" cy="3.75" r="1.25" />
+      <circle cx="12.75" cy="3.75" r="1.25" />
+      <circle cx="8" cy="13.75" r="1.25" />
+      <path d="M4.2 4.7l2.5 2.5M11.8 4.7l-2.5 2.5M8 10.25v2.25" />
+    </Glyph>
+  );
+}
+
+/** The Board view: three columns. */
+export function BoardIcon() {
+  return (
+    <Glyph>
+      <rect x="2" y="3" width="3" height="10" rx="1" />
+      <rect x="6.5" y="3" width="3" height="7" rx="1" />
+      <rect x="11" y="3" width="3" height="4.5" rx="1" />
+    </Glyph>
+  );
+}
+
+/** The Table view: a header and rows. */
+export function TableIcon() {
+  return (
+    <Glyph>
+      <rect x="2" y="3" width="12" height="10" rx="2" />
+      <path d="M2 6.5h12M2 9.75h12M6 6.5v6.5" />
+    </Glyph>
+  );
+}
+
 /** Widen the task panel, or put it back: arrows out when narrow, in when already wide. */
 export function ExpandIcon({ expanded }: { expanded: boolean }) {
   return (

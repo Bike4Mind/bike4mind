@@ -10,7 +10,9 @@
  * - Results are cached per (detection, evidence hash, policy version, model); unknown results are
  *   retried a bounded number of times, then at most once a day.
  * - A provider failure is stored as `unknown` with a diagnostic code, never as a judgment.
- * - Advisory only: nothing here writes to a user, an API key, credits, riskScore or reviewState.
+ * - Advisory only: nothing here writes to a user, an API key, credits, riskScore or reviewState. The
+ *   sweep hands each judgment to an injected `afterAssessment` hook; automated containment
+ *   (../autoContainment) is the one that may act on it.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -280,6 +282,11 @@ async function readCache(cacheKey: string): Promise<AbuseAssessmentItem | null> 
 
 export type AbuseAssessmentDeps = {
   groupEvidence?: AbuseAssessmentGroupEvidenceSource;
+  /**
+   * Sweep only: called with every judgment the sweep reads or makes, cached included. A failure is
+   * logged and counted as an error; it never stops the sweep.
+   */
+  afterAssessment?: (item: AbuseAssessmentItem) => Promise<unknown>;
 };
 
 /** The pseudonymous summary for a detection, with group evidence when a producer supplies it. */
@@ -451,6 +458,12 @@ export async function sweepAbuseAssessments({
         tally.skipped[outcome.reason] = (tally.skipped[outcome.reason] ?? 0) + 1;
         if (RUN_ENDING_SKIPS.has(outcome.reason)) return { status: 'stopped', ...tally };
         continue;
+      }
+      if (deps.afterAssessment) {
+        await deps.afterAssessment(outcome.item).catch((error: unknown) => {
+          tally.errors += 1;
+          logger.error(`Abuse assessment follow-up failed on detection ${detection.id}`, error);
+        });
       }
       if (outcome.cached) {
         tally.cached += 1;

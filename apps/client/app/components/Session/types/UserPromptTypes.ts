@@ -69,6 +69,8 @@ export interface ReplyContainerProps {
   search?: string;
   isExpandable?: boolean;
   completed?: boolean;
+  /** True once the turn is finished, whether it completed or was stopped. */
+  settled?: boolean;
   /** Machine-readable classifier for an error quest, drives targeted error UI (e.g. the Add Credits CTA). */
   errorCode?: IChatHistoryItem['errorCode'];
   questMasterPlanId?: string;

@@ -177,6 +177,16 @@ describe('sessionSummarization summary-file lookup', () => {
     );
   });
 
+  it('creates the summary file as a server upload, not a client one', async () => {
+    await run();
+
+    expect(h.createFabFile).toHaveBeenCalledWith(
+      OWNER,
+      expect.anything(),
+      expect.objectContaining({ serverUpload: true })
+    );
+  });
+
   it('labels an existing summary file when refreshing it', async () => {
     h.fabFileStore.push({ id: 'summary-1', userId: OWNER, sessionId: SESSION_ID, fileName: 'Notebook Summary.txt' });
 

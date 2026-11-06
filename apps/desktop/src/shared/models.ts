@@ -128,8 +128,11 @@ export type LoadedModelState =
   | { kind: 'unsupported' }
   | { kind: 'unknown' }
   | { kind: 'unloaded' }
-  /** `expiresAt` is epoch ms when keep-alive unloads it; null when the server gave none. */
-  | { kind: 'loaded'; expiresAt: number | null };
+  /**
+   * `expiresAt` is epoch ms when keep-alive unloads it; null when the server gave none. `contextLength` is the
+   * num_ctx it is loaded with, which a different one reloads; absent when the server does not say.
+   */
+  | { kind: 'loaded'; expiresAt: number | null; contextLength?: number };
 
 export type HubGatedMode = false | 'auto' | 'manual';
 

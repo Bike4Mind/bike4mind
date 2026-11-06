@@ -1,5 +1,6 @@
 import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { PromptCacheTtl } from '@bike4mind/common';
+import type { AttentionNotice, AttentionOpenEvent } from './attention';
 import type { AccountCredits, AccountProfile } from './account';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
@@ -61,7 +62,7 @@ import type {
   UpdateProjectResult,
 } from './chat';
 import type { GenerationSettings } from './generation';
-import type { ModelSettings } from './modelSettings';
+import type { ModelLoadOffer, ModelSettings } from './modelSettings';
 import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
@@ -173,7 +174,9 @@ export const IPC_CHANNELS = {
   chatSetSessionGeneration: 'chat:set-session-generation',
   chatGetModelSettings: 'chat:get-model-settings',
   chatSetModelSettings: 'chat:set-model-settings',
+  chatGetModelLoadOffer: 'chat:get-model-load-offer',
   chatSetSessionPinned: 'chat:set-session-pinned',
+  chatSetSessionOrchestrate: 'chat:set-session-orchestrate',
   /**
    * The one way an approval mode changes. Renderer -> main only, driven by the composer pill:
    * there is deliberately no tool, no MCP surface and no model-facing path to this channel.
@@ -485,6 +488,12 @@ export const IPC_CHANNELS = {
   terminalData: 'terminal:data',
   /** main -> renderer push; one conversation's tab list changed. */
   terminalsChanged: 'terminal:changed',
+  /** A session needs the user while the app is in the background; see @shared/attention. */
+  attentionNotify: 'attention:notify',
+  attentionClaim: 'attention:claim',
+  attentionSetBadge: 'attention:set-badge',
+  /** main -> renderer push: the user clicked a notice. */
+  attentionOpen: 'attention:open',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -760,8 +769,14 @@ export interface DesktopApi {
     getModelSettings(modelId: string): Promise<ModelSettings | null>;
     /** Replace a device-side model's defaults; `{}` clears them. Null when the id or set is not valid. */
     setModelSettings(modelId: string, settings: ModelSettings): Promise<ModelSettings | null>;
+    /**
+     * The load-time options a device-side model takes, its context sizes rated for `draftTokens` (undefined: the
+     * model's own draft count). Null for an id that is not one.
+     */
+    getModelLoadOffer(modelId: string, draftTokens?: number): Promise<ModelLoadOffer | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
+    setSessionOrchestrate(sessionId: string, orchestrate: boolean): Promise<ChatSessionSummary | null>;
     /**
      * Set how much this conversation may do without asking. Called from the composer pill, in
      * response to the user clicking it, and from nowhere else - see IPC_CHANNELS above.
@@ -1223,6 +1238,19 @@ export interface DesktopApi {
      * the link was opened. Nothing about a link in a reply needs to know.
      */
     openExternal(url: string): Promise<void>;
+  };
+  /** OS notices for sessions that need the user while the app is not focused. */
+  attention: {
+    /**
+     * Of `sessionIds`, the ones this window may announce. Every open window sees the same entry into
+     * needs-action, so main hands each entry to the first window that asks and the rest get nothing.
+     */
+    claim(sessionIds: string[]): Promise<string[]>;
+    /** Main shows it only while no app window is focused, so the caller need not check. */
+    notify(notice: AttentionNotice): Promise<void>;
+    /** Sessions waiting on the user, as the macOS dock badge; 0 clears it. A no-op elsewhere. */
+    setBadgeCount(count: number): Promise<void>;
+    onOpen(listener: (event: AttentionOpenEvent) => void): () => void;
   };
   /**
    * The developer log window's own surface. Used by the `#/dev-logs` route and nothing else.

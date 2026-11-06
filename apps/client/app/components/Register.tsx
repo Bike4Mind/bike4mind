@@ -355,7 +355,10 @@ const Register: React.FC = () => {
   };
 
   const handleSocialLogin = (provider: 'google' | 'github' | 'okta' | 'apple') => {
-    startOAuthSignIn(`/api/auth/${provider}`).catch((error: unknown) => {
+    // Carried through the signed OAuth state and redeemed if this login creates the account.
+    const code = inviteCode.trim();
+    const startUrl = code ? `/api/auth/${provider}?inviteCode=${encodeURIComponent(code)}` : `/api/auth/${provider}`;
+    startOAuthSignIn(startUrl).catch((error: unknown) => {
       toast.error(error instanceof Error ? error.message : 'Sign-in could not start. Please try again.');
     });
   };

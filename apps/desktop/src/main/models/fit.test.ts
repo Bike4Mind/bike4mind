@@ -111,6 +111,27 @@ describe('fitFromArch', () => {
     );
   });
 
+  it('plans the draft a speculating model runs with, and none when it does not', () => {
+    stub(6);
+    fitFromArch(DENSE, 4 * GIB, cpu(16), 16384, { draftMax: 3 });
+    expect(vi.mocked(estimateFit).mock.calls[0]?.[0].runtime).toMatchObject({ draftMax: 3, speculative: true });
+    expect(vi.mocked(estimateFit).mock.calls[0]?.[0].model).not.toHaveProperty('draftMax');
+    fitFromArch(DENSE, 4 * GIB, cpu(16), 16384, {});
+    expect(vi.mocked(estimateFit).mock.calls[1]?.[0].runtime).toEqual({
+      kind: 'ollama',
+      flashAttn: 'auto',
+      slots: 1,
+      draftMax: 0,
+    });
+  });
+
+  it('plans the KV cache type entered for the server on both caches', () => {
+    stub(6);
+    fitFromArch(DENSE, 4 * GIB, cpu(16), 16384, { kvCacheType: 'q4_0' });
+    expect(vi.mocked(estimateFit).mock.calls[0]?.[0].runtime).toMatchObject({ kv: { k: 'q4_0', v: 'q4_0' } });
+    expect(vi.mocked(estimateFit).mock.calls[0]?.[0].model).not.toHaveProperty('kvCacheType');
+  });
+
   it('fits, names the context, and sets what the runtime allocates against the budget less the margin', () => {
     stub(5);
     const fit = fitFromArch(DENSE, 4 * GIB, cpu(16), 16384);
@@ -425,6 +446,14 @@ describe('on a 16 GB unified-memory Mac', () => {
     expect(fit.level).not.toBe('too-large');
     expect(need).toBeLessThanOrEqual(usable);
     expect(usable).toBe(9.6);
+  });
+
+  it('needs less with a q8_0 KV cache entered, and says so', () => {
+    const f16 = fitFromArch(GEMMA4_12B, 7_151_003_754, MAC16, 131072);
+    const q8 = fitFromArch(GEMMA4_12B, 7_151_003_754, MAC16, 131072, { kvCacheType: 'q8_0' });
+    expect(f16.detail).not.toContain('KV cache');
+    expect(q8.detail).toContain('the 128K context chat will use with a q8_0 KV cache');
+    expect(shown(q8.detail)[0]).toBeLessThan(shown(f16.detail)[0]);
   });
 
   it('says how much this Mac can hold when a model cannot load at all, and needs more than that', () => {

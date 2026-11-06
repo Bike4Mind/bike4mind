@@ -324,6 +324,20 @@ describe('[strategy]/callback - banned user gate', () => {
     expect(mockIssueBrowserSession).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['a payment hold', { disputePending: true }, 'account_on_hold'],
+    ['a moderation suspension', { moderation: { status: 'suspended' } }, 'account_policy_suspended'],
+  ])('sends %s to the login notice without issuing a session', async (_label, state, code) => {
+    const res = await runCallback(
+      null,
+      { id: 'u-held', email: 'held@example.com', isBanned: false, ...state },
+      undefined
+    );
+
+    expect(res._getRedirectUrl()).toBe(`/login?error=${code}`);
+    expect(mockIssueBrowserSession).not.toHaveBeenCalled();
+  });
+
   it('still signs in a user who is not banned', async () => {
     const res = await runCallback(null, { id: 'u-ok', email: 'ok@example.com', isBanned: false }, undefined);
 

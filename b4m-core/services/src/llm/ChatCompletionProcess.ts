@@ -7124,6 +7124,8 @@ export class ChatCompletionProcess {
               // credit-capped personal turn), recorded on the chat settlement event so
               // collected revenue = sum(creditsCharged) - sum(writtenOffCredits).
               writtenOffCredits: writtenOffCredits > 0 ? writtenOffCredits : undefined,
+              // The hold this turn reserved, so a settlement far above it is findable per account.
+              reservedCredits: reservedAtSettlement > 0 ? reservedAtSettlement : undefined,
               // Not always 'ok': a turn we aborted as degenerate is priced like any other
               // (the provider tokens were really spent) but has to be findable for a refund.
               status: usageEventStatusForFinish(providerStopReason),

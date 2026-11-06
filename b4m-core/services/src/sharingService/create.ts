@@ -71,6 +71,8 @@ export const createInvite = async (
   let doc: IFabFileDocument | ISessionDocument | IOrganizationDocument | IGroupDocument | IProjectDocument | null =
     null;
   let name: string | undefined = '';
+  let organizationForInvite: IOrganizationDocument | null = null;
+  let pendingOrganizationRecipients: string[] = [];
 
   switch (type) {
     case InviteType.FabFile:
@@ -81,11 +83,14 @@ export const createInvite = async (
       doc = await db.sessions.shareable.findShareAccessById(user, id);
       name = doc?.name;
       break;
-    case InviteType.Organization:
-      doc = await inviteToOrg(user, { id, recipients }, db);
-
+    case InviteType.Organization: {
+      const organizationInvite = await inviteToOrg(user, { id, recipients }, db);
+      organizationForInvite = organizationInvite.organization;
+      doc = organizationForInvite;
+      pendingOrganizationRecipients = organizationInvite.pendingRecipients;
       name = doc?.name;
       break;
+    }
     case InviteType.Group: {
       if (!rest.permissions) throw new BadRequestError('Invalid invite group request');
       const group = await db.groups.findById(id);
@@ -207,18 +212,15 @@ export const createInvite = async (
     const resolvedEmails = [...matchedByEmailOrName, ...byId]
       .map(u => u.email)
       .filter((email): email is string => Boolean(email));
-    // A Project invite may name someone with no account yet by exact address: they register with
+    // A Project or Organization invite may name someone with no account yet by exact address: they register with
     // that email and find the invite waiting. Stored lowercased; an SSO signup keeps the provider's
     // casing, which is why accept.ts and refuseWholeInvite.ts match pending case-insensitively.
     // Built the same whether or not the address belongs to an account, so the response reveals
     // nothing new (toSharerInviteViews lowercases typed addresses for the same reason).
     const resolvedLower = new Set(resolvedEmails.map(email => email.toLowerCase()));
-    const unregistered =
-      type === InviteType.Project
-        ? recipientsArray
-            .map(recipient => recipient.trim().toLowerCase())
-            .filter(recipient => z.email().safeParse(recipient).success && !resolvedLower.has(recipient))
-        : [];
+    const unregistered = recipientsArray
+      .map(recipient => recipient.trim().toLowerCase())
+      .filter(recipient => z.email().safeParse(recipient).success && !resolvedLower.has(recipient));
     pending = Array.from(new Set([...resolvedEmails, ...unregistered]));
     // An invite naming only unresolvable recipients can never be viewed or accepted by anyone now
     // that those gates key on `pending`, so fail loudly at mint time instead of persisting a row
@@ -233,6 +235,19 @@ export const createInvite = async (
     // `pending` is the point.
     if (recipientsArray.length > 0 && pending.length === 0) {
       throw new BadRequestError('Could not find a user for any recipient');
+    }
+  }
+
+  if (organizationForInvite) {
+    pending = Array.from(new Set(pending.map(email => email.trim().toLowerCase())));
+    const alreadyInvited = new Set(pendingOrganizationRecipients.map(email => email.trim().toLowerCase()));
+    if (pending.some(email => alreadyInvited.has(email))) {
+      throw new BadRequestError('A recipient already has a pending organization invitation');
+    }
+    // The owner holds a seat outside users[].
+    const totalUsers = organizationForInvite.users.length + 1;
+    if (totalUsers + pendingOrganizationRecipients.length + pending.length > organizationForInvite.seats) {
+      throw new BadRequestError('Organization is full');
     }
   }
 
@@ -298,19 +313,16 @@ const inviteToOrg = async (
   if (!isOrgMember(user, organization)) throw new BadRequestError('Organization not found');
   assertCanManageOrgGroups(user, organization);
 
-  // We add 1 to include the owner of the organization
-  const totalUsers = (organization.users.length ?? 0) + 1;
-
-  if (totalUsers + params.recipients.length > organization.seats) {
-    throw new BadRequestError('Organization is full');
-  }
-
   const invites = await db.invites.findAllByDocumentId(organization.id);
-  const pending = invites?.map(invite => invite.recipients?.pending || []).flat().length;
+  const now = new Date();
+  const pendingRecipients = invites
+    .filter(
+      invite =>
+        invite.type === InviteType.Organization &&
+        invite.remaining > 0 &&
+        (!invite.expiresAt || new Date(invite.expiresAt) > now)
+    )
+    .flatMap(invite => invite.recipients?.pending ?? []);
 
-  if (totalUsers + pending + params.recipients.length > organization.seats) {
-    throw new BadRequestError('Organization is full');
-  }
-
-  return organization;
+  return { organization, pendingRecipients };
 };
