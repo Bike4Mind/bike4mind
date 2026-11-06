@@ -48,6 +48,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeySco
         }
       );
 
+      res.setHeader('Cache-Control', 'private, no-store');
       return res.json(result);
     })
   );
