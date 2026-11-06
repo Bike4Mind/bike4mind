@@ -25,8 +25,9 @@ describe('creditGrantNeedsApproval', () => {
   it("adds this admin's grants over the expiry window to the threshold check", async () => {
     mocks.sum.mockResolvedValue(600);
     expect(await creditGrantNeedsApproval(500, 'admin1')).toBe(POLICY);
-    const [actor, since] = mocks.sum.mock.calls[0] as [string, Date];
+    const [actor, since, options] = mocks.sum.mock.calls[0] as [string, Date, { excludeApproved?: boolean }];
     expect(actor).toBe('admin1');
+    expect(options).toEqual({ excludeApproved: true });
     expect(Date.now() - since.getTime()).toBeCloseTo(24 * 60 * 60 * 1000, -4);
     mocks.sum.mockResolvedValue(500);
     expect(await creditGrantNeedsApproval(500, 'admin1')).toBeNull();

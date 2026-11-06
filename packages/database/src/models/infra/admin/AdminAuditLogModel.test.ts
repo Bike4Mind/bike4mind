@@ -353,8 +353,33 @@ describe('AdminAuditLogRepository.countActions', () => {
       )
     );
 
+    await adminAuditLogRepository.append(
+      entry(
+        { action: 'user.bulk.suspended', details: { approval: { id: 'approval-1' } } },
+        new Date('2026-03-02T00:00:00Z')
+      )
+    );
+
     await expect(
       adminAuditLogRepository.countActions('admin-1', ['user.bulk.suspended', 'user.bulk.contained'], since)
     ).resolves.toBe(2);
+  });
+});
+
+describe('AdminAuditLogRepository.sumCreditsGranted excludeApproved', () => {
+  setupMongoTest();
+
+  it('skips grants run on an approval only when asked', async () => {
+    const since = new Date('2026-03-01T00:00:00Z');
+    const at = new Date('2026-03-02T00:00:00Z');
+    await adminAuditLogRepository.append(entry({ action: 'org.credits.granted', details: { credits: 100 } }, at));
+    await adminAuditLogRepository.append(
+      entry({ action: 'org.credits.granted', details: { credits: 900, approval: { id: 'approval-1' } } }, at)
+    );
+
+    await expect(adminAuditLogRepository.sumCreditsGranted('admin-1', since)).resolves.toBe(1000);
+    await expect(adminAuditLogRepository.sumCreditsGranted('admin-1', since, { excludeApproved: true })).resolves.toBe(
+      100
+    );
   });
 });

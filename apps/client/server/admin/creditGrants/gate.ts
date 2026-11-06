@@ -13,6 +13,7 @@ export async function creditGrantNeedsApproval(credits: number, actorUserId: str
   if (!policy.enabled || credits <= 0) return null;
   if (credits > policy.creditThreshold) return policy;
   const since = new Date(Date.now() - policy.expiryHours * HOUR_MS);
-  const recent = await adminAuditLogRepository.sumCreditsGranted(actorUserId, since);
+  // Grants this admin ran as the approver of someone else's request were already reviewed.
+  const recent = await adminAuditLogRepository.sumCreditsGranted(actorUserId, since, { excludeApproved: true });
   return credits + recent > policy.creditThreshold ? policy : null;
 }

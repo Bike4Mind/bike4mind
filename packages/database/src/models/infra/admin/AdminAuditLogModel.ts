@@ -485,14 +485,24 @@ class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository 
 
   async countActions(actorUserId: string, actions: readonly AdminAuditAction[], since: Date): Promise<number> {
     return this.auditLogModel
-      .countDocuments({ 'actor.userId': actorUserId, action: { $in: [...actions] }, occurredAt: { $gte: since } })
+      .countDocuments({
+        'actor.userId': actorUserId,
+        action: { $in: [...actions] },
+        occurredAt: { $gte: since },
+        'details.approval': { $exists: false },
+      })
       .maxTimeMS(LIST_QUERY_MAX_TIME_MS);
   }
 
-  async sumCreditsGranted(actorUserId: string, since: Date): Promise<number> {
+  async sumCreditsGranted(
+    actorUserId: string,
+    since: Date,
+    options: { excludeApproved?: boolean } = {}
+  ): Promise<number> {
+    const approved = options.excludeApproved ? { 'details.approval': { $exists: false } } : {};
     const [total] = await this.auditLogModel
       .aggregate<{ credits: number }>([
-        { $match: { ...creditGrantsBy(actorUserId), occurredAt: { $gte: since } } },
+        { $match: { ...creditGrantsBy(actorUserId), occurredAt: { $gte: since }, ...approved } },
         { $group: { _id: null, credits: { $sum: '$details.credits' } } },
       ])
       .option({ maxTimeMS: LIST_QUERY_MAX_TIME_MS });
