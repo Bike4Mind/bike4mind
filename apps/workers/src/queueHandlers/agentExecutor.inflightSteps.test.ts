@@ -106,6 +106,9 @@ describe('processExecution in-flight step wiring', () => {
   });
 
   it('drains the persister in a finally, so every return path waits for pending writes', () => {
-    expect(processExecution).toMatch(/\} finally \{\n\s+await inflightSteps\.drain\(\);\n\s+\}\n\}\n*$/);
+    // First in the outer finally; the loop dispatch request after it may follow.
+    expect(processExecution).toMatch(
+      /\} finally \{\n\s+await inflightSteps\.drain\(\);\n(?:\s+\/\/.*\n)*\s+if \(loopId\) await requestLoopDispatch\(loopId, logger\);\n\s+\}\n\}\n*$/
+    );
   });
 });
