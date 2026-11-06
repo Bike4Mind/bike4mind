@@ -378,4 +378,27 @@ describe('copied file provenance', () => {
     await expect(handler(req('me'), makeRes().res)).rejects.toBe(refusal);
     expect(h.findById).not.toHaveBeenCalled();
   });
+
+  it('keeps promptTruncated on the generation carried to a share recipient', async () => {
+    h.findOne.mockResolvedValue({
+      ...ORIGINAL,
+      userId: 'owner',
+      sourceMetadata: {
+        ...ORIGINAL.sourceMetadata,
+        generation: { ...ORIGINAL.sourceMetadata.generation, promptTruncated: true },
+      },
+    });
+
+    await handler(req('me'), makeRes().res);
+
+    const [params] = h.saveGeneratedAsset.mock.calls[0];
+    expect(params.generation.promptTruncated).toBe(true);
+  });
+
+  it('fails with an internal error when the save is refused without a cause', async () => {
+    h.saveGeneratedAsset.mockResolvedValue({ saved: false });
+
+    await expect(handler(req('me'), makeRes().res)).rejects.toThrow('Failed to save the image to your files');
+    expect(h.findById).not.toHaveBeenCalled();
+  });
 });
