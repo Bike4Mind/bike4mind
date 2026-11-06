@@ -5,7 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { AbuseAssessmentRow } from '@client/app/hooks/data/shadowDetections';
-import { ShadowDetectionAssessmentPanel } from './ShadowDetectionAssessmentPanel';
+import type { AbuseAssessmentAccountProfile } from '@bike4mind/common';
+import { ShadowDetectionAssessmentPanel, describeAccountProfile } from './ShadowDetectionAssessmentPanel';
 
 const hooks = vi.hoisted(() => ({
   useAbuseAssessments: vi.fn(),
@@ -49,6 +50,26 @@ const makeItem = (overrides: Partial<AbuseAssessmentRow> = {}): AbuseAssessmentR
     assessedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   }) as unknown as AbuseAssessmentRow;
+
+const makeProfile = (overrides: Partial<AbuseAssessmentAccountProfile> = {}): AbuseAssessmentAccountProfile => ({
+  signupMethod: 'otc',
+  signupNetwork: { asnKnown: true, hosting: false, datacenter: false, anonymousIp: null, ja4Present: true },
+  email: { plusAddressed: true, randomLookingPlusTag: true, generatedLocalPart: false, consumerMailDomain: true },
+  minutesToTwoFactor: 4,
+  minutesToFirstSpend: 1200,
+  spend: { totalCredits: 1500, byModel: [{ model: null, creditShare: 0.5, events: 3, creditsPerEvent: 250 }] },
+  linkedAccounts: {
+    windowHours: 72,
+    total: 5,
+    blocked: 1,
+    sharedSignupIp: 4,
+    sharedJa4: 2,
+    sharedMailbox: 0,
+    sharedMailDomain: 0,
+    truncated: true,
+  },
+  ...overrides,
+});
 
 const mutateAsync = vi.fn();
 
@@ -102,5 +123,56 @@ describe('ShadowDetectionAssessmentPanel', () => {
     expect((await screen.findByTestId('shadow-detection-assessment-outcome')).textContent).toContain(
       'off in admin settings'
     );
+  });
+
+  it('shows each account profile above the raw evidence', () => {
+    hooks.useAbuseAssessments.mockReturnValue({
+      data: [
+        makeItem({ evidenceVersion: 2, featureSummary: { accounts: [{ ref: 'acct_1', profile: makeProfile() }] } }),
+      ],
+      isPending: false,
+      error: null,
+    });
+    renderPanel();
+    const text = screen.getByTestId('shadow-detection-assessment-profiles').textContent;
+    expect(text).toContain('acct_1');
+    expect(text).toContain('Linked within 72h: 5+');
+  });
+
+  it('renders no profiles for a v1 summary or a profile that does not parse', () => {
+    hooks.useAbuseAssessments.mockReturnValue({
+      data: [makeItem({ featureSummary: { accounts: [{ ref: 'acct_1' }, { ref: 'acct_2', profile: { x: 1 } }] } })],
+      isPending: false,
+      error: null,
+    });
+    renderPanel();
+    expect(screen.queryByTestId('shadow-detection-assessment-profiles')).toBeNull();
+  });
+});
+
+describe('describeAccountProfile', () => {
+  it('words the signup, email, timing, spend and link facts', () => {
+    expect(describeAccountProfile(makeProfile())).toEqual([
+      'Signup: email code; hosting/VPN network no, anonymous IP unknown, JA4 present',
+      'Email: plus-addressed, random-looking tag, webmail domain',
+      'Two-factor: 4 min after signup',
+      'First spend: 1,200 min after signup',
+      'Spend: 1,500 credits - no model 50% (250/call)',
+      'Linked within 72h: 5+ (1 blocked; signup IP 4, JA4 2, mailbox 0, mail domain 0)',
+    ]);
+  });
+
+  it('omits facts the profile does not have', () => {
+    const lines = describeAccountProfile(
+      makeProfile({
+        signupMethod: 'oauth',
+        email: null,
+        minutesToTwoFactor: null,
+        minutesToFirstSpend: null,
+        spend: null,
+        linkedAccounts: null,
+      })
+    );
+    expect(lines).toEqual(['Signup: oauth; hosting/VPN network no, anonymous IP unknown, JA4 present']);
   });
 });

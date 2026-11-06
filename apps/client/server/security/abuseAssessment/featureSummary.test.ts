@@ -175,6 +175,37 @@ describe('buildFeatureSummary', () => {
     ).toThrow();
   });
 
+  it('fits a full set of accounts, each with evidence and a full profile, without omitting any', () => {
+    const full = {
+      ...profile,
+      spend: {
+        ...profile.spend!,
+        byModel: Array.from({ length: 5 }, (_, i) => ({
+          model: `model-${i}`,
+          creditShare: 0.2,
+          events: 10,
+          creditsPerEvent: 12.5,
+        })),
+      },
+    };
+    const userIds = Array.from({ length: ABUSE_ASSESSMENT_MAX_ACCOUNTS }, (_, index) =>
+      (0x65f0000000000000000000a0n + BigInt(index)).toString(16)
+    );
+    const summary = buildFeatureSummary({
+      detection: detection({ userIds }),
+      accounts: userIds.map(id => ({
+        id,
+        createdAt: new Date('2026-11-01T10:00:00Z'),
+        summary: evidence(),
+        profile: full,
+      })),
+      group: null,
+    });
+    expect(summary.accountsOmitted).toBe(0);
+    expect(summary.accounts).toHaveLength(ABUSE_ASSESSMENT_MAX_ACCOUNTS);
+    expect(JSON.stringify(summary).length).toBeLessThan(24_000);
+  });
+
   it('caps the accounts and counts the rest as omitted', () => {
     const userIds = Array.from({ length: ABUSE_ASSESSMENT_MAX_ACCOUNTS + 5 }, (_, index) =>
       (0x65f0000000000000000000a0n + BigInt(index)).toString(16)

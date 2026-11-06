@@ -225,6 +225,10 @@ describe('young-account spend shadow detection recording', () => {
     expect(mocks.record).toHaveBeenCalledWith(
       expect.objectContaining({ summary: expect.stringContaining('links to the other listed spenders unknown') })
     );
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('link facts were not read'),
+      expect.objectContaining({ error: expect.any(Error) })
+    );
   });
 
   it('records one detection per listed account, claimed per account and window', async () => {
