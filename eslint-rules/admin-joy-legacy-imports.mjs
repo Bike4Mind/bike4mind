@@ -97,7 +97,6 @@ export default {
   'Users/Views/RecentActivityView.tsx': [[1, '4761ad3c8a441a88']],
   'VoiceSettingsTab.tsx': [[2, '32f438bd778335d7']],
   'WebhookAuditLogs/index.tsx': [[3, '22653ab828d91b71']],
-  'WorldTime.tsx': [[2, '7074f93d317f3741']],
   'email/EmailActivityHistory.tsx': [[2, '5d7be40ee2063946']],
   'email/EmailJobDetail.tsx': [[2, '81717d4fa42f09a7']],
   'email/EmailJobsPanel.tsx': [[2, '5aa722f629a194a4']],
