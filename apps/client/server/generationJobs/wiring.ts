@@ -26,6 +26,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
+import { recordInsufficientCredits } from '@server/billing/userLimitEvents';
 import { Logger } from '@bike4mind/observability';
 import { modelDiscoveryService } from '@bike4mind/services';
 import { GenerationJobEngine } from '@bike4mind/services/generationJobs';
@@ -393,6 +394,7 @@ export const getVideoJobDeps = (): VideoJobDeps => {
       organizations: organizationRepository,
       creditTransactions: creditTransactionRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+      onInsufficientCredits: recordInsufficientCredits,
     },
     enqueue: enqueueGenerationJob,
     recordUsage,
@@ -422,6 +424,7 @@ export const getMusicJobDeps = (): MusicJobDeps => {
       organizations: organizationRepository,
       creditTransactions: creditTransactionRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+      onInsufficientCredits: recordInsufficientCredits,
     },
     enqueue: enqueueGenerationJob,
     recordUsage: recordMusicUsage,

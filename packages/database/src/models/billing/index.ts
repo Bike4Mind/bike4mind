@@ -19,3 +19,4 @@ export * from './StripeDisputeModel';
 export * from './newAccountSpendCapAdapters';
 export * from './HeldCreditRewardModel';
 export * from './SpendAlertModel';
+export * from './UserLimitEventModel';

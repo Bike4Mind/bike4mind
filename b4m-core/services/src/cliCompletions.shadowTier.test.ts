@@ -60,6 +60,7 @@ function buildDb(
     } as any,
     usageEvents: { record: vi.fn().mockResolvedValue(undefined) } as any,
     organizations: {} as any,
+    recordLimitEvent: vi.fn().mockResolvedValue(undefined),
     cache: {
       tryIncrementWithinLimitFixedWindow: vi
         .fn()
@@ -166,6 +167,31 @@ describe('executeCompletion for a restricted-tier caller', () => {
     expect(outOfCredits.code).toBe('insufficient_credits');
     expect(errorShape(overCap)).toEqual(errorShape(outOfCredits));
     expect(h.complete).not.toHaveBeenCalled();
+  });
+
+  it('records the daily-cap refusal on the user timeline', async () => {
+    const db = buildDb(restricted, { cacheSuccess: false });
+
+    await run(db).catch(() => undefined);
+
+    expect(db.recordLimitEvent).toHaveBeenCalledTimes(1);
+    expect(db.recordLimitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user1',
+        kind: 'insufficient_credits',
+        model: 'premium-model',
+        details: expect.objectContaining({ reason: 'restricted_tier_token_cap' }),
+      })
+    );
+  });
+
+  it('still throws the out-of-credits error when recording the daily-cap refusal fails', async () => {
+    const db = buildDb(restricted, { cacheSuccess: false });
+    db.recordLimitEvent.mockRejectedValue(new Error('timeline write failed'));
+
+    const err = await run(db).catch(e => e);
+
+    expect(err.code).toBe('insufficient_credits');
   });
 
   describe('credit pricing', () => {

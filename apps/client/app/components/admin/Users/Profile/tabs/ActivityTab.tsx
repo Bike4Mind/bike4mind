@@ -1,20 +1,30 @@
 import React, { useMemo, useState } from 'react';
 import { Box, Button, Input, Stack, Typography } from '@mui/joy';
 import { useNavigate, useSearch } from '@tanstack/react-router';
-import { USER_TIMELINE_TYPES, type AuditEntry } from '@bike4mind/common';
+import {
+  USER_TIMELINE_CATEGORIES,
+  USER_TIMELINE_CATEGORY_LABELS,
+  USER_TIMELINE_TYPES,
+  type AuditEntry,
+} from '@bike4mind/common';
 import { useUserTimeline } from '@client/app/hooks/data/adminUserTimeline';
 import { AuditEntryDrawer } from '@client/app/components/admin/AuditLog/shared';
 import { EmptyState, ErrorState, SectionCard, ToggleChipGroup } from '../../../shared';
 import {
   activityFiltersFromSearch,
   activitySearchFromFilters,
+  categoriesOfTypes,
+  typesOfCategories,
   type ActivityFilters,
   type ActivitySearch,
 } from '../activitySearch';
 import { TimelineList, TimelineSkeleton } from './TimelineList';
-import { TIMELINE_TYPE_LABELS, timelineItem } from './timelineItems';
+import { timelineItem } from './timelineItems';
 
-const TYPE_OPTIONS = USER_TIMELINE_TYPES.map(type => ({ value: type, label: TIMELINE_TYPE_LABELS[type] }));
+export const CATEGORY_OPTIONS = USER_TIMELINE_CATEGORIES.map(category => ({
+  value: category,
+  label: USER_TIMELINE_CATEGORY_LABELS[category],
+}));
 
 type ActivityTimelineProps = {
   userId: string;
@@ -62,7 +72,7 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
       ) : (
         <EmptyState
           title="No activity yet"
-          description="Sign-ins, usage, credits and admin changes appear here."
+          description="Spend, limits, sign-ins, payments and admin changes appear here."
           action={null}
         />
       );
@@ -77,9 +87,9 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
         body="custom"
         action={
           <ToggleChipGroup
-            options={TYPE_OPTIONS}
-            value={filters.types}
-            onChange={types => onFiltersChange({ ...filters, types })}
+            options={CATEGORY_OPTIONS}
+            value={categoriesOfTypes(filters.types)}
+            onChange={categories => onFiltersChange({ ...filters, types: typesOfCategories(categories) })}
             aria-label="Show activity from"
             data-testid="user-timeline-filter-type"
           />
