@@ -532,6 +532,7 @@ export function ChatShell({
           if (!current()) return;
           setStoredDefaults(stored => new Map(stored).set(defaultsModelId, settings ?? null));
           clearDefaultsReadFailure(defaultsSessionId);
+          // Also drop this model's failures stored for other chats: the read they report has since succeeded.
           setDefaultsReadFailures(failures => {
             const next = new Map(failures);
             for (const [id, failure] of failures) if (failure.modelId === defaultsModelId) next.delete(id);
