@@ -917,6 +917,12 @@ export const OrchestrationDefaultsSchema = z.object({
   dagEnabled: z.boolean().default(true),
   /** LLM intent-classifier configuration. */
   intentClassifier: IntentClassifierConfigSchema.default(IntentClassifierConfigSchema.parse({})),
+  /**
+   * What the agent executor does when a run's final answer follows a below-threshold iteration:
+   * `annotate` emits `low_confidence_completion` and completes, `block` also pauses for review,
+   * `off` does neither. Omitted => `annotate`.
+   */
+  lowConfidenceCompletion: z.enum(['block', 'annotate', 'off']).optional(),
 });
 
 export type OrchestrationDefaults = z.infer<typeof OrchestrationDefaultsSchema>;
