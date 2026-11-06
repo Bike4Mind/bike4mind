@@ -69,7 +69,12 @@ vi.mock('@bike4mind/server-utils/decisions/providers', () => ({
   resolveCallableDecisionProviders: vi.fn(),
 }));
 
-import { assessShadowDetection, replayAbuseAssessments, sweepAbuseAssessments } from './abuseAssessment';
+import {
+  assessShadowDetection,
+  replayAbuseAssessments,
+  summarizeDetection,
+  sweepAbuseAssessments,
+} from './abuseAssessment';
 import { collectRequestActivity } from './requestActivity';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
@@ -438,5 +443,40 @@ describe('replayAbuseAssessments', () => {
       rows: [expect.objectContaining({ exampleId: DETECTION_ID, label: 'confirmed_abuse', result: 'abuse' })],
     });
     expect(mocks.save).not.toHaveBeenCalled();
+  });
+});
+
+describe('summarizeDetection', () => {
+  const profile = {
+    signupMethod: 'email' as const,
+    signupNetwork: { asnKnown: true, hosting: false, datacenter: false, anonymousIp: false, ja4Present: false },
+    email: null,
+    minutesToTwoFactor: null,
+    minutesToFirstSpend: null,
+    spend: null,
+    linkedAccounts: null,
+  };
+  const summaries = [{ id: '65f0000000000000000000a1', createdAt: new Date('2026-11-01T10:00:00Z'), summary: null }];
+
+  it('attaches each loaded profile to its account', async () => {
+    mocks.findSummaries.mockResolvedValue(summaries);
+    const summary = await summarizeDetection(detection, logger, {
+      loadAccountProfiles: async () => new Map([['65f0000000000000000000a1', profile]]),
+    });
+    expect(summary.accounts[0].profile).toEqual(profile);
+  });
+
+  it('assesses without profiles, and warns, when the profile load fails', async () => {
+    mocks.findSummaries.mockResolvedValue(summaries);
+    const summary = await summarizeDetection(detection, logger, {
+      loadAccountProfiles: async () => {
+        throw new Error('timeout');
+      },
+    });
+    expect(summary.accounts[0].profile).toBeNull();
+    expect((logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
+      expect.stringContaining('account profiles failed'),
+      expect.objectContaining({ detectionId: DETECTION_ID, errorName: 'Error' })
+    );
   });
 });

@@ -465,11 +465,13 @@ describe('alertSignupNetworkBurst', () => {
     expect(mocks.recordShadowDetection).toHaveBeenCalledTimes(2);
   });
 
-  it('treats a failed corroboration read as uncorroborated and never throws', async () => {
+  it('treats a failed corroboration read as uncorroborated, warns, and never throws', async () => {
+    const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
     mocks.countRecentSignups.mockResolvedValue({ ipSignups: 2, prefixSignups: null, asnSignups: null });
     mocks.findRecentSignupsOnIp.mockRejectedValue(new Error('db down'));
     await expect(alertSignupNetworkBurst({ network: CONSUMER, userId: 'u1', method: 'otc' })).resolves.toBeUndefined();
     expect(mocks.recordShadowDetection).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Corroboration read failed'), expect.anything());
   });
 
   it('never writes to the account, its keys or its credits', async () => {
@@ -617,6 +619,23 @@ describe('readIpCorroboration', () => {
         { id: 'u0', email: 'b@gmail.com' },
       ])
     ).toEqual([]);
+  });
+
+  it('rejects when the account or spend read fails, so the caller can fall back', async () => {
+    const siblings = [{ userId: 's1', ja4: null }];
+    const input = { network: { ip: '198.51.100.4', ja4: null }, userId: 'u1', ...window };
+    await expect(
+      readIpCorroboration({
+        ...input,
+        deps: { ...deps({ siblings }), findEmails: vi.fn().mockRejectedValue(new Error('x')) },
+      })
+    ).rejects.toThrow('x');
+    await expect(
+      readIpCorroboration({
+        ...input,
+        deps: { ...deps({ siblings }), spendSince: vi.fn().mockRejectedValue(new Error('y')) },
+      })
+    ).rejects.toThrow('y');
   });
 
   it('reads nothing further when the IP has no earlier signup', async () => {
