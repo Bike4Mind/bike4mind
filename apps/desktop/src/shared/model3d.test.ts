@@ -213,8 +213,31 @@ describe('partTreeError', () => {
     [part('knob', { metalness: 1.5 }), 'metalness that is not a number from 0 to 1'],
     [part('knob', { roughness: Number.NaN }), 'roughness that is not a number from 0 to 1'],
     [part('knob', { smooth: 'yes' as unknown as boolean }), 'smooth that is not true or false'],
+    [part('knob', { clearcoat: 2 }), 'clearcoat that is not a number from 0 to 1'],
+    [part('knob', { sheen: -0.1 }), 'sheen that is not a number from 0 to 1'],
+    [part('knob', { transmission: Number.NaN }), 'transmission that is not a number from 0 to 1'],
+    [part('knob', { ior: 0.9 }), 'ior that is not a number from 1 to 2.333'],
+    [part('knob', { ior: 3 }), 'ior that is not a number from 1 to 2.333'],
+    [part('knob', { thickness: -1 }), 'thickness that is not a number of 0 or more'],
+    [
+      part('knob', { emissiveIntensity: Number.POSITIVE_INFINITY }),
+      'emissiveIntensity that is not a number of 0 or more',
+    ],
+    [part('knob', { emissive: 'orange' }), 'emissive that is not a #rrggbb colour'],
+    [part('knob', { emissive: 7 as unknown as string }), 'emissive that is not a #rrggbb colour'],
   ])('refuses a material %#', (bad, message) => {
     expect(partTreeError([bad])).toContain(message);
+  });
+
+  it('accepts glass, varnish, cloth and a glowing part', () => {
+    expect(
+      partTreeError([
+        part('glass', { transmission: 1, ior: 1.5, thickness: 2, roughness: 0.05 }),
+        part('lid', { clearcoat: 1 }),
+        part('cushion', { sheen: 0.8 }),
+        part('lamp', { emissive: '#FFAA00', emissiveIntensity: 4 }),
+      ])
+    ).toBeNull();
   });
 
   it('accepts a metal, smooth part', () => {

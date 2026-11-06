@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import {
@@ -14,6 +13,7 @@ import {
   type ModelUnits,
   type ModelView,
 } from '@shared/model3d';
+import { enableShadows, ModelComposer, ModelStage } from './modelStage';
 
 /**
  * three.js side of the model pane: meshes from the sandboxed engine become a scene, exports and
@@ -41,6 +41,48 @@ function shadedGeometry(geometry: THREE.BufferGeometry, smooth: boolean, units: 
   return toCreasedNormals(geometry.scale(toMm, toMm, toMm), SMOOTH_CREASE).scale(1 / toMm, 1 / toMm, 1 / toMm);
 }
 
+/** Part colours are authored as sRGB hex, like every colour picker; three converts them to linear. */
+function srgb(hex: string): THREE.Color {
+  return new THREE.Color().setStyle(hex, THREE.SRGBColorSpace);
+}
+
+/**
+ * glTF PBR plus the KHR material extensions GLTFExporter writes: clearcoat, sheen, transmission
+ * with ior and volume thickness, and emissive strength. Unset fields keep three's defaults, so a
+ * part that sets none of them exports as plain metallic-roughness.
+ */
+export function partMaterial(part: ModelPartMesh): THREE.MeshPhysicalMaterial {
+  const color = srgb(part.color || DEFAULT_PART_COLOR);
+  const material = new THREE.MeshPhysicalMaterial({
+    color,
+    flatShading: !part.smooth,
+    roughness: part.roughness ?? 0.75,
+    metalness: part.metalness ?? 0.05,
+  });
+  material.name = part.name;
+  if (part.clearcoat !== undefined) {
+    material.clearcoat = part.clearcoat;
+    material.clearcoatRoughness = 0.08;
+  }
+  if (part.sheen !== undefined && part.sheen > 0) {
+    // glTF has no sheen strength, only a colour: the part's own, scaled by `sheen`, is that colour.
+    material.sheen = 1;
+    material.sheenColor.copy(color).multiplyScalar(part.sheen);
+    material.sheenRoughness = 0.6;
+  }
+  if (part.transmission !== undefined) material.transmission = part.transmission;
+  if (part.ior !== undefined) material.ior = part.ior;
+  if (part.thickness !== undefined) material.thickness = part.thickness;
+  if (part.emissive !== undefined) {
+    material.emissive.copy(srgb(part.emissive));
+    material.emissiveIntensity = part.emissiveIntensity ?? 1;
+  }
+  // The viewer's pick highlight borrows emissive, then puts these back.
+  material.userData.emissive = material.emissive.getHex(THREE.LinearSRGBColorSpace);
+  material.userData.emissiveIntensity = material.emissiveIntensity;
+  return material;
+}
+
 /**
  * The object the viewer, exports and screenshots share. `userData.units` records the model units.
  *
@@ -59,13 +101,7 @@ export function buildModelObject(parts: ModelPartMesh[], units: ModelUnits): THR
     geometry.setAttribute('position', new THREE.BufferAttribute(part.positions.slice(), 3));
     geometry.setIndex(new THREE.BufferAttribute(part.indices, 1));
     geometry.translate(-pivot[0], -pivot[1], -pivot[2]);
-    const material = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(part.color || DEFAULT_PART_COLOR),
-      flatShading: !part.smooth,
-      roughness: part.roughness ?? 0.75,
-      metalness: part.metalness ?? 0.05,
-    });
-    material.name = part.name;
+    const material = partMaterial(part);
     const mesh = new THREE.Mesh(shadedGeometry(geometry, part.smooth === true, units), material);
     mesh.name = part.name;
     return mesh;
@@ -277,6 +313,20 @@ function bakeTopTransforms(root: THREE.Object3D): void {
 }
 
 /**
+ * KHR_materials_volume measures thickness in the mesh's own units, which the bake turns into
+ * metres. Materials are shared with the viewer's object by clone(), so each is copied first.
+ */
+function scaleThickness(root: THREE.Object3D, factor: number): void {
+  root.traverse(node => {
+    if (!(node instanceof THREE.Mesh) || !(node.material instanceof THREE.MeshPhysicalMaterial)) return;
+    if (node.material.thickness === 0) return;
+    const material = node.material.clone();
+    material.thickness *= factor;
+    node.material = material;
+  });
+}
+
+/**
  * GLB in metres and Y-up (glTF's convention), one node and material per part, pivots kept. Always
  * in the modelled pose, whatever the pane's joint sliders show, plus one animation clip per joint.
  */
@@ -284,7 +334,10 @@ export async function exportGlb(root: THREE.Object3D): Promise<Uint8Array> {
   const scene = new THREE.Scene();
   const copy = root.clone(true);
   poseJoints(copy, {});
-  if (copy.userData.units === 'mm') copy.scale.setScalar(0.001);
+  if (copy.userData.units === 'mm') {
+    copy.scale.setScalar(0.001);
+    scaleThickness(copy, 0.001);
+  }
   bakeTopTransforms(copy);
   scene.add(copy);
   // TRS rather than a matrix: glTF forbids `matrix` on a node an animation targets, and these
@@ -304,7 +357,7 @@ export async function loadAsset(kind: Exclude<ModelKind, 'model'>, bytes: Uint8A
     geometry.computeVertexNormals();
     const mesh = new THREE.Mesh(
       geometry,
-      new THREE.MeshStandardMaterial({ color: DEFAULT_PART_COLOR, flatShading: true, roughness: 0.75 })
+      new THREE.MeshPhysicalMaterial({ color: srgb(DEFAULT_PART_COLOR), flatShading: true, roughness: 0.75 })
     );
     const model = new THREE.Group();
     model.rotation.x = -Math.PI / 2;
@@ -370,35 +423,18 @@ export function frameCamera(
   return sphere.center.clone();
 }
 
-/**
- * Lights plus a neutral studio environment. Metal has no colour of its own, only what it reflects,
- * so without an environment a `metalness: 1` part renders near black; engines and glTF viewers
- * always supply one. Returns the environment texture for the caller to dispose with the renderer.
- */
-export function addLights(scene: THREE.Scene, renderer: THREE.WebGLRenderer): THREE.Texture {
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  const environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-  pmrem.dispose();
-  scene.environment = environment;
-  // The environment already lights every side, so the direct lights only add shape and highlights.
-  scene.environmentIntensity = 0.7;
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x444455, 0.8));
-  const key = new THREE.DirectionalLight(0xffffff, 2.2);
-  key.position.set(3, 5, 4);
-  scene.add(key);
-  const fill = new THREE.DirectionalLight(0xffffff, 0.6);
-  fill.position.set(-4, 2, -3);
-  scene.add(fill);
-  return environment;
-}
-
 const TILE = 512;
+
+/** Each tile renders at twice its size and is drawn down, which smooths edges the AO pass leaves. */
+const TILE_SUPERSAMPLE = 2;
 
 /**
  * One labelled tile per view, laid out in a grid, as a PNG. Rendered off screen with a renderer of
- * its own, so it works whether or not the pane is visible.
+ * its own, so it works whether or not the pane is visible, and through the pane's stage and
+ * composer (modelStage.ts), so the agent sees the lighting, shadows and AO the user does.
+ * Joints are posed at `angles` (degrees by part name; the modelled pose when absent), not as the
+ * pane shows them.
  */
-/** Joints are posed at `angles` (degrees by part name; the modelled pose when absent), not as the pane shows them. */
 export async function renderContactSheet(
   root: THREE.Object3D,
   views: ModelView[],
@@ -408,38 +444,45 @@ export async function renderContactSheet(
   const columns = views.length <= 2 ? views.length : views.length <= 4 ? 2 : 3;
   const rows = Math.ceil(views.length / columns);
   const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
+  const stage = new ModelStage(scene, renderer);
+  const composer = new ModelComposer(renderer, scene, camera);
   try {
-    renderer.setPixelRatio(1);
+    renderer.setPixelRatio(TILE_SUPERSAMPLE);
     renderer.setSize(TILE, TILE, false);
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(dark ? '#1f2329' : '#f4f5f7');
-    const environment = addLights(scene, renderer);
+    composer.setSize(TILE, TILE, TILE_SUPERSAMPLE);
     const subject = root.clone(true);
     poseJoints(subject, angles);
+    enableShadows(subject);
     scene.add(subject);
-    const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
+    // Fitted to the pose shown, so an open lid's shadow stays inside the shadow camera.
+    stage.fit(subject, { dark, grid: false });
+    composer.fit(stage.bounds);
     const sheet = document.createElement('canvas');
     sheet.width = columns * TILE;
     sheet.height = rows * TILE;
     const context = sheet.getContext('2d');
     if (!context) throw new Error('No 2D canvas available for the screenshot.');
+    context.imageSmoothingQuality = 'high';
     views.forEach((view, index) => {
       frameCamera(camera, subject, VIEW_DIRECTIONS[view]);
-      renderer.render(scene, camera);
+      composer.render();
       const x = (index % columns) * TILE;
       const y = Math.floor(index / columns) * TILE;
-      context.drawImage(renderer.domElement, x, y);
+      context.drawImage(renderer.domElement, x, y, TILE, TILE);
       context.font = 'bold 22px sans-serif';
       context.fillStyle = dark ? '#e6e8eb' : '#22262b';
       context.fillText(view.toUpperCase(), x + 14, y + 32);
       context.strokeStyle = dark ? '#3a4048' : '#d5d8dd';
       context.strokeRect(x + 0.5, y + 0.5, TILE - 1, TILE - 1);
     });
-    environment.dispose();
     const blob = await new Promise<Blob | null>(resolve => sheet.toBlob(resolve, 'image/png'));
     if (!blob) throw new Error('The screenshot could not be encoded.');
     return new Uint8Array(await blob.arrayBuffer());
   } finally {
+    composer.dispose();
+    stage.dispose();
     renderer.dispose();
     renderer.forceContextLoss();
   }

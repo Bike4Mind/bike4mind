@@ -43,7 +43,24 @@ export type ModelPartMesh = {
   roughness?: number;
   /** Shades curved faces smoothly (a barrel, a knob) while keeping sharp edges; absent means faceted. */
   smooth?: boolean;
+  /** 0..1: a glossy varnish layer over the base (lacquered wood, car paint). Absent means none. */
+  clearcoat?: number;
+  /** 0..1: the soft rim glow of cloth and velvet, tinted by the part's colour. Absent means none. */
+  sheen?: number;
+  /** 0..1: how much light passes through (1 for clear glass or water). Absent means opaque. */
+  transmission?: number;
+  /** Index of refraction, 1..2.333 (water 1.33, glass 1.5, diamond 2.33). Absent means 1.5. */
+  ior?: number;
+  /** With `transmission`: how thick the material is, in model units, so refraction bends light. */
+  thickness?: number;
+  /** A colour (#rrggbb) the part glows with on its own (a lamp, an LED, embers). */
+  emissive?: string;
+  /** With `emissive`: how strongly it glows, 0 or more. Absent means 1. */
+  emissiveIntensity?: number;
 };
+
+/** glTF's KHR_materials_ior bounds three clamps to; outside them a renderer would disagree. */
+export const MAX_IOR = 2.333;
 
 export const MODEL_MOTIONS = ['turn', 'slide'] as const;
 export type ModelMotion = (typeof MODEL_MOTIONS)[number];
@@ -259,14 +276,28 @@ export function formatModelSummary(report: ModelBuildReport, glbPath?: string): 
 const isNumbers = (value: unknown, length: number): boolean =>
   Array.isArray(value) && value.length === length && value.every(Number.isFinite);
 
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+
+const inRange = (value: number, min: number, max: number): boolean =>
+  Number.isFinite(value) && value >= min && value <= max;
+
 function partMaterialError(part: ModelPartMesh): string | null {
-  for (const key of ['metalness', 'roughness'] as const) {
+  const name = `Part "${part.name}"`;
+  for (const key of ['metalness', 'roughness', 'clearcoat', 'sheen', 'transmission'] as const) {
     const value = part[key];
-    if (value !== undefined && !(Number.isFinite(value) && value >= 0 && value <= 1))
-      return `Part "${part.name}" has a ${key} that is not a number from 0 to 1.`;
+    if (value !== undefined && !inRange(value, 0, 1)) return `${name} has a ${key} that is not a number from 0 to 1.`;
   }
+  if (part.ior !== undefined && !inRange(part.ior, 1, MAX_IOR))
+    return `${name} has an ior that is not a number from 1 to ${MAX_IOR} (glass is 1.5).`;
+  for (const key of ['thickness', 'emissiveIntensity'] as const) {
+    const value = part[key];
+    if (value !== undefined && !inRange(value, 0, Number.MAX_VALUE))
+      return `${name} has a ${key} that is not a number of 0 or more.`;
+  }
+  if (part.emissive !== undefined && !(typeof part.emissive === 'string' && HEX_COLOR.test(part.emissive)))
+    return `${name} has an emissive that is not a #rrggbb colour.`;
   if (part.smooth !== undefined && typeof part.smooth !== 'boolean')
-    return `Part "${part.name}" has a smooth that is not true or false.`;
+    return `${name} has a smooth that is not true or false.`;
   return null;
 }
 
