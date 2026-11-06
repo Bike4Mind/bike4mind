@@ -123,8 +123,6 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
-  if (!(await payerCanFundSessionOperation({ payerId: payer.id, operation: 'session tagging', logger }))) return;
-
   logger.info(`Handling tagging job for session ${sessionId} (as user ${user.id})`);
 
   // Skip if session already has tags, unless it's been a while (duplicate-processing guard)
@@ -159,6 +157,9 @@ export const handler = withEventContext(async (event, logger) => {
     logger.info(`No quests found for session ${sessionId} - nothing to tag yet`);
     return;
   }
+
+  // Below the cheap exits above: the spider re-dispatches no-quest notebooks on every pass.
+  if (!(await payerCanFundSessionOperation({ payerId: payer.id, operation: 'session tagging', logger }))) return;
 
   const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
   logger.info(`Using operations model for tagging: ${modelInfo.name} (${modelInfo.backend})`);

@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   evaluate: vi.fn(),
   recordUsage: vi.fn(),
   payerCanFund: vi.fn(),
+  availableModels: vi.fn(),
 }));
 
 vi.mock('@workers/utils/eventContext', () => ({ withEventContext: (handler: unknown) => handler }));
@@ -25,6 +26,7 @@ vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
   mementoService: { findMostSimilarMemento: vi.fn() },
 }));
+vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: h.availableModels }));
 vi.mock('@bike4mind/services/llm', () => ({
   MementoEvaluationService: class {
     evaluate = h.evaluate;
@@ -91,8 +93,31 @@ describe('createMemento evaluation usage', () => {
     await run();
 
     expect(h.payerCanFund).toHaveBeenCalledWith(expect.objectContaining({ payerId: 'user-1' }));
-    expect(apiKeyService.getEffectiveLLMApiKeys).not.toHaveBeenCalled();
     expect(h.evaluate).not.toHaveBeenCalled();
     expect(h.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it("gates on the chat turn's model, not the operations model, resolved with the user's keys", async () => {
+    const apiKeyTable = { anthropic: 'key' };
+    vi.mocked(apiKeyService.getEffectiveLLMApiKeys).mockResolvedValueOnce(apiKeyTable as never);
+    const chatModel = { id: 'chat-model', freeToRun: true };
+    h.availableModels.mockResolvedValue([{ id: 'other-model' }, chatModel]);
+    h.payerCanFund.mockResolvedValue(false);
+
+    await run();
+
+    const [{ resolveModelInfo }] = h.payerCanFund.mock.calls[0];
+    await expect(resolveModelInfo()).resolves.toBe(chatModel);
+    expect(h.availableModels).toHaveBeenCalledExactlyOnceWith(apiKeyTable);
+  });
+
+  it('rejects the model resolution when the chat model is not in the catalog', async () => {
+    h.availableModels.mockResolvedValue([{ id: 'other-model' }]);
+    h.payerCanFund.mockResolvedValue(false);
+
+    await run();
+
+    const [{ resolveModelInfo }] = h.payerCanFund.mock.calls[0];
+    await expect(resolveModelInfo()).rejects.toThrow('chat-model');
   });
 });

@@ -38,6 +38,22 @@ describe('payerCanFundSessionOperation', () => {
     expect(logger.info).not.toHaveBeenCalled();
   });
 
+  it('forwards the model resolver so a free non-operations model can waive the refusal', async () => {
+    h.checkCredits.mockResolvedValue({ allowed: true });
+    const resolveModelInfo = vi.fn();
+
+    await payerCanFundSessionOperation({
+      payerId: 'payer-1',
+      operation: 'memento extraction',
+      resolveModelInfo,
+      logger: logger as unknown as Logger,
+    });
+
+    expect(h.checkCredits).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ userId: 'payer-1', operation: 'memento extraction', resolveModelInfo })
+    );
+  });
+
   it('returns false and logs the skip when the pre-flight refuses', async () => {
     h.checkCredits.mockResolvedValue({ allowed: false, reason: 'insufficient credits' });
 

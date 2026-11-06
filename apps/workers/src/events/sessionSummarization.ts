@@ -101,8 +101,6 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
-  if (!(await payerCanFundSessionOperation({ payerId: payer.id, operation: 'session summarization', logger }))) return;
-
   logger.info(`Handling summarization job for session ${sessionId} (as user ${userId ?? session.userId})`);
 
   const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
@@ -151,6 +149,9 @@ export const handler = withEventContext(async (event, logger) => {
     logger.debug(`No replayable quests to summarize for session ${sessionId}`);
     return;
   }
+
+  // After the nothing-to-summarize exits, so an idle notebook costs no billing reads.
+  if (!(await payerCanFundSessionOperation({ payerId: payer.id, operation: 'session summarization', logger }))) return;
 
   const content = replayableQuests
     .map(quest =>

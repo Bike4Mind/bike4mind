@@ -44,6 +44,11 @@ export interface SessionOperationalCreditPreflightArgs {
   operationCount: number;
   /** Named in the refusal message, e.g. 'session tagging'. */
   operation: string;
+  /**
+   * Resolves the model the queued call actually runs on, for work that does not use the operations
+   * model (memento extraction runs on the chat turn's model). Called only on a would-be refusal.
+   */
+  resolveModelInfo?: () => Promise<ModelInfo>;
   logger?: Logger;
 }
 
@@ -121,16 +126,17 @@ function settlesFreeForAnyVolume(modelInfo: ModelInfo): boolean {
  * rather than fail-opening like the reads above - those cannot produce a verdict at all without
  * succeeding, whereas here a verdict already exists and "priced" is the accurate default.
  */
-async function operationalSpendSettlesFree(logger?: Logger): Promise<boolean> {
+async function operationalSpendSettlesFree(
+  resolveModelInfo: (() => Promise<ModelInfo>) | undefined,
+  logger?: Logger
+): Promise<boolean> {
   try {
+    if (resolveModelInfo) return settlesFreeForAnyVolume(await resolveModelInfo());
     const { OperationsModelService } = await import('@bike4mind/server-utils/services/operationsModelService');
     const { modelInfo } = await OperationsModelService.getOperationsModel();
     return settlesFreeForAnyVolume(modelInfo);
   } catch (err) {
-    logger?.warn(
-      '[sessionOperationalCreditPreflight] failed to resolve the operations model; keeping the refusal',
-      err
-    );
+    logger?.warn('[sessionOperationalCreditPreflight] failed to resolve the model in play; keeping the refusal', err);
     return false;
   }
 }
@@ -195,6 +201,7 @@ export async function checkSessionOperationalCredits({
   userId,
   operationCount,
   operation,
+  resolveModelInfo,
   logger,
 }: SessionOperationalCreditPreflightArgs): Promise<SessionOperationalCreditVerdict> {
   if (operationCount <= 0) return { allowed: true };
@@ -296,12 +303,12 @@ export async function checkSessionOperationalCredits({
   // Last question before refusing, and only worth asking here: MIN_CREDITS_PER_OPERATION is a
   // nominal proxy for a cost that can legitimately be zero, and a 422 on free work is a
   // regression against the ungated behavior this replaced.
-  if (await operationalSpendSettlesFree(logger)) {
+  if (await operationalSpendSettlesFree(resolveModelInfo, logger)) {
     // warn, not info: a waived refusal is the designed path, but it is still a refusal this gate
     // declined to enforce, and the operations model being costless is worth seeing when someone
     // asks why a zero-balance account is running summaries.
     logger?.warn(
-      `[sessionOperationalCreditPreflight] waiving ${operation} refusal; the operations model settles free at any volume`
+      `[sessionOperationalCreditPreflight] waiving ${operation} refusal; its model settles free at any volume`
     );
     return { allowed: true };
   }

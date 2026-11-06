@@ -21,7 +21,8 @@ vi.mock('../creditService', () => ({
 
 import { recordOperationalUsage } from './recordOperationalUsage';
 
-const logger = { warn: vi.fn(), debug: vi.fn(), info: vi.fn() } as never;
+const loggerMock = { warn: vi.fn(), debug: vi.fn(), info: vi.fn(), error: vi.fn() };
+const logger = loggerMock as never;
 const user = { id: 'u1' } as never;
 
 function setToggles({ bill, enforce }: { bill: boolean; enforce: boolean }) {
@@ -81,6 +82,7 @@ const baseParams = {
 
 beforeEach(() => {
   deductMock.mockClear();
+  loggerMock.error.mockClear();
   getSettingsValueMock.mockReset();
 });
 
@@ -214,15 +216,36 @@ describe('recordOperationalUsage', () => {
     });
   });
 
-  it('still records the event when the deduction throws (billing must not block analytics)', async () => {
+  it('records the event as unbilled when the debit itself throws (billing must not block analytics)', async () => {
+    setToggles({ bill: true, enforce: true });
+    const record = vi.fn().mockResolvedValue(null);
+    const db = fullBillingDb(record, { user: 500 });
+    db.users.decrementCreditsFloored.mockRejectedValueOnce(new Error('db down'));
+
+    await recordOperationalUsage(baseParams, { db, logger });
+
+    expect(db.users.state.balance).toBe(500);
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 0 });
+  });
+
+  it('still reports the debit when the ledger write fails after the balance moved', async () => {
     setToggles({ bill: true, enforce: true });
     deductMock.mockRejectedValueOnce(new Error('ledger down'));
     const record = vi.fn().mockResolvedValue(null);
+    const db = fullBillingDb(record, { user: 500 });
 
-    await recordOperationalUsage(baseParams, { db: fullBillingDb(record), logger });
+    await recordOperationalUsage(baseParams, { db, logger });
 
+    expect(db.users.state.balance).toBe(400);
     expect(record).toHaveBeenCalledTimes(1);
-    expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 0 });
+    expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 100 });
+    expect(record.mock.calls[0][0]).not.toHaveProperty('writtenOffCredits');
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      expect.stringContaining('[OPERATIONAL_LEDGER_WRITE_FAILED]'),
+      expect.any(Error),
+      { holderId: 'u1', debited: 100 }
+    );
   });
 
   describe('free-tier holders', () => {
@@ -445,6 +468,22 @@ describe('recordOperationalUsage', () => {
       expect(db.users.decrementCreditsFloored).not.toHaveBeenCalled();
       expect(deductMock).not.toHaveBeenCalled();
       expect(record.mock.calls[0][0]).toMatchObject({ writtenOffCredits: 100 });
+    });
+
+    it('keeps per-member org usage on the partial debit of an organization pool', async () => {
+      setToggles({ bill: true, enforce: true });
+      const record = vi.fn().mockResolvedValue(null);
+      const db = fullBillingDb(record, { organization: 30 });
+      const organization = { id: 'org1' } as never;
+
+      await recordOperationalUsage({ ...baseParams, organization }, { db, logger });
+
+      expect(deductMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ organization, user, credits: 30 }),
+        expect.anything(),
+        { skipBalanceUpdate: true, currentCreditHolder: { currentCredits: 0 } }
+      );
+      expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 100, writtenOffCredits: 70 });
     });
   });
 });

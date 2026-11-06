@@ -198,7 +198,8 @@ export async function recordOperationalUsage(
             source: params.source ?? 'system',
             apiKeyId: params.apiKeyId,
           },
-          { creditTransactions: db.creditTransactions, users: db.users, organizations: db.organizations }
+          { creditTransactions: db.creditTransactions, users: db.users, organizations: db.organizations },
+          logger
         );
         creditsCharged = credits;
         writtenOffCredits = credits - settled;
@@ -273,7 +274,11 @@ type FlooredDebitParams = {
  * written off. Same floor as the voice and CLI settlements (decrementCreditsFloored). Resolves the
  * credits actually debited; the ledger row records that amount, not the full charge.
  */
-async function debitFlooredAtZero(params: FlooredDebitParams, db: OperationalBillingAdapters): Promise<number> {
+async function debitFlooredAtZero(
+  params: FlooredDebitParams,
+  db: OperationalBillingAdapters,
+  logger: Logger
+): Promise<number> {
   const { organization, user } = params;
   const holderId = organization ? organization.id : user.id;
   const holderRepository = organization ? db.organizations : db.users;
@@ -281,13 +286,22 @@ async function debitFlooredAtZero(params: FlooredDebitParams, db: OperationalBil
   const debited = await holderRepository.decrementCreditsFloored(holderId, params.credits);
   if (debited <= 0) return 0;
 
-  const holderAfterDebit = await holderRepository.findById(holderId);
-  if (!holderAfterDebit) throw new Error(`Credit holder ${holderId} disappeared after an operational debit`);
+  // The balance has already moved, so a failure from here on must not report the charge as unbilled:
+  // resolve `debited` regardless and flag the missing ledger row for reconciliation.
+  try {
+    const holderAfterDebit = await holderRepository.findById(holderId);
+    if (!holderAfterDebit) throw new Error(`Credit holder ${holderId} disappeared after an operational debit`);
 
-  await deductCreditsWithOrgSupport(
-    { type: 'text_generation_usage', ...params, organization: organization ?? null, credits: debited },
-    { db },
-    { skipBalanceUpdate: true, currentCreditHolder: holderAfterDebit }
-  );
+    await deductCreditsWithOrgSupport(
+      { type: 'text_generation_usage', ...params, organization: organization ?? null, credits: debited },
+      { db },
+      { skipBalanceUpdate: true, currentCreditHolder: holderAfterDebit }
+    );
+  } catch (err) {
+    logger.error('[OPERATIONAL_LEDGER_WRITE_FAILED] Balance debited but the ledger row was not written', err, {
+      holderId,
+      debited,
+    });
+  }
   return debited;
 }

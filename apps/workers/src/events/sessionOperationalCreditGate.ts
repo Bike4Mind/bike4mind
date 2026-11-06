@@ -1,31 +1,41 @@
+import type { ModelInfo } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { checkSessionOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
 
 /**
  * Balance gate for the session event handlers (auto-naming, summarization, tagging, context
- * summarization, mementos), run right before their operations-model call.
+ * summarization, mementos), run right before their model call.
  *
  * Most of these events are published downstream of a chat turn, and that turn's settlement can
- * leave the payer at exactly zero (the balance cap floors it there). The handler's charge settles
- * after the call through `recordOperationalUsage`, which never checks the balance, so without this
- * gate a zero-balance payer is pushed negative by the follow-up work. The request-side pre-flight
+ * leave the payer at exactly zero (the balance cap floors it there). `recordOperationalUsage`
+ * floors the follow-up charge at zero, so without this gate the work would still run and its cost
+ * would be written off. The request-side pre-flight
  * (`apps/client/server/utils/sessionOperationalCreditPreflight`) only guards the routes that
  * publish these events directly; this covers every publisher, including future ones.
  *
- * Returns false to skip the work. An unexpected failure also skips: the work is a non-critical
- * convenience, and skipping it cannot cost the payer anything.
+ * Pass `resolveModelInfo` when the call does not run on the operations model, so a free model
+ * waives the refusal. Returns false to skip the work. An unexpected failure also skips: the work
+ * is a non-critical convenience, and skipping it cannot cost the payer anything.
  */
 export async function payerCanFundSessionOperation({
   payerId,
   operation,
+  resolveModelInfo,
   logger,
 }: {
   payerId: string;
   operation: string;
+  resolveModelInfo?: () => Promise<ModelInfo>;
   logger: Logger;
 }): Promise<boolean> {
   try {
-    const verdict = await checkSessionOperationalCredits({ userId: payerId, operationCount: 1, operation, logger });
+    const verdict = await checkSessionOperationalCredits({
+      userId: payerId,
+      operationCount: 1,
+      operation,
+      resolveModelInfo,
+      logger,
+    });
     if (verdict.allowed) return true;
     logger.info(`[SESSION_OP_CREDIT_SKIP] skipping ${operation}; payer cannot cover it`, {
       payerId,
