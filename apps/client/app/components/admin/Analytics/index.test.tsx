@@ -442,7 +442,7 @@ describe('AnalyticsTab', () => {
     apiOnly.activeUsers.days = apiOnly.activeUsers.days.map(day => ({ ...day, dau: 0, wau: 0, mau: 0 }));
     apiOnly.activeUsers.bySource = apiOnly.activeUsers.bySource.map(day => ({ ...day, counts: { api: 5 } }));
     apiOnly.activeUsers.sources = ['api'];
-    mocks.get.mockResolvedValue({ data: apiOnly });
+    mocks.overview.mockResolvedValue({ data: apiOnly });
     await renderPage('/admin?tab=analytics');
     expect(await screen.findByTestId('analytics-active-users-chart')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('analytics-active-users-table-toggle-btn'));
@@ -457,7 +457,7 @@ describe('AnalyticsTab', () => {
   it('keeps weekly and monthly activity visible on days without daily use', async () => {
     const returningUsers = overview();
     returningUsers.activeUsers.days = returningUsers.activeUsers.days.map(day => ({ ...day, dau: 0, apiDau: 0 }));
-    mocks.get.mockResolvedValue({ data: returningUsers });
+    mocks.overview.mockResolvedValue({ data: returningUsers });
     await renderPage('/admin?tab=analytics');
     expect(await screen.findByTestId('analytics-active-users-chart')).toBeInTheDocument();
   });
