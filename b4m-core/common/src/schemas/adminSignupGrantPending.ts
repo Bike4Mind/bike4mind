@@ -67,3 +67,49 @@ export const adminSignupGrantPendingSchema = z.object({
   }),
 });
 export type AdminSignupGrantPending = z.infer<typeof adminSignupGrantPendingSchema>;
+
+/** One row of the Invite Center pending list (GET /api/admin/signup-grants/pending). */
+export const adminSignupGrantPendingRowSchema = z.object({
+  id: z.string(),
+  email: z.string().nullable(),
+  createdAt: z.string().nullable(),
+  source: z.enum(['default', 'package']).nullable(),
+  stage: z.enum(['pending_email', 'signup', 'unlocked']).nullable(),
+  status: z.enum(['held', 'dripping', 'blocked']),
+  held: z
+    .object({
+      reason: z.enum(['budget_exhausted', 'risk_review']).nullable(),
+      since: z.string().nullable(),
+      credits: z.number(),
+    })
+    .nullable(),
+  blocked: z.object({ at: z.string().nullable() }).nullable(),
+  /** Same math as the profile pending card's `schedule.remaining`, under the live drip cap. */
+  remaining: z.number(),
+  dripRemaining: z.number(),
+  rewards: z.object({
+    queuedCount: z.number(),
+    queuedCredits: z.number(),
+    pausedCount: z.number(),
+    pausedCredits: z.number(),
+  }),
+});
+export type AdminSignupGrantPendingRow = z.infer<typeof adminSignupGrantPendingRowSchema>;
+
+export const adminSignupGrantPendingListSchema = z.object({
+  data: z.array(adminSignupGrantPendingRowSchema),
+  nextCursor: z.string().nullable(),
+  /** Bulk release is full-admin only; delegated credit admins can list and block. */
+  viewer: z.object({ canRelease: z.boolean() }),
+});
+export type AdminSignupGrantPendingList = z.infer<typeof adminSignupGrantPendingListSchema>;
+
+/** Each part is null when its read failed, so one bad read blanks one tile rather than the whole header. */
+export const adminSignupGrantPendingSummarySchema = z.object({
+  exposure: z
+    .object({ accountsWithRemaining: z.number(), totalRemaining: z.number(), totalDripRemaining: z.number() })
+    .nullable(),
+  trickle: z.object({ day: z.string(), spentToday: z.number(), limit: z.number(), missing: z.boolean() }).nullable(),
+  queue: z.object({ held: z.number(), oldestHeldAt: z.string().nullable() }).nullable(),
+});
+export type AdminSignupGrantPendingSummary = z.infer<typeof adminSignupGrantPendingSummarySchema>;

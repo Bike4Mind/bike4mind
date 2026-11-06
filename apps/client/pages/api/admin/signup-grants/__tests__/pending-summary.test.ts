@@ -1,0 +1,116 @@
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { createMocks } from 'node-mocks-http';
+import mongoose from 'mongoose';
+import {
+  PENDING_FREE_CREDITS_TAG,
+  resolveSignupGrantSchedule,
+  signupGrantDripOpen,
+  signupGrantDripRemaining,
+  signupGrantRemaining,
+  type SignupGrant,
+} from '@bike4mind/common';
+import { adminSettingsRepository, signupGrantReleaseRepository, User } from '@bike4mind/database';
+import {
+  createMongoServer,
+  MONGO_TEST_TIMEOUT_MS,
+} from '../../../../../../../packages/database/src/__test__/createMongoServer';
+
+// Real adminApi permission gate; only the transport (baseApi) is stubbed so the middleware runs in-line.
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: () => {
+    let get: ((req: unknown, res: unknown) => unknown) | undefined;
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
+    const chain = Object.assign(
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) middleware(req, res, () => undefined);
+        return get?.(req, res);
+      },
+      {
+        use: (fn: (req: unknown, res: unknown, next: () => void) => void) => (middlewares.push(fn), chain),
+        get: (fn: (req: unknown, res: unknown) => unknown) => ((get = fn), chain),
+      }
+    );
+    return chain;
+  },
+}));
+vi.mock('@server/middlewares/asyncHandler', () => ({
+  asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
+}));
+
+import handler from '../pending-summary';
+
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+let server: Awaited<ReturnType<typeof createMongoServer>>;
+
+const oid = (n: number) => new mongoose.Types.ObjectId(n.toString(16).padStart(24, '0'));
+const at = new Date('2026-01-01T00:00:00Z');
+const later = new Date('2026-02-01T00:00:00Z');
+const grant = (over: Record<string, unknown> = {}) => ({
+  stage: 'signup',
+  signupCredits: 100,
+  unlockCredits: 200,
+  creditsReleased: 100,
+  ...over,
+});
+const seed = [
+  {
+    _id: oid(1),
+    signupGrantHeldReason: 'budget_exhausted',
+    signupGrantHeldAt: later,
+    tags: [PENDING_FREE_CREDITS_TAG],
+    signupGrant: grant({ creditsReleased: 0 }),
+  },
+  { _id: oid(2), signupGrantHeldReason: 'budget_exhausted', signupGrantHeldAt: at, tags: [PENDING_FREE_CREDITS_TAG] },
+  { _id: oid(3), signupGrant: grant({ dripCredits: 50, creditsReleased: 150 }) },
+  { _id: oid(4), signupGrant: grant({ stage: 'unlocked', unlockedBy: 'verification', creditsReleased: 300 }) },
+];
+
+const call = async () => {
+  const { req, res } = createMocks({ method: 'GET' });
+  Object.assign(req, { user: { id: 'admin-1', isAdmin: true }, logger: { warn: vi.fn(), error: vi.fn() } });
+  await handler(req as never, res as never);
+  return res._getJSONData();
+};
+
+beforeAll(async () => {
+  server = await createMongoServer();
+  await mongoose.connect(server.getUri());
+});
+
+afterAll(async () => {
+  await mongoose.disconnect();
+  await server?.stop();
+});
+
+describe('GET /api/admin/signup-grants/pending-summary', () => {
+  it('reports zeros and an empty queue with no holders', async () => {
+    const summary = await call();
+    expect(summary.exposure).toEqual({ accountsWithRemaining: 0, totalRemaining: 0, totalDripRemaining: 0 });
+    expect(summary.queue).toEqual({ held: 0, oldestHeldAt: null });
+    expect(summary.trickle).toMatchObject({ spentToday: 0, limit: 0, missing: true });
+  });
+
+  it('totals exposure over accounts with credits to come and reports the oldest held tranche', async () => {
+    await User.collection.insertMany(seed.map((doc, n) => ({ ...doc, email: `u${n}@example.com`, username: `u${n}` })));
+    const { dripCap } = await resolveSignupGrantSchedule(adminSettingsRepository);
+    const grants = seed.map(doc => doc.signupGrant).filter(Boolean) as SignupGrant[];
+    const remaining = grants.map(g => signupGrantRemaining(g, dripCap));
+
+    const summary = await call();
+    expect(summary.exposure.accountsWithRemaining).toBe(remaining.filter(r => r > 0).length);
+    expect(summary.exposure.totalRemaining).toBe(remaining.reduce((a, b) => a + b, 0));
+    expect(summary.exposure.totalDripRemaining).toBe(
+      grants.reduce((sum, g) => sum + (signupGrantDripOpen(g) ? signupGrantDripRemaining(g, dripCap) : 0), 0)
+    );
+    expect(summary.queue).toEqual({ held: 2, oldestHeldAt: at.toISOString() });
+  });
+
+  it('nulls only the tile whose read failed', async () => {
+    const spy = vi.spyOn(signupGrantReleaseRepository, 'countHeld').mockRejectedValueOnce(new Error('read failed'));
+    const summary = await call();
+    expect(summary.queue).toBeNull();
+    expect(summary.exposure).not.toBeNull();
+    expect(summary.trickle).not.toBeNull();
+    spy.mockRestore();
+  });
+});
