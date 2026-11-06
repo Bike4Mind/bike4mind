@@ -29,6 +29,7 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
+import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 
 export const handler = withEventContext(async (event, logger) => {
@@ -148,6 +149,9 @@ export const handler = withEventContext(async (event, logger) => {
     logger.debug(`No replayable quests to summarize for session ${sessionId}`);
     return;
   }
+
+  // After the nothing-to-summarize exits, so an idle notebook costs no billing reads.
+  if (!(await payerCanFundSessionOperation({ payerId: payer.id, operation: 'session summarization', logger }))) return;
 
   const content = replayableQuests
     .map(quest =>
