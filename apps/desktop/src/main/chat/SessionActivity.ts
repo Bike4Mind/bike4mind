@@ -1,4 +1,4 @@
-import type { ChatSessionStatus, ChatSessionStatusEvent } from '@shared/chat';
+import type { ChatSessionStatus, ChatSessionStatusEvent, SessionSetupStep } from '@shared/chat';
 
 /**
  * The authoritative answer to "what is each session doing", for every session at once.
@@ -17,8 +17,8 @@ import type { ChatSessionStatus, ChatSessionStatusEvent } from '@shared/chat';
 export class SessionActivity {
   private readonly replying = new Set<string>();
 
-  /** Sessions cutting their worktree or sending their first turn, which have no reply yet. */
-  private readonly preparing = new Set<string>();
+  /** Sessions cutting their worktree or sending their first turn, which have no reply yet, by step. */
+  private readonly preparing = new Map<string, SessionSetupStep>();
 
   /** sessionId -> approvals outstanding. One turn can put several tools at the gate at once. */
   private readonly awaiting = new Map<string, number>();
@@ -40,7 +40,7 @@ export class SessionActivity {
    * per busy conversation rather than one per conversation that has ever existed.
    */
   snapshot(): ChatSessionStatusEvent[] {
-    const ids = new Set([...this.replying, ...this.preparing, ...this.awaiting.keys(), ...this.held]);
+    const ids = new Set([...this.replying, ...this.preparing.keys(), ...this.awaiting.keys(), ...this.held]);
     const events: ChatSessionStatusEvent[] = [];
     for (const sessionId of ids) {
       const status = this.statusOf(sessionId);
@@ -61,8 +61,14 @@ export class SessionActivity {
    * Held across the worktree and the turn that follows it, and ended after `replyStarted`, so
    * the row goes straight from preparing to replying without a 'done' push in between.
    */
-  preparingStarted(sessionId: string): void {
-    this.transition(sessionId, () => this.preparing.add(sessionId));
+  preparingStarted(sessionId: string, step: SessionSetupStep): void {
+    this.transition(sessionId, () => this.preparing.set(sessionId, step));
+  }
+
+  /** Move a session already preparing on to its next setup step; a no-op for one that is not. */
+  preparingStep(sessionId: string, step: SessionSetupStep): void {
+    if (!this.preparing.has(sessionId)) return;
+    this.transition(sessionId, () => this.preparing.set(sessionId, step));
   }
 
   preparingEnded(sessionId: string): void {
@@ -96,24 +102,26 @@ export class SessionActivity {
     this.held.delete(sessionId);
   }
 
-  /** Still being prepared: held by the worktree or first-turn hold, with no reply streaming yet. */
-  private isPreparing(sessionId: string, status: ChatSessionStatus): boolean {
-    return status === 'processing' && this.preparing.has(sessionId) && !this.replying.has(sessionId);
+  /** The setup step of a session still being prepared, with no reply streaming yet; else undefined. */
+  private setupStep(sessionId: string, status: ChatSessionStatus): SessionSetupStep | undefined {
+    if (status !== 'processing' || this.replying.has(sessionId)) return undefined;
+    return this.preparing.get(sessionId);
   }
 
   private eventFor(sessionId: string, status: ChatSessionStatus): ChatSessionStatusEvent {
-    return this.isPreparing(sessionId, status) ? { sessionId, status, preparing: true } : { sessionId, status };
+    const step = this.setupStep(sessionId, status);
+    return step ? { sessionId, status, preparing: step } : { sessionId, status };
   }
 
   private transition(sessionId: string, mutate: () => void): void {
     const before = this.statusOf(sessionId);
-    const preparingBefore = this.isPreparing(sessionId, before);
+    const stepBefore = this.setupStep(sessionId, before);
     mutate();
     const after = this.statusOf(sessionId);
     // Only a real change goes out: a turn running four tools would otherwise push four
     // identical 'needs-action' events, and every open window would re-render on each one.
-    // The preparing flag counts as a change: preparing -> replying keeps 'processing'.
-    if (after !== before || this.isPreparing(sessionId, after) !== preparingBefore) {
+    // The setup step counts as a change: preparing -> replying keeps 'processing'.
+    if (after !== before || this.setupStep(sessionId, after) !== stepBefore) {
       this.onChange(this.eventFor(sessionId, after));
     }
   }

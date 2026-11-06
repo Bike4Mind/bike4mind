@@ -301,7 +301,7 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
             </Typography>
           )}
         </Box>
-        <AgentStateChip state={agent.state} preparing={agent.preparing} />
+        <AgentStateChip state={agent.state} preparing={agent.preparing !== undefined} />
         <IconButton
           size="sm"
           variant="plain"
