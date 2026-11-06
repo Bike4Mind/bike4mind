@@ -8,32 +8,42 @@ import { EMPTY_MODEL_STATE } from '@shared/model3d';
 import type { ModelEngine } from './model3d/useModelEngine';
 import { MODEL_EXAMPLE_PROMPTS, ModelPane } from './ModelPane';
 
+const recordTurntable = vi.hoisted(() => vi.fn(async () => new Uint8Array([1, 2, 3])));
+
 // jsdom has no WebGL; the viewport is covered by the live app, not here.
 vi.mock('./model3d/ModelViewport', () => ({
   ModelViewport: ({
     dimmed,
+    lighting,
     pose,
     picked,
     onPick,
     clip,
+    handleRef,
   }: {
     dimmed: boolean;
+    lighting: string;
     pose: Record<string, number>;
     picked: string | null;
     onPick: (name: string | null) => void;
     clip: string | null;
-  }) => (
-    <div
-      data-testid="model-pane-viewport"
-      data-dimmed={String(dimmed)}
-      data-pose={JSON.stringify(pose)}
-      data-picked={picked ?? ''}
-      data-clip={clip ?? ''}
-    >
-      <button data-testid="pick-lid" onClick={() => onPick('lid')} />
-      <button data-testid="pick-none" onClick={() => onPick(null)} />
-    </div>
-  ),
+    handleRef?: { current: unknown };
+  }) => {
+    if (handleRef) handleRef.current = { recordTurntable };
+    return (
+      <div
+        data-testid="model-pane-viewport"
+        data-dimmed={String(dimmed)}
+        data-lighting={lighting}
+        data-pose={JSON.stringify(pose)}
+        data-picked={picked ?? ''}
+        data-clip={clip ?? ''}
+      >
+        <button data-testid="pick-lid" onClick={() => onPick('lid')} />
+        <button data-testid="pick-none" onClick={() => onPick(null)} />
+      </div>
+    );
+  },
 }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -239,6 +249,43 @@ describe('ModelPane', () => {
     expect(byTestId('model-pane-clip-lid')?.textContent).toBe('Play');
     act(() => byTestId('model-pane-clip-drawer')?.click());
     expect(byTestId('model-pane-viewport')?.dataset.clip).toBe('');
+  });
+
+  it('switches the viewport to night lighting and back', () => {
+    render(engine(BUILT));
+    expect(byTestId('model-pane-viewport')?.dataset.lighting).toBe('studio');
+    act(() => byTestId('model-pane-night-btn')?.click());
+    expect(byTestId('model-pane-viewport')?.dataset.lighting).toBe('night');
+    expect(byTestId('model-pane-night-btn')?.getAttribute('aria-pressed')).toBe('true');
+    act(() => byTestId('model-pane-night-btn')?.click());
+    expect(byTestId('model-pane-viewport')?.dataset.lighting).toBe('studio');
+  });
+
+  it('records a turntable of the joints, stops playback first, and saves it as WebM', async () => {
+    const saveExport = vi.fn(async () => '/project/chest-turntable.webm');
+    (window as unknown as { b4m: unknown }).b4m = { model: { saveExport } };
+    const joints = [
+      {
+        name: 'lid',
+        motion: 'turn' as const,
+        axis: [1, 0, 0] as [number, number, number],
+        range: [0, 100] as [number, number],
+      },
+    ];
+    const glb = {
+      ...BUILT,
+      state: { path: '/project/chest.glb', kind: 'glb' as const, generation: 3, source: null, missing: false },
+      clips: ['lid'],
+      joints,
+    };
+    render(engine(glb));
+    act(() => byTestId('model-pane-clip-lid')?.click());
+    expect(byTestId('model-pane-viewport')?.dataset.clip).toBe('lid');
+    await act(async () => byTestId('model-pane-record-btn')?.click());
+    expect(byTestId('model-pane-viewport')?.dataset.clip).toBe('');
+    expect(recordTurntable).toHaveBeenCalledWith(joints);
+    expect(saveExport).toHaveBeenCalledWith({ format: 'webm', bytes: new Uint8Array([1, 2, 3]) });
+    expect(byTestId('model-pane-note')?.textContent).toBe('Saved chest-turntable.webm');
   });
 
   it('drops the highlight when another file opens', () => {

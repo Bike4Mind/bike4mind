@@ -1,15 +1,25 @@
 import Box from '@mui/joy/Box';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import type { ModelJoint } from '@shared/model3d';
 import { frameCamera, poseJoints } from './modelScene';
-import { enableShadows, ModelComposer, ModelStage } from './modelStage';
+import { addGlowLights, enableShadows, ModelComposer, ModelStage, type StageLighting } from './modelStage';
+import { orbitPosition, recordCanvas, TURNTABLE_SIZE, turntablePose } from './turntable';
+
+/** What the pane can ask of the viewport beyond its props. */
+export type ModelViewportHandle = {
+  /** Records one turntable orbit of the model as it is shown now, swinging `joints`; resolves with WebM bytes. */
+  recordTurntable: (joints: readonly ModelJoint[]) => Promise<Uint8Array>;
+};
 
 type Props = {
   object: THREE.Group | null;
   wireframe: boolean;
   /** A faded measuring grid on the floor; the floor itself is a shadow catcher either way. */
   grid: boolean;
+  /** Studio softboxes, or night: moonlight, with glowing parts blooming and lighting what is near. */
+  lighting: StageLighting;
   dark: boolean;
   /** Dims the model while its latest build has failed. */
   dimmed: boolean;
@@ -23,6 +33,8 @@ type Props = {
   onPick: (name: string | null) => void;
   /** An opened asset's animation to play on a loop, by name; null shows it at rest. */
   clip: string | null;
+  /** Filled with the viewport's handle while it is mounted. */
+  handleRef?: MutableRefObject<ModelViewportHandle | null>;
 };
 
 /** Pointer travel, in CSS px, under which a press and release is a click rather than an orbit. */
@@ -59,10 +71,24 @@ type Viewer = {
   render: () => void;
   /** Frames the current model again, unless the user has moved the camera since it was framed. */
   reframe: () => void;
+  recordTurntable: ModelViewportHandle['recordTurntable'];
 };
 
 /** The interactive three.js view: orbit (drag), zoom (wheel) and pan (right drag), rendered on demand. */
-export function ModelViewport({ object, wireframe, grid, dark, dimmed, frameKey, pose, picked, onPick, clip }: Props) {
+export function ModelViewport({
+  object,
+  wireframe,
+  grid,
+  lighting,
+  dark,
+  dimmed,
+  frameKey,
+  pose,
+  picked,
+  onPick,
+  clip,
+  handleRef,
+}: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewer = useRef<Viewer | null>(null);
   const framedFor = useRef<string | null>(null);
@@ -96,7 +122,10 @@ export function ModelViewport({ object, wireframe, grid, dark, dimmed, frameKey,
     controls.enableDamping = false;
     // AO costs a few ms a frame at retina size: orbiting, sliders and playback draw without it.
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    // While a turntable records, it alone draws: orbit, rebuild and resize frames would land in the clip.
+    let recording = false;
     const render = () => {
+      if (recording) return;
       composer.render(false);
       clearTimeout(idleTimer);
       idleTimer = setTimeout(() => composer.render(true), IDLE_RENDER_DELAY);
@@ -112,7 +141,7 @@ export function ModelViewport({ object, wireframe, grid, dark, dimmed, frameKey,
     };
     const resize = () => {
       const { clientWidth, clientHeight } = element;
-      if (!clientWidth || !clientHeight) return;
+      if (!clientWidth || !clientHeight || recording) return;
       renderer.setSize(clientWidth, clientHeight);
       composer.setSize(clientWidth, clientHeight, window.devicePixelRatio);
       camera.aspect = clientWidth / clientHeight;
@@ -144,7 +173,52 @@ export function ModelViewport({ object, wireframe, grid, dark, dimmed, frameKey,
     renderer.domElement.addEventListener('pointerup', onPointerUp);
     const observer = new ResizeObserver(resize);
     observer.observe(element);
-    viewer.current = { renderer, scene, camera, controls, content, stage, composer, render, reframe };
+
+    const recordTurntable = async (joints: readonly ModelJoint[]): Promise<Uint8Array> => {
+      if (recording) throw new Error('A recording is already running.');
+      const shown = shownCopy.current;
+      if (!shown) throw new Error('There is no model to record.');
+      recording = true;
+      clearTimeout(idleTimer);
+      controls.enabled = false;
+      const canvas = renderer.domElement;
+      const startPosition = camera.position.clone();
+      const startTarget = controls.target.clone();
+      const { near, far } = camera;
+      const startPose = { ...poseRef.current };
+      const { width, height } = TURNTABLE_SIZE;
+      // A fixed landscape frame at 1x; the pane letterboxes it meanwhile rather than stretching it.
+      renderer.setPixelRatio(1);
+      renderer.setSize(width, height, false);
+      composer.setSize(width, height, 1);
+      canvas.style.objectFit = 'contain';
+      camera.aspect = width / height;
+      // Re-fitted to the landscape frame from the angle the user was looking at it.
+      const direction = startPosition.clone().sub(startTarget);
+      const target = frameCamera(camera, shown, [direction.x, direction.y, direction.z]);
+      const orbitStart = camera.position.clone();
+      try {
+        return await recordCanvas(canvas, progress => {
+          camera.position.copy(orbitPosition(orbitStart, target, progress));
+          camera.lookAt(target);
+          if (shownCopy.current && joints.length)
+            poseJoints(shownCopy.current, turntablePose(joints, startPose, progress));
+          composer.render(true);
+        });
+      } finally {
+        recording = false;
+        camera.position.copy(startPosition);
+        camera.near = near;
+        camera.far = far;
+        camera.lookAt(startTarget);
+        if (shownCopy.current) poseJoints(shownCopy.current, poseRef.current);
+        canvas.style.objectFit = '';
+        renderer.setPixelRatio(window.devicePixelRatio);
+        controls.enabled = true;
+        resize();
+      }
+    };
+    viewer.current = { renderer, scene, camera, controls, content, stage, composer, render, reframe, recordTurntable };
     resize();
     return () => {
       observer.disconnect();
@@ -162,11 +236,25 @@ export function ModelViewport({ object, wireframe, grid, dark, dimmed, frameKey,
   }, []);
 
   useEffect(() => {
+    if (!handleRef) return;
+    handleRef.current = {
+      recordTurntable: async joints => {
+        if (!viewer.current) throw new Error('The model view is not ready.');
+        return viewer.current.recordTurntable(joints);
+      },
+    };
+    return () => {
+      handleRef.current = null;
+    };
+  }, [handleRef]);
+
+  useEffect(() => {
     const current = viewer.current;
     if (!current) return;
     current.content.clear();
-    current.stage.fit(object, { dark, grid });
+    current.stage.fit(object, { dark, grid, lighting });
     current.composer.fit(current.stage.bounds);
+    current.composer.setLighting(lighting);
     shownObject.current = object;
     shownCopy.current = null;
     if (object) {
@@ -184,6 +272,7 @@ export function ModelViewport({ object, wireframe, grid, dark, dimmed, frameKey,
       });
       highlightPart(shown, pickedRef.current);
       enableShadows(shown);
+      if (lighting === 'night') addGlowLights(shown, current.stage.radius);
       current.content.add(shown);
       // Re-frame only when a different model opens, so a rebuild keeps the user's camera.
       if (framedFor.current !== frameKey) {
@@ -194,7 +283,7 @@ export function ModelViewport({ object, wireframe, grid, dark, dimmed, frameKey,
       current.controls.update();
     }
     current.render();
-  }, [object, wireframe, grid, dark, dimmed, frameKey]);
+  }, [object, wireframe, grid, lighting, dark, dimmed, frameKey]);
 
   // A slider drag or playback only turns nodes: no re-clone, no re-frame.
   useEffect(() => {

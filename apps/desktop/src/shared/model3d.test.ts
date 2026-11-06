@@ -3,6 +3,7 @@ import {
   describeJoints,
   jointsOf,
   formatModelSummary,
+  isModelExportFormat,
   modelKindFor,
   partTreeError,
   siblingGlbPath,
@@ -291,5 +292,12 @@ describe('describeJoints', () => {
       },
     });
     expect(text).toContain('Joints: lid: pivot (0, 1, 2), in body');
+  });
+});
+
+describe('isModelExportFormat', () => {
+  it('admits the model formats and the turntable video, nothing else', () => {
+    expect(['glb', 'stl', 'webm'].every(isModelExportFormat)).toBe(true);
+    expect(['mp4', 'GLB', '', null, 3].some(isModelExportFormat)).toBe(false);
   });
 });
