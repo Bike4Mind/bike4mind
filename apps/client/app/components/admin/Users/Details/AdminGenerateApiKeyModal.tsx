@@ -26,6 +26,15 @@ import {
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
+import { isAdminProvisionedApiKeyScope } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
+import { ReasonPicker } from '@client/app/components/admin/shared/ReasonPicker';
+import {
+  ADMIN_REASON_PRESETS,
+  type AdminReasonDraft,
+  EMPTY_ADMIN_REASON,
+  composeAdminReason,
+  isAdminReasonComplete,
+} from '@client/app/components/admin/shared/adminReason';
 
 interface AdminGenerateApiKeyModalProps {
   open: boolean;
@@ -55,6 +64,7 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
   });
   const [expirationDays, setExpirationDays] = useState<string>('never');
   const [generatedKey, setGeneratedKey] = useState<string | null>(null);
+  const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
   const { handleCopyToClipboard, copied } = useCopyToClipboard({ showToast: true });
   const {
     data: allLakes,
@@ -85,6 +95,7 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
     });
     setExpirationDays('never');
     setGeneratedKey(null);
+    setReason(EMPTY_ADMIN_REASON);
   };
 
   const handleClose = () => {
@@ -92,11 +103,15 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
     onClose();
   };
 
+  // The route requires an audit reason for admin-provisioned scopes (generate-api-key.ts).
+  const reasonRequired = formData.scopes.some(isAdminProvisionedApiKeyScope);
+
   const handleSubmit = () => {
     const submitData: AdminCreateUserApiKeyRequest = {
       ...formData,
       expiresAt: expirationDays === 'never' ? undefined : dayjs().add(parseInt(expirationDays), 'days').toDate(),
       preauthorizedLakeIds: preauthorizedLakeIds.length > 0 ? preauthorizedLakeIds : undefined,
+      reason: reasonRequired ? composeAdminReason(reason) : undefined,
     };
     generateMutation.mutate({ userId: user.id, data: submitData });
   };
@@ -305,6 +320,16 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
             </Box>
           </FormControl>
 
+          {reasonRequired && (
+            <ReasonPicker
+              label="Reason for an admin-provisioned scope"
+              presets={ADMIN_REASON_PRESETS.apiKeyAdminScope}
+              value={reason}
+              onChange={setReason}
+              data-testid="admin-generate-key-reason"
+            />
+          )}
+
           <FormControl>
             <FormLabel>Expiration</FormLabel>
             <Select value={expirationDays} onChange={(_, value) => setExpirationDays(value as string)}>
@@ -362,7 +387,9 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
             <Button
               onClick={handleSubmit}
               loading={generateMutation.isPending}
-              disabled={!formData.name || formData.scopes.length === 0}
+              disabled={
+                !formData.name || formData.scopes.length === 0 || (reasonRequired && !isAdminReasonComplete(reason))
+              }
             >
               Generate API Key
             </Button>

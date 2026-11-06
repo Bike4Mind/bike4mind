@@ -78,6 +78,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
         details: {
           keyId: previous.keyId,
           keyName: key.name,
+          scopes: key.scopes,
           previousKeyPrefix: previous.keyPrefix,
           keyPrefix: result.keyPrefix,
         },

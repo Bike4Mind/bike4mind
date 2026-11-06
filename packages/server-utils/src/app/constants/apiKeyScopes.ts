@@ -498,19 +498,19 @@ const HAND_WRITTEN_ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
   {
     value: ApiKeyScope.OVERWATCH_INGEST_WRITE,
     label: 'Overwatch: Ingest',
-    description: 'Server-to-server event ingestion for Overwatch analytics',
+    description: 'Can send analytics events into Overwatch, server to server',
     endpoints: [],
   },
   {
     value: ApiKeyScope.QA_INGEST,
     label: 'QA: Ingest',
-    description: 'CI ingest of end-to-end test runs for the admin status page',
+    description: 'Can upload end-to-end test runs from CI to the admin status page',
     endpoints: [],
   },
   {
     value: ApiKeyScope.REWARDS_GRANT,
     label: 'Partners: Rewards',
-    description: 'Server-to-server credit grants for partner games (BedrockNews Headword)',
+    description: 'Can grant credits to users, server to server, for partner games',
     endpoints: [],
   },
   {
@@ -531,6 +531,18 @@ const HAND_WRITTEN_ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
  */
 export const ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] =
   HAND_WRITTEN_ADMIN_ONLY_API_KEY_SCOPES.map(withDerivedEndpoints);
+
+const ADMIN_ONLY_API_KEY_SCOPE_VALUES: ReadonlySet<string> = new Set(ADMIN_ONLY_API_KEY_SCOPES.map(s => s.value));
+
+/**
+ * Admin-provisioned scopes. The admin mint route requires an audit reason for a key carrying one,
+ * and the audit log spells out what each one can do (AuditLog/shared/auditEntryContext.ts).
+ */
+export const isAdminProvisionedApiKeyScope = (value: string): boolean => ADMIN_ONLY_API_KEY_SCOPE_VALUES.has(value);
+
+/** Catalogue row (label + description) for a self-service or admin-provisioned scope; undefined otherwise. */
+export const findApiKeyScopeOption = (value: string): ApiKeyScopeOption | undefined =>
+  USER_API_KEY_SCOPES.find(s => s.value === value) ?? ADMIN_ONLY_API_KEY_SCOPES.find(s => s.value === value);
 
 /** Each built-in row's hand-written supplements, before withDerivedEndpoints; for the catalogue tests. */
 export const HAND_WRITTEN_API_KEY_SCOPE_ENDPOINTS: ReadonlyMap<ApiKeyScopeValue, readonly string[]> = new Map(

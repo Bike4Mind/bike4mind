@@ -25,6 +25,7 @@ export const ADMIN_REASON_PRESETS = {
   internalAccount: ['Team member', 'Contractor or partner', 'Marked in error'],
   apiKeyRevokeAll: ['Compromised or leaked keys', 'Abuse / automated signups', 'Customer request'],
   apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
+  apiKeyAdminScope: ['Partner integration', 'Internal service', 'Requested by the account owner'],
   accountTags: ['Account review', 'Support request', 'Internal testing'],
   productAccess: ['Pilot or partner access', 'Plan change', 'Support request'],
   systemMessage: ['Account notice', 'Support follow-up', 'Policy warning'],

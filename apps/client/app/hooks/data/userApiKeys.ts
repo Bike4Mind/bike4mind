@@ -81,6 +81,8 @@ export interface CreateUserApiKeyRequest {
  */
 export interface AdminCreateUserApiKeyRequest extends CreateUserApiKeyRequest {
   preauthorizedLakeIds?: string[];
+  /** Audit reason; the route requires it when any scope is admin-provisioned. */
+  reason?: string;
 }
 
 /** Configure an existing embed key - only the provided fields change. */

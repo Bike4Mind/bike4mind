@@ -69,7 +69,8 @@ vi.mock('@bike4mind/database/auth', () => ({
 }));
 
 const mockRecordAdminAction = vi.hoisted(() => vi.fn().mockResolvedValue(null));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@server/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
   recordAdminActionFromRequest: (...a: unknown[]) => mockRecordAdminAction(...a),
 }));
 
@@ -233,7 +234,7 @@ describe('POST /api/admin/users/:userId/generate-api-key - scope allowlist guard
   });
 
   it('allows overwatch-ingest:write (admin-provisioned scope) and calls the service', async () => {
-    const { req, res } = post({ name: 'ingest', scopes: ['overwatch-ingest:write'] });
+    const { req, res } = post({ name: 'ingest', scopes: ['overwatch-ingest:write'], reason: 'Internal service' });
     await mockRefs.postHandler!(req, res);
     expect(res._getStatusCode()).toBe(201);
     expect(mockCreateKey).toHaveBeenCalledWith(
@@ -245,7 +246,7 @@ describe('POST /api/admin/users/:userId/generate-api-key - scope allowlist guard
 
   it('allows release-notes:write for a platform-admin target', async () => {
     mockUserFind.mockResolvedValue({ id: 'target-user', username: 'targetUser', isAdmin: true });
-    const { req, res } = post({ name: 'release video', scopes: ['release-notes:write'] });
+    const { req, res } = post({ name: 'release video', scopes: ['release-notes:write'], reason: 'Internal service' });
     await mockRefs.postHandler!(req, res);
     expect(res._getStatusCode()).toBe(201);
     expect(mockCreateKey).toHaveBeenCalledWith(
@@ -771,5 +772,68 @@ describe('POST /api/admin/users/:userId/generate-api-key - admin audit', () => {
       expect.any(String),
       expect.objectContaining({ keyId: 'k1' })
     );
+  });
+});
+
+describe('POST /api/admin/users/:userId/generate-api-key - reason for admin-provisioned scopes', () => {
+  const REASON = 'Partner integration: game server credit grants';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserFind.mockResolvedValue({ id: 'target-user', username: 'targetUser', email: 'target@example.com' });
+    mockCreateKey.mockResolvedValue({ id: 'k1', name: 'rewards', keyPrefix: 'b4m_live', scopes: ['rewards:grant'] });
+    mockRecordAdminAction.mockResolvedValue(null);
+    mockLogEvent.mockResolvedValue(undefined);
+  });
+
+  it('refuses an admin-provisioned scope with no reason, before minting', async () => {
+    const { req, res } = post({ name: 'rewards', scopes: ['rewards:grant'] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/reload the page/i);
+    expect(mockCreateKey).not.toHaveBeenCalled();
+    expect(mockRecordAdminAction).not.toHaveBeenCalled();
+  });
+
+  it('refuses a reason shorter than the shared minimum', async () => {
+    const { req, res } = post({ name: 'rewards', scopes: ['rewards:grant'], reason: 'ok' });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/at least 5/i);
+    expect(mockCreateKey).not.toHaveBeenCalled();
+  });
+
+  it.each(['overwatch-ingest:write', 'qa:ingest', 'rewards:grant'])('requires a reason for %s', async scope => {
+    const { req, res } = post({ name: 'svc', scopes: [scope] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/reload the page/i);
+    expect(mockCreateKey).not.toHaveBeenCalled();
+  });
+
+  it('stores the reason on the audit entry', async () => {
+    const { req, res } = post({ name: 'rewards', scopes: ['rewards:grant'], reason: `  ${REASON}  ` });
+    await mockRefs.postHandler!(req, res);
+
+    expect(res.statusCode).toBe(201);
+    expect(mockRecordAdminAction).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'user.api_key.generated',
+        reason: REASON,
+        details: expect.objectContaining({ name: 'rewards', scopes: ['rewards:grant'] }),
+      })
+    );
+  });
+
+  it('keeps the reason optional for self-service scopes', async () => {
+    mockCreateKey.mockResolvedValue({ id: 'k1', name: 'key', keyPrefix: 'b4m_live', scopes: ['notebooks:read'] });
+    const { req, res } = post({ name: 'key', scopes: ['notebooks:read'] });
+    await mockRefs.postHandler!(req, res);
+
+    expect(res.statusCode).toBe(201);
+    expect(mockRecordAdminAction).toHaveBeenCalledWith(req, expect.objectContaining({ reason: undefined }));
+  });
+
+  it('records an optional reason given for self-service scopes', async () => {
+    mockCreateKey.mockResolvedValue({ id: 'k1', name: 'key', keyPrefix: 'b4m_live', scopes: ['notebooks:read'] });
+    const { req, res } = post({ name: 'key', scopes: ['notebooks:read'], reason: REASON });
+    await mockRefs.postHandler!(req, res);
+
+    expect(mockRecordAdminAction).toHaveBeenCalledWith(req, expect.objectContaining({ reason: REASON }));
   });
 });
