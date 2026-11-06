@@ -510,16 +510,16 @@ class HelperLifecycleTests(unittest.TestCase):
             self.assertIn(['delete', 'pod', helper.name, '--wait=false', '--ignore-not-found'], kube.calls)
 
     def test_pod_deleted_when_ready_wait_fails(self):
-        class K(self.kube().__class__):
-            def run(self, args, **kw):
-                if args[0] == 'wait':
-                    self.calls.append(list(args))
-                    raise backup.BackupError('timed out')
-                return super().run(args, **kw)
         for exc in (backup.BackupError('timed out'), KeyboardInterrupt()):
+            class K(self.kube().__class__):
+                def run(self, args, **kw):
+                    if args[0] == 'wait':
+                        self.calls.append(list(args))
+                        raise exc
+                    return super().run(args, **kw)
             kube = K()
             helper = backup.Helper(kube, 'rel', 'mc:1')
-            with self.assertRaises(BaseException):
+            with self.assertRaises(type(exc)):
                 helper.__enter__()
             self.assertIn(['delete', 'pod', helper.name, '--wait=false', '--ignore-not-found'], kube.calls)
 
