@@ -20,6 +20,13 @@ Begin EVERY turn that calls a tool with one line in exactly this form, before an
 <confidence score="0.8">one short reason</confidence>
 The score is a number from 0 to 1: how confident you are that your work so far is on track and correct. Be honest; a low score pauses the run for human review, which is better than proceeding on a guess.`;
 
+/**
+ * Re-sent at the tail of every request that follows a tool result. The system-prompt instruction alone
+ * is dropped by the model on later turns, so those turns fell back to the tool-based score.
+ */
+export const SELF_REPORT_CONFIDENCE_REMINDER =
+  'Begin your next turn with the confidence line if it calls a tool: <confidence score="0.8">one short reason</confidence>';
+
 const OPEN = '<confidence';
 const CLOSE = '</confidence>';
 // Models given this prompt open a turn with an empty reasoning block before the tag. It carries
