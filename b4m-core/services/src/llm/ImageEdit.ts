@@ -613,7 +613,8 @@ export class ImageEditService {
 
       // Editing is a narrower capability than generation, and this handler bills the
       // selected model - so reject an unsupported selection here rather than silently
-      // running (and charging for) some other model. Mirrors the chat edit_image tool.
+      // running (and charging for) some other model. This is the wider /image-edits gate;
+      // the chat edit_image tool uses the narrower EDIT_SUPPORTED_IMAGE_MODELS list.
       if (!supportsImageEditEndpoint(model)) {
         throw new BadRequestError(
           `Model "${model}" does not support image editing. Supported models: ${[...EDIT_SUPPORTED_IMAGE_MODELS, 'flux-2-*'].join(', ')}`
