@@ -1403,7 +1403,8 @@ describe('ImageEditService quest partial writes', () => {
     replies: [],
     type: 'message',
     promptMeta: {
-      model: { name: 'gpt-image-1', parameters: {} },
+      // invoke() sends the retired 'gpt-image-1'; the request schema remaps it to its successor.
+      model: { name: ImageModels.GPT_IMAGE_2, parameters: {} },
       session: { id: 'session1', userId: 'user1' },
     },
   };

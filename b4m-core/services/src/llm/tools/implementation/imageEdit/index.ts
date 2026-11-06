@@ -22,6 +22,7 @@ import {
   type ImageOutputFormat,
   type OpenAIImageBackground,
   type GeneratedAssetLineageEntry,
+  resolveLegacyImageModel,
 } from '@bike4mind/common';
 import {
   OpenAIImageService,
@@ -354,7 +355,7 @@ export const imageEditTool: ToolDefinition = {
       // `generationModel` is only the starting point for that fallback and the model
       // recorded on a moderation incident; billing and dispatch both use `editModel`.
       const generationModel = imageConfig?.model || ImageModels.GPT_IMAGE_1_5;
-      let editModel = imageConfig?.editModel as ImageModels | undefined;
+      let editModel = resolveLegacyImageModel(imageConfig?.editModel) as ImageModels | undefined;
 
       if (!editModel) {
         // Fallback logic based on generation model provider
