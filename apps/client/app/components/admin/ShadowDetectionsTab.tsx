@@ -6,6 +6,7 @@ import {
   Checkbox,
   FormControl,
   FormLabel,
+  IconButton,
   Radio,
   RadioGroup,
   Stack,
@@ -14,6 +15,7 @@ import {
   Typography,
 } from '@mui/joy';
 import { Link } from '@tanstack/react-router';
+import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
 import {
   SHADOW_DETECTION_LIST_LIMIT,
   SHADOW_DETECTION_VERDICTS,
@@ -999,7 +1001,7 @@ export const ShadowDetectionsTab: React.FC = () => {
       sortValue: row => ACTION_DISPLAY[row.wouldAction].label,
       width: '7rem',
     },
-    { id: 'actor', label: 'Actor', render: row => <Actor row={row} context={context} />, width: '20rem' },
+    { id: 'actor', label: 'Actor', render: row => <Actor row={row} context={context} />, width: '18rem' },
     {
       id: 'verdict',
       label: 'Verdict',
@@ -1009,17 +1011,23 @@ export const ShadowDetectionsTab: React.FC = () => {
     },
   ];
 
-  const rowActions = (row: ShadowDetectionRow) => (
-    <Button
-      size="sm"
-      variant="plain"
-      color="neutral"
-      data-testid={`shadow-detection-grade-btn-${row.id}`}
-      onClick={() => setGrading(row)}
-    >
-      {row.verdict ? 'Change verdict' : 'Record verdict'}
-    </Button>
-  );
+  const rowActions = (row: ShadowDetectionRow) => {
+    const label = row.verdict ? 'Change verdict' : 'Record verdict';
+    return (
+      <Tooltip title={label}>
+        <IconButton
+          size="sm"
+          variant="plain"
+          color="neutral"
+          aria-label={label}
+          data-testid={`shadow-detection-grade-btn-${row.id}`}
+          onClick={() => setGrading(row)}
+        >
+          <RateReviewOutlinedIcon />
+        </IconButton>
+      </Tooltip>
+    );
+  };
 
   const filtered = detector !== undefined || verdict !== 'unreviewed';
   const emptyTitle =
@@ -1129,9 +1137,10 @@ export const ShadowDetectionsTab: React.FC = () => {
         loading={detections.isPending}
         error={detections.error ? "Couldn't load detections." : undefined}
         onRetry={() => void detections.refetch()}
+        onRowActivate={setGrading}
         rowActions={rowActions}
         // The fixed-width columns plus room for the summary; narrower screens scroll sideways.
-        minWidth="64rem"
+        minWidth="76rem"
         empty={
           <EmptyState
             title={emptyTitle}
