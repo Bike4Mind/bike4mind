@@ -319,7 +319,8 @@ const historyImportBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('
       abortIncompleteMultipartUpload: {
         daysAfterInitiation: 1, // Clean up failed uploads after 1 day
       },
-    },    expireNoncurrentVersionsRule,
+    },
+    expireNoncurrentVersionsRule,
   ],
 });
 
