@@ -135,5 +135,6 @@ export * from './adminAuditQuery';
 export * from './adminAuditReview';
 export * from './adminUserActivity';
 export * from './adminUserTimeline';
+export * from './adminSubscriptionTimeline';
 
 export * from './SignupProtectionTypes';

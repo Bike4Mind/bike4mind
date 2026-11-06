@@ -109,6 +109,8 @@ vi.mock('@server/billing/paymentFailureNotice', () => ({
   notifyPaymentFailed: (...args: unknown[]) => mockNotifyPaymentFailed(...args),
   notifyCanceledForNonPayment: vi.fn(),
 }));
+// The BillingEvent store has its own suite (server/billing/billingEventStore.test.ts).
+vi.mock('@server/billing/billingEventStore', () => ({ recordBillingEvent: vi.fn() }));
 
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postMessageToSlack: (...args: unknown[]) => mockPostMessageToSlack(...args),

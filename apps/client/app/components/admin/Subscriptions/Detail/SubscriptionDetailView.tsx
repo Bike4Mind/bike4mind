@@ -7,6 +7,7 @@ import { SubscriptionDetailStats } from './SubscriptionDetailStats';
 import { SubscriptionDetailTabs, subscriptionDetailPanelId, subscriptionDetailTabId } from './SubscriptionDetailTabs';
 import { OverviewTab } from './tabs/OverviewTab';
 import { SubscriptionAdminLogTab } from './tabs/SubscriptionAdminLogTab';
+import { SubscriptionTimelineTab } from './tabs/SubscriptionTimelineTab';
 import { ExtendCompDialog } from './actions/ExtendCompDialog';
 import { EndCompDialog } from './actions/EndCompDialog';
 import { EditCreditsPerCycleDialog } from './actions/EditCreditsPerCycleDialog';
@@ -106,6 +107,8 @@ export const SubscriptionDetailView: React.FC<SubscriptionDetailViewProps> = ({
             onOpenLedger={userId => void navigation.openUserLedger(userId)}
           />
         );
+      case 'timeline':
+        return <SubscriptionTimelineTab subscriptionId={detail.subscription.id} />;
       case 'admin':
         return <SubscriptionAdminLogTab subscriptionId={detail.subscription.id} />;
     }
