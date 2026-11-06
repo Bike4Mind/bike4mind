@@ -89,7 +89,7 @@ export async function getTopAccounts(query: AnalyticsOverviewQuery, now = new Da
       {
         $group: {
           _id: '$userId',
-          activeDays: { $sum: 1 },
+          activeDays: { $sum: { $cond: [{ $ifNull: ['$active', true] }, 1, 0] } },
           requests: { $sum: '$requests' },
           credits: { $sum: '$creditsCharged' },
         },
@@ -110,6 +110,7 @@ export async function getTopAccounts(query: AnalyticsOverviewQuery, now = new Da
       {
         $project: {
           day: 1,
+          active: 1,
           orgs: {
             $ifNull: ['$orgs', [{ orgId: '$orgId', requests: '$requests', creditsCharged: '$creditsCharged' }]],
           },
@@ -119,6 +120,7 @@ export async function getTopAccounts(query: AnalyticsOverviewQuery, now = new Da
       {
         $group: {
           _id: { orgId: '$orgs.orgId', day: '$day' },
+          active: { $max: { $cond: [{ $ifNull: ['$orgs.active', { $ifNull: ['$active', true] }] }, 1, 0] } },
           requests: { $sum: '$orgs.requests' },
           credits: { $sum: '$orgs.creditsCharged' },
         },
@@ -126,7 +128,7 @@ export async function getTopAccounts(query: AnalyticsOverviewQuery, now = new Da
       {
         $group: {
           _id: '$_id.orgId',
-          activeDays: { $sum: 1 },
+          activeDays: { $sum: '$active' },
           requests: { $sum: '$requests' },
           credits: { $sum: '$credits' },
         },

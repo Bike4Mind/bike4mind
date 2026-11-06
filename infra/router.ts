@@ -136,11 +136,13 @@ export const ORIGIN_VERIFY_HEADER = 'x-b4m-origin-verify';
 // special: false keeps the value alphanumeric, so it is safe inside the JS string literal below.
 export const originVerifySecret = new random.RandomPassword('OriginVerifySecret', { length: 48, special: false });
 const originVerifyInjection = $interpolate`
-  // Drops a viewer-forged copy. AWS docs show computed cloudfront-viewer-* headers already present here,
-  // so this may also drop the real JA4: remove it before adding JA4 to the origin request policy.
-  // JA4 never reaches the origin today: SST's Router uses the managed AllViewerExceptHostHeader policy,
-  // which omits it, and a custom policy cannot both drop Host (the function URL origin needs that) and
-  // add CloudFront headers. Until that changes, signupMeta.ja4 is always null.
+  // Belt and braces: CloudFront already strips viewer-supplied cloudfront-* names before this function
+  // runs (probed with an echo origin). The real JA4 never appears here either: a viewer-request function
+  // sees exactly the cloudfront-* headers the origin request policy adds, and SST's Router uses the
+  // managed AllViewerExceptHostHeader policy, whose implicit set (viewer-address, country, city, TLS
+  // version, device type, ...) excludes the JA4 and ASN headers. A policy that adds JA4 while still
+  // dropping Host (the function URL origin needs that) can only be a whitelist, so signupMeta.ja4 stays
+  // null until the capture routes get a behavior of their own.
   delete event.request.headers["${CLOUDFRONT_VIEWER_JA4_HEADER}"];
   event.request.headers["${ORIGIN_VERIFY_HEADER}"] = { value: "${originVerifySecret.result}" };
 `;

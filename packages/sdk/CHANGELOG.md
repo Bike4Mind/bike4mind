@@ -1,5 +1,39 @@
 # @bike4mind/sdk
 
+## 1.6.0
+
+### Minor Changes
+
+- [#6138](https://github.com/Bike4Mind/bike4mind/pull/6138) [`6f5c1fb`](https://github.com/Bike4Mind/bike4mind/commit/6f5c1fbcc93ad51f40f12d0e17edc6cc65f09c28) Thanks [@maconard](https://github.com/maconard)! - share the cached prompt across chats and append tool changes
+
+- [#6311](https://github.com/Bike4Mind/bike4mind/pull/6311) [`7584b87`](https://github.com/Bike4Mind/bike4mind/commit/7584b87589a6c9974658af8bd22deb5c6081ce32) Thanks [@maconard](https://github.com/maconard)! - chat with OpenAI-compatible model servers
+
+- [#6325](https://github.com/Bike4Mind/bike4mind/pull/6325) [`0b07156`](https://github.com/Bike4Mind/bike4mind/commit/0b07156f05974c6a45dbf373af6dffc22ceb3058) Thanks [@erikbethke](https://github.com/erikbethke)! - post to opted-in Slack channels with a slack:post API key
+
+- [#6394](https://github.com/Bike4Mind/bike4mind/pull/6394) [`6a288cd`](https://github.com/Bike4Mind/bike4mind/commit/6a288cd1a5544e97866cd69f0a932e7c62ecda0c) Thanks [@onoya](https://github.com/onoya)! - session quest history and credit transaction endpoints
+
+- [#6396](https://github.com/Bike4Mind/bike4mind/pull/6396) [`0fca829`](https://github.com/Bike4Mind/bike4mind/commit/0fca8293a5d3dceb185b1c4e450a7e487f2d179f) Thanks [@onoya](https://github.com/onoya)! - device push token registry
+
+- [#6422](https://github.com/Bike4Mind/bike4mind/pull/6422) [`f21f3e9`](https://github.com/Bike4Mind/bike4mind/commit/f21f3e9eb90774500f9311e6912ea940ef40cb2f) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - publish four file routes as v1 contracts
+
+- [#6537](https://github.com/Bike4Mind/bike4mind/pull/6537) [`ef2d63e`](https://github.com/Bike4Mind/bike4mind/commit/ef2d63e097faf5550af8c6b331526c0e6785f74c) Thanks [@jebie](https://github.com/jebie)! - cap in-flight presigned uploads per user and reserve their bytes against quota
+
+- [#6590](https://github.com/Bike4Mind/bike4mind/pull/6590) [`77496f1`](https://github.com/Bike4Mind/bike4mind/commit/77496f1bfe8ecb6148555056b540060881a11821) Thanks [@jarlacut](https://github.com/jarlacut)! - add an ID-token to ai-token exchange helper
+
+- [#6604](https://github.com/Bike4Mind/bike4mind/pull/6604) [`339b66f`](https://github.com/Bike4Mind/bike4mind/commit/339b66f6f199232b75b5b8088cbec9d8b757c2c2) Thanks [@jjmarfa](https://github.com/jjmarfa)! - meter the remaining platform-key text completion routes
+
+- [#6621](https://github.com/Bike4Mind/bike4mind/pull/6621) [`910a008`](https://github.com/Bike4Mind/bike4mind/commit/910a00879345f163e88dd216607f98fb9964a917) Thanks [@jjmarfa](https://github.com/jjmarfa)! - edit images with FLUX.2 reference inputs
+
+### Patch Changes
+
+- [#6109](https://github.com/Bike4Mind/bike4mind/pull/6109) [`bcd3d7d`](https://github.com/Bike4Mind/bike4mind/commit/bcd3d7d048e3b543cf807dcc09c1a033df238a28) Thanks [@dea0030](https://github.com/dea0030)! - check contract responses in production and strip undeclared fields outside it
+
+- [#6275](https://github.com/Bike4Mind/bike4mind/pull/6275) [`70be4dc`](https://github.com/Bike4Mind/bike4mind/commit/70be4dce93edfdc12d9241678204b2ccc8ee103c) Thanks [@onoya](https://github.com/onoya)! - record cache tokens and session on completion usage rows
+
+- [#6337](https://github.com/Bike4Mind/bike4mind/pull/6337) [`69b8c37`](https://github.com/Bike4Mind/bike4mind/commit/69b8c37e6376947f478d61af49778568e97db700) Thanks [@maconard](https://github.com/maconard)! - constrain the json_schema forced tool and honor caller reasoning
+
+- [#6480](https://github.com/Bike4Mind/bike4mind/pull/6480) [`c959137`](https://github.com/Bike4Mind/bike4mind/commit/c95913786fbe3f42d5e2bfcd6c0185574309bb11) Thanks [@ktdejesus](https://github.com/ktdejesus)! - bill web search and web fetch per provider call
+
 ## 1.5.0
 
 ### Minor Changes

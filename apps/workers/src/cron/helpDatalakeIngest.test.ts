@@ -4,7 +4,10 @@ import * as path from 'path';
 const h = vi.hoisted(() => ({
   connectDB: vi.fn(),
   findBySlug: vi.fn(),
+  findByDatalakeTag: vi.fn(),
   getSettingsValue: vi.fn(),
+  claimOnce: vi.fn(),
+  ensureHelpDataLake: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
   createHelpEmbedder: vi.fn(),
   ingestHelpDatalake: vi.fn(),
@@ -14,12 +17,16 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/database', () => ({
   connectDB: h.connectDB,
-  adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
+  adminSettingsRepository: {
+    getSettingsValue: h.getSettingsValue,
+    claimOnce: h.claimOnce,
+  },
   apiKeyRepository: {},
-  dataLakeRepository: { findBySlug: h.findBySlug },
+  dataLakeRepository: { findBySlug: h.findBySlug, findByDatalakeTag: h.findByDatalakeTag },
   fabFileChunkRepository: {},
   fabFileRepository: {},
 }));
+vi.mock('@bike4mind/db-core', () => ({ withTransaction: async (callback: () => Promise<unknown>) => callback() }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     info = vi.fn();
@@ -29,8 +36,10 @@ vi.mock('@bike4mind/observability', () => ({
 }));
 vi.mock('@bike4mind/scripts/help/ingestHelpDatalake', () => ({
   HELP_DATALAKE_SLUG: 'system-help',
+  HELP_DATALAKE_TAG: 'datalake:system-help',
   createHelpEmbedder: h.createHelpEmbedder,
   ingestHelpDatalake: h.ingestHelpDatalake,
+  ensureHelpDataLake: h.ensureHelpDataLake,
 }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
@@ -39,7 +48,7 @@ vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://%STAGE%/db' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'dev' } } }));
 
-import { handler } from './helpDatalakeIngest';
+import { HELP_LAKE_BOOTSTRAP_MARKER, handler, runHelpDatalakeIngest } from './helpDatalakeIngest';
 
 const CLEAN_RESULT = {
   publicEntries: 51,
@@ -138,5 +147,126 @@ describe('helpDatalakeIngest cron', () => {
     const res = await handler();
 
     expect(JSON.parse(res.body)).toMatchObject({ unchanged: 49, created: 2, removed: 11 });
+  });
+});
+
+describe('runHelpDatalakeIngest with a bootstrap owner (self-host)', () => {
+  const bootstrapOwnerId = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.findBySlug.mockResolvedValue(null);
+    h.findByDatalakeTag.mockResolvedValue(null);
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.getEffectiveLLMApiKeys.mockResolvedValue({});
+    h.createHelpEmbedder.mockReturnValue({ embed: vi.fn(), model: 'text-embedding-3-small' });
+    h.ingestHelpDatalake.mockResolvedValue(CLEAN_RESULT);
+    h.claimOnce.mockResolvedValue(true);
+    h.ensureHelpDataLake.mockResolvedValue('lake-1');
+    bootstrapOwnerId.mockResolvedValue('admin-1');
+  });
+
+  it('creates a never-created lake under the bootstrap owner, embedding with that owner keys', async () => {
+    await runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId });
+
+    expect(h.getEffectiveLLMApiKeys).toHaveBeenCalledWith('admin-1', expect.anything());
+    expect(h.ingestHelpDatalake).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        userId: 'admin-1',
+        helpIndexPath: path.join('/corpus', 'help-index.json'),
+        requireActiveLake: true,
+      })
+    );
+  });
+
+  it('does not revive a lake that exists but is deleted or purging', async () => {
+    h.findByDatalakeTag.mockResolvedValue({ id: 'lake-1', status: 'deleted' });
+
+    expect(await runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId })).toEqual({
+      skipped: 'lake-missing',
+    });
+    expect(bootstrapOwnerId).not.toHaveBeenCalled();
+    expect(h.ingestHelpDatalake).not.toHaveBeenCalled();
+  });
+
+  it('skips until an admin exists to own the lake', async () => {
+    bootstrapOwnerId.mockResolvedValue(null);
+
+    expect(await runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId })).toEqual({ skipped: 'no-owner' });
+    expect(h.ingestHelpDatalake).not.toHaveBeenCalled();
+  });
+
+  it('keeps an existing lake owner rather than the bootstrap owner', async () => {
+    h.findBySlug.mockResolvedValue({ id: 'lake-1', createdByUserId: 'system-user' });
+
+    await runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId });
+
+    expect(bootstrapOwnerId).not.toHaveBeenCalled();
+    expect(h.ingestHelpDatalake).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ userId: 'system-user' })
+    );
+  });
+
+  it('does not re-bootstrap a purged lake: the marker outlives the hard-deleted row', async () => {
+    h.claimOnce.mockResolvedValue(false);
+
+    expect(await runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId })).toEqual({
+      skipped: 'lake-missing',
+    });
+    expect(h.ingestHelpDatalake).not.toHaveBeenCalled();
+  });
+
+  it('records the marker for a lake it did not create, live or deleted, so a later purge stays purged', async () => {
+    h.findBySlug.mockResolvedValue({ id: 'lake-1', createdByUserId: 'system-user' });
+    await runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId });
+    h.findBySlug.mockResolvedValue(null);
+    h.findByDatalakeTag.mockResolvedValue({ id: 'lake-1', status: 'deleted' });
+    await runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId });
+
+    expect(h.claimOnce).toHaveBeenCalledTimes(2);
+    expect(h.claimOnce).toHaveBeenCalledWith(HELP_LAKE_BOOTSTRAP_MARKER, expect.any(String));
+  });
+
+  it('does not spend the bootstrap when the embedding model is unusable', async () => {
+    h.getSettingsValue.mockResolvedValue(undefined);
+
+    expect(await runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId })).toEqual({
+      skipped: 'embedding-model',
+    });
+    expect(h.claimOnce).not.toHaveBeenCalled();
+  });
+
+  it('does not embed when creating the lake fails', async () => {
+    h.ensureHelpDataLake.mockRejectedValueOnce(new Error('lake creation failed'));
+
+    await expect(runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId })).rejects.toThrow(
+      'lake creation failed'
+    );
+    expect(h.ingestHelpDatalake).not.toHaveBeenCalled();
+  });
+
+  it('creates the lake before resolving embedding credentials', async () => {
+    h.getEffectiveLLMApiKeys.mockImplementationOnce(async () => {
+      expect(h.ensureHelpDataLake).toHaveBeenCalledOnce();
+      throw new Error('key lookup failed');
+    });
+
+    await expect(runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId })).rejects.toThrow(
+      'key lookup failed'
+    );
+  });
+});
+
+describe('hosted handler and the bootstrap marker', () => {
+  it('never writes the self-host marker', async () => {
+    vi.clearAllMocks();
+    h.findBySlug.mockResolvedValue({ id: 'lake-1', createdByUserId: 'system-user' });
+    h.ingestHelpDatalake.mockResolvedValue(CLEAN_RESULT);
+
+    await handler();
+
+    expect(h.claimOnce).not.toHaveBeenCalled();
   });
 });

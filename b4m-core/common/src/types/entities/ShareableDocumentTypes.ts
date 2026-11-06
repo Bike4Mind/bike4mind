@@ -178,4 +178,6 @@ export interface UserShareMatch {
 export interface UserSharesChange {
   remove?: UserShareMatch;
   add?: UserShareGrant[];
+  /** Also edit a soft-deleted document, so a revoke reaches a tombstone before a restore. */
+  includeDeleted?: boolean;
 }

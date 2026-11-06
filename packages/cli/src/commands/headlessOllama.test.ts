@@ -3,7 +3,7 @@ import type { ILogger } from '@bike4mind/observability';
 import { createHeadlessLlmBackendDeps, MAX_DIAGNOSTIC_ARG_CHARS } from './headlessOllama.js';
 
 const { constructBackend } = vi.hoisted(() => ({
-  constructBackend: vi.fn<(host: string, logger: ILogger) => void>(),
+  constructBackend: vi.fn<(host: string, logger: ILogger, options?: { requestSettings?: unknown }) => void>(),
 }));
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
@@ -11,8 +11,8 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   return {
     ...original,
     OllamaBackend: class {
-      constructor(host: string, logger: ILogger) {
-        constructBackend(host, logger);
+      constructor(host: string, logger: ILogger, options?: { requestSettings?: unknown }) {
+        constructBackend(host, logger, options);
       }
     },
   };
@@ -64,6 +64,12 @@ describe('headless Ollama diagnostics', () => {
     expect(stderr).toHaveBeenCalledWith('failed: Error: connect ECONNREFUSED\n');
     expect(stderr).toHaveBeenCalledWith('nested {"cause":"Error: connect ECONNREFUSED"}\n');
     expect(stderr).toHaveBeenCalledWith('shared {"a":{"id":1},"b":{"id":1}}\n');
+  });
+
+  it('passes the per-model request settings reader through to the backend', () => {
+    const requestSettings = vi.fn(async () => ({}));
+    createHeadlessLlmBackendDeps(false).createOllamaBackend('http://127.0.0.1:11434', { requestSettings });
+    expect(constructBackend.mock.lastCall![2]?.requestSettings).toBe(requestSettings);
   });
 
   it('caps each rendered argument and says how much was cut', () => {

@@ -1,11 +1,18 @@
 import mongoose, { Schema } from 'mongoose';
 import type {
+  SignupDomainHoldAssessment,
   SignupDomainHoldAutoPolicy,
   SignupDomainReview,
   SignupObservation,
   SignupProtectionRepository,
 } from '@bike4mind/common';
-import { emailDomainCandidates, SIGNUP_DOMAIN_HOLD_AUTO_POLICIES } from '@bike4mind/common';
+import {
+  emailDomainCandidates,
+  SIGNUP_DOMAIN_HOLD_ASSESSMENT_FAILURES,
+  SIGNUP_DOMAIN_HOLD_AUTO_POLICIES,
+  SIGNUP_DOMAIN_HOLD_JUDGMENTS,
+} from '@bike4mind/common';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { PartnerSignupRule } from './PartnerSignupRuleModel';
 import { disposableDomainRepository } from './DisposableDomainModel';
 
@@ -33,6 +40,24 @@ const reviewSchema = new Schema<SignupDomainReview>({
       {
         policy: { type: String, enum: SIGNUP_DOMAIN_HOLD_AUTO_POLICIES, required: true },
         decidedAt: { type: Date, required: true },
+      },
+      { _id: false }
+    ),
+    default: undefined,
+  },
+  // Flat storage for the discriminated union signupDomainHoldAssessmentSchema (common); `outcome`
+  // says which of the optional fields are set.
+  assessment: {
+    type: new Schema(
+      {
+        outcome: { type: String, enum: ['judged', 'failed'], required: true },
+        policyVersion: { type: Number, required: true },
+        judgment: { type: String, enum: SIGNUP_DOMAIN_HOLD_JUDGMENTS },
+        confidence: Number,
+        failure: { type: String, enum: SIGNUP_DOMAIN_HOLD_ASSESSMENT_FAILURES },
+        attempts: Number,
+        model: { type: String, required: true },
+        assessedAt: { type: Date, required: true },
       },
       { _id: false }
     ),
@@ -119,6 +144,41 @@ export const signupDomainReviewRepository = {
         $set: { status: 'blocked', reviewedAt: decidedAt, autoDecision: { policy, decidedAt } },
         $unset: { reviewedBy: 1 },
       }
+    );
+    return result.modifiedCount === 1;
+  },
+  /**
+   * Pending holds whose reason starts with `reasonPrefix` and that need an advisory assessment: never
+   * assessed, assessed under another policy version, or failed fewer than `maxAttempts` times with
+   * the last attempt at or before `retryBefore`. Oldest first.
+   */
+  async listPendingForAssessment(
+    reasonPrefix: string,
+    { policyVersion, maxAttempts, retryBefore }: { policyVersion: number; maxAttempts: number; retryBefore: Date },
+    limit: number
+  ): Promise<SignupDomainReview[]> {
+    return SignupDomainReviewModel.find({
+      status: 'held_pending_review',
+      reason: { $regex: `^${escapeRegex(reasonPrefix)}` },
+      $or: [
+        { assessment: { $exists: false } },
+        { 'assessment.policyVersion': { $ne: policyVersion } },
+        {
+          'assessment.outcome': 'failed',
+          'assessment.attempts': { $lt: maxAttempts },
+          'assessment.assessedAt': { $lte: retryBefore },
+        },
+      ],
+    })
+      .sort({ triggeredAt: 1, _id: 1 })
+      .limit(limit)
+      .lean();
+  },
+  /** Stores an advisory verdict on a still-pending hold. False when the hold was decided first. */
+  async recordAssessment(domain: string, assessment: SignupDomainHoldAssessment): Promise<boolean> {
+    const result = await SignupDomainReviewModel.updateOne(
+      { domain, status: 'held_pending_review' },
+      { $set: { assessment } }
     );
     return result.modifiedCount === 1;
   },

@@ -22,6 +22,7 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { buildSessionUpdateAdapters } from '@server/sessions/sessionUpdateAdapters';
+import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
 
 // Each verb's auth mode, required scope, and path/body validation come from its contract
 // (sessionGetContract, sessionUpdateContract, sessionDeleteContract), the single source of truth
@@ -78,6 +79,19 @@ const deleteHandler = nextRouteForContract(sessionDeleteContract).delete(async (
       }
     )
   );
+
+  // Published replies are snapshots that outlive their notebook; take the owner's down with it, as
+  // the bulk DELETE /api/sessions does. After the delete, so a refused or conflicting one keeps them.
+  // The delete is already committed, so a failure is logged rather than failing the request.
+  try {
+    await unpublishUserArtifactsBySource(userId, { kind: 'reply', sessionIds: [id] }, { logger: req.logger });
+  } catch (error) {
+    req.logger.error('Error unpublishing replies after session delete:', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      sessionId: id,
+      userId,
+    });
+  }
 
   await logEvent({ userId, type: SessionEvents.DELETE_SESSION, metadata: { sessionId: id } }, { ability: req.ability });
 

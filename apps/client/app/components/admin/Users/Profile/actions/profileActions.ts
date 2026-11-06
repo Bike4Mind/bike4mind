@@ -19,6 +19,8 @@ export type ProfileAction =
   | 'subscription'
   | 'loginAs'
   | 'message'
+  | 'scheduleDeletion'
+  | 'cancelDeletion'
   | 'delete';
 
 /**

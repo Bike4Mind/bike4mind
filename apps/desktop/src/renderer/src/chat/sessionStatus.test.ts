@@ -68,12 +68,10 @@ describe('applyPreparingEvents', () => {
     const preparing = applyPreparingEvents(none, [{ sessionId: 'a', status: 'processing', preparing: 'worktree' }]);
     expect(preparing.get('a')).toBe('worktree');
 
-    const installing = applyPreparingEvents(preparing, [
-      { sessionId: 'a', status: 'processing', preparing: 'dependencies' },
-    ]);
-    expect(installing.get('a')).toBe('dependencies');
+    const starting = applyPreparingEvents(preparing, [{ sessionId: 'a', status: 'processing', preparing: 'starting' }]);
+    expect(starting.get('a')).toBe('starting');
 
-    const replying = applyPreparingEvents(installing, [{ sessionId: 'a', status: 'processing' }]);
+    const replying = applyPreparingEvents(starting, [{ sessionId: 'a', status: 'processing' }]);
     expect(replying.has('a')).toBe(false);
     expect(preparing.get('a')).toBe('worktree');
   });

@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LocalModels } from '../modelServers/LocalModels';
 import { ModelServerRegistry, PICKER_LIST_WAIT_MS } from '../modelServers/ModelServerRegistry';
 import { ModelServerStore } from '../modelServers/ModelServerStore';
+import { inertLaunchers } from '../modelServers/testLaunchers';
 import { ChatService } from './ChatService';
 import type { McpManager } from './mcp/McpManager';
 import type { SecretCipher, StoreFile } from './mcp/McpServerStore';
@@ -85,6 +86,7 @@ async function fixture(
   const servers = new ModelServerRegistry({
     store: new ModelServerStore(cipher, memoryFile(), logger),
     logger,
+    launchers: inertLaunchers(),
     changed,
     edited: () => holder.catalog?.forgetLocal(),
     fetchFor,

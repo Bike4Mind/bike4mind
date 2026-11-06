@@ -83,6 +83,11 @@ vi.mock('@workers/events/recordSessionOperationalUsage', () => ({
   recordSessionOperationalUsage: vi.fn(),
 }));
 
+// The credit gate is covered by its own tests; here every payer can fund the call.
+vi.mock('@workers/events/sessionOperationalCreditGate', () => ({
+  payerCanFundSessionOperation: vi.fn(async () => true),
+}));
+
 import { TAG_RETRY_BACKOFF_MS } from '@bike4mind/common';
 import { Session, Quest, User, sessionRepository } from '@bike4mind/database';
 import { handler } from './sessionTagging';

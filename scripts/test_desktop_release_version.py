@@ -51,20 +51,17 @@ class DesktopVersionTest(unittest.TestCase):
         self.commit('feat(desktop): feature')
         self.releases.append({'tag_name': 'desktop-v0.2.0', 'prerelease': False,
                               'draft': True, 'target_commitish': self.git('rev-parse', 'HEAD')})
-        version, publish, previous = select_version(self.releases, '0.1.0')
-        self.assertEqual((version, publish), ('0.2.0', True))
+        version, publish, previous, reclaim = select_version(self.releases, '0.1.0')
+        self.assertEqual((version, publish, reclaim), ('0.2.0', True, ''))
         self.assertEqual(previous, self.git('rev-parse', 'HEAD'))
         self.assertNotIn('desktop-v0.2.0', self.git('tag', '--list').splitlines())
         self.assertIn('# Desktop 0.2.0', release_notes(version, previous, 'example/repo', 'example/dist'))
-        self.commit('fix(desktop): another fix')
-        with self.assertRaises(ValueError):
-            select_version(self.releases, '0.1.0')
 
     def test_initial_untagged_draft_can_generate_notes(self):
         self.git('tag', '-d', 'desktop-v0.1.0')
         releases = [{'tag_name': 'desktop-v0.1.0', 'prerelease': False,
                      'draft': True, 'target_commitish': self.git('rev-parse', 'HEAD')}]
-        version, publish, previous = select_version(releases, '0.1.0')
+        version, publish, previous, _ = select_version(releases, '0.1.0')
         self.assertEqual((version, publish), ('0.1.0', True))
         self.assertEqual(self.git('tag', '--list'), '')
         self.assertIn('# Desktop 0.1.0', release_notes(version, previous, 'example/repo', 'example/dist'))
@@ -72,17 +69,65 @@ class DesktopVersionTest(unittest.TestCase):
     def test_distribution_draft_wins_over_source_tag_reservation(self):
         self.releases.append({'tag_name': 'desktop-v0.1.0', 'prerelease': False,
                               'draft': True, 'target_commitish': self.git('rev-parse', 'HEAD')})
-        self.commit('fix(desktop): next change')
-        with self.assertRaises(ValueError):
-            select_version(self.releases, '0.1.0')
+        self.assertEqual(select_version(self.releases, '0.1.0')[1:3], (True, self.git('rev-parse', 'HEAD')))
 
-    def test_source_reservation_without_destination_release_blocks_next_commit(self):
+    def test_orphaned_draft_beside_a_published_release_is_never_reclaimed(self):
+        self.releases.append({'tag_name': 'desktop-v0.1.0', 'prerelease': False,
+                              'draft': True, 'target_commitish': self.git('rev-parse', 'HEAD')})
+        self.commit('fix(desktop): next change')
+        self.assertEqual(select_version(self.releases, '0.1.0'), ('0.1.1', True, 'desktop-v0.1.0', ''))
+
+    def test_pending_reservation_at_head_is_retried_not_reclaimed(self):
         self.commit('fix(desktop): reserved build')
         self.git('tag', 'desktop-v0.1.1')
         releases = with_reservations(self.releases, ['desktop-v0.1.0', 'desktop-v0.1.1'])
-        self.assertEqual(select_version(releases, '0.1.0')[:2], ('0.1.1', True))
+        head = self.git('rev-parse', 'HEAD')
+        self.assertEqual(select_version(releases, '0.1.0'), ('0.1.1', True, head, ''))
+
+    def test_orphaned_source_reservation_is_reclaimed_at_head(self):
+        self.commit('feat(desktop): reserved build')
+        orphan = self.git('rev-parse', 'HEAD')
+        self.git('tag', 'desktop-v0.2.0')
+        releases = with_reservations(self.releases, ['desktop-v0.1.0', 'desktop-v0.2.0'])
         self.commit('fix(desktop): next commit')
-        with self.assertRaises(ValueError):
+        version, publish, previous, reclaim = select_version(releases, '0.1.0')
+        self.assertEqual((version, publish, previous, reclaim), ('0.2.0', True, 'desktop-v0.1.0', orphan))
+        notes = release_notes(version, previous, 'example/repo', 'example/dist')
+        self.assertIn('feat(desktop): reserved build', notes)
+        self.assertIn('fix(desktop): next commit', notes)
+
+    def test_orphaned_distribution_draft_is_reclaimed_at_head(self):
+        self.commit('fix(desktop): drafted build')
+        orphan = self.git('rev-parse', 'HEAD')
+        self.releases.append({'tag_name': 'desktop-v0.1.1', 'prerelease': False,
+                              'draft': True, 'target_commitish': orphan})
+        self.commit('fix(desktop): next commit')
+        self.assertEqual(select_version(self.releases, '0.1.0'), ('0.1.1', True, 'desktop-v0.1.0', orphan))
+
+    def test_orphan_below_the_selected_version_is_left_in_place(self):
+        self.commit('fix(desktop): reserved build')
+        self.git('tag', 'desktop-v0.1.1')
+        releases = with_reservations(self.releases, ['desktop-v0.1.0', 'desktop-v0.1.1'])
+        self.commit('feat(desktop): next feature')
+        self.assertEqual(select_version(releases, '0.1.0'), ('0.2.0', True, 'desktop-v0.1.0', ''))
+
+    def test_preview_never_reclaims_an_orphan(self):
+        self.commit('fix(desktop): reserved build')
+        self.git('tag', 'desktop-v0.1.1')
+        releases = with_reservations(self.releases, ['desktop-v0.1.0', 'desktop-v0.1.1'])
+        self.commit('fix(desktop): next commit')
+        self.assertEqual(select_version(releases, '0.1.0', '12', 'fix(desktop): next commit', '42')[::3],
+                         ('0.1.2-pr.12.42', ''))
+
+    def test_reservation_off_the_head_history_fails_closed(self):
+        main = self.git('branch', '--show-current')
+        self.git('checkout', '-qb', 'side')
+        self.commit('fix(desktop): side build')
+        self.git('tag', 'desktop-v0.1.1')
+        self.git('checkout', '-q', main)
+        self.commit('fix(desktop): main build')
+        releases = with_reservations(self.releases, ['desktop-v0.1.0', 'desktop-v0.1.1'])
+        with self.assertRaises(subprocess.CalledProcessError):
             select_version(releases, '0.1.0')
 
     def test_known_prerelease_tag_does_not_become_stable_reservation(self):
@@ -105,10 +150,10 @@ class DesktopVersionTest(unittest.TestCase):
         releases = with_reservations(releases, tags + ['desktop-v1.0.0'])
         self.assertEqual(select_version(releases, '0.1.0')[:2], ('0.6.0', True))
         self.git('tag', 'desktop-v0.6.0')
+        orphan = self.git('rev-parse', 'HEAD')
         releases = with_reservations(releases, ['desktop-v0.6.0'])
         self.commit('fix(desktop): later change')
-        with self.assertRaises(ValueError):
-            select_version(releases, '0.1.0')
+        self.assertEqual(select_version(releases, '0.1.0'), ('0.6.0', True, 'desktop-v0.5.0', orphan))
 
     def test_real_destination_draft_still_blocks_at_withdrawn_version(self):
         self.git('tag', 'desktop-v0.5.0')
@@ -160,6 +205,25 @@ class DesktopVersionTest(unittest.TestCase):
         self.releases.append({'tag_name': 'desktop-v2.0.0', 'prerelease': False})
         with self.assertRaises(ValueError):
             select_version(self.releases, '0.1.0')
+
+    def test_orphaned_major_draft_still_requires_beta_policy_change(self):
+        self.commit('fix(desktop): reserved build')
+        orphan = self.git('rev-parse', 'HEAD')
+        self.commit('fix(desktop): next commit')
+        for version in ('1.0.1', '2.0.0', '9.0.0'):
+            with self.subTest(version=version):
+                releases = self.releases + [{'tag_name': 'desktop-v' + version,
+                    'prerelease': False, 'draft': True, 'target_commitish': orphan}]
+                with self.assertRaisesRegex(ValueError, 'explicit beta policy change'):
+                    select_version(releases, '0.1.0')
+
+    def test_accidental_major_orphan_remains_excluded(self):
+        orphan = self.git('rev-parse', 'HEAD')
+        self.commit('fix(desktop): next commit')
+        releases = self.releases + [{'tag_name': 'desktop-v1.0.0',
+            'prerelease': False, 'draft': True, 'target_commitish': orphan}]
+        self.assertEqual(select_version(releases, '0.1.0'),
+                         ('0.1.1', True, 'desktop-v0.1.0', ''))
 
     def test_unrelated_breaking_change_is_ignored(self):
         self.commit('feat(web)!: change web contract', 'apps/client/app.ts')

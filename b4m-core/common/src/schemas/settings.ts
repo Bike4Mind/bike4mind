@@ -306,6 +306,7 @@ export const SettingKeySchema = z.enum([
   'EnableDeferredToolLoading',
   'DeferredToolStartSetMaxTokens',
   'EnableQuestMaster',
+  'QuestMasterLegacyShutdownDate',
   'EnableQuestMasterDefault',
   'EnableHearth',
   'EnableHearthDefault',
@@ -398,7 +399,6 @@ export const SettingKeySchema = z.enum([
   'ScanURLinPrompt',
   'DefaultInviteCode',
   'serverStatus',
-  'defaultSeats',
   'CSMandCTAFlag',
   'showDesktopAppPromo',
   'SystemFiles',
@@ -494,6 +494,8 @@ export const SettingKeySchema = z.enum([
   'enableDomainIntelligence',
   'holdSignupsFromDomainsYoungerThanDays',
   'autoConfirmDisposableAggregateHolds',
+  'signupDomainHoldAssessmentEnabled',
+  'signupDomainHoldAssessmentConfig',
   'domainIntelligenceTimeoutMs',
   'paymentRiskAlertsEnabled',
   'paymentRiskYoungAccountMinutes',
@@ -512,7 +514,6 @@ export const SettingKeySchema = z.enum([
   'paymentRiskCheckoutMaxBlockedAttempts',
   'paymentRiskCheckoutBlockedWindowMinutes',
   'paymentRiskLinkedAccountActions',
-  'defaultFreeCredits',
   'freeTierDailySpendCapCredits',
   'freeTierDay1SpendCapCredits',
   'freeTierDays2To7SpendCapCredits',
@@ -533,20 +534,13 @@ export const SettingKeySchema = z.enum([
   'spendMonitorTrustedAccountIds',
   'spendMonitorTrustedAccountSpikeFloorCredits',
   'spendMonitorTrustedAccountCeilingCredits',
+  'youngAccountSpendPageUsdPerHour',
+  'youngAccountSpendWarnUsdPerHour',
   'freeTierDailySystemCostCapUsd',
-  'stagedSignupGrantEnabled',
-  'signupGrantCredits',
-  'verifiedUnlockCredits',
-  'signupGrantDailyBudget',
   'signupGrantSignupPoolDaily',
   'signupGrantTricklePoolDaily',
   'signupGrantRiskPolicy',
-  'signupGrantActivityEnabled',
-  'signupGrantActivityMinMessages',
   'signupGrantActivityMinActiveSeconds',
-  'signupGrantActivityMinDays',
-  'signupGrantActivityDailyCredits',
-  'signupGrantActivityMaxCredits',
   'signupGrantActivityPreviewTestMode',
   'signupUnlockPaymentHoldHours',
   'signupGrantInitialCredits',
@@ -564,6 +558,7 @@ export const SettingKeySchema = z.enum([
   'turnstileFailClosed',
   'turnstileSiteKey',
   'signupRiskScoring',
+  'signupRiskAutoApproval',
   'preferenceArenaEnabled',
   'preferenceArenaCreditsPerVote',
   'preferenceArenaDailyVoteCap',
@@ -815,6 +810,9 @@ export const IntentClassifierConfigSchema = z.object({
 
 export type IntentClassifierConfig = z.infer<typeof IntentClassifierConfigSchema>;
 
+export const LOW_CONFIDENCE_COMPLETION_MODES = ['block', 'annotate', 'off'] as const;
+export type LowConfidenceCompletionMode = (typeof LOW_CONFIDENCE_COMPLETION_MODES)[number];
+
 export const OrchestrationDefaultsSchema = z.object({
   /**
    * Tool names the synthetic profile is allowed to invoke. A DEFAULT toolbelt, not a gate:
@@ -917,6 +915,12 @@ export const OrchestrationDefaultsSchema = z.object({
   dagEnabled: z.boolean().default(true),
   /** LLM intent-classifier configuration. */
   intentClassifier: IntentClassifierConfigSchema.default(IntentClassifierConfigSchema.parse({})),
+  /**
+   * What the agent executor does when a run's final answer follows a below-threshold iteration:
+   * `annotate` emits `low_confidence_completion` and completes, `block` also pauses for review,
+   * `off` does neither. Omitted => `annotate`.
+   */
+  lowConfidenceCompletion: z.enum(LOW_CONFIDENCE_COMPLETION_MODES).optional(),
 });
 
 export type OrchestrationDefaults = z.infer<typeof OrchestrationDefaultsSchema>;
@@ -1144,6 +1148,13 @@ function isEscalationScheduleOrBlank(value: string): boolean {
 
 function withSchema<T extends object, S extends z.ZodTypeAny>(setting: T, schema: S) {
   return { ...setting, schema };
+}
+
+/** A real YYYY-MM-DD calendar date (rejects 2027-02-30). */
+export function isCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
 function makeStringSetting(
@@ -1491,6 +1502,28 @@ export const AutoContainmentConfigSchema = z.object({
 });
 export type AutoContainmentConfig = z.infer<typeof AutoContainmentConfigSchema>;
 
+/**
+ * Operator limits for the advisory assessment of young-domain signup holds
+ * (apps/client/server/security/signupDomainHoldAssessment). Every default spends nothing: no model and
+ * a zero budget. `signupDomainHoldAssessmentEnabled` gates all provider egress on top of this.
+ */
+export const SignupDomainHoldAssessmentConfigSchema = z.object({
+  /** Decisions model to ask; must be served here and have a platform key. Null means no calls. */
+  model: z.enum(DECISION_MODEL_IDS).nullable().prefault(null),
+  /** Platform spend per 24h window (opened by the first call), in USD, at each call's worst-case cost. */
+  dailyBudgetUsd: z.number().min(0).max(1000).prefault(0),
+  /** Provider calls per 24h window (opened by the first call). */
+  maxCallsPerDay: z.number().int().min(0).max(10_000).prefault(100),
+  /** Provider calls in flight at once, across all instances. */
+  maxConcurrency: z.number().int().min(1).max(10).prefault(1),
+  /** Holds assessed per triage run (every 10 minutes). */
+  maxAssessmentsPerRun: z.number().int().min(1).max(100).prefault(20),
+  /** Least confidence in an `abuse` verdict that confirms the hold; anything lower leaves it pending. */
+  minConfirmConfidence: z.number().min(0.5).max(1).prefault(0.9),
+});
+
+export type SignupDomainHoldAssessmentConfig = z.infer<typeof SignupDomainHoldAssessmentConfigSchema>;
+
 export enum ServerStatusEnum {
   Live = 'live',
   Maintenance = 'maintenance',
@@ -1540,6 +1573,41 @@ export const SignupRiskScoringSchema = z
   .strict();
 
 export type SignupRiskScoring = z.infer<typeof SignupRiskScoringSchema>;
+
+/**
+ * Rules that approve a pending signup risk review without an admin
+ * (apps/client/server/security/riskReviewAutoApproval.ts). Both only move pending to approved, which
+ * an admin can reopen; a model verdict never approves.
+ */
+export const SignupRiskAutoApprovalSchema = z
+  .object({
+    settledPayment: z
+      .object({
+        enabled: z.boolean().prefault(true),
+        /**
+         * Hours a successful payment must have stood, leaving time for an early fraud warning or dispute;
+         * 0 approves as the payment succeeds. Any refund, dispute or early fraud warning on the account,
+         * a partial or goodwill refund included, reopens this approval and rules the account out for good.
+         */
+        minPaymentAgeHours: z.number().int().min(0).max(720).prefault(24),
+      })
+      .strict()
+      .prefault({}),
+    quietAccount: z
+      .object({
+        enabled: z.boolean().prefault(false),
+        minAccountAgeDays: z.number().int().min(1).max(365).prefault(14),
+        /** Only accounts scoring at most this; set it near the review threshold to cover borderline rows only. */
+        maxScore: z.number().min(1).max(100).prefault(60),
+        /** Days since the score was last recomputed (by email verification or a new API key). */
+        minQuietDays: z.number().int().min(1).max(365).prefault(7),
+      })
+      .strict()
+      .prefault({}),
+  })
+  .strict();
+
+export type SignupRiskAutoApproval = z.infer<typeof SignupRiskAutoApprovalSchema>;
 
 export const CUSTOM_MCP_POLICY_MODES = ['off', 'presets_only', 'allowlist', 'any'] as const;
 export type CustomMcpPolicyMode = (typeof CUSTOM_MCP_POLICY_MODES)[number];
@@ -2302,6 +2370,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'SimulatorComputeCreditsPerRound', order: 91.5 },
       { key: 'EnableQuestMaster', order: 92 },
       { key: 'EnableQuestMasterDefault', order: 93 },
+      { key: 'QuestMasterLegacyShutdownDate', order: 93.5 },
       { key: 'EnableHearth', order: 94 },
       { key: 'EnableHearthDefault', order: 95 },
       { key: 'EnableRapidReply', order: 100 },
@@ -2347,7 +2416,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableUserDeletionEmailNotification', order: 1 },
       { key: 'EnableUserDeletionSlackNotification', order: 2 },
       { key: 'CSMandCTAFlag', order: 3 },
-      { key: 'defaultSeats', order: 4 },
       { key: 'defaultTags', order: 5 },
     ],
   },
@@ -2362,19 +2430,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'billOperationalUsage', order: 1 },
       { key: 'blockDisposableEmails', order: 2 },
       { key: 'blockedEmailDomains', order: 3 },
-      { key: 'stagedSignupGrantEnabled', order: 4 },
-      { key: 'signupGrantCredits', order: 5 },
-      { key: 'verifiedUnlockCredits', order: 6 },
-      { key: 'signupGrantDailyBudget', order: 7 },
       { key: 'signupGrantSignupPoolDaily', order: 7.1 },
       { key: 'signupGrantTricklePoolDaily', order: 7.2 },
       { key: 'signupGrantRiskPolicy', order: 8 },
-      { key: 'signupGrantActivityEnabled', order: 9 },
-      { key: 'signupGrantActivityMinMessages', order: 11 },
       { key: 'signupGrantActivityMinActiveSeconds', order: 11.5 },
-      { key: 'signupGrantActivityMinDays', order: 12 },
-      { key: 'signupGrantActivityDailyCredits', order: 13 },
-      { key: 'signupGrantActivityMaxCredits', order: 14 },
       { key: 'signupGrantActivityPreviewTestMode', order: 14.5 },
       { key: 'signupUnlockPaymentHoldHours', order: 14.6 },
       { key: 'signupGrantInitialCredits', order: 14.7 },
@@ -2403,6 +2462,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'spendMonitorTrustedAccountIds', order: 19.492 },
       { key: 'spendMonitorTrustedAccountSpikeFloorCredits', order: 19.493 },
       { key: 'spendMonitorTrustedAccountCeilingCredits', order: 19.494 },
+      { key: 'youngAccountSpendPageUsdPerHour', order: 19.495 },
+      { key: 'youngAccountSpendWarnUsdPerHour', order: 19.496 },
       { key: 'freeTierDailySystemCostCapUsd', order: 19.5 },
       { key: 'syntheticUserEmailDomains', order: 20 },
       { key: 'turnstileEnabled', order: 21 },
@@ -2412,10 +2473,13 @@ export const API_SERVICE_GROUPS = {
       { key: 'signupBurstWindowHours', order: 25 },
       { key: 'signupBurstAutoHold', order: 26 },
       { key: 'signupRiskScoring', order: 27 },
+      { key: 'signupRiskAutoApproval', order: 27.5 },
       { key: 'signupAnomaly', order: 28 },
       { key: 'enableDomainIntelligence', order: 29 },
       { key: 'holdSignupsFromDomainsYoungerThanDays', order: 30 },
       { key: 'autoConfirmDisposableAggregateHolds', order: 30.5 },
+      { key: 'signupDomainHoldAssessmentEnabled', order: 30.6 },
+      { key: 'signupDomainHoldAssessmentConfig', order: 30.7 },
       { key: 'domainIntelligenceTimeoutMs', order: 31 },
       { key: 'paymentRiskAlertsEnabled', order: 32 },
       { key: 'paymentRiskYoungAccountMinutes', order: 33 },
@@ -3101,6 +3165,23 @@ export const settingsMap = {
     order: 91,
     dependsOn: 'EnableQuestMaster',
   }),
+  QuestMasterLegacyShutdownDate: {
+    ...makeStringSetting({
+      key: 'QuestMasterLegacyShutdownDate',
+      name: 'Quest Master: legacy v4/v5 shutdown date',
+      defaultValue: '',
+      description:
+        'The date (YYYY-MM-DD) the legacy v4 and v5 Quest Master views are turned off, shown in their retirement banner. Leave empty until it is decided: the banner then says the views are being retired without a date.',
+      category: 'Experimental',
+      group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+      order: 92,
+      // Read by the retirement banner on the legacy quest views (LegacyQuestmasterRetirement.tsx).
+      userReadable: true,
+    }),
+    schema: z.string().refine(value => value === '' || isCalendarDate(value), {
+      message: 'Use a date like 2027-01-31, or leave it empty.',
+    }),
+  },
   EnableHearth: makeBooleanSetting({
     key: 'EnableHearth',
     name: 'Enable Hearth',
@@ -4355,13 +4436,6 @@ export const settingsMap = {
     order: 1,
     options: Object.values(ServerStatusEnum),
   }),
-  defaultSeats: makeNumberSetting({
-    key: 'defaultSeats',
-    name: 'Default Seats',
-    defaultValue: 20,
-    description: 'The default number of seats for new organizations.',
-    category: 'Users',
-  }),
   enforceCredits: makeBooleanSetting({
     key: 'enforceCredits',
     userReadable: true,
@@ -4885,51 +4959,6 @@ export const settingsMap = {
     // refuses invalid entries and readers filter with partitionDomainList.
     schema: z.array(z.string()),
   }),
-  stagedSignupGrantEnabled: makeBooleanSetting({
-    key: 'stagedSignupGrantEnabled',
-    name: 'Staged Signup Grants',
-    defaultValue: false,
-    userReadable: true,
-    description:
-      'Retired: no longer read. Every new signup is enrolled in a staged grant, and Signup Grant Initial Credits and Signup Grant Drip Cap decide what it pays (a drip cap of 0 locks nothing).',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    category: 'Users',
-  }),
-  signupGrantCredits: makeNumberSetting({
-    key: 'signupGrantCredits',
-    name: 'Signup Grant Credits',
-    defaultValue: 0,
-    min: 0,
-    int: true,
-    userReadable: true,
-    description:
-      'Credits released after email verification for newly enrolled staged accounts. Used only while Signup Grant Initial Credits is unset. 0 grants nothing.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    category: 'Users',
-  }),
-  verifiedUnlockCredits: makeNumberSetting({
-    key: 'verifiedUnlockCredits',
-    name: 'Verified Unlock Credits',
-    defaultValue: 0,
-    min: 0,
-    int: true,
-    userReadable: true,
-    description:
-      'Maximum additional credits available after server-validated unlocks. Stronger evidence pays only the cumulative difference. Does not enable a verification flow.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    category: 'Users',
-  }),
-  signupGrantDailyBudget: makeNumberSetting({
-    key: 'signupGrantDailyBudget',
-    name: 'Signup Grant Daily Budget (deprecated)',
-    defaultValue: 0,
-    min: 0,
-    int: true,
-    description: 'Deprecated: replaced by the signup and trickle pools; no longer read.',
-    hideOnProductionStages: true,
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    category: 'Users',
-  }),
   signupGrantSignupPoolDaily: makeNumberSetting({
     key: 'signupGrantSignupPoolDaily',
     name: 'Signup Pool (credits per day)',
@@ -4962,29 +4991,6 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
-  signupGrantActivityEnabled: makeBooleanSetting({
-    key: 'signupGrantActivityEnabled',
-    name: 'Signup Grant Activity Unlock',
-    defaultValue: false,
-    userReadable: true,
-    description:
-      'Legacy fallback: only read while Signup Grant Daily Credits is unset, where ON applies Signup Activity Daily Credits as the daily drip and OFF pays no drip. Set Signup Grant Daily Credits instead.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    category: 'Users',
-  }),
-  signupGrantActivityMinMessages: makeNumberSetting({
-    key: 'signupGrantActivityMinMessages',
-    name: 'Signup Activity Minimum Messages (deprecated)',
-    defaultValue: 0,
-    min: 0,
-    max: 10000,
-    int: true,
-    description:
-      'Deprecated and unused: the activity drip qualifies on active time, not chat turns. Use Signup Activity Minimum Active Seconds.',
-    hideOnProductionStages: true,
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    category: 'Users',
-  }),
   signupGrantActivityMinActiveSeconds: makeNumberSetting({
     key: 'signupGrantActivityMinActiveSeconds',
     name: 'Signup Activity Minimum Active Seconds',
@@ -4995,46 +5001,6 @@ export const settingsMap = {
     userReadable: true,
     description:
       'Active time in a UTC day, counted from heartbeat pings while the app is open and in use, before the activity drip pays. Invalid values fall back to 60.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    category: 'Users',
-  }),
-  signupGrantActivityMinDays: makeNumberSetting({
-    key: 'signupGrantActivityMinDays',
-    name: 'Signup Activity Minimum Days (deprecated)',
-    defaultValue: 0,
-    min: 0,
-    max: 365,
-    int: true,
-    description:
-      'Deprecated and unused: the activity drip is paid per qualifying UTC day and no longer reads this value. Leave at zero.',
-    hideOnProductionStages: true,
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    category: 'Users',
-  }),
-  signupGrantActivityDailyCredits: makeNumberSetting({
-    key: 'signupGrantActivityDailyCredits',
-    name: 'Signup Activity Daily Credits',
-    defaultValue: 0,
-    min: 0,
-    max: 10000,
-    int: true,
-    userReadable: true,
-    description:
-      'Legacy fallback: the daily drip amount while Signup Grant Daily Credits is unset and Signup Grant Activity Unlock is ON. Set Signup Grant Daily Credits instead.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    category: 'Users',
-  }),
-  signupGrantActivityMaxCredits: makeNumberSetting({
-    key: 'signupGrantActivityMaxCredits',
-    name: 'Signup Activity Maximum Credits',
-    defaultValue: 9000,
-    min: 0,
-    max: 1000000,
-    int: true,
-    // The client resolves the legacy drip cap from it while signupGrantDripCap is unset.
-    userReadable: true,
-    description:
-      'Legacy fallback: while Signup Grant Drip Cap is unset, the drip cap is the smaller of this and Verified Unlock Credits (an unset Verified Unlock Credits counts as 0, so nothing drips). Set Signup Grant Drip Cap instead.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -5067,8 +5033,7 @@ export const settingsMap = {
     min: 0,
     int: true,
     userReadable: true,
-    description:
-      'Credits a new account receives after email verification. While unset, Signup Grant Credits applies, else 0.',
+    description: 'Credits a new account receives after email verification. Unset means 0.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -5080,19 +5045,19 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Credits paid for each day of qualifying activity until the drip cap is reached. Zero disables the drip. While unset, Signup Activity Daily Credits applies if the activity drip is enabled, else 0.',
+      'Credits paid for each day of qualifying activity until the drip cap is reached. Zero or unset disables the drip.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantDripCap: makeNumberSetting({
     key: 'signupGrantDripCap',
     name: 'Signup Grant Drip Cap',
-    defaultValue: 9000,
+    defaultValue: 0,
     min: 0,
     int: true,
     userReadable: true,
     description:
-      'Total credits the daily drip may pay per account. Changes apply to enrolled accounts on their next drip, including accounts the drip already completed, but not accounts a verification unlock completed. Zero disables the drip. While unset, the smaller of Signup Activity Maximum Credits (9000 when unset) and Verified Unlock Credits (0 when unset) applies, or 0 while staged signup grants are off.',
+      'Total credits the daily drip may pay per account. Changes apply to enrolled accounts on their next drip, including accounts the drip already completed, but not accounts a verification unlock completed. Zero disables the drip and pays an invite in full at signup. While unset, nothing drips and an invite pays its initial share at signup, the rest on unlock.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -5130,15 +5095,6 @@ export const settingsMap = {
     description:
       'Refuse a self-serve signup once this many accounts signed up from the same network (ASN) in the last hour. Zero disables the limit. Best effort: simultaneous signups can overshoot by a few.',
     group: API_SERVICE_GROUPS.CREDITS.id,
-    category: 'Users',
-  }),
-  defaultFreeCredits: makeNumberSetting({
-    key: 'defaultFreeCredits',
-    userReadable: true,
-    name: 'Default Free Credits',
-    defaultValue: 0,
-    description:
-      'Retired: no longer sizes any signup grant. A self-serve signup receives Signup Grant Initial Credits after email verification; set that instead. Kept only so a stored value stays visible.',
     category: 'Users',
   }),
   preferenceArenaEnabled: makeBooleanSetting({
@@ -5436,6 +5392,26 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),
+  youngAccountSpendPageUsdPerHour: makeNumberSetting({
+    key: 'youngAccountSpendPageUsdPerHour',
+    name: 'Young-Account Spend Alarm: Page Ceiling (USD)',
+    defaultValue: 0,
+    min: 0,
+    description:
+      'Estimated provider USD per rolling hour spent by accounts under 7 days old at which the young-account spend alarm pages. 0 (default) stops managing the threshold and leaves its current value unchanged, including any previous override, until a deploy restores the deployed default. A positive change is applied to the CloudWatch alarm by the hourly young-account spend job, so it takes up to an hour.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  youngAccountSpendWarnUsdPerHour: makeNumberSetting({
+    key: 'youngAccountSpendWarnUsdPerHour',
+    name: 'Young-Account Spend Alarm: Warn Ceiling (USD)',
+    defaultValue: 0,
+    min: 0,
+    description:
+      'Estimated provider USD per rolling hour spent by accounts under 7 days old at which the young-account spend warning posts. 0 (default) stops managing the threshold and leaves its current value unchanged, including any previous override, until a deploy restores the deployed default. A positive change is applied to the CloudWatch alarm by the hourly young-account spend job, so it takes up to an hour.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
   freeTierDailySystemCostCapUsd: makeNumberSetting({
     key: 'freeTierDailySystemCostCapUsd',
     name: 'Free Tier Daily System Cost Cap (USD)',
@@ -5576,6 +5552,24 @@ export const settingsMap = {
     category: 'Users',
     schema: SignupRiskScoringSchema,
   }),
+  signupRiskAutoApproval: makeObjectSetting({
+    key: 'signupRiskAutoApproval',
+    name: 'Signup Risk Auto-Approval',
+    defaultValue: SignupRiskAutoApprovalSchema.parse({}),
+    description:
+      'Approves a pending signup risk review without an admin. settledPayment: a successful card payment ' +
+      '(credit pack or subscription) that Stripe Radar rated normal, on a card no other account paid with in ' +
+      'the payment-attempt retention window, at least minPaymentAgeHours old. quietAccount (off by default): an account at least ' +
+      'minAccountAgeDays old, scoring at most maxScore, not rescored for minQuietDays and named in no open ' +
+      'shadow detection. Neither applies to a banned, suspended or disputed account, one whose payment unlock ' +
+      'was forfeited, one with a signup tranche held for review, or one an admin reopened. Each approval is ' +
+      'audited and listed in Risk review, where it can be reopened; a refund, dispute or early fraud warning ' +
+      'reopens a settledPayment approval automatically. A stored value that fails to parse turns ' +
+      'both rules off.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    schema: SignupRiskAutoApprovalSchema,
+  }),
   signupAnomaly: makeObjectSetting({
     key: 'signupAnomaly',
     name: 'Signup anomaly detection',
@@ -5624,6 +5618,26 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
       'Confirm Signup Domain Holds whose reason is disposable-aggregate without waiting for an admin, keeping their free credits held. Runs every 10 minutes on stages with scheduled jobs. Each one is recorded in the Admin Audit Log as a system action, and an admin can still Release it from Signup Domain Holds.',
+  }),
+  signupDomainHoldAssessmentEnabled: makeBooleanSetting({
+    key: 'signupDomainHoldAssessmentEnabled',
+    name: 'Advisory Assessment of Young-Domain Holds',
+    defaultValue: false,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Lets a Decisions model judge pending young-domain Signup Domain Holds (abuse, legitimate or insufficient evidence) from a summary of counts and flags: domain age, mail provider class, whether the site answers with content, signup timing and network spread. It never sees emails, IPs, the domain name or site text. It only ever confirms a hold (keeps free credits held) on a confident abuse verdict, recorded in the Admin Audit Log as a system action; it never releases one, and every other verdict leaves the hold for an admin. Paid from the platform key and budget. Off means no provider calls.',
+  }),
+  signupDomainHoldAssessmentConfig: makeObjectSetting({
+    key: 'signupDomainHoldAssessmentConfig',
+    name: 'Advisory Assessment of Young-Domain Holds: Model and Limits',
+    defaultValue: SignupDomainHoldAssessmentConfigSchema.parse({}),
+    description:
+      'The Decisions model to ask (it must have a platform key), the daily USD budget and call cap, concurrent calls, holds per 10-minute run, and the least confidence in an abuse verdict that confirms a hold. The defaults make no calls. The assessment only ever confirms; it never releases a hold.',
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    dependsOn: 'signupDomainHoldAssessmentEnabled',
+    schema: SignupDomainHoldAssessmentConfigSchema,
   }),
   domainIntelligenceTimeoutMs: makeNumberSetting({
     key: 'domainIntelligenceTimeoutMs',
@@ -8026,6 +8040,22 @@ export function redactSettingSecretsForBroadcast(setting: AdminSettingDoc): Admi
     return { ...setting, settingValue: hasValue ? SENSITIVE_SETTING_MASK : '' };
   }
   return redactSettingSecrets(setting);
+}
+
+/** Non-sensitive settings whose value embeds secrets that redactSettingSecrets masks field by field. */
+const SETTINGS_WITH_NESTED_SECRETS: ReadonlySet<string> = new Set(['sreAgentConfig']);
+
+/**
+ * Setting keys whose raw stored document is safe to stream over a WebSocket subscription:
+ * defined (core or contributed), not `isSensitive`, and not a shape that nests secrets
+ * (sreAgentConfig, see redactSettingSecrets). An allowlist so an orphaned or newly added
+ * sensitive row is withheld by default. Sensitive settings reach admins only through the
+ * redacting REST paths (/api/settings, /api/settings/fetch).
+ */
+export function broadcastSafeSettingKeys(): string[] {
+  return allSettingDefinitions()
+    .filter(definition => !definition.isSensitive && !SETTINGS_WITH_NESTED_SECRETS.has(definition.key))
+    .map(definition => definition.key);
 }
 
 /** Setting keys explicitly tagged `publicSafe` - the only keys allowed in the public artifact. */

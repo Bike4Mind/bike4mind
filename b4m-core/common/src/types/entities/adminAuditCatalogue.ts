@@ -54,6 +54,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.credits.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.subscription.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'billing.comp.changed': { category: 'credits', severity: 'notice', write: 'strict' },
+  'billing.subscription.synced': { category: 'credits', severity: 'notice', write: 'strict' },
   'billing.subscription.cancel_scheduled': { category: 'credits', severity: 'critical', write: 'strict' },
   'billing.subscription.resumed': { category: 'credits', severity: 'critical', write: 'strict' },
   // bestEffort: the StripeDispute record holds the resolution; the Contain a lost dispute applies is audited per user.
@@ -74,6 +75,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.restriction_lifted': { category: 'access', severity: 'notice', write: 'strict' },
 
   'user.deleted': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.deletion.scheduled': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.deletion.cancelled': { category: 'account', severity: 'notice', write: 'strict' },
   'user.deletion.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
   // notice, not critical like user.deleted: the sweep carrying out a user's own scheduled deletion.
   'user.deletion.completed': { category: 'account', severity: 'notice', write: 'strict' },
@@ -148,6 +151,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // written in that user's transaction. reopened is the undo of approved.
   'user.signup_risk.approved': { category: 'access', severity: 'notice', write: 'strict' },
   'user.signup_risk.reopened': { category: 'access', severity: 'notice', write: 'strict' },
+  // A system actor approving on payment or quiet-account evidence (apps/client/server/security/riskReviewAutoApproval.ts).
+  'user.signup_risk.auto_approved': { category: 'access', severity: 'notice', write: 'strict' },
   'user.signup_risk.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
   // Signup domain holds: one strict entry per decision, written in the same transaction as the status
   // change. confirmed/released come from admins (apps/client/pages/api/admin/signup-domain-holds.ts);

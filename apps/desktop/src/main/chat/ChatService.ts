@@ -393,12 +393,6 @@ type SendOptions = {
 export const MAX_CONCURRENT_SPAWNED = 10;
 
 /**
- * How long a spawned agent's first turn waits for its new worktree's dependency install (ms).
- * It cannot wait out an install itself: ending its turn reads as the agent having finished.
- */
-export const SPAWN_INSTALL_WAIT_MS = 10 * 60_000;
-
-/**
  * How long a title request may take before it is dropped.
  *
  * Short on purpose: the sidebar row already reads acceptably, so a slow answer is worth less
@@ -683,10 +677,10 @@ export class ChatService {
 
   private readonly launching = new Set<string>();
 
-  /** Ends a spawned agent's wait for its install early, when it is stopped or deleted meanwhile. */
   /** Parents an agent worktree was cut for during this run; see mayHaveAgentWorktrees. */
   private readonly agentParents = new Set<string>();
-  private readonly installWaits = new Map<string, (reason: 'stopped' | 'deleted') => void>();
+  /** A stop or delete that reached a spawn still preparing; read before its first turn is sent. */
+  private readonly launchInterrupts = new Map<string, 'stopped' | 'deleted'>();
 
   /** Startup has failed; no new input may race its preservation or deletion. */
   private readonly abandoning = new Set<string>();
@@ -1931,8 +1925,8 @@ export class ChatService {
     const scopeKey = this.deps.store.scopeKey() ?? 'local';
     this.deps.approvals?.forgetSession(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
-    // Ahead of stop(), so a spawn waiting on its install reads this as the delete it is.
-    this.installWaits.get(sessionId)?.('deleted');
+    // Ahead of stop(), so a spawn still preparing reads this as the delete it is.
+    if (this.launching.has(sessionId)) this.launchInterrupts.set(sessionId, 'deleted');
     this.stop(sessionId);
     await this.deps.capabilities
       ?.revokeMatching(
@@ -1997,7 +1991,9 @@ export class ChatService {
    * server it started. `bash_kill` and the panel's Stop button are how those end.
    */
   stop(sessionId: string): void {
-    this.installWaits.get(sessionId)?.('stopped');
+    if (this.launching.has(sessionId) && !this.launchInterrupts.has(sessionId)) {
+      this.launchInterrupts.set(sessionId, 'stopped');
+    }
     this.active.get(sessionId)?.abort();
   }
 
@@ -5354,12 +5350,16 @@ export class ChatService {
           const workingDirectory = child.project.workingDirectory;
           text = `${worktreePreamble(projectDirectory, { ...worktree, workingDirectory })}\n\n${seed}`;
         }
-        if (!unprepared) {
-          const waited = await this.awaitSpawnInstall(child.id);
-          if (waited !== 'ready') failure = 'It was stopped before its first turn.';
-          deleted = waited === 'deleted';
-          stopped = waited === 'stopped';
-        }
+      }
+      // The dependency install keeps running in the background: the turn starts now, and its
+      // prompt says how to block on the install (bash_output wait_seconds) when node_modules is needed.
+      // Awaiting only the install's planning, so that first prompt already knows one is running.
+      if (!failure) {
+        await this.deps.dependencies?.isInstalling(child.id);
+        const interrupted = await this.launchInterruption(child.id);
+        if (interrupted) failure = 'It was stopped before its first turn.';
+        deleted = interrupted === 'deleted';
+        stopped = interrupted === 'stopped';
       }
       if (!failure) {
         this.deps.activity?.preparingStep(child.id, 'starting');
@@ -5386,6 +5386,7 @@ export class ChatService {
     } finally {
       if (reservation) releaseBranchName(reservation);
       this.launching.delete(child.id);
+      this.launchInterrupts.delete(child.id);
       this.deps.activity?.preparingEnded(child.id);
       if (!failure) this.flushQueue(child.id);
     }
@@ -5397,35 +5398,16 @@ export class ChatService {
     }
   }
 
-  /**
-   * Hold a spawned agent's first turn until its worktree's install settles, or the cap passes.
-   * A timeout or failure still starts the turn, whose prompt then says the install is running or
-   * failed; only a stop or a delete meanwhile does not.
-   */
-  private async awaitSpawnInstall(sessionId: string): Promise<'ready' | 'stopped' | 'deleted'> {
-    const installer = this.deps.dependencies;
-    if (!installer) return 'ready';
-    let interrupted: 'stopped' | 'deleted' | null = null;
-    const stopped = new Promise<null>(resolve =>
-      this.installWaits.set(sessionId, reason => {
-        interrupted ??= reason;
-        resolve(null);
-      })
-    );
-    try {
-      if (await installer.isInstalling(sessionId)) this.deps.activity?.preparingStep(sessionId, 'dependencies');
-      const outcome = await Promise.race([installer.waitFor(sessionId, SPAWN_INSTALL_WAIT_MS), stopped]);
-      if (outcome && outcome !== 'none') this.deps.logger.debug(`CHAT: spawn ${sessionId} install wait: ${outcome}`);
-    } finally {
-      this.installWaits.delete(sessionId);
-    }
-    if (interrupted) return interrupted;
+  /** A stop or delete that arrived while the spawn was preparing, or a session gone meanwhile. */
+  private async launchInterruption(sessionId: string): Promise<'stopped' | 'deleted' | null> {
+    const flagged = this.launchInterrupts.get(sessionId);
+    if (flagged) return flagged;
     if (this.abandoning.has(sessionId) || !(await this.deps.store.get(sessionId))) return 'deleted';
-    return 'ready';
+    return null;
   }
 
   /**
-   * A spawned agent the user stopped while its install ran: keep the session and its worktree,
+   * A spawned agent the user stopped while it was preparing: keep the session and its worktree,
    * and hand the seed back unsent, since stopping is their call rather than a startup failure.
    */
   private async keepStoppedSpawn(parentId: string, child: ChatSessionSummary): Promise<void> {

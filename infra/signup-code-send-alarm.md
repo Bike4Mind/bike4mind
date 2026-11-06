@@ -29,6 +29,7 @@ fail deployment (or, for the scheduled worker, fail the run).
 | `LLM_SPEND_ALARM_USD_PER_HOUR`           | 20                     | Estimated LLM USD per provider except Anthropic, hourly `Sum`       |
 | `LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC` | 75                     | Estimated LLM USD for Anthropic, hourly `Sum`                       |
 | `YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR` | 5                      | Estimated LLM USD per hour by accounts under 7 days old             |
+| `YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR`  | 2                      | Same metric, warn tier (heads-up below the page)                    |
 | `SIGNUP_ALARM_PER_HOUR`                  | 8                      | Accounts created per hour (hourly census)                           |
 | `NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR`     | 5                      | User API keys created within 24h of signup per hour (hourly census) |
 
@@ -93,6 +94,13 @@ with their email (the user id when there is none), an admin link and the Stripe 
 counts and the window.
 Each run logs `young-account-spend` with `windowStart`, `windowEnd` and the totals.
 
+Each run also applies the admin settings `youngAccountSpendPageUsdPerHour` and
+`youngAccountSpendWarnUsdPerHour` to the two hourly
+`EstimatedUsdYoungAccounts` alarms, so a positive change takes effect within the hour. Setting either
+value to 0 stops managing that threshold: its current value, including a previous override, stays
+until a deploy restores the deployed default. A deploy that
+changes the env default rewrites the threshold until the next hourly run re-applies the override.
+
 A breached run also records one shadow detection per listed account (detector
 `youngAccountSpend`, would-action `contain`) for grading on the admin Detections
 page, before the Slack step, and logs `young-account-spend-shadow-detections` with
@@ -155,10 +163,12 @@ The line is written by a dedicated info-level JSON logger in
 metadata. Research completions log each settled configuration, including when
 credit enforcement is disabled; aborts carrying settled partial usage count too.
 
-Metric filters on the ChatCompletion log group and the `cli_completion_request`
-WebSocket Lambda's log group (both run `executeCompletion`; the list is
-`infra/llmSpendLogGroups.ts`) write the same metrics to the `<app>/<stage>/LLMSpend`
-namespace, so every alarm and widget below sums both:
+Metric filters on every log group that logs the line write the same metrics to the
+`<app>/<stage>/LLMSpend` namespace, so every alarm and widget below sums them all.
+The list is `infra/llmSpendLogGroups.ts`: the ChatCompletion container and the
+`cli_completion_request` WebSocket Lambda (both run `executeCompletion`), the Slack
+quest processor Lambda, and the Next.js server Lambda (`/api/chat?wait=true` and the
+voice v2 LLM proxy run `ChatCompletionProcess` inline):
 
 | Metric                      | Value            | Dimensions        |
 | --------------------------- | ---------------- | ----------------- |
@@ -176,9 +186,11 @@ and WAF edge-signal counts from the alarms above.
 
 An hourly alarm on `EstimatedUsdYoungAccounts` fires when accounts under 7 days
 old sum to at least `YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR` (whole USD) and
-routes to the same Slack DLQ topic. It is not listed in the dashboard alarm-status widget.
+routes to the same Slack DLQ topic. A warn-level twin, `young-account-spend-rate-warn`, fires at
+`YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR` (default 2, where ordinary new-user hours top out).
+Neither is listed in the dashboard alarm-status widget.
 
-When it (or the 5-minute `llm-spend-young-accounts` alarm) fires, the Slack relay
+When either (or the 5-minute `llm-spend-young-accounts` alarm) fires, the Slack relay
 (`apps/workers/src/events/youngAccountSpendDetail.ts`) runs a Logs Insights query
 over the same log groups for the breaching window and adds a "Top
 accounts in the window" section: up to five accounts with id, estimated USD,
@@ -199,10 +211,9 @@ DLQ topic, is listed in the alarm-status widget, and has its own "Estimated USD
 per hour by provider" widget with both ceilings drawn.
 
 The figures are estimates from our price table, not provider invoices. Paths
-outside those two log groups are not counted: the Slack quest Lambdas log the
-same line but are not filtered; the agent executor, image, video and voice paths
-do not log it. JSON selectors do match Lambda's tab-prefixed text lines (see
-`infra/logMessageFilterPattern.ts`).
+outside those log groups are not counted: the agent executor, image, video and
+voice paths other than the v2 LLM proxy do not log it. JSON selectors do match
+Lambda's tab-prefixed text lines (see `infra/logMessageFilterPattern.ts`).
 
 ## Mail send failures (`infra/mailAlarms.ts`)
 

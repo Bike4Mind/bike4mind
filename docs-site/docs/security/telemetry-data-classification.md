@@ -454,6 +454,17 @@ Off by default behind the `abuseAssessmentEnabled` and `abuseAssessmentConfig` a
 | Judgment          | `result`, probabilities, confidence, or an `unknown` result with a failure code                        | 365 days (TTL on `assessedAt`) | Admin review                         |
 | Versions and cost | Model id and reported version, policy and evidence versions, cost in USD, trigger, requesting admin id | 365 days (TTL on `assessedAt`) | Admin review, budget accounting      |
 
+## Advisory signup domain hold assessments
+
+Off by default behind the `signupDomainHoldAssessmentEnabled` and `signupDomainHoldAssessmentConfig` admin settings, a scheduled job can ask a Decisions model to judge a signup domain hold placed on a recently registered domain as abuse, legitimate or insufficient evidence. The model receives only a summary computed by the platform: the domain's age in days, a mail-provider class, whether the domain's website answers and has content, signup counts and timing, and counts of distinct networks, network operators and countries across the held signups, with a hosting-network share. It never receives the domain name, an email, an IP, a network number, a user id or any text from the domain's website. Calls use the platform's provider key and a platform budget. A confident abuse judgment can only confirm the hold, which keeps the signups' free credits held; it never releases a hold, and an admin can still release it.
+
+| Data       | Storage                                                                                       | Lifetime                  | Purpose                 |
+| ---------- | --------------------------------------------------------------------------------------------- | ------------------------- | ----------------------- |
+| Judgment   | `SignupDomainReview.assessment`: judgment and confidence, or a failure code and attempt count | Lifetime of the hold row  | Admin review            |
+| Versions   | Model id, policy version, assessment time                                                     | Lifetime of the hold row  | Admin review            |
+| Detection  | A shadow detection per judged hold, with the held account ids and the summary's counts        | Shadow detection lifetime | Admin review, precision |
+| Call count | The domain name and a count of model calls for it, in the platform cache                      | 24 hours                  | Per-domain call cap     |
+
 ## Signup and login network metadata
 
 Every self-service signup stores the network it came from on the new account (`signupMeta`), written once. Every successful signup and sign-in also writes one `AuthEvent` row. Admin-created accounts and impersonation sessions write neither. The network number (ASN) and country come from headers the CDN sets; when they are absent the fields are empty, never guessed. A failed write never blocks sign-in. Both are visible only to admins, and both are deleted with the account, except for the coarse fields copied to Stripe (see below). The full IP on `signupMeta` is kept for the same 90 days as the `AuthEvent` rows; after that the daily `signupIpRetention` job replaces it with its /24 (IPv4) or /48 (IPv6) prefix. The other `signupMeta` fields stay for the account's lifetime. Two other stores keep sign-in IPs outside this retention: `User.loginRecords[].ip` holds the full IP of the most recent sign-ins for the account's lifetime, and `UserAuthAuditLog.actorIp` keeps it for 12 months (TTL index).
@@ -472,6 +483,20 @@ The ASN, country and hosting flag are also copied to Stripe as `signup_asn`, `si
 `signupMeta.challengeVerified` records `true` only after a real server-verified challenge pass; skipped or unavailable checks remain null or absent. It shares the other non-IP signup metadata's admin-only access, account lifetime, and account-deletion behavior. Signed signup tokens carry this observation only to preserve it through verification; public test secrets and fail-open checks do not establish proof. On email sign-up the proof is single-use, because the signed token is consumed. On OAuth sign-up it is per-flow: the signed state is not consumed, so every callback that reuses the same state within its 5-minute lifetime records the same pass.
 
 Signup grant assessments also emit one of the `signup-grant-assessed-full`, `signup-grant-assessed-reduced`, or `signup-grant-assessed-review` log markers after commit. These markers contain only the outcome band, without account identifiers, policy weights, network observations, or challenge tokens. CloudWatch metric filters count them for monitoring and an optional review-volume alarm. The markers follow the server log group's retention; metric counts follow CloudWatch retention. Emission is best effort, so counts are operational monitoring rather than an exact grant ledger.
+
+## Waitlist signup network metadata
+
+A waitlist request (the public subscribe form, or a sign-up attempt while registration is closed) stores a smaller copy of the same network capture on the `Subscriber` row as `signupNetwork`. These people have no account yet, so the full IP is never stored: only its /24 (IPv4) or /48 (IPv6) prefix is kept. The daily `signupIpRetention` job clears the whole `signupNetwork` object once it is 90 days old. The waitlist row itself stays until an admin deletes it. The data is shown only to admins, in the network column of the Invite Center waitlist.
+
+| Field              | Stored as                                                                         | Retention | Purpose                                           |
+| ------------------ | --------------------------------------------------------------------------------- | --------- | ------------------------------------------------- |
+| IP prefix          | `signupNetwork.ipPrefix`, /24 or /48 only                                         | 90 days   | Attribute probing and repeat signups to a network |
+| User agent         | `signupNetwork.userAgent`, first 512 characters                                   | 90 days   | Abuse investigation                               |
+| Network and region | `asn`, operator for hosting ASNs, ISO country code, `isDatacenter`                | 90 days   | Spot signups from one network or a host           |
+| Edge signals       | `ja4` TLS fingerprint, WAF anonymous-IP and bot labels (null when not forwarded)  | 90 days   | Tie waitlist probes to other traffic              |
+| Challenge outcome  | `challengeVerified`: `true` after a server-verified Turnstile pass, otherwise null | 90 days   | Tell challenged signups from unchallenged ones    |
+
+A waitlist name that contains HTML or script markup, starts with a spreadsheet-formula character (`=`, `+`, `-`, `@`), or contains control characters is stored with `suspicious.reasons` listing which. Such a row gets the same response as any other signup and no Slack alert. The flag stays for the life of the row.
 
 ## Account behavioral evidence
 

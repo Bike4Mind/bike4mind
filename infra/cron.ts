@@ -31,10 +31,12 @@ import {
 } from './buckets';
 import { websocketApi } from './websocket';
 import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
+import { youngAccountSpendAlarms } from './llmSpend';
 import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
+import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
 import './businessMetricAlerts';
 import './imageModerationReviewSweep';
@@ -124,8 +126,9 @@ const signupBaselineReport = runsScheduledJobs
     })
   : undefined;
 
-// Auto-confirms Signup Domain Holds that need no judgment (it never releases one). A failed hold
-// throws so signupDomainHoldTriageLambdaErrors in alarms.ts sees it; the next run retries.
+// Auto-confirms Signup Domain Holds that need no judgment, then runs the advisory assessment of
+// young-domain holds, which may also only confirm (neither ever releases one).
+// A failed hold throws so signupDomainHoldTriageLambdaErrors in alarms.ts sees it; the next run retries.
 const signupDomainHoldTriageCron = runsScheduledJobs
   ? new sst.aws.Cron('signupDomainHoldTriage', {
       schedule: 'rate(10 minutes)',
@@ -133,7 +136,9 @@ const signupDomainHoldTriageCron = runsScheduledJobs
         vpc: lambdaVpc,
         handler: 'apps/workers/src/cron/signupDomainHoldTriage.handler',
         runtime: 'nodejs24.x',
-        timeout: '2 minutes',
+        // Room for the advisory assessment (site probe and one Decisions call per hold); it stops
+        // starting new holds a minute before the timeout.
+        timeout: '5 minutes',
         memory: '512 MB',
         retries: 0,
         link: [...allSecrets],
@@ -172,6 +177,23 @@ const disposableDomainRefreshCron = runsScheduledJobs
   : undefined;
 
 const youngAccountSpendAlertMention = alarmSlackMentionFunctionArgs();
+// The job rewrites these two alarms' thresholds from admin settings (youngAccountSpendAlarmThresholds.ts).
+const [youngAccountSpendPageAlarm, youngAccountSpendWarnAlarm] = youngAccountSpendAlarms;
+const youngAccountSpendAlarmArgs =
+  youngAccountSpendPageAlarm && youngAccountSpendWarnAlarm
+    ? {
+        environment: {
+          YOUNG_ACCOUNT_SPEND_ALARM_NAME: youngAccountSpendPageAlarm.name,
+          YOUNG_ACCOUNT_SPEND_WARN_ALARM_NAME: youngAccountSpendWarnAlarm.name,
+        },
+        permissions: [
+          {
+            actions: ['cloudwatch:DescribeAlarms', 'cloudwatch:PutMetricAlarm'],
+            resources: youngAccountSpendAlarms.map(alarm => alarm.arn),
+          },
+        ],
+      }
+    : { environment: { YOUNG_ACCOUNT_SPEND_ALARM_NAME: '', YOUNG_ACCOUNT_SPEND_WARN_ALARM_NAME: '' }, permissions: [] };
 const youngAccountSpendAlert =
   runsScheduledJobs && youngAccountSpendAlertDeadLetter
     ? new sst.aws.Cron('youngAccountSpendAlert', {
@@ -187,9 +209,14 @@ const youngAccountSpendAlert =
             ...DEFAULT_LAMBDA_ENVIRONMENT,
             YOUNG_ACCOUNT_SPEND_ALERT_CREDITS: process.env.YOUNG_ACCOUNT_SPEND_ALERT_CREDITS || '',
             YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS: process.env.YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS || '',
+            ...youngAccountSpendAlarmArgs.environment,
             ...youngAccountSpendAlertMention.environment,
           },
-          permissions: [youngAccountSpendAlertDeadLetter.sendPermission, ...youngAccountSpendAlertMention.permissions],
+          permissions: [
+            youngAccountSpendAlertDeadLetter.sendPermission,
+            ...youngAccountSpendAlertMention.permissions,
+            ...youngAccountSpendAlarmArgs.permissions,
+          ],
           transform: youngAccountSpendAlertDeadLetter.functionTarget,
           logging: {
             retention: '1 week',
@@ -1309,6 +1336,44 @@ if (revenueSnapshotCron && revenueSnapshotDeadLetter) {
   revenueSnapshotDeadLetter.allowRules([$util.output(revenueSnapshotCron)]);
 }
 
+// Subscription Reconciliation -- records where subscriptions and org seats disagree with Stripe as
+// BillingMismatch findings. Read-only against Stripe; upserts findings, so retries are safe. Runs before
+// the 07:00 credit purchase reconciliation. A run that still fails lands in the DLQ.
+const subscriptionReconciliationCron =
+  runsScheduledJobs && subscriptionReconciliationDeadLetter
+    ? new sst.aws.Cron('subscriptionReconciliation', {
+        schedule: 'cron(30 6 * * ? *)', // Daily at 06:30 UTC
+        function: {
+          vpc: lambdaVpc,
+          handler: 'apps/workers/src/cron/subscriptionReconciliation.handler',
+          runtime: 'nodejs24.x',
+          timeout: '10 minutes',
+          link: [...allSecrets],
+          environment: {
+            ...DEFAULT_LAMBDA_ENVIRONMENT,
+          },
+          permissions: [
+            subscriptionReconciliationDeadLetter.sendPermission,
+            { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
+          ],
+          transform: subscriptionReconciliationDeadLetter.functionTarget,
+          logging: {
+            retention: '1 month',
+          },
+        },
+        transform: {
+          target: {
+            ...subscriptionReconciliationDeadLetter.ruleTarget.target,
+            input: undefined,
+          },
+        },
+      })
+    : undefined;
+
+if (subscriptionReconciliationCron && subscriptionReconciliationDeadLetter) {
+  subscriptionReconciliationDeadLetter.allowRules([$util.output(subscriptionReconciliationCron)]);
+}
+
 // Storage Reconciliation -- compares each user's currentStorageSize with the bytes their charged
 // files hold, records drift and alerts over threshold. Dry run unless STORAGE_RECONCILIATION_REPAIR
 // is 'true'; a daily pass resumes across hourly invocations.
@@ -1628,6 +1693,7 @@ export {
   providerUsagePollCron,
   creditPurchaseReconciliationCron,
   revenueSnapshotCron,
+  subscriptionReconciliationCron,
   storageReconciliationCron,
   driveLakeResyncPollCron,
   githubLakeReconcileCron,

@@ -156,7 +156,6 @@ type CoreSettingConfig = (typeof settingsMap)[keyof typeof settingsMap];
 // Credits System group links there instead.
 export const GROWTH_PRICING_ONLY_KEYS: ReadonlySet<SettingKey> = new Set<SettingKey>([
   'allowOpenRegistration',
-  'defaultFreeCredits',
   'enforceCredits',
   'pricePerCredit',
   'lowCreditsThreshold',
@@ -185,6 +184,7 @@ const JSON_SETTING_KEYS = new Set<string>([
   'abuseAssessmentConfig',
   'autoContainmentConfig',
   'usagePatternSignalsConfig',
+  'signupDomainHoldAssessmentConfig',
 ]);
 
 const AdminSettingsTab: React.FC = () => {

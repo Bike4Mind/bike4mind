@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
-const { run } = vi.hoisted(() => ({ run: vi.fn() }));
+const { run, runSubscribers } = vi.hoisted(() => ({ run: vi.fn(), runSubscribers: vi.fn() }));
 vi.mock('@workers/cron/signupIpRetention', () => ({ runSignupIpRetention: run }));
+vi.mock('@workers/cron/subscriberNetworkRetention', () => ({ runSubscriberNetworkRetention: runSubscribers }));
 import { SelfHostWorker } from './selfHostWorker';
 import { registerSignupIpRetention } from './signupIpRetention';
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;
@@ -10,6 +11,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
   run.mockResolvedValue({ truncatedCount: 0 });
+  runSubscribers.mockResolvedValue({ clearedCount: 0 });
   worker = new SelfHostWorker(logger);
   registerSignupIpRetention(worker);
 });
@@ -25,6 +27,7 @@ describe('local signup IP retention schedule', () => {
     expect(run).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(run).toHaveBeenCalledExactlyOnceWith();
+    expect(runSubscribers).toHaveBeenCalledExactlyOnceWith();
     await vi.advanceTimersByTimeAsync(86_400_000);
     expect(run).toHaveBeenCalledTimes(2);
   });

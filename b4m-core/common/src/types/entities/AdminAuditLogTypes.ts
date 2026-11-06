@@ -118,6 +118,14 @@ export interface IAdminAuditLogRepository {
   sumCreditsGranted(actorUserId: string, since: Date): Promise<number>;
 }
 
+/** The subscription Timeline read capability, without extending the base repository's required contract. */
+export type SubscriptionTimelineAuditLogRepository = IAdminAuditLogRepository & {
+  listForSubscriptionOrOwner(
+    scope: { owner: { kind: 'user' | 'organization'; id: string }; subscriptionIds: string[] },
+    page: { limit: number; cursor?: AuditLogCursor }
+  ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }>;
+};
+
 /** An actor whose credit-grant burst has already alerted; it stays open while grants keep coming. */
 export type AdminAuditOpenBurst = { actorUserId: string; lastGrantAt: Date };
 

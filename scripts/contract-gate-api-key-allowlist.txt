@@ -113,7 +113,6 @@ apps/client/pages/api/admin/oauth-clients/index.ts
 apps/client/pages/api/admin/operations-model.ts
 apps/client/pages/api/admin/organizations/[id]/convert-to-paid.ts
 apps/client/pages/api/admin/organizations/[id]/group-types.ts
-apps/client/pages/api/admin/organizations/[id]/reconcile-seats.ts
 apps/client/pages/api/admin/organizations/[id]/revoke.ts
 apps/client/pages/api/admin/organizations/[id]/seats.ts
 apps/client/pages/api/admin/organizations/[id]/top-up.ts

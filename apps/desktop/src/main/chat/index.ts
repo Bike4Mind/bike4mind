@@ -111,6 +111,7 @@ import { readHostOllamaEnv } from '../modelServers/observedOllama';
 import { withEnteredSpecs } from '../models/enteredHardware';
 import { machineView } from '../models/fit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
+import { MODEL_SETTINGS_FILE_NAME } from '@shared/modelSettings';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
@@ -392,6 +393,8 @@ export function registerChat(
   auth: AuthService,
   hooks: Pick<ChatServiceDeps, 'sessionClosed' | 'releaseSessionTerminals'> & {
     observeStream?(event: ChatStreamEvent): void;
+    /** Every session status push, as the renderers get it; main's needs-you watch reads these. */
+    observeSessionStatus?(event: ChatSessionStatusEvent): void;
     /** Revoking a model-pull grant in Settings stops that download; true once it no longer runs. */
     cancelModelPull?(key: string): Promise<boolean>;
     /** The curated list's projector sizes, so chat sizes a vision model the way the Models screen does. */
@@ -511,7 +514,9 @@ export function registerChat(
     models.forgetLocal();
     send(IPC_CHANNELS.chatModelsChanged, undefined);
   }, LATE_RELOAD_DEBOUNCE_MS);
-  const modelSettings = new ModelSettingsStore(join(userData, 'model-settings.json'), message => logger.warn(message));
+  const modelSettings = new ModelSettingsStore(join(userData, MODEL_SETTINGS_FILE_NAME), message =>
+    logger.warn(message)
+  );
   const loadSettings = (modelId: string) => modelSettings.get(modelId);
   // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
   const modelServers = new ModelServerRegistry({
@@ -624,6 +629,7 @@ export function registerChat(
   // replying, and this turns the pair into the one status a sidebar row draws.
   const activity = new SessionActivity((event: ChatSessionStatusEvent) => {
     send(IPC_CHANNELS.chatSessionStatus, event);
+    hooks.observeSessionStatus?.(event);
     // Only reached once a turn has run, long after pullRequests below exists.
     if (event.status === 'done') pullRequests.turnSettled(event.sessionId);
   });

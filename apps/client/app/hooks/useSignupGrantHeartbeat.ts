@@ -18,6 +18,7 @@ interface HeartbeatResponse {
   paidToday: boolean;
   withheld: boolean;
   nextEligibleAt?: number;
+  spent?: boolean;
 }
 
 /** Another tab pinged recently, so this one idles; the server throttle remains the real guard. */
@@ -54,6 +55,11 @@ export function useSignupGrantHeartbeat() {
       lastInputAt = Date.now();
     };
     INPUT_EVENTS.forEach(name => window.addEventListener(name, onInput, { passive: true }));
+    const stop = () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      INPUT_EVENTS.forEach(name => window.removeEventListener(name, onInput));
+    };
 
     const schedule = (delay: number) => {
       if (!stopped) timer = setTimeout(tick, delay);
@@ -70,6 +76,12 @@ export function useSignupGrantHeartbeat() {
       let delay = HEARTBEAT_INTERVAL_MS;
       try {
         const res = await api.post<HeartbeatResponse>('/api/users/active-session');
+        // Re-arms only when eligibility flips back on or the drip cap changes (both effect deps).
+        if (res.data.spent === true) {
+          stop();
+          queryClient.invalidateQueries({ queryKey: ['identify'] });
+          return;
+        }
         if (res.data.creditsGranted > 0 || res.data.paidToday) {
           queryClient.invalidateQueries({ queryKey: ['identify'] });
         }
@@ -89,10 +101,6 @@ export function useSignupGrantHeartbeat() {
     };
     tick();
 
-    return () => {
-      stopped = true;
-      if (timer) clearTimeout(timer);
-      INPUT_EVENTS.forEach(name => window.removeEventListener(name, onInput));
-    };
-  }, [eligible, userId, queryClient]);
+    return stop;
+  }, [eligible, userId, queryClient, dripCap]);
 }

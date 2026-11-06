@@ -9,6 +9,8 @@ export interface IAnalyticsUserDayOrg {
   orgId: string;
   requests: number;
   creditsCharged: number;
+  /** First-party activity billed to this org; absent on older rollups. */
+  active?: boolean;
 }
 
 /** One row per (UTC day, user) with activity; the source for DAU/WAU/MAU and per-user rollups. */
@@ -26,6 +28,8 @@ export interface IAnalyticsUserDay {
   sources: string[];
   signupDay?: string; // YYYY-MM-DD (UTC) of the user's account creation
   suspected: boolean;
+  /** At least one first-party request that day (see ACTIVE_SOURCES); the DAU/WAU/MAU rows. */
+  active: boolean;
 }
 
 export type IAnalyticsUserDayDocument = IAnalyticsUserDay & IMongoDocument;
@@ -43,6 +47,7 @@ const AnalyticsUserDaySchema = new Schema<IAnalyticsUserDayDocument>(
             orgId: { type: String, required: true },
             requests: { type: Number, required: true },
             creditsCharged: { type: Number, required: true },
+            active: { type: Boolean, required: false },
           },
           { _id: false }
         ),
@@ -55,6 +60,7 @@ const AnalyticsUserDaySchema = new Schema<IAnalyticsUserDayDocument>(
     sources: { type: [String], default: [] },
     signupDay: { type: String, required: false, match: ANALYTICS_DAY_PATTERN },
     suspected: { type: Boolean, required: true, default: false },
+    active: { type: Boolean, required: true, default: false },
   },
   { timestamps: true, collection: 'analytics_user_days' }
 );
@@ -62,6 +68,7 @@ const AnalyticsUserDaySchema = new Schema<IAnalyticsUserDayDocument>(
 AnalyticsUserDaySchema.index({ day: 1, userId: 1 }, { unique: true });
 AnalyticsUserDaySchema.index({ userId: 1, day: 1 });
 AnalyticsUserDaySchema.index({ signupDay: 1, day: 1 });
+AnalyticsUserDaySchema.index({ day: 1, active: 1, userId: 1 });
 
 export type IAnalyticsUserDayModel = Model<IAnalyticsUserDayDocument>;
 
@@ -70,9 +77,13 @@ export class AnalyticsUserDayRepository extends BaseRepository<IAnalyticsUserDay
     super(model);
   }
 
-  /** Ids of the users active in the inclusive [fromDay, toDay] range. */
-  async distinctUserIds(fromDay: string, toDay: string): Promise<string[]> {
-    return this.model.distinct('userId', { day: { $gte: fromDay, $lte: toDay } }).maxTimeMS(60_000);
+  /** Ids of the users with a row in the inclusive [fromDay, toDay] range that also matches `filter`. */
+  async distinctUserIds(
+    fromDay: string,
+    toDay: string,
+    filter: { active: true } | { sources: string } = { active: true }
+  ): Promise<string[]> {
+    return this.model.distinct('userId', { day: { $gte: fromDay, $lte: toDay }, ...filter }).maxTimeMS(60_000);
   }
 }
 

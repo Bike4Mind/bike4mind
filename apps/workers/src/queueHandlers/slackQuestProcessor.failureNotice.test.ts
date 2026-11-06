@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import type { VideoToolConfig } from '@bike4mind/services/llm/tools';
-import { TooManyRequestsError } from '@bike4mind/common';
+import { ForbiddenError, TooManyRequestsError } from '@bike4mind/common';
+import { ACCOUNT_BANNED_MESSAGE } from '@bike4mind/services/userService/accountState';
 import { Logger } from '@bike4mind/observability';
 
 // Exercises the Slack quest handler's delivery and video resolver wiring. The chat processor and external
@@ -283,6 +284,33 @@ describe('slackQuestProcessor failure notice', () => {
     expect(mockUpdateMessage).not.toHaveBeenCalled();
   });
 
+  describe('when the owner account is suspended', () => {
+    const bannedError = new ForbiddenError(ACCOUNT_BANNED_MESSAGE);
+
+    it('consumes the event, still posts the failure notice, and logs at warn', async () => {
+      const warnSpy = vi.spyOn(Logger.prototype, 'warn');
+      const errorSpy = vi.spyOn(Logger.prototype, 'error');
+      mockProcess.mockRejectedValueOnce(bannedError);
+      questDoc = { slackNotification, type: 'error', reply: bannedError.message };
+
+      await expect(handler(makeEvent())).resolves.toBeUndefined();
+
+      expect(mockUpdateMessage).toHaveBeenCalledTimes(1);
+      expect(mockUpdateMessage.mock.calls[0][0].text).toContain(bannedError.message);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('refused before'),
+        expect.objectContaining({ questId: QUEST_ID })
+      );
+      expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('Chat processing failed'), expect.anything());
+    });
+
+    it('still rethrows an unrelated forbidden error', async () => {
+      mockProcess.mockRejectedValueOnce(new ForbiddenError('Unauthorized. Admin access required.'));
+
+      await expect(handler(makeEvent())).rejects.toThrow('Unauthorized. Admin access required.');
+    });
+  });
+
   describe('when billing refuses the turn with the free-tier daily cap', () => {
     const capError = new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
       errorCode: 'daily_free_limit_reached',
@@ -300,7 +328,7 @@ describe('slackQuestProcessor failure notice', () => {
       expect(mockUpdateMessage).toHaveBeenCalledTimes(1);
       expect(mockUpdateMessage.mock.calls[0][0].text).toContain(capError.message);
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('refused by billing'),
+        expect.stringContaining('refused before'),
         expect.objectContaining({ questId: QUEST_ID })
       );
       expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('Chat processing failed'), expect.anything());

@@ -79,7 +79,9 @@ export type CloudFrontViewerNetwork = {
  * CloudFront overwrites any client-supplied copy, so these are trusted on deployed stages only; a
  * self-host has no CloudFront in front, where the same headers would be whatever the client sent.
  * They reach the origin only when the distribution's origin request policy forwards them, so
- * absence is normal and yields nulls.
+ * absence is normal and yields nulls. The managed AllViewerExceptHostHeader policy the Router uses
+ * forwards country but not ASN (probed with an echo origin, see infra/router.ts), so on deployed
+ * stages asn is null today and country is real.
  */
 export function getCloudFrontViewerNetwork(readHeader: HeaderReader): CloudFrontViewerNetwork {
   if (isSelfHost()) return { asn: null, country: null };

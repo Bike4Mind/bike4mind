@@ -471,6 +471,291 @@ describe('ModelServerRegistry launching servers', () => {
     await expect(registry.startServer('local')).rejects.toThrow('could not find Ollama');
   });
 
+  it('cannot start an Ollama it cannot find, says why, and looks again later', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { registry, launchers } = setup();
+      vi.mocked(launchers.program).mockResolvedValueOnce({
+        problem: 'Desktop could not find Ollama on this computer.',
+      });
+      await registry.check('local');
+      const missing = (await local(registry)).launch;
+      expect(missing).toMatchObject({
+        owner: 'none',
+        canStart: false,
+        problem: null,
+        programMissing: 'Desktop could not find Ollama on this computer.',
+      });
+      await registry.check('local');
+      expect(launchers.program).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(30_000);
+      await registry.check('local');
+      expect(launchers.program).toHaveBeenCalledTimes(2);
+      const found = (await local(registry)).launch;
+      expect(found).toMatchObject({ canStart: true, problem: null });
+      expect(found?.programMissing).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('looks again at once on a user check, but never runs more than two looks at a time', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { registry, launchers } = setup();
+      vi.mocked(launchers.program).mockResolvedValueOnce({
+        problem: 'Desktop could not find Ollama on this computer.',
+      });
+      await registry.check('local');
+      expect((await local(registry)).launch).toMatchObject({ canStart: false });
+
+      await registry.check('local');
+      expect(launchers.program).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await registry.check('local', { lookAgain: true });
+      expect(launchers.program).toHaveBeenCalledTimes(2);
+      expect((await local(registry)).launch).toMatchObject({ canStart: true });
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      let found: (value: { path: string }) => void = () => {};
+      vi.mocked(launchers.program)
+        .mockReturnValueOnce(new Promise(resolve => (found = resolve)))
+        .mockReturnValue(new Promise(() => {}));
+      for (let click = 0; click < 4; click++) {
+        const checked = registry.check('local', { lookAgain: true });
+        await vi.advanceTimersByTimeAsync(2_000);
+        await checked;
+      }
+      expect(launchers.program).toHaveBeenCalledTimes(4);
+      found({ path: '/opt/fake/bin' });
+      await vi.advanceTimersByTimeAsync(0);
+      const last = registry.check('local', { lookAgain: true });
+      await vi.advanceTimersByTimeAsync(2_000);
+      await last;
+      expect(launchers.program).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('looks again on a user check only two seconds after the last look began', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { registry, launchers } = setup();
+      vi.mocked(launchers.program).mockResolvedValue({ problem: 'Desktop could not find Ollama on this computer.' });
+      await registry.check('local');
+      for (let click = 0; click < 10; click++) await registry.check('local', { lookAgain: true });
+      expect(launchers.program).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await registry.check('local', { lookAgain: true });
+      expect(launchers.program).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('waits the whole 30 seconds between looks', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    try {
+      const { registry, launchers } = setup();
+      vi.mocked(launchers.program).mockResolvedValue({ problem: 'Desktop could not find Ollama on this computer.' });
+      await registry.check('local');
+      await vi.advanceTimersByTimeAsync(29_999);
+      await registry.check('local');
+      expect(launchers.program).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await registry.check('local');
+      expect(launchers.program).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not look again on a user check until two full seconds after the last look began', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    try {
+      const { registry, launchers } = setup();
+      vi.mocked(launchers.program).mockResolvedValue({ problem: 'Desktop could not find Ollama on this computer.' });
+      await registry.check('local');
+      await vi.advanceTimersByTimeAsync(1_999);
+      await registry.check('local', { lookAgain: true });
+      expect(launchers.program).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await registry.check('local', { lookAgain: true });
+      expect(launchers.program).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('looks again on a user check even while an earlier look is still stuck, below the outstanding cap', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    try {
+      const { registry, launchers } = setup();
+      vi.mocked(launchers.program).mockReturnValue(new Promise(() => {}));
+      const first = registry.check('local');
+      await vi.advanceTimersByTimeAsync(2_000);
+      await first;
+      expect(launchers.program).toHaveBeenCalledTimes(1);
+      const second = registry.check('local', { lookAgain: true });
+      await vi.advanceTimersByTimeAsync(2_000);
+      await second;
+      expect(launchers.program).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports a look as pending before the first health check has settled', async () => {
+    const { registry } = setup();
+    expect((await local(registry)).launch).toMatchObject({ canStart: false, programPending: true });
+  });
+
+  it('starts no new look while two abandoned looks are still outstanding', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { registry, launchers } = setup();
+      vi.mocked(launchers.program).mockReturnValue(new Promise(() => {}));
+      for (let round = 0; round < 4; round++) {
+        const checked = registry.check('local');
+        await vi.advanceTimersByTimeAsync(31_000);
+        await checked;
+      }
+      expect(launchers.program).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops reporting a pending look once two looks are stuck, so Install can show', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { registry, launchers } = setup();
+      vi.mocked(launchers.program).mockReturnValue(new Promise(() => {}));
+      const first = registry.check('local');
+      await vi.advanceTimersByTimeAsync(2_000);
+      await first;
+      expect((await local(registry)).launch).toMatchObject({ canStart: false, programPending: true });
+
+      await vi.advanceTimersByTimeAsync(31_000);
+      const second = registry.check('local', { lookAgain: true });
+      await vi.advanceTimersByTimeAsync(2_000);
+      await second;
+      await vi.advanceTimersByTimeAsync(31_000);
+      await registry.check('local', { lookAgain: true });
+      expect(launchers.program).toHaveBeenCalledTimes(2);
+      const launch = (await local(registry)).launch;
+      expect(launch).toMatchObject({ canStart: false, problem: null });
+      expect(launch?.programPending).toBeUndefined();
+      expect(launch?.programMissing).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('treats a lookup that throws before it returns a promise as a failed look, and keeps looking', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      const { registry, launchers } = setup();
+      vi.mocked(launchers.program).mockImplementation(() => {
+        throw new Error('no shell');
+      });
+      for (let round = 0; round < 3; round++) {
+        await expect(registry.check('local')).resolves.toBeDefined();
+        await vi.advanceTimersByTimeAsync(31_000);
+      }
+      expect(launchers.program).toHaveBeenCalledTimes(3);
+      const launch = (await local(registry)).launch;
+      expect(launch).toMatchObject({ canStart: false, programMissing: 'Desktop could not check for Ollama: no shell' });
+      expect(launch?.programPending).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports a look that settles in time with the check, in one push', async () => {
+    const { registry, changed } = setup();
+    changed.mockClear();
+    await registry.check('local');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(changed.mock.calls[0][0][0].launch).toMatchObject({ canStart: true });
+  });
+
+  it('does not offer Start until it has looked for Ollama, and pushes a slow look once when it settles', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { registry, launchers, changed } = setup();
+      let found: (value: { path: string }) => void = () => {};
+      vi.mocked(launchers.program).mockReturnValueOnce(new Promise(resolve => (found = resolve)));
+      const checked = registry.check('local');
+      await vi.advanceTimersByTimeAsync(2_000);
+      await checked;
+      expect((await local(registry)).launch).toMatchObject({ canStart: false, problem: null, programPending: true });
+
+      await vi.advanceTimersByTimeAsync(0);
+      changed.mockClear();
+      found({ path: '/opt/fake/bin' });
+      await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(changed).toHaveBeenCalledTimes(1);
+      expect(changed.mock.calls[0][0][0].launch).toMatchObject({ canStart: true });
+      expect(changed.mock.calls[0][0][0].launch.programPending).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops a look that settles after a newer one', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { registry, launchers } = setup();
+      let stale: (value: { problem: string }) => void = () => {};
+      vi.mocked(launchers.program).mockReturnValueOnce(new Promise(resolve => (stale = resolve)));
+      const first = registry.check('local');
+      await vi.advanceTimersByTimeAsync(2_000);
+      await first;
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await registry.check('local');
+      expect(launchers.program).toHaveBeenCalledTimes(2);
+      expect((await local(registry)).launch).toMatchObject({ canStart: true });
+
+      stale({ problem: 'Desktop could not find Ollama on this computer.' });
+      await vi.advanceTimersByTimeAsync(0);
+      const launch = (await local(registry)).launch;
+      expect(launch).toMatchObject({ canStart: true });
+      expect(launch?.programMissing).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never looks for Ollama for a saved loopback address, which may be a tunnel to another machine', async () => {
+    const { registry, launchers } = setup();
+    const [, added] = await registry.add({
+      address: 'http://127.0.0.1:11500',
+      credential: none,
+      name: 'tunnel',
+      kind: 'ollama',
+      access: 'chat',
+      launch: true,
+    });
+    vi.mocked(launchers.program).mockClear();
+    vi.mocked(launchers.program).mockResolvedValue({ problem: 'Desktop could not find Ollama on this computer.' });
+    const views = await registry.check(added.id);
+    expect(launchers.program).not.toHaveBeenCalled();
+    const view = views.find(server => server.id === added.id)?.launch;
+    expect(view).toMatchObject({ canStart: true });
+    expect(view?.programMissing).toBeUndefined();
+  });
+
   it('stops what it started when a server is removed, and everything on quit', async () => {
     const { registry, handles } = setup();
     const [, added] = await registry.add({

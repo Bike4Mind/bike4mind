@@ -453,6 +453,27 @@ describe('updateByStripeSubscriptionIdReturningBefore', () => {
     expect([first?.priceId, second?.priceId]).toEqual(['price_basic', 'price_pro']);
   });
 
+  it('writes only while the row still carries expectedUpdatedAt', async () => {
+    const created = await Subscription.create(row({ subscriptionId: 'sub_guard', priceId: 'price_basic' }));
+    const current = (await Subscription.findById(created.id).lean<{ updatedAt: Date }>())!.updatedAt;
+
+    const stale = await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore(
+      'sub_guard',
+      { priceId: 'price_pro' },
+      new Date(current.getTime() - 1000)
+    );
+    expect(stale).toBeNull();
+    expect((await Subscription.findById(created.id).lean<{ priceId: string }>())?.priceId).toBe('price_basic');
+
+    const fresh = await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore(
+      'sub_guard',
+      { priceId: 'price_pro' },
+      current
+    );
+    expect(fresh).toMatchObject({ priceId: 'price_basic' });
+    expect((await Subscription.findById(created.id).lean<{ priceId: string }>())?.priceId).toBe('price_pro');
+  });
+
   it('returns null, and writes nothing, when this stage has no row or the id is missing', async () => {
     expect(
       await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore('sub_missing', { priceId: 'p' })
@@ -488,5 +509,47 @@ describe('findActiveSubscriptionsByOwners', () => {
     await Subscription.create(row({ ownerType: Org, ownerId: 'org_a' }));
 
     await expect(subscriptionRepository.findActiveSubscriptionsByOwners(Org, [])).resolves.toEqual([]);
+  });
+});
+
+describe('findNonTerminalStripeRows', () => {
+  it('matches the source resolver for explicit and legacy rows and projects only reconciliation fields', async () => {
+    const cases = [
+      { id: 'sub_explicit', source: 'stripe', include: true },
+      { id: 'admin_granted_explicit', source: 'stripe', include: true },
+      { id: 'sub_missing', source: undefined, include: true },
+      { id: 'sub_null', source: null, include: true },
+      { id: 'sub_empty', source: '', include: true },
+      { id: 'admin_granted_legacy', source: undefined, include: false },
+      { id: 'sub_grant', source: 'admin_grant', include: false },
+      { id: 'sub_unknown', source: 'unknown', include: false },
+    ];
+    for (const testCase of cases) {
+      const created = await Subscription.create({
+        ...row({ subscriptionId: testCase.id }),
+        grantedReason: 'not compared',
+      });
+      await Subscription.collection.updateOne(
+        { _id: created._id },
+        testCase.source === undefined ? { $unset: { source: '' } } : { $set: { source: testCase.source } }
+      );
+    }
+    await Subscription.create(row({ subscriptionId: 'sub_finished', status: 'canceled' }));
+    await Subscription.create(row({ subscriptionId: 'sub_expired', status: 'incomplete_expired' }));
+    const missingId = await Subscription.create(row({ subscriptionId: 'sub_no_id' }));
+    await Subscription.collection.updateOne({ _id: missingId._id }, { $unset: { subscriptionId: '' } });
+
+    const found = await subscriptionRepository.findNonTerminalStripeRows();
+
+    expect(found.map(subscription => subscription.subscriptionId).sort()).toEqual(
+      cases
+        .filter(testCase => testCase.include)
+        .map(testCase => testCase.id)
+        .sort()
+    );
+    expect(found[0]).toHaveProperty('ownerType');
+    expect(found[0]).toHaveProperty('updatedAt');
+    expect(found[0]).not.toHaveProperty('grantedReason');
+    expect(found[0]).not.toHaveProperty('periodStartsAt');
   });
 });

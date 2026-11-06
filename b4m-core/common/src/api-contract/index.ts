@@ -80,6 +80,14 @@ export {
   deleteProjectContract,
 } from './contracts/projects.contract';
 export {
+  listProjectFilesContract,
+  addProjectFilesContract,
+  removeProjectFileContract,
+  listProjectSessionsContract,
+  addProjectSessionsContract,
+  removeProjectSessionContract,
+} from './contracts/projectContent.contract';
+export {
   listAgentsContract,
   getAgentContract,
   createAgentContract,

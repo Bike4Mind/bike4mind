@@ -1,15 +1,15 @@
-import type { ChatStreamEvent, ChatToolCall } from '@shared/chat';
+import type { ChatStreamEvent, ChatToolCall, SessionSetupStep } from '@shared/chat';
 import { describe, expect, it } from 'vitest';
 import {
   activityLabel,
   agentNowText,
   bufferUntrackedActivity,
-  describeToolInput,
   foldActivity,
   toolKind,
   type AgentActivity,
   type ToolKind,
 } from './activity';
+import { describeToolInput } from '@shared/toolDetail';
 
 const call = (name: string, input: Record<string, unknown> = {}): ChatToolCall => ({
   id: 'call-1',
@@ -233,7 +233,7 @@ describe('activityLabel', () => {
 
 describe('agentNowText', () => {
   it('names the setup step ahead of any activity or snippet', () => {
-    const preparing = (step: 'worktree' | 'dependencies' | 'starting') =>
+    const preparing = (step: SessionSetupStep) =>
       agentNowText({
         state: 'working',
         preparing: step,
@@ -241,7 +241,6 @@ describe('agentNowText', () => {
         lastSnippet: 'old',
       });
     expect(preparing('worktree')).toBe('Creating worktree');
-    expect(preparing('dependencies')).toBe('Installing dependencies');
     expect(preparing('starting')).toBe('Starting up');
   });
 

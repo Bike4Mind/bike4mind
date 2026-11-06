@@ -1,6 +1,7 @@
 import { StringDecoder } from 'node:string_decoder';
 import { z } from 'zod';
 import { modelBlobsOf, type FetchLike } from '@bike4mind/local-models';
+import { LOCAL_OLLAMA_RUNTIME_ID } from '@bike4mind/local-models/model-settings';
 import {
   localBackend,
   localModelId,
@@ -41,7 +42,8 @@ import type { CompletionStreamEvent } from './streamEvents';
 import { createThinkFilter, type ThinkSplit } from './thinkFilter';
 import { ollamaRate } from './tokenRate';
 
-export const OLLAMA_RUNTIME_ID = 'ollama';
+// The CLI applies this computer's model settings under the same id.
+export const OLLAMA_RUNTIME_ID = LOCAL_OLLAMA_RUNTIME_ID;
 const OLLAMA_URL = 'http://127.0.0.1:11434';
 const TIMEOUT_MS = 1_000;
 /** A server across a network answers short calls slower than the daemon on this computer. */

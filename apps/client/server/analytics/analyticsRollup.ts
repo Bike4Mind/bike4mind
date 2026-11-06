@@ -5,14 +5,14 @@ import {
   analyticsDailyRepository,
   analyticsUserDayRepository,
   UsageEvent,
-  User,
   type IAnalyticsDailyInternal,
   type IAnalyticsDailySignups,
   type IAnalyticsUserDay,
 } from '@bike4mind/database';
-import { INTERNAL_ACCOUNT_FLAGS, UNCLASSIFIED_SOURCE } from '@bike4mind/common';
-import { signupVerdictOf } from '../users/signupClassifier';
-import { classifySignupWindow, currentStaffRegex, isCountedUser, loadUserFlags } from './signupCohort';
+import { ACTIVE_SOURCES, UNCLASSIFIED_SOURCE } from '@bike4mind/common';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
+import { classifyRealSignups } from './realSignup';
+import { classifySignupWindow, isCountedUser, loadCountingContext, loadUserFlags } from './signupCohort';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const QUERY_DEADLINE_MS = 120_000;
@@ -54,44 +54,31 @@ export async function classifyCohort(
   { now = new Date(), logger = console, maxTimeMS = QUERY_DEADLINE_MS }: RollupOptions
 ): Promise<CohortResult> {
   const { start, end } = dayBounds(day);
-  const { counted, signalsById, truncated } = await classifySignupWindow(start, end, {
-    now,
-    deadlineMs: maxTimeMS,
-  });
+  const ctx = await loadCountingContext();
+  const [{ legitIds, suspectedIds }, { counted, signalsById, truncated }] = await Promise.all([
+    classifyRealSignups(start, end, { deadlineMs: maxTimeMS, ctx }),
+    classifySignupWindow(start, end, { now, deadlineMs: maxTimeMS, ctx }),
+  ]);
+  // The scan only feeds bySignal; truncation cannot change the real/suspected split.
   if (truncated) logger.warn(`analytics rollup: signup candidate scan truncated for ${day}`);
 
-  const staffRegex = currentStaffRegex();
-  const total = truncated
-    ? await User.countDocuments({
-        createdAt: { $gte: start, $lt: end },
-        $nor: [
-          ...INTERNAL_ACCOUNT_FLAGS.map(flag => ({ [flag]: true })),
-          ...(staffRegex ? [{ email: staffRegex }] : []),
-        ],
-      }).maxTimeMS(maxTimeMS)
-    : counted.length;
-
   const signups: IAnalyticsDailySignups = {
-    legit: 0,
-    suspected: 0,
-    unclassified: Math.max(0, total - counted.length),
+    legit: legitIds.length,
+    suspected: suspectedIds.length,
+    unclassified: 0,
     bySignal: {},
   };
-  const suspectedIds: string[] = [];
   for (const candidate of counted) {
-    const signals = signalsById.get(candidate.id) ?? [];
-    for (const signal of signals) signups.bySignal[signal] = (signups.bySignal[signal] ?? 0) + 1;
-    const verdict = signupVerdictOf(signals, candidate.createdAt, now);
-    signups[verdict] += 1;
-    if (verdict === 'suspected') suspectedIds.push(candidate.id);
+    for (const signal of signalsById.get(candidate.id) ?? []) {
+      signups.bySignal[signal] = (signups.bySignal[signal] ?? 0) + 1;
+    }
   }
-  return { signups, classifiedIds: counted.map(candidate => candidate.id), suspectedIds };
+  return { signups, classifiedIds: [...legitIds, ...suspectedIds], suspectedIds };
 }
 
 /**
  * Classifies the accounts created on `day` and writes the result back: the `suspected` flag on
- * that cohort's user-day rows and the signup counts on the day's analytics_daily row. Unclassified
- * covers unscanned accounts and accounts too young for dormancy; it never counts as legit.
+ * that cohort's user-day rows and the signup counts on the day's analytics_daily row.
  */
 export async function evaluateSignupDay(day: string, options: RollupOptions = {}) {
   const { signups, classifiedIds, suspectedIds } = await classifyCohort(day, options);
@@ -179,14 +166,19 @@ export const unionSize = (...sets: Iterable<string>[]) => new Set(sets.flatMap(i
  * window sits on both sides (each day is classified when it is rolled up), so "all" is the union, not the sum.
  */
 async function windowCounts(day: string, current: InternalDayIds) {
-  const [weekIds, monthIds, internal] = await Promise.all([
-    analyticsUserDayRepository.distinctUserIds(shiftDay(day, -(WAU_WINDOW_DAYS - 1)), day),
-    analyticsUserDayRepository.distinctUserIds(shiftDay(day, -(MAU_WINDOW_DAYS - 1)), day),
+  const week = [shiftDay(day, -(WAU_WINDOW_DAYS - 1)), day] as const;
+  const month = [shiftDay(day, -(MAU_WINDOW_DAYS - 1)), day] as const;
+  const [weekIds, monthIds, apiWau, apiMau, internal] = await Promise.all([
+    analyticsUserDayRepository.distinctUserIds(...week, { active: true }),
+    analyticsUserDayRepository.distinctUserIds(...month, { active: true }),
+    analyticsUserDayRepository.distinctUserIds(...week, { sources: 'api' }),
+    analyticsUserDayRepository.distinctUserIds(...month, { sources: 'api' }),
     internalWindowIds(day, current),
   ]);
   return {
     wau: weekIds.length,
     mau: monthIds.length,
+    api: { wau: apiWau.length, mau: apiMau.length },
     internal: {
       wau: internal.week.size,
       mau: internal.month.size,
@@ -206,8 +198,8 @@ async function refreshLaterWindows(day: string, current: InternalDayIds) {
     .maxTimeMS(QUERY_DEADLINE_MS)
     .lean<{ day: string; internal?: Pick<IAnalyticsDailyInternal, 'dau'> }[]>();
   for (const { day: laterDay, internal: laterInternal } of later) {
-    const { wau, mau, internal } = await windowCounts(laterDay, current);
-    const update: Record<string, number | boolean> = { wau, mau };
+    const { wau, mau, api, internal } = await windowCounts(laterDay, current);
+    const update: Record<string, number | boolean> = { wau, mau, 'api.wau': api.wau, 'api.mau': api.mau };
     // Rows from before internal counts were recorded stay without them until they are rolled up again.
     if (laterInternal) {
       for (const [key, value] of Object.entries(internal)) update[`internal.${key}`] = value;
@@ -232,22 +224,26 @@ type EventGroup = {
 type DayUsageAcc = {
   requests: number;
   credits: number;
+  /** A first-party request that day: the user counts toward DAU/WAU/MAU. */
+  active: boolean;
   features: Set<string>;
   sources: Set<string>;
   byOwner: Map<
     string,
-    { ownerType: IAnalyticsUserDay['ownerType']; ownerId: string; requests: number; credits: number }
+    { ownerType: IAnalyticsUserDay['ownerType']; ownerId: string; requests: number; credits: number; active: boolean }
   >;
 };
 
 /**
- * Counted users' usage on one UTC day, grouped the way rollupDay stores it, plus the ids and surfaces of
- * the internal users it leaves out. Read-only, so the admin overview reuses it for the live slice of
- * today and its numbers match the rollup.
+ * Eligible users' usage on one UTC day, grouped the way rollupDay stores it, plus the ids and surfaces of
+ * the internal users it leaves out. Read-only, so the admin overview reuses it for the live slice of today
+ * and its numbers match the rollup. A user is active on a first-party request (ACTIVE_SOURCES, or a legacy
+ * event with no source); `api` users are kept in `perUser` for the separate API series; `system` traffic
+ * is dropped.
  */
 export async function collectDayUsage(day: string, { maxTimeMS = QUERY_DEADLINE_MS }: RollupOptions = {}) {
   const { start, end } = dayBounds(day);
-  const staffRegex = currentStaffRegex();
+  const ctx = await loadCountingContext();
 
   const groups = await UsageEvent.aggregate<EventGroup>([
     { $match: { status: 'ok', createdAt: { $gte: start, $lt: end } } },
@@ -281,12 +277,17 @@ export async function collectDayUsage(day: string, { maxTimeMS = QUERY_DEADLINE_
 
   for (const group of groups) {
     const { userId, ownerType, ownerId, feature, source, model } = group._id;
-    if (!isCountedUser(users.get(userId), staffRegex)) {
-      internalIds.add(userId);
+    if (source === 'system') continue;
+    const active = !source || (ACTIVE_SOURCES as readonly string[]).includes(source);
+    const user = users.get(userId);
+    if (user && aiAccessDeniedMessage(user) !== null) continue;
+    if (!isCountedUser(user, ctx)) {
+      if (active) internalIds.add(userId);
       bump(internalBySource, source ?? UNCLASSIFIED_SOURCE, group.requests);
       continue;
     }
     const acc: DayUsageAcc = perUser.get(userId) ?? {
+      active: false,
       requests: 0,
       credits: 0,
       features: new Set(),
@@ -294,23 +295,30 @@ export async function collectDayUsage(day: string, { maxTimeMS = QUERY_DEADLINE_
       byOwner: new Map(),
     };
     perUser.set(userId, acc);
+    if (active) acc.active = true;
     acc.requests += group.requests;
     acc.credits += group.credits;
     acc.features.add(feature);
     if (source) acc.sources.add(source);
     const ownerKey = `${ownerType}:${ownerId}`;
-    const owner = acc.byOwner.get(ownerKey) ?? { ownerType, ownerId, requests: 0, credits: 0 };
+    const owner = acc.byOwner.get(ownerKey) ?? { ownerType, ownerId, requests: 0, credits: 0, active: false };
     owner.requests += group.requests;
     owner.credits += group.credits;
+    if (active) owner.active = true;
     acc.byOwner.set(ownerKey, owner);
     bump(byFeature, feature, group.requests);
     bump(bySource, source ?? UNCLASSIFIED_SOURCE, group.requests);
     bump(byModel, model, group.requests);
     creditsConsumed += group.credits;
   }
+  const accs = [...perUser.values()];
+  const activeCount = accs.filter(acc => acc.active).length;
+  const apiCount = accs.filter(acc => acc.sources.has('api')).length;
   return {
     users,
     perUser,
+    activeCount,
+    apiCount,
     byFeature,
     bySource,
     byModel,
@@ -325,10 +333,8 @@ export async function collectDayUsage(day: string, { maxTimeMS = QUERY_DEADLINE_
  */
 export async function rollupDay(day: string, options: RollupOptions = {}) {
   const computedAt = options.now ?? new Date();
-  const { users, perUser, byFeature, bySource, byModel, creditsConsumed, internal } = await collectDayUsage(
-    day,
-    options
-  );
+  const { users, perUser, activeCount, apiCount, byFeature, bySource, byModel, creditsConsumed, internal } =
+    await collectDayUsage(day, options);
 
   const suspectedUsers = await resolveSuspected(
     [...perUser.keys()].map(userId => {
@@ -354,13 +360,19 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
             // Per org, so an org is credited only with the work billed to it (analyticsTopAccounts.ts).
             orgs: owners
               .filter(owner => owner.ownerType === 'Organization')
-              .map(owner => ({ orgId: owner.ownerId, requests: owner.requests, creditsCharged: owner.credits })),
+              .map(owner => ({
+                orgId: owner.ownerId,
+                requests: owner.requests,
+                creditsCharged: owner.credits,
+                active: owner.active,
+              })),
             requests: acc.requests,
             creditsCharged: acc.credits,
             features: [...acc.features].sort(),
             sources: [...acc.sources].sort(),
             signupDay: user?.createdAt ? formatDay(new Date(user.createdAt)) : undefined,
             suspected: suspectedUsers.has(userId),
+            active: acc.active,
           },
         },
         upsert: true,
@@ -380,14 +392,15 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
 
   const signups = await evaluateSignupDay(day, options);
   const internalIds = { day, userIds: internal.userIds };
-  const { wau, mau, internal: internalWindows } = await windowCounts(day, internalIds);
+  const { wau, mau, api, internal: internalWindows } = await windowCounts(day, internalIds);
   // The daily row is the backfill completion marker; leave it absent until all dependent windows refresh.
   await refreshLaterWindows(day, internalIds);
   await analyticsDailyRepository.upsertDay(day, {
     signups,
-    dau: perUser.size,
+    dau: activeCount,
     wau,
     mau,
+    api: { dau: apiCount, wau: api.wau, mau: api.mau },
     requestsByFeature: toRecord(byFeature),
     requestsBySource: toRecord(bySource),
     requestsByModel: toRecord(byModel, ANALYTICS_BY_MODEL_LIMIT),
@@ -400,7 +413,7 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
     },
     computedAt,
   });
-  return { day, dau: perUser.size, wau, mau };
+  return { day, dau: activeCount, wau, mau, api: { dau: apiCount, ...api } };
 }
 
 /** Re-runs signup classification for the trailing days so late signals (dormancy, API use) land. */

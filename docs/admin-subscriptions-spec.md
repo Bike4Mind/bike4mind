@@ -34,7 +34,7 @@ There is no admin page for invoices, refunds, coupons, MRR/revenue, past due, tr
 - **Webhook** (`pages/api/stripe/webhook.ts`):
   - Handles pack payments, `invoice.payment_succeeded` (through the worker: plan credit grants), `customer.subscription.updated/deleted`, `invoice.payment_failed` (marks past_due and sends a dunning email), `charge.refunded` and disputes (credit clawback), and `customer.deleted`.
   - Ignores `trial_will_end`, `invoice.paid/finalized/upcoming` and `subscription.created`.
-  - **Persists no events**, so there is nothing to build a billing timeline from.
+  - Persisted no events before the `BillingEvent` store (6.2); it now writes one row per owned event, which feeds the Timeline tab.
 - **Reconciliation:** the only cron is `creditPurchaseReconciliation`, which checks credit packs only. Nothing compares subscriptions or seats with Stripe.
 - **Guards on existing admin money routes:**
 
@@ -47,7 +47,7 @@ There is no admin page for invoices, refunds, coupons, MRR/revenue, past due, tr
 | `subscriptions/[id]/remove` | **none** | strict | - | no Stripe cancel |
 | `organizations/[id]/revoke` | **optional** | yes | - | |
 | `organizations/[id]/seats` | **none** | yes | - | refuses Stripe-billed orgs |
-| `organizations/[id]/reconcile-seats` | **none** | when changed | - | trusts Mongo quantity |
+| `organizations/[id]/reconcile-seats` | removed | - | - | replaced by `subscriptions/[id]/sync` (Stripe-wins, audited with a reason) |
 | `organizations/[id]/convert-to-paid` | **none** | yes | - | creates Stripe customer + Checkout |
 
   No admin money route is rate-limited.

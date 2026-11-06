@@ -10,7 +10,7 @@ import {
 
 export const ADMIN_SUBSCRIPTIONS_TAB_SLUG = 'subscriptions';
 
-export type SubscriptionAction = 'extend' | 'end' | 'credits' | 'remove' | 'cancel' | 'resume';
+export type SubscriptionAction = 'extend' | 'end' | 'credits' | 'remove' | 'cancel' | 'resume' | 'sync';
 
 export const ownerDisplayName = (row: Pick<AdminSubscriptionRow, 'owner'>): string => {
   const { owner } = row;
@@ -45,6 +45,8 @@ export type SubscriptionActionAvailability = {
   stripeResume: boolean;
   editCredits: { visible: boolean; disabledReason: string | null };
   remove: { disabledReason: string | null };
+  /** Sync from Stripe: Stripe-billed rows only; a comp has no Stripe state. */
+  sync: { visible: boolean; disabledReason: string | null };
 };
 
 /** Which header actions a subscription offers (docs/admin-subscriptions-spec.md sections 5.2 and 7). */
@@ -68,6 +70,7 @@ export const subscriptionActionAvailability = (
     compActions: isCompSubscription(subscription) && !terminal,
     editCredits: { visible: !terminal, disabledReason: noActor },
     remove: { disabledReason: live ? REMOVE_LIVE_STRIPE_REASON : noActor },
+    sync: { visible: subscription.source === 'stripe' && !isCompSubscription(subscription), disabledReason: null },
   };
 };
 

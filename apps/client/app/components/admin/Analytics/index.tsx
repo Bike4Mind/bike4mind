@@ -25,7 +25,7 @@ import { AdminTab } from '../adminSidebarConfig';
 import { ORGS_ORG_ID_PARAM } from '../organizationsTabSearch';
 import { ActiveUsersSection } from './ActiveUsersSection';
 import { CohortsSection } from './CohortsSection';
-import { SignupsSection } from './SignupsSection';
+import { SignupsSection, type SignupWindowSelection } from './SignupsSection';
 import { CreditsSection, FeatureUsageSection, ModelUsageSection } from './UsageSections';
 import { TopAccountsSection } from './TopAccountsSection';
 import { downloadAnalyticsExport } from './analyticsExport';
@@ -47,7 +47,7 @@ const COMPARE_OPTIONS = [
   { value: 'off', label: 'Off' },
 ] as const;
 const SIGNUPS_OPTIONS = [
-  { value: 'legit', label: 'Legit only' },
+  { value: 'legit', label: 'Real only' },
   { value: 'all', label: 'All' },
 ] as const;
 const ACCOUNTS_OPTIONS = [
@@ -56,10 +56,11 @@ const ACCOUNTS_OPTIONS = [
   { value: 'all', label: 'All' },
 ] as const;
 const FOOTERS: Record<AnalyticsAccounts, string> = {
-  external: 'Counts exclude admin, system, flagged test and staff-domain accounts. Days are UTC.',
+  external:
+    'Active users: an AI request that UTC day from the web app, CLI, Desktop or an agent run; internal, Developer-tagged, test, banned and AI-held accounts are not counted. A signup is real when the email is verified, the account is not banned or held, and it made an AI request within 7 days; every other signup, banned or held ones included, is suspected. External API users are shown separately regardless of Accounts and not counted. Days are UTC.',
   internal:
-    'Active users count only admin, system, flagged test and staff-domain accounts; signups, usage and top accounts always exclude them. Days are UTC.',
-  all: 'Active users include admin, system, flagged test and staff-domain accounts; signups, usage and top accounts always exclude them. Days are UTC.',
+    'Active users count only admin, system, flagged test, staff-domain, Developer-tagged and test-persona accounts; signups, usage and top accounts always exclude them. The separate API series always counts external accounts. Days are UTC.',
+  all: 'Active users include admin, system, flagged test, staff-domain, Developer-tagged and test-persona accounts; signups, usage and top accounts always exclude them. The separate API series always counts external accounts. Days are UTC.',
 };
 
 const todayUtc = () => new Date().toISOString().slice(0, 10);
@@ -83,7 +84,7 @@ function StatTiles({ data }: { data: AnalyticsOverview }) {
   const days = data.activeUsers.days.filter(day => !day.partial);
   const line = (value: number | null, previous: number | null, unit?: 'points') =>
     compare ? comparisonLine(value, previous, window.completeDays, unit) : undefined;
-  const signupsLabel = data.signupsMode === 'legit' ? 'New signups (legit)' : 'New signups (all)';
+  const signupsLabel = data.signupsMode === 'legit' ? 'New signups (real)' : 'New signups (all)';
   const signupSeries = data.signups.buckets
     .filter(bucket => !bucket.partial)
     .map(bucket =>
@@ -91,7 +92,7 @@ function StatTiles({ data }: { data: AnalyticsOverview }) {
         ? null
         : data.signupsMode === 'legit'
           ? bucket.legit
-          : bucket.legit + (bucket.suspected ?? 0) + (bucket.unclassified ?? 0)
+          : bucket.legit + (bucket.suspected ?? 0)
     );
   const stickinessSeries = days.map(day => (day.dau !== null && day.mau ? (day.dau / day.mau) * 100 : null));
 
@@ -172,10 +173,14 @@ const AnalyticsTab = () => {
     setQuery({ range, from: data?.window.from ?? shiftUtc(to, -27), to });
   };
   const showDefaultRange = query.range === '90d' ? undefined : () => setRange('90d');
-  const openSignupWindow = (window: { createdFrom: string; createdTo: string }) =>
+  const openSignupWindow = (window: SignupWindowSelection) =>
     void navigate({
       to: '/admin',
-      search: (previous: AdminSearch) => ({ ...adminSearchForTab(previous, ADMIN_USERS_TAB_SLUG), ...window }),
+      search: (previous: AdminSearch) => ({
+        ...adminSearchForTab(previous, ADMIN_USERS_TAB_SLUG),
+        ...window,
+        verdict: window.verdict,
+      }),
     });
 
   const openTab = (tab: AdminTab) => {
