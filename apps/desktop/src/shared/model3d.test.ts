@@ -226,6 +226,7 @@ describe('partTreeError', () => {
     ],
     [part('knob', { emissive: 'orange' }), 'emissive that is not a #rrggbb colour'],
     [part('knob', { emissive: 7 as unknown as string }), 'emissive that is not a #rrggbb colour'],
+    [part('plank', { texture: 'oak' as unknown as 'wood' }), 'texture that is not one of: wood, brushed'],
   ])('refuses a material %#', (bad, message) => {
     expect(partTreeError([bad])).toContain(message);
   });
@@ -237,6 +238,8 @@ describe('partTreeError', () => {
         part('lid', { clearcoat: 1 }),
         part('cushion', { sheen: 0.8 }),
         part('lamp', { emissive: '#FFAA00', emissiveIntensity: 4 }),
+        part('plank', { texture: 'wood' }),
+        part('plate', { texture: 'brushed', metalness: 1 }),
       ])
     ).toBeNull();
   });

@@ -158,6 +158,7 @@ function partsOf(result, Manifold) {
         if (entry[key] !== undefined) part[key] = Number(entry[key]);
       }
       if (entry.emissive !== undefined) part.emissive = String(entry.emissive);
+      if (entry.texture !== undefined) part.texture = String(entry.texture);
       if (entry.smooth !== undefined) part.smooth = typeof entry.smooth === 'boolean' ? entry.smooth : String(entry.smooth);
     }
     return part;

@@ -164,6 +164,19 @@ describe('loadAsset (stl)', () => {
       expect(material.emissive.getHex()).toBe(0);
     });
 
+    it('gives a textured part its maps, and brushed metal its anisotropy, with bump scaled to the units', () => {
+      const wood = partMaterial({ ...box('plank', 1, 1, 1), texture: 'wood' });
+      expect(wood.map).not.toBeNull();
+      expect(wood.roughnessMap).not.toBeNull();
+      expect(wood.anisotropy).toBe(0);
+      const brushed = partMaterial({ ...box('plate', 1, 1, 1), texture: 'brushed' }, 'm');
+      expect(brushed.anisotropy).toBeGreaterThan(0);
+      expect(brushed.bumpScale).toBeCloseTo(
+        partMaterial({ ...box('plate', 1, 1, 1), texture: 'brushed' }).bumpScale / 1000
+      );
+      expect(partMaterial(box('body', 1, 1, 1)).map).toBeNull();
+    });
+
     it('records the part glow, so a pick highlight can put it back', () => {
       const material = partMaterial({ ...box('lamp', 1, 1, 1), emissive: '#ffffff', emissiveIntensity: 2 });
       expect(material.userData).toMatchObject({ emissive: 0xffffff, emissiveIntensity: 2 });

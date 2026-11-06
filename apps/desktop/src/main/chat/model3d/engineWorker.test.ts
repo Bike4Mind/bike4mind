@@ -81,7 +81,7 @@ describe('model worker', () => {
     const reply = await build(
       `export default function model({ m }) {
         return [{ name: 'lamp', shape: m.Manifold.cube([1, 1, 1]), clearcoat: 0.5, sheen: '0.25', transmission: 1,
-          ior: 1.45, thickness: 2, emissive: '#ffaa00', emissiveIntensity: 3 }];
+          ior: 1.45, thickness: 2, emissive: '#ffaa00', emissiveIntensity: 3, texture: 'wood' }];
       }`,
       false
     );
@@ -94,6 +94,7 @@ describe('model worker', () => {
       thickness: 2,
       emissive: '#ffaa00',
       emissiveIntensity: 3,
+      texture: 'wood',
     });
   });
 
