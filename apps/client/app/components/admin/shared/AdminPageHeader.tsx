@@ -13,7 +13,7 @@ export function AdminPageHeader({ title, count, description, actions }: AdminPag
       data-testid="admin-page-header"
     >
       <Box>
-        <Typography level="h3" sx={{ color: 'admin.ink' }}>
+        <Typography level="h1" sx={{ color: 'admin.ink' }}>
           {title}
           {count !== undefined && ` (${count.toLocaleString()})`}
         </Typography>

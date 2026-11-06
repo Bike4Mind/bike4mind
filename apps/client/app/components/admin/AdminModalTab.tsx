@@ -288,7 +288,7 @@ const ModalsAdminTab: React.FC = () => {
   };
 
   return (
-    <Sheet sx={{ p: 2, width: '100%', overflow: 'auto' }}>
+    <Sheet sx={{ width: '100%', overflow: 'auto' }}>
       <Stack
         direction={{ xs: 'column', sm: 'row' }}
         justifyContent="space-between"

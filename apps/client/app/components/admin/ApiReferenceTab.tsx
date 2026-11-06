@@ -75,7 +75,7 @@ const ApiReferenceTab = () => {
   const scopes = useGenericApiKeyScopes();
 
   return (
-    <Box sx={{ p: 3, height: '100%', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
+    <Box sx={{ height: '100%', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
       <Box
         sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1, mb: 3 }}
       >

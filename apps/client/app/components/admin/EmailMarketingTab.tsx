@@ -8,7 +8,7 @@ export default function EmailMarketingTab() {
   const [activeTab, setActiveTab] = useState(0);
 
   return (
-    <Box sx={{ p: 2 }}>
+    <Box>
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
         <Typography level="h3">Email Marketing</Typography>
         <ContextHelpButton helpId="admin/email-marketing" tooltipText="Email Marketing Help" />

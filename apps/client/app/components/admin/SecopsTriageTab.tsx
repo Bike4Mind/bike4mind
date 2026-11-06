@@ -367,7 +367,7 @@ function SecopsTriageConfigPanel() {
 
 export default function SecopsTriageTab() {
   return (
-    <Sheet sx={{ p: 3, maxWidth: 800 }}>
+    <Sheet sx={{ maxWidth: 800 }}>
       <Stack direction="row" alignItems="center" spacing={1.5} sx={{ mb: 3 }}>
         <SecurityIcon sx={{ color: 'primary.500' }} />
         <Box>
