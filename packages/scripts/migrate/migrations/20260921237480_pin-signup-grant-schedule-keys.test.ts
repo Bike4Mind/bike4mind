@@ -154,6 +154,15 @@ describe('pin signup grant schedule keys migration', () => {
     await migration.up();
     expect(await value('signupGrantInitialCredits')).toBe('250');
     expect((await marker())?.pins).toContainEqual({ settingName: 'signupGrantInitialCredits', settingValue: '250' });
+
+    const pinsAfterFirstRun = (await marker())?.pins;
+    await migration.up();
+    expect((await marker())?.pins).toEqual(pinsAfterFirstRun);
+
+    await migration.down();
+    expect(await AdminSettings.findOne({ settingName: 'signupGrantInitialCredits' })).toBeNull();
+    await migration.up();
+    expect(await value('signupGrantInitialCredits')).toBe('250');
   });
 
   it('writes nothing where every schedule key is stored', async () => {

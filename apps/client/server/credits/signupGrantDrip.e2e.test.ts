@@ -50,7 +50,6 @@ const adminSettings = {
 } as unknown as Parameters<typeof newSignupGrant>[0] & { findBySettingNames: (keys: string[]) => Promise<unknown[]> };
 let clock = new Date();
 const notify = vi.fn<(alert: SignupGrantBudgetAlert) => Promise<void>>().mockResolvedValue();
-const notifyConfig = vi.fn<NonNullable<SignupProtection['notifyConfig']>>().mockResolvedValue();
 const signupProtection: SignupProtection = {
   repository: {
     findReview: async () => null,
@@ -60,7 +59,6 @@ const signupProtection: SignupProtection = {
     isOrganizationDomain: async () => false,
   },
   grantBudget: { repository: signupGrantBudgetRepository, notify, now: () => clock },
-  notifyConfig,
 };
 const adapters = {
   db: { users: userRepository, creditTransactions: creditTransactionRepository, adminSettings, signupProtection },
@@ -99,7 +97,6 @@ beforeEach(async () => {
   config.signupGrantDripCap = '9000';
   delete config.signupGrantRiskPolicy;
   notify.mockClear();
-  notifyConfig.mockClear();
   clock = new Date();
 });
 
@@ -536,7 +533,6 @@ describe('signup activity drip', () => {
       expect((await User.findById(user.id))?.signupGrant).toMatchObject({ unlockCredits: 0, creditsReleased: 1000 });
       expect((await drip(user.id, 0)).creditsGranted).toBe(0);
       expect(await creditsOf(user.id)).toBe(1000);
-      expect(notifyConfig).not.toHaveBeenCalled();
     } finally {
       for (const key of Object.keys(seeded)) delete config[key];
       Object.assign(config, prior);
