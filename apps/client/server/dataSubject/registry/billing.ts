@@ -178,7 +178,6 @@ export const billingHolders = {
       },
     ],
   },
-  // A dispute against an organization's or an unmatched charge is not a person.
   // A Stripe webhook event on the person's subscription: invoices, refunds and disputes.
   BillingEvent: {
     kind: 'holder',
@@ -204,6 +203,7 @@ export const billingHolders = {
   StripeDispute: {
     kind: 'holder',
     references: [
+      // A dispute against an organization's or an unmatched charge is not a person.
       {
         path: 'subjectId',
         matchBy: 'userId',
