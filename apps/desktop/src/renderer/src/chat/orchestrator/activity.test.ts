@@ -232,15 +232,17 @@ describe('activityLabel', () => {
 });
 
 describe('agentNowText', () => {
-  it('says the workspace is being prepared ahead of any activity or snippet', () => {
-    expect(
+  it('names the setup step ahead of any activity or snippet', () => {
+    const preparing = (step: 'worktree' | 'dependencies' | 'starting') =>
       agentNowText({
         state: 'working',
-        preparing: true,
+        preparing: step,
         activity: { kind: 'phase', phase: 'thinking' },
         lastSnippet: 'old',
-      })
-    ).toBe('Preparing its workspace');
+      });
+    expect(preparing('worktree')).toBe('Creating worktree');
+    expect(preparing('dependencies')).toBe('Installing dependencies');
+    expect(preparing('starting')).toBe('Starting up');
   });
 
   it('falls back to the activity label once no longer preparing', () => {

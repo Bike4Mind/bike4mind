@@ -1,5 +1,6 @@
 import type { Logger } from '@bike4mind/observability';
 import { IAgent, IMessage } from '@bike4mind/common';
+import { meterCompletionBackend, type CompletionMeter } from '@bike4mind/services';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 
 // System prompt for generating agent descriptions
@@ -154,7 +155,7 @@ ${contextString}
 Generate a description that captures this agent's unique personality, personal mission, and approach to helping users. Remember: they have their own burning goals and aren't just docile assistants - they're beings with purpose!`;
 };
 
-export async function generateAgentDescription(agent: IAgent, logger: Logger): Promise<string> {
+export async function generateAgentDescription(agent: IAgent, logger: Logger, meter: CompletionMeter): Promise<string> {
   // Build the context prompt from agent metadata
   const userPrompt = buildAgentContextPrompt(agent);
 
@@ -171,11 +172,12 @@ export async function generateAgentDescription(agent: IAgent, logger: Logger): P
   ];
 
   // Use operations model for agent description generation
-  const { modelId, llm } = await OperationsModelService.getOperationsModel();
+  const { modelId, llm: rawLlm, modelInfo } = await OperationsModelService.getOperationsModel();
 
-  if (!llm) {
+  if (!rawLlm) {
     throw new Error('Failed to initialize LLM backend');
   }
+  const llm = meterCompletionBackend(rawLlm, meter, modelInfo);
 
   let generatedDescription = '';
 

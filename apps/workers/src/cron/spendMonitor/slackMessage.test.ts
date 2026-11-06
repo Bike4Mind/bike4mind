@@ -118,6 +118,33 @@ describe('buildSpendAlertMessage', () => {
     expect(account).not.toContain('Top accounts');
   });
 
+  it('shows the trusted share left out of a platform ratio', () => {
+    const platformAlert = {
+      ...baseAlert,
+      rule: 'platform_spike' as const,
+      scopeType: 'platform' as const,
+      scopeId: 'all',
+      context: { baseline: 300, ratio: 30, trustedExcluded: 6000 },
+    };
+    const out = json(build({ alert: platformAlert }));
+    expect(out).toContain('Normal excl. trusted (15m)');
+    expect(out).toContain('Trusted accounts, not in ratio*\\n6,000 credits');
+    const plain = json(build({ alert: { ...platformAlert, context: { baseline: 300, ratio: 30 } } }));
+    expect(plain).toContain('Normal (15m)');
+    expect(plain).not.toContain('not in ratio');
+  });
+
+  it('marks a cost estimate for the trusted share of a cost spike', () => {
+    const costAlert = {
+      ...baseAlert,
+      rule: 'platform_cost_spike' as const,
+      scopeType: 'platform' as const,
+      scopeId: 'all',
+      context: { baseline: 10, ratio: 6, trustedExcluded: 12.5 },
+    };
+    expect(json(build({ alert: costAlert }))).toContain('$12.50 (est.)');
+  });
+
   it('marks a trusted account on the scope line, the context and the resolve', () => {
     const trustedAlert = { ...baseAlert, context: { ...baseAlert.context, trusted: true } };
     const out = json(build({ alert: trustedAlert }));

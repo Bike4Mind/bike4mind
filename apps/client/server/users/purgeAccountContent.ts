@@ -30,6 +30,7 @@ type PurgeOptions = { logger: Pick<Logger, 'info' | 'warn' | 'error'>; assertLea
 const BATCH_SIZE = 100;
 type PurgeRecord = {
   userId?: string | mongoose.Types.ObjectId;
+  __v?: number;
   sessionId?: string;
   id?: string;
   dataLakeId?: string;
@@ -346,6 +347,60 @@ async function purgePersonalLakes(
   }
 }
 
+async function purgePersonalProjects(
+  userId: string,
+  personalOrganizationIds: readonly string[],
+  assertLease: () => Promise<void>
+) {
+  const projects = collectionFor('Project');
+  while (true) {
+    const batch = await projects
+      .find(personalFilter(userId, personalOrganizationIds), { projection: { _id: 1 } })
+      .limit(BATCH_SIZE)
+      .toArray();
+    if (batch.length === 0) return;
+    for (const project of batch) {
+      await assertLease();
+      const projectId = String(project._id);
+      // Members keep the grants a project minted on surviving (organization or other owners')
+      // documents unless they go with it, as deleteProject's revoke cascade does.
+      for (const model of [FabFile.modelName, Session.modelName]) {
+        await collectionFor(model).updateMany(
+          { 'users.projectId': projectId },
+          { $pull: { users: { projectId } }, $inc: { __v: 1 } }
+        );
+      }
+      await projects.deleteOne({ _id: project._id, ...personalFilter(userId, personalOrganizationIds) });
+    }
+  }
+}
+
+async function purgePersonalAgents(
+  userId: string,
+  personalOrganizationIds: readonly string[],
+  assertLease: () => Promise<void>
+) {
+  const agents = collectionFor('Agent');
+  while (true) {
+    const batch = await agents
+      .find(personalFilter(userId, personalOrganizationIds), { projection: { _id: 1 } })
+      .limit(BATCH_SIZE)
+      .toArray();
+    if (batch.length === 0) return;
+    await assertLease();
+    const agentIds = batch.map(agent => String(agent._id));
+    // Same cleanup as deleteAgent: nobody's Slack setting may keep pointing at a removed agent.
+    await collectionFor('User').updateMany(
+      { 'slackSettings.customAgentId': { $in: agentIds } },
+      { $unset: { 'slackSettings.customAgentId': '' } }
+    );
+    await agents.deleteMany({
+      _id: { $in: batch.map(agent => agent._id) },
+      ...personalFilter(userId, personalOrganizationIds),
+    });
+  }
+}
+
 async function purgePersonalUsage(
   userId: string,
   personalOrganizationIds: readonly string[],
@@ -420,9 +475,10 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
   await purgePersonalLakes(userId, personalOrganizationIds, assertLease);
   await purgePersonalUsage(userId, personalOrganizationIds, assertLease);
 
+  await purgePersonalProjects(userId, personalOrganizationIds, assertLease);
+  await purgePersonalAgents(userId, personalOrganizationIds, assertLease);
+
   for (const model of [
-    'Project',
-    'Agent',
     'ToolModel',
     'Memento',
     'ResearchAgent',
@@ -453,6 +509,7 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
     'OAuthRefreshToken',
     'OAuthAuthorizationCode',
     'UserApiKey',
+    'ApiKey',
     'PushToken',
     'DeviceAuthorization',
     'CcBridgeDevice',

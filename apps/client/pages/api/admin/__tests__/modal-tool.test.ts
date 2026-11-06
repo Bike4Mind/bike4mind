@@ -28,7 +28,7 @@ vi.mock('@bike4mind/observability', () => ({
   },
 }));
 // No operations model available, so the route uses its pattern-matching fallback.
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: () => {
       throw new Error('no model');

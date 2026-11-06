@@ -181,6 +181,8 @@ const api: DesktopApi = {
     setSessionGeneration: (sessionId: string, generation: GenerationSettings) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionGeneration, sessionId, generation),
     getModelSettings: (modelId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetModelSettings, modelId),
+    getUnsupportedModelSettings: (modelId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatGetUnsupportedModelSettings, modelId),
     setModelSettings: (modelId: string, settings: ModelSettings) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetModelSettings, modelId, settings),
     getModelLoadOffer: (modelId: string, draftTokens?: number) =>

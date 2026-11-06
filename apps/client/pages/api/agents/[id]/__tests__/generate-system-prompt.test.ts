@@ -42,7 +42,11 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   getAvailableModels: vi.fn().mockResolvedValue([{ id: 'claude-opus-4-20250514' }]),
   getLlmByModel: () => ({ complete: h.complete }),
 }));
-vi.mock('@bike4mind/services', () => ({ apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) } }));
+vi.mock('@bike4mind/services', () => ({
+  apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) },
+  meterCompletionBackend: (llm: unknown) => llm,
+}));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: () => vi.fn() }));
 vi.mock('@client/server/agents/systemPromptRateLimit', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/server/agents/systemPromptRateLimit')>()),
   assertSystemPromptGenerationAllowed: h.assertAllowed,

@@ -22,6 +22,7 @@ import {
   FileText,
   Fingerprint,
   Gauge,
+  Gavel,
   GitBranch,
   GitPullRequest,
   Globe,
@@ -144,6 +145,7 @@ export enum AdminTab {
   Revenue = 72,
   ShadowDetections = 73,
   ModerationIncidents = 74,
+  StripeDisputes = 75,
 }
 
 /**
@@ -229,6 +231,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         tab: AdminTab.ShadowDetections,
         label: 'Detections',
         testid: 'admin-shadow-detections-btn',
+      },
+      {
+        Icon: Gavel,
+        tab: AdminTab.StripeDisputes,
+        label: 'Disputes',
+        testid: 'admin-stripe-disputes-btn',
       },
       { Icon: HandCoins, tab: AdminTab.HeldSignupGrants, label: 'Held signup grants' },
       { Icon: ArrowRightLeft, tab: AdminTab.Migrate, label: 'Migration', gate: 'userMigration' },

@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { SxProps } from '@mui/joy/styles/types';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -111,6 +110,7 @@ import { TavernView } from './orchestrator/tavern/TavernView';
 import { latestQuestReport } from './orchestrator/finale';
 import { agentStates } from './orchestrator/roster';
 import { prefersReducedMotion } from './orchestrator/motion';
+import { ThreadDock, type ThreadDockMode } from './orchestrator/ThreadDock';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
 import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
 
@@ -204,8 +204,6 @@ export type AccountStrip = (status: ReactNode) => ReactNode;
 
 /** How long the first-run tavern intro plays before it is marked seen (ms). */
 const ORCHESTRATOR_INTRO_MS = 1500;
-/** The conversation docked beside the orchestrator stage (px). */
-const DOCK_WIDTH = 380;
 
 /**
  * 'playing' while the first-run intro runs, then 'shown' until the user picks a view: the intro is
@@ -1317,25 +1315,7 @@ export function ChatShell({
   );
 
   const orchestratorShown = orchestrating && activeId !== null;
-  const dockHidden = orchestratorShown && !orchestratorPrefs.dockOpen;
-  const threadHostTestId = dockHidden
-    ? 'orchestrator-dock-hidden'
-    : orchestratorShown
-      ? 'orchestrator-dock'
-      : undefined;
-  // A hidden dock stays laid out (visibility, not display), so the thread keeps its scroll offset.
-  const threadHostSx: SxProps = !orchestratorShown
-    ? { flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }
-    : {
-        width: DOCK_WIDTH,
-        flexShrink: 0,
-        minHeight: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        ...(dockHidden
-          ? { position: 'absolute', top: 0, right: 0, bottom: 0, visibility: 'hidden' }
-          : { borderLeft: '1px solid', borderColor: 'divider' }),
-      };
+  const threadDockMode: ThreadDockMode = !orchestratorShown ? 'chat' : orchestratorPrefs.dockOpen ? 'docked' : 'hidden';
 
   return (
     <Box sx={chatShellRootSx} {...drop.handlers} data-testid="chat-shell">
@@ -1628,9 +1608,9 @@ export function ChatShell({
                   }
                 />
               )}
-              <Box ref={threadHost} data-testid={threadHostTestId} sx={threadHostSx}>
+              <ThreadDock mode={threadDockMode} hostRef={threadHost}>
                 {thread}
-              </Box>
+              </ThreadDock>
             </Box>
 
             {panelShown && panelProject && conversation.session && (

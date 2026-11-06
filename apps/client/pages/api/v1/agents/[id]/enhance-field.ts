@@ -5,6 +5,7 @@
  */
 import { enhanceAgentFieldContract } from '@bike4mind/common';
 import { enhanceAgentField } from '@server/agents/authoring/enhanceAgentField';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { AUTHORING_RATE_LIMIT_BUCKET, findOwnedAgent } from '@server/agents/v1AgentRoute';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { toV1AuthoringError } from '@server/agents/v1AgentErrors';
@@ -27,7 +28,8 @@ const handler = nextRouteForContract(enhanceAgentFieldContract, {
         agent,
         req.user.id,
         { fieldName: field_name, currentValue: current_value, agentName: agent_name },
-        req.logger
+        req.logger,
+        createRequestCompletionMeter(req, 'agent field enhancement', { systemModel: true })
       );
       return res.json({ enhanced_value: enhanced });
     } catch (error) {

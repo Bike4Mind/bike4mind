@@ -1030,6 +1030,8 @@ export function computeHolderSettlement(
 /**
  * Warns when a shortfall settlement left the holder owing credits (see computeHolderSettlement). A
  * refund that lands on a balance a sibling turn already took negative adds no debt and stays quiet.
+ * The message is the completion-credit-overdraft alarm's filter (SETTLEMENT_DEBT_MESSAGE in
+ * infra/llmSpend.ts); keep the two in sync.
  */
 export function warnOnSettlementDebt(
   logger: Logger,

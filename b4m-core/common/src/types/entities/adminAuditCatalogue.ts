@@ -56,6 +56,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'billing.comp.changed': { category: 'credits', severity: 'notice', write: 'strict' },
   'billing.subscription.cancel_scheduled': { category: 'credits', severity: 'critical', write: 'strict' },
   'billing.subscription.resumed': { category: 'credits', severity: 'critical', write: 'strict' },
+  // bestEffort: the StripeDispute record holds the resolution; the Contain a lost dispute applies is audited per user.
+  'billing.dispute.resolved': { category: 'credits', severity: 'notice', write: 'bestEffort' },
 
   'user.role.admin_granted': { category: 'access', severity: 'critical', write: 'strict' },
   'user.role.admin_revoked': { category: 'access', severity: 'critical', write: 'strict' },
@@ -73,6 +75,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
 
   'user.deleted': { category: 'account', severity: 'critical', write: 'strict' },
   'user.deletion.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
+  // notice, not critical like user.deleted: the sweep carrying out a user's own scheduled deletion.
+  'user.deletion.completed': { category: 'account', severity: 'notice', write: 'strict' },
   // notice, not info: the same entry carries an admin's change to another user's email, password and tags.
   'user.profile.updated': { category: 'account', severity: 'notice', write: 'bestEffort' },
   'user.note.created': { category: 'support', severity: 'info', write: 'strict' },

@@ -1,7 +1,8 @@
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { questRepository, sessionRepository } from '@bike4mind/database';
-import { redactSessionForClient } from '@bike4mind/common';
-import { sessionService } from '@bike4mind/services';
+import { HTTPError, redactSessionForClient } from '@bike4mind/common';
+import { meterCompletionBackend, sessionService } from '@bike4mind/services';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { InternalServerError, NotFoundError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertSessionAccess } from '@bike4mind/server-utils/utils/sessionAccess';
@@ -20,7 +21,13 @@ const handler = baseApi().post<Request<unknown, unknown, unknown, { id: string }
 
     try {
       // Get operations model
-      const { modelId, llm } = await OperationsModelService.getOperationsModel();
+      const operations = await OperationsModelService.getOperationsModel();
+      const { modelId } = operations;
+      const llm = meterCompletionBackend(
+        operations.llm,
+        createRequestCompletionMeter(req, 'session auto-rename', { systemModel: true }),
+        operations.modelInfo
+      );
 
       const updatedSession = await sessionService.autoName(
         { sessionId: id },
@@ -53,6 +60,8 @@ const handler = baseApi().post<Request<unknown, unknown, unknown, { id: string }
     } catch (error) {
       // Revoked or deleted during the LLM call: the gated write refused it.
       if (error instanceof NotFoundError) throw error;
+      // Credit and admission refusals keep their status (422); the empty-title 500 is logged below.
+      if (error instanceof HTTPError && !(error instanceof InternalServerError)) throw error;
       req.logger.error('Error in auto-rename:', error);
       throw new InternalServerError('Failed to auto-rename session');
     }

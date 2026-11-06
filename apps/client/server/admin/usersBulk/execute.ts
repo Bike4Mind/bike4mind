@@ -96,7 +96,7 @@ type UserOutcome =
   | { status: 'skipped'; canceledSubscriptions?: string[]; subscriptionCancelError?: string }
   | { status: 'failed'; userId: string; error: string };
 
-type ApplyContext = {
+export type ApplyContext = {
   action: AdminUsersBulkAction;
   actorId: string;
   reason: string;
@@ -104,6 +104,12 @@ type ApplyContext = {
   /** Epoch ms past which a user's Stripe cancel makes no more requests. */
   cancelDeadline: number;
 };
+
+/** What one user's steps need: the batch-level seams (resolve, domains, summary) are not used. */
+export type ApplyDeps = Pick<
+  ExecuteDeps,
+  'db' | 'store' | 'withTransaction' | 'audit' | 'endRealtimeConnections' | 'cancelSubscriptions' | 'logger'
+>;
 
 const isDoneEntry = (data: unknown): data is { state: 'done'; result: AdminUsersBulkResult } =>
   typeof data === 'object' &&
@@ -114,8 +120,8 @@ const isDoneEntry = (data: unknown): data is { state: 'done'; result: AdminUsers
 /** The steps for one user, inside its transaction. Returns null when nothing changed. */
 async function applySteps(
   userId: string,
-  { action, actorId, reason, batchId }: ApplyContext,
-  deps: ExecuteDeps
+  { action, actorId, reason, batchId }: Omit<ApplyContext, 'cancelDeadline'>,
+  deps: ApplyDeps
 ): Promise<UserUndoSnapshot | null> {
   const { db } = deps;
   const user = await db.findUser(userId);
@@ -228,7 +234,7 @@ async function cancelSubscriptionsOf(
   user: BulkUser,
   action: BanActionType,
   { batchId, cancelDeadline }: ApplyContext,
-  deps: ExecuteDeps,
+  deps: Pick<ExecuteDeps, 'cancelSubscriptions' | 'logger'>,
   snapshot: Pick<UserUndoSnapshot, 'canceledSubscriptions'>
 ): Promise<{ subscriptionCancelError?: string }> {
   try {
@@ -239,6 +245,47 @@ async function cancelSubscriptionsOf(
     deps.logger?.error('Users bulk subscription cancel failed for user', { userId: user.id, error });
     return { subscriptionCancelError: errorMessage(error) };
   }
+}
+
+/**
+ * Applies an action to one user outside any batch, for a system action that keeps its own durable undo
+ * record instead of the batch's short-lived one. `onApplied` runs in the same transaction, so that
+ * record commits with the change or not at all. Returns null when the user needed no change; throws
+ * when the user's transaction fails. Its after-commit steps must stay in sync with applyToUser's.
+ * Subscriptions a ban action cancels after the commit are set on the returned snapshot.
+ */
+export async function applyActionToUser(
+  userId: string,
+  context: ApplyContext,
+  deps: ApplyDeps,
+  onApplied: (snapshot: UserUndoSnapshot) => Promise<void>
+): Promise<UserUndoSnapshot | null> {
+  const snapshot = await deps.withTransaction(async () => {
+    const applied = await applySteps(userId, context, deps);
+    if (applied) await onApplied(applied);
+    return applied;
+  });
+  if (snapshot && (snapshot.banned || snapshot.apiKeys)) {
+    // The action committed; a socket teardown failure must not make the caller treat it as failed.
+    try {
+      await deps.endRealtimeConnections(userId);
+    } catch (error) {
+      deps.logger?.error('Ending realtime connections failed after a committed action', { userId, error });
+    }
+  }
+  const { type } = context.action;
+  if (!isBanAction(type)) return snapshot;
+  // As applyToUser: also for a user already suspended (null snapshot), so an older ban is caught up.
+  const user = await deps.db.findUser(userId).catch((error: unknown) => {
+    deps.logger?.error('Reading the user to cancel subscriptions failed after a committed action', { userId, error });
+    return null;
+  });
+  if (!user) return snapshot;
+  const { subscriptionCancelError } = await cancelSubscriptionsOf(user, type, context, deps, snapshot ?? {});
+  if (subscriptionCancelError) {
+    deps.logger?.error('Subscription cancel failed after a committed action', { userId, subscriptionCancelError });
+  }
+  return snapshot;
 }
 
 /** Replays a finished batch with the same idempotency key, or refuses one still running. */

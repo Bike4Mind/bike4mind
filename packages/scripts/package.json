@@ -44,6 +44,7 @@
     "test:api-usage": "tsx test-api-usage-monitoring.ts",
     "smoke:selfhost-agent-run": "tsx src/smoke-selfhost-agent-run.ts",
     "test:agent-execute-ws": "tsx testAgentExecuteWs.ts",
+    "smoke:selfhost-history-import": "tsx src/smoke-selfhost-history-import.ts",
     "test:kb-refusal": "tsx testKnowledgeToolRefusal.ts",
     "eval:tool-calling": "tsx toolCallingScorecard.ts",
     "create-prod-release": "tsx src/createProductionRelease.ts",

@@ -1,12 +1,14 @@
 import { useState, type ReactNode } from 'react';
 import { Alert, Box, Button, Input, Skeleton, Stack, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
+import { toast } from 'sonner';
 import { ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import type {
   AnalyticsAccounts,
   AnalyticsOverview,
   AnalyticsOverviewQuery,
   AnalyticsRange,
+  TopAccountRow,
 } from '@client/app/utils/analyticsOverview';
 import {
   AdminPageHeader,
@@ -17,10 +19,17 @@ import {
   StatusChip,
   useAdminListUrlState,
 } from '../shared';
-import { adminSearchForTab, type AdminSearch } from '../adminTabParams';
+import { ADMIN_ORGANIZATIONS_TAB_SLUG, adminSearchForTab, type AdminSearch } from '../adminTabParams';
+import { adminTabToSlug } from '../adminTabSlugs';
+import { AdminTab } from '../adminSidebarConfig';
+import { ORGS_ORG_ID_PARAM } from '../organizationsTabSearch';
 import { ActiveUsersSection } from './ActiveUsersSection';
 import { CohortsSection } from './CohortsSection';
 import { SignupsSection, type SignupWindowSelection } from './SignupsSection';
+import { CreditsSection, FeatureUsageSection, ModelUsageSection } from './UsageSections';
+import { TopAccountsSection } from './TopAccountsSection';
+import { downloadAnalyticsExport } from './analyticsExport';
+import { useAnalyticsTopAccounts } from './useAnalyticsTopAccounts';
 import { ANALYTICS_SEARCH_KEYS, readAnalyticsFilters, writeAnalyticsFilters } from './analyticsTabSearch';
 import { comparisonLine, formatCount, formatPercent, formatUpdatedAt, sparklineValues } from './analyticsFormat';
 import { useAnalyticsOverview } from './useAnalyticsOverview';
@@ -50,8 +59,8 @@ const FOOTERS: Record<AnalyticsAccounts, string> = {
   external:
     'Active users: an AI request that UTC day from the web app, CLI, Desktop or an agent run; internal, Developer-tagged, test, banned and AI-held accounts are not counted. A signup is real when the email is verified, the account is not banned or held, and it made an AI request within 7 days; every other signup, banned or held ones included, is suspected. External API users are shown separately regardless of Accounts and not counted. Days are UTC.',
   internal:
-    'Active users count only admin, system, flagged test, staff-domain, Developer-tagged and test-persona accounts; signups always exclude them. The separate API series always counts external accounts. Days are UTC.',
-  all: 'Active users include admin, system, flagged test, staff-domain, Developer-tagged and test-persona accounts; signups always exclude them. The separate API series always counts external accounts. Days are UTC.',
+    'Active users count only admin, system, flagged test, staff-domain, Developer-tagged and test-persona accounts; signups, usage and top accounts always exclude them. The separate API series always counts external accounts. Days are UTC.',
+  all: 'Active users include admin, system, flagged test, staff-domain, Developer-tagged and test-persona accounts; signups, usage and top accounts always exclude them. The separate API series always counts external accounts. Days are UTC.',
 };
 
 const todayUtc = () => new Date().toISOString().slice(0, 10);
@@ -150,7 +159,10 @@ const AnalyticsTab = () => {
 
   const customIncomplete = query.range === 'custom' && (!query.from || !query.to);
   const customInverted = query.range === 'custom' && !!query.from && !!query.to && query.from > query.to;
-  const { data, isPending, isError, refetch } = useAnalyticsOverview(query, !customIncomplete && !customInverted);
+  const queryReady = !customIncomplete && !customInverted;
+  const { data, isPending, isError, isPlaceholderData, refetch } = useAnalyticsOverview(query, queryReady);
+  const topAccounts = useAnalyticsTopAccounts(query, queryReady);
+  const [exporting, setExporting] = useState(false);
 
   const setQuery = (patch: Partial<AnalyticsOverviewQuery>) =>
     updateUrl({ filters: writeAnalyticsFilters({ ...query, ...patch }) });
@@ -171,6 +183,31 @@ const AnalyticsTab = () => {
       }),
     });
 
+  const openTab = (tab: AdminTab) => {
+    const slug = adminTabToSlug(tab);
+    if (slug) void navigate({ to: '/admin', search: (previous: AdminSearch) => adminSearchForTab(previous, slug) });
+  };
+  const openUser = (row: TopAccountRow) => void navigate({ to: '/admin/users/$userId', params: { userId: row.id } });
+  const openOrg = (row: TopAccountRow) =>
+    void navigate({
+      to: '/admin',
+      search: (previous: AdminSearch) => ({
+        ...adminSearchForTab(previous, ADMIN_ORGANIZATIONS_TAB_SLUG),
+        [ORGS_ORG_ID_PARAM]: row.id,
+      }),
+    });
+  const exportCsv = async () => {
+    if (!data) return;
+    setExporting(true);
+    try {
+      await downloadAnalyticsExport(data, topAccounts.data);
+    } catch {
+      toast.error("Couldn't export the analytics. Try again.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   // Pending also covers a custom range still waiting for its dates.
   const loading = isPending && !isError;
   const sectionProps = {
@@ -189,7 +226,30 @@ const AnalyticsTab = () => {
       <AdminPageHeader
         title="Analytics"
         description="Who uses Bike4Mind, how often, and whether they come back. UTC."
-        actions={<ContextHelpButton helpId="admin/analytics" tooltipText="Analytics help" />}
+        actions={
+          <Stack direction="row" gap={1} alignItems="center">
+            <Button
+              variant="outlined"
+              color="neutral"
+              size="sm"
+              // Placeholder data is the previous range's, so either side could put another range in the zip.
+              disabled={
+                !data ||
+                isError ||
+                isPlaceholderData ||
+                topAccounts.isPending ||
+                topAccounts.isError ||
+                topAccounts.isPlaceholderData
+              }
+              loading={exporting}
+              onClick={() => void exportCsv()}
+              data-testid="analytics-export-btn"
+            >
+              Export CSV
+            </Button>
+            <ContextHelpButton helpId="admin/analytics" tooltipText="Analytics help" />
+          </Stack>
+        }
       />
 
       <Stack
@@ -329,6 +389,21 @@ const AnalyticsTab = () => {
       >
         <ActiveUsersSection {...sectionProps} />
         <SignupsSection {...sectionProps} onSelectWindow={openSignupWindow} />
+        <FeatureUsageSection {...sectionProps} />
+        <ModelUsageSection {...sectionProps} onOpenModels={() => openTab(AdminTab.ModelMetrics)} />
+        <CreditsSection {...sectionProps} onOpenCredits={() => openTab(AdminTab.CreditAnalytics)} />
+        {(['users', 'orgs'] as const).map(kind => (
+          <TopAccountsSection
+            key={kind}
+            kind={kind}
+            data={topAccounts.data}
+            loading={topAccounts.isPending && !topAccounts.isError}
+            error={topAccounts.isError}
+            onRetry={() => void topAccounts.refetch()}
+            onShowDefaultRange={showDefaultRange}
+            onOpen={kind === 'users' ? openUser : openOrg}
+          />
+        ))}
       </Box>
 
       <CohortsSection signups={query.signups} />

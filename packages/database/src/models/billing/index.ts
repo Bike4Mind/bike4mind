@@ -15,6 +15,7 @@ export * from './ProviderInvoiceModel';
 export * from './SpendReconciliationModel';
 export * from './RevenueSnapshotModel';
 export * from './SpendRollupModel';
+export * from './StripeDisputeModel';
 export * from './newAccountSpendCapAdapters';
 export * from './HeldCreditRewardModel';
 export * from './SpendAlertModel';

@@ -155,6 +155,14 @@ export interface CreateFabFileAdapters {
    * summaries), so no presigned PUT is minted and the row is not a client upload (IFabFile.clientUpload).
    */
   serverUpload?: boolean;
+  /**
+   * Skips the owner's storage quota gate and stamps the row `storageExempt`, so the S3 upload event
+   * never charges it either (claimStorageCharge). An adapter rather than a `createFabFileSchema`
+   * field for the same reason as `provenance`: that schema is parsed from a caller-controlled HTTP
+   * body. The `MaxFileSize` cap still applies. Its one intended caller is the legacy QuestMaster
+   * conversion, which writes files the user never asked for.
+   */
+  storageExempt?: boolean;
 }
 
 /**
@@ -199,6 +207,7 @@ export const prepareFabFile = async (
     objectKey,
     pendingUploadBytes,
     serverUpload,
+    storageExempt,
   }: CreateFabFileAdapters
 ) => {
   const params = secureParameters(parameters, createFabFileSchema);
@@ -252,17 +261,20 @@ export const prepareFabFile = async (
     });
   }
 
-  await checkStorageLimitForOwner(
-    { user, organizationId: ownerOrganizationId, pendingBytes: pendingUploadBytes?.(ownerOrganizationId) },
-    params.fileSize,
-    id => db.organizations.findById(id)
-  );
+  if (!storageExempt) {
+    await checkStorageLimitForOwner(
+      { user, organizationId: ownerOrganizationId, pendingBytes: pendingUploadBytes?.(ownerOrganizationId) },
+      params.fileSize,
+      id => db.organizations.findById(id)
+    );
+  }
 
   const buildData: Omit<IFabFileDocument, 'id'> = {
     userId,
     ...params,
     ...(ownerOrganizationId && { organizationId: ownerOrganizationId }),
     ...(tags !== undefined && { tags }),
+    ...(storageExempt && { storageExempt: true }),
     ...(provenance && {
       sourceType: provenance.sourceType,
       ...(provenance.sourceMetadata && { sourceMetadata: provenance.sourceMetadata }),

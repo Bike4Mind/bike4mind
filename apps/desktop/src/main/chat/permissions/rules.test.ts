@@ -1,8 +1,9 @@
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { permissionProtectedRoots } from '../protectedLocations';
+import { realpathSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { permissionProtectedLocations } from '../protectedLocations';
 import { scanShell } from '../tools/shellScan';
 import { permissionSubject } from './subject';
 import {
@@ -348,7 +349,11 @@ describe('PermissionRuleSet', () => {
       const scan = await scanShell(script, join(base, 'proj'), [base]);
       if (!scan) throw new Error('Expected the command to parse');
       const subject: PermissionSubject = { tool: 'bash_execute', shell: { script, ...scan } };
-      const roots = permissionProtectedRoots(join(base, 'cfg-link', 'App'), join(base, 'home'), join(base, 'managed'));
+      const roots = [
+        ...permissionProtectedLocations(join(base, 'cfg-link', 'App'), join(base, 'home'), join(base, 'managed'), {
+          warn: () => {},
+        }).paths(),
+      ];
       expect(decide(set({ allow: ['Bash(cp:*)'] }, roots), subject)).toBeNull();
       expect(decide(set({ allow: ['Bash(cp:*)'] }, [join(base, 'cfg-link', 'App')]), subject)).toBe('allow');
     } finally {
@@ -370,6 +375,120 @@ describe('PermissionRuleSet', () => {
     } finally {
       await rm(base, { recursive: true, force: true });
     }
+  });
+
+  it('does not allow an edit of a dangling link inside a protected folder reached through an alias', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'permission-roots-')));
+    try {
+      await mkdir(join(base, 'home', 'prot'), { recursive: true });
+      await mkdir(join(base, 'out'));
+      await symlink(join(base, 'home'), join(base, 'alias'));
+      await symlink(join(base, 'out', 'x'), join(base, 'home', 'prot', 'lnk'));
+      const rules = set({ allow: ['Edit'] }, [join(base, 'home', 'prot')]);
+      expect(decide(rules, { tool: 'file_edit', paths: [join(base, 'alias', 'prot', 'lnk')] })).toBeNull();
+      expect(decide(rules, { tool: 'file_edit', paths: [join(base, 'alias', 'other')] })).toBe('allow');
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  it('does not allow an edit of a path whose parent cannot be resolved, though the path itself can', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'permission-roots-')));
+    const native = realpathSync.native;
+    vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+      if (String(path) === join(base, 'dir')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      return native(path, options);
+    });
+    try {
+      await mkdir(join(base, 'dir'));
+      await writeFile(join(base, 'dir', 'file'), 'x');
+      const rules = set({ allow: ['Edit'] }, [join(base, 'prot')]);
+      expect(decide(rules, { tool: 'file_edit', paths: [join(base, 'dir', 'file')] })).toBeNull();
+      expect(decide(rules, { tool: 'file_edit', paths: [join(base, 'other')] })).toBe('allow');
+    } finally {
+      vi.restoreAllMocks();
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  it('reads the protected roots from their provider on each decision', () => {
+    let roots: readonly string[] = [];
+    const compiled = compileRule(parsed('Edit', true), 'allow', SOURCE, { home: HOME, root: PROJECT, cwd: PROJECT });
+    if (!compiled) throw new Error('Expected the rule to compile');
+    const rules = new PermissionRuleSet([compiled], () => roots);
+    const subject: PermissionSubject = { tool: 'file_edit', paths: [join(PROJECT, 'prot', 'file')] };
+    expect(decide(rules, subject)).toBe('allow');
+    roots = [join(PROJECT, 'prot')];
+    expect(decide(rules, subject)).toBeNull();
+    expect(rules.coversFolder(join(PROJECT, 'prot'))).toBe(false);
+  });
+
+  it('applies no allow rule while a protected folder is unresolved', () => {
+    let unresolved: readonly string[] = ['/home/someone/.claude'];
+    const rules = ['Edit(**)', 'Bash(git status:*)'].map(text => {
+      const compiled = compileRule(parsed(text, true), 'allow', SOURCE, { home: HOME, root: PROJECT, cwd: PROJECT });
+      if (!compiled) throw new Error('Expected the rule to compile');
+      return compiled;
+    });
+    const set = new PermissionRuleSet(rules, [], () => unresolved);
+    const edit: PermissionSubject = { tool: 'file_edit', paths: [join(PROJECT, 'file')] };
+    const bash = shell('git status', ['git status'], [PROJECT]);
+    expect(decide(set, edit)).toBeNull();
+    expect(decide(set, bash)).toBeNull();
+    unresolved = [];
+    expect(decide(set, edit)).toBe('allow');
+    expect(decide(set, bash)).toBe('allow');
+  });
+
+  describe('when a path cannot be resolved', () => {
+    let base: string;
+    let rules: PermissionRuleSet;
+
+    beforeEach(async () => {
+      base = await realpath(await mkdtemp(join(tmpdir(), 'permission-unresolved-')));
+      await mkdir(join(base, 'config', 'App'), { recursive: true });
+      await mkdir(join(base, 'locked'));
+      await symlink(join(base, 'config', 'App'), join(base, 'locked', 'alias'));
+      await symlink(join(base, 'loop-a'), join(base, 'loop-b'));
+      await symlink(join(base, 'loop-b'), join(base, 'loop-a'));
+      rules = set({ allow: [`Edit(/${base}/**)`, 'Bash(cp:*)'] }, [join(base, 'config', 'App')]);
+      const native = realpathSync.native;
+      vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+        if (String(path).startsWith(join(base, 'locked'))) {
+          throw Object.assign(new Error('denied'), { code: 'EACCES' });
+        }
+        return native(path, options);
+      });
+    });
+
+    afterEach(async () => {
+      vi.restoreAllMocks();
+      await rm(base, { recursive: true, force: true });
+    });
+
+    it('still allows a resolvable path beside it', () => {
+      expect(decide(rules, { tool: 'file_write', paths: [join(base, 'notes.md')] })).toBe('allow');
+      expect(rules.coversFolder(join(base, 'notes'))).toBe(true);
+    });
+
+    it.each([
+      ['EACCES', ['locked', 'alias']],
+      ['ELOOP', ['loop-a']],
+    ])('treats it as protected on %s', (_code, parts) => {
+      const directory = join(base, ...parts);
+      const target = join(directory, 'tool-access.json');
+      expect(decide(rules, { tool: 'file_write', paths: [target] })).toBeNull();
+      const script = `cp x ${target}`;
+      const command = { text: script, words: script, coverable: true };
+      expect(
+        decide(rules, {
+          tool: 'bash_execute',
+          shell: { script, commands: [command], directories: [], paths: [target] },
+        })
+      ).toBeNull();
+      expect(rules.coversFolder(directory)).toBe(false);
+      expect(decide(rules, shell(script, [script], [directory]))).toBeNull();
+    });
   });
 
   describe.each(['darwin', 'win32'] as const)('on %s', platform => {

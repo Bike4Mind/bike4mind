@@ -1583,9 +1583,21 @@ export type ChatSessionStatus = 'processing' | 'needs-action' | 'done';
 export interface ChatSessionStatusEvent {
   sessionId: string;
   status: ChatSessionStatus;
-  /** A 'processing' session that is still being prepared (worktree, held first turn), not yet replying. */
-  preparing?: true;
+  /** A 'processing' session that is still being prepared, not yet replying: the step it is on. */
+  preparing?: SessionSetupStep;
 }
+
+/**
+ * What a session is doing before its first reply: cutting its worktree, waiting on that
+ * worktree's dependency install, or starting the turn itself.
+ */
+export type SessionSetupStep = 'worktree' | 'dependencies' | 'starting';
+
+export const SESSION_SETUP_LABEL: Record<SessionSetupStep, string> = {
+  worktree: 'Creating worktree',
+  dependencies: 'Installing dependencies',
+  starting: 'Starting up',
+};
 
 export interface SendMessageRequest {
   sessionId: string;

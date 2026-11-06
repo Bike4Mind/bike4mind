@@ -1,5 +1,5 @@
 import { snippetOf } from '@shared/agentOutcome';
-import type { ChatStreamEvent, ChatToolCall } from '@shared/chat';
+import { SESSION_SETUP_LABEL, type ChatStreamEvent, type ChatToolCall } from '@shared/chat';
 import type { AgentView } from './roster';
 
 /** What a running agent is doing right now, as far as its stream shows. Status only, never stored. */
@@ -134,7 +134,7 @@ export function activityLabel(activity: AgentActivity): string {
 export function agentNowText(
   agent: Pick<AgentView, 'state' | 'preparing' | 'activity' | 'lastSnippet'>
 ): string | undefined {
-  if (agent.state === 'working' && agent.preparing) return 'Preparing its workspace';
+  if (agent.state === 'working' && agent.preparing) return SESSION_SETUP_LABEL[agent.preparing];
   if (agent.state === 'working' && agent.activity) return activityLabel(agent.activity);
   // A call parked at the approval gate is still the agent's current tool.
   if (agent.state === 'needs-you' && agent.activity?.kind === 'tool')

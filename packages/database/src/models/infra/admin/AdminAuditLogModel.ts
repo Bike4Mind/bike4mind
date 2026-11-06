@@ -175,6 +175,10 @@ const LIST_QUERY_MAX_TIME_MS = 15_000;
 
 type FilterClause = Record<string, unknown>;
 
+const deletionActionFilter = (): FilterClause => ({
+  $or: [{ action: { $regex: /\.deleted$/ } }, { action: 'user.deletion.completed' }],
+});
+
 const buildFilterClauses = (filters: AuditLogFilters): FilterClause[] => {
   const clauses: FilterClause[] = [];
   const equals = (field: string, value: string | undefined) => {
@@ -192,7 +196,8 @@ const buildFilterClauses = (filters: AuditLogFilters): FilterClause[] => {
   equals('context.requestId', filters.requestId);
   equals('related.impersonationSessionId', filters.impersonationSessionId);
   // The schema restricts verb to [a-z_], so it needs no regex escaping.
-  if (filters.verb !== undefined) clauses.push({ action: { $regex: `\\.${filters.verb}$` } });
+  if (filters.verb === 'deleted') clauses.push(deletionActionFilter());
+  else if (filters.verb !== undefined) clauses.push({ action: { $regex: `\\.${filters.verb}$` } });
   if (filters.from !== undefined) clauses.push({ occurredAt: { $gte: new Date(filters.from) } });
   if (filters.to !== undefined) clauses.push({ occurredAt: { $lte: new Date(filters.to) } });
   return clauses;
@@ -426,8 +431,8 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
               action: { $nin: [IMPERSONATION_STARTED_ACTION, IMPERSONATION_ENDED_ACTION] },
             }),
             impersonations: facetCount({ action: IMPERSONATION_STARTED_ACTION }),
-            deletions: facetCount({ action: { $regex: '\\.deleted$' } }),
-            deniedAttempts: facetCount({ action: { $regex: '\\.denied$' } }),
+            deletions: facetCount(deletionActionFilter()),
+            deniedAttempts: facetCount({ action: { $regex: /\.denied$/ } }),
           },
         },
       ])

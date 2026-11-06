@@ -4022,6 +4022,8 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     moderationLastAttemptAt: { type: Date, required: false },
     // See IFabFile.storageChargedAt and packages/server-utils/src/s3/storageCharge.ts.
     storageChargedAt: { type: Date, required: false },
+    // Server-stamped only; claimStorageCharge never charges an exempt row (see IFabFile.storageExempt).
+    storageExempt: { type: Boolean, required: false },
     error: { type: String, required: false },
     presignedUrl: { type: String },
     fileUrl: { type: String },
