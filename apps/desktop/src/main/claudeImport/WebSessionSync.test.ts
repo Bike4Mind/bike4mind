@@ -2,6 +2,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { IPC_CHANNELS } from '@shared/ipc';
 import { SessionStore } from '../chat/SessionStore';
 import { sessionScopeKey, type SessionScope } from '../chat/sessionScope';
 import { importScopeTag } from './ClaudeCodeSync';
@@ -59,6 +60,7 @@ async function setup(apis: Map<string, WebApi>, initial: SessionScope | null = A
   const root = await mkdtemp(join(tmpdir(), 'web-session-sync-'));
   let scope = initial;
   const store = new SessionStore(join(root, 'sessions'), 'default-model', undefined, () => scope);
+  const send = vi.fn();
   const service = new ClaudeImportService({
     home: join(root, 'home'),
     userData: join(root, 'userData'),
@@ -68,7 +70,7 @@ async function setup(apis: Map<string, WebApi>, initial: SessionScope | null = A
     listSessions: () => store.list(),
     deleteImported: (id, scopeKey) => store.deleteImported(id, scopeKey),
     pickPath: async () => null,
-    send: () => {},
+    send,
     logger: { warn: () => {} },
     webApi: () => (scope ? (apis.get(scope.accountId) ?? null) : null),
   });
@@ -76,6 +78,7 @@ async function setup(apis: Map<string, WebApi>, initial: SessionScope | null = A
   return {
     store,
     service,
+    send,
     signIn: (next: SessionScope | null) => {
       scope = next;
       service.onScopeChanged();
@@ -183,6 +186,28 @@ describe('Bike4Mind web sync', () => {
     await service.syncWeb();
     expect(await store.get(idFor(ACCOUNT_A, 'nb1'))).toBeNull();
     expect((await service.state()).web.counts.found).toBe(0);
+  });
+
+  it('refreshes rendered sessions when an emptied notebook is removed after a failed refresh', async () => {
+    const web = fakeWeb(oneNotebook());
+    const { service, store, send } = await setup(new Map([['account-a', web.api]]));
+    await service.setWebSettings({ enabled: true });
+    await service.syncWeb();
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith(IPC_CHANNELS.claudeImportedSessionsChanged, null));
+    send.mockClear();
+
+    web.notebooks.nb1.updatedAt = '2026-01-02T00:00:00.000Z';
+    web.get
+      .mockResolvedValueOnce({ data: [{ id: 'nb1', ...web.notebooks.nb1 }], hasMore: false })
+      .mockRejectedValueOnce(new Error('chat unavailable'));
+    await service.syncWeb();
+    expect((await service.state()).web.counts.failed).toBe(1);
+    expect(await store.get(idFor(ACCOUNT_A, 'nb1'))).not.toBeNull();
+
+    web.notebooks.nb1.quests = [];
+    await service.syncWeb();
+    expect(await store.get(idFor(ACCOUNT_A, 'nb1'))).toBeNull();
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith(IPC_CHANNELS.claudeImportedSessionsChanged, null));
   });
 
   it('does not recreate a locally deleted copy after a failed refresh', async () => {

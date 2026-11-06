@@ -381,7 +381,10 @@ export class ClaudeImportService {
           pickModel,
         });
         scope.webNotebooks[notebook.id] = cursor;
-        if (cursor.status === 'imported' || (previous?.status === 'imported' && cursor.status === 'skipped')) {
+        if (
+          cursor.status === 'imported' ||
+          ((previous?.status === 'imported' || previous?.wasImported === true) && cursor.status === 'skipped')
+        ) {
           this.sessionsChanged();
         }
       } catch (error) {
