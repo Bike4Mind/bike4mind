@@ -136,6 +136,26 @@ describe('UsersBulkActionDialog', () => {
     await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Restored 2 users'));
   });
 
+  it('reports a 202 as submitted for approval and offers no undo', async () => {
+    apiPost.mockImplementation(async (url: string) => {
+      if (url.endsWith('/preview')) return { data: preview() };
+      return { data: { approvalId: 'd'.repeat(24), status: 'pending', expiresAt: new Date().toISOString() } };
+    });
+    const { onClose, onDone } = renderDialog('suspend');
+    await screen.findByTestId('admin-users-bulk-dry-run');
+
+    fireEvent.click(screen.getByTestId('admin-users-bulk-suspend-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('admin-users-bulk-suspend-confirm-btn'));
+
+    await waitFor(() => expect(toastMock.info).toHaveBeenCalledWith(expect.stringContaining('Submitted for approval')));
+    expect(toastMock.info).toHaveBeenCalledWith(expect.stringContaining('No users were changed yet'));
+    expect(onDone).toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
+    expect(toastMock.success).not.toHaveBeenCalled();
+    expect(toastMock.warning).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('undo-toast-message')).not.toBeInTheDocument();
+  });
+
   it('sends blockEmailDomains in the preview and the commit once the box is checked, and lists the domains', async () => {
     const emailDomains = { toBlock: ['acme.com'], alreadyBlocked: ['old.com'], notOwned: ['gmail.com'] };
     apiPost.mockImplementation(async (url: string, body: { action: { blockEmailDomains?: boolean } }) => {
