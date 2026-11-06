@@ -965,6 +965,16 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return rows.map(row => String(row._id));
   }
 
+  // Unindexed on purpose: only the self-host help-lake bootstrap calls it, and only until that lake exists.
+  // `_id` order is creation order and, unlike createdAt, is never null.
+  async findOldestActiveAdminId(): Promise<string | null> {
+    const row = await this.model
+      .findOne({ isAdmin: true, isBanned: { $ne: true }, deletedAt: { $exists: false } }, { _id: 1 })
+      .sort({ _id: 1 })
+      .lean<{ _id: unknown }>();
+    return row ? String(row._id) : null;
+  }
+
   /**
    * Charge `count` referrals (atomic, floored at zero) and record the invites they created, so a
    * concurrent change to either field is not reverted. Two writes: a pipeline update can't use

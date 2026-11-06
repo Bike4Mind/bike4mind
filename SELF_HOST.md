@@ -656,7 +656,16 @@ Without a key the command throws rather than skipping. Set `HELP_EMBEDDINGS_REQU
 
 **You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Profile menu -> More -> API Keys**) as well as at build time.
 
-This is also the one place OpenAI specifically is required: help vectors are always embedded with `text-embedding-3-small`, whatever **Default Embedding Model** you picked for your own files, because the corpus and the query have to share a vector space.
+This is also the one place OpenAI specifically is required: Help panel vectors are always embedded with `text-embedding-3-small`, whatever **Default Embedding Model** you picked for your own files, because the corpus and the query have to share a vector space.
+
+### Help in any chat (the `system-help` data lake)
+
+Separately from the Help panel, the public help articles are mirrored into a data lake named `system-help`, so any chat can search them through the knowledge base. The `worker` keeps it in sync: it runs on startup and every 6 hours, using the help corpus built into the worker image and your **Default Embedding Model**.
+
+- **First run.** On an install where the lake has never existed, the worker creates it, owned by the oldest admin account. Until an admin exists, each run logs that it is waiting and does nothing. The lake owner's keys (or your instance-wide keys) pay for the embeddings.
+- **Steady state.** Re-runs are differential: an unchanged corpus writes nothing and embeds nothing. Rebuilding the image after a docs change re-embeds only the articles that changed.
+- **Missing embedding key.** If the Default Embedding Model's provider has no API key, the run fails and the worker logs `scheduled task "helpDatalakeIngest" failed` on startup and every 6 hours. Add the key or pick a local embedder under **Settings -> AI -> Default Embedding Model**.
+- **Turning it off.** Delete the `system-help` lake, and purge it if you want its files gone too. The worker records the first help lake it sees, so it never recreates one that was deleted or purged. On a fresh install, lake creation and this marker commit together in a Mongo transaction; an interrupted bootstrap can retry without losing the deletion safeguard. To turn it back on, run `help:ingest-datalake`.
 
 ## Background worker
 
@@ -664,7 +673,8 @@ The `worker` service is the self-host replacement for the hosted background infr
 
 - **consumes queues** - research tasks, image generation and image edit, the RAG ingestion pipeline (`fabFileChunkQueue` -> `fabFileVectorizeQueue`), and the Google Drive and GitHub data-lake syncs (`driveLakeIngestQueue`, `githubLakeIngestQueue`, `githubLakeRevokeQueue`, `driveDisconnectPurgeQueue`);
 - **consumes enrichment events** - memento creation, session auto-naming, summaries, and tagging, delivered via `SELF_HOST_EVENT_QUEUE`;
-- **runs the scheduler** - the task scheduler (research follow-ups) every 5 minutes, plus a safety-net scan that re-enqueues any uploaded file whose chunking never started.
+- **runs the scheduler** - the task scheduler (research follow-ups) every 5 minutes, plus a safety-net scan that re-enqueues any uploaded file whose chunking never started;
+- **keeps the help lake in sync** - see [Help in any chat](#help-in-any-chat-the-system-help-data-lake).
 
 It comes up automatically with the stack. To watch it:
 
