@@ -34,7 +34,8 @@ const rollup = (
   scopeId: string,
   bucketStart: Date,
   credits: number,
-  costUsd = 0
+  // A steady platform cost clears the cost floor without spiking, so the credit rules decide.
+  costUsd = scopeType === 'platform' ? 20 : 0
 ): ISpendRollup => ({ bucketStart, scopeType, scopeId, credits, costUsd, creditsCharged: credits, requests: 1 });
 
 /** Three buckets filling the evaluated window [10:00, 10:15). */
@@ -525,13 +526,113 @@ describe('evaluateSpend', () => {
       expect([...fakes.findUsersByIds.mock.calls[0][0]].sort()).toEqual(['staff-1', 'staff-2', 'staff-3']);
     });
 
-    it('still counts trusted spend toward the platform total', async () => {
+    /** The previous 24h of one owner scope, for a baseline that already held trusted use. */
+    const ownerHistory = (id: string, creditsPerBucket: number): ISpendRollup[] =>
+      Array.from({ length: DAY_MS / BUCKET_MS }, (_, i) =>
+        rollup('User', id, new Date(WINDOW_START.getTime() - (i + 1) * BUCKET_MS), creditsPerBucket)
+      );
+
+    it('does not page the platform spike on trusted-only spend of about 15k credits', async () => {
       const fakes = createFakes();
-      fakes.setRollups([...quietPlatformHistory(), ...windowBuckets('platform', 'all', 10_000), ...heavyUser('staff')]);
+      // 15,000 credits in the window against a 300-credit baseline; 14,700 of it is one trusted account.
+      fakes.setRollups([
+        ...quietPlatformHistory(),
+        ...windowBuckets('platform', 'all', 5000),
+        ...windowBuckets('User', 'staff', 4900),
+      ]);
+
+      await expect(run(fakes, trustedDomain)).resolves.toEqual({ breaches: 0, posted: 0 });
+    });
+
+    it('judges the platform on its full total when the trust lookup fails', async () => {
+      const fakes = createFakes();
+      fakes.findUsersByIds.mockRejectedValueOnce(new Error('users down'));
+      fakes.setRollups([
+        ...quietPlatformHistory(),
+        ...windowBuckets('platform', 'all', 5000),
+        ...windowBuckets('User', 'staff', 4900),
+      ]);
 
       await run(fakes, trustedDomain);
 
-      expect(fakes.alerts.map(alert => alert.rule)).toEqual(['platform_spike']);
+      expect(fakes.alerts.find(alert => alert.rule === 'platform_spike')).toMatchObject({
+        severity: 'critical',
+        lastValue: 15000,
+      });
+    });
+
+    it('judges the platform on its full total when the trusted history read fails', async () => {
+      const fakes = createFakes();
+      fakes.setRollups([
+        ...quietPlatformHistory(),
+        ...windowBuckets('platform', 'all', 5000),
+        ...windowBuckets('User', 'staff', 4900),
+      ]);
+      // The trusted history is the first owner-scope series read of the run.
+      fakes.windowSeries.mockRejectedValueOnce(new Error('rollup read failed'));
+
+      await run(fakes, trustedDomain);
+
+      expect(fakes.alerts.find(alert => alert.rule === 'platform_spike')).toMatchObject({ lastValue: 15000 });
+      expect(fakes.deps.logger.error).toHaveBeenCalledWith('spend-monitor-trusted-spend-failed', expect.anything());
+    });
+
+    it('still pages the same spike when the account is not trusted', async () => {
+      const fakes = createFakes();
+      fakes.setRollups([
+        ...quietPlatformHistory(),
+        ...windowBuckets('platform', 'all', 5000),
+        ...windowBuckets('User', 'outsider', 4900),
+      ]);
+
+      // A trust list is configured, but this account is not on it.
+      await run(fakes, parseSpendTrustConfig('corp.example.org', ''));
+
+      expect(fakes.alerts.find(alert => alert.rule === 'platform_spike')).toMatchObject({
+        severity: 'critical',
+        lastValue: 15000,
+      });
+      expect(fakes.alerts.find(alert => alert.rule === 'platform_spike')?.context).not.toHaveProperty(
+        'trustedExcluded'
+      );
+    });
+
+    it('pages a standard spike next to trusted use, reporting the full total and the trusted share', async () => {
+      const fakes = createFakes();
+      fakes.setRollups([
+        ...quietPlatformHistory(),
+        ...windowBuckets('platform', 'all', 5000),
+        ...windowBuckets('User', 'staff', 2000),
+      ]);
+
+      await run(fakes, trustedDomain);
+
+      const platform = fakes.alerts.find(alert => alert.rule === 'platform_spike');
+      // 15,000 total, 6,000 trusted: 9,000 standard against a 300 baseline.
+      expect(platform).toMatchObject({
+        lastValue: 15000,
+        context: { baseline: 300, ratio: 30, trustedExcluded: 6000 },
+      });
+      expect(JSON.stringify(fakes.posts)).toContain('Trusted accounts, not in ratio');
+    });
+
+    it('takes trusted use out of the baseline too', async () => {
+      const fakes = createFakes();
+      // The last 24h ran 2,000 credits per bucket, 1,900 of it the trusted account: a 300 standard baseline.
+      // The window runs 4,000 per bucket with the same 1,900 trusted: 6,300 standard, a x21 spike.
+      fakes.setRollups([
+        ...quietPlatformHistory(2000),
+        ...ownerHistory('staff', 1900),
+        ...windowBuckets('platform', 'all', 4000),
+        ...windowBuckets('User', 'staff', 1900),
+      ]);
+
+      await run(fakes, trustedDomain);
+
+      expect(fakes.alerts.find(alert => alert.rule === 'platform_spike')).toMatchObject({
+        severity: 'critical',
+        context: { baseline: 300, ratio: 21 },
+      });
     });
   });
 

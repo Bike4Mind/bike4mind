@@ -15,6 +15,7 @@ import { EVENTS_SEARCH_KEYS } from './EventMetrics/eventsTabSearch';
 import { INTEGRATION_DEMAND_SEARCH_KEYS } from './integrationDemandSearch';
 import { ANALYTICS_SEARCH_KEYS } from './Analytics/analyticsTabSearch';
 import { PENDING_SEARCH_KEYS } from './inviteCenterSearch';
+import { STRIPE_DISPUTE_SEARCH_KEYS } from './stripeDisputeSearch';
 import type { AdminListSearchKeys } from './shared/useAdminListUrlState';
 
 describe('ADMIN_TAB_PARAMS', () => {
@@ -373,9 +374,10 @@ describe('useAdminListUrlState keys', () => {
     INTEGRATION_DEMAND_SEARCH_KEYS,
     ANALYTICS_SEARCH_KEYS,
     PENDING_SEARCH_KEYS,
+    STRIPE_DISPUTE_SEARCH_KEYS,
   };
   // Left out of the registry on purpose, so validateSearch strips them: free-text searches that can
-  // hold personal data, and saved-view names that are not shareable yet.
+  // hold personal data, saved-view names that are not shareable yet, and query/view keys a tab never writes.
   const PRIVATE_KEYS = new Set([
     'detectionQuery',
     'detectionView',
@@ -387,6 +389,8 @@ describe('useAdminListUrlState keys', () => {
     'analyticsView',
     'pendingQuery',
     'pendingView',
+    'disputeQuery',
+    'disputeView',
   ]);
   const registered = new Set<string>(Object.values(ADMIN_TAB_PARAMS).flat());
 

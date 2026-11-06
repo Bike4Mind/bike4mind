@@ -93,13 +93,14 @@ jobs:
           # A head that moved on is decided by its own validate run.
           superseded() {
             local live
-            live=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha 2>/dev/null || true)
+            live=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha 2>/dev/null) || live=""
             [ -n "$live" ] && [ "$live" != "$HEAD_SHA" ]
           }
 
           # Verify against the live title: a re-run of an old run carries a stale title in
-          # its payload. On an API error, fall back to the payload title.
-          PR_TITLE=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .title 2>/dev/null || true)
+          # its payload. On an API error, fall back to the payload title; gh prints error
+          # JSON to stdout on failure, so discard it.
+          PR_TITLE=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .title 2>/dev/null) || PR_TITLE=""
           export PR_TITLE="${PR_TITLE:-$EVENT_TITLE}"
           if superseded; then
             echo "::notice::The PR head has moved past $HEAD_SHA; its own validate run decides."

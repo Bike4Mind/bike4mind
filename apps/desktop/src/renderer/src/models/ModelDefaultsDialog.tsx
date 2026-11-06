@@ -26,13 +26,16 @@ import {
 } from '@shared/generation';
 import { contextSizeLabel, parseModelContextSetting, type ModelContextSetting } from '@shared/localContextSetting';
 import {
+  isEmptyModelSettings,
   KEEP_ALIVE_CHOICES,
   MAX_DRAFT_TOKENS,
+  quotedForMessage,
   type ContextSizeOffer,
   type KeepAliveSeconds,
   type ModelEffort,
   type ModelLoadOffer,
   type ModelSettings,
+  type UnsupportedModelSetting,
 } from '@shared/modelSettings';
 import { EFFORT_LABELS } from '../chat/ReasoningEffortPicker';
 
@@ -249,7 +252,7 @@ export function ModelDefaultsDialog({
 /** An IPC rejection arrives wrapped in Electron's "Error invoking remote method" text. */
 function reasonText(reason: unknown): string {
   const text = reason instanceof Error ? reason.message : String(reason);
-  return text.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '');
+  return text.replace(/^Error invoking remote method '[^']*': (?:\w*Error: )?/, '');
 }
 
 function ModelDefaultsForm({
@@ -262,6 +265,9 @@ function ModelDefaultsForm({
   onSaved?: () => void;
 }) {
   const [loaded, setLoaded] = useState<ModelSettings | null>(null);
+  // What a save starts from: the stored set until Clear all, so fields the form does not draw go back as stored.
+  const [clearedAll, setClearedAll] = useState(false);
+  const [unsupported, setUnsupported] = useState<UnsupportedModelSetting[]>([]);
   const [readFailed, setReadFailed] = useState(false);
   const [drafts, setDrafts] = useState<Drafts>({});
   // Each field's last parseable text, which a blur puts back over text the input cannot parse.
@@ -302,6 +308,22 @@ function ModelDefaultsForm({
         setReadFailed(true);
         setError(`Desktop could not read this model's settings: ${reasonText(reason)}`);
       }
+    );
+    return () => {
+      live = false;
+    };
+  }, [modelId]);
+
+  useEffect(() => {
+    setUnsupported([]);
+    if (!modelId) return;
+    let live = true;
+    // A failed read is already shown by the settings read above; this only adds notes.
+    window.b4m.chat.getUnsupportedModelSettings(modelId).then(
+      values => {
+        if (live) setUnsupported(values ?? []);
+      },
+      () => undefined
     );
     return () => {
       live = false;
@@ -350,24 +372,35 @@ function ModelDefaultsForm({
 
   if (!option) return null;
   const fields = editableFields(option);
-  const levels = option.controls?.effort?.levels ?? [];
+  const listed = option.controls?.effort?.levels ?? [];
+  // A stored level the model no longer lists stays selectable, so the Select can show it and a save keeps it.
+  const storedEffort = loaded?.effort;
+  const levels =
+    listed.length > 0 && storedEffort && !listed.includes(storedEffort) ? [...listed, storedEffort] : listed;
+
+  // What a save starts from. Only what the user changed here is rewritten; everything else goes back exactly
+  // as stored, including values this model's controls do not draw or would clamp.
+  const base: ModelSettings = clearedAll ? {} : (loaded ?? {});
+  const baseDrafts = draftsOf(base.generation);
 
   const save = async () => {
-    const generation: GenerationSettings = {};
+    const generation: GenerationSettings = { ...base.generation };
     for (const { field, control } of fields) {
-      const text = drafts[field]?.trim();
-      if (!text) continue;
-      const value = requestGeneration({ [field]: Number(text) }, { [field]: control })[field];
+      const text = drafts[field]?.trim() ?? '';
+      if (text === (baseDrafts[field] ?? '')) continue;
+      const value = text ? requestGeneration({ [field]: Number(text) }, { [field]: control })[field] : undefined;
       if (value !== undefined) generation[field] = value;
+      else delete generation[field];
     }
-    // Load-time choices are kept as read even when the offer could not be fetched, so a save never drops them.
+    const pick = <T,>(changed: boolean, current: T | undefined, kept: T | undefined) => (changed ? current : kept);
     const next: ModelSettings = {
       ...(Object.keys(generation).length > 0 ? { generation } : {}),
-      ...(effort && levels.includes(effort) ? { effort } : {}),
-      ...(context ? { context } : {}),
-      ...(draftTokens !== undefined ? { draftTokens } : {}),
-      ...(keepAlive !== null ? { keepAlive } : {}),
+      effort: pick(effort !== (base.effort ?? null), effort ?? undefined, base.effort),
+      context: pick(!sameContext(context, base.context ?? null), context ?? undefined, base.context),
+      draftTokens: pick(draftText.trim() !== (base.draftTokens?.toString() ?? ''), draftTokens, base.draftTokens),
+      keepAlive: pick(keepAlive !== (base.keepAlive ?? null), keepAlive ?? undefined, base.keepAlive),
     };
+    for (const key of Object.keys(next) as (keyof ModelSettings)[]) if (next[key] === undefined) delete next[key];
     setSaving(true);
     try {
       const saved = await window.b4m.chat.setModelSettings(option.id, next);
@@ -383,6 +416,7 @@ function ModelDefaultsForm({
   };
 
   const touched =
+    (!clearedAll && loaded !== null && !isEmptyModelSettings(loaded)) ||
     fields.some(({ field }) => drafts[field]?.trim()) ||
     effort !== null ||
     context !== null ||
@@ -403,6 +437,17 @@ function ModelDefaultsForm({
               {error}
             </Alert>
           )}
+          {unsupported.map(({ field, value }) => (
+            <Typography
+              key={field}
+              level="body-xs"
+              color="warning"
+              sx={{ mt: 1 }}
+              data-testid="model-defaults-unsupported-note"
+            >
+              {field} {quotedForMessage(value)} is kept in the settings file but not used by this version of Desktop.
+            </Typography>
+          ))}
           {loaded === null ? (
             <Box sx={{ display: 'grid', placeItems: 'center', py: 3 }}>
               <CircularProgress size="sm" />
@@ -449,9 +494,11 @@ function ModelDefaultsForm({
                         const text = event.currentTarget.validity.badInput
                           ? (lastGood.current[field] ?? '')
                           : event.currentTarget.value.trim();
-                        const value = text
-                          ? requestGeneration({ [field]: Number(text) }, { [field]: control })[field]
-                          : undefined;
+                        // The value a save starts from stays as stored, even past what the control now allows.
+                        const value =
+                          text && text !== baseDrafts[field]
+                            ? requestGeneration({ [field]: Number(text) }, { [field]: control })[field]
+                            : undefined;
                         const shown = value !== undefined ? String(value) : text;
                         event.currentTarget.value = shown;
                         lastGood.current[field] = shown;
@@ -493,12 +540,13 @@ function ModelDefaultsForm({
                       setEffort(value && value !== 'default' ? (value as ModelEffort) : null)
                     }
                     sx={{ width: 140, flexShrink: 0 }}
-                    slotProps={{ button: { 'aria-label': 'Thinking level' } }}
-                    data-testid="model-defaults-effort-select"
+                    slotProps={{
+                      button: { 'aria-label': 'Thinking level', 'data-testid': 'model-defaults-effort-select' },
+                    }}
                   >
                     <Option value="default">Model default</Option>
                     {levels.map(level => (
-                      <Option key={level} value={level}>
+                      <Option key={level} value={level} data-testid={`model-defaults-effort-option-${level}`}>
                         {EFFORT_LABELS[level]}
                       </Option>
                     ))}
@@ -547,6 +595,7 @@ function ModelDefaultsForm({
             disabled={saving || loaded === null || !touched}
             onClick={() => {
               lastGood.current = {};
+              setClearedAll(true);
               setDrafts({});
               setEffort(null);
               setContext(null);

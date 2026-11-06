@@ -110,7 +110,11 @@ describe('InstalledTab embedding-only rows', () => {
 describe('InstalledTab model settings', () => {
   it("offers Settings for a model chat lists with controls, and opens that model's dialog", async () => {
     (window as unknown as { b4m: unknown }).b4m = {
-      chat: { getModelSettings: async () => ({}), getModelLoadOffer: async () => ({}) },
+      chat: {
+        getModelSettings: async () => ({}),
+        getUnsupportedModelSettings: async () => [],
+        getModelLoadOffer: async () => ({}),
+      },
       models: { getLoadedState: async () => ({ kind: 'unloaded' }) },
     };
     const chatModel: ChatModelOption = {

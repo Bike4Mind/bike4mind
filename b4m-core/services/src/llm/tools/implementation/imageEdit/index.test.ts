@@ -413,6 +413,23 @@ describe('imageEditTool - credit gate names the rendered model', () => {
     );
   });
 
+  it('bills the successor when a stale client sends the retired gpt-image-1 as editModel', async () => {
+    const context = createFakeContext();
+    context.onStart = vi.fn();
+
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.FLUX_PRO_1_1,
+      editModel: ImageModels.GPT_IMAGE_1,
+    } as GenerateImageToolCall);
+
+    await toolFn({ image: PNG_DATA_URL, prompt: 'make it warmer' });
+
+    expect(context.onStart).toHaveBeenCalledWith(
+      'edit_image',
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_2 })
+    );
+  });
+
   it('records the rendered model, not the generation model, on the saved file', async () => {
     mockCheckImage.mockReset().mockResolvedValue(undefined);
     mockSaveFromTool.mockReset();

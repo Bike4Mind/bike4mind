@@ -25,7 +25,15 @@ export type SpendBreach = {
   ratio: number | null;
   /** Set on account-level breaches of a trusted scope. */
   trusted?: true;
+  /** Platform breaches only: the part of `value` spent by trusted accounts, left out of the ratio and floors. */
+  trustedExcluded?: number;
 };
+
+/**
+ * A platform metric for one window. `value` and `baseline` are standard-tier spend, which the floors
+ * and the ratio are judged on; `total` is what the window really spent, which the alert reports.
+ */
+export type PlatformObservation = ScopeObservation & { total: number };
 
 export type ScopeObservation = {
   scopeType: SpendRollupScopeType;
@@ -63,21 +71,33 @@ function breach(
 
 function evaluatePlatformMetric(
   rule: SpendRuleId,
-  obs: ScopeObservation,
+  obs: PlatformObservation,
   floor: number,
   t: SpendThresholds
 ): SpendBreach[] {
   const ratio = ratioOf(obs);
   if (!isSpike(obs, ratio, t.platformSpikeRatio, floor)) return [];
   const severity = ratio !== null && ratio >= t.platformCriticalRatio ? 'critical' : 'warning';
-  return [breach(rule, obs, severity, ratio)];
+  const trustedExcluded = obs.total - obs.value;
+  return [
+    {
+      ...breach(rule, obs, severity, ratio),
+      value: obs.total,
+      ...(trustedExcluded > 0 ? { trustedExcluded } : {}),
+    },
+  ];
 }
 
+/**
+ * A platform alert needs standard-tier spend over BOTH floors: enough credits and enough provider cost.
+ * Either metric alone is too easy to trip (a cheap model run at volume, a few costly calls).
+ */
 export function evaluatePlatform(
-  credits: ScopeObservation,
-  costUsd: ScopeObservation,
+  credits: PlatformObservation,
+  costUsd: PlatformObservation,
   t: SpendThresholds
 ): SpendBreach[] {
+  if (credits.value < t.platformSpikeFloorCredits || costUsd.value < t.platformCostFloorUsd) return [];
   return [
     ...evaluatePlatformMetric('platform_spike', credits, t.platformSpikeFloorCredits, t),
     ...evaluatePlatformMetric('platform_cost_spike', costUsd, t.platformCostFloorUsd, t),

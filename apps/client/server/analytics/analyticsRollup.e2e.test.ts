@@ -326,6 +326,21 @@ describe('rollupDay', () => {
     });
   });
 
+  it('stores each org the user worked in with only the usage billed to it', async () => {
+    const org = (ownerId: string) => ({ ownerType: 'Organization', ownerId });
+    for (let i = 0; i < 3; i++) await seedEvent(users.a, `${DAY}T10:0${i}:00Z`);
+    await seedEvent(users.a, `${DAY}T11:00:00Z`, org('acme'));
+    await seedEvent(users.a, `${DAY}T12:00:00Z`, { ...org('globex'), creditsCharged: 5 });
+    await seedEvent(users.a, `${DAY}T12:30:00Z`, { ...org('globex'), creditsCharged: 5 });
+    await rollupDay(DAY, { now: NOW });
+    const row = await AnalyticsUserDay.findOne({ userId: String(users.a) }).lean();
+    expect(row).toMatchObject({ requests: 6, creditsCharged: 18, orgId: 'globex' });
+    expect(row?.orgs).toEqual([
+      { orgId: 'globex', requests: 2, creditsCharged: 10 },
+      { orgId: 'acme', requests: 1, creditsCharged: 2 },
+    ]);
+  });
+
   it('clears stale organization attribution when a day is recomputed with only personal usage', async () => {
     await seedEvent(users.a, `${DAY}T10:00:00Z`, { ownerType: 'Organization', ownerId: 'organization' });
     await rollupDay(DAY, { now: NOW });
@@ -335,6 +350,7 @@ describe('rollupDay', () => {
     const row = await AnalyticsUserDay.findOne({ userId: String(users.a) }).lean();
     expect(row?.ownerType).toBe('User');
     expect(row?.orgId).toBeUndefined();
+    expect(row?.orgs).toEqual([]);
   });
 
   it('counts signups outside the scan cap as unclassified and preserves their existing verdict', async () => {

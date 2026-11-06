@@ -22,12 +22,21 @@ export const llmSpendNamespace = () => `${$app.name}/${$app.stage}/LLMSpend`;
 export const LLM_SPEND_ALARM_USD_PER_5MIN_DEFAULT = 25;
 export const LLM_SPEND_ALARM_USD_PER_HOUR_DEFAULT = 20;
 export const LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC_DEFAULT = 75;
-export const YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR_DEFAULT = 2;
+// Ordinary new-user use peaks around 2 USD per rolling hour; 5 leaves headroom.
+export const YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR_DEFAULT = 5;
 export const LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN_DEFAULT = 3;
 const USAGE_MESSAGE = 'llm-usage-settled';
 /** Must stay in sync with the charged-down-to-zero log line in b4m-core/services/src/cliCompletions.ts. */
 export const COMPLETION_CREDIT_OVERDRAFT_MESSAGE =
   '[CLI_CREDITS] ALERT: Completion cost more than the balance could pay - charged down to zero';
+/** Must stay in sync with warnOnSettlementDebt in b4m-core/services/src/llm/ChatCompletionProcess.ts (web chat). */
+export const SETTLEMENT_DEBT_MESSAGE =
+  '[BILLING_SHORTFALL_DEBT] Settlement exceeded the balance; holder owes credits until topped up';
+/** Every log line that means a completion cost more than its holder's balance could pay. */
+export const COMPLETION_CREDIT_OVERDRAFT_MESSAGES = [
+  COMPLETION_CREDIT_OVERDRAFT_MESSAGE,
+  SETTLEMENT_DEBT_MESSAGE,
+] as const;
 
 export function llmSpendFilterPattern(value: 'usd' | 'outputTokens', byModel = false): string {
   // CloudWatch only extracts fields selected by the pattern, including metric values/dimensions.
@@ -36,7 +45,7 @@ export function llmSpendFilterPattern(value: 'usd' | 'outputTokens', byModel = f
 }
 
 export const LLM_SPEND_YOUNG_ACCOUNT_FILTER_PATTERN = `{ $.message = "${USAGE_MESSAGE}" && $.isYoungAccount IS TRUE && $.usd >= 0 }`;
-export const COMPLETION_CREDIT_OVERDRAFT_FILTER_PATTERN = `{ $.message = "${COMPLETION_CREDIT_OVERDRAFT_MESSAGE}" }`;
+export const COMPLETION_CREDIT_OVERDRAFT_FILTER_PATTERN = `{ ${COMPLETION_CREDIT_OVERDRAFT_MESSAGES.map(message => `$.message = "${message}"`).join(' || ')} }`;
 
 const spendThreshold = parseAlarmThreshold(
   'LLM_SPEND_ALARM_USD_PER_5MIN',
@@ -232,7 +241,8 @@ if (isMonitoredStage) {
 
   new aws.cloudwatch.MetricAlarm('completionCreditOverdraft', {
     name: `${prefix}-completion-credit-overdraft`,
-    alarmDescription: 'A completion cost more credits than its holder had; the balance was charged down to zero',
+    alarmDescription:
+      'A completion cost more credits than its holder had (CLI: charged down to zero; web chat: balance left negative)',
     comparisonOperator: 'GreaterThanOrEqualToThreshold',
     evaluationPeriods: 1,
     metricName: 'CompletionCreditOverdrafts',
