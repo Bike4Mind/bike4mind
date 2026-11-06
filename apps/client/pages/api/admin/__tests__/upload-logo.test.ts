@@ -146,3 +146,20 @@ describe('upload-logo admin audit', () => {
     expect(res._isEndCalled()).toBe(false);
   });
 });
+
+describe('/api/admin/upload-logo permission gate', () => {
+  it.each(['POST', 'DELETE'] as const)('refuses %s for a user without admin access before any work', async method => {
+    const { req, res } = createMocks({
+      method,
+      body: { fileName: 'logo.png', mimeType: 'image/png', fileSize: 321 },
+    });
+    (req as Record<string, unknown>).user = { id: 'user-1', isAdmin: false };
+
+    await expect((handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res)).rejects.toThrow(
+      /missing permission/i
+    );
+    expect(h.getSignedUrl).not.toHaveBeenCalled();
+    expect(h.deleteObject).not.toHaveBeenCalled();
+    expect(h.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+});

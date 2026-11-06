@@ -150,7 +150,7 @@ async function getOAuthConfigStatus(): Promise<OAuthConfigStatus> {
   };
 }
 
-const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({ adminPermissions: { GET: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
   async (req: Request, res: Response) => {
     try {
       const mailService = new MailService();

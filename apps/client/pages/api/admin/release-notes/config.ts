@@ -13,7 +13,7 @@ const ConfigPatchSchema = ReleaseNotesConfigSchema.partial().strict();
 const REQUIRED_KEYS = ['enabled', 'modelId', 'embargoHours', 'denylist'];
 
 const handler = adminApi({
-  adminPermissions: { GET: 'support:read', PUT: 'settings:manage' },
+  adminPermissions: { GET: 'settings:manage', PUT: 'settings:manage' },
   requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(async (req, res) => {

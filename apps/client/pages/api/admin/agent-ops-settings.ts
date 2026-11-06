@@ -43,7 +43,7 @@ async function fetchSelectableModels() {
 }
 
 const handler = adminApi({
-  adminPermissions: { GET: 'support:read', PUT: 'settings:manage', POST: 'settings:manage' },
+  adminPermissions: { GET: 'settings:manage', PUT: 'settings:manage', POST: 'settings:manage' },
   requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(async (req, res) => {

@@ -28,7 +28,7 @@ export const CONTEXT_TELEMETRY_RATE_LIMIT = 20;
 
 // requiredScopes only constrains API-key callers (server/middlewares/baseApi.ts); browser/JWT
 // admins are unaffected and still pass the admin permission gate. rateLimit is chained after
-// baseApi so it keys on req.user.id rather than the client IP.
+// adminApi so it keys on req.user.id rather than the client IP.
 const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: CONTEXT_TELEMETRY_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'admin-context-telemetry' }))
   .get(

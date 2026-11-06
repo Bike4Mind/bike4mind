@@ -88,7 +88,7 @@ async function resolvePlatformEmbeddingKeys() {
  * on a billable probe just because its owner is an admin. JWT/browser callers still go through the
  * admin permission gate.
  */
-const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({ adminPermissions: { GET: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
   asyncHandler(async (req: Request, res: Response) => {
     const logger = req.logger;
     const model = await resolveDefaultEmbeddingModel(logger, 'embedding-limits');
