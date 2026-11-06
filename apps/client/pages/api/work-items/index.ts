@@ -13,7 +13,7 @@ import {
   priorityPatch,
   ticketMovePatch,
 } from '@server/utils/loopTickets';
-import { requestLoopDispatch } from '@server/utils/loopDispatch';
+import { pushLoopChanged, requestLoopDispatch } from '@server/utils/loopDispatch';
 import {
   parseStatusFilter,
   validateWorkItemDependencies,
@@ -122,7 +122,11 @@ const handler = baseApi()
       ...(ticket?.blockedOn && { blockedOn: ticket.blockedOn }),
     } as Omit<IWorkItem, 'id' | 'createdAt' | 'updatedAt'>);
 
-    if (loop && (await makeDueIfReady(loop))) await requestLoopDispatch(loop.id, req.logger);
+    if (loop) {
+      if (await makeDueIfReady(loop)) await requestLoopDispatch(loop.id, req.logger);
+      // The owner's other tabs and browsers; the tab that made the write already updated its own cache.
+      await pushLoopChanged(req.user!.id, loop.id, req.logger);
+    }
     res.status(201).json(created);
   });
 

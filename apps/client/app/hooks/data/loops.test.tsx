@@ -244,6 +244,36 @@ describe('useMoveLoopTicket', () => {
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: loopKeys.all });
   });
 
+  it("shows the server's reason when it refuses the move", async () => {
+    patch.mockRejectedValue(
+      new AxiosError('Request failed with status code 400', '400', undefined, undefined, {
+        status: 400,
+        statusText: '',
+        data: { name: 'BadRequestError', error: 'Stage "qa" is not a stage of this loop' },
+        headers: {},
+        config: { headers: new AxiosHeaders() },
+      })
+    );
+    const { result, cached } = seeded();
+
+    await act(() => result.current.mutateAsync({ loopId: 'l1', id: 't1', stage: 'doing' }).catch(() => undefined));
+
+    expect(cached()).toEqual({ todo: ['t1:p2', 't2:p2'], doing: [] });
+    expect(toast.error).toHaveBeenCalledWith('Stage "qa" is not a stage of this loop');
+  });
+
+  it('says the move is undone when the server cannot be reached', async () => {
+    patch.mockRejectedValue(new AxiosError('Network Error', AxiosError.ERR_NETWORK, undefined, {}));
+    const { result, cached, invalidate } = seeded();
+
+    await act(() => result.current.mutateAsync({ loopId: 'l1', id: 't1', stage: 'doing' }).catch(() => undefined));
+
+    expect(cached()).toEqual({ todo: ['t1:p2', 't2:p2'], doing: [] });
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(toast.error).toHaveBeenCalledWith("Move undone: couldn't reach the server.");
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: loopKeys.all });
+  });
+
   it('reloads every loop on a 409', async () => {
     patch.mockRejectedValue(httpError(409, 'Ticket changed while saving'));
     const { result, cached, invalidate } = seeded();

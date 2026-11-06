@@ -258,16 +258,40 @@ export async function dispatchLoopNow(loopId: string, now: Date, logger: Logger)
   // consumer's concurrency (infra/cron.ts, loopDispatchQueue); an atomic in-flight counter is the upgrade.
   const { maxActiveRuns, lanesPerUser } = await loopLaneLimits();
   const claimed: string[] = [];
+  let serverFull = false;
   for (let i = 0; i < maxActiveRuns && !claimed.includes(loopId); i++) {
-    if ((await loopRepository.countInFlight()) >= maxActiveRuns) break;
+    if ((await loopRepository.countInFlight()) >= maxActiveRuns) {
+      serverFull = true;
+      break;
+    }
     const result = await dispatchDue(now, 1, lanesPerUser, logger);
     claimed.push(...result.claimed);
     // Nothing started: nothing else is startable now.
     if (!result.capped) break;
   }
 
-  // dispatchDue already pushed for every loop it claimed.
-  if (folded && !claimed.includes(loopId)) await pushLoopChanged(loop.userId, loop.id, logger);
+  // dispatchDue already pushed for every loop it claimed, and held it on the owner's lane limit if that was full.
+  if (claimed.includes(loopId)) return;
+  const held = await holdUnstarted(loopId, serverFull, claimed, now);
+  if (folded || held) await pushLoopChanged(loop.userId, loop.id, logger);
+}
+
+/**
+ * Shows why an event could not start a due loop, so it does not look stuck until the next tick: its own lanes
+ * are full (`loop`), else the server-wide cap (the tick's own `setCapacityHolds`, which skips leased loops).
+ */
+async function holdUnstarted(loopId: string, serverFull: boolean, claimed: string[], now: Date): Promise<boolean> {
+  const loop = await loopRepository.findById(loopId);
+  if (!loop || loop.status !== 'live' || !loop.nextRunAt || new Date(loop.nextRunAt) > now) return false;
+  const lanes = loopMaxConcurrent(loop);
+  // A one-lane loop shows its running run instead, as markDispatched does.
+  if (lanes > 1 && activeLaneCount(loop) >= lanes) {
+    await loopRepository.holdForCapacity(loop.id, 'loop', now);
+    return true;
+  }
+  if (!serverFull) return false;
+  await loopRepository.setCapacityHolds(now, claimed);
+  return true;
 }
 
 /** Reopens tickets whose `blockedOn` condition now holds, and makes their loops due. Never touches a plain block. */

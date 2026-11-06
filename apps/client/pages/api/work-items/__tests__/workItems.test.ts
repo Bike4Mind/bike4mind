@@ -57,7 +57,8 @@ const verifyOrgAccess = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
 
 const requestLoopDispatch = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/loopDispatch', () => ({ requestLoopDispatch }));
+const pushLoopChanged = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/loopDispatch', () => ({ requestLoopDispatch, pushLoopChanged }));
 
 currentModule.name = 'collection';
 await import('@pages/api/work-items/index');
@@ -465,6 +466,23 @@ describe('loop tickets through the work-items routes', () => {
     repo.findByIdForUser.mockResolvedValue(item());
     await call('item', 'patch', { query: { id: OID_A }, body: { title: 'Renamed' } }).result;
     expect(requestLoopDispatch).not.toHaveBeenCalled();
+  });
+
+  it("pushes a loop ticket's create and move to the owner's other tabs, and never a plain work item's", async () => {
+    await call('collection', 'post', { body: { title: 'T', loopId: LOOP } }).result;
+    expect(pushLoopChanged).toHaveBeenCalledWith('u1', LOOP, undefined);
+
+    pushLoopChanged.mockClear();
+    repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'todo' }));
+    repo.findNextReadyForLoop.mockResolvedValue(null);
+    await call('item', 'patch', { query: { id: OID_A }, body: { stage: 'doing' } }).result;
+    expect(pushLoopChanged).toHaveBeenCalledWith('u1', LOOP, undefined);
+    expect(pushLoopChanged.mock.invocationCallOrder[0]).toBeGreaterThan(repo.updateForUser.mock.invocationCallOrder[0]);
+
+    pushLoopChanged.mockClear();
+    repo.findByIdForUser.mockResolvedValue(item());
+    await call('item', 'patch', { query: { id: OID_A }, body: { title: 'Renamed' } }).result;
+    expect(pushLoopChanged).not.toHaveBeenCalled();
   });
 
   it('does not ask for a dispatch when the loop has nothing ready to run', async () => {
