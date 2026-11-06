@@ -10,8 +10,11 @@ export type ModelKind = 'model' | 'glb' | 'stl';
 
 export type ModelUnits = 'mm' | 'm';
 
-/** Procedural surface detail a part can carry: wood grain or brushed metal, tinted by its colour. */
-export const MODEL_TEXTURES = ['wood', 'brushed'] as const;
+/**
+ * Procedural surface detail a part can carry, tinted by its colour: wood grain, brushed metal,
+ * pebbled leather, natural stone, or painted wood worn through at the edges (its colour is the paint).
+ */
+export const MODEL_TEXTURES = ['wood', 'brushed', 'leather', 'stone', 'painted'] as const;
 export type ModelTexture = (typeof MODEL_TEXTURES)[number];
 
 export type ModelParam = { value: number; min: number; max: number; step: number };

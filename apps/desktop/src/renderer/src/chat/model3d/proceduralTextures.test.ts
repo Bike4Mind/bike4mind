@@ -16,21 +16,70 @@ describe('tileableNoise', () => {
 });
 
 describe('textureBytes', () => {
-  it.each(['wood', 'brushed'] as const)('makes the same %s every time, varied and seamless', kind => {
-    const { color, roughness } = textureBytes(kind);
-    expect(color).toEqual(textureBytes(kind).color);
-    const tones = new Set(Array.from({ length: 64 }, (_, index) => toneAt(color, index * 8, index * 8)));
-    expect(tones.size).toBeGreaterThan(8);
-    // The last column runs on into the first, and the last row into the first.
-    let jump = 0;
-    for (let index = 0; index < TEXTURE_SIZE; index += 1) {
-      jump += Math.abs(toneAt(color, TEXTURE_SIZE - 1, index) - toneAt(color, 0, index));
-      jump += Math.abs(toneAt(color, index, TEXTURE_SIZE - 1) - toneAt(color, index, 0));
+  it.each(['wood', 'brushed', 'leather', 'stone', 'painted'] as const)(
+    'makes the same %s every time, varied and seamless',
+    kind => {
+      const { color, roughness } = textureBytes(kind);
+      expect(color).toEqual(textureBytes(kind).color);
+      const tones = new Set(Array.from({ length: 64 }, (_, index) => toneAt(color, index * 8, index * 8)));
+      expect(tones.size).toBeGreaterThan(8);
+      // The last column runs on into the first, and the last row into the first.
+      let jump = 0;
+      for (let index = 0; index < TEXTURE_SIZE; index += 1) {
+        jump += Math.abs(toneAt(color, TEXTURE_SIZE - 1, index) - toneAt(color, 0, index));
+        jump += Math.abs(toneAt(color, index, TEXTURE_SIZE - 1) - toneAt(color, index, 0));
+      }
+      expect(jump / (2 * TEXTURE_SIZE)).toBeLessThan(24);
+      // Roughness rides in the green channel, as glTF reads it.
+      expect(roughness[0]).toBe(255);
+      expect(roughness[1]).toBeLessThanOrEqual(255);
     }
-    expect(jump / (2 * TEXTURE_SIZE)).toBeLessThan(24);
-    // Roughness rides in the green channel, as glTF reads it.
-    expect(roughness[0]).toBe(255);
-    expect(roughness[1]).toBeLessThanOrEqual(255);
+  );
+});
+
+describe('painted wood', () => {
+  it('carries the paint colour, worn through to bare wood in places', () => {
+    const { color } = textureBytes('painted', [0.2, 0.4, 0.8]);
+    const texels = Array.from({ length: TEXTURE_SIZE * TEXTURE_SIZE }, (_, index) =>
+      color.slice(index * 4, index * 4 + 3)
+    );
+    // Paint: blue above red. Bare wood: red above blue.
+    const painted = texels.filter(([red, , blue]) => blue > red).length;
+    const bare = texels.filter(([red, , blue]) => red > blue + 40).length;
+    expect(painted / texels.length).toBeGreaterThan(0.6);
+    expect(bare / texels.length).toBeGreaterThan(0.01);
+    expect(bare / texels.length).toBeLessThan(0.3);
+  });
+
+  it('bakes the colour into the map and leaves the material white, one map per paint', () => {
+    const red = buildModelObject(
+      [
+        {
+          name: 'door',
+          color: '#8e2a22',
+          positions: new Float32Array([0, 0, 0, 300, 0, 0, 0, 20, 0]),
+          indices: new Uint32Array([0, 1, 2]),
+          texture: 'painted',
+        },
+      ],
+      'mm'
+    );
+    const green = buildModelObject(
+      [
+        {
+          name: 'door',
+          color: '#2f5d50',
+          positions: new Float32Array([0, 0, 0, 300, 0, 0, 0, 20, 0]),
+          indices: new Uint32Array([0, 1, 2]),
+          texture: 'painted',
+        },
+      ],
+      'mm'
+    );
+    const material = (root: THREE.Object3D) =>
+      (root.getObjectByName('door') as THREE.Mesh).material as THREE.MeshPhysicalMaterial;
+    expect(material(red).color.getHex()).toBe(0xffffff);
+    expect(material(red).map).not.toBe(material(green).map);
   });
 });
 
