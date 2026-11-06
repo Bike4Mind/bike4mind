@@ -18,8 +18,7 @@
 
 import { ApiKeyScope } from '@bike4mind/common';
 import { Resource } from 'sst';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Logger } from '@bike4mind/observability';
 import {
@@ -81,30 +80,24 @@ function getTier1Status(stage: string): Tier1SecretInfo[] {
   }).map(({ isValid: _isValid, exposure: _exposure, ...info }) => info);
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  try {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
+const handler = adminApi({ adminPermissions: { GET: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
+  async (req, res) => {
+    try {
+      const stage = Config.STAGE;
+      const secrets = getTier1Status(stage);
+
+      const response: Tier1StatusResponse = {
+        stage,
+        secrets,
+      };
+
+      return res.json(response);
+    } catch (error) {
+      Logger.error('Error fetching Tier 1 secrets status:', error);
+      return res.status(500).json({ error: 'Failed to fetch Tier 1 secrets status' });
     }
-
-    const stage = Config.STAGE;
-    const secrets = getTier1Status(stage);
-
-    const response: Tier1StatusResponse = {
-      stage,
-      secrets,
-    };
-
-    return res.json(response);
-  } catch (error) {
-    if (error instanceof ForbiddenError) {
-      Logger.warn('Error fetching Tier 1 secrets status:', error.message);
-      return res.status(403).json({ error: error.message });
-    }
-    Logger.error('Error fetching Tier 1 secrets status:', error);
-    return res.status(500).json({ error: 'Failed to fetch Tier 1 secrets status' });
   }
-});
+);
 
 export const config = {
   api: {

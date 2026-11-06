@@ -1,8 +1,7 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { getSignupAnomalySnapshot } from '@server/users/signupAnomaly';
 
-export default baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
-  if (!req.user?.isAdmin) return res.status(403).json({ message: 'Admin access required' });
+export default adminApi({ adminPermissions: { GET: 'support:read' }, auth: 'jwtOnly' }).get(async (req, res) => {
   res.setHeader('Cache-Control', 'private, no-store');
   return res.json(await getSignupAnomalySnapshot());
 });

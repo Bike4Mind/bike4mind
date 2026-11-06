@@ -1,10 +1,10 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { Request } from 'express';
-import { baseApi } from '@client/server/middlewares/baseApi';
+import { adminApi } from '@client/server/middlewares/adminApi';
 import { agentOpsSettingsRepository, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
 import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
-import { ForbiddenError, BadRequestError, InternalServerError, getSettingsByNames } from '@bike4mind/utils';
+import { BadRequestError, InternalServerError, getSettingsByNames } from '@bike4mind/utils';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { agentOpsModelRejection } from '@client/app/utils/agentOpsModels';
 import { modelCatalogListingOptions } from '@client/server/utils/modelCatalogOptions';
@@ -42,12 +42,11 @@ async function fetchSelectableModels() {
   return getAvailableModels(buildApiKeyTable(coreKeys), modelCatalogListingOptions());
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', PUT: 'settings:manage', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
-    if (!req.user!.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const settings = await agentOpsSettingsRepository.getSettings();
 
     if (!settings) {
@@ -69,10 +68,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     res.json(settings);
   })
   .put<Request<{}, {}, CreateUpdateSettingsRequest>>(async (req, res) => {
-    if (!req.user!.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const { generationLlmModel, rateLimitSeconds, isEnabled } = req.body;
 
     // Only a change of pin is worth a live catalog fan-out: validating on every save would let a
@@ -118,10 +113,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     res.json(updatedSettings);
   })
   .post<Request<{}, {}, AddVersionRequest>>(async (req, res) => {
-    if (!req.user!.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const { metaPrompt, description } = req.body;
 
     if (!metaPrompt || !metaPrompt.trim()) {

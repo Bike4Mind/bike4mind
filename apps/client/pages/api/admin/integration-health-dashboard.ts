@@ -2,8 +2,8 @@ import { Request, Response } from 'express';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import {
   integrationHealthCheckRepository,
   integrationAuditLogRepository,
@@ -48,12 +48,11 @@ function buildHealthToAuditMap(): Record<IntegrationName, string[]> {
 
 const HEALTH_TO_AUDIT = buildHealthToAuditMap();
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const parseResult = timeRangeSchema.safeParse(req.query.timeRange);
     if (!parseResult.success) {
       throw new BadRequestError(`Invalid timeRange: must be one of 24h, 7d, 30d`);
@@ -182,7 +181,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       inMemoryBreakerStates,
     });
   })
-  // Rate limit between GET and POST - baseApi applies middleware in declaration order
+  // Rate limit between GET and POST - adminApi applies middleware in declaration order
   .use(
     rateLimit({
       limit: 5,
@@ -190,10 +189,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     })
   )
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const parseResult = probeBodySchema.safeParse(req.body);
     if (!parseResult.success) {
       throw new BadRequestError(`Invalid request body: ${parseResult.error.issues[0]?.message}`);

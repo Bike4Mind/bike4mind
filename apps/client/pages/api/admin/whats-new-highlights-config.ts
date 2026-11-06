@@ -1,9 +1,8 @@
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { AdminSettings } from '@bike4mind/database';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { validateHighlightsTemplate } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.prompt';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
@@ -46,14 +45,12 @@ const HighlightsConfigSchema = z.object({
   attachMarkdownFile: z.boolean().optional(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', PUT: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .use(rateLimit({ limit: ADMIN_CONFIG_RATE_LIMIT, windowMs: ONE_MINUTE_MS }))
   .get(async (req: Request, res: Response) => {
-    // Check if user is admin
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     try {
       const setting = await AdminSettings.findOne({ settingName: SETTING_NAME });
       const config = setting?.settingValue || {
@@ -77,11 +74,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
   })
   .put(async (req: Request, res: Response) => {
-    // Check if user is admin
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     try {
       // Validate configuration with Zod schema
       const config = HighlightsConfigSchema.parse(req.body);

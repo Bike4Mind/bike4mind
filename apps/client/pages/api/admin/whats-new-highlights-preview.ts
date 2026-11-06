@@ -1,8 +1,7 @@
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { buildHighlightsPrompt } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.prompt';
 import type { ModalForHighlights } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 import { z } from 'zod';
@@ -46,13 +45,9 @@ function getSampleModals(): ModalForHighlights[] {
   ];
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: PREVIEW_RATE_LIMIT, windowMs: ONE_MINUTE_MS }))
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     try {
       const { template } = PreviewRequestSchema.parse(req.body);
 

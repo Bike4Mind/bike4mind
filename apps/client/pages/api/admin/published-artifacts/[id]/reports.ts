@@ -1,7 +1,6 @@
 import { Request } from 'express';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { PublishedArtifactReport } from '@bike4mind/database';
 
 /**
@@ -10,26 +9,25 @@ import { PublishedArtifactReport } from '@bike4mind/database';
  * before deciding on a takedown.
  */
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req: Request, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Admin access required');
+const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
+  async (req: Request, res) => {
+    const publicId = String(req.query.id);
+    const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? 50), 10) || 50));
+    const skip = Math.max(0, parseInt(String(req.query.skip ?? 0), 10) || 0);
+
+    const [reports, total] = await Promise.all([
+      PublishedArtifactReport.find({ publicId })
+        .select('reason details status reporterId resolvedBy resolvedAt createdAt')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      PublishedArtifactReport.countDocuments({ publicId }),
+    ]);
+
+    return res.status(200).json({ reports, total, limit, skip, hasMore: skip + reports.length < total });
   }
-  const publicId = String(req.query.id);
-  const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? 50), 10) || 50));
-  const skip = Math.max(0, parseInt(String(req.query.skip ?? 0), 10) || 0);
-
-  const [reports, total] = await Promise.all([
-    PublishedArtifactReport.find({ publicId })
-      .select('reason details status reporterId resolvedBy resolvedAt createdAt')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean(),
-    PublishedArtifactReport.countDocuments({ publicId }),
-  ]);
-
-  return res.status(200).json({ reports, total, limit, skip, hasMore: skip + reports.length < total });
-});
+);
 
 export const config = {
   api: { externalResolver: true },

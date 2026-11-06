@@ -3,13 +3,12 @@ import { apiKeyUsageLogRepository, userApiKeyRepository } from '@bike4mind/datab
 import { BadRequestError } from '@bike4mind/utils';
 import mongoose from 'mongoose';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import {
   decideScopeGate,
   parseStagedScopes,
   SCOPE_STAGING_ENV_VAR,
 } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ALL_KNOWN_API_KEY_SCOPE_VALUES } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 
 /** ApiKeyUsageLog's TTL is 90 days, so a longer window would silently return less. */
@@ -105,12 +104,8 @@ function unloggedSurfacesUnder(prefix: string): string[] {
  *
  * Read-only by design: it produces the list, a human rotates the keys.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const query = req.query as Record<string, string | string[] | undefined>;
 
     const endpointPrefix = readSingle(query.endpointPrefix)?.trim();

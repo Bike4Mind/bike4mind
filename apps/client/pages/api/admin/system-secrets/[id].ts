@@ -11,8 +11,8 @@
 
 import { systemSecretRepository, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { clearSecretCache, resolveSecret } from '@server/managers/systemSecretsManager';
 import { Logger } from '@bike4mind/observability';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
@@ -26,13 +26,12 @@ function maskSecretValue(value: string | undefined): string {
   return '****' + value.slice(-4);
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { id } = req.query;
 
       if (!id || typeof id !== 'string') {
@@ -63,10 +62,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         warnings: resolution.warnings,
       });
     } catch (error) {
-      if (error instanceof ForbiddenError) {
-        Logger.warn('Error fetching system secret:', error.message);
-        return res.status(403).json({ error: error.message });
-      }
       Logger.error('Error fetching system secret:', error);
       if (error instanceof NotFoundError) {
         return res.status(404).json({ error: error.message });
@@ -79,10 +74,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   })
   .delete(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { id } = req.query;
 
       if (!id || typeof id !== 'string') {
@@ -123,10 +114,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         message: `Database override for ${secret.secretName} deleted. Will now use SST value if available.`,
       });
     } catch (error) {
-      if (error instanceof ForbiddenError) {
-        Logger.warn('Error deleting system secret:', error.message);
-        return res.status(403).json({ error: error.message });
-      }
       Logger.error('Error deleting system secret:', error);
       if (error instanceof NotFoundError) {
         return res.status(404).json({ error: error.message });

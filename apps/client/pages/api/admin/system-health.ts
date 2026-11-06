@@ -1,7 +1,6 @@
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { MailService, type EmailConfigStatus } from '@server/utils/mailer';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import mongoose from 'mongoose';
@@ -151,34 +150,32 @@ async function getOAuthConfigStatus(): Promise<OAuthConfigStatus> {
   };
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req: Request, res: Response) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
+const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
+  async (req: Request, res: Response) => {
+    try {
+      const mailService = new MailService();
+      const emailStatus = mailService.getConfigStatus();
+      const oauthStatus = await getOAuthConfigStatus();
+
+      const response: SystemHealthResponse = {
+        email: emailStatus,
+        database: {
+          type: process.env.MAIN_DB_TYPE || 'MongoAtlas',
+          connected: mongoose.connection.readyState === 1,
+          readyState: mongoose.connection.readyState,
+        },
+        oauth: oauthStatus,
+      };
+
+      return res.json(response);
+    } catch (error) {
+      console.error('Error getting system health:', error);
+      return res.status(500).json({
+        error: 'Failed to get system health status',
+      });
+    }
   }
-
-  try {
-    const mailService = new MailService();
-    const emailStatus = mailService.getConfigStatus();
-    const oauthStatus = await getOAuthConfigStatus();
-
-    const response: SystemHealthResponse = {
-      email: emailStatus,
-      database: {
-        type: process.env.MAIN_DB_TYPE || 'MongoAtlas',
-        connected: mongoose.connection.readyState === 1,
-        readyState: mongoose.connection.readyState,
-      },
-      oauth: oauthStatus,
-    };
-
-    return res.json(response);
-  } catch (error) {
-    console.error('Error getting system health:', error);
-    return res.status(500).json({
-      error: 'Failed to get system health status',
-    });
-  }
-});
+);
 
 export default handler;
 

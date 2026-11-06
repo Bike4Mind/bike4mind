@@ -1,7 +1,6 @@
 import { Request, Response } from 'express';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { envKey } from '@bike4mind/auth/apiKeyService';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
@@ -87,14 +86,10 @@ async function resolvePlatformEmbeddingKeys() {
  * requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key before req.user
  * is set, so a key issued for a narrow integration cannot spend the platform embedding credential
  * on a billable probe just because its owner is an admin. JWT/browser callers still go through the
- * isAdmin check below.
+ * admin permission gate.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
   asyncHandler(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const logger = req.logger;
     const model = await resolveDefaultEmbeddingModel(logger, 'embedding-limits');
     const provider = getProviderFromModel(model);

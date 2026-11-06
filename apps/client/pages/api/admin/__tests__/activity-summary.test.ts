@@ -12,17 +12,24 @@ const { getActivitySummary, route } = vi.hoisted(() => ({
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config: unknown) => {
     route.config = config;
+    const middlewares: ((req: unknown, res: unknown, next: () => void) => unknown)[] = [];
     const chain = {
-      use: () => chain,
+      use: (middleware: (req: unknown, res: unknown, next: () => void) => unknown) => {
+        middlewares.push(middleware);
+        return chain;
+      },
       get: (handler: NonNullable<typeof route.get>) => {
-        route.get = handler;
+        route.get = async (req, res) => {
+          for (const middleware of middlewares) await middleware(req, res, () => undefined);
+          return handler(req, res);
+        };
         return chain;
       },
     };
     return chain;
   },
 }));
-vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 vi.mock('@server/admin/getActivitySummary', () => ({ getActivitySummary }));
 
 import '../activity-summary';
@@ -31,11 +38,11 @@ describe('GET /api/admin/activity-summary', () => {
   beforeEach(() => getActivitySummary.mockReset());
 
   it('requires the admin API scope', () => {
-    expect(route.config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
+    expect(route.config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN], allowedMethods: ['GET'] });
   });
 
   it('rejects non-admin users before querying activity', async () => {
-    await expect(route.get?.({ user: { isAdmin: false } }, {})).rejects.toThrow('Admin access required');
+    await expect(route.get?.({ method: 'GET', user: { isAdmin: false } }, {})).rejects.toThrow(/missing permission/i);
     expect(getActivitySummary).not.toHaveBeenCalled();
   });
 
@@ -43,11 +50,13 @@ describe('GET /api/admin/activity-summary', () => {
     const summary = { totalEvents: 1003 };
     const json = vi.fn();
     getActivitySummary.mockResolvedValueOnce(summary);
-    await route.get?.({ user: { isAdmin: true } }, { json });
+    await route.get?.({ method: 'GET', user: { isAdmin: true } }, { json });
     expect(json).toHaveBeenCalledExactlyOnceWith(summary);
 
     getActivitySummary.mockRejectedValueOnce(new Error('database unavailable'));
-    await expect(route.get?.({ user: { isAdmin: true } }, { json })).rejects.toThrow('database unavailable');
+    await expect(route.get?.({ method: 'GET', user: { isAdmin: true } }, { json })).rejects.toThrow(
+      'database unavailable'
+    );
     expect(json).toHaveBeenCalledOnce();
   });
 });

@@ -1,9 +1,9 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { ForbiddenError, NotFoundError, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
+import { NotFoundError, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { SAVED_VIEWS_RATE_LIMIT, savedViewsDeps } from '@server/admin/savedViews/adapters';
 import { deleteSavedView, updateSavedView } from '@server/admin/savedViews/savedViews';
 import { UpdateAdminSavedViewRequestSchema, type AdminSavedViewResponse } from '@client/app/utils/adminSavedViews';
@@ -16,11 +16,14 @@ const viewIdOf = (query: unknown): string => {
 };
 
 /** Rename, share/unshare or replace (PATCH), or delete (DELETE) one of the caller's own views. */
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { PATCH: 'settings:manage', DELETE: 'settings:manage' },
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .use(rateLimit(SAVED_VIEWS_RATE_LIMIT))
   .patch(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
       const viewId = viewIdOf(req.query);
       const patch = parseOrBadRequest(UpdateAdminSavedViewRequestSchema, req.body);
       const view: AdminSavedViewResponse = await updateSavedView(
@@ -34,7 +37,6 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
   )
   .delete(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
       await deleteSavedView(req.user.id, viewIdOf(req.query), savedViewsDeps(req.logger));
       return res.status(204).end();
     })

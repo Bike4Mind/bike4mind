@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { modelCatalogRepository, modelDiscoveryStateRepository, modelPriceRepository } from '@bike4mind/database';
 import {
@@ -13,7 +13,7 @@ import {
 import { modelDiscoveryService } from '@bike4mind/services';
 import { modelReferenceReport } from '@bike4mind/server-utils/modelDiscovery/modelReferenceReport';
 import { ApiKeyScope, LIFECYCLE_STATUSES, toPerMTokRate, type IModelPrice, type PerMTokRate } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Deprecation queue and lifecycle report (spec sec 5.10 / 7).
@@ -62,10 +62,11 @@ const ResolveBody = z.object({
   acknowledgeBlockers: z.boolean().optional(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
-
     const daysAhead = parseInt(req.query.daysAhead as string) || 90;
 
     const [liveModels, rows, pending, priceRows, staleReport] = await Promise.all([
@@ -110,8 +111,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     });
   })
   .post(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
-
     const parsed = ResolveBody.safeParse(req.body);
     if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'invalid request');
     const { modelId, action } = parsed.data;
