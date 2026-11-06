@@ -39,9 +39,11 @@ const mockSessionFindById = vi.fn();
 const mockQuestFindBySessionIdAndId = vi.fn();
 const mockQuestUpdate = vi.fn();
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: (work: () => Promise<unknown>) => work(),
   sessionRepository: {
     findById: (...a: any[]) => mockSessionFindById(...a),
     shareable: { findUpdateAccessById: async () => ({ id: 'sess-1' }) },
+    update: async () => undefined,
   },
   questRepository: {
     findBySessionIdAndId: (...a: any[]) => mockQuestFindBySessionIdAndId(...a),

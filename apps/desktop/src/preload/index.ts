@@ -468,6 +468,8 @@ const api: DesktopApi = {
     syncCode: () => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSyncCode),
     importChatExport: () => ipcRenderer.invoke(IPC_CHANNELS.claudeImportChatExport),
     setWatchFolder: (clear: boolean) => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSetWatchFolder, clear),
+    setWebSettings: patch => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSetWebSettings, patch),
+    syncWeb: () => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSyncWeb),
     remove: kind => ipcRenderer.invoke(IPC_CHANNELS.claudeImportRemove, kind),
     onStateChanged: listener => {
       const handler = (_event: unknown, state: ClaudeImportState) => listener(state);

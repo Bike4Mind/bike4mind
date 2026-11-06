@@ -1471,6 +1471,7 @@ export function registerChat(
     },
     send,
     logger,
+    webApi: () => auth.getApiClient(),
   });
 
   return {
