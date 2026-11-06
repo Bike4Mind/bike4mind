@@ -43,9 +43,9 @@ const formatLatency = (ms: number): string => (ms < 1000 ? `${ms} ms` : `${(ms /
 
 const sourceLabel = (call: AdminUsageReceiptCall): string => {
   const source = call.source ? (SOURCE_LABELS[call.source] ?? call.source) : 'Unclassified';
-  if (call.operation) return `${source} · ${OPERATION_LABELS[call.operation] ?? call.operation}`;
+  if (call.operation) return `${source} \u00b7 ${OPERATION_LABELS[call.operation] ?? call.operation}`;
   const feature = FEATURE_LABELS[call.feature] ?? call.feature.replace(/_/g, ' ');
-  return `${source} · ${feature}`;
+  return `${source} \u00b7 ${feature}`;
 };
 
 const CallReceipt: React.FC<{ call: AdminUsageReceiptCall; index: number; count: number }> = ({
@@ -68,7 +68,7 @@ const CallReceipt: React.FC<{ call: AdminUsageReceiptCall; index: number; count:
         </Fact>
         <Fact label="Source" data-testid="usage-receipt-source">
           {sourceLabel(call)}
-          {call.apiKeyPrefix ? ` · key ${call.apiKeyPrefix}` : ''}
+          {call.apiKeyPrefix ? ` \u00b7 key ${call.apiKeyPrefix}` : ''}
         </Fact>
         <Fact label="Stop reason">{call.stopReason}</Fact>
         <Fact label="Latency">{call.latencyMs !== undefined ? formatLatency(call.latencyMs) : undefined}</Fact>

@@ -84,7 +84,7 @@ describe('UsageReceiptDrawer', () => {
       refetch: vi.fn(),
     });
     renderDrawer();
-    expect(screen.getByTestId('usage-receipt-source')).toHaveTextContent('System · Notebook naming');
+    expect(screen.getByTestId('usage-receipt-source')).toHaveTextContent('System \u00b7 Notebook naming');
   });
 
   it('says "not recorded" for rows written before the receipt fields existed', () => {
