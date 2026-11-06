@@ -3,6 +3,7 @@ import { BokehPass } from 'three/examples/jsm/postprocessing/BokehPass.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { Reflector } from 'three/examples/jsm/objects/Reflector.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 
@@ -222,6 +223,85 @@ function gridFor(box: THREE.Box3, dark: boolean): THREE.GridHelper {
 export type StageOptions = { dark: boolean; grid: boolean; lighting?: StageLighting };
 
 /**
+ * A faint mirror for the floor, as on a polished studio sweep: the reflection fades out with the
+ * distance from the model, so the floor has no edge. Uniform names the Reflector sets (tDiffuse,
+ * color, textureMatrix) must stay as they are.
+ */
+const GlossyFloorShader = {
+  name: 'GlossyFloorShader',
+  uniforms: {
+    color: { value: null },
+    tDiffuse: { value: null },
+    textureMatrix: { value: null },
+    strength: { value: 0.2 },
+    center: { value: new THREE.Vector3() },
+    fadeRadius: { value: 1 },
+  },
+  vertexShader: /* glsl */ `
+    uniform mat4 textureMatrix;
+    varying vec4 vUv;
+    varying vec3 vWorld;
+    void main() {
+      vUv = textureMatrix * vec4(position, 1.0);
+      vec4 world = modelMatrix * vec4(position, 1.0);
+      vWorld = world.xyz;
+      gl_Position = projectionMatrix * viewMatrix * world;
+    }`,
+  fragmentShader: /* glsl */ `
+    uniform vec3 color;
+    uniform sampler2D tDiffuse;
+    uniform float strength;
+    uniform vec3 center;
+    uniform float fadeRadius;
+    varying vec4 vUv;
+    varying vec3 vWorld;
+    void main() {
+      vec4 reflected = texture2DProj(tDiffuse, vUv);
+      float fade = 1.0 - smoothstep(0.0, 1.0, distance(vWorld.xz, center.xz) / fadeRadius);
+      gl_FragColor = vec4(reflected.rgb * color, strength * fade * fade);
+    }`,
+};
+
+/** How strongly the floor reflects, by backdrop: a dark floor shows a reflection more, as a real one does. */
+const REFLECTION = { light: 0.24, dark: 0.3, night: 0.4 };
+/** The reflection's resolution, as a share of the canvas: a little softness reads as gloss, not glass. */
+const REFLECTION_SCALE = 0.5;
+
+/**
+ * The glossy floor under the model. Its reflection renders the scene once more from below, so it
+ * skips the AO and depth-of-field passes (which render with an override material) and leaves out
+ * the shadow-catcher floor and grid, which lie in the mirror's own plane.
+ */
+function glossyFloor(hidden: () => THREE.Object3D[]): Reflector {
+  const reflector = new Reflector(new THREE.PlaneGeometry(1, 1), {
+    shader: GlossyFloorShader,
+    color: 0xffffff,
+    textureWidth: 512,
+    textureHeight: 512,
+    multisample: 0,
+  });
+  reflector.name = 'reflection';
+  reflector.rotation.x = -Math.PI / 2;
+  const material = reflector.material as THREE.ShaderMaterial;
+  material.transparent = true;
+  material.depthWrite = false;
+  const renderReflection = reflector.onBeforeRender.bind(reflector);
+  const size = new THREE.Vector2();
+  reflector.onBeforeRender = (renderer, scene, camera, geometry, ownMaterial, group) => {
+    if (scene.overrideMaterial) return;
+    renderer.getDrawingBufferSize(size).multiplyScalar(REFLECTION_SCALE).floor();
+    const target = reflector.getRenderTarget();
+    if (target.width !== size.x || target.height !== size.y) target.setSize(size.x, size.y);
+    const objects = hidden();
+    const visible = objects.map(object => object.visible);
+    objects.forEach(object => (object.visible = false));
+    renderReflection(renderer, scene, camera, geometry, ownMaterial, group);
+    objects.forEach((object, index) => (object.visible = visible[index]));
+  };
+  return reflector;
+}
+
+/**
  * The studio around one model: environment, key light, shadow-catcher floor and optional grid,
  * all in a group of its own so the caller's content stays apart. `fit` re-sizes it to a model.
  */
@@ -231,6 +311,7 @@ export class ModelStage {
   private readonly key = new THREE.DirectionalLight(0xffffff, 3);
   private readonly floor: THREE.Mesh<THREE.PlaneGeometry, THREE.ShadowMaterial>;
   private grid: THREE.GridHelper | null = null;
+  private readonly reflection: Reflector;
   readonly bounds = new THREE.Box3();
 
   constructor(
@@ -257,6 +338,8 @@ export class ModelStage {
     this.floor.receiveShadow = true;
     this.floor.name = 'floor';
     this.group.add(this.floor);
+    this.reflection = glossyFloor(() => [this.floor, ...(this.grid ? [this.grid] : [])]);
+    this.group.add(this.reflection);
     this.group.name = 'stage';
     scene.add(this.group);
   }
@@ -301,6 +384,13 @@ export class ModelStage {
     this.floor.position.set(sphere.center.x, floorY, sphere.center.z);
     this.floor.scale.setScalar(radius * 12);
     this.floor.material.opacity = night ? 0.7 : dark ? 0.5 : 0.55;
+    // Just under the shadow catcher, so the two never fight over the same depth.
+    this.reflection.position.set(sphere.center.x, floorY - radius * 1e-3, sphere.center.z);
+    this.reflection.scale.setScalar(radius * 12);
+    const uniforms = (this.reflection.material as THREE.ShaderMaterial).uniforms;
+    uniforms.strength.value = night ? REFLECTION.night : dark ? REFLECTION.dark : REFLECTION.light;
+    uniforms.center.value.copy(sphere.center);
+    uniforms.fadeRadius.value = radius * 2.5;
 
     if (this.grid) {
       this.group.remove(this.grid);
@@ -319,6 +409,7 @@ export class ModelStage {
     this.grid?.dispose();
     this.floor.geometry.dispose();
     this.floor.material.dispose();
+    this.reflection.dispose();
     this.key.dispose();
     this.environment.dispose();
   }
