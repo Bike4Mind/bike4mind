@@ -33,6 +33,7 @@ import {
   isMediaOnlyMimeType,
   isSupportedEmbeddingModel,
   isSupportedFabFileMimeType,
+  NotFoundError,
   provenancePayloadShape,
 } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
@@ -73,6 +74,27 @@ const isUnreadableFormat = (mimeType: string | null | undefined): boolean =>
   !isSupportedFabFileMimeType(mimeType) &&
   !mimeType.startsWith('text/') &&
   !isMediaOnlyMimeType(mimeType);
+
+/**
+ * True only when a chunking failure is a not-found AND a fresh read confirms the file is no longer
+ * accessible - i.e. it was deleted mid-run. Any other not-found (a missing storage object, say)
+ * still counts as a real failure. A failed confirmation read answers false, so the delivery keeps
+ * its ordinary retry instead of being dropped on a guess.
+ */
+async function wasRemovedMidRun(
+  err: unknown,
+  user: Parameters<typeof fabFileRepository.shareable.findAccessibleById>[0],
+  fabFileId: string
+): Promise<boolean> {
+  // The name check covers a second module realm of @bike4mind/common, as isChunkClaimLostError does.
+  const isNotFound = err instanceof NotFoundError || (err instanceof Error && err.name === 'NotFoundError');
+  if (!isNotFound) return false;
+  try {
+    return !(await fabFileRepository.shareable.findAccessibleById(user, fabFileId));
+  } catch {
+    return false;
+  }
+}
 
 /**
  * How many chunks per vectorize message is the operator's dataLakeVectorizeChunkBatchSize
@@ -1053,6 +1075,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         logger.warn(
           `FabFile ${fabFileId}: chunk claim lost (a successor claimed it, or the file was removed) - this delivery is a no-op`
         );
+        return null;
+      }
+
+      // The owner deleted the file (or lost access to it) after the pre-flight read above but
+      // before prepare re-read it. Nothing is left to chunk and no retry can bring it back, so
+      // acknowledge instead of retrying toward the DLQ.
+      if (await wasRemovedMidRun(err, user, fabFileId)) {
+        logger.warn(`FabFile ${fabFileId}: removed while it was being chunked - this delivery is a no-op`);
         return null;
       }
 

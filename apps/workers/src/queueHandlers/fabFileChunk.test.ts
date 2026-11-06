@@ -174,6 +174,8 @@ vi.mock('@bike4mind/common', async () => {
     isMediaOnlyMimeType: actual.isMediaOnlyMimeType,
     DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT: 50,
     ChunkClaimLostError,
+    // Real: the mid-run-deletion branch must recognise the class prepare actually throws.
+    NotFoundError: actual.NotFoundError,
     // Mirrors the REAL dual-check in errors.ts exactly (not just re-declaring the class) - an
     // `instanceof`-only mock here would make F2's regression test below tautological, the same gap
     // the real bug would hide behind.
@@ -204,7 +206,7 @@ const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(),
 
 import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
 import { dispatch } from './fabFileChunk';
-import { ChunkClaimLostError } from '@bike4mind/common';
+import { ChunkClaimLostError, NotFoundError } from '@bike4mind/common';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
 const payload = { fabFileId: 'ff1', userId: 'u1' };
@@ -803,6 +805,61 @@ describe('fabFileChunk handler - stale-claim takeover mid-run (#1802 Phase 2)', 
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
     expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
     expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+  });
+});
+
+describe('fabFileChunk handler - file deleted mid-run', () => {
+  // The owner deletes the file after the pre-flight read but before prepare re-reads it, so prepare
+  // throws a not-found. No retry can bring the file back: acknowledge, warn once, account nothing.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.fabFileFindOneAndUpdate.mockResolvedValue({ _id: 'ff1' });
+    h.findAccessibleById.mockResolvedValueOnce({ id: 'ff1', batchId: 'batch-1' }).mockResolvedValue(null);
+    h.chunkFabfile.mockRejectedValue(new NotFoundError('FabFile not found'));
+  });
+
+  it('acknowledges the message without deferring, accounting a failure or dispatching work', async () => {
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    expect(h.incrementCounters).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('warns once and still releases the claim', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('removed while it was being chunked'));
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', chunkClaimedAt: expect.any(Date) },
+      { $set: { isChunking: false } }
+    );
+  });
+
+  it('treats a same-named not-found from another module realm the same way', async () => {
+    h.chunkFabfile.mockRejectedValue(Object.assign(new Error('FabFile not found'), { name: 'NotFoundError' }));
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+  });
+
+  it('keeps the ordinary failure path when the file is still there', async () => {
+    h.findAccessibleById.mockReset().mockResolvedValue({ id: 'ff1', batchId: 'batch-1' });
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('FabFile not found');
+    expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('removed while it was being chunked'));
+  });
+
+  it('keeps the ordinary failure path when the confirmation read fails', async () => {
+    h.findAccessibleById
+      .mockReset()
+      .mockResolvedValueOnce({ id: 'ff1', batchId: 'batch-1' })
+      .mockRejectedValue(new Error('connection reset'));
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('FabFile not found');
+  });
+
+  it('does not re-read for an error that is not a not-found', async () => {
+    h.chunkFabfile.mockRejectedValue(new Error('Invalid PDF structure'));
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('Invalid PDF structure');
+    expect(h.findAccessibleById).toHaveBeenCalledTimes(1);
   });
 });
 
