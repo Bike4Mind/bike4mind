@@ -716,9 +716,8 @@ describe('registerUser', () => {
       const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
       mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
         const values: Record<string, string> = {
-          stagedSignupGrantEnabled: 'true',
-          signupGrantCredits: '12',
-          verifiedUnlockCredits: '28',
+          signupGrantInitialCredits: '12',
+          signupGrantDripCap: '28',
         };
         return name in values ? { settingValue: values[name] } : readSetting(name);
       });
@@ -774,9 +773,8 @@ describe('registerUser', () => {
         const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
         mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
           const values: Record<string, string> = {
-            stagedSignupGrantEnabled: 'true',
-            signupGrantCredits: '4',
-            verifiedUnlockCredits: '0',
+            signupGrantInitialCredits: '4',
+            signupGrantDripCap: '9000',
             ReferralCreditsAmount: '10',
           };
           return name in values ? { settingValue: values[name] } : readSetting(name);

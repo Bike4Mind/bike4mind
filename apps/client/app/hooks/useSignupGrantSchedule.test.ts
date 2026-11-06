@@ -31,29 +31,15 @@ describe('useSignupGrantSchedule parity with the server resolver', () => {
   it.each([
     ['no rows', {}],
     [
-      'legacy staged with activity',
-      {
-        stagedSignupGrantEnabled: 'true',
-        signupGrantActivityEnabled: true,
-        signupGrantCredits: 100,
-        defaultFreeCredits: 50,
-        verifiedUnlockCredits: 2000,
-        signupGrantActivityMaxCredits: 1500,
-        signupGrantActivityDailyCredits: 25,
-      },
-    ],
-    ['retired flat grant keys', { stagedSignupGrantEnabled: false, defaultFreeCredits: 300 }],
-    [
       'schedule keys set',
       {
-        stagedSignupGrantEnabled: 'false',
         signupGrantInitialCredits: '0',
         signupGrantDailyCredits: 40,
         signupGrantDripCap: '6000',
         signupGrantInviteBonusCredits: 10,
       },
     ],
-    ['invalid stored values', { signupGrantDripCap: '', signupGrantDailyCredits: -1, verifiedUnlockCredits: 1.5 }],
+    ['invalid stored values', { signupGrantDripCap: '', signupGrantDailyCredits: -1, signupGrantInitialCredits: 1.5 }],
   ])('resolves the same schedule as the server for %s', async (_label, values) => {
     h.rows = rowsOf(values);
     const { schedule } = await serverSchedule(h.rows);

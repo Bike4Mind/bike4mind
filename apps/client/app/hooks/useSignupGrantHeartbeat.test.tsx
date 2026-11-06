@@ -6,7 +6,6 @@ const h = vi.hoisted(() => ({
   post: vi.fn(),
   invalidate: vi.fn(),
   grant: undefined as Record<string, unknown> | undefined,
-  enabled: true as boolean | string | undefined,
   daily: 1000 as number | undefined,
 }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: h.post } }));
@@ -17,7 +16,6 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 vi.mock('@client/app/hooks/data/settings', () => ({
   useSettingsFromServer: () => ({
     data: [
-      { settingName: 'signupGrantActivityEnabled', settingValue: h.enabled },
       { settingName: 'signupGrantDailyCredits', settingValue: h.daily },
       { settingName: 'signupGrantDripCap', settingValue: '9000' },
     ],
@@ -44,7 +42,6 @@ describe('useSignupGrantHeartbeat', () => {
     localStorage.clear();
     h.post.mockReset().mockResolvedValue(response());
     h.invalidate.mockReset();
-    h.enabled = true;
     h.daily = 1000;
     h.grant = { stage: 'signup', signupCredits: 1000, unlockCredits: 9000, creditsReleased: 1000 };
     setHidden(false);
@@ -57,14 +54,6 @@ describe('useSignupGrantHeartbeat', () => {
     renderHook(() => useSignupGrantHeartbeat());
     await advance(HEARTBEAT_INTERVAL_MS * 2);
     expect(h.post).not.toHaveBeenCalled();
-    touch();
-    await advance(HEARTBEAT_INTERVAL_MS);
-    expect(h.post).toHaveBeenCalledTimes(1);
-  });
-
-  it('pings with the retired activity flag off while the daily amount is positive', async () => {
-    h.enabled = false;
-    renderHook(() => useSignupGrantHeartbeat());
     touch();
     await advance(HEARTBEAT_INTERVAL_MS);
     expect(h.post).toHaveBeenCalledTimes(1);

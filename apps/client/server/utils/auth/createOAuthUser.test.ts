@@ -38,9 +38,8 @@ describe('createUniqueOAuthUser', () => {
   it('snapshots staging only for a newly created credit-eligible account', async () => {
     mockFindSetting.mockImplementation(async (name: string) => ({
       settingValue: {
-        stagedSignupGrantEnabled: 'true',
-        signupGrantCredits: '12',
-        verifiedUnlockCredits: '28',
+        signupGrantInitialCredits: '12',
+        signupGrantDripCap: '28',
       }[name],
     }));
     await createUniqueOAuthUser({
@@ -82,7 +81,7 @@ describe('createUniqueOAuthUser', () => {
     const referralInvite = { inviteId: 'invite-1', inviterId: 'inviter-1', grantCredits: 30 };
     beforeEach(() => {
       mockFindSetting.mockImplementation(async (name: string) => ({
-        settingValue: { stagedSignupGrantEnabled: 'true', signupGrantCredits: '12', verifiedUnlockCredits: '28' }[name],
+        settingValue: { signupGrantInitialCredits: '12', signupGrantDripCap: '28' }[name],
       }));
     });
 

@@ -71,12 +71,8 @@ describe('getOpenSignupStarterCredits', () => {
     await expect(getOpenSignupStarterCredits()).resolves.toBe(0);
   });
 
-  it('returns 0 when staged grants are on with a zero tranche', async () => {
-    stored([
-      ...rows(true, 5000),
-      { settingName: 'stagedSignupGrantEnabled', settingValue: true },
-      { settingName: 'signupGrantCredits', settingValue: 0 },
-    ]);
+  it('returns 0 with a zero initial grant', async () => {
+    stored([...rows(true, 5000), { settingName: 'signupGrantInitialCredits', settingValue: 0 }]);
 
     await expect(getOpenSignupStarterCredits()).resolves.toBe(0);
   });
@@ -89,16 +85,6 @@ describe('getOpenSignupStarterCredits', () => {
     ]);
 
     await expect(getOpenSignupStarterCredits()).resolves.toBe(250);
-  });
-
-  it('returns 0 on an invite-only deployment even with staged grants on', async () => {
-    stored([
-      ...rows(false, 5000),
-      { settingName: 'stagedSignupGrantEnabled', settingValue: true },
-      { settingName: 'signupGrantCredits', settingValue: 250 },
-    ]);
-
-    await expect(getOpenSignupStarterCredits()).resolves.toBe(0);
   });
 
   // The share page has no invite code to read, so a visitor is offered what an uninvited signup gets.
@@ -148,7 +134,6 @@ describe('getOpenSignupStarterCredits', () => {
     }) => {
       const all: Row[] = [
         ...rows(true, free),
-        { settingName: 'verifiedUnlockCredits', settingValue: 4750 },
         { settingName: 'signupGrantDripCap', settingValue: 9000 },
         { settingName: 'signupGrantInviteBonusCredits', settingValue: 2000 },
         ...(initial === undefined ? [] : [{ settingName: 'signupGrantInitialCredits', settingValue: initial }]),
