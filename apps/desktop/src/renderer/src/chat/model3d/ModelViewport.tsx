@@ -2,15 +2,24 @@ import Box from '@mui/joy/Box';
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import type { ModelJoint } from '@shared/model3d';
-import { frameCamera, poseJoints } from './modelScene';
+import type { ModelJoint, ModelView } from '@shared/model3d';
+import { frameCamera, poseJoints, VIEW_DIRECTIONS } from './modelScene';
 import { addGlowLights, enableShadows, ModelComposer, ModelStage, type StageLighting } from './modelStage';
 import { orbitPosition, recordCanvas, TURNTABLE_SIZE, turntablePose } from './turntable';
 
 /** What the pane can ask of the viewport beyond its props. */
 export type ModelViewportHandle = {
-  /** Records one turntable orbit of the model as it is shown now, swinging `joints`; resolves with WebM bytes. */
-  recordTurntable: (joints: readonly ModelJoint[]) => Promise<Uint8Array>;
+  /**
+   * Records one turntable orbit of the model as it is shown now, swinging `joints`; resolves with WebM
+   * bytes. `onProgress` hears each frame's place in the clip (0..1).
+   */
+  recordTurntable: (joints: readonly ModelJoint[], onProgress?: (progress: number) => void) => Promise<Uint8Array>;
+  /** Frames the model from one side, or from the default three-quarter view when `view` is null. */
+  setView: (view: ModelView | null) => void;
+  /** Orbits the camera by these angles (radians): positive azimuth turns right, positive polar tilts down. */
+  orbit: (azimuth: number, polar: number) => void;
+  /** Moves the camera towards the target (factor below 1) or away from it (above 1). */
+  zoom: (factor: number) => void;
 };
 
 type Props = {
@@ -71,8 +80,7 @@ type Viewer = {
   render: () => void;
   /** Frames the current model again, unless the user has moved the camera since it was framed. */
   reframe: () => void;
-  recordTurntable: ModelViewportHandle['recordTurntable'];
-};
+} & ModelViewportHandle;
 
 /** The interactive three.js view: orbit (drag), zoom (wheel) and pan (right drag), rendered on demand. */
 export function ModelViewport({
@@ -174,7 +182,36 @@ export function ModelViewport({
     const observer = new ResizeObserver(resize);
     observer.observe(element);
 
-    const recordTurntable = async (joints: readonly ModelJoint[]): Promise<Uint8Array> => {
+    const setView = (view: ModelView | null) => {
+      const shown = shownObject.current;
+      if (!shown || recording) return;
+      controls.target.copy(frameCamera(camera, shown, view === null ? VIEW_DIRECTIONS.iso : VIEW_DIRECTIONS[view]));
+      // A preset is a deliberate camera; only the default view goes back to following the pane's size.
+      userMoved.current = view !== null;
+      controls.update();
+    };
+    const orbit = (azimuth: number, polar: number) => {
+      if (recording) return;
+      const offset = camera.position.clone().sub(controls.target);
+      const spherical = new THREE.Spherical().setFromVector3(offset);
+      spherical.theta -= azimuth;
+      // Short of the poles, where the orbit would flip over.
+      spherical.phi = THREE.MathUtils.clamp(spherical.phi + polar, 0.05, Math.PI - 0.05);
+      camera.position.copy(controls.target).add(new THREE.Vector3().setFromSpherical(spherical));
+      userMoved.current = true;
+      controls.update();
+    };
+    const zoom = (factor: number) => {
+      if (recording) return;
+      const offset = camera.position.clone().sub(controls.target).multiplyScalar(factor);
+      camera.position.copy(controls.target).add(offset);
+      userMoved.current = true;
+      controls.update();
+    };
+    const recordTurntable = async (
+      joints: readonly ModelJoint[],
+      onProgress?: (progress: number) => void
+    ): Promise<Uint8Array> => {
       if (recording) throw new Error('A recording is already running.');
       const shown = shownCopy.current;
       if (!shown) throw new Error('There is no model to record.');
@@ -204,6 +241,7 @@ export function ModelViewport({
           if (shownCopy.current && joints.length)
             poseJoints(shownCopy.current, turntablePose(joints, startPose, progress));
           composer.render(true);
+          onProgress?.(progress);
         });
       } finally {
         recording = false;
@@ -218,7 +256,21 @@ export function ModelViewport({
         resize();
       }
     };
-    viewer.current = { renderer, scene, camera, controls, content, stage, composer, render, reframe, recordTurntable };
+    viewer.current = {
+      renderer,
+      scene,
+      camera,
+      controls,
+      content,
+      stage,
+      composer,
+      render,
+      reframe,
+      recordTurntable,
+      setView,
+      orbit,
+      zoom,
+    };
     resize();
     return () => {
       observer.disconnect();
@@ -238,10 +290,13 @@ export function ModelViewport({
   useEffect(() => {
     if (!handleRef) return;
     handleRef.current = {
-      recordTurntable: async joints => {
+      recordTurntable: async (joints, onProgress) => {
         if (!viewer.current) throw new Error('The model view is not ready.');
-        return viewer.current.recordTurntable(joints);
+        return viewer.current.recordTurntable(joints, onProgress);
       },
+      setView: view => viewer.current?.setView(view),
+      orbit: (azimuth, polar) => viewer.current?.orbit(azimuth, polar),
+      zoom: factor => viewer.current?.zoom(factor),
     };
     return () => {
       handleRef.current = null;
