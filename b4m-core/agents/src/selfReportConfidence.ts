@@ -33,6 +33,9 @@ const CLOSE = '</confidence>';
 // nothing, and left in it surfaces as a literal "<think></think>" thought.
 const EMPTY_THINK = '<think></think>';
 const EMPTY_THINK_BLOCKS = /<think>\s*<\/think>/gi;
+// A confidence tag the model never closed (or a stray closing tag). Only the tag itself goes; the text
+// around it stays, since nothing says where an unclosed tag was meant to end.
+const DANGLING_TAG = /<\/?confidence\b[^>]*>?/gi;
 const LEADING_FILLER = /^(?:\s|<think>\s*<\/think>)*/i;
 // A tag still unclosed after this much text is not a tag; stop holding the stream back.
 const MAX_HELD_LENGTH = 600;
@@ -54,7 +57,9 @@ export class SelfReportStreamFilter {
     this.held += delta;
     const rest = this.held.slice(LEADING_FILLER.exec(this.held)![0].length);
     const lower = rest.toLowerCase();
-    if (lower === '' || OPEN.startsWith(lower) || EMPTY_THINK.startsWith(lower)) return '';
+    // Whitespace inside the empty block is tolerated, as `EMPTY_THINK_BLOCKS` does for the stored text.
+    const compact = lower.replace(/^<think>\s+/, '<think>');
+    if (lower === '' || OPEN.startsWith(lower) || EMPTY_THINK.startsWith(compact)) return '';
     if (!lower.startsWith(OPEN)) return this.release();
     const end = lower.indexOf(CLOSE);
     if (end === -1) return this.held.length > MAX_HELD_LENGTH ? this.release() : '';
@@ -69,7 +74,7 @@ export class SelfReportStreamFilter {
   }
 
   private release(): string {
-    const held = this.held.replace(EMPTY_THINK_BLOCKS, '');
+    const held = this.held.replace(EMPTY_THINK_BLOCKS, '').replace(DANGLING_TAG, '');
     this.settled = true;
     this.held = '';
     return held;
@@ -82,7 +87,7 @@ export class SelfReportStreamFilter {
  * Returns the first well-formed report and the text with every confidence tag, and every empty
  * reasoning block, removed, so neither reaches a thought or final answer. A tag whose score is
  * missing, non-numeric or outside 0-1 yields no report (the caller falls back to the tool-based
- * score) but is still stripped.
+ * score) but is still stripped, as is a tag that never closes (which yields no report either).
  */
 export function parseSelfReport(text: string): { report?: SelfReport; text: string } {
   let report: SelfReport | undefined;
@@ -96,5 +101,5 @@ export function parseSelfReport(text: string): { report?: SelfReport; text: stri
     }
     return '';
   });
-  return { report, text: stripped.replace(EMPTY_THINK_BLOCKS, '') };
+  return { report, text: stripped.replace(EMPTY_THINK_BLOCKS, '').replace(DANGLING_TAG, '') };
 }
