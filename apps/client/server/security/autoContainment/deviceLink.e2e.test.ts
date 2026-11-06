@@ -74,7 +74,7 @@ function deps(): DeviceLinkDeps & { assessAndContain: ReturnType<typeof vi.fn> }
   return {
     ...live,
     loadConfig: async () => ({ windowHours: 168, commonNetworks: 5 }),
-    assessAndContain: vi.fn(async () => ({ assessed: false, contained: false })),
+    assessAndContain: vi.fn(async () => ({ assessed: false, containment: null })),
     now: () => NOW,
   };
 }
