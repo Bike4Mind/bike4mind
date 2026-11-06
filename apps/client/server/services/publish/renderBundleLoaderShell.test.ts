@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { renderBundleLoaderShell } from './renderBundleLoaderShell';
-import { VIEWER_SANDBOX } from './viewerSecurity';
+import { VIEWER_SANDBOX } from '@bike4mind/server-utils/services/publish/viewerSecurity';
 
 describe('renderBundleLoaderShell', () => {
   const shell = renderBundleLoaderShell();

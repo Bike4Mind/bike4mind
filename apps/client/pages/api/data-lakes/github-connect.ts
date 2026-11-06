@@ -19,7 +19,7 @@ import {
   buildGitHubLakeAuthorizeUrl,
   requireGitHubLakeAppConfig,
   resolveConnectableLake,
-} from '@server/integrations/github/dataLake/githubLakeConnection';
+} from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
 import { clearStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';

@@ -27,7 +27,7 @@ vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: {},
 }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: (...a: unknown[]) => mockLogAuth(...a) }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...a: unknown[]) => mockRecord(...a),
   parseAdminActionReason: (value: unknown) => {
     if (typeof value !== 'string' || value.length < 3) throw new Error('A reason is required');

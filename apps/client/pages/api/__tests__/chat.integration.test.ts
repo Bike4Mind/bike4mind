@@ -109,7 +109,7 @@ vi.mock('@server/billing/freeTierDailyCapGate', () => ({
   checkFreeTierDailySpendCap: (...args: unknown[]) => mockCheckFreeTierDailySpendCap(...args),
 }));
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it now; only
   // checkApiKeyRateLimit is stubbed.
   ...(await orig<Record<string, unknown>>()),

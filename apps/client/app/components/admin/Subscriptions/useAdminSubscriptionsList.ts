@@ -4,7 +4,7 @@ import type {
   AdminSubscriptionsFilter,
   AdminSubscriptionsListResponse,
   AdminSubscriptionsSummary,
-} from '@client/app/utils/adminSubscriptionsFilter';
+} from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import type { SubscriptionsViewCounts } from './subscriptionsListViews';
 import { SUBSCRIPTIONS_FILTER_KEYS, type SubscriptionsListParams } from './subscriptionsTabSearch';
 

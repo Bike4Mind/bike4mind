@@ -1,4 +1,4 @@
-import { Ability } from '@server/auth/ability';
+import { Ability } from '@bike4mind/server-utils/auth/ability';
 import { accessibleBy } from '@casl/mongoose';
 import { mongoose, Quest, Session } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -174,11 +174,7 @@ export const stopReply = async (sessionId: string, ability: Ability, questId?: s
   return quest;
 };
 
-export const summarizeSession = async (
-  sessionId: string,
-  trigger: PersistedSessionSummaryTrigger,
-  payerId: string
-) => {
+export const summarizeSession = async (sessionId: string, trigger: PersistedSessionSummaryTrigger, payerId: string) => {
   await publishSummarizeSession(sessionId, trigger, payerId);
 };
 

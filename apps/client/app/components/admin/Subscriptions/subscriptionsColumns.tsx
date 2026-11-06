@@ -6,8 +6,8 @@ import {
   planIntervalLabel,
   type AdminSubscriptionRow,
   type AdminSubscriptionsSortField,
-} from '@client/app/utils/adminSubscriptionsFilter';
-import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
+} from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
+import { SUBSCRIPTION_PLANS_MAP } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import type { DataColumn } from '../shared/DataTable';
 import { formatMoney } from '../shared/formatMoney';
 import { InitialsAvatar } from '../shared/InitialsAvatar';

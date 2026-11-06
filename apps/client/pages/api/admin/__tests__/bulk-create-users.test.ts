@@ -37,14 +37,14 @@ vi.mock('@server/analytics/funnel', () => ({
   emitSignupFunnelEvents: (...args: unknown[]) => h.emitSignupFunnelEvents(...args),
   recordAccountLane: (...args: unknown[]) => h.recordAccountLane(...args),
 }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
 vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/mailer/emailHelpers')>()),
   getLogoUrl: () => 'logo',
   buildEmailLogoImg: () => '',
 }));
 
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...args: unknown[]) => h.recordAdminAction(...args),
 }));
 

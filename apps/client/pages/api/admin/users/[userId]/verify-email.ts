@@ -6,7 +6,7 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { ApiKeyScope, AuthEvents } from '@bike4mind/common';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
 import { emitEmailVerifiedFunnelEvents } from '@server/analytics/funnel';
 

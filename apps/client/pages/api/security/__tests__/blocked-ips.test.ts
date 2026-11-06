@@ -53,7 +53,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: () => clientIp.value }));
-vi.mock('@server/utils/adminAudit', async () => {
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async () => {
   const { AdminActionReasonSchema } = await import('@bike4mind/common');
   return {
     recordAdminActionFromRequest: audit.record,

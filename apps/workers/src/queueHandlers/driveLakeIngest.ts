@@ -28,7 +28,7 @@ import {
 } from '@bike4mind/common';
 import { BadRequestError, checkStorageLimitForOwner, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { dataLakeService } from '@bike4mind/services';
-import defineAbilitiesFor from '@server/auth/ability';
+import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 import {
   assertConnectorLakeWrite,
   createLakeIngestRetirer,
@@ -70,7 +70,7 @@ import {
   MAX_INGEST_FILE_BYTES,
   driveIngestSkipReason,
 } from '@bike4mind/server-utils/integrations/google/drive/driveIngestLimits';
-import { finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
+import { finalizeBatchIfComplete } from '@bike4mind/server-utils/dataLakes/dataLakeBatchProgress';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
 import mime from 'mime-types';

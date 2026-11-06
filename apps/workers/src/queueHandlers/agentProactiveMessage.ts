@@ -24,7 +24,7 @@ import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import * as agentProactiveMessagingService from '@bike4mind/services/agentProactiveMessagingService';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { canAccessSession } from '@bike4mind/server-utils/utils/sessionAccess';
-import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 
 const agentProactiveMessageQueuePayload = z.object({
   sessionAgentConfigId: z.string(),

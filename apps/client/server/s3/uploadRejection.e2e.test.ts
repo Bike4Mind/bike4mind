@@ -5,12 +5,12 @@ import { FabFile, DataLakeBatchModel, dataLakeBatchRepository } from '@bike4mind
 import { KnowledgeType } from '@bike4mind/common';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { admitLandedUpload, rejectLandedUpload } from '@bike4mind/server-utils/s3/uploadSizeGate';
-import { recordRejectedUploadBatch } from './recordRejectedUploadBatch';
+import { recordRejectedUploadBatch } from '@bike4mind/server-utils/s3/recordRejectedUploadBatch';
 
 const h = vi.hoisted(() => ({ deleteObject: vi.fn(), sendToClient: vi.fn(), finalize: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ delete: h.deleteObject }) }));
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: h.sendToClient }));
-vi.mock('@server/dataLakes/dataLakeBatchProgress', async importOriginal => ({
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeBatchProgress', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   finalizeBatchIfComplete: h.finalize,
 }));

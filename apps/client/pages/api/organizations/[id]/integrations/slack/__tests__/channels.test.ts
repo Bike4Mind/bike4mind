@@ -53,7 +53,7 @@ vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
 }));
 
 const mockRecordAdminAction = vi.fn();
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...a: unknown[]) => mockRecordAdminAction(...a),
 }));
 

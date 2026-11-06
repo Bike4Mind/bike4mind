@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { meterCompletionBackend } from '@bike4mind/services';
 import { UnprocessableEntityError } from '@bike4mind/common';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';

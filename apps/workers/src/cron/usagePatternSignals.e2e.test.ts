@@ -19,7 +19,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   getSettingsMap: h.getSettingsMap,
 }));
-vi.mock('@server/entitlements/activeSubscriptions', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({
   getActiveSubscriptionsForUser: h.getActiveSubscriptionsForUser,
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));

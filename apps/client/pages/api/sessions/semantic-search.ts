@@ -47,7 +47,7 @@ import { apiKeyService, assertOwnerHasCredits, creditService, meterCompletionBac
 import { ReRankService } from '@bike4mind/services/llm/reranker';
 import { SmallLLMService } from '@bike4mind/services/llm/SmallLLMService';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 interface SemanticSearchRequest {
   query: string;

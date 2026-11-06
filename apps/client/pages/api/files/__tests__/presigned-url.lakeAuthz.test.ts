@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ApiKeyScope } from '@bike4mind/common';
-import { FILES_READ_SCOPES } from '@server/files/fileScopes';
+import { FILES_READ_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
 
 /**
  * The real handler's `isAccessible` closure, end to end - presigned-url.moderation.test.ts only

@@ -21,7 +21,7 @@ import {
   LAKE_MEMORY_RATE_LIMIT_WINDOW_MS,
   lakeMemoryRateLimitKey,
 } from '@bike4mind/server-utils/dataLakes/lakeMemoryRateLimit';
-import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { DataLakeAuditEvents, logAuditEvent } from '@bike4mind/server-utils/utils/auditLog';
 import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 
 /**

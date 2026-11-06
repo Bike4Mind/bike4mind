@@ -1,5 +1,5 @@
 import { withEventContext } from '@workers/utils/eventContext';
-import { NotebookCurationEvents } from '@server/utils/eventBus';
+import { NotebookCurationEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { FabFile } from '@bike4mind/database';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { CurationEvents } from '@bike4mind/common';

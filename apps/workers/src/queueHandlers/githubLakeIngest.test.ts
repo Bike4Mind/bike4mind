@@ -53,7 +53,7 @@ vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', as
   getRepository: h.getRepository,
   getBranchHeadSha: h.getBranchHeadSha,
 }));
-vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection', () => ({
   releaseGitHubLakeConnection: h.releaseGitHubLakeConnection,
 }));
 vi.mock('@workers/queueHandlers/githubLakeSlice', () => ({ runGitHubLakeSlice: h.runGitHubLakeSlice }));

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
-import type { AdminSubscriptionsSummary } from '@client/app/utils/adminSubscriptionsFilter';
+import type { AdminSubscriptionsSummary } from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config?: unknown) => {

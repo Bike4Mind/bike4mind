@@ -25,7 +25,7 @@ import {
   isSelfOrImpersonator,
   parseAdminActionReason,
   recordAdminActionFromRequest,
-} from '@server/utils/adminAudit';
+} from '@bike4mind/server-utils/utils/adminAudit';
 
 export const STRIPE_WRITE_CHANGED_MESSAGE = 'This subscription changed. Review and try again.';
 // 24h, matching how long Stripe retains an idempotency key. Set once at claim time and never extended by a rewrite,

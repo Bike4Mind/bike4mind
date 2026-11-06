@@ -32,8 +32,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: (...a: unknown[]) => mockLogAuthAudit(...a) }));
 // parseAdminActionReason and isSameUserId stay real so the 400 is the route's own.
-vi.mock('@server/utils/adminAudit', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: (...a: unknown[]) => mockRecord(...a),
   denySelfAdminAction: (...a: unknown[]) => mockDeny(...a),
 }));

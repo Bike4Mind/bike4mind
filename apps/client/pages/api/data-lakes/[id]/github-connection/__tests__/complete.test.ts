@@ -33,7 +33,7 @@ vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', async importOriginal => 
 vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', () => ({
   getGitHubLakeAppConfig: h.getGitHubLakeAppConfig,
 }));
-vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection', () => ({
   completeGitHubLakeConnection: h.completeGitHubLakeConnection,
   requireGitHubLakeAppConfig: h.requireGitHubLakeAppConfig,
   toGitHubLakeConnectionResponse: h.toGitHubLakeConnectionResponse,

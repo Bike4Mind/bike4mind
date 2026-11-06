@@ -10,7 +10,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { blockedIPRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 // GET: list active blocked IPs (limit=10, max 50)
 // POST: block { ip (address or CIDR range), scope, duration, reason }

@@ -3,7 +3,7 @@ import { BadRequestError, NotFoundError, getSettingsMap, getSettingsValue } from
 import { deleteElevenLabsAgent, getElevenLabsAgent, updateElevenLabsAgent } from '@bike4mind/voice';
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
-import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { definedKeys, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
 
 const UpdateVoiceAgentBodySchema = z.object({

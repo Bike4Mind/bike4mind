@@ -3,7 +3,7 @@ import { emailDomainOf, personalEmailProviders } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { userService } from '@bike4mind/services';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
-import { signupProtection } from '@server/auth/signupProtection';
+import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import { otcEmailKey } from './otcLimits';
 
 const HOUR_MS = 60 * 60 * 1000;

@@ -63,8 +63,8 @@ vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
 }));
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn() }));
 // parseAdminActionReason and isSameUserId stay real; the denied helper records, then throws a 403.
-vi.mock('@server/utils/adminAudit', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>();
   const { ForbiddenError } = await import('@bike4mind/common');
   const record = vi.fn(async () => {
     insideTransactionAtAudit = inTransaction;
@@ -81,8 +81,8 @@ vi.mock('@server/utils/adminAudit', async importOriginal => {
 });
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
-import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { SUBSCRIPTION_PLANS } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import handler from '../grant-subscription';
 

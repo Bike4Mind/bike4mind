@@ -46,7 +46,7 @@ import {
   cacheRepository,
 } from '@bike4mind/database';
 import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
-import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import {
   registerLambdaErrorHandlers,
@@ -80,11 +80,11 @@ import { Permission } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { getUserEntitlements } from '@server/entitlements';
-import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { executionTurnAuth } from '@server/auth/turnAuth';
 import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
-import defineAbilitiesFor from '@server/auth/ability';
+import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
@@ -267,7 +267,7 @@ import { resolveAndPublishMementoCompletion } from '@server/utils/publishMemento
 import { resolveAndBuildMementosPreamble } from '@workers/utils/getFirstIterationMementosPreamble';
 import { resolveExecutionMementoGates } from '@bike4mind/server-utils/utils/resolveExecutionMementoGates';
 import { getFirstIterationSkillsPreamble } from '@workers/utils/getFirstIterationSkillsPreamble';
-import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
+import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
 import { loadAgentMcpTools, type AgentMcpTools } from '@workers/utils/loadAgentMcpTools';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';

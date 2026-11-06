@@ -7,7 +7,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 // The wake deps are assembled inline because buildDefaultWakeDeps lives in
 // apps/workers/src/deepAgent/wakeHandler.ts, which apps/client cannot import.
 import { createReActRunAct, noopRunAct, runWakeCycle, type WakeDeps } from '@bike4mind/agents';
-import '@server/deepAgent/contributedToolbelts';
+import '@bike4mind/server-utils/deepAgent/contributedToolbelts';
 import { enrollDeepAgent } from '@bike4mind/server-utils/deepAgent/enroll';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { LlmWakeSteps } from '@bike4mind/server-utils/deepAgent/llmSteps';
@@ -15,7 +15,7 @@ import { createDeepAgentToolMaterializer } from '@server/deepAgent/toolMateriali
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 import { loadLinkedAgentContext } from '@bike4mind/server-utils/deepAgent/missions';
 import { bridgeWakeToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
-import { resolveThinkingVisibilityForUserId } from '@server/utils/thinkingVisibility';
+import { resolveThinkingVisibilityForUserId } from '@bike4mind/server-utils/utils/thinkingVisibility';
 
 /**
  * POST /api/deep-agent/spin  (admin/dev only)

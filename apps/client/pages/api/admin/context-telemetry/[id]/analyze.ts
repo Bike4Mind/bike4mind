@@ -13,7 +13,7 @@ import {
   type HistoricalBaselines,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import {
   computeHistoricalBaselines,
   generateRuleBasedAnalysis,

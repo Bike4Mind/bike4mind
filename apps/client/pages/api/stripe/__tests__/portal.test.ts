@@ -43,7 +43,7 @@ vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
 
 // Drives the admin-grant branch on the Organization owner path; unreached on the guard tests.
 const mockResolveSubscriptionSource = vi.fn();
-vi.mock('@server/services/organizationService', () => ({
+vi.mock('@bike4mind/server-utils/services/organizationService', () => ({
   resolveSubscriptionSource: (...args: unknown[]) => mockResolveSubscriptionSource(...args),
 }));
 

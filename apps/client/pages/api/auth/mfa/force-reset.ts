@@ -15,7 +15,7 @@ import {
   isSelfOrImpersonator,
   parseAdminActionReason,
   recordAdminActionFromRequest,
-} from '@server/utils/adminAudit';
+} from '@bike4mind/server-utils/utils/adminAudit';
 import * as z from 'zod';
 
 const forceResetBodySchema = z.object({

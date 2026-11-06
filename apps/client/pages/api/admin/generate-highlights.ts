@@ -9,7 +9,7 @@ import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
 import type { WhatsNewHighlightsPayload } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 import { Logger } from '@bike4mind/observability';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import {
   HIGHLIGHTS_NOTE_LIMIT,
   loadHighlightsReleaseNotes,

@@ -15,7 +15,7 @@ import {
 import { baseApi } from '@server/middlewares/baseApi';
 import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
 import { admitPendingUploads } from '@server/files/pendingUploads';
-import { createFabFile } from '@server/managers/fabFileManager';
+import { createFabFile } from '@bike4mind/server-utils/managers/fabFileManager';
 import {
   adminSettingsRepository,
   dataLakeBatchRepository,
@@ -41,7 +41,7 @@ import { Request } from 'express';
 import { Resource } from 'sst';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
-import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
+import { FILES_WRITE_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
 
 const s3Client = createS3Client();
 const EXPIRES = 600; // 10 minutes

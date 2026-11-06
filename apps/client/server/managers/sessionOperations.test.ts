@@ -62,7 +62,7 @@ import {
   getMessagesFromSession,
 } from './sessionOperations';
 import { publishSummarizeSession, publishContextSummarizeSession } from './sessionSideEffects';
-import type { Ability } from '@server/auth/ability';
+import type { Ability } from '@bike4mind/server-utils/auth/ability';
 import type { IChatHistoryItem } from '@bike4mind/common';
 
 // Typed casts keep the intended types visible (and catch drift) without real Mongoose docs.

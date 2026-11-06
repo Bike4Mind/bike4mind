@@ -89,8 +89,8 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: credits.withTransaction,
 }));
 vi.mock('@bike4mind/database/social', () => ({ groupRepository: {} }));
-vi.mock('@server/entitlements/partnerRules', () => ({ invalidatePartnerRuleCache: vi.fn() }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({ invalidatePartnerRuleCache: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   parseAdminActionReason: (value: unknown) => String(value),
   recordAdminActionFromRequest: credits.recordAdminAction,
 }));

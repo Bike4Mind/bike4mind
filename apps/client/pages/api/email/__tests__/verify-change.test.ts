@@ -19,7 +19,7 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 // logAuditEvent writes a CounterLog row; an own email change must never reach it.
 const mockLogAuditEvent = vi.fn();
-vi.mock('@server/utils/auditLog', () => ({
+vi.mock('@bike4mind/server-utils/utils/auditLog', () => ({
   logAuditEvent: (...a: unknown[]) => mockLogAuditEvent(...a),
   calculateTokenAge: vi.fn(() => 0),
 }));

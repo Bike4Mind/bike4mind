@@ -6,7 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { IPartnerSignupRuleDocument } from '@bike4mind/common';
-import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import { SUBSCRIPTION_PLANS } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 
 const api = vi.hoisted(() => ({
   fetchPartnerSignupRules: vi.fn(),

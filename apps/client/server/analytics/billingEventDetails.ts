@@ -2,7 +2,7 @@ import type Stripe from 'stripe';
 import { paymentAttemptRepository, userRepository } from '@bike4mind/database';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { SubscriptionOwnerType, type ISubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
+import { getEntitlingPlanByPriceId } from '@bike4mind/server-utils/lib/userSubscriptions/utils';
 
 // What the billing events in signupEvents.ts carry and who they are about, kept apart from it so
 // the emitter does not import the plan catalogue or the database. Overwatch's

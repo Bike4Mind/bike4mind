@@ -23,7 +23,7 @@ vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessage
 vi.mock('@server/integrations/slack/subscriptionLifecycle', () => ({ adminOwnerSlackRef: () => 'user' }));
 // vitest.setup.ts mocks sst without a websocket resource; extend that mock rather than replace it.
 Object.assign(Resource, { websocket: { managementEndpoint: 'wss://ws.example.com' } });
-vi.mock('@client/lib/userSubscriptions/constants', () => ({
+vi.mock('@bike4mind/server-utils/lib/userSubscriptions/constants', () => ({
   SUBSCRIPTION_PLANS: [],
   SUBSCRIPTION_PLANS_MAP: {},
   TEAM_PLAN: { priceId: 'price_team', tier: 2 },

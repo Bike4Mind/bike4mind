@@ -7,7 +7,7 @@ import { consumeGitHubLakeAuthGrant } from '@bike4mind/server-utils/integrations
 import {
   authorizeGitHubLakeConnection,
   requireGitHubLakeAppConfig,
-} from '@server/integrations/github/dataLake/githubLakeConnection';
+} from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
 import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { Request } from 'express';

@@ -2,7 +2,7 @@ import {
   SUBSCRIPTION_STATUS_FILTERS,
   type AdminSubscriptionsSummary,
   type SubscriptionStatusFilter,
-} from '@client/app/utils/adminSubscriptionsFilter';
+} from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { matchSavedView, type SavedViewValues } from '../shared/matchSavedView';
 import {
   CLEARED_FILTER_PARAMS,
@@ -29,7 +29,7 @@ const NOT_TERMINAL: SubscriptionStatusFilter[] = SUBSCRIPTION_STATUS_FILTERS.fil
 );
 
 /**
- * Must stay in sync with viewConditions in server/admin/subscriptionsList/subscriptionViewConditions.ts,
+ * Must stay in sync with viewConditions in packages/server-utils/src/admin/subscriptionsList/subscriptionViewConditions.ts,
  * whose counts label these tabs, and with the views table in docs/admin-subscriptions-spec.md 5.1.
  */
 export const SUBSCRIPTIONS_BUILT_IN_VIEWS: readonly SubscriptionsBuiltInView[] = [

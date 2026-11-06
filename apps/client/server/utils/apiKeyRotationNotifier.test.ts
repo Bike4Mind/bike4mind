@@ -8,7 +8,7 @@ vi.mock('@bike4mind/services', () => ({
   userApiKeyService: { notifyApiKeyReowned: h.notifyApiKeyReowned },
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: h.users }));
-vi.mock('./mailer', () => ({ default: { kind: 'mailer' } }));
+vi.mock('@bike4mind/server-utils/utils/mailer/index', () => ({ default: { kind: 'mailer' } }));
 
 import { notifyApiKeyRotationReown } from './apiKeyRotationNotifier';
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 const { release } = vi.hoisted(() => ({ release: vi.fn<() => Promise<{ failed: number }>>() }));
-vi.mock('@server/referrals/subscriptionReward', () => ({ releaseDueSubscriptionRewards: release }));
+vi.mock('@bike4mind/server-utils/referrals/subscriptionReward', () => ({ releaseDueSubscriptionRewards: release }));
 
 import { registerReferralRewardRelease } from './referralRewardRelease';
 import type { SelfHostWorker } from './selfHostWorker';

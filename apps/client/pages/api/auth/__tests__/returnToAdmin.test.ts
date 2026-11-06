@@ -53,7 +53,7 @@ const mockFindBySid = vi.fn();
 const mockEndConnections = vi.fn();
 const mockUserFindById = vi.fn();
 const mockEndImpersonation = vi.fn();
-vi.mock('@server/auth/impersonation', () => ({
+vi.mock('@bike4mind/server-utils/auth/impersonation', () => ({
   endImpersonation: (...args: unknown[]) => mockEndImpersonation(...args),
 }));
 vi.mock('@bike4mind/database', () => ({

@@ -43,7 +43,7 @@ vi.mock('@server/auth/signInSecondFactor', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 const mockRecordForActor = vi.fn();
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionForActor: (...a: unknown[]) => mockRecordForActor(...a),
   systemAuditActor: (name: string) => ({ kind: 'system', scope: 'platform', name, wasAdmin: false }),
   toUserActor: (user: { id: string }, scope: string) => ({ kind: 'user', scope, userId: user.id }),

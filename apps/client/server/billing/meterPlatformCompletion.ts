@@ -47,7 +47,7 @@ import { assertApiKeyOrgMembership } from '@bike4mind/server-utils/billing/asser
 import { persistedIsAdmin } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { recordPaidPlanRefusal } from '@server/billing/userLimitEvents';
 import { getUserEntitlements } from '@server/entitlements';
-import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
+import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 import {
   reserveRequestCredits,
   resolveRequestBillingOrgId,

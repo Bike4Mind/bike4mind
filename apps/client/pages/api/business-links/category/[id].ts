@@ -5,7 +5,7 @@ import { ResearchLinkCategory } from '@bike4mind/database/content';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
-import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { definedKeys, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
 
 interface IParams {

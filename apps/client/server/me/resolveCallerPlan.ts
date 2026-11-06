@@ -1,6 +1,6 @@
 import type { MeSubscription, MeTier } from '@bike4mind/common';
 import { SubscriptionOwnerType, type ISubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
+import { getEntitlingPlanByPriceId } from '@bike4mind/server-utils/lib/userSubscriptions/utils';
 import { SubscriptionPlanInterval, UserSubscriptionTier } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import { resolveSubscriptionCycleCredits } from '@bike4mind/server-utils/lib/userSubscriptions/cycleCredits';
 

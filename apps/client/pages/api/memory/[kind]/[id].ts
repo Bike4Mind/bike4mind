@@ -34,7 +34,7 @@ import { createPersonaAgentMemoryStore } from '@server/memory/personaAgentMemory
 import { createUserMementoMemoryStore } from '@bike4mind/server-utils/memory/userMementoMemoryStore';
 import { createLakeMemberSourcesResolver } from '@bike4mind/server-utils/memory/lakeSourceReachability';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { DataLakeAuditEvents, logAuditEvent } from '@bike4mind/server-utils/utils/auditLog';
 import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 import type { EntitlementRequest } from '@server/entitlements';
 

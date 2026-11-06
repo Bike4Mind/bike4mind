@@ -35,7 +35,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: audit.record,
   userAuditTarget: async (id: string) => {
     const user = await mockUserFindById(id);

@@ -35,7 +35,7 @@ const mockFindByOrganizationId = vi.fn();
 const mockWorkspaceDelete = vi.fn();
 const mockClearApiPosting = vi.fn();
 const mockRecordAudit = vi.fn();
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...args: unknown[]) => mockRecordAudit(...args),
 }));
 vi.mock('@bike4mind/database/infra', () => ({

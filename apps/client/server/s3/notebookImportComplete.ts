@@ -24,7 +24,7 @@ import { moderateImportedKnowledgeFiles } from '@bike4mind/server-utils/s3/moder
 import { chargeStampedKnowledgeStorage, stampImportedKnowledgeRows } from '@bike4mind/server-utils/s3/storageCharge';
 import { buildKnowledgeModerationDeps } from '@server/s3/knowledgeModerationDeps';
 import { withContext } from '@bike4mind/server-utils/s3/utils';
-import { createOwnedArtifactSourceRefsGuard } from '@server/utils/artifactSourceRefsGuards';
+import { createOwnedArtifactSourceRefsGuard } from '@bike4mind/server-utils/utils/artifactSourceRefsGuards';
 import type { ClientSession, FilterQuery } from 'mongoose';
 import type {
   IArtifactContentDocument,

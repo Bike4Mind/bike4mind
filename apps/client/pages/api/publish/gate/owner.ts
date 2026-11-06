@@ -4,7 +4,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { z } from 'zod';
 import { PublishedArtifact, shareTokenFilter } from '@bike4mind/database';
 import { parsePublishPath, segmentsFromViewerPathname } from '@server/services/publish/parsePublishPath';
-import { setGateProofCookie } from '@server/services/publish/publishGateToken';
+import { setGateProofCookie } from '@bike4mind/server-utils/services/publish/publishGateToken';
 
 /**
  * POST /api/publish/gate/owner - mint the passphrase proof cookie for a viewer the gate would

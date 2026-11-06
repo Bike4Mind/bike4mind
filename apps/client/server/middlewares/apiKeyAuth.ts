@@ -11,13 +11,13 @@ import { UnauthorizedError, ForbiddenError } from '@bike4mind/server-utils/utils
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
-import ability from '@server/auth/ability';
+import ability from '@bike4mind/server-utils/auth/ability';
 import { Request, Response, NextFunction } from 'express';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
 import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
-import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
+import { extractApiKeyFromHeaders } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 import { createHash } from 'crypto';
 import type { z } from 'zod';
 import {
@@ -29,7 +29,7 @@ import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAcc
 import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
 import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
 import { apiKeyGrantsAdmin, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
-import { resolveUntrustedKeyLimits } from '@server/utils/apiKeyTrust';
+import { resolveUntrustedKeyLimits } from '@bike4mind/server-utils/utils/apiKeyTrust';
 
 type ScopeForbiddenDetail = Pick<z.infer<typeof ScopeForbiddenErrorSchema>, 'required_scopes' | 'also_required_scopes'>;
 

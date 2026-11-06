@@ -11,7 +11,7 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import { creditService, organizationService } from '@bike4mind/services';
 import { entitlementsForEmail, signupCreditsForKeys } from '@bike4mind/server-utils/lib/entitlements/registry';
-import { partnerSignupGrantForEmail } from '@server/entitlements/partnerRules';
+import { partnerSignupGrantForEmail } from '@bike4mind/server-utils/entitlements/partnerRules';
 import { grantIndividualAdminSubscription } from '@server/subscriptions/grantIndividualAdminSubscription';
 import { runPartnerSignupHooks, type PartnerSignupRuleMatch } from '@server/entitlements/partnerSignupHooks';
 import { pushEntitlementInvalidation, pushSubscriptionsInvalidation } from '@server/entitlements/invalidate';

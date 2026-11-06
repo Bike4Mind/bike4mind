@@ -4,7 +4,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { Request } from 'express';
 import Stripe from 'stripe';
-import { minorUnitsPerMajor } from '@server/integrations/stripe/currency';
+import { minorUnitsPerMajor } from '@bike4mind/server-utils/integrations/stripe/currency';
 
 /**
  * GET /api/subscriptions/checkout-session?id=cs_...

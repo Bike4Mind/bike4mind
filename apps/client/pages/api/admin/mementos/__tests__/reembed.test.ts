@@ -40,7 +40,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 const mockAudit = vi.hoisted(() => vi.fn().mockResolvedValue(null));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
 let userIdPage: Array<{ _id: string }> = [];
 const mockAggregate = vi.fn(() => Promise.resolve(userIdPage));

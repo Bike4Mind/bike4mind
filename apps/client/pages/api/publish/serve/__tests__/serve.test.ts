@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { VIEWER_SANDBOX } from '@server/services/publish/viewerSecurity';
+import { VIEWER_SANDBOX } from '@bike4mind/server-utils/services/publish/viewerSecurity';
 
 const {
   mockArtifactFindOne,
@@ -1883,7 +1883,7 @@ describe('GET /api/publish/serve - access gates (issue #383)', () => {
   });
 
   it('a valid per-artifact proof cookie unlocks the gated bundle - served like a gated (non-public) page', async () => {
-    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    const { signGateToken } = await import('@bike4mind/server-utils/services/publish/publishGateToken');
     mockArtifactFindOne.mockReturnValue(passphraseGated());
     mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Secret page</h1></body></html>'));
 
@@ -1905,7 +1905,7 @@ describe('GET /api/publish/serve - access gates (issue #383)', () => {
   });
 
   it('a proof for a DIFFERENT artifact does not unlock (re-prompts instead)', async () => {
-    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    const { signGateToken } = await import('@bike4mind/server-utils/services/publish/publishGateToken');
     mockArtifactFindOne.mockReturnValue(passphraseGated());
 
     const token = signGateToken({ publicId: 'someOtherArtifact' });
@@ -2019,7 +2019,7 @@ describe('GET /api/publish/serve - access gates on /a/<shareToken> links', () =>
   });
 
   it('passphrase-gated share link WITH proof serves, inlining assets (proof cookie cannot ride opaque-origin fetches)', async () => {
-    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    const { signGateToken } = await import('@bike4mind/server-utils/services/publish/publishGateToken');
     mockArtifactFindOne.mockReturnValue(
       bundle({
         accessGate: { kind: 'passphrase' },
@@ -2075,7 +2075,7 @@ describe('GET /api/publish/serve - access gates on /a/<shareToken> links', () =>
     });
 
     it('serves it once the proof cookie is presented', async () => {
-      const { signGateToken } = await import('@server/services/publish/publishGateToken');
+      const { signGateToken } = await import('@bike4mind/server-utils/services/publish/publishGateToken');
       mockArtifactFindOne.mockReturnValue(privateShared());
       mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Private</h1></body></html>'));
 
@@ -2916,7 +2916,7 @@ describe('GET /api/publish/serve - export affordances on the viewer surfaces (is
   });
 
   it('offers the links on a passphrase-verified page - the proof cookie rides the navigation', async () => {
-    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    const { signGateToken } = await import('@bike4mind/server-utils/services/publish/publishGateToken');
     mockArtifactFindOne.mockReturnValue(publicReply({ accessGate: { kind: 'passphrase' } }));
     const { res, promise } = run(['r', 'rexp'], { cookie: `b4m_pg_rexp=${signGateToken({ publicId: 'rexp' })}` });
     await promise;
@@ -3432,7 +3432,7 @@ describe('GET /api/publish/serve - multi-page bundles', () => {
   const gated = (over: Record<string, unknown> = {}) =>
     bundle({ accessGate: { kind: 'passphrase' }, manifest: PAGES, commentPolicy: 'open', ...over });
   const proofCookie = async () => {
-    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    const { signGateToken } = await import('@bike4mind/server-utils/services/publish/publishGateToken');
     return `b4m_pg_pub1=${signGateToken({ publicId: 'pub1' })}`;
   };
   const storage: Record<string, string> = {
@@ -3588,7 +3588,7 @@ describe('GET /api/publish/serve - signed file delivery', () => {
   const gated = (over: Record<string, unknown> = {}) =>
     bundle({ accessGate: { kind: 'passphrase' }, manifest: FILES, ...over });
   const proofCookie = async () => {
-    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    const { signGateToken } = await import('@bike4mind/server-utils/services/publish/publishGateToken');
     return `b4m_pg_pub1=${signGateToken({ publicId: 'pub1' })}`;
   };
   const signedKey = (url: string) => new URL(url).pathname.slice(1);
@@ -3776,7 +3776,7 @@ describe('GET /api/publish/serve - signed file delivery', () => {
   });
 
   it('caps media links in a gated render at the remaining proof lifetime', async () => {
-    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    const { signGateToken } = await import('@bike4mind/server-utils/services/publish/publishGateToken');
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
@@ -4018,7 +4018,7 @@ describe('GET /api/publish/serve - owner-only thumbnails never reach a served pa
     bundle({ thumbnail: { key: THUMB_KEY, versionId: THUMB_VERSION, renderedAt: new Date() }, ...over });
 
   const proofCookie = async () => {
-    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    const { signGateToken } = await import('@bike4mind/server-utils/services/publish/publishGateToken');
     return `b4m_pg_pub1=${signGateToken({ publicId: 'pub1' })}`;
   };
 

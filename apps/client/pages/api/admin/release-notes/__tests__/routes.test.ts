@@ -55,7 +55,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/database/infra', () => ({
   AdminSettings: { findOneAndUpdate: m.upsert, findOne: () => ({ lean: () => m.findSetting() }) },
 }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: m.audit,
   definedKeys: (data: Record<string, unknown>) => Object.keys(data).filter(key => data[key] !== undefined),
 }));

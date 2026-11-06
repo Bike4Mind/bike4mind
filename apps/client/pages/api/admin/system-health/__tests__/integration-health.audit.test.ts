@@ -29,7 +29,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
 vi.mock('@bike4mind/database', () => ({
   INTEGRATION_HEALTH_INTEGRATIONS: ['github', 'slack'],

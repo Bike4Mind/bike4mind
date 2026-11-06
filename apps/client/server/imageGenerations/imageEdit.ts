@@ -26,7 +26,7 @@ import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
 import type { IUserDocument } from '@bike4mind/common';
 import { Resource } from 'sst';
-import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 import { imageCreditHolds } from '@server/billing/imageCreditHolds';
 
 let _imageEdit: ImageEditService | undefined;

@@ -24,12 +24,12 @@ vi.mock('@server/admin/subscriptionsList/listAdminSubscriptions', () => ({
   OWNER_SEARCH_LIMIT: 500,
   MISMATCH_ID_LIMIT: 5000,
 }));
-vi.mock('@client/app/utils/adminSubscriptionsFilter', async importOriginal => ({
-  ...(await importOriginal<typeof import('@client/app/utils/adminSubscriptionsFilter')>()),
+vi.mock('@bike4mind/server-utils/app/utils/adminSubscriptionsFilter', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/app/utils/adminSubscriptionsFilter')>()),
   ADMIN_SUBSCRIPTIONS_EXPORT_MAX_ROWS: 1000,
 }));
 
-import type { AdminSubscriptionRow } from '@client/app/utils/adminSubscriptionsFilter';
+import type { AdminSubscriptionRow } from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import handler from '../export';
 
 const ADMIN = { id: 'a'.repeat(24), isAdmin: true };

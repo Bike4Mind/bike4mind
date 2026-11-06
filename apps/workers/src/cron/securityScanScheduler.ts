@@ -22,7 +22,7 @@ import {
 } from '@bike4mind/server-utils/integrations/github/githubWorkflowTrigger';
 import { handler as runCloudScan } from '@bike4mind/server-utils/security/cloudScan';
 import { calculateNextRunTime } from '@bike4mind/server-utils/utils/scheduleCalculator';
-import { logAuditEvent, AdminConfigAuditEvents } from '@server/utils/auditLog';
+import { logAuditEvent, AdminConfigAuditEvents } from '@bike4mind/server-utils/utils/auditLog';
 
 interface ScanResult {
   scanType: SecurityScanType;

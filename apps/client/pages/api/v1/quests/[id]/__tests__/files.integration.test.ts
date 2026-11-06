@@ -15,13 +15,13 @@ const { mockValidate, mockFindUser, mockRateLimit, mockListByQuest } = vi.hoiste
   mockListByQuest: vi.fn(),
 }));
 
-vi.mock('@server/utils/apiKeyTrust', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
   resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
     rateLimit: key.rateLimit,
     ownerUntrusted: false,
   }),
 }));
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));

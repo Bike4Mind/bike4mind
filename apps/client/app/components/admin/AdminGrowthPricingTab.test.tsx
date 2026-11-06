@@ -3,7 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
-import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@client/lib/userSubscriptions/constants';
+import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 
 // Read at render time, so a test can seed the stored platform rows.
 let serverSettings: { settingName: string; settingValue: unknown }[] | undefined = [];

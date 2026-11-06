@@ -32,7 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => db);
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 
 import '@pages/api/admin/oauth-clients/index';
 

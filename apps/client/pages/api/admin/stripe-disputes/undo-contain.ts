@@ -8,7 +8,7 @@ import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
 import { usersBulkUndoDeps } from '@server/admin/usersBulk/adapters';
 import { SUPERSEDED_MESSAGE } from '@server/admin/usersBulk/undo';
 import { DisputeContainUndoRefused, undoDisputeContain } from '@server/billing/stripeDisputes';
-import { parseAdminActionReason } from '@server/utils/adminAudit';
+import { parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
 import { respond } from '@server/utils/respond';
 
 const ONE_MINUTE_MS = 60_000;

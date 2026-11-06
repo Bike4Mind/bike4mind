@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { isSlackUserValidationError } from '@bike4mind/server-utils/integrations/slack/slackExportErrors';
 import { withTransaction } from '@bike4mind/database';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
  * POST /api/admin/slack-app/create

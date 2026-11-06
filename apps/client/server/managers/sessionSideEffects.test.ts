@@ -44,7 +44,7 @@ vi.mock('sst', () => ({
   Resource: { websocket: { managementEndpoint: 'wss://mgmt' } },
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   SessionEvents: {
     Summarize: { publish: summarizePublish },
     ContextSummarize: { publish: contextSummarizePublish },
@@ -62,7 +62,7 @@ import {
 import { ClientMessageSender } from '@bike4mind/utils';
 import { ActivityType } from '@bike4mind/server-utils/config/activityType';
 import type { ISessionDocument } from '@bike4mind/common';
-import type { Ability } from '@server/auth/ability';
+import type { Ability } from '@bike4mind/server-utils/auth/ability';
 import type { Logger } from '@bike4mind/observability';
 
 // Typed mock factories: `Partial<ISessionDocument>` gives field-name checking, so a

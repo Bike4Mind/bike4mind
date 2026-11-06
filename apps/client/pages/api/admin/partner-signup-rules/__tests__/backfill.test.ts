@@ -54,7 +54,7 @@ vi.mock('@server/organizations/notifySeatCeilingRaised', () => ({ auditSeatCeili
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postMessageToSlack: vi.fn(async () => undefined),
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import '@pages/api/admin/partner-signup-rules/backfill';
 

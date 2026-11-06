@@ -7,7 +7,7 @@ import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
 import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const paramsSchema = z.object({
   id: z.string().min(1),

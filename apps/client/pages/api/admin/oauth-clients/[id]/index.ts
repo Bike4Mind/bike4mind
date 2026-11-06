@@ -1,6 +1,6 @@
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { updateOAuthClient } from '@bike4mind/database';
 import { ApiKeyScope, updateOAuthClientSchema } from '@bike4mind/common';
 

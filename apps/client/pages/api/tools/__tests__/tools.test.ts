@@ -22,14 +22,14 @@ const { mockResolveTrust, mockValidate, mockUserFindById, mockKeyRateLimit, mock
 
 const USER = { id: 'user-1', _id: 'user-1', username: 'jules', tokenVersion: 0, isBanned: false };
 
-vi.mock('@server/utils/apiKeyTrust', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
   resolveApiKeyTrust: (...a: unknown[]) => mockResolveTrust(...a),
   resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
     rateLimit: key.rateLimit,
     ownerUntrusted: false,
   }),
 }));
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockKeyRateLimit(...a),
 }));

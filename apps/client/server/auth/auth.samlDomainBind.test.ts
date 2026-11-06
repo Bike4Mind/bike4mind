@@ -19,7 +19,7 @@ vi.mock('@bike4mind/database/infra', () => ({
   secretRotationRepository: { findBySecretName: vi.fn() },
 }));
 // auth.ts pulls in the CASL ability, which drags the whole Mongoose model graph behind it.
-vi.mock('@server/auth/ability', () => ({ default: vi.fn() }));
+vi.mock('@bike4mind/server-utils/auth/ability', () => ({ default: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { GOOGLE_CLIENT_ID: '', GITHUB_CLIENT_ID: '', JWT_SECRET: 'test-secret' },
 }));

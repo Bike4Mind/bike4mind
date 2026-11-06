@@ -75,7 +75,7 @@ const lakeConfigAuditPrincipal = vi.hoisted(() => vi.fn(() => keyPrincipal as un
 vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPrincipal }));
 
 const invalidatePartnerRuleCache = vi.hoisted(() => vi.fn());
-vi.mock('@server/entitlements/partnerRules', () => ({ invalidatePartnerRuleCache }));
+vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({ invalidatePartnerRuleCache }));
 
 const findActiveSubscriptionsByOwner = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 vi.mock('@bike4mind/server-utils/models/Subscription', () => ({

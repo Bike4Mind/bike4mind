@@ -112,7 +112,7 @@ vi.mock('@bike4mind/server-utils/integrations/google/drive/common', () => ({
   disableDriveConnectionForLake: h.disableDriveConnectionForLake,
   enableDriveConnectionForLake: h.enableDriveConnectionForLake,
 }));
-vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection', () => ({
   disableGitHubConnectionForLake: h.disableGitHubConnectionForLake,
   enableGitHubConnectionForLake: h.enableGitHubConnectionForLake,
 }));

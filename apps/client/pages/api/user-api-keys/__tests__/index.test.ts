@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
 import { createMocks } from 'node-mocks-http';
 
 const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
@@ -116,11 +118,11 @@ vi.mock('@bike4mind/server-utils/premium-generated/premiumApiKeyScopes.generated
   ],
 }));
 const resolveApiKeyTrust = vi.hoisted(() => vi.fn().mockResolvedValue({ assessment: { status: 'trusted' } }));
-vi.mock('@server/utils/apiKeyTrust', () => ({ resolveApiKeyTrust }));
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({ resolveApiKeyTrust }));
 
 import { CreditHolderType } from '@bike4mind/common';
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
-import { requestRiskEvidenceRefresh } from '@server/auth/riskEvidence';
+import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 import '@pages/api/user-api-keys/index';
 
 function post(body: unknown, opts: { isAdmin?: boolean } = {}) {

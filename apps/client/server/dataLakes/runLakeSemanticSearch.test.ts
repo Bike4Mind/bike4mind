@@ -67,7 +67,7 @@ vi.mock('@bike4mind/utils', () => ({
 }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
 const activePlanResolver = vi.hoisted(() => ({ hasActivePlan: vi.fn() }));
-vi.mock('@server/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
 vi.mock('@bike4mind/server-utils/dataLakes/requestMembership', () => ({ getRequestMembershipOrgIds: async () => [] }));
 vi.mock('@bike4mind/server-utils/dataLakes/resolveAuditPrincipal', () => ({ resolveAuditPrincipal: () => ({}) }));
 

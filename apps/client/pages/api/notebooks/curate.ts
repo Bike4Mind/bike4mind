@@ -1,11 +1,11 @@
-import { NotebookCurationEvents } from '@server/utils/eventBus';
+import { NotebookCurationEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { sessionRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { assertRequestCanAfford } from '@server/billing/meterPlatformCompletion';
 import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
 import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
-import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
+import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 import { NotebookCurateRequestSchema } from '../../../types/api';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';

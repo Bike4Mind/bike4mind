@@ -46,7 +46,7 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
     delete = h.deleteObject;
   },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 vi.mock('sst', () => ({ Resource: { appFilesBucket: { name: 'bucket' } } }));
 vi.mock('@server/utils/browserUploadUrl', () => ({
   resolveBrowserAppFileUploadUrl: (_id: string, url: string) => url,

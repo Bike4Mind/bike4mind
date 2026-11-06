@@ -6,7 +6,7 @@ import { ApiKeyScope, BadRequestError, CliCompletionChunkAction, TooManyRequests
 import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
-import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { Connection } from '@bike4mind/database/social';
 import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
@@ -19,7 +19,7 @@ vi.mock('@server/billing/freeTierDailyCapGate', () => ({
   checkFreeTierDailySpendCap: mockCheckFreeTierDailySpendCap,
 }));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
-vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     info = vi.fn();

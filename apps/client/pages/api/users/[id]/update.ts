@@ -45,7 +45,7 @@ import {
   parseAdminActionReason,
   readAdminActionReason,
   recordAdminActionFromRequest,
-} from '@server/utils/adminAudit';
+} from '@bike4mind/server-utils/utils/adminAudit';
 
 const idParamSchema = z.object({ id: z.string() });
 

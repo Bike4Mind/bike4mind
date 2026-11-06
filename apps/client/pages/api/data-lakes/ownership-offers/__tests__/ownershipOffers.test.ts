@@ -54,7 +54,7 @@ vi.mock('@bike4mind/database', () => ({
   lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   adminSettingsRepository: {},
 }));
-vi.mock('@server/utils/mailer', () => ({ default: { sendEmail: h.sendEmail } }));
+vi.mock('@bike4mind/server-utils/utils/mailer/index', () => ({ default: { sendEmail: h.sendEmail } }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
 import offersHandler from '../index';

@@ -43,7 +43,7 @@ vi.mock('@client/server/agents/systemPromptRateLimit', async importOriginal => (
   ...(await importOriginal<typeof import('@client/server/agents/systemPromptRateLimit')>()),
   assertSystemPromptGenerationAllowed: vi.fn(),
 }));
-vi.mock('@server/moderation/imageModerationIncidents', () => ({ imageModerationIncidents: {} }));
+vi.mock('@bike4mind/server-utils/moderation/imageModerationIncidents', () => ({ imageModerationIncidents: {} }));
 vi.mock('@bike4mind/services/llm/imageModerationGate', () => ({ moderateImageOrThrow: vi.fn() }));
 vi.mock('@server/help/retrieval', () => ({ searchHelpContext: vi.fn() }));
 vi.mock('@server/middlewares/perUserRateLimit', () => ({

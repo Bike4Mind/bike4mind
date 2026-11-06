@@ -51,7 +51,7 @@ vi.mock('sst', () => ({
 // Passthrough so the raw handler runs without connectDB / Config; this test owns the connection.
 vi.mock('@workers/utils/eventContext', () => ({ withEventContext: (fn: unknown) => fn }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   SessionEvents: {
     Tag: { schema: { parse: (properties: unknown) => properties }, publish: vi.fn() },
     Summarize: { publish: vi.fn() },

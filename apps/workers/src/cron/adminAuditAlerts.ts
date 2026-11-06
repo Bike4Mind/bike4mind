@@ -18,7 +18,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { getSettingsMap, getSettingsValue, postMessageToSlack } from '@bike4mind/utils';
 import { Resource } from 'sst';
 import type { Request } from 'express';
-import { reconcileExpiredImpersonations } from '@server/auth/impersonation';
+import { reconcileExpiredImpersonations } from '@bike4mind/server-utils/auth/impersonation';
 
 const logger = new Logger({ metadata: { service: 'adminAuditAlerts' } });
 

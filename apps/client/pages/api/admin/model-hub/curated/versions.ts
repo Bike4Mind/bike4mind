@@ -9,7 +9,7 @@ import {
 import { Config, isDeployedStage } from '@bike4mind/server-utils/utils/config';
 import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { adminApi } from '@server/middlewares/adminApi';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 // Real lists are a few KB. A list near the 4 MiB cap, escaped into JSON and again into the Lambda event, may not
 // fit the 6 MB request cap.

@@ -2,9 +2,9 @@ import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { MailService, type TestEmailResult } from '@server/utils/mailer';
+import { MailService, type TestEmailResult } from '@bike4mind/server-utils/utils/mailer/index';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
 
 const TestEmailSchema = z.object({

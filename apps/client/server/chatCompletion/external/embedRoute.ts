@@ -64,7 +64,7 @@ import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@bike4mind/serve
 import { extractBearer, resolveEmbedSessionToken } from '@server/embed/resolveEmbedSessionToken';
 import { reauthorizeIdentifiedSession } from '@server/embed/identifiedEmbedUser';
 import { resolveEmbedOriginDecision } from '@server/embed/firstPartyOrigin';
-import { checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
+import { checkApiKeyRateLimit } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 import { checkEmbedSessionRateLimit } from '@server/utils/embedSessionRateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
 import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';

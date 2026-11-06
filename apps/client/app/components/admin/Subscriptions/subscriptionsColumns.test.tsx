@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { ReactNode } from 'react';
 import { describe, expect, it } from 'vitest';
-import type { AdminSubscriptionRow } from '@client/app/utils/adminSubscriptionsFilter';
+import type { AdminSubscriptionRow } from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { subscriptionsColumns } from './subscriptionsColumns';
 

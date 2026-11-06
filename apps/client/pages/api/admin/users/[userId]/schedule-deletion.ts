@@ -7,7 +7,7 @@ import {
   isSelfOrImpersonator,
   parseAdminActionReason,
   recordAdminActionFromRequest,
-} from '@server/utils/adminAudit';
+} from '@bike4mind/server-utils/utils/adminAudit';
 import { scheduleAccountDeletion } from '@server/users/accountDeletion';
 
 const DAY_MS = 24 * 60 * 60 * 1000;

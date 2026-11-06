@@ -56,7 +56,7 @@ const create = vi.hoisted(() =>
 vi.mock('@bike4mind/services', () => ({ organizationService: { search, create } }));
 vi.mock('@bike4mind/database', () => ({ organizationRepository: {}, userRepository: {} }));
 const audit = vi.hoisted(() => vi.fn(async () => null));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit }));
 
 import '@pages/api/organizations/index';
 

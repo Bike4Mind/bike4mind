@@ -3,7 +3,7 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { ApiKeyScope, MEMENTO_EMBEDDING_ID } from '@bike4mind/common';
 import { Memento } from '@bike4mind/database';
 import { reembedMementosForUser } from '@server/memory/reembedMementos';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
  * Admin-only, dry-run-by-default repair for V1 mementos left in a pre-pin embedding space (see

@@ -2,7 +2,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import { resolveConsent } from '@client/app/utils/consentRegion';
 import { checkoutSurfaceParam, trackBeginCheckout, type UpsellSurface } from '@client/app/utils/funnelEvents';
-import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
+import { SUBSCRIPTION_PLANS_MAP } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { ISubscription, SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionPlanSchema } from '@bike4mind/server-utils/lib/userSubscriptions/schemas';
 import { IUserSubscription } from '@bike4mind/server-utils/lib/userSubscriptions/types';

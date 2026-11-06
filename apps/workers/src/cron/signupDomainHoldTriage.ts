@@ -47,7 +47,7 @@ export const TRIAGE_BATCH_LIMIT = 200;
 
 const RULE_POLICY: SignupDomainHoldAutoPolicy = 'disposable-aggregate-rule';
 
-// Same shape as systemAuditActor() in apps/client/server/utils/adminAudit.ts.
+// Same shape as systemAuditActor() in packages/server-utils/src/utils/adminAudit.ts.
 const SYSTEM_ACTOR: AuditActor = {
   kind: 'system',
   scope: 'platform',

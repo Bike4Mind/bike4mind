@@ -7,7 +7,7 @@
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { adminSettingsRepository, sreErrorTrackingRepository, cacheRepository } from '@bike4mind/database';
 import { SreAgentConfigSchema, getConfiguredRepoSlugs, resolveFullConfig } from '@bike4mind/common';

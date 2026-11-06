@@ -8,7 +8,7 @@ import {
   type PrincipalCursor,
 } from '@bike4mind/database';
 import { migrateLedgerVectorsForPrincipal } from '@server/memory/reembedMementos';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
  * Admin-only, dry-run-by-default repair for LEDGER vectors: backfills events written without one and

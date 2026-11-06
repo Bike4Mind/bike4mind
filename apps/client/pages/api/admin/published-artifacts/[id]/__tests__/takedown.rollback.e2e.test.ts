@@ -13,7 +13,7 @@ import { PublishedArtifact, PublishedArtifactReport } from '@bike4mind/database'
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const audit = vi.hoisted(() => ({ record: vi.fn() }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: audit.record,
   userAuditTarget: async (id: string) => ({ kind: 'user', id, displayName: id }),
 }));

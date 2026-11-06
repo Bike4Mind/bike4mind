@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CreditHolderType, ForbiddenError, OAUTH_DEVICE_CLIENT_IDS, settingsMap } from '@bike4mind/common';
-import type { ActiveSubscriptionsRequest } from '@server/entitlements/activeSubscriptions';
+import type { ActiveSubscriptionsRequest } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 
 const { getSettingsMapMock, findActiveUserSubscriptions, findActiveSubscriptionsByOwners, findPlanHolderOrgIds } =
   vi.hoisted(() => {
@@ -35,7 +35,7 @@ const setMode = (mode: string | undefined) =>
   getSettingsMapMock.mockResolvedValue(mode === undefined ? {} : { apiKeyAccess: mode });
 
 let gate: typeof import('@server/utils/apiKeyAccessGate');
-let plans: typeof import('@client/lib/userSubscriptions/constants');
+let plans: typeof import('@bike4mind/server-utils/lib/userSubscriptions/constants');
 
 beforeEach(async () => {
   vi.resetModules();
@@ -47,7 +47,7 @@ beforeEach(async () => {
   findPlanHolderOrgIds.mockResolvedValue([]);
   findActiveSubscriptionsByOwners.mockResolvedValue([]);
   gate = await import('@server/utils/apiKeyAccessGate');
-  plans = await import('@client/lib/userSubscriptions/constants');
+  plans = await import('@bike4mind/server-utils/lib/userSubscriptions/constants');
 });
 
 afterEach(() => {
@@ -179,7 +179,7 @@ describe('isApiKeyAccessAllowed', () => {
     req.user = USER as Express.User;
     const { resolveUserRateTier } = await import('./userRateTier');
     expect(await resolveUserRateTier(USER, req)).toBe('basic');
-    const { getRequestActiveSubscriptions } = await import('@server/entitlements/activeSubscriptions');
+    const { getRequestActiveSubscriptions } = await import('@bike4mind/server-utils/entitlements/activeSubscriptions');
     expect(await getRequestActiveSubscriptions(req)).toBe(req.activeSubscriptions);
     expect(await gate.isApiKeyAccessAllowed(USER, undefined, req)).toBe(true);
     expect(findActiveUserSubscriptions).toHaveBeenCalledTimes(1);

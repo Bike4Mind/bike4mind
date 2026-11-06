@@ -14,7 +14,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@bike4mind/database', () => ({ FeedbackModel: {}, User: {}, adminSettingsRepository: {} }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postFeedbackToSlack: vi.fn() }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(),
   getSettingsValue: (key: string, settings: Record<string, string>) => settings[key],

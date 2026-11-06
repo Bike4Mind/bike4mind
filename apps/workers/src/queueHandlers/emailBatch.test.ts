@@ -32,7 +32,7 @@ vi.mock('@bike4mind/database', () => ({
   subscriberRepository: { findById: vi.fn() },
 }));
 
-vi.mock('@server/utils/mailer', () => ({
+vi.mock('@bike4mind/server-utils/utils/mailer/index', () => ({
   default: { sendEmail: vi.fn() },
 }));
 

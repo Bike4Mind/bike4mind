@@ -7,7 +7,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { User } from '@bike4mind/database';
-import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import { SUBSCRIPTION_PLANS } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { grantIndividualAdminSubscription } from './grantIndividualAdminSubscription';
 

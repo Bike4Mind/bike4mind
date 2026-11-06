@@ -5,9 +5,12 @@ import {
   type RevenueSnapshotMrr,
 } from '@bike4mind/database';
 import { SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
-import type { AdminRevenueTotals } from '@client/app/utils/adminRevenue';
-import { addUtcDays, utcDayStart } from '@client/app/utils/adminRevenue';
-import { MRR_CURRENCY, type AdminSubscriptionsMrrTotal } from '@client/app/utils/adminSubscriptionsFilter';
+import type { AdminRevenueTotals } from '@bike4mind/server-utils/app/utils/adminRevenue';
+import { addUtcDays, utcDayStart } from '@bike4mind/server-utils/app/utils/adminRevenue';
+import {
+  MRR_CURRENCY,
+  type AdminSubscriptionsMrrTotal,
+} from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import {
   billedGroupStages,
@@ -15,8 +18,11 @@ import {
   mrrTotal,
   mrrTotalsBy,
   type MrrGroup,
-} from '../subscriptionsList/subscriptionMrr';
-import { cancelCondition, viewConditions } from '../subscriptionsList/subscriptionViewConditions';
+} from '@bike4mind/server-utils/admin/subscriptionsList/subscriptionMrr';
+import {
+  cancelCondition,
+  viewConditions,
+} from '@bike4mind/server-utils/admin/subscriptionsList/subscriptionViewConditions';
 
 /**
  * Revenue totals per docs/admin-subscriptions-spec.md section 5.3, shared by GET /api/admin/revenue and the

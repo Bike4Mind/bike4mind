@@ -40,7 +40,7 @@ import {
 import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { embedTexts, encodeEmbeddingBase64 } from '@server/embeddings/embedTexts';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
+import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 
 // Cached per container, so it gets a neutral logger: a request's logger would pin that request's context.
 let sharedTokenizer: ITokenizer | undefined;

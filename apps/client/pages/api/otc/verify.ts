@@ -1,6 +1,6 @@
 import { issueSessionForRequest } from '@server/auth/issueSession';
 import { blockedSignInMessage } from '@server/auth/blockedSignIn';
-import { signupProtection } from '@server/auth/signupProtection';
+import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import {
   AuthEvents,
   HTTPError,
@@ -57,8 +57,8 @@ import { createSignupGrantRiskCollector } from '@bike4mind/server-utils/auth/sig
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
-import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
-import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
+import { readConsentedAcquisitionTouches } from '@bike4mind/server-utils/analytics/acquisition';
+import { emitSignupForSourceProducts } from '@bike4mind/server-utils/analytics/signupEvents';
 import { emitEmailVerifiedFunnelEvents, emitFunnelEvent, recordSignupAcquisition } from '@server/analytics/funnel';
 import { readVisitId } from '@server/analytics/visitSession';
 import jwt from 'jsonwebtoken';
@@ -66,7 +66,7 @@ import { randomUUID } from 'crypto';
 import * as z from 'zod';
 import { selfUserResponseSchema } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
-import { recordAdminActionForActor, systemAuditActor } from '@server/utils/adminAudit';
+import { recordAdminActionForActor, systemAuditActor } from '@bike4mind/server-utils/utils/adminAudit';
 
 interface PendingTokenPayload {
   email: string;

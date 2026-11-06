@@ -99,7 +99,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: vi.fn() }));
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   StripeEvents: { CustomerSubscriptionUpdated: { publish: mocks.publishSubscriptionUpdated } },
 }));
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
@@ -133,12 +133,14 @@ vi.mock('@server/billing/paymentRisk', () => ({
 }));
 vi.mock('@server/billing/earlyFraudWarning', () => ({ respondToEarlyFraudWarning: vi.fn() }));
 vi.mock('@server/billing/linkedAccounts', () => ({ propagateAccountRisk: vi.fn() }));
-vi.mock('@server/analytics/signupEvents', () => ({
+vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({
   emitPurchaseEvents: vi.fn(),
   emitBillingEvent: mocks.emitBillingEvent,
 }));
 const { reverseReward } = vi.hoisted(() => ({ reverseReward: vi.fn() }));
-vi.mock('@server/referrals/subscriptionReward', () => ({ reverseSubscriptionRewardForRefund: reverseReward }));
+vi.mock('@bike4mind/server-utils/referrals/subscriptionReward', () => ({
+  reverseSubscriptionRewardForRefund: reverseReward,
+}));
 const { reverseStanding } = vi.hoisted(() => ({ reverseStanding: vi.fn() }));
 vi.mock('@server/billing/purchaseReversal', () => ({ reversePurchaseStanding: reverseStanding }));
 vi.mock('@server/billing/paymentFailureNotice', () => ({

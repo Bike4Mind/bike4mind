@@ -34,7 +34,7 @@ import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { cliCompletionErrorFields } from '@server/utils/errorSanitization';
 import { ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { getUserEntitlements } from '@server/entitlements';
-import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@server/utils/untrustedCompletionQuota';
 import { recordUserLimitEvent } from '@server/billing/userLimitEvents';

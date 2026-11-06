@@ -2,7 +2,7 @@ import { emailJobRepository } from '@bike4mind/database';
 import { ApiKeyScope, EmailJobStatus } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const handler = adminApi({
   adminPermissions: { POST: 'settings:manage' },

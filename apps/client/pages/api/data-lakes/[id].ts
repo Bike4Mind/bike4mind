@@ -23,7 +23,7 @@ import { respond } from '@server/utils/respond';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { isSessionActivatablePromptId } from '@bike4mind/server-utils/utils/sessionActivatablePrompts';
 import { disableDriveConnectionForLake } from '@bike4mind/server-utils/integrations/google/drive/common';
-import { disableGitHubConnectionForLake } from '@server/integrations/github/dataLake/githubLakeConnection';
+import { disableGitHubConnectionForLake } from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
 
 // The canonical single READ gate observes the read-time grant cutover (#1673): its assertLakeAccess
 // call is wired with the settings repo + a logger, so a persisted reader grant resolves into the

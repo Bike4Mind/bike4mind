@@ -35,7 +35,9 @@ const mockSendToQueue = vi.fn();
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => mockSendToQueue(...a) }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'dev' }, whatsNewHighlightsQueue: { url: 'https://queue' } } }));
 const mockAudit = vi.fn();
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: (...a: unknown[]) => mockAudit(...a) }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...a: unknown[]) => mockAudit(...a),
+}));
 
 import handler from '../generate-highlights';
 import { HIGHLIGHTS_NOTE_LIMIT } from '@bike4mind/server-utils/whatsNew/releaseNoteHighlights';

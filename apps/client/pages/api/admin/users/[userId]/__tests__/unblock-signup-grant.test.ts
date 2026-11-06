@@ -30,7 +30,7 @@ vi.mock('@bike4mind/database', () => ({
   heldCreditRewardRepository: h.rewards,
 }));
 vi.mock('@bike4mind/services', () => ({ userService: { unblockSignupGrant: h.unblock } }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   denySelfAdminAction: h.denySelf,
   isSelfOrImpersonator: (user: { id: string; impersonatedBy?: string }, targetId: string) =>
     [user.id, user.impersonatedBy].some(id => id?.toLowerCase() === targetId.toLowerCase()),

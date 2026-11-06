@@ -20,7 +20,7 @@ import type { IUserRepository, RiskEvidenceCoverage } from '@bike4mind/common';
 import { connectDB, userRepository } from '@bike4mind/database';
 import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { requestRiskEvidenceRefresh } from '@server/auth/riskEvidence';
+import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 import { RISK_EVIDENCE_NAMESPACE, RiskEvidenceMetrics } from '@workers/queueHandlers/riskEvidence';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { Resource } from 'sst';

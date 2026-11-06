@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { FILES_READ_SCOPES } from '@server/files/fileScopes';
+import { FILES_READ_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { Request } from 'express';

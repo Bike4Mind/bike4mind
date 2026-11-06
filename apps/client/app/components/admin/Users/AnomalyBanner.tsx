@@ -1,4 +1,4 @@
-import type { SignupAnomalySnapshot } from '@client/app/utils/signupAnomaly';
+import type { SignupAnomalySnapshot } from '@bike4mind/server-utils/app/utils/signupAnomaly';
 import { AnomalyBanner as SharedAnomalyBanner } from '../shared/AnomalyBanner';
 
 function headline(snapshot: SignupAnomalySnapshot): string {

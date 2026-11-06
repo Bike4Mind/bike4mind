@@ -35,7 +35,9 @@ vi.mock('@client/server/tools/modalImageHandler', () => ({
 vi.mock('@server/utils/cacheExternalImage', () => ({ cacheExternalImage: vi.fn() }));
 
 const mockAudit = vi.fn();
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: (...a: unknown[]) => mockAudit(...a) }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...a: unknown[]) => mockAudit(...a),
+}));
 
 import handler from '../execute';
 

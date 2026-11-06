@@ -69,7 +69,7 @@ vi.mock('@bike4mind/database/auth', () => ({
 }));
 
 const mockRecordAdminAction = vi.hoisted(() => vi.fn().mockResolvedValue(null));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...a: unknown[]) => mockRecordAdminAction(...a),
 }));
 

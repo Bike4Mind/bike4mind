@@ -43,7 +43,7 @@ vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import { Logger } from '@bike4mind/observability';
 import handler from '../index';

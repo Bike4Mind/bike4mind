@@ -111,7 +111,7 @@ vi.mock('@bike4mind/database', () => ({
   User: { findById: vi.fn(async () => ({ id: 'u1' })) },
   withTransaction: vi.fn((fn: () => unknown) => fn()),
 }));
-vi.mock('@server/managers/fabFileManager', () => ({ getVector: h.getVector }));
+vi.mock('@bike4mind/server-utils/managers/fabFileManager', () => ({ getVector: h.getVector }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
   embeddingCacheService: { getEmbedding: h.getEmbedding, setEmbedding: vi.fn().mockResolvedValue(undefined) },
@@ -135,8 +135,8 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@server/billing/reserveRequestCredits', () => ({ reserveRequestCredits: h.reserveRequestCredits }));
 const activePlanResolver = vi.hoisted(() => ({ hasActivePlan: vi.fn() }));
-vi.mock('@server/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
-vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: vi.fn(),
   completedBatchStatus: vi.fn(),
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),

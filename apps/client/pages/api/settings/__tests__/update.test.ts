@@ -31,7 +31,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 const recordAdminActionFromRequest = vi.fn();
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...args: unknown[]) => {
     order.push('record');
     return recordAdminActionFromRequest(...args);

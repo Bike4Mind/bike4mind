@@ -15,12 +15,12 @@ import {
   addMessageToSession,
   getDefaultSession,
 } from '@server/managers/sessionManager';
-import defineAbilitiesFor from '@server/auth/ability';
+import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 import { isAvailable } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
 import { recordRateLimitEvent } from '@bike4mind/server-utils/utils/cloudwatch';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
-import { LLMEvents } from '@server/utils/eventBus';
-import { buildMcpEnvVariables } from '@server/utils/mcpEnv';
+import { LLMEvents } from '@bike4mind/server-utils/utils/eventBus';
+import { buildMcpEnvVariables } from '@bike4mind/server-utils/utils/mcpEnv';
 
 import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';

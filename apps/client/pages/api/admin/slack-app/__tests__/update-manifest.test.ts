@@ -37,7 +37,7 @@ vi.mock('@bike4mind/slack', () => ({
   extractBaseUrl: () => 'https://example.com',
   isSlackUserValidationError: () => false,
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import handler from '../update-manifest';
 

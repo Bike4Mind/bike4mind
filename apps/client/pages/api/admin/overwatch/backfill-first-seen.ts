@@ -4,7 +4,7 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { User, OverwatchUserFirstSeen } from '@bike4mind/database';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const BATCH_SIZE = 500;
 const PRODUCT_ID = 'bike4mind';

@@ -2,7 +2,9 @@ vi.mock('@server/auth/withAccountNotPurging', () => ({
   withAccountNotPurging: async (_id: string, write: () => Promise<unknown>) => write(),
 }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
 import { createMocks } from 'node-mocks-http';
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -15,7 +17,9 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
-vi.mock('@server/analytics/signupEvents', () => ({ emitSignupForSourceProducts: vi.fn().mockResolvedValue([]) }));
+vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({
+  emitSignupForSourceProducts: vi.fn().mockResolvedValue([]),
+}));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
   isE2EEnabled: () => false,
@@ -57,7 +61,7 @@ vi.mock('jsonwebtoken', () => ({
   default: { verify: (...a: any[]) => mockJwtVerify(...a), sign: (...a: any[]) => mockJwtSign(...a) },
 }));
 
-vi.mock('@server/entitlements/partnerRules', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({
   partnerSignupGrantForEmail: vi.fn(() =>
     Promise.resolve({ matched: false, entitlements: new Set(), signupCredits: 0 })
   ),

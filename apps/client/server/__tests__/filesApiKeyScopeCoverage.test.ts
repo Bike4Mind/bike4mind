@@ -5,7 +5,7 @@ import path from 'path';
 import { extractRequiredScopesGate, methodBlocks, stripComments, tsFiles } from './scopeCoverageHelpers';
 
 /**
- * Every `/api/files` door gates API keys on a files scope (server/files/fileScopes.ts). Before
+ * Every `/api/files` door gates API keys on a files scope (packages/server-utils/src/files/fileScopes.ts). Before
  * this guard, the family was scoped door by door and most doors were missed, so a key minted
  * without `files:*` could still upload and read through a sibling. A source scan, not a runtime
  * test: nothing at runtime fails when a new door simply omits `requiredScopes`.
@@ -60,7 +60,10 @@ describe('every /api/files door gates API keys on a files scope', () => {
   it.each(routes)('%s', (relPath, file) => {
     const rawSource = readFileSync(file, 'utf8');
     const gate = extractRequiredScopesGate(rawSource, 'FILES');
-    expect(gate, 'declare baseApi({ requiredScopes: FILES_*_SCOPES }) from @server/files/fileScopes').toBeDefined();
+    expect(
+      gate,
+      'declare baseApi({ requiredScopes: FILES_*_SCOPES }) from @bike4mind/server-utils/files/fileScopes'
+    ).toBeDefined();
 
     const expectedGate = EXPECTED_GATES[relPath];
     expect(

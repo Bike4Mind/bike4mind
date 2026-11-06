@@ -2,7 +2,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { userRepository, withTransaction } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { userService } from '@bike4mind/services';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   generateVerificationLink,
@@ -10,8 +10,8 @@ import {
   buildEmailLogoImg,
   escapeHtml,
 } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
-import { logAuditEvent, EmailAuditEvents } from '@server/utils/auditLog';
-import { MailService } from '@server/utils/mailer';
+import { logAuditEvent, EmailAuditEvents } from '@bike4mind/server-utils/utils/auditLog';
+import { MailService } from '@bike4mind/server-utils/utils/mailer/index';
 
 // Requires authentication - users resend verification to themselves
 const handler = baseApi({ auth: true })

@@ -83,7 +83,7 @@ vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAcces
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: h.storageDelete }),
 }));
-vi.mock('@server/utils/auditLog', () => ({
+vi.mock('@bike4mind/server-utils/utils/auditLog', () => ({
   logAuditEvent: h.logAuditEvent,
   DataLakeAuditEvents: { LAKE_DOCUMENT_PURGED: 'LAKE_DOCUMENT_PURGED' },
 }));

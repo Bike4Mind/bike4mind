@@ -6,7 +6,7 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { securityScanScheduleRepository, SECURITY_SCAN_TYPES, SecurityScanType } from '@bike4mind/database';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { calculateNextRunTime } from '@bike4mind/server-utils/utils/scheduleCalculator';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
 
 // Production schedule: Every Sunday at 2:00 AM UTC

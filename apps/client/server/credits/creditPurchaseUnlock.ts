@@ -1,4 +1,4 @@
-import { unlockSignupGrantFromPayment } from './subscriptionUnlock';
+import { unlockSignupGrantFromPayment } from '@bike4mind/server-utils/credits/subscriptionUnlock';
 
 /**
  * Releases the whole remaining signup grant once the user has bought a credit pack, held for

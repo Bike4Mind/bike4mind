@@ -17,7 +17,7 @@ import {
   getAllBreakerStates,
   resetBreaker,
 } from '@bike4mind/server-utils/services/mcpCircuitBreakers';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { recordIntegrationProbe } from '@server/utils/integrationProbeAudit';
 
 const handler = adminApi({

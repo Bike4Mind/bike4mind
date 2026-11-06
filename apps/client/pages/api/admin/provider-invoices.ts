@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { providerInvoiceRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';

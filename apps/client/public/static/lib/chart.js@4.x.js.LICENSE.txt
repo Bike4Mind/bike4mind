@@ -1,7 +1,7 @@
 Third-party license notices for the vendored chart.js@4.x.js bundle.
 
 This file is the blessed Chart.js library served at /static/lib/chart.js@4.x.js
-(see BLESSED_SCRIPT_PATHS in apps/client/server/services/publish/validateBundle.ts).
+(see BLESSED_SCRIPT_PATHS in packages/server-utils/src/services/publish/validateBundle.ts).
 It is the Chart.js v4.5.1 UMD build, which statically bundles @kurkle/color.
 Both are distributed under the MIT License; their full notices follow.
 

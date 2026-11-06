@@ -6,7 +6,7 @@ import {
 
 /**
  * Preset reasons per audited action. A preset alone is a complete reason, so every label must
- * satisfy the shared `adminActionReason` rule unchanged; `adminAudit.test.ts` pins that against
+ * satisfy the shared `adminActionReason` rule unchanged; `adminReason.test.ts` pins that against
  * the server's `parseAdminActionReason`.
  */
 export const ADMIN_REASON_PRESETS = {

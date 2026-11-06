@@ -14,7 +14,7 @@ import omit from 'lodash/omit';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { type NetworkRequest, readNetworkMeta } from '@server/auth/networkMeta';
 import { isSignupNetworkOverLimit } from '@server/auth/signupNetworkLimits';
-import { signupProtection } from '@server/auth/signupProtection';
+import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import { applyEmailVerifiedGrants, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
 import { wasTurnstileVerified } from '@server/auth/signupChallenge';
 import { readOAuthInviteCode } from '@server/auth/passportOAuthStateStore';

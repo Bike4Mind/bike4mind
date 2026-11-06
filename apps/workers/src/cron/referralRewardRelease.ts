@@ -11,7 +11,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import {
   releaseDueSubscriptionRewards,
   type ReleaseSubscriptionRewardsResult,
-} from '@server/referrals/subscriptionReward';
+} from '@bike4mind/server-utils/referrals/subscriptionReward';
 import { Resource } from 'sst';
 
 export async function handler(): Promise<ReleaseSubscriptionRewardsResult> {

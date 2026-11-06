@@ -1,8 +1,11 @@
 import { useMemo, useState } from 'react';
 import { Button, Dropdown, Menu, MenuButton, MenuItem, Stack } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
-import { SUBSCRIPTION_STATUS_FILTERS, UNKNOWN_PLAN_FILTER } from '@client/app/utils/adminSubscriptionsFilter';
-import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@client/lib/userSubscriptions/constants';
+import {
+  SUBSCRIPTION_STATUS_FILTERS,
+  UNKNOWN_PLAN_FILTER,
+} from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
+import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { AdminSearchInput } from '../shared/FilterBar';
 import { FilterChip, type FilterChipOption } from '../shared/FilterChip';
 import { adminFocus, adminFocusScope } from '../shared/adminStyles';

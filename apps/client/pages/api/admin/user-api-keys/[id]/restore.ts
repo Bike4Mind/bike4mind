@@ -4,7 +4,7 @@ import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { auditKeyRef, loadApiKeyOrThrow, ownerAuditTarget, readApiKeyIdParam } from '@server/utils/adminApiKeyActions';
 
 /**

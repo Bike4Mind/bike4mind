@@ -20,7 +20,7 @@ const { mockGetOperationsModel, mockRefineText, mockFindByKey, mockCreateOrUpdat
   })
 );
 
-vi.mock('@server/utils/apiKeyTrust', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
   resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
     rateLimit: key.rateLimit,
     ownerUntrusted: false,
@@ -34,7 +34,7 @@ vi.mock('@bike4mind/services/llm/refineText', async orig => ({
   ...(await orig<typeof import('@bike4mind/services/llm/refineText')>()),
   refineText: (...a: unknown[]) => mockRefineText(...a),
 }));
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig =>
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig =>
   (await import('@server/generations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
 );
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', async () =>

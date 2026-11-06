@@ -4,7 +4,11 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { Cache, cacheRepository } from '@bike4mind/database';
-import { buildRateLimitKeys, checkApiKeyRateLimit, resetApiKeyRateLimit } from './apiKeyRateLimitCheck';
+import {
+  buildRateLimitKeys,
+  checkApiKeyRateLimit,
+  resetApiKeyRateLimit,
+} from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
 // hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).

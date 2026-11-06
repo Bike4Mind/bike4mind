@@ -45,7 +45,7 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({ systemPromptRepository: h.repo }));
 vi.mock('@bike4mind/server-utils/utils/systemPrompts/defaults', () => ({ getDefaultSystemPrompts: h.defaults }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import indexHandler from '../index';
 import promptHandler from '../[promptId]';

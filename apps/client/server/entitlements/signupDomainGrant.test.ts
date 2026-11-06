@@ -38,7 +38,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 const mockPartnerGrant = vi.fn();
-vi.mock('@server/entitlements/partnerRules', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({
   partnerSignupGrantForEmail: (...a: unknown[]) => mockPartnerGrant(...a),
 }));
 

@@ -11,8 +11,8 @@ import {
   isSelfOrImpersonator,
   loadCreditGrantPolicy,
   recordAdminActionFromRequest,
-} from '@server/utils/adminAudit';
-import { buildHeldGrantAdapters, heldGrantBatches } from '@server/credits/heldSignupGrantAdapters';
+} from '@bike4mind/server-utils/utils/adminAudit';
+import { buildHeldGrantAdapters, heldGrantBatches } from '@bike4mind/server-utils/credits/heldSignupGrantAdapters';
 
 const bodySchema = z.object({
   userIds: z

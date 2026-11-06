@@ -30,7 +30,7 @@ vi.mock('@bike4mind/database', () => ({
   SupportAccess: { findOneAndUpdate: h.record },
   withTransaction: async (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   parseAdminActionReason: (reason: unknown) => {
     if (typeof reason !== 'string' || reason.trim().length < 5 || reason.length > 500)
       throw new Error('Invalid reason');

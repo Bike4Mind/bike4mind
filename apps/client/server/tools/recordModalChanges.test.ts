@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Request } from 'express';
 
 const audit = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit }));
 
 import { recordModalChanges } from './recordModalChanges';
 

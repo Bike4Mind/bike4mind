@@ -3,7 +3,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { EmailDomainGroup } from '@client/app/utils/signupAnomaly';
+import type { EmailDomainGroup } from '@bike4mind/server-utils/app/utils/signupAnomaly';
 import { DomainGroupHeader } from './DomainGroupHeader';
 
 const theme = extendTheme({ ...getThemeConfig() });

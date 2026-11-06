@@ -4,7 +4,7 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { withTransaction } from '@bike4mind/database';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
  * POST /api/admin/slack-app/reconnect

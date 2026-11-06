@@ -9,7 +9,7 @@ import {
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { KnowledgeType, Permission } from '@bike4mind/common';
 import { FabFile, User } from '@bike4mind/database';
-import defineAbilitiesFor from '@server/auth/ability';
+import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 

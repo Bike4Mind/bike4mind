@@ -6,7 +6,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { PublishedArtifact, PublishedArtifactReport, withTransaction } from '@bike4mind/database';
 import { invalidatePublishCdn, toCacheTarget } from '@server/services/publish';
-import { recordAdminActionFromRequest, userAuditTarget } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest, userAuditTarget } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
  * Admin takedown / restore for a public page.

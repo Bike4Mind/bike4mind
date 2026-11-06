@@ -17,7 +17,7 @@ import { priceAffectsEntitlements } from '@server/entitlements/paidStanding';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
 import { Resource } from 'sst';
 import { randomUUID } from 'crypto';

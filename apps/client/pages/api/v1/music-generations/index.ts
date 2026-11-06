@@ -28,7 +28,7 @@ import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrg
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
 import { toPublicMusicGeneration } from '@server/musicGenerations/toPublicMusicGeneration';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 const CURSOR_SCOPE = 'v1.music-generations';
 

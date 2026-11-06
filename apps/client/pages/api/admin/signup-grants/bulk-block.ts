@@ -4,7 +4,7 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { readBulkSignupGrantAction } from '@server/credits/bulkSignupGrantAdminAction';
 import { signupGrantAuditTarget } from '@server/credits/signupGrantAdminAction';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:adjust' } })
   .use(csrfProtection())

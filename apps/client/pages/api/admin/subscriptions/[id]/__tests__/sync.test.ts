@@ -57,7 +57,7 @@ vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   },
   Subscription: { findById: () => ({ lean: mocks.modelFindById }) },
 }));
-vi.mock('@server/services/organizationService', () => ({ setSeats: mocks.setSeats }));
+vi.mock('@bike4mind/server-utils/services/organizationService', () => ({ setSeats: mocks.setSeats }));
 vi.mock('@server/admin/subscriptionsList/listAdminSubscriptions', () => ({ toAdminSubscriptionRows: mocks.toRows }));
 vi.mock('@server/admin/subscriptionsList/adminSubscriptionsQuery', () => ({ subscriptionPlanCatalog: () => ({}) }));
 
@@ -77,8 +77,8 @@ function fail(prop: string | symbol): never {
   throw new Error(`Stripe write or unexpected call: ${String(prop)}`);
 }
 
-vi.mock('@server/utils/adminAudit', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>();
   const { ForbiddenError } = await import('@bike4mind/common');
   return {
     ...actual,

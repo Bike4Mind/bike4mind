@@ -23,7 +23,7 @@ vi.mock('@bike4mind/services', () => ({
   userService: { recalculateUserStorage: (...a: unknown[]) => mockRecalculate(...a) },
 }));
 
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...a: unknown[]) => mockRecordAdminAction(...a),
 }));
 

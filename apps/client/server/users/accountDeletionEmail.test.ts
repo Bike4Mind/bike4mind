@@ -3,7 +3,7 @@ import { ACCOUNT_DELETION_RETAINED_RECORDS } from '@bike4mind/common';
 import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 
 const publish = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish } } }));
 const config = vi.hoisted(() => ({ SUPPORT_EMAIL: 'not-configured' }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: config }));
 

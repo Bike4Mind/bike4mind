@@ -24,7 +24,7 @@ vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), warn: vi.f
 vi.mock('@bike4mind/database', () => ({
   sreErrorPatternRepository: { findById: h.findById, update: h.update },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import handler from '../[id]';
 

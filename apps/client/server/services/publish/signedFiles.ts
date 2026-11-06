@@ -1,6 +1,6 @@
-import { GATE_TOKEN_TTL_SECONDS } from './publishGateToken';
-import { PUBLISH_HOST } from './validateBundle';
-import { isUsercontentHost } from './viewerSecurity';
+import { GATE_TOKEN_TTL_SECONDS } from '@bike4mind/server-utils/services/publish/publishGateToken';
+import { PUBLISH_HOST } from '@bike4mind/server-utils/services/publish/validateBundle';
+import { isUsercontentHost } from '@bike4mind/server-utils/services/publish/viewerSecurity';
 
 /**
  * Publish - how bundle files reach the browser without going through the serve Lambda.

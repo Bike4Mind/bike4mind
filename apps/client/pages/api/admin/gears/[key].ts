@@ -1,6 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { GearOverride } from '@bike4mind/database';
 
 /** DELETE /api/admin/gears/[key] - clear an override, reverting the gear to

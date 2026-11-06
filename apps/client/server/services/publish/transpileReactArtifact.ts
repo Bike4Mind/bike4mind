@@ -14,7 +14,7 @@ import {
   ARTIFACT_MODULE_RUNTIME_FACTORY_SRC,
   createArtifactModuleResolver,
 } from '@client/app/utils/reactArtifactModules';
-import { PUBLISH_HOST } from './validateBundle';
+import { PUBLISH_HOST } from '@bike4mind/server-utils/services/publish/validateBundle';
 
 /**
  * Publish-time React transpiler (issue #21): converts a single-file React/JSX artifact into a

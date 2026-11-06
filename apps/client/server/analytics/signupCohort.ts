@@ -8,7 +8,7 @@ import {
   parseSyntheticDomainList,
 } from '@bike4mind/common';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
-import type { SignupSignal } from '@client/app/utils/signupSignals';
+import type { SignupSignal } from '@bike4mind/server-utils/app/utils/signupSignals';
 import { classifySignups, SPIKE_BASELINE_HOURS, type SignupCandidate } from '../users/signupClassifier';
 import { countByBucket, loadCandidates } from '../users/signupTimeseries';
 

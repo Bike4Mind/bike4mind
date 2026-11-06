@@ -1,5 +1,5 @@
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
-import { revokeGitHubLakeConnection } from '@server/integrations/github/dataLake/githubLakeConnection';
+import { revokeGitHubLakeConnection } from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
 import { ConflictError } from '@bike4mind/server-utils/utils/errors';
 import { z, ZodError } from 'zod';
 

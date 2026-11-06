@@ -1,9 +1,11 @@
 vi.mock('@server/auth/withAccountNotPurging', () => ({
   withAccountNotPurging: async (_id: string, write: () => Promise<unknown>) => write(),
 }));
-import { signupProtection } from '@server/auth/signupProtection';
+import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
 import { createMocks } from 'node-mocks-http';
 import {
   BadRequestError,
@@ -41,7 +43,7 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
-vi.mock('@server/analytics/signupEvents', () => ({
+vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({
   emitSignupForSourceProducts: (...a: any[]) => mockEmitSignup(...a),
 }));
 const mockRecordSignupAcquisition = vi.fn().mockResolvedValue({ isSynthetic: false });
@@ -100,7 +102,7 @@ const mockJwtVerify = vi.fn();
 const mockJwtSign = vi.hoisted(() => vi.fn((..._a: unknown[]) => 'signed-token'));
 const mockSetThrottleTier = vi.fn();
 const mockRecordAdminActionForActor = vi.fn();
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionForActor: (...a: unknown[]) => mockRecordAdminActionForActor(...a),
   systemAuditActor: (name: string) => ({ kind: 'system', scope: 'platform', name, wasAdmin: false }),
 }));
@@ -111,7 +113,7 @@ vi.mock('jsonwebtoken', () => ({
 // DB-backed partner rules (issue #293). Default to "no rule" so the base cases fall
 // through to the env registry; DB-precedence cases set a match.
 const mockPartnerGrant = vi.fn();
-vi.mock('@server/entitlements/partnerRules', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({
   partnerSignupGrantForEmail: (...a: any[]) => mockPartnerGrant(...a),
 }));
 // Identity redactor: the response schema alone has to drop secrets from the login/registration bodies.

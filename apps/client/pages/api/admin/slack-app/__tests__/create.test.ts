@@ -38,7 +38,9 @@ vi.mock('@bike4mind/database/infra', () => ({
 }));
 
 const mockAudit = vi.fn();
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: (...a: unknown[]) => mockAudit(...a) }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...a: unknown[]) => mockAudit(...a),
+}));
 vi.mock('@bike4mind/database', () => ({ withTransaction: (fn: () => Promise<unknown>) => fn() }));
 
 import '../create';

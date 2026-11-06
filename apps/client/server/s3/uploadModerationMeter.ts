@@ -10,7 +10,7 @@ import type { Logger } from '@bike4mind/observability';
 import { recordOperationalUsage } from '@bike4mind/services';
 import { REKOGNITION_MODERATION_USD_PER_CALL } from '@bike4mind/utils/imageModeration';
 import type { ModerateUploadedFileArgs } from '@bike4mind/server-utils/s3/moderateUploadedFile';
-import { activePlanResolver } from '@server/entitlements/activeSubscriptions';
+import { activePlanResolver } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 import { reserveImageModerationCalls } from '@server/s3/imageModerationBudget';
 
 /**

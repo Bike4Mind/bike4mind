@@ -34,7 +34,7 @@ vi.mock('@bike4mind/services', () => ({
   sessionService: { createSession: h.createSession },
   userApiKeyService: { loadApiKeyTrustSettings: h.trustSettings },
 }));
-vi.mock('@server/utils/apiKeyTrust', () => ({ resolveApiKeyTrust: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({ resolveApiKeyTrust: vi.fn() }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn().mockResolvedValue({}),
   getSettingsValue: (name: string) => ({ voiceV2Enabled: true, elevenLabsServerApiKey: 'el-key' })[name],

@@ -10,14 +10,14 @@ import {
 } from '@bike4mind/common';
 import { adminSettingsRepository, User, userRepository } from '@bike4mind/database';
 import type { AcquisitionTouches } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
-import { readConsentedAcquisitionTouches } from './acquisition';
+import { readConsentedAcquisitionTouches } from '@bike4mind/server-utils/analytics/acquisition';
 import { bindSignupHop } from './hops';
 import { emitProductEvent, HOST_PRODUCT_ID } from '@bike4mind/server-utils/analytics/emitActiveEvent';
 import { laneMetadata } from '@bike4mind/server-utils/analytics/lane';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
-import { stableEventId } from './signupEvents';
+import { stableEventId } from '@bike4mind/server-utils/analytics/signupEvents';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
-import { rewardInviterForFirstAnswer } from '@server/referrals/firstAnswerReward';
+import { rewardInviterForFirstAnswer } from '@bike4mind/server-utils/referrals/firstAnswerReward';
 
 // Server half of the funnel instrumentation. The client half (begin_checkout, upsell_*) is
 // app/utils/funnelEvents.ts. Users flagged isSynthetic are handled differently by each: the client

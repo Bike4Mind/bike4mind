@@ -16,7 +16,7 @@ import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { z } from 'zod';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sreErrorTrackingRepository, cacheRepository, DISMISSABLE_STATUSES } from '@bike4mind/database';
 import { SRE_DEFAULT_REPO_SLUG } from '@bike4mind/common';

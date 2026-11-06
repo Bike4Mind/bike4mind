@@ -16,7 +16,7 @@ import { orgSlackWorkspaceRepository, slackChannelConfigRepository } from '@bike
 import { ConflictError, NotFoundError, SLACK_CHANNEL_ID_PATTERN, type ISlackChannelConfig } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { WebClient } from '@slack/web-api';
 
 const MAX_ALLOWED_KEY_IDS = 50;

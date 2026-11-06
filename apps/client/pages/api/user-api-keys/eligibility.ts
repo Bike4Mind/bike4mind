@@ -2,7 +2,7 @@ import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userApiKeyService } from '@bike4mind/services';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
-import { resolveApiKeyTrust } from '@server/utils/apiKeyTrust';
+import { resolveApiKeyTrust } from '@bike4mind/server-utils/utils/apiKeyTrust';
 
 export type ApiKeyEligibilityResponse = {
   /**

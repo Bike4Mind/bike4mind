@@ -1,5 +1,5 @@
 import { withEventContext } from '@workers/utils/eventContext';
-import { TelemetryEvents } from '@server/utils/eventBus';
+import { TelemetryEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   AnomalyAlertService,
   type ISlackMessageSender,
@@ -15,7 +15,7 @@ import {
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { SlackClient } from '@bike4mind/slack';
 import { GitHubService } from '@bike4mind/server-utils/services/githubService';
-import { cacheTelemetryAnalysisOnQuest } from '@server/utils/telemetryAnalysisCache';
+import { cacheTelemetryAnalysisOnQuest } from '@bike4mind/server-utils/utils/telemetryAnalysisCache';
 import {
   ALERT_THRESHOLDS,
   ContextTelemetryAlerts,
@@ -44,7 +44,7 @@ import {
   fetchExistingTelemetryIssues,
   fetchRecentlyClosedIssues,
   createTelemetryIssue,
-} from '@server/utils/telemetryIssueCreator';
+} from '@bike4mind/server-utils/utils/telemetryIssueCreator';
 
 // Cache key prefixes
 const CACHE_PREFIX_DUP_ALERT = 'telemetry-dup-alert:';
@@ -52,7 +52,7 @@ const CACHE_PREFIX_ISSUE_CLAIM = 'telemetry-issue-claim:';
 const CACHE_PREFIX_RATE_LIMIT = 'telemetry-rate-limit:';
 
 // getFallbackPriority, fetchExistingTelemetryIssues, fetchRecentlyClosedIssues are shared
-// with the manual create-issue endpoint via @server/utils/telemetryIssueCreator.
+// with the manual create-issue endpoint via @bike4mind/server-utils/utils/telemetryIssueCreator.
 // createGitHubIssue and ensureLabelsExist were consolidated into createTelemetryIssue there too.
 
 /**

@@ -6,7 +6,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { imageModerationIncidentRepository, withTransaction } from '@bike4mind/database';
 import { ncmecService } from '@bike4mind/services';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { recordAdminActionFromRequest, userAuditTarget } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest, userAuditTarget } from '@bike4mind/server-utils/utils/adminAudit';
 
 // Resolve NCMEC credentials from SST Resource (linked secrets expose Resource.X.value, not
 // process.env.X). Fall back to process.env for local dev and self-host. useSandbox defaults

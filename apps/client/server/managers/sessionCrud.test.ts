@@ -83,7 +83,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { update: userRepoUpdate, findById: userRepoFindById },
 }));
 
-vi.mock('@server/auth/ability', () => ({
+vi.mock('@bike4mind/server-utils/auth/ability', () => ({
   default: defineAbilitiesForSpy,
 }));
 
@@ -126,7 +126,7 @@ import {
   recordNotebookAddedToProjectActivity,
 } from './sessionSideEffects';
 import type { IUserDocument } from '@bike4mind/common';
-import type { Ability } from '@server/auth/ability';
+import type { Ability } from '@bike4mind/server-utils/auth/ability';
 import type { Logger } from '@bike4mind/observability';
 
 // Typed casts keep the intended types visible (and catch drift) without a real Mongoose doc.

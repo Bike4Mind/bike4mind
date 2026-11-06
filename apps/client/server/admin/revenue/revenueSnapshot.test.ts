@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { MrrGroup } from '../subscriptionsList/subscriptionMrr';
+import type { MrrGroup } from '@bike4mind/server-utils/admin/subscriptionsList/subscriptionMrr';
 import { churnedWithin, revenueFacets, revenueTotalsFromFacets, toRevenueSnapshot } from './revenueSnapshot';
 
 type Key = Record<string, unknown>;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { RevenueTrendPoint } from '@client/app/utils/adminRevenue';
+import type { RevenueTrendPoint } from '@bike4mind/server-utils/app/utils/adminRevenue';
 import {
   OTHER_PLANS_KEY,
   atRiskTakeaway,

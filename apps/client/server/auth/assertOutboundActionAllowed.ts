@@ -3,8 +3,8 @@ import { ACCOUNT_TRUST_REQUIRED_ERROR_CODE } from '@bike4mind/common';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import type { userApiKeyService } from '@bike4mind/services';
 import { isAiAccessRevoked } from '@bike4mind/services/userService/accountState';
-import type { ActiveSubscriptionsRequest } from '@server/entitlements/activeSubscriptions';
-import { resolveApiKeyTrust } from '@server/utils/apiKeyTrust';
+import type { ActiveSubscriptionsRequest } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
+import { resolveApiKeyTrust } from '@bike4mind/server-utils/utils/apiKeyTrust';
 
 type OutboundActor = userApiKeyService.ApiKeyTrustSubject & { id: string; isModerated?: boolean | null };
 

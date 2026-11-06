@@ -6,8 +6,8 @@ import { ForbiddenError, NotFoundError, BadRequestError } from '@bike4mind/serve
 import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
 import { ApiKeyScope, type ContextTelemetry } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { createTelemetryIssue } from '@server/utils/telemetryIssueCreator';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { createTelemetryIssue } from '@bike4mind/server-utils/utils/telemetryIssueCreator';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const paramsSchema = z.object({
   id: z.string().min(1),

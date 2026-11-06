@@ -64,7 +64,7 @@ vi.mock('@bike4mind/server-utils/integrations/github/sreWebhookDispatch', () => 
   computeIssueFingerprint: () => 'fp',
   dispatchIssueToSre: h.dispatch,
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import scanHandler from '../scan';
 import { resolveFullConfig } from '@bike4mind/common';

@@ -100,7 +100,9 @@ vi.mock('@bike4mind/agents', () => ({
 }));
 
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));
-vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn(async () => 'none') }));
+vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({
+  resolveThinkingVisibility: vi.fn(async () => 'none'),
+}));
 // Balance mechanics are covered in meterPlatformCompletion.test.ts; this pins the route's call order.
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
   createModelAdmission: async () => ({

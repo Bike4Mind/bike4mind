@@ -26,7 +26,7 @@ vi.mock('@bike4mind/services', async importOriginal => ({
 // Reached only on a would-be refusal, and mocked rather than imported for real because the
 // service resolves system API keys and builds the whole model catalog.
 const activePlanResolver = vi.hoisted(() => ({ hasActivePlan: vi.fn() }));
-vi.mock('@server/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
 const mockDailyCap = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock('@server/billing/freeTierDailyCapGate', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/billing/freeTierDailyCapGate')>()),

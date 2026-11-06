@@ -16,7 +16,7 @@ vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
     findActiveSubscriptionsByOwners: (...args: unknown[]) => findActiveSubscriptionsByOwners(...args),
   },
 }));
-vi.mock('@client/lib/userSubscriptions/constants', () => ({
+vi.mock('@bike4mind/server-utils/lib/userSubscriptions/constants', () => ({
   // Mirrors the real module: the Team price lives only in TEAM_PLAN, never in SUBSCRIPTION_PLANS.
   SUBSCRIPTION_PLANS: [{ priceId: 'price_pro', name: 'Professional' }],
   TEAM_PLAN: { priceId: 'price_team', name: 'Team' },

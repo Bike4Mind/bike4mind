@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { modelCatalogRepository, modelDiscoveryStateRepository, modelPriceRepository } from '@bike4mind/database';
 import {
   catalogLifecycles,

@@ -32,7 +32,7 @@ vi.mock('@bike4mind/database', () => ({
   identityProviderRepository: { findByEmailDomain: h.findByEmailDomain, createIDP: h.createIDP },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import handler from '../index';
 

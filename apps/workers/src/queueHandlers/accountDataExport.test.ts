@@ -83,7 +83,7 @@ vi.mock('@bike4mind/server-utils/memory/factCipher', () => ({ createKeyProvider:
 vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({
   createLedgerMemoryStore: () => ({ readProfile: h.readProfile }),
 }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
 
 import { ACCOUNT_DATA_EXPORT_TTL_MS } from '@bike4mind/server-utils/utils/accountDataExport';
 import { dispatch, MAX_FILE_BYTES } from './accountDataExport';

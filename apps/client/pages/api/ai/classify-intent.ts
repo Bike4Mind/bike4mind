@@ -2,7 +2,7 @@ import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQ
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
 import {

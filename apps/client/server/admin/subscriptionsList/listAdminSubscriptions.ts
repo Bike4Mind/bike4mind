@@ -16,7 +16,7 @@ import type {
   AdminSubscriptionsListParams,
   AdminSubscriptionsListResponse,
   AdminSubscriptionsSummary,
-} from '@client/app/utils/adminSubscriptionsFilter';
+} from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { TERMINAL_SUBSCRIPTION_STATUSES } from '@bike4mind/server-utils/lib/subscriptions/types';
 import type Stripe from 'stripe';
@@ -30,7 +30,13 @@ import {
   viewConditions,
   type PlanCatalog,
 } from './adminSubscriptionsQuery';
-import { billedIntervalOf, mrrGroupStages, mrrTotal, subscriptionMrr, type MrrGroup } from './subscriptionMrr';
+import {
+  billedIntervalOf,
+  mrrGroupStages,
+  mrrTotal,
+  subscriptionMrr,
+  type MrrGroup,
+} from '@bike4mind/server-utils/admin/subscriptionsList/subscriptionMrr';
 
 // ms. A list read that runs past this is a filter the indexes cannot serve; fail it rather than queue.
 const LIST_MAX_TIME_MS = 10_000;

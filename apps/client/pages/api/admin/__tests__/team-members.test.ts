@@ -35,7 +35,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: vi.fn(),
   definedKeys: (data: Record<string, unknown>) => Object.keys(data).filter(key => data[key] !== undefined),
 }));

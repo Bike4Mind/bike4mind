@@ -15,11 +15,11 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 const h = vi.hoisted(() => ({ record: vi.fn(), publish: vi.fn(), stepUp: vi.fn() }));
 
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   parseAdminActionReason: (reason: string) => reason,
   recordAdminActionFromRequest: h.record,
 }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: h.stepUp }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }));
 vi.mock('@server/middlewares/baseApi', () => ({

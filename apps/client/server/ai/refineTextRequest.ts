@@ -8,7 +8,7 @@ import {
   OperationsModelUnavailableError,
 } from '@bike4mind/server-utils/services/operationsModelService';
 import { CacheKeys } from '@server/utils/cacheKeys';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { createRequestCompletionMeter, type MeteredRequest } from '@server/billing/meterPlatformCompletion';
 
 // Identical (text, context) refinements are common (users re-clicking refine),

@@ -46,7 +46,7 @@ vi.mock('@bike4mind/database', () => ({
   toAdminUserNote: vi.fn(),
   toAdminUserNoteRevision: vi.fn(),
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mocks.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mocks.audit }));
 await import('../notes');
 await import('../tags');
 const USER = '650000000000000000000001';

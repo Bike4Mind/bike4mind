@@ -22,7 +22,7 @@ import { BadRequestError, InternalServerError, NotFoundError } from '@bike4mind/
 import { validatePrivateKeyFormat } from '@server/utils/validators';
 import { Logger } from '@bike4mind/observability';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const logger = new Logger({ metadata: { component: 'admin-github-rotate-key' } });
 

@@ -5,7 +5,7 @@ import { publishMementoCompletion, type MementoCompletionExecution } from './pub
 
 const publishMock = vi.fn<(payload: unknown) => Promise<void>>();
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   LLMEvents: {
     CompletionCompleted: {
       publish: (payload: unknown) => publishMock(payload),

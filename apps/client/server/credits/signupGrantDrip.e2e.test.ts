@@ -24,7 +24,7 @@ import {
   settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
-import { unlockSignupGrantFromSubscription } from './subscriptionUnlock';
+import { unlockSignupGrantFromSubscription } from '@bike4mind/server-utils/credits/subscriptionUnlock';
 import { unlockSignupGrantFromCreditPurchase } from './creditPurchaseUnlock';
 import { grantCreditPurchase } from '../billing/grantCreditPurchase';
 

@@ -15,7 +15,7 @@ import {
   replayAbuseAssessments,
   summarizeDetection,
 } from '@server/security/abuseAssessment/abuseAssessment';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { respond } from '@server/utils/respond';
 
 const ONE_MINUTE_MS = 60_000;

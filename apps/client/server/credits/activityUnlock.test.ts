@@ -7,7 +7,7 @@ const h = vi.hoisted(() => ({
   setting: vi.fn(),
   limits: vi.fn(),
 }));
-vi.mock('@server/auth/signupProtection', () => ({ signupProtection: h.protection }));
+vi.mock('@bike4mind/server-utils/auth/signupProtection', () => ({ signupProtection: h.protection }));
 vi.mock('@bike4mind/services', () => ({ userService: { dripSignupGrant: h.drip, resolveDripLimits: h.limits } }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { findBySettingName: h.setting },

@@ -9,7 +9,7 @@ const { mockAssertCredits, mockCount, mockCountTaggable, mockPublishStart } = vi
 }));
 
 const { mockAudit } = vi.hoisted(() => ({ mockAudit: vi.fn() }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};
@@ -24,7 +24,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 vi.mock('@bike4mind/database/auth', () => ({
   sessionRepository: { count: mockCount, countTaggableNotebooks: mockCountTaggable },
 }));
-vi.mock('@server/utils/eventBus', () => ({ SpiderEvents: { Start: { publish: mockPublishStart } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ SpiderEvents: { Start: { publish: mockPublishStart } } }));
 vi.mock('@server/utils/sessionOperationalCreditPreflight', () => ({
   assertSessionOperationalCredits: mockAssertCredits,
 }));

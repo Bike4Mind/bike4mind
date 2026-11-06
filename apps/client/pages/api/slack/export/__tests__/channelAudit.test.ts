@@ -34,7 +34,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mocks.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mocks.audit }));
 vi.mock('@bike4mind/database', () => ({
   slackDevWorkspaceRepository: { findByIdWithToken: mocks.findByIdWithToken },
   slackExportJobRepository: {

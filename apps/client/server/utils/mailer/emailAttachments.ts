@@ -205,7 +205,7 @@ export async function sendEmailWithAttachments(
 
   const totalSize = calculateEventBridgeSize(body, attachments);
 
-  const { EmailEvents } = await import('@server/utils/eventBus');
+  const { EmailEvents } = await import('@bike4mind/server-utils/utils/eventBus');
 
   if (totalSize <= EVENTBRIDGE_SAFE_LIMIT) {
     await EmailEvents.Send.publish({

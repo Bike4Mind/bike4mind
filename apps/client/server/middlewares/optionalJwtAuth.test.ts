@@ -11,7 +11,7 @@ const { mockAuthenticate, mockAbility } = vi.hoisted(() => ({
 vi.mock('@server/auth/auth', () => ({
   default: { authenticate: mockAuthenticate },
 }));
-vi.mock('@server/auth/ability', () => ({ default: mockAbility }));
+vi.mock('@bike4mind/server-utils/auth/ability', () => ({ default: mockAbility }));
 
 // The real admission (middlewares/oauthRouteGate.ts) runs; only its leaf reads are stubbed. `enforced`
 // is the admin's enforceMFA toggle.

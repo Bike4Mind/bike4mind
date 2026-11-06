@@ -11,7 +11,7 @@ import {
 } from '@bike4mind/common';
 import { User, userApiKeyRepository, cacheRepository } from '@bike4mind/database';
 import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
-import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
+import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { assertNoPendingDeletion } from '@bike4mind/server-utils/auth/deletionPendingGate';
@@ -23,7 +23,7 @@ import {
 import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
-import { resolveUntrustedKeyLimits } from '@server/utils/apiKeyTrust';
+import { resolveUntrustedKeyLimits } from '@bike4mind/server-utils/utils/apiKeyTrust';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
 

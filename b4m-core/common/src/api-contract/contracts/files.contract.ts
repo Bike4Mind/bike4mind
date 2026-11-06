@@ -30,7 +30,7 @@ import { ApiErrorSchema, ScopeForbiddenErrorSchema, StorageLimitErrorSchema } fr
  * routes (apps/client/server/files/), so the gates cannot drift apart.
  */
 // Write does not imply read for files, as on the SPA-internal /api/files doors
-// (apps/client/server/files/fileScopes.ts): both doors reach the same file, so they must agree.
+// (packages/server-utils/src/files/fileScopes.ts): both doors reach the same file, so they must agree.
 const READ_FORBIDDEN = 'The API key lacks `files:read`.';
 const WRITE_FORBIDDEN = 'The API key lacks `files:write`.';
 

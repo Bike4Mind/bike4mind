@@ -2,7 +2,7 @@ import { emailTemplateRepository } from '@bike4mind/database';
 import { adminApi } from '@server/middlewares/adminApi';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
  * Clone an existing email template to create a new one
