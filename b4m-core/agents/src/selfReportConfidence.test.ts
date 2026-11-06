@@ -95,14 +95,14 @@ describe('SelfReportStreamFilter', () => {
     expect(run(['<CONFIDENCE score="1">x</CONFIDENCE>Go']).all).toBe('Go');
   });
 
-  it('emits a tag that never closes at flush', () => {
+  it('emits the text after a tag that never closes at flush, without the tag', () => {
     const { all } = run(['<confidence score="0.5">never closed']);
-    expect(all).toBe('<confidence score="0.5">never closed');
+    expect(all).toBe('never closed');
   });
 
-  it('gives up on an oversized unclosed tag', () => {
+  it('gives up holding an oversized unclosed tag and releases the text without the tag', () => {
     const { out } = run(['<confidence score="0.5">' + 'x'.repeat(700)]);
-    expect(out[0]).toContain('<confidence');
+    expect(out[0]).toBe('x'.repeat(700));
   });
 
   it('only filters at the start: a later tag is left alone', () => {
@@ -131,5 +131,74 @@ describe('SelfReportStreamFilter', () => {
   it('passes a think block with content straight through', () => {
     const { out } = run(['<think>pondering</think>Hi']);
     expect(out).toEqual(['<think>pondering</think>Hi']);
+  });
+});
+
+describe('parseSelfReport with a tag that never closes', () => {
+  it('strips an unclosed opening tag and records no report', () => {
+    const { report, text } = parseSelfReport('<confidence score="0.5">partial answer');
+    expect(report).toBeUndefined();
+    expect(text).not.toMatch(/confidence/i);
+    expect(text).toContain('partial answer');
+  });
+
+  it('strips a tag cut off mid-attribute at the end of the turn', () => {
+    const { report, text } = parseSelfReport('Looking at it <confidence score="0.');
+    expect(report).toBeUndefined();
+    expect(text).toBe('Looking at it ');
+  });
+
+  it('strips a stray closing tag', () => {
+    expect(parseSelfReport('done</confidence> now').text).toBe('done now');
+  });
+
+  it('still reads a well-formed tag that comes before an unclosed one', () => {
+    const { report, text } = parseSelfReport('<confidence score="0.9">ok</confidence>go <confidence score="0.1">cut');
+    expect(report).toEqual({ confidence: 0.9, reason: 'ok' });
+    expect(text).not.toMatch(/confidence/i);
+  });
+});
+
+describe('SelfReportStreamFilter with a tag that never closes', () => {
+  const run = (deltas: string[]) => {
+    const filter = new SelfReportStreamFilter();
+    const out = deltas.map(d => filter.push(d));
+    return { out, all: out.join('') + filter.flush() };
+  };
+
+  it('does not release an unclosed tag when the stream ends', () => {
+    const { all } = run(['<confidence score="0.5">partial', ' answer']);
+    expect(all).not.toMatch(/<confidence/i);
+    expect(all).toContain('partial answer');
+  });
+
+  it('does not release the tag when it grows past the hold limit', () => {
+    const { all } = run(['<confidence score="0.5">', 'x'.repeat(700)]);
+    expect(all).not.toMatch(/<confidence/i);
+    expect(all).toContain('x'.repeat(700));
+  });
+});
+
+describe('SelfReportStreamFilter with whitespace inside the empty think block', () => {
+  const run = (deltas: string[]) => {
+    const filter = new SelfReportStreamFilter();
+    const out = deltas.map(d => filter.push(d));
+    return { out, all: out.join('') + filter.flush() };
+  };
+
+  it('hides a tag after a think block that holds a newline, in one delta', () => {
+    const { all } = run(['<think>\n</think><confidence score="0.9">r</confidence>Hi']);
+    expect(all).toBe('Hi');
+  });
+
+  it('hides it when the stream splits inside the whitespace', () => {
+    const { out, all } = run(['<think>', '\n', '</think>', '<confidence score="0.9">r</confidence>', 'Hi']);
+    expect(out.slice(0, 3).every(chunk => chunk === '')).toBe(true);
+    expect(all).toBe('Hi');
+  });
+
+  it('still passes a think block with content straight through', () => {
+    const { all } = run(['<think>\nthinking</think>Hi']);
+    expect(all).toBe('<think>\nthinking</think>Hi');
   });
 });
