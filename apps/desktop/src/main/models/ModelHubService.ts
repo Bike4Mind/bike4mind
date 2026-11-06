@@ -28,9 +28,24 @@ import {
   type HardwareProfile,
   ollamaPullRef,
   ollamaRefAliases,
+  planSplitImport,
+  removeSplitStaging,
   pullBlock,
+  runSplitImport,
   sameRepo,
+  siblingLayers,
+  splitImportBlock,
+  splitImportName,
+  splitImportSpace,
+  stagedPartBytes,
   type ApprovalFailure,
+  type DownloadOptions,
+  type DownloadResult,
+  type HubGgufFile,
+  type ImportSpace,
+  type ModelImportRuntime,
+  type SiblingLayers,
+  type SplitImportPlan,
   type HubGgufBuild,
   type HubModelDetail,
   type HubModelSummary,
@@ -63,6 +78,7 @@ import {
   type HubManifest,
 } from '@bike4mind/common';
 import {
+  formatBytes,
   licenseKind,
   pullKey,
   type CuratedBuildView,
@@ -119,7 +135,8 @@ import { catalogSampling } from './catalogSampling';
 import { clearsCap, isLinuxStoreDir, partialLoad } from './wslGpuCap';
 import type { CatalogSampling } from '@shared/generation';
 
-export interface ModelRuntimePort {
+/** The import methods are what a split build needs; without them it is refused. */
+export interface ModelRuntimePort extends Partial<ModelImportRuntime> {
   readonly baseUrl: string;
   health(): Promise<RuntimeHealth>;
   list(): Promise<InstalledModel[]>;
@@ -140,6 +157,9 @@ export interface ModelHubPort {
   ): Promise<string | null>;
   ollamaLayers(repo: string, tag: string, options?: { signal?: AbortSignal }): Promise<OllamaRegistryLayers | null>;
   checkToken(options?: { signal?: AbortSignal }): Promise<boolean>;
+  /** Needed to import a split build. */
+  download?(file: HubGgufFile, destination: string, options?: DownloadOptions): Promise<DownloadResult>;
+  ollamaRegistryJson?(repo: string, digest: string, options?: { signal?: AbortSignal }): Promise<unknown>;
 }
 
 export interface HubTokenPort {
@@ -203,6 +223,10 @@ export interface ModelHubServiceDeps {
   defaultStoreDir?: () => string | null;
   /** Whether `path` is a folder on this computer's disk; assumed true when absent. */
   pathExists?: (path: string) => Promise<boolean>;
+  /** Where split builds are staged on this computer while they import; without it they are refused. */
+  importDir?: () => string;
+  /** Whether two paths on this computer are on one disk; null when that cannot be read. */
+  sameDisk?: (a: string, b: string) => Promise<boolean | null>;
   /** True while a download to a saved server runs: that server's Ollama stops it if this computer sleeps. */
   keepAwake?: (on: boolean) => void;
   /** Desktop runs on Windows or inside WSL, so Ollama at this computer's address may run in WSL. */
@@ -272,7 +296,8 @@ async function mapLimited<T, R>(items: readonly T[], limit: number, map: (item: 
 
 /** `listed` keeps the failure in the pull list, as a failed download rather than a refused one. */
 type Refusal = { ok: false; error: ModelHubError; listed: boolean };
-type Prepared = { ok: true; ref: string } | Refusal;
+type SplitApproval = NonNullable<Extract<Awaited<ReturnType<typeof checkApproval>>, { ok: true }>['split']>;
+type Prepared = { ok: true; ref: string; split?: SplitApproval } | Refusal;
 const refused = (kind: ModelHubErrorKind, message: string, listed = false): Refusal => ({
   ok: false,
   error: hubError(kind, message),
@@ -380,7 +405,25 @@ interface PullEntry {
   stopped?: ModelHubError;
   /** The reviewed build a Curated pull is checked against once it lands, and whether its tag was there before. */
   curated: { entry: HubEntry; build: HubBuild; hadTag: boolean | null } | null;
+  /** Set for a split build Desktop downloads itself and creates in Ollama. */
+  import?: SplitImportPlan;
+  /** Shown with a successful import that went ahead without something it could not read. */
+  importNotice?: string;
 }
+
+const NO_REGISTRY_PARAMS =
+  'The registry settings for this model (stop words, temperature and similar) could not be read, so it was ' +
+  'created without them.';
+
+/** `local-only`: a saved server, which has no way to take the uploaded parts. */
+type SplitSupport = 'import' | 'local-only' | 'none';
+
+const SPLIT_LOCAL_ONLY = 'Split into several files, which Desktop can add only to Ollama on this computer.';
+
+type ImportHub = ModelHubPort & Required<Pick<ModelHubPort, 'download'>>;
+const hubImports = (hub: ModelHubPort): hub is ImportHub => typeof hub.download === 'function';
+const runtimeImports = (runtime: ModelRuntimePort): runtime is ModelRuntimePort & ModelImportRuntime =>
+  !!runtime.hasBlob && !!runtime.uploadBlob && !!runtime.create;
 
 /** Per server: two servers can each hold the same tag. */
 const tagKey = (target: Target, ref: string) => `${target.id}\0${ref.toLowerCase()}`;
@@ -515,7 +558,17 @@ function toCard(model: HubModelSummary): HubModelCard {
   };
 }
 
-function blockedReason(detail: HubModelDetail, build: HubGgufBuild, tokenSent: boolean): string | null {
+function blockedReason(
+  detail: HubModelDetail,
+  build: HubGgufBuild,
+  tokenSent: boolean,
+  split: SplitSupport = 'none'
+): string | null {
+  if (build.split && split === 'import') {
+    const block = splitImportBlock(detail, build);
+    return block && blockMessage(block, tokenSent);
+  }
+  if (build.split && build.complete && split === 'local-only') return SPLIT_LOCAL_ONLY;
   const block = pullBlock(detail, build);
   return block && blockMessage(block, tokenSent);
 }
@@ -567,17 +620,24 @@ function toView(
   endpoint: string,
   detail: HubModelDetail,
   tokenSent: boolean,
-  fit: (build: HubGgufBuild) => ModelFit | null
+  fit: (build: HubGgufBuild) => ModelFit | null,
+  split: SplitSupport = 'none'
 ): HubModelView {
-  const builds: HubBuildView[] = detail.builds.map(build => ({
-    id: build.id,
-    label: build.label,
-    sizeBytes: build.sizeBytes,
-    ollamaRef: build.ollamaRef && ollamaPullRef(build.ollamaRef, detail.ollamaNeedsSshKey),
-    installedNames: build.ollamaRef ? ollamaRefAliases(build.ollamaRef) : [],
-    blockedReason: blockedReason(detail, build, tokenSent),
-    fit: fit(build),
-  }));
+  const builds: HubBuildView[] = detail.builds.map(build => {
+    const imported = build.split && split === 'import' ? splitImportName(detail.id, build) : null;
+    const ref = imported ?? build.ollamaRef;
+    return {
+      id: build.id,
+      label: build.label,
+      sizeBytes: build.sizeBytes,
+      ollamaRef: imported ?? (build.ollamaRef && ollamaPullRef(build.ollamaRef, detail.ollamaNeedsSshKey)),
+      installedNames: ref ? ollamaRefAliases(ref) : [],
+      blockedReason: blockedReason(detail, build, tokenSent, split),
+      importParts: imported ? build.files.length : null,
+      importLargestBytes: imported ? Math.max(...build.files.map(file => file.sizeBytes)) : null,
+      fit: fit(build),
+    };
+  });
   const url = licenseUrl(endpoint, detail);
   return {
     ...toCard(detail),
@@ -610,6 +670,8 @@ function libraryView(
     ollamaRef: library.ref,
     installedNames: ollamaRefAliases(library.ref),
     blockedReason: null,
+    importParts: null,
+    importLargestBytes: null,
     fit,
   };
   return {
@@ -1251,6 +1313,12 @@ export class ModelHubService {
     return server ? { ...server, id: serverId, local: false } : null;
   }
 
+  #splitSupport(target: Target | null, hub: ModelHubPort): SplitSupport {
+    if (!target) return 'none';
+    if (!target.local) return 'local-only';
+    return this.#deps.importDir && runtimeImports(target.runtime) && hubImports(hub) ? 'import' : 'none';
+  }
+
   #hub(): Promise<HubSession> {
     if (!this.#session) {
       const session = this.#deps.tokens
@@ -1462,7 +1530,13 @@ export class ModelHubService {
         token && hubAccess(found, token) === 'denied' ? await hub.getModel(repo, { refresh: true }) : found;
       return {
         ok: true,
-        model: toView(hub.endpoint, detail, token, this.#buildFit(detail, sizing, this.#deps.curated())),
+        model: toView(
+          hub.endpoint,
+          detail,
+          token,
+          this.#buildFit(detail, sizing, this.#deps.curated()),
+          this.#splitSupport(target, hub)
+        ),
       };
     } catch (error) {
       return { ok: false, error: toModelHubError(error, token) };
@@ -1504,6 +1578,8 @@ export class ModelHubService {
       controller,
       ref: null,
       curated: null,
+      // Owns a failed import's staging until replanned, so a refused retry's #drop still clears it.
+      import: existing?.import,
       view: {
         key,
         serverId: target.id,
@@ -1540,6 +1616,20 @@ export class ModelHubService {
     if (!prepared.ok) return prepared.listed ? this.#fail(key, entry, prepared.error) : refuse(prepared.error);
     const { ref } = prepared;
 
+    if (prepared.split) {
+      let planned: { ok: true; plan: SplitImportPlan; notice?: string } | Refusal;
+      try {
+        planned = await this.#planImport(prepared.split, target, controller.signal);
+      } catch (error) {
+        if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
+        return this.#fail(key, entry, toModelHubError(error, token));
+      }
+      if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
+      if (!planned.ok) return planned.listed ? this.#fail(key, entry, planned.error) : refuse(planned.error);
+      entry.import = planned.plan;
+      entry.importNotice = planned.notice;
+    } else entry.import = undefined;
+
     const hadTag = curated ? await this.#hadTagBefore(target, ref) : null;
     if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
     entry.ref = ref;
@@ -1569,6 +1659,7 @@ export class ModelHubService {
   }
 
   async #download(key: string, entry: PullEntry, target: Target): Promise<ModelPullResult> {
+    if (entry.import) return this.#import(key, entry, target, entry.import);
     const ref = entry.ref as string;
     const { curated } = entry;
     const { signal } = entry.controller;
@@ -1613,6 +1704,126 @@ export class ModelHubService {
     return { ok: true, ref };
   }
 
+  /** The parts, projector and params of an approved split build, refused when this computer lacks the room. */
+  async #planImport(
+    split: SplitApproval,
+    target: Target,
+    signal: AbortSignal
+  ): Promise<{ ok: true; plan: SplitImportPlan; notice?: string } | Refusal> {
+    const { hub } = await this.#hub();
+    let sibling: SiblingLayers = { projectorSha256: null, parameters: null };
+    let notice: string | undefined;
+    const readJson = hub.ollamaRegistryJson?.bind(hub);
+    if (readJson) {
+      try {
+        sibling = await siblingLayers(
+          split.detail,
+          split.build,
+          { ollamaLayers: (repo, tag, options) => hub.ollamaLayers(repo, tag, options), ollamaRegistryJson: readJson },
+          signal
+        );
+      } catch (error) {
+        if (signal.aborted) throw error;
+        notice = NO_REGISTRY_PARAMS;
+        // Without them the model still imports; Ollama reads its template from the GGUF.
+        this.#deps.warn(`MODELS: no projector or params from a sibling build of ${split.detail.id}: ${String(error)}`);
+      }
+    }
+    const plan = planSplitImport(split.detail, split.build, sibling);
+    const runtime = target.runtime;
+    if (!runtimeImports(runtime)) return refused('cannot-pull', SPLIT_LOCAL_ONLY);
+    const present = new Set<string>();
+    for (const part of plan.parts) if (await runtime.hasBlob(part.digest, { signal })) present.add(part.digest);
+    const root = this.#deps.importDir?.();
+    const staged = root ? await stagedPartBytes(root, plan, present) : undefined;
+    const space = await this.#importSpace(plan, present, staged);
+    if (space.ok) return { ok: true, plan, notice };
+    const where = space.where === 'store' ? "on the disk with Ollama's models" : 'on the disk Desktop downloads to';
+    return refused(
+      'cannot-pull',
+      `Adding this split build needs ${formatBytes(space.neededBytes)} free ${where}, and ` +
+        `${formatBytes(space.freeBytes)} is free. Free some space, then download again.`
+    );
+  }
+
+  async #importSpace(
+    plan: SplitImportPlan,
+    present: ReadonlySet<string>,
+    staged?: ReadonlyMap<string, number>
+  ): Promise<ImportSpace> {
+    const staging = this.#deps.importDir?.() ?? null;
+    const store = await this.storeLocation(LOCAL_SERVER_ID);
+    const free = (path: string) => this.#deps.freeSpace?.(path).catch(() => null) ?? Promise.resolve(null);
+    // An 'elsewhere' store is not on this computer's disks, so its device cannot be compared: unknown.
+    const sameDisk =
+      store.source !== 'elsewhere' && staging && store.path
+        ? ((await this.#deps.sameDisk?.(staging, store.path).catch(() => null)) ?? null)
+        : null;
+    return splitImportSpace(
+      plan,
+      present,
+      {
+        stagingFreeBytes: staging ? await free(staging) : null,
+        storeFreeBytes: store.freeBytes,
+        sameDisk,
+      },
+      staged
+    );
+  }
+
+  /** Downloads each part Ollama lacks, hands it over, then creates the model; a failed run keeps its staging so a retry resumes. */
+  async #import(key: string, entry: PullEntry, target: Target, plan: SplitImportPlan): Promise<ModelPullResult> {
+    const { signal } = entry.controller;
+    const root = this.#deps.importDir?.();
+    const { hub, token } = await this.#hub();
+    const runtime = target.runtime;
+    if (!root || !runtimeImports(runtime) || !hubImports(hub))
+      return this.#fail(key, entry, hubError('cannot-pull', SPLIT_LOCAL_ONLY));
+    entry.view = {
+      ...entry.view,
+      ref: plan.model,
+      phase: 'downloading',
+      completedBytes: 0,
+      totalBytes: plan.totalBytes,
+      error: null,
+    };
+    this.#push(true);
+    try {
+      await runSplitImport(plan, {
+        hub,
+        runtime,
+        dir: root,
+        signal,
+        keep: () => this.#partsOfOthers(entry),
+        onProgress: progress => {
+          const phase = progress.status === 'creating' ? 'finishing' : 'downloading';
+          const changed = phase !== entry.view.phase;
+          entry.view = {
+            ...entry.view,
+            phase,
+            completedBytes: progress.completedBytes,
+            totalBytes: progress.totalBytes,
+          };
+          this.#push(changed);
+        },
+      });
+    } catch (error) {
+      if (signal.aborted) {
+        // Quitting aborts every pull; its parts stay so the next import resumes them. A removed server's pull was
+        // already dropped, which cleared them.
+        if (!this.#disposed && this.#pulls.get(key) === entry)
+          await removeSplitStaging(root, plan, this.#partsOfOthers(entry));
+        this.#drop(key, entry, false);
+        return { ok: false, error: entry.stopped ?? hubError('cancelled', 'Download cancelled.'), listed: false };
+      }
+      return this.#fail(key, entry, diskFullError(error, target) ?? toModelHubError(error, token));
+    }
+    this.#deps.onInstalledChanged(target.id);
+    // runSplitImport removed the staging on success.
+    this.#drop(key, entry, false);
+    return { ok: true, ref: plan.model, ...(entry.importNotice ? { notice: entry.importNotice } : {}) };
+  }
+
   /**
    * Re-checks the dialog's request through the shared approval and words any refusal for the pull dialog. A library
    * build has no Hugging Face repo: the reviewed manifest digest is sent as its revision.
@@ -1651,6 +1862,7 @@ export class ModelHubService {
       libraryLayers: (ref, options) => this.#deps.libraryLayers(ref, options),
       health: () => target.runtime.health(),
       signal,
+      importSplit: this.#splitSupport(target, (await this.#hub()).hub) === 'import',
       onReviewed: ({ label, sizeBytes }) => {
         entry.view = { ...entry.view, label, expectedBytes: sizeBytes };
       },
@@ -1762,10 +1974,22 @@ export class ModelHubService {
     return { ok: false, error, listed: true };
   }
 
-  #drop(key: string, entry: PullEntry): void {
+  /** `clearStaging` false when the caller already removed an import's staged parts. */
+  #drop(key: string, entry: PullEntry, clearStaging = true): void {
     if (this.#pulls.get(key) !== entry) return;
     this.#pulls.delete(key);
+    const root = this.#deps.importDir?.();
+    if (clearStaging && entry.import && root && !this.#disposed)
+      void removeSplitStaging(root, entry.import, this.#partsOfOthers(entry));
     this.#push(true);
+  }
+
+  /** Digests of the staged parts other imports still hold or may resume; two builds of one repo can share a projector. */
+  #partsOfOthers(entry: PullEntry): Set<string> {
+    const digests = new Set<string>();
+    for (const other of this.#pulls.values())
+      if (other !== entry) for (const part of other.import?.parts ?? []) digests.add(part.digest);
+    return digests;
   }
 
   #push(now: boolean): void {

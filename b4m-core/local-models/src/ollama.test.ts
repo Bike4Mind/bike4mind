@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { ReadStream } from 'node:fs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   LocalRuntimeError,
   ModelNotFoundError,
@@ -6,6 +10,7 @@ import {
   RuntimeConnectionError,
   RuntimeHttpError,
   RuntimeProtocolError,
+  RuntimeStorageError,
 } from './errors';
 import { OllamaRuntime } from './ollama';
 import type { PullProgress } from './types';
@@ -20,6 +25,19 @@ import {
   showFor,
   tags,
 } from './__test__/ollamaFixtures';
+
+const openedStreams = vi.hoisted((): ReadStream[] => []);
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    createReadStream: (...args: Parameters<typeof actual.createReadStream>) => {
+      const stream = actual.createReadStream(...args);
+      openedStreams.push(stream);
+      return stream;
+    },
+  };
+});
 
 let server: FakeServer | undefined;
 
@@ -840,5 +858,159 @@ describe('OllamaRuntime.remove and loaded', () => {
       },
       { name: 'old:latest', sizeBytes: 100, vramBytes: 0, contextLength: null, expiresAt: '2024-06-04T14:38:31Z' },
     ]);
+  });
+});
+
+describe('OllamaRuntime blobs and create', () => {
+  const digest = `sha256:${'c'.repeat(64)}`;
+
+  it('reads whether the daemon holds a blob', async () => {
+    server = await startFakeServer({
+      [`HEAD /api/blobs/${digest}`]: (_request, response) => response.writeHead(200).end(),
+    });
+    const runtime = runtimeFor(server);
+    expect(await runtime.hasBlob(digest)).toBe(true);
+    expect(await runtime.hasBlob(`sha256:${'d'.repeat(64)}`)).toBe(false);
+    expect(server.requests.map(request => request.method)).toEqual(['HEAD', 'HEAD']);
+  });
+
+  it('refuses a digest that is not a sha256 before sending anything', async () => {
+    server = await startFakeServer({});
+    const runtime = runtimeFor(server);
+    await expect(runtime.hasBlob('sha256:../../api/delete')).rejects.toThrow('Invalid blob digest');
+    await expect(runtime.uploadBlob('c'.repeat(64), '/nonexistent')).rejects.toThrow('Invalid blob digest');
+    expect(server.requests).toEqual([]);
+  });
+
+  it('streams a file into a blob and reports the bytes sent', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ollama-blob-'));
+    try {
+      const file = join(dir, 'part.gguf');
+      await writeFile(file, 'GGUF shard bytes');
+      server = await startFakeServer({
+        [`POST /api/blobs/${digest}`]: (_request, response) => response.writeHead(201).end(),
+      });
+      const sent: number[] = [];
+      await runtimeFor(server).uploadBlob(digest, file, { onProgress: bytes => sent.push(bytes) });
+      expect(server.requests[0]).toMatchObject({ body: 'GGUF shard bytes' });
+      expect(server.requests[0]?.headers['content-type']).toBe('application/octet-stream');
+      expect(sent.at(-1)).toBe(16);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('throttles upload progress and always reports the final byte count', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ollama-blob-'));
+    try {
+      const file = join(dir, 'part.gguf');
+      await writeFile(file, Buffer.alloc(8 * 1024 * 1024, 1));
+      server = await startFakeServer({
+        [`POST /api/blobs/${digest}`]: (_request, response) => response.writeHead(201).end(),
+      });
+      const sent: number[] = [];
+      await runtimeFor(server).uploadBlob(digest, file, { onProgress: bytes => sent.push(bytes) });
+      expect(sent.at(-1)).toBe(8 * 1024 * 1024);
+      expect(sent.length).toBeLessThanOrEqual(8);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('gives up on an upload the daemon stops answering', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ollama-blob-'));
+    try {
+      const file = join(dir, 'part.gguf');
+      await writeFile(file, 'x');
+      server = await startFakeServer({ [`POST /api/blobs/${digest}`]: () => {} });
+      await expect(runtimeFor(server).uploadBlob(digest, file, { idleTimeoutMs: 100 })).rejects.toThrow(
+        /stopped taking/
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a staged file it cannot read as a storage error, not an unreachable Ollama', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ollama-blob-'));
+    try {
+      server = await startFakeServer({
+        [`POST /api/blobs/${digest}`]: (_request, response) => response.writeHead(201).end(),
+      });
+      const failure = await runtimeFor(server)
+        .uploadBlob(digest, join(dir, 'gone.gguf'))
+        .then(
+          () => null,
+          (error: unknown) => error
+        );
+      expect(failure).toBeInstanceOf(RuntimeStorageError);
+      expect(failure).not.toBeInstanceOf(RuntimeConnectionError);
+      expect(failure).toMatchObject({ operation: 'read', code: 'ENOENT' });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('closes the staged file when the upload never reaches Ollama', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ollama-blob-'));
+    try {
+      const file = join(dir, 'part.gguf');
+      await writeFile(file, 'x');
+      const runtime = new OllamaRuntime({ baseUrl: `http://127.0.0.1:${await closedPort()}` });
+      openedStreams.length = 0;
+      await expect(runtime.uploadBlob(digest, file)).rejects.toBeInstanceOf(RuntimeConnectionError);
+      expect(openedStreams).toHaveLength(1);
+      expect(openedStreams[0]?.destroyed).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('surfaces a digest mismatch the daemon reports on upload', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ollama-blob-'));
+    try {
+      const file = join(dir, 'part.gguf');
+      await writeFile(file, 'x');
+      server = await startFakeServer({ [`POST /api/blobs/${digest}`]: json({ error: 'digest mismatch' }, 400) });
+      await expect(runtimeFor(server).uploadBlob(digest, file)).rejects.toThrow('digest mismatch');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('creates a model from named blobs and resolves on success', async () => {
+    server = await startFakeServer({
+      'POST /api/create': (_request, response) =>
+        response.end(ndjson([{ status: 'parsing GGUF' }, { status: 'writing manifest' }, { status: 'success' }])),
+    });
+    const request = {
+      model: 'hf.co/org/repo:Q8_0',
+      files: { 'model-00001-of-00002.gguf': digest, 'model-00002-of-00002.gguf': `sha256:${'d'.repeat(64)}` },
+      parameters: { temperature: 0.6, stop: ['</s>'] },
+    };
+    await runtimeFor(server).create(request);
+    expect(JSON.parse(server.requests[0]?.body ?? '')).toEqual({ ...request, stream: true });
+  });
+
+  it('rejects with the daemon error from a create frame or a refused request', async () => {
+    server = await startFakeServer({
+      'POST /api/create': (_request, response) =>
+        response.end(ndjson([{ status: 'parsing GGUF' }, { error: 'invalid split GGUF' }])),
+    });
+    const create = runtimeFor(server).create({ model: 'm:q', files: { 'a.gguf': digest } });
+    await expect(create).rejects.toBeInstanceOf(LocalRuntimeError);
+    await expect(create).rejects.toThrow('could not create m:q: invalid split GGUF');
+    await server.close();
+    server = await startFakeServer({ 'POST /api/create': json({ error: 'invalid model name' }, 400) });
+    await expect(runtimeFor(server).create({ model: 'm:q', files: {} })).rejects.toThrow(
+      'could not create m:q: invalid model name'
+    );
+  });
+
+  it('rejects when the create stream ends without success', async () => {
+    server = await startFakeServer({
+      'POST /api/create': (_request, response) => response.end(ndjson([{ status: 'parsing GGUF' }])),
+    });
+    await expect(runtimeFor(server).create({ model: 'm:q', files: {} })).rejects.toBeInstanceOf(RuntimeProtocolError);
   });
 });

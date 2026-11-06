@@ -171,6 +171,8 @@ function rowBuild(build: CuratedBuildView, rated: boolean): HubBuildView {
     ollamaRef: build.ollamaRef,
     installedNames: [build.ollamaRef.toLowerCase()],
     blockedReason: build.blockedReason,
+    importParts: null,
+    importLargestBytes: null,
     fit: rated ? build.fit : null,
   };
 }

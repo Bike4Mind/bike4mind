@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, rm, truncate, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -13,7 +13,10 @@ import {
   loadCuratedManifest,
   type HardwareProfile,
   ollamaPullRef,
+  ollamaRefAliases,
+  type DownloadOptions,
   type HubGgufBuild,
+  type HubGgufFile,
   type HubModelDetail,
   type HubSearchPage,
   type InspectOptions,
@@ -212,6 +215,8 @@ function harness(
       | 'wslHost'
       | 'integratedGpu'
       | 'specs'
+      | 'importDir'
+      | 'sameDisk'
     >;
   } = {}
 ) {
@@ -3314,4 +3319,450 @@ describe('token operation failures and ordering', () => {
       expect(tokens.get).toHaveBeenCalledTimes(2);
     }
   );
+});
+
+describe('ModelHubService split builds', () => {
+  const SPLIT_ID = 'qwen2.5-0.5b-instruct-q8_0';
+  const SPLIT_REF = `hf.co/${REPO}:Q8_0`;
+  const PROJECTOR_SHA = 'f'.repeat(64);
+  const PARAMS_SHA = 'e'.repeat(64);
+  const shard = (index: number, sizeBytes: number) => ({
+    path: `${SPLIT_ID}-0000${index}-of-00002.gguf`,
+    sizeBytes,
+    sha256: String(index).repeat(64),
+    url: `https://x/${index}`,
+  });
+  const splitDetail = (overrides: Partial<HubModelDetail> = {}) =>
+    detail({
+      builds: [
+        build(),
+        build({
+          id: SPLIT_ID,
+          quant: 'Q8_0',
+          label: 'Q8_0',
+          files: [shard(1, 300), shard(2, 200)],
+          sizeBytes: 500,
+          split: true,
+          ollamaRef: null,
+          ollamaRefIssue: 'split',
+        }),
+      ],
+      projectors: [
+        { path: 'mmproj-BF16.gguf', sizeBytes: 60, sha256: 'b'.repeat(64), url: 'https://x/b', quant: 'BF16' },
+        { path: 'mmproj-F16.gguf', sizeBytes: 50, sha256: PROJECTOR_SHA, url: 'https://x/f', quant: 'F16' },
+      ],
+      ...overrides,
+    });
+  const splitRequest = { ...request, buildId: SPLIT_ID, sizeBytes: 500 };
+
+  async function importing(options: Parameters<typeof harness>[0] = {}) {
+    const root = await mkdtemp(join(tmpdir(), 'hub-split-'));
+    const h = harness({ detail: splitDetail(), ...options, deps: { importDir: () => root, ...options.deps } });
+    const blobs = new Set<string>();
+    const events: string[] = [];
+    const runtime = Object.assign(h.runtime, {
+      hasBlob: vi.fn(async (digest: string) => blobs.has(digest)),
+      uploadBlob: vi.fn(async (digest: string, path: string) => {
+        events.push(`upload ${path.slice(path.lastIndexOf('/') + 1)}`);
+        blobs.add(digest);
+      }),
+      create: vi.fn(async (_request: { model: string }) => {
+        events.push('create');
+      }),
+    });
+    const hub = Object.assign(h.hub, {
+      download: vi.fn(async (file: HubGgufFile, destination: string, opts?: DownloadOptions) => {
+        events.push(`download ${file.path}`);
+        opts?.onProgress?.({ status: 'downloading', completedBytes: file.sizeBytes, totalBytes: file.sizeBytes });
+        await writeFile(destination, 'x');
+        return { path: destination, sizeBytes: file.sizeBytes, sha256: file.sha256, resumedBytes: 0 };
+      }),
+      ollamaRegistryJson: vi.fn(async () => ({ stop: ['<|im_end|>'], temperature: 0.7, typical_p: 1 })),
+    });
+    hub.ollamaLayers.mockImplementation(async () => ({
+      model: SHA,
+      others: [
+        { mediaType: 'application/vnd.ollama.image.projector', digest: PROJECTOR_SHA },
+        { mediaType: 'application/vnd.ollama.image.params', digest: PARAMS_SHA },
+      ],
+    }));
+    const left = () => readdir(root);
+    return { ...h, runtime, hub, root, blobs, events, left, cleanup: () => rm(root, { recursive: true, force: true }) };
+  }
+
+  it('offers a split build on this computer under its hf.co name, and says why not on a saved server', async () => {
+    const t = await importing();
+    try {
+      const view = await t.service.detail(REPO);
+      expect(view.ok && view.model.builds[1]).toMatchObject({
+        ollamaRef: SPLIT_REF,
+        installedNames: ollamaRefAliases(SPLIT_REF),
+        blockedReason: null,
+        importParts: 2,
+      });
+      expect(view.ok && view.model.builds[0].importParts).toBeNull();
+      const plain = await harness({ detail: splitDetail() }).service.detail(REPO);
+      expect(plain.ok && plain.model.builds[1]).toMatchObject({
+        blockedReason: expect.stringMatching(/Split/),
+        importParts: null,
+      });
+      const remote = await servers({ detail: splitDetail() }).service.detail(REPO, 'a');
+      expect(remote.ok && remote.model.builds[1].blockedReason).toMatch(/only to Ollama on this computer/);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('downloads each part, hands it to Ollama, then creates the model with the sibling projector and params', async () => {
+    const t = await importing();
+    try {
+      let finish = () => {};
+      t.runtime.create.mockImplementationOnce(async () => {
+        t.events.push('create');
+        await new Promise<void>(resolve => (finish = resolve));
+      });
+      const result = t.service.pull(splitRequest);
+      await vi.waitFor(() => expect(t.runtime.create).toHaveBeenCalled());
+      expect(t.service.pulls()[0]).toMatchObject({ phase: 'finishing', completedBytes: 550, totalBytes: 550 });
+      finish();
+      await expect(result).resolves.toEqual({ ok: true, ref: SPLIT_REF });
+
+      expect(t.events).toEqual([
+        `download ${SPLIT_ID}-00001-of-00002.gguf`,
+        `upload ${'1'.repeat(64)}.gguf`,
+        `download ${SPLIT_ID}-00002-of-00002.gguf`,
+        `upload ${'2'.repeat(64)}.gguf`,
+        'download mmproj-F16.gguf',
+        `upload ${PROJECTOR_SHA}.gguf`,
+        'create',
+      ]);
+      expect(t.runtime.create).toHaveBeenCalledWith(
+        {
+          model: SPLIT_REF,
+          files: {
+            [`${SPLIT_ID}-00001-of-00002.gguf`]: `sha256:${'1'.repeat(64)}`,
+            [`${SPLIT_ID}-00002-of-00002.gguf`]: `sha256:${'2'.repeat(64)}`,
+            'mmproj-F16.gguf': `sha256:${PROJECTOR_SHA}`,
+          },
+          parameters: { stop: ['<|im_end|>'], temperature: 0.7 },
+        },
+        expect.anything()
+      );
+      expect(t.hub.ollamaLayers).toHaveBeenCalledWith(REPO, 'Q4_K_M', expect.anything());
+      expect(t.hub.ollamaRegistryJson).toHaveBeenCalledWith(REPO, PARAMS_SHA, expect.anything());
+      expect(t.hub.verifyOllamaRef).not.toHaveBeenCalled();
+      expect(t.runtime.pull).not.toHaveBeenCalled();
+      expect(t.installedChanged).toHaveBeenCalledTimes(1);
+      expect(t.service.pulls()).toEqual([]);
+      expect(await t.left()).toEqual([]);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('still imports without a projector or params when the sibling cannot be read', async () => {
+    const t = await importing({ detail: splitDetail({ projectors: [] }) });
+    try {
+      t.hub.ollamaLayers.mockRejectedValue(new Error('registry down'));
+      const result = await t.service.pull(splitRequest);
+      expect(result).toMatchObject({ ok: true, ref: SPLIT_REF, notice: expect.stringMatching(/could not be read/) });
+      expect(t.runtime.create.mock.calls[0]?.[0]).not.toHaveProperty('parameters');
+      expect(t.warn).toHaveBeenCalledWith(expect.stringMatching(/registry down/));
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('counts a store Desktop cannot see as one disk with staging', async () => {
+    let root = '';
+    let stagingFree = 849;
+    const freeSpace = vi.fn(async (path: string) => (path === root ? stagingFree : 10_000));
+    const sameDisk = vi.fn(async () => false);
+    const t = await importing({ deps: { freeSpace, sameDisk, pathExists: async () => false } });
+    root = t.root;
+    try {
+      t.runtime.list.mockResolvedValue([
+        {
+          name: 'qwen2.5:0.5b',
+          sizeBytes: 1,
+          quantization: null,
+          family: null,
+          parameterSize: null,
+          modifiedAt: null,
+          capabilities: { tools: true, vision: false, thinking: false, embeddings: false, completion: true },
+        },
+      ]);
+      const inspect = t.runtime.inspect.getMockImplementation();
+      t.runtime.inspect.mockImplementation(async (name, options) => ({
+        ...(await inspect!(name, options)),
+        contents: { template: null, license: null, modelBlob: SHA, storeDir: '/root/.ollama/models' },
+      }));
+      // 550 bytes in all, 300 in the largest part: one disk needs 850 on the staging disk.
+      await expect(t.service.pull(splitRequest)).resolves.toMatchObject({
+        ok: false,
+        error: { kind: 'cannot-pull', message: expect.stringContaining('on the disk Desktop downloads to') },
+      });
+      expect(t.hub.download).not.toHaveBeenCalled();
+      stagingFree = 850;
+      await expect(t.service.pull(splitRequest)).resolves.toMatchObject({ ok: true });
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('counts parts already staged as progress when checking the room for a retry', async () => {
+    const free = vi.fn(async () => 549);
+    const t = await importing({
+      deps: { defaultStoreDir: () => '/default', sameDisk: async () => true, freeSpace: free },
+    });
+    try {
+      await writeFile(join(t.root, `${'1'.repeat(64)}.gguf.partial`), Buffer.alloc(300));
+      await expect(t.service.pull(splitRequest)).resolves.toMatchObject({ ok: false, error: { kind: 'cannot-pull' } });
+      free.mockResolvedValue(550);
+      await expect(t.service.pull(splitRequest)).resolves.toMatchObject({ ok: true });
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('keeps the staged part when the app quits mid-part', async () => {
+    const t = await importing();
+    try {
+      const stall = async (_file: HubGgufFile, destination: string, opts?: DownloadOptions) => {
+        await writeFile(`${destination}.partial`, 'half');
+        return new Promise<never>((_resolve, reject) => {
+          const stop = () => reject(new DOMException('aborted', 'AbortError'));
+          // The test may abort while the partial is still being written.
+          if (opts?.signal?.aborted) stop();
+          else opts?.signal?.addEventListener('abort', stop);
+        });
+      };
+      t.hub.download.mockImplementationOnce(stall);
+      const quit = t.service.pull(splitRequest);
+      await vi.waitFor(() => expect(t.hub.download).toHaveBeenCalled());
+      t.service.dispose();
+      await expect(quit).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(await t.left()).toEqual([`${'1'.repeat(64)}.gguf.partial`]);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  // 550 bytes in all, 300 in the largest part.
+  it.each([
+    { sameDisk: true, staging: 10_000, store: 849, where: "on the disk with Ollama's models" },
+    { sameDisk: false, staging: 10_000, store: 549, where: "on the disk with Ollama's models" },
+    { sameDisk: false, staging: 299, store: 10_000, where: 'on the disk Desktop downloads to' },
+  ])('refuses before downloading when a disk lacks the room: %j', async ({ sameDisk, staging, store, where }) => {
+    let root = '';
+    const freeSpace = vi.fn(async (path: string) => (path === '/default' ? store : path === root ? staging : 0));
+    const t = await importing({
+      deps: { defaultStoreDir: () => '/default', sameDisk: async () => sameDisk, freeSpace },
+    });
+    root = t.root;
+    try {
+      const result = await t.service.pull(splitRequest);
+      expect(result).toMatchObject({
+        ok: false,
+        error: { kind: 'cannot-pull', message: expect.stringContaining(where) },
+      });
+      expect(t.hub.download).not.toHaveBeenCalled();
+      expect(t.service.pulls()).toEqual([]);
+      freeSpace.mockResolvedValue(10_000);
+      await expect(t.service.pull(splitRequest)).resolves.toEqual({ ok: true, ref: SPLIT_REF });
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('cancels mid-part and leaves nothing staged', async () => {
+    const t = await importing();
+    try {
+      t.hub.download.mockImplementationOnce(async (_file, destination, opts) => {
+        await writeFile(`${destination}.partial`, 'half');
+        return new Promise<never>((_resolve, reject) => {
+          const stop = () => reject(new DOMException('aborted', 'AbortError'));
+          // The test may abort while the partial is still being written.
+          if (opts?.signal?.aborted) stop();
+          else opts?.signal?.addEventListener('abort', stop);
+        });
+      });
+      const result = t.service.pull(splitRequest);
+      await vi.waitFor(() => expect(t.hub.download).toHaveBeenCalled());
+      t.service.cancel(pullKey(REPO, SPLIT_ID));
+      await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+      expect(t.service.pulls()).toEqual([]);
+      expect(t.runtime.create).not.toHaveBeenCalled();
+      expect(t.installedChanged).not.toHaveBeenCalled();
+      expect(await t.left()).toEqual([]);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  describe('two builds of one repo sharing a projector', () => {
+    const OTHER_ID = 'qwen2.5-0.5b-instruct-q4_0';
+    const otherShard = (index: number) => ({
+      path: `${OTHER_ID}-0000${index - 2}-of-00002.gguf`,
+      sizeBytes: 100,
+      sha256: String(index).repeat(64),
+      url: `https://x/${index}`,
+    });
+    const otherRequest = { ...request, buildId: OTHER_ID, sizeBytes: 200 };
+
+    async function sharing() {
+      const base = splitDetail();
+      const t = await importing({
+        detail: {
+          ...base,
+          builds: [
+            ...base.builds,
+            {
+              ...base.builds[1],
+              id: OTHER_ID,
+              quant: 'Q4_0',
+              label: 'Q4_0',
+              files: [otherShard(3), otherShard(4)],
+              sizeBytes: 200,
+            },
+          ],
+        },
+      });
+      const fallback = t.hub.download.getMockImplementation()!;
+      const releases: Array<() => void> = [];
+      const hold = (_destination: string, opts?: DownloadOptions) =>
+        new Promise<void>((resolve, reject) => {
+          releases.push(resolve);
+          opts?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        });
+      return { t, fallback, hold, releases };
+    }
+
+    it('keeps the shared part another import holds open when one build is cancelled', async () => {
+      const { t, fallback, hold, releases } = await sharing();
+      try {
+        t.hub.download.mockImplementation(async (file, destination, opts) => {
+          if (file.sha256 === PROJECTOR_SHA) {
+            await writeFile(`${destination}.partial`, 'half');
+            await writeFile(`${destination}.lock`, 'held');
+            await hold(destination, opts);
+            await writeFile(destination, 'x');
+            return { path: destination, sizeBytes: file.sizeBytes, sha256: file.sha256, resumedBytes: 0 };
+          }
+          if (file.sha256 === '3'.repeat(64)) {
+            await writeFile(`${destination}.partial`, 'half');
+            await hold(destination, opts);
+          }
+          return fallback(file, destination, opts);
+        });
+        const first = t.service.pull(splitRequest);
+        await vi.waitFor(() => expect(releases).toHaveLength(1));
+        const second = t.service.pull(otherRequest);
+        await vi.waitFor(() => expect(releases).toHaveLength(2));
+        t.service.cancel(pullKey(REPO, OTHER_ID));
+        await expect(second).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect((await t.left()).sort()).toEqual([`${PROJECTOR_SHA}.gguf.lock`, `${PROJECTOR_SHA}.gguf.partial`]);
+        releases[0]();
+        await expect(first).resolves.toMatchObject({ ok: true });
+      } finally {
+        await t.cleanup();
+      }
+    });
+
+    it('does not remove a shared part when the other build succeeds', async () => {
+      const { t, fallback, hold, releases } = await sharing();
+      try {
+        t.hub.download.mockImplementation(async (file, destination, opts) => {
+          if (file.sha256 === '3'.repeat(64)) await hold(destination, opts);
+          return fallback(file, destination, opts);
+        });
+        t.runtime.create.mockImplementationOnce(async () => {
+          await writeFile(join(t.root, `${PROJECTOR_SHA}.gguf.partial`), 'x');
+        });
+        const second = t.service.pull(otherRequest);
+        await vi.waitFor(() => expect(releases).toHaveLength(1));
+        await expect(t.service.pull(splitRequest)).resolves.toMatchObject({ ok: true });
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect(await t.left()).toEqual([`${PROJECTOR_SHA}.gguf.partial`]);
+        t.service.cancel(pullKey(REPO, OTHER_ID));
+        await second;
+      } finally {
+        await t.cleanup();
+      }
+    });
+  });
+
+  it("fails with Ollama's reason, keeps the staged part, and a retry fetches only what Ollama lacks", async () => {
+    const t = await importing();
+    try {
+      t.runtime.uploadBlob.mockImplementationOnce(async (digest: string) => {
+        t.blobs.add(digest);
+      });
+      t.runtime.uploadBlob.mockImplementationOnce(async () => {
+        throw new LocalRuntimeError('ollama could not take the part: digest mismatch', 'ollama');
+      });
+      const failed = await t.service.pull(splitRequest);
+      expect(failed).toMatchObject({ ok: false });
+      expect(t.service.pulls()[0]).toMatchObject({
+        phase: 'failed',
+        error: { message: expect.stringMatching(/digest mismatch/) },
+      });
+      expect(t.runtime.create).not.toHaveBeenCalled();
+      expect(await t.left()).toHaveLength(1);
+
+      t.hub.download.mockClear();
+      await expect(t.service.pull(splitRequest)).resolves.toEqual({ ok: true, ref: SPLIT_REF });
+      expect(t.hub.download.mock.calls.map(([file]) => file.path)).toEqual([
+        `${SPLIT_ID}-00002-of-00002.gguf`,
+        'mmproj-F16.gguf',
+      ]);
+      expect(await t.left()).toEqual([]);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('removes the staged parts of a failed import when the user dismisses it', async () => {
+    const t = await importing();
+    try {
+      t.runtime.uploadBlob.mockRejectedValueOnce(new LocalRuntimeError('ollama could not take the part', 'ollama'));
+      await t.service.pull(splitRequest);
+      expect(await t.left()).toHaveLength(1);
+      t.service.dismiss(pullKey(REPO, SPLIT_ID));
+      await vi.waitFor(async () => expect(await t.left()).toEqual([]));
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('removes the staged parts of a failed import when its retry is refused', async () => {
+    const free = vi.fn(async () => 10_000);
+    const t = await importing({
+      deps: { defaultStoreDir: () => '/default', sameDisk: async () => true, freeSpace: free },
+    });
+    try {
+      t.runtime.uploadBlob.mockRejectedValueOnce(new LocalRuntimeError('ollama could not take the part', 'ollama'));
+      await t.service.pull(splitRequest);
+      expect(await t.left()).toHaveLength(1);
+      free.mockResolvedValue(1);
+      await expect(t.service.pull(splitRequest)).resolves.toMatchObject({ ok: false, error: { kind: 'cannot-pull' } });
+      expect(t.service.pulls()).toEqual([]);
+      await vi.waitFor(async () => expect(await t.left()).toEqual([]));
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('needs Ollama 0.35.0 or newer to add a split build', async () => {
+    const t = await importing({ version: '0.34.2' });
+    try {
+      const result = await t.service.pull(splitRequest);
+      expect(result).toMatchObject({ ok: false, error: { message: expect.stringMatching(/0\.35\.0/) } });
+      expect(t.hub.download).not.toHaveBeenCalled();
+    } finally {
+      await t.cleanup();
+    }
+  });
 });

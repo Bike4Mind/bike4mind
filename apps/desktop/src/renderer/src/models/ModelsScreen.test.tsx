@@ -144,6 +144,8 @@ function view(extra: Partial<HubModelView> = {}): HubModelView {
         ollamaRef: `hf.co/${REPO}:Q4_K_M`,
         installedNames: [`hf.co/${REPO}:q4_k_m`.toLowerCase(), `huggingface.co/${REPO}:q4_k_m`.toLowerCase()],
         blockedReason: null,
+        importParts: null,
+        importLargestBytes: null,
         fit: null,
       },
     ],
@@ -265,6 +267,8 @@ function libraryPull(fit: ModelFit = FITS): CuratedPullResult {
     ollamaRef: E4B_REF,
     installedNames: [E4B_REF.toLowerCase()],
     blockedReason: null,
+    importParts: null,
+    importLargestBytes: null,
     fit,
   };
   return {
@@ -1592,6 +1596,26 @@ describe('ModelsScreen explore', () => {
     });
   });
 
+  it('asks no Ollama key steps for a split build Desktop adds itself, and says it comes in parts', async () => {
+    const split = {
+      ...view().builds[0],
+      id: 'qwen-q8_0',
+      label: 'Q8_0',
+      ollamaRef: `hf.co/${REPO}:Q8_0`,
+      importParts: 3,
+      importLargestBytes: 200_000_000,
+    };
+    bridge.detail = { ok: true, model: view({ builds: [split], needsAccess: true, gated: 'manual' }) };
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    await click(q('models-build-pull-btn'));
+    expect(q('models-pull-dialog-size')?.textContent).toContain('491 MB download in 3 parts.');
+    expect(q('models-pull-dialog-size')?.textContent).toContain('Desktop downloads the parts one at a time');
+    expect(q('models-pull-dialog-access-checkbox')).toBeNull();
+    expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(false);
+  });
+
   it('names each build by its label when two share a quant', async () => {
     const plain = view().builds[0];
     bridge.detail = {
@@ -1963,6 +1987,37 @@ describe('ModelsScreen servers', () => {
     await click(q('models-build-pull-btn'));
     expect(q('models-pull-dialog-path')?.textContent).toBe('Saved with the other models on gpu box.');
     expect(calls.pull).not.toHaveBeenCalled();
+  });
+
+  it('sizes the room for a split import as an upper bound and leaves the hard check to Desktop', async () => {
+    const split = {
+      ...view().builds[0],
+      id: 'qwen-q8_0',
+      label: 'Q8_0',
+      ollamaRef: `hf.co/${REPO}:Q8_0`,
+      importParts: 3,
+      importLargestBytes: 200_000_000,
+    };
+    bridge.detail = { ok: true, model: view({ builds: [split] }) };
+    bridge.store = { path: '/home/me/.ollama/models', source: 'runtime', freeBytes: 600_000_000 };
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    await click(q('models-build-pull-btn'));
+    const text = q('models-pull-dialog-path')?.textContent;
+    expect(text).toContain('600 MB free.');
+    expect(text).not.toContain('not enough');
+    expect(text).toContain('Adding the parts needs up to 691 MB free');
+  });
+
+  it('shows the notice an import returns when it went ahead without the registry params', async () => {
+    calls.pull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M`, notice: 'created without them.' });
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    await click(q('models-build-pull-btn'));
+    await click(q('models-pull-dialog-confirm-btn'));
+    expect(q('models-detail-pull-notice')?.textContent).toBe('created without them.');
   });
 
   it("marks Ollama's default folder as a default, and warns when this computer is short of space", async () => {
