@@ -83,6 +83,42 @@ describe('indexed entity lookup', () => {
     });
     expect((await searchAdminEntities('192.0.2.1')).map(result => result.id)).toEqual([String(userId)]);
   });
+  it('returns the five most recently active IP owners, newest first', async () => {
+    const owners = Array.from({ length: 6 }, () => new Types.ObjectId());
+    await User.collection.insertMany(owners.map((_id, i) => ({ _id, name: `Owner ${i}`, username: `owner${i}` })));
+    const base = Date.now();
+    await AuthSessionModel.collection.insertMany(
+      owners.map((owner, i) => ({
+        sid: `recency-${i}`,
+        userId: String(owner),
+        device: { ip: '192.0.2.9' },
+        lastUsedAt: new Date(base + i * 1000),
+        expiresAt: new Date(base + 60_000),
+      }))
+    );
+    expect((await searchAdminEntities('192.0.2.9')).map(result => result.id)).toEqual(
+      owners.slice(1).reverse().map(String)
+    );
+  });
+  it('keeps other users on the IP visible when one API user fills the usage rows', async () => {
+    const busy = new Types.ObjectId();
+    const quiet = new Types.ObjectId();
+    await User.collection.insertMany([
+      { _id: busy, name: 'Busy', username: 'busy' },
+      { _id: quiet, name: 'Quiet', username: 'quiet' },
+    ]);
+    const base = Date.now();
+    await ApiKeyUsageLog.collection.insertMany([
+      { userId: String(quiet), keyId: 'quiet-key', ipAddress: '192.0.2.10', timestamp: new Date(base - 60_000) },
+      ...Array.from({ length: 120 }, (_, i) => ({
+        userId: String(busy),
+        keyId: 'busy-key',
+        ipAddress: '192.0.2.10',
+        timestamp: new Date(base + i),
+      })),
+    ]);
+    expect((await searchAdminEntities('192.0.2.10')).map(result => result.id)).toEqual([String(busy), String(quiet)]);
+  });
   it('caps each result group', async () => {
     await Organization.collection.insertMany(Array.from({ length: 10 }, () => ({ name: 'Common org' })));
     expect(await searchAdminEntities('Common org')).toHaveLength(5);

@@ -116,7 +116,7 @@ const callAsMfaPending = async (method: RequestMethod, url: string) => {
   );
   const route = nc<any, any>().use(auth).all(handlerFn);
   await route(req as any, res as any);
-  return { res, handlerFn };
+  return { res, handlerFn, logger: (req as any).logger as { info: ReturnType<typeof vi.fn> } };
 };
 
 describe('auth middleware: mfaPending sign-in token', () => {
@@ -133,6 +133,14 @@ describe('auth middleware: mfaPending sign-in token', () => {
     expect(handlerFn).not.toHaveBeenCalled();
     expect(res._getStatusCode()).toBe(401);
     expect(res._getJSONData()).toMatchObject({ mfaPending: true });
+  });
+
+  it('keeps admin search queries out of the blocked-request log', async () => {
+    const { res, logger } = await callAsMfaPending('GET', '/api/admin/search?q=SECRETVALUE');
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(logger.info).toHaveBeenCalled();
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain('SECRETVALUE');
   });
 
   it('still admits the sign-in enrollment and verification routes', async () => {

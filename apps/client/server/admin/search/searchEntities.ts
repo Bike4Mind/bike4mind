@@ -26,29 +26,49 @@ export async function searchAdminEntities(query: string): Promise<AdminSearchRes
         .maxTimeMS(QUERY_TIMEOUT_MS)
         .lean()
     : [];
-  const ipRows =
+  const validId = (id: unknown): id is string => typeof id === 'string' && /^[a-f0-9]{24}$/i.test(id);
+  const [sessionRows, usageRows] =
     kind === 'ip'
       ? await Promise.all([
           AuthSessionModel.find({ 'device.ip': ip })
             .hint('auth_session_ip_search')
-            .select('userId -_id')
+            .select('userId lastUsedAt -_id')
             .sort({ lastUsedAt: -1 })
             .limit(100)
             .maxTimeMS(QUERY_TIMEOUT_MS)
             .lean(),
-          ApiKeyUsageLog.find({ ipAddress: ip })
-            .hint('api_usage_ip_search')
-            .select('userId -_id')
-            .sort({ timestamp: -1 })
-            .limit(100)
-            .maxTimeMS(QUERY_TIMEOUT_MS)
-            .lean(),
+          // One row per API user, so a single busy key cannot crowd out other users on the IP.
+          ApiKeyUsageLog.aggregate<{ _id: string; last: Date }>(
+            [
+              { $match: { ipAddress: ip } },
+              { $sort: { timestamp: -1 } },
+              { $group: { _id: '$userId', last: { $first: '$timestamp' } } },
+              { $sort: { last: -1 } },
+              { $limit: 100 },
+            ],
+            { hint: 'api_usage_ip_search', maxTimeMS: QUERY_TIMEOUT_MS }
+          ),
         ])
-      : [];
-  const ipUserIds = ipRows
-    .flat()
-    .map(row => row.userId)
-    .filter(id => /^[a-f0-9]{24}$/i.test(id));
+      : [[], []];
+  const lastSeen = new Map<string, number>();
+  const noteSeen = (id: unknown, at: Date | undefined) => {
+    if (!validId(id)) return;
+    const time = at ? new Date(at).getTime() : 0;
+    lastSeen.set(id, Math.max(lastSeen.get(id) ?? 0, time));
+  };
+  sessionRows.forEach(row => noteSeen(row.userId, row.lastUsedAt));
+  usageRows.forEach(row => noteSeen(row._id, row.last));
+  // Newest first; the user query re-sorts by _id, so the order is restored in JS below.
+  const recentOwnerIds = [...lastSeen.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([id]) => id)
+    .slice(0, GROUP_LIMIT);
+  const recencyOrder =
+    kind === 'ip'
+      ? recentOwnerIds
+      : kind === 'keyPrefix'
+        ? [...new Set(keys.map(key => key.userId).filter(validId))]
+        : null;
   const userFilter =
     kind === 'id'
       ? { _id: query }
@@ -56,11 +76,9 @@ export async function searchAdminEntities(query: string): Promise<AdminSearchRes
         ? { email: query }
         : kind === 'stripe'
           ? { stripeCustomerId: query }
-          : kind === 'ip'
-            ? { _id: { $in: ipUserIds } }
-            : kind === 'keyPrefix'
-              ? { _id: { $in: keys.map(key => key.userId) } }
-              : null;
+          : recencyOrder
+            ? { _id: { $in: recencyOrder } }
+            : null;
   const [users, namedOrganizations, identifiedOrganizations] = await Promise.all([
     userFilter
       ? User.find(userFilter)
@@ -92,6 +110,9 @@ export async function searchAdminEntities(query: string): Promise<AdminSearchRes
           .lean()
       : [],
   ]);
+  if (recencyOrder) {
+    users.sort((x, y) => recencyOrder.indexOf(String(x._id)) - recencyOrder.indexOf(String(y._id)));
+  }
   const organizations = [
     ...new Map([...identifiedOrganizations, ...namedOrganizations].map(org => [String(org._id), org])).values(),
   ].slice(0, GROUP_LIMIT);

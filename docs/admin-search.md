@@ -12,10 +12,10 @@ returns masked emails, displayed key prefixes and abbreviated organization IDs.
 Never paste a full API key. Key results open their owner's API keys tab; organization
 results open the organization profile.
 
-IP searches inspect the latest 100 matching sign-in records and 100 API usage
-records, then resolve their owners. They reflect retained records, not all historical
-activity. Searches by IP or key prefix write an audit entry containing the identifier
-type rather than the query. Each admin can make 30 searches per minute.
+IP searches inspect the latest 100 matching sign-in records and up to 100 distinct
+API users, then resolve the five most recently active owners. They reflect retained
+records, not all historical activity. Searches by IP or key prefix write an audit entry
+containing the identifier type rather than the query. Each admin can make 30 searches per minute.
 
 ## Troubleshooting
 
