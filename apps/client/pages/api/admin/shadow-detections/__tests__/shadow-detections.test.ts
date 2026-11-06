@@ -9,6 +9,8 @@ const h = vi.hoisted(() => ({
   list: vi.fn(),
   summarize: vi.fn(),
   addVerdict: vi.fn(),
+  addVerdicts: vi.fn(),
+  listContext: vi.fn(),
   record: vi.fn(),
   userWrite: vi.fn(),
 }));
@@ -33,7 +35,13 @@ vi.mock('@server/middlewares/adminApi', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  shadowDetectionRepository: { list: h.list, summarize: h.summarize, addVerdict: h.addVerdict },
+  shadowDetectionRepository: {
+    list: h.list,
+    summarize: h.summarize,
+    addVerdict: h.addVerdict,
+    addVerdicts: h.addVerdicts,
+    listContext: h.listContext,
+  },
   // Grading must never act on the accounts a detection names: any write here fails the test.
   userRepository: { update: h.userWrite, updateOne: h.userWrite, setRiskReviewState: h.userWrite },
   userApiKeyRepository: { update: h.userWrite },
@@ -48,6 +56,8 @@ const loadRoutes = async () => {
   await import('@pages/api/admin/shadow-detections/index');
   h.current = 'verdict';
   await import('@pages/api/admin/shadow-detections/verdict');
+  h.current = 'verdicts';
+  await import('@pages/api/admin/shadow-detections/verdicts');
 };
 
 const ADMIN_ID = 'a'.repeat(24);
@@ -91,6 +101,8 @@ beforeEach(async () => {
   h.list.mockReset().mockResolvedValue({ data: [], truncated: false });
   h.summarize.mockReset().mockResolvedValue([]);
   h.addVerdict.mockReset();
+  h.addVerdicts.mockReset();
+  h.listContext.mockReset().mockResolvedValue({ accounts: [], burstPeers: [] });
   h.record.mockReset().mockResolvedValue(null);
   h.userWrite.mockReset();
   if (!h.handlers.list) await loadRoutes();
@@ -133,6 +145,19 @@ describe('GET /api/admin/shadow-detections', () => {
     expect(res._getHeaders()['cache-control']).toBe('private, no-store');
     const body = res._getJSONData();
     expect(body).toMatchObject({ truncated: true, summary, data: [{ id: DETECTION_ID, revision: 0 }] });
+  });
+
+  it('returns the accounts and burst peers of the listed detections', async () => {
+    const accounts = [{ userId: 'u1', status: 'suspended', signupMethod: 'google', currentCredits: 0 }];
+    const burstPeers = [{ detectionId: DETECTION_ID, userIds: ['u2'], truncated: false }];
+    h.list.mockResolvedValue({ data: [item()], truncated: false });
+    h.listContext.mockResolvedValue({ accounts, burstPeers });
+    const { req, res } = request('GET');
+
+    await h.handlers.list.get(req, res);
+
+    expect(h.listContext).toHaveBeenCalledWith([expect.objectContaining({ id: DETECTION_ID })]);
+    expect(res._getJSONData()).toMatchObject({ accounts, burstPeers });
   });
 
   it('rejects an unknown filter', async () => {
@@ -233,5 +258,65 @@ describe('POST /api/admin/shadow-detections/verdict', () => {
       await expect(h.handlers.verdict.post(req, res)).rejects.toMatchObject({ statusCode: 400 });
     }
     expect(h.addVerdict).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/admin/shadow-detections/verdicts', () => {
+  const OTHER_ID = 'c'.repeat(24);
+  const bulkBody = (overrides: Record<string, unknown> = {}) => ({
+    items: [
+      { id: DETECTION_ID, expectedRevision: 0 },
+      { id: OTHER_ID, expectedRevision: 2 },
+    ],
+    verdict: 'confirmed_abuse',
+    reason: REASON,
+    ...overrides,
+  });
+
+  it('records one verdict on each detection as the signed-in admin, audits each graded one, and reports conflicts', async () => {
+    const graded = item({ verdict: 'confirmed_abuse', revision: 1 });
+    const moved = item({ id: OTHER_ID, verdict: 'legitimate_human', revision: 3 });
+    h.addVerdicts.mockResolvedValue({ updated: [graded], conflicts: [moved], notFound: [] });
+    const { req, res } = request('POST', { body: bulkBody() });
+
+    await h.handlers.verdicts.post(req, res);
+
+    expect(h.addVerdicts).toHaveBeenCalledWith({
+      items: bulkBody().items,
+      verdict: 'confirmed_abuse',
+      reason: REASON,
+      reviewerId: ADMIN_ID,
+    });
+    expect(h.record).toHaveBeenCalledExactlyOnceWith(
+      req,
+      expect.objectContaining({
+        action: 'security.detection.reviewed',
+        target: expect.objectContaining({ id: DETECTION_ID }),
+        reason: REASON,
+      })
+    );
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({
+      updated: [{ id: DETECTION_ID, verdict: 'confirmed_abuse' }],
+      conflicts: [{ id: OTHER_ID, verdict: 'legitimate_human' }],
+      notFound: [],
+    });
+    expect(h.userWrite).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['no detections', { items: [] }],
+    ['a malformed id', { items: [{ id: 'nope', expectedRevision: 0 }] }],
+    ['an unknown verdict', { verdict: 'maybe' }],
+  ])('rejects %s before grading', async (_label, overrides) => {
+    const { req, res } = request('POST', { body: bulkBody(overrides) });
+    await expect(h.handlers.verdicts.post(req, res)).rejects.toThrow(/detection ids/i);
+    expect(h.addVerdicts).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing reason before grading', async () => {
+    const { req, res } = request('POST', { body: bulkBody({ reason: undefined }) });
+    await expect(h.handlers.verdicts.post(req, res)).rejects.toThrow();
+    expect(h.addVerdicts).not.toHaveBeenCalled();
   });
 });
