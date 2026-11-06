@@ -107,11 +107,12 @@ describe('resolveSubject', () => {
   });
 
   it('refuses a link that leads back to itself through a path realpath cannot read', async () => {
-    const loop = 'L'.repeat(250);
+    // macOS caps a link's target text at its 1024-byte PATH_MAX: keep the target under it, past the mocked limit.
+    const loop = 'L'.repeat(100);
     await symlink('.', join(root, loop));
     const link = join(root, 'x');
-    await symlink(join(root, ...Array.from({ length: 8 }, () => loop), 'x'), link);
-    pathMax.bytes = 1024;
+    await symlink(join(root, ...Array.from({ length: 5 }, () => loop), 'x'), link);
+    pathMax.bytes = 512;
     pathMax.overflows = link;
     await expect(resolveSubject({ tool: 'file_write', paths: [join(link, 'new')] })).rejects.toMatchObject({
       code: 'ELOOP',

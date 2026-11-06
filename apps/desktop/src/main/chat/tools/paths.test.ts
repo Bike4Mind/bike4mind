@@ -397,11 +397,12 @@ describe('realpathSyncNearest', () => {
 
   it('returns null for a link that leads back to itself through a path realpath cannot read', async () => {
     const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
-    const loop = 'L'.repeat(250);
+    // macOS caps a link's target text at its 1024-byte PATH_MAX: keep the target under it, past the mocked limit.
+    const loop = 'L'.repeat(100);
     await symlink('.', join(base, loop));
     const link = join(base, 'x');
-    await symlink(join(base, ...Array.from({ length: 8 }, () => loop), 'x'), link);
-    limitPathMax(1024, link);
+    await symlink(join(base, ...Array.from({ length: 5 }, () => loop), 'x'), link);
+    limitPathMax(512, link);
     expect(realpathSyncNearest(join(link, 'new'))).toBeNull();
   });
 
