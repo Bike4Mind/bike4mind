@@ -5,7 +5,7 @@ import type { OrchestratorViewProps } from '../OrchestratorStage';
 import type { AgentView } from '../roster';
 import { agentFixture, createThemedMount, el, query } from '../testUtils';
 import { assignPersonas } from '@shared/agentPersona';
-import { DOOR_POINT, INNKEEPER_POINT, TAVERN_SLOTS } from './scene';
+import { BAR_COUNTER, DOOR_POINT, INNKEEPER_POINT, TAVERN_SLOTS, hiddenByCounter } from './scene';
 import { TavernView } from './TavernView';
 
 type SceneModule = typeof import('./scene');
@@ -360,6 +360,50 @@ describe('TavernView', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it('clips him by where he is mid-walk, not by where he is headed', async () => {
+      const agents = [agentFixture('a', 'working'), agentFixture('b', 'done')];
+      await renderTavern(agents, false, null, { parent: { status: 'processing' } });
+      const frames: FrameRequestCallback[] = [];
+      vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => frames.push(callback));
+      vi.stubGlobal('cancelAnimationFrame', () => {});
+      const SCENE = { left: 0, top: 0, width: 1000, height: 500 };
+      const box = (rect: { left: number; top: number; width: number; height: number }) =>
+        ({
+          ...rect,
+          right: rect.left + rect.width,
+          bottom: rect.top + rect.height,
+          x: rect.left,
+          y: rect.top,
+        }) as DOMRect;
+      let feet = { x: 60, y: BAR_COUNTER.front - 3 };
+      vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+        if (this === el('orchestrator-tavern')) return box(SCENE);
+        const width = 75;
+        const height = 75;
+        return box({
+          left: (feet.x / 100) * SCENE.width - width / 2,
+          top: (feet.y / 100) * SCENE.height - height,
+          width,
+          height,
+        });
+      });
+
+      await renderTavern(agents, false, null, { parent: sessionRead('b') });
+      const art = () => el('orchestrator-tavern-innkeeper-art');
+      const behind = hiddenByCounter(feet, 15);
+      expect(behind).toBeGreaterThan(0);
+      expect(art().style.clipPath).toBe(`inset(0 0 ${behind}% 0)`);
+
+      feet = { x: 60, y: BAR_COUNTER.front + 5 };
+      act(() => frames.splice(0).forEach(frame => frame(0)));
+      act(() => frames.splice(0).forEach(frame => frame(600)));
+      expect(art().style.clipPath).toMatch(/^inset\(0(px)?( 0(px)?)*\)$|^inset\(0(px)? 0(px)? 0% 0(px)?\)$/);
+
+      act(() => frames.splice(0).forEach(frame => frame(1300)));
+      expect(hiddenByCounter(TAVERN_SLOTS.hearth[0], 15)).toBe(0);
+      expect(art().style.clipPath).toBe('inset(0 0 0% 0)');
     });
 
     it('heads back to the bar, not the door, when the agent it is visiting is archived mid-visit', async () => {

@@ -1,6 +1,6 @@
 import Box from '@mui/joy/Box';
 import { keyframes } from '@mui/system';
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { SESSION_SETUP_LABEL } from '@shared/chat';
 import { activityLabel, toolKind, type ToolKind } from '../activity';
 import { prefersReducedMotion } from '../motion';
@@ -25,7 +25,8 @@ import { INNKEEPER_ART, TAVERN_BACKDROP, characterSprite, type InnkeeperPose } f
 
 const BUBBLE_MAX = 28;
 const NAME_MAX = 26;
-const WALK = '1.2s ease-in-out';
+const WALK_MS = 1200;
+const WALK = `${WALK_MS / 1000}s ease-in-out`;
 // Percent of the scene height, so sprites scale with the window; sprite canvases are square.
 const SPRITE_HEIGHT_PERCENT = 15;
 const SPRITE_HEIGHT = `${SPRITE_HEIGHT_PERCENT}%`;
@@ -372,8 +373,48 @@ function Innkeeper({
   onSelect?(): void;
 }) {
   const hidden = hiddenByCounter(point, SPRITE_HEIGHT_PERCENT);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const artRef = useRef<HTMLImageElement>(null);
+  const walkedFrom = useRef(point);
+  const rest = `inset(0 0 ${hidden}% 0)`;
+
+  // The counter overlap is not linear along a walk, so the clip follows his live position instead of easing.
+  useLayoutEffect(() => {
+    const from = walkedFrom.current;
+    walkedFrom.current = point;
+    const button = buttonRef.current;
+    const art = artRef.current;
+    const scene = button?.parentElement;
+    if (!button || !art || !scene || (from.x === point.x && from.y === point.y) || prefersReducedMotion()) return;
+    const follow = () => {
+      const box = scene.getBoundingClientRect();
+      if (box.height <= 0) return;
+      const feet = button.getBoundingClientRect();
+      const live = {
+        x: ((feet.left + feet.width / 2 - box.left) / box.width) * 100,
+        y: ((feet.bottom - box.top) / box.height) * 100,
+      };
+      art.style.clipPath = `inset(0 0 ${hiddenByCounter(live, SPRITE_HEIGHT_PERCENT)}% 0)`;
+    };
+    let start: number | undefined;
+    let frame = 0;
+    const tick = (now: number) => {
+      start ??= now;
+      if (now - start >= WALK_MS) {
+        art.style.clipPath = rest;
+        return;
+      }
+      follow();
+      frame = requestAnimationFrame(tick);
+    };
+    follow();
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [point, rest]);
+
   return (
     <Box
+      ref={buttonRef}
       component="button"
       type="button"
       disabled={!onSelect}
@@ -407,17 +448,16 @@ function Innkeeper({
         src={INNKEEPER_ART[pose]}
         alt=""
         draggable={false}
+        ref={artRef}
         data-testid="orchestrator-tavern-innkeeper-art"
-        // Animated with the walk, so stepping out from behind the bar reveals the legs as they clear it.
-        style={{ clipPath: `inset(0 0 ${hidden}% 0)` }}
+        // The resting clip; while he walks the layout effect above overrides it frame by frame.
+        style={{ clipPath: rest }}
         sx={{
           position: 'relative',
           display: 'block',
           width: '100%',
           height: '100%',
           imageRendering: 'pixelated',
-          transition: `clip-path ${WALK}`,
-          [NO_MOTION]: { transition: 'none' },
         }}
       />
       {bubble && (
