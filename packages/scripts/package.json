@@ -84,6 +84,7 @@
     "repair:stale-organization-pointers": "tsx src/repair-stale-organization-pointers.ts",
     "report:signup-grant-sizing": "tsx src/report-signup-grant-sizing.ts",
     "report:gear-grant-audit": "tsx src/gear-grant-audit.ts",
+    "report:access-review": "tsx src/access-review.ts",
     "migrate:signup-grant-schedule": "tsx src/migrate-signup-grant-schedule.ts",
     "tavern:upload-icons": "tsx src/uploadTavernIcons.ts",
     "count-tokens-probe": "tsx count-tokens-probe.ts",
