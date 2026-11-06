@@ -1,0 +1,87 @@
+/** A confidence assessment the model reported for its own iteration. */
+export type SelfReport = {
+  /** 0-1, validated; a score outside that range is never clamped into a report. */
+  confidence: number;
+  /** One line, whitespace-collapsed and length-capped; absent when the model gave none. */
+  reason?: string;
+};
+
+const MAX_REASON_LENGTH = 200;
+
+// Lenient on attribute quoting and tag case, strict on the value: the score is validated separately.
+const TAG = /<confidence\s+score\s*=\s*["']?([^"'>\s]*)["']?\s*>([\s\S]*?)<\/confidence\s*>/gi;
+
+/**
+ * Appended to the system prompt when self-report is enabled. Asks for the tag in the same turn as the
+ * next thought, so it costs no extra call.
+ */
+export const SELF_REPORT_CONFIDENCE_PROMPT = `CONFIDENCE REPORTING:
+Start every turn that calls a tool with one line in exactly this form, before anything else:
+<confidence score="0.8">one short reason</confidence>
+The score is a number from 0 to 1: how confident you are that your work so far is on track and correct. Be honest; a low score pauses the run for human review, which is better than proceeding on a guess.`;
+
+const OPEN = '<confidence';
+const CLOSE = '</confidence>';
+// A tag still unclosed after this much text is not a tag; stop holding the stream back.
+const MAX_HELD_LENGTH = 600;
+
+/**
+ * Keeps a leading `<confidence>` tag out of a live text stream. The prompt puts the tag first in the
+ * turn, so only that position is held back: the tag is withheld until it closes and the text after it
+ * flows through. Anything else passes straight through, as does a tag that never closes
+ * (`flush()` returns whatever is still held).
+ */
+export class SelfReportStreamFilter {
+  private held = '';
+  private settled = false;
+
+  /** The part of `delta` that is safe to show now. */
+  push(delta: string): string {
+    if (this.settled) return delta;
+    this.held += delta;
+    const lead = this.held.trimStart();
+    if (lead === '') return '';
+    const lower = lead.toLowerCase();
+    if (OPEN.startsWith(lower)) return '';
+    if (!lower.startsWith(OPEN)) return this.release();
+    const end = lower.indexOf(CLOSE);
+    if (end === -1) return this.held.length > MAX_HELD_LENGTH ? this.release() : '';
+    this.settled = true;
+    this.held = '';
+    return lead.slice(end + CLOSE.length).trimStart();
+  }
+
+  /** Whatever the stream ended while still holding back. */
+  flush(): string {
+    return this.settled ? '' : this.release();
+  }
+
+  private release(): string {
+    const held = this.held;
+    this.settled = true;
+    this.held = '';
+    return held;
+  }
+}
+
+/**
+ * Pull the model's self-reported confidence out of its turn text.
+ *
+ * Returns the first well-formed report and the text with every confidence tag removed, so the tag
+ * never reaches a thought or final answer. A tag whose score is missing, non-numeric or outside 0-1
+ * yields no report (the caller falls back to the tool-based score) but is still stripped.
+ */
+export function parseSelfReport(text: string): { report?: SelfReport; text: string } {
+  let report: SelfReport | undefined;
+  const stripped = text.replace(TAG, (_tag, rawScore: string, rawReason: string) => {
+    if (!report) {
+      const confidence = rawScore.trim() === '' ? NaN : Number(rawScore);
+      if (Number.isFinite(confidence) && confidence >= 0 && confidence <= 1) {
+        const reason = rawReason.replace(/\s+/g, ' ').trim().slice(0, MAX_REASON_LENGTH);
+        report = reason ? { confidence, reason } : { confidence };
+      }
+    }
+    return '';
+  });
+  return { report, text: stripped };
+}
