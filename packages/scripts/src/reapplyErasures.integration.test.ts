@@ -358,7 +358,15 @@ describe('records source flags', () => {
     const source = parseRecordsSource(['--records-uri', raw]);
     expect(source).toMatchObject({ dbName: 'prod' });
     expect(describeRecordsSource(source)).toBe('h1:27017,h2:27017/prod');
-    expect(describeMongoTarget('mongodb://admin:ab/cd@db.example:27017/prod')).toBe('db.example:27017/prod');
+  });
+
+  it('prints no userinfo when the password holds a raw question mark', () => {
+    const target = describeMongoTarget('mongodb://user:pa?ss@h1/prod');
+    expect(target).toBe('(unparseable uri)');
+    expect(describeMongoTarget('mongodb://admin:s3cr?et@h1/prod')).not.toMatch(/admin|s3cr/);
+    expect(describeMongoTarget('mongodb://user:pa?ss@h1:27017,h2/prod?replicaSet=a')).toBe('(unparseable uri)');
+    const source = parseRecordsSource(['--records-uri', 'mongodb://user:pa?ss@h1/prod', '--records-db', 'prod']);
+    expect(describeRecordsSource(source)).toBe('(unparseable uri)/prod');
   });
 
   it('ignores an @ in a query option and refuses the same uri as records source and target', () => {

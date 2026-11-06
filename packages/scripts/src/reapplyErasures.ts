@@ -41,12 +41,15 @@ const flagValue = (argv: string[], name: string): string | undefined => {
 /**
  * Splits a mongo uri into host and database, credentials dropped. The query goes first, then everything
  * through the last `@`, so neither a password holding a raw `/` (the driver only rejects it at connect)
- * nor an `@` in a query option can leak into, or skew, what is printed or compared.
+ * nor an `@` in a query option skews what is printed or compared. A `?` in the userinfo cannot be told
+ * from a query start: when the part before the first `?` has no `@` but the rest does, return undefined
+ * (printed as an unparseable uri) rather than risk printing credentials.
  */
 const parseMongoUri = (uri: string): { host: string; db: string } | undefined => {
   const m = /^mongodb(?:\+srv)?:\/\/(.*)$/.exec(uri);
   if (!m) return undefined;
-  const rest = m[1].split('?')[0];
+  const [rest, ...query] = m[1].split('?');
+  if (!rest.includes('@') && query.join('?').includes('@')) return undefined;
   const [host, ...path] = rest.slice(rest.lastIndexOf('@') + 1).split('/');
   return { host, db: path.join('/') };
 };
