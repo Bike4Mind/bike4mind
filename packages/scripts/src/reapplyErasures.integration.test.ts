@@ -353,6 +353,20 @@ describe('records source flags', () => {
     expect(out).not.toMatch(/ab|cd/);
   });
 
+  it('prints no password fragment on the records line and still names the database', () => {
+    const raw = 'mongodb://user:pa/ss@h1:27017,h2:27017/prod?replicaSet=rs0';
+    const source = parseRecordsSource(['--records-uri', raw]);
+    expect(source).toMatchObject({ dbName: 'prod' });
+    expect(describeRecordsSource(source)).toBe('h1:27017,h2:27017/prod');
+    expect(describeMongoTarget('mongodb://admin:ab/cd@db.example:27017/prod')).toBe('db.example:27017/prod');
+  });
+
+  it('ignores an @ in a query option and refuses the same uri as records source and target', () => {
+    const uri = 'mongodb://user:secret@h1/prod?appName=ops@team';
+    expect(describeMongoTarget(uri)).toBe('h1/prod');
+    expect(() => assertRecordsNotTarget(parseRecordsSource(['--records-uri', uri]), uri)).toThrow(/--from-target/);
+  });
+
   it('prints the records source and refuses one equal to the target', () => {
     const uri = parseRecordsSource(['--records-uri', 'mongodb://u:p@old.example:27017/prod?x=1']);
     expect(describeRecordsSource(uri)).toBe('old.example:27017/prod');

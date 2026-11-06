@@ -38,9 +38,21 @@ const flagValue = (argv: string[], name: string): string | undefined => {
   return value;
 };
 
+/**
+ * Splits a mongo uri into host and database, credentials dropped. The query goes first, then everything
+ * through the last `@`, so neither a password holding a raw `/` (the driver only rejects it at connect)
+ * nor an `@` in a query option can leak into, or skew, what is printed or compared.
+ */
+const parseMongoUri = (uri: string): { host: string; db: string } | undefined => {
+  const m = /^mongodb(?:\+srv)?:\/\/(.*)$/.exec(uri);
+  if (!m) return undefined;
+  const rest = m[1].split('?')[0];
+  const [host, ...path] = rest.slice(rest.lastIndexOf('@') + 1).split('/');
+  return { host, db: path.join('/') };
+};
+
 /** Database named in a mongo uri path (`mongodb://host/db?x=1`), if any. */
-export const dbNameFromUri = (uri: string): string | undefined =>
-  /^mongodb(?:\+srv)?:\/\/[^/?]+\/([^?]+)/.exec(uri)?.[1];
+export const dbNameFromUri = (uri: string): string | undefined => parseMongoUri(uri)?.db || undefined;
 
 /**
  * Pick exactly one records source from the command line. A typo or an empty `$OLD_URI` must fail
@@ -60,22 +72,16 @@ export function parseRecordsSource(argv: string[]): RecordsSource {
   return { kind: 'uri', uri: uri as string, dbName };
 }
 
-/**
- * `host/database` of a mongo uri, credentials dropped: safe to print. Everything through the last `@`
- * goes, so a password holding a raw `/` (which the driver only rejects at connect) is not printed.
- */
+/** `host/database` of a mongo uri, credentials dropped: safe to print. */
 export const describeMongoTarget = (uri: string): string => {
-  const m = /^mongodb(?:\+srv)?:\/\/(.*)$/.exec(uri);
-  if (!m) return '(unparseable uri)';
-  const rest = m[1].slice(m[1].lastIndexOf('@') + 1);
-  const [host, ...path] = rest.split('?')[0].split('/');
-  return `${host}/${path.join('/') || '(no database)'}`;
+  const parsed = parseMongoUri(uri);
+  return parsed ? `${parsed.host}/${parsed.db || '(no database)'}` : '(unparseable uri)';
 };
 
 /** What the operator sees for the records source; the target line sits beside it. */
 export const describeRecordsSource = (source: RecordsSource): string =>
   source.kind === 'uri'
-    ? `${describeMongoTarget(source.uri).split('/')[0]}/${source.dbName}`
+    ? `${parseMongoUri(source.uri)?.host ?? '(unparseable uri)'}/${source.dbName}`
     : source.kind === 'file'
       ? `file ${source.file}`
       : 'the target database';
