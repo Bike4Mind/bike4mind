@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import { resolveSignupGrantSchedule } from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
-import migration, { PIN_MARKER_COLLECTION } from './20260921239995_pin-signup-grant-schedule-keys';
+import migration, { PIN_MARKER_COLLECTION } from './20260921237480_pin-signup-grant-schedule-keys';
 import { storedGrantCredits } from './legacySignupGrantSchedule';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });

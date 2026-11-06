@@ -37,7 +37,7 @@ interface PinMarker {
  * operator sets signupGrantDripCap by hand.
  */
 const migration: MigrationFile = {
-  id: 20260921239995,
+  id: 20260921237480,
   name: 'pin-signup-grant-schedule-keys',
   up: async () => {
     const rows = await AdminSettings.find({
