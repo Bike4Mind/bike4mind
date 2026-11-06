@@ -65,6 +65,7 @@ export * from './agentPublic';
 export * from './pagination';
 export * from './projectPublic';
 export * from './projectContentPublic';
+export * from './projectSharingPublic';
 export * from './claudeMarketplace';
 export * from './skillMarketPublic';
 export * from './publicModel';

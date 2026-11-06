@@ -129,7 +129,8 @@ use to build a typed client). They are deliberately not repeated here, so the tw
   \`/api/v1/artifacts/{id}/versions[/{version}]\`
 - Agents: \`/api/v1/agents\`, \`/api/v1/agents/{id}\`
 - Projects: \`/api/v1/projects\`, \`/api/v1/projects/{id}\`, \`/api/v1/projects/{id}/files[/{file_id}]\`,
-  \`/api/v1/projects/{id}/sessions[/{session_id}]\`
+  \`/api/v1/projects/{id}/sessions[/{session_id}]\`, \`/api/v1/projects/{id}/members/{user_id}\`,
+  \`/api/v1/projects/{id}/invites\`, \`/api/v1/projects/{id}/system-prompts[/{file_id}]\`
 - Files and data lakes: \`/api/v1/files[?search=]\` (list, upload), \`/api/v1/files/{id}\` (get, update,
   delete), \`/api/v1/files/{id}/chunk\`, \`/api/v1/files/search\`, \`/api/v1/files/by-ids\`,
   \`/api/v1/files/bulk-delete\`, \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
@@ -173,28 +174,6 @@ below are still hand-written.
 | GET | /api/sessions/[id]/chat/[messageId] | Get a specific message |
 | PUT | /api/sessions/[id]/chat/[messageId] | Update a message |
 | DELETE | /api/sessions/[id]/chat/[messageId] | Delete a message |
-
----
-
-### Projects
-
-Project create, list, get, update and delete, and the project's files and sessions (list, add, remove), are covered
-by the generated docs (see above). The routes below are still hand-written.
-
-If you call \`/api/projects/[id]/files\` or \`/api/projects/[id]/sessions\` with an API key, move to
-\`/api/v1/projects/{id}/files\` and \`/api/v1/projects/{id}/sessions\`. The older routes still answer but are no
-longer documented, and their response shapes differ (unpaginated, internal field names).
-
-**Required API-key scope:** \`projects:read\` (or \`projects:write\`) for the GET routes, \`projects:write\` for the rest.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| DELETE | /api/projects/[id]/members | Remove a project member (send \`userId\` in the body), or leave the project when omitted |
-| GET | /api/projects/[id]/invites | List project invites (requires share permission) |
-| POST | /api/projects/[id]/systemPrompts | Add system prompt files to a project (\`fileIds\` in the body) |
-| DELETE | /api/projects/[id]/systemPrompts | Remove system prompt files from a project (\`fileIds\`, or legacy single \`fileId\`, in the body) |
-| POST | /api/projects/[id]/systemPrompts/toggle | Toggle system prompt |
-| DELETE | /api/projects/removeNonExistintFiles | Clean up orphan file references |
 
 ---
 

@@ -1,85 +1,16 @@
-import {
-  activityRepository,
-  fabFileRepository,
-  projectRepository,
-  sessionRepository,
-  userRepository,
-  withTransaction,
-} from '@bike4mind/database';
-import { projectService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { PROJECTS_WRITE_SCOPES } from '@server/projects/projectScopes';
-import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+import { removeProjectMember } from '@server/projects/projectSharingMutations';
 import { respond } from '@server/utils/respond';
-import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from '@server/sharing/revokedFileReferences';
-import { ProjectEvents, projectResponseSchema } from '@bike4mind/common';
-import { ActivityType } from '@bike4mind/server-utils/config/activityType';
+import { projectResponseSchema } from '@bike4mind/common';
 
 const handler = baseApi({ requiredScopes: PROJECTS_WRITE_SCOPES }).delete(async (req, res) => {
   const { userId: memberIdToRemove } = req.body;
-  const isRemovingMember = !!memberIdToRemove;
-  const projectId = req.query.id as string;
-
-  // Read before the leave: its cascade prunes the project's file list.
-  const cleanUpTargets = await projectRevokeCleanupTargets(projectId, memberIdToRemove || req.user.id, req.logger);
-
-  const result = await withTransaction(async () => {
-    const project = await projectService.leaveProject(
-      req.user,
-      {
-        id: projectId,
-        userIdToRemove: memberIdToRemove,
-      },
-      {
-        db: {
-          projects: projectRepository,
-          sessions: sessionRepository,
-          fabFiles: fabFileRepository,
-          users: userRepository,
-        },
-      }
-    );
-
-    if (isRemovingMember) {
-      await logEvent(
-        {
-          userId: req.user.id,
-          type: ProjectEvents.REMOVE_MEMBER,
-          metadata: {
-            projectId,
-            projectName: project.name,
-            memberId: memberIdToRemove,
-          },
-        },
-        { ability: req.ability }
-      );
-    } else {
-      await logEvent(
-        {
-          userId: req.user.id,
-          type: ProjectEvents.PROJECT_LEAVED,
-          metadata: {
-            projectId,
-            projectName: project.name,
-            memberId: req.user.id,
-          },
-        },
-        { ability: req.ability }
-      );
-
-      await activityRepository.createActivity(
-        ActivityType.PROJECT_LEAVED,
-        { type: 'Project', id: projectId },
-        { type: 'User', id: req.user.id }
-      );
-    }
-
-    return project;
-  });
-
-  // After the commit, outside its session (see cleanUpDeletedFileReferences).
-  await cleanUpRevokedFileReferences(cleanUpTargets, req.logger);
-
+  const result = await removeProjectMember(
+    { user: req.user, ability: req.ability, logger: req.logger },
+    req.query.id as string,
+    memberIdToRemove || undefined
+  );
   return respond(res, projectResponseSchema, result);
 });
 

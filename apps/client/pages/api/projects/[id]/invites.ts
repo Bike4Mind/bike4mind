@@ -5,32 +5,16 @@ import {
   assertProjectsWriteScope,
   PROJECTS_READ_OR_WRITE_SCOPES,
 } from '@server/projects/projectScopes';
+import { createProjectInvite } from '@server/projects/projectSharingMutations';
 import { inviteRepository, projectRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { toSharerInviteViews } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { sharingService } from '@bike4mind/services';
-import { InviteEvents, InviteType, ProjectEvents, Permission } from '@bike4mind/common';
-import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+import { Permission } from '@bike4mind/common';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import {
-  withTransaction,
-  userRepository,
-  fabFileRepository,
-  sessionRepository,
-  organizationRepository,
-  Project,
-  Group,
-} from '@bike4mind/database';
 import { z } from 'zod';
-import { getInviteTypeName } from '@server/utils/mailer/inviteNotificationEmail';
-import {
-  MAX_INVITE_MESSAGE_LENGTH,
-  MAX_INVITE_RECIPIENTS,
-  notifyInvitees,
-  reserveInviteSendBudget,
-} from '@server/utils/inviteSendLimits';
+import { MAX_INVITE_MESSAGE_LENGTH, MAX_INVITE_RECIPIENTS } from '@server/utils/inviteSendLimits';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 // Loose because the Add Members modal sends one request per selected user. The mail itself is
@@ -85,84 +69,12 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
 
       const { expiresAt, ...restBody } = createInviteBodySchema.parse(req.body);
 
-      const budget = await reserveInviteSendBudget(req.user.id, restBody.recipients, { chargeTypedAddresses: true });
-      const created = await withTransaction(() => {
-        return sharingService.createInvite(
-          req.user,
-          // id and type come last so path params are always authoritative over any body field.
-          { ...restBody, ...(expiresAt !== undefined && { expiresAt }), id, type: InviteType.Project },
-          {
-            db: {
-              invites: inviteRepository,
-              users: userRepository,
-              fabFiles: fabFileRepository,
-              sessions: sessionRepository,
-              projects: projectRepository,
-              organizations: organizationRepository,
-              groups: Group,
-            },
-          }
-        );
-      }).catch(async (error: unknown) => {
-        await budget.release();
-        throw error;
-      });
-
-      await logEvent(
-        {
-          userId: req.user.id,
-          type: InviteEvents.CREATE_INVITE,
-          metadata: { id: created.id, totalInvites: created.recipients?.pending?.length ?? 0 },
-        },
-        { ability: req.ability }
+      const { view, link } = await createProjectInvite(
+        { user: req.user, ability: req.ability, logger: req.logger },
+        id,
+        { ...restBody, expiresAt }
       );
-
-      const project = await Project.findById(id);
-      if (project) {
-        await Promise.all(
-          (created.recipients?.pending || []).map(async (recipientId: string) =>
-            logEvent(
-              {
-                userId: req.user.id,
-                type: ProjectEvents.ADD_MEMBER,
-                metadata: {
-                  projectId: id,
-                  projectName: project.name,
-                  memberId: recipientId,
-                  memberRole: (restBody.permissions || []).join(','),
-                },
-              },
-              { ability: req.ability }
-            )
-          )
-        );
-      }
-
-      // Token, not `_id` - see generateInviteLink in pages/api/[type]/[id]/invites/index.ts for why.
-      const generateInviteLink = (invite: { id: string; token?: string }) => {
-        return `${process.env.APP_URL}/share/${invite.token ?? invite.id}`;
-      };
-
-      // Same notification the generic invite route sends; without it an invitee only learns of the
-      // invite from the in-app inbox. Not awaited, so a mail failure never fails the invite.
-      const pendingRecipients = created.recipients?.pending || [];
-      if (pendingRecipients.length > 0) {
-        const brand = process.env.APP_NAME || '';
-        notifyInvitees({
-          recipients: pendingRecipients,
-          sharerName: req.user.name || req.user.username || `A${brand ? ` ${brand}` : ''} user`,
-          sharerEmail: req.user.email || '',
-          documentName: project?.name || 'a project',
-          typeName: getInviteTypeName(InviteType.Project),
-          inviteLink: generateInviteLink(created),
-          message: restBody.description,
-        }).catch(error => {
-          req.logger?.error('Failed to send invite notification emails', { error, inviteId: created.id });
-        });
-      }
-
-      const [view] = await toSharerInviteViews([created], req.user);
-      return res.json({ ...view, link: generateInviteLink(created) });
+      return res.json({ ...view, link });
     })
   );
 

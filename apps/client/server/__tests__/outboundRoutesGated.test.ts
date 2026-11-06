@@ -43,6 +43,7 @@ const INLINE_GATED = [
   'v1/agents/[id]/generate-avatar.ts',
   'v1/agents/[id]/generate-system-prompt.ts',
   'v1/agents/[id]/enhance-field.ts',
+  'v1/projects/[id]/invites.ts',
 ];
 
 const source = (route: string) => readFileSync(path.join(ROUTES_DIR, route), 'utf8').replace(/^\s*\/\/[^\n]*/gm, '');

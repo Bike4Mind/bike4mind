@@ -88,6 +88,14 @@ export {
   removeProjectSessionContract,
 } from './contracts/projectContent.contract';
 export {
+  removeProjectMemberContract,
+  listProjectInvitesContract,
+  createProjectInviteContract,
+  addProjectSystemPromptsContract,
+  updateProjectSystemPromptContract,
+  removeProjectSystemPromptContract,
+} from './contracts/projectSharing.contract';
+export {
   listAgentsContract,
   getAgentContract,
   createAgentContract,

@@ -1,8 +1,7 @@
-import { fabFileRepository, projectRepository, withTransaction } from '@bike4mind/database';
-import { projectService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { PROJECTS_WRITE_SCOPES } from '@server/projects/projectScopes';
+import { setProjectSystemPrompt } from '@server/projects/projectSharingMutations';
 import { respond } from '@server/utils/respond';
 import { projectResponseSchema } from '@bike4mind/common';
 
@@ -11,20 +10,10 @@ const handler = baseApi({ requiredScopes: PROJECTS_WRITE_SCOPES }).post(
     const { id } = req.query as { id: string };
     const { fileId } = req.body as { fileId: string };
 
-    const project = await withTransaction(() =>
-      projectService.toggleSystemPrompt(
-        req.user,
-        {
-          projectId: id,
-          fileId,
-        },
-        {
-          db: {
-            fabFiles: fabFileRepository,
-            projects: projectRepository,
-          },
-        }
-      )
+    const project = await setProjectSystemPrompt(
+      { user: req.user, ability: req.ability, logger: req.logger },
+      id,
+      fileId
     );
 
     return respond(res, projectResponseSchema, project);
