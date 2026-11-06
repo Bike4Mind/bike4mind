@@ -15,7 +15,23 @@ vi.mock('./userPath', async importOriginal => ({
   resolveUserPath: vi.fn(async () => process.env.PATH ?? ''),
 }));
 
-const PROGRAMS = ['cat', 'ls', 'grep', 'git', 'find', 'rg', 'xargs', 'sed', 'npx', 'cp', 'wc', 'tar'];
+const PROGRAMS = [
+  'cat',
+  'ls',
+  'grep',
+  'git',
+  'find',
+  'rg',
+  'xargs',
+  'sed',
+  'npx',
+  'cp',
+  'wc',
+  'tar',
+  'echo',
+  'printf',
+  'rm',
+];
 
 /** Commands that ran unasked on main and must still run as the mode allows, in a repository with a large node_modules. */
 describe('commands main ran unasked', () => {
@@ -40,11 +56,12 @@ describe('commands main ran unasked', () => {
       join(proj, '.claude', 'agents'),
       join(proj, '.claude', 'commands'),
       join(proj, 'src'),
+      join(proj, 'bin2'),
       join(base, 'bin'),
     ]) {
       await mkdir(folder, { recursive: true });
     }
-    await writeFile(join(proj, '.claude', 'settings.json'), '{}');
+    await writeFile(join(proj, '.claude', 'settings.json'), '{"hooks": {}}');
     await writeFile(join(proj, '.claude', 'agents', 'x.md'), 'x');
     await writeFile(join(proj, '.claude', 'commands', 'x.md'), 'x');
     await writeFile(join(proj, 'src', 'a.ts'), 'foo a');
@@ -61,6 +78,17 @@ describe('commands main ran unasked', () => {
       execFileSync('git', ['-C', repo, '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', ...args], {
         env,
       });
+    };
+    const repository = async (name: string, files: Record<string, string>): Promise<string> => {
+      const repo = join(proj, name);
+      for (const [path, content] of Object.entries(files)) {
+        await mkdir(join(repo, path, '..'), { recursive: true });
+        await writeFile(join(repo, path), content);
+      }
+      git(repo, 'init', '-q', '-b', 'main');
+      git(repo, 'add', '-A');
+      git(repo, 'commit', '-qm', 'first');
+      return repo;
     };
     git(proj, 'init', '-q', '-b', 'main');
     git(proj, 'add', '-A');
@@ -88,21 +116,40 @@ describe('commands main ran unasked', () => {
     git(crepo, '-c', 'core.autocrlf=true', 'add', '-A');
     git(crepo, 'commit', '-qm', 'first');
     git(crepo, 'config', 'core.autocrlf', 'true');
+    // lrepo has settings committed with LF and rewritten with CRLF, with no autocrlf to fold them back.
+    const lrepo = await repository('lrepo', { '.claude/settings.json': '{\n}\n' });
+    await writeFile(join(lrepo, '.claude', 'settings.json'), '{\r\n}\r\n');
+    // srepo has settings changed in the work tree; drepo has a tracked folder a link to the app's data replaced.
+    const srepo = await repository('srepo', { '.claude/settings.json': '{}', 'src/b.ts': 'b' });
+    await writeFile(join(srepo, '.claude', 'settings.json'), '{"x": 1}');
+    await writeFile(join(srepo, 'src', 'b.ts'), 'b2');
+    const drepo = await repository('drepo', { 'docs/secret': 's', 'src/b.ts': 'b' });
+    await rm(join(drepo, 'docs'), { recursive: true });
+    await symlink(userData, join(drepo, 'docs'));
     // prepo is a treeless partial clone whose missing trees would come from a host through core.sshCommand.
     git(proj, 'config', 'uploadpack.allowFilter', 'true');
     execFileSync('git', ['clone', '-q', '--filter=tree:0', '--no-checkout', `file://${proj}`, join(proj, 'prepo')]);
     git(join(proj, 'prepo'), 'remote', 'set-url', 'origin', 'ssh://example.invalid/r');
     git(join(proj, 'prepo'), 'config', 'core.sshCommand', `touch ${join(base, 'fetched')}; false`);
     execFileSync('tar', ['-cf', 'clean.tar', 'src'], { cwd: proj });
-    // A tar on PATH that logs each call, and a decoy in the project that only a lookup from the folder would run.
+    execFileSync('tar', ['-czf', 'clean.tar.gz', 'src'], { cwd: proj });
+    // A tar on PATH that logs each call, and decoys in the project that only a lookup from the project would run.
     const realTar = execFileSync('sh', ['-c', 'command -v tar'], { encoding: 'utf8' }).trim();
     await writeFile(
       join(base, 'bin', 'tar'),
       `#!/bin/sh\necho "$@" >> ${join(base, 'tar-calls')}\nexec ${realTar} "$@"\n`
     );
     await writeFile(join(proj, 'tar'), `#!/bin/sh\ntouch ${join(base, 'local-tar')}\nexit 1\n`);
-    await chmod(join(base, 'bin', 'tar'), 0o755);
-    await chmod(join(proj, 'tar'), 0o755);
+    await writeFile(join(proj, 'gzip'), `#!/bin/sh\ntouch ${join(base, 'local-gzip')}\nexit 1\n`);
+    await writeFile(join(proj, 'bin2', 'gzip'), `#!/bin/sh\ntouch ${join(base, 'project-gzip')}\nexit 1\n`);
+    for (const program of [
+      join(base, 'bin', 'tar'),
+      join(proj, 'tar'),
+      join(proj, 'gzip'),
+      join(proj, 'bin2', 'gzip'),
+    ]) {
+      await chmod(program, 0o755);
+    }
     await mkdir(join(base, 'tmp'));
     vi.stubEnv('TMPDIR', join(base, 'tmp'));
     vi.stubEnv('HOME', home);
@@ -145,14 +192,31 @@ describe('commands main ran unasked', () => {
   const unasked = { auto: true, full: true, allowed: true };
   // On main the rules floor already refused any command naming `.claude`; only auto and full ran it.
   const unaskedNamingClaude = { auto: true, full: true, allowed: false };
+  const asks = { auto: false, full: false };
 
   it.each([
     ["find . -name '*.ts' | xargs grep -l a", '', unasked],
     ["find . -name '*.ts' -not -path './node_modules/*' | xargs grep -l a", '', unasked],
+    ["find . -name '*.ts' -mtime -1 | xargs cat", '', unasked],
+    ['find . -name "*.ts" | xargs npx prettier --write', '', unasked],
+    ['find src -name "*.ts" -exec sed -i s/a/b/ {} +', '', unasked],
     ['rg -l foo | xargs cat', '', unasked],
-    ['git ls-files | xargs wc -l', '', unasked],
+    ["rg -l foo | xargs sed -i 's/a/b/'", '', unasked],
+    ['rg -l hooks | xargs sed -i s/a/b/', '', unasked],
     ["rg -l foo src | xargs sed -i 's/a/b/'", '', unasked],
     ['grep -rl foo src | xargs sed -i s/a/b/', '', unasked],
+    ['grep -rl foo . | xargs sed -i s/foo/bar/g', '', unasked],
+    ['git ls-files | xargs wc -l', '', unasked],
+    ['git ls-files "*.ts" | xargs npx prettier --write', '', unasked],
+    ['git ls-files -m | xargs npx prettier --write', '', unasked],
+    ['git grep -l foo | xargs sed -i s/a/b/', '', unasked],
+    ['git diff --name-only | xargs npx prettier --write', '', unasked],
+    ['git diff --name-only | xargs cat', '', unasked],
+    ['git diff --name-only --cached | xargs cat', '', unasked],
+    ['git diff --name-only HEAD | xargs wc -l', '', unasked],
+    ['ls src/*.ts | xargs wc -l', '', unasked],
+    ['echo src/a.ts | xargs rm', '', unasked],
+    ["printf '%s\\n' src/a.ts | xargs wc -l", '', unasked],
     ['cat .claude/agents/x.md', '', unaskedNamingClaude],
     ['ls -la .claude/', '', unaskedNamingClaude],
     ['grep -r hooks .claude', '', unaskedNamingClaude],
@@ -166,17 +230,29 @@ describe('commands main ran unasked', () => {
     expect(await judge(command, folder)).toEqual(expected);
   });
 
-  it('asks before xargs hands what git diff lists to a writing program', async () => {
-    expect(await judge('git diff --name-only | xargs npx prettier --write')).toEqual({
-      auto: false,
-      full: false,
-      allowed: false,
-    });
+  it.each([
+    ['grep -rl hooks . | xargs sed -i s/a/b/', ''],
+    ['rg -l --hidden hooks | xargs sed -i s/a/b/', ''],
+    ["find . -name '*.json' | xargs sed -i s/a/b/", ''],
+    ["find . -name '*.json' -exec sed -i s/a/b/ {} +", ''],
+    ['git ls-files | xargs sed -i s/a/b/', ''],
+    ['git grep -l hooks | xargs sed -i s/a/b/', ''],
+    ['echo .claude/settings.json | xargs rm', ''],
+    ['git diff --name-only | xargs npx prettier --write', 'srepo'],
+    ['git reset --hard', 'lrepo'],
+  ])('asks before %s (in proj/%s) rewrites settings', async (command, folder) => {
+    expect(await judge(command, folder)).toMatchObject(asks);
   });
 
-  it('asks before xargs hands what a lister finds under settings to a writing program', async () => {
-    expect(await judge("rg -l foo | xargs sed -i 's/a/b/'")).toMatchObject({ auto: false, full: false });
-  });
+  it.each(['git ls-files | xargs cat', 'git diff --name-only | xargs cat'])(
+    'asks for %s as for the path a link replaced',
+    async command => {
+      const direct = await judge('cat docs/secret', 'drepo');
+
+      expect(direct.auto).toBe(false);
+      expect(await judge(command, 'drepo')).toMatchObject({ auto: direct.auto, full: direct.full });
+    }
+  );
 
   it('fetches nothing for a partial clone while it compares a checkout', async () => {
     await judge('git checkout origin/other', 'prepo');
@@ -186,11 +262,13 @@ describe('commands main ran unasked', () => {
 
   it('lists an archive with the tar on PATH, never one in the project or one on another host', async () => {
     const path = process.env.PATH ?? '';
-    vi.stubEnv('PATH', `.:${join(base, 'bin')}:${path}`);
+    vi.stubEnv('PATH', `.:${join(proj, 'bin2')}:${join(base, 'bin')}:${path}`);
     try {
       expect(await judge('tar -xf clean.tar')).toMatchObject({ full: true, allowed: true });
+      expect(await judge('tar -xf clean.tar.gz')).toMatchObject({ full: true, allowed: true });
       const started = Date.now();
       await judge('tar -xf host.example:x');
+      await judge('tar -xf //host.example/share/x.tar');
       await judge('tar -xf -');
       expect(Date.now() - started).toBeLessThan(1500);
     } finally {
@@ -198,9 +276,11 @@ describe('commands main ran unasked', () => {
     }
     const calls = await readFile(join(base, 'tar-calls'), 'utf8');
 
-    expect(calls).toContain('clean.tar');
+    expect(calls).toContain('clean.tar.gz');
     expect(calls).not.toContain('host.example');
     expect(calls).not.toMatch(/--file=-( |$)/m);
-    expect(await exists(join(base, 'local-tar'))).toBe(false);
+    for (const marker of ['local-tar', 'local-gzip', 'project-gzip']) {
+      expect(await exists(join(base, marker))).toBe(false);
+    }
   });
 });
