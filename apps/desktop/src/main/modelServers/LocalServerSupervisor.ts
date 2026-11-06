@@ -60,7 +60,8 @@ interface Slot {
 }
 
 export interface LocalServerSupervisorDeps {
-  launchers?: Launchers;
+  /** Required, so no test reaches hostLaunchers (a login shell and a disk scan) by leaving it out. */
+  launchers: Launchers;
   logger: { warn(message: string): void };
   /** A server Desktop started exited without being stopped, or one changed between starting, running and stopping. */
   changed(id: string): void;
@@ -92,7 +93,7 @@ export class LocalServerSupervisor {
   private writing: Promise<void> = Promise.resolve();
 
   constructor(private readonly deps: LocalServerSupervisorDeps) {
-    this.launchers = deps.launchers ?? hostLaunchers();
+    this.launchers = deps.launchers;
     this.processes = deps.processes ?? hostProcessProbe();
   }
 
