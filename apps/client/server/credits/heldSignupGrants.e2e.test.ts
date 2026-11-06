@@ -314,7 +314,6 @@ describe('held signup grant release', () => {
   });
 
   it('records no credits when the grant was already paid, so revoke cannot debit it', async () => {
-    config.defaultFreeCredits = '12';
     const user = await createUser(false, 7);
     expect(await userService.grantFreeCredits(user, adapters)).toMatchObject({ creditsGranted: 12 });
     await User.updateOne(

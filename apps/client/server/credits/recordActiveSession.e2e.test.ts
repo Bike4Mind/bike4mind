@@ -308,15 +308,7 @@ describe('active session heartbeat', () => {
     expect(await creditsOf(user.id)).toBe(1000);
   });
 
-  it('pays with the retired activity flag off when the daily amount is positive', async () => {
-    const user = await createSignupStageUser(0);
-    config.signupGrantActivityEnabled = 'false';
-    config.signupGrantDailyCredits = '1000';
-    await User.updateOne({ _id: user.id }, { currentCredits: 0 });
-    expect(await pingEvery60s(user.id, 0, 600)).toMatchObject({ creditsGranted: 1000, paidToday: true });
-  });
-
-  it('pays nothing when the daily amount is 0, even with the retired activity flag on', async () => {
+  it('pays nothing when the daily amount is 0', async () => {
     const user = await createSignupStageUser(0);
     config.signupGrantDailyCredits = '0';
     await ping(user.id, 0);

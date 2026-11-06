@@ -5092,7 +5092,7 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Total credits the daily drip may pay per account. Changes apply to enrolled accounts on their next drip, including accounts the drip already completed, but not accounts a verification unlock completed. Zero disables the drip. While unset, the smaller of Signup Activity Maximum Credits (9000 when unset) and Verified Unlock Credits (0 when unset) applies, or 0 while staged signup grants are off.',
+      'Total credits the daily drip may pay per account. Changes apply to enrolled accounts on their next drip, including accounts the drip already completed, but not accounts a verification unlock completed. Zero disables the drip. While unset, the default of 9000 applies.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),

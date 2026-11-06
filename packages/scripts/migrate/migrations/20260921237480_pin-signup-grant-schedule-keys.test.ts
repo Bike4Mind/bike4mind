@@ -1,12 +1,20 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { resolveSignupGrantSchedule } from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
 import migration, { PIN_MARKER_COLLECTION } from './20260921237480_pin-signup-grant-schedule-keys';
-import { storedGrantCredits } from './legacySignupGrantSchedule';
+import { isStoredToggleOn, signupGrantScheduleFromValues, storedGrantCredits } from './legacySignupGrantSchedule';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+
+// The runtime resolver as it read the retired keys, rebuilt from the frozen helper.
+async function legacyRuntimeSchedule() {
+  const raw = new Map((await AdminSettings.find({}).lean()).map(row => [row.settingName, row.settingValue]));
+  return signupGrantScheduleFromValues(
+    key => (key === 'defaultFreeCredits' ? undefined : storedGrantCredits(key, raw.get(key))),
+    { staged: true, activity: isStoredToggleOn(raw.get('signupGrantActivityEnabled')) }
+  );
+}
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 
@@ -36,7 +44,6 @@ const seed = (rows: Record<string, string>) =>
 const value = async (settingName: string) => (await AdminSettings.findOne({ settingName }).lean())?.settingValue;
 const scheduleValues = async () => Promise.all(SCHEDULE_KEYS.map(value));
 const marker = () => mongoose.connection.collection(PIN_MARKER_COLLECTION).findOne({ kind: 'pins' });
-const repo = { findBySettingName: (settingName: string) => AdminSettings.findOne({ settingName }).lean() } as never;
 
 // The resolver once the legacy keys are no longer read: only the schedule keys, with registry defaults.
 async function simplifiedSchedule() {
@@ -98,7 +105,7 @@ const SHAPES: [string, Record<string, string>][] = [
 describe('pin signup grant schedule keys migration', () => {
   it.each(SHAPES)('keeps the schedule unchanged once only schedule keys are read: %s', async (_name, rows) => {
     await seed(rows);
-    const { dripCapSource, ...before } = await resolveSignupGrantSchedule(repo);
+    const { dripCapSource, ...before } = await legacyRuntimeSchedule();
     await migration.up();
     const after = await simplifiedSchedule();
 

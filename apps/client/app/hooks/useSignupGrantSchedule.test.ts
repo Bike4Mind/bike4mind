@@ -40,6 +40,7 @@ describe('useSignupGrantSchedule parity with the server resolver', () => {
       },
     ],
     ['invalid stored values', { signupGrantDripCap: '', signupGrantDailyCredits: -1, signupGrantInitialCredits: 1.5 }],
+    ['only retired keys', { verifiedUnlockCredits: '3000', signupGrantActivityMaxCredits: '2000' }],
   ])('resolves the same schedule as the server for %s', async (_label, values) => {
     h.rows = rowsOf(values);
     const { schedule } = await serverSchedule(h.rows);

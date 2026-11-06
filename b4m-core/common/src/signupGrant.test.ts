@@ -13,9 +13,9 @@ const settings = (values: Record<string, unknown>) =>
   }) as unknown as Parameters<typeof newSignupGrant>[0];
 
 describe('signup grant configuration', () => {
-  it('ignores the retired staged flag and defaultFreeCredits, locking nothing when the drip cap is 0', async () => {
-    const offEnv = { stagedSignupGrantEnabled: 'false', defaultFreeCredits: '75', signupGrantDripCap: '0' };
-    expect(await newSignupGrant(settings(offEnv))).toMatchObject({ signupCredits: 0, unlockCredits: 0 });
+  it('locks nothing and pays an invite whole when the drip cap is 0', async () => {
+    const offEnv = { signupGrantInitialCredits: '75', signupGrantDripCap: '0' };
+    expect(await newSignupGrant(settings(offEnv))).toMatchObject({ signupCredits: 75, unlockCredits: 0 });
     expect(await newSignupGrant(settings(offEnv), 60)).toMatchObject({ signupCredits: 60, unlockCredits: 0 });
   });
 
@@ -26,35 +26,13 @@ describe('signup grant configuration', () => {
 
   it.each([
     ['a stored drip cap', { signupGrantInitialCredits: '75', signupGrantDripCap: '9000' }],
-    [
-      'a legacy unlock key of 0',
-      { stagedSignupGrantEnabled: 'true', signupGrantCredits: '75', verifiedUnlockCredits: '0' },
-    ],
-    ['no cap key', { stagedSignupGrantEnabled: 'true', signupGrantCredits: '75' }],
+    ['no cap key', { signupGrantInitialCredits: '75' }],
   ])('still splits an invite into tranche plus locked remainder under %s', async (_label, values) => {
     expect(await newSignupGrant(settings(values), 200)).toMatchObject({ signupCredits: 75, unlockCredits: 125 });
   });
 
-  it.each(['0', '75', '-1', 'invalid'])(
-    'ignores the retired defaultFreeCredits %s and locks nothing without a verification unlock row',
-    async value => {
-      const result = await resolveSignupGrantSettings(
-        settings({ stagedSignupGrantEnabled: 'true', defaultFreeCredits: value })
-      );
-      expect(result.signupCredits).toBe(0);
-      expect(result.unlockCredits).toBe(0);
-    }
-  );
-
-  it('honors explicit zero instead of falling back to the legacy grant', async () => {
-    const result = await newSignupGrant(
-      settings({
-        stagedSignupGrantEnabled: 'true',
-        defaultFreeCredits: '75',
-        signupGrantCredits: '0',
-        verifiedUnlockCredits: '25',
-      })
-    );
+  it('honors an explicit zero initial grant', async () => {
+    const result = await newSignupGrant(settings({ signupGrantInitialCredits: '0', signupGrantDripCap: '25' }));
     expect(result).toEqual({
       stage: 'pending_email',
       signupCredits: 0,
@@ -66,34 +44,19 @@ describe('signup grant configuration', () => {
 });
 
 describe('signup grant schedule', () => {
-  const prodOldKeys = {
-    stagedSignupGrantEnabled: 'true',
-    signupGrantActivityEnabled: 'true',
-    defaultFreeCredits: '10000',
-    signupGrantCredits: '1000',
-    verifiedUnlockCredits: '9000',
-    signupGrantActivityDailyCredits: '1000',
-    signupGrantActivityMaxCredits: '9000',
+  const emptySchedule = {
+    initialCredits: 0,
+    dailyCredits: 0,
+    dripCap: 9000,
+    unlockCredits: 9000,
+    paysFlat: false,
+    inviteBonusCredits: 0,
+    dripCapSource: 'default',
   };
 
-  it('resolves only-old-keys to the same schedule as before', async () => {
-    expect(await resolveSignupGrantSchedule(settings(prodOldKeys))).toEqual({
-      initialCredits: 1000,
-      dailyCredits: 1000,
-      dripCap: 9000,
-      unlockCredits: 9000,
-      paysFlat: false,
-      inviteBonusCredits: 0,
-      dripCapSource: 'legacy',
-    });
-    const config = await resolveSignupGrantSettings(settings(prodOldKeys));
-    expect([config.signupCredits, config.unlockCredits]).toEqual([1000, 9000]);
-  });
-
-  it('lets the new keys win over the old ones', async () => {
+  it('resolves the four schedule keys', async () => {
     const schedule = await resolveSignupGrantSchedule(
       settings({
-        ...prodOldKeys,
         signupGrantInitialCredits: '250',
         signupGrantDailyCredits: 300,
         signupGrantDripCap: '4000',
@@ -111,132 +74,52 @@ describe('signup grant schedule', () => {
     });
   });
 
+  it('falls back to 0 and the registry drip cap default when nothing is stored', async () => {
+    expect(await resolveSignupGrantSchedule(settings({}))).toEqual(emptySchedule);
+    const config = await resolveSignupGrantSettings(settings({}));
+    expect([config.signupCredits, config.unlockCredits]).toEqual([0, 9000]);
+  });
+
+  it('never reads the retired keys', async () => {
+    const retired = {
+      stagedSignupGrantEnabled: 'false',
+      signupGrantActivityEnabled: 'true',
+      defaultFreeCredits: '10000',
+      signupGrantCredits: '1000',
+      verifiedUnlockCredits: '3000',
+      signupGrantActivityDailyCredits: '1000',
+      signupGrantActivityMaxCredits: '2000',
+    };
+    expect(await resolveSignupGrantSchedule(settings(retired))).toEqual(emptySchedule);
+  });
+
   it('honours a stored 0 but treats an absent key as unset', async () => {
     const zero = await resolveSignupGrantSchedule(
-      settings({ ...prodOldKeys, signupGrantInitialCredits: '0', signupGrantDailyCredits: '0', signupGrantDripCap: 0 })
+      settings({ signupGrantInitialCredits: '0', signupGrantDailyCredits: '0', signupGrantDripCap: 0 })
     );
-    expect([zero.initialCredits, zero.dailyCredits, zero.dripCap, zero.dripCapSource]).toEqual([0, 0, 0, 'setting']);
+    expect(zero).toMatchObject({ initialCredits: 0, dailyCredits: 0, dripCap: 0, unlockCredits: 0, paysFlat: true });
+    expect(zero.dripCapSource).toBe('setting');
   });
 
   it.each(['', '  ', 'garbage', '-5', '1.5', null])('falls back past an invalid stored value %j', async value => {
     const schedule = await resolveSignupGrantSchedule(
       settings({
-        ...prodOldKeys,
         signupGrantInitialCredits: value,
         signupGrantDailyCredits: value,
         signupGrantDripCap: value,
+        signupGrantInviteBonusCredits: value,
       })
     );
-    expect([schedule.initialCredits, schedule.dailyCredits, schedule.dripCap]).toEqual([1000, 1000, 9000]);
-    expect(schedule.dripCapSource).toBe('legacy');
+    expect(schedule).toEqual(emptySchedule);
   });
 
-  it('takes the smaller legacy cap, reading an absent activity max as its default', async () => {
-    const staged = { stagedSignupGrantEnabled: 'true' };
-    const both = await resolveSignupGrantSchedule(
-      settings({ ...staged, signupGrantActivityMaxCredits: '9000', verifiedUnlockCredits: '5000' })
-    );
-    expect(both.dripCap).toBe(5000);
-    const one = await resolveSignupGrantSchedule(settings({ ...staged, verifiedUnlockCredits: '7000' }));
-    expect([one.dripCap, one.dripCapSource]).toEqual([7000, 'default']);
-  });
-
-  it.each([
-    { max: '3000', verified: '9000', dripCap: 3000, unlockCredits: 9000 },
-    { max: '9000', verified: '3000', dripCap: 3000, unlockCredits: 3000 },
-  ])(
-    'bounds the drip by the smaller legacy cap but enrolls verifiedUnlockCredits (max $max, verified $verified)',
-    async ({ max, verified, dripCap, unlockCredits }) => {
-      const values = { ...prodOldKeys, signupGrantActivityMaxCredits: max, verifiedUnlockCredits: verified };
-      expect(await resolveSignupGrantSchedule(settings(values))).toMatchObject({ dripCap, unlockCredits });
-      expect(await newSignupGrant(settings(values))).toMatchObject({ signupCredits: 1000, unlockCredits });
-    }
-  );
-
-  it('keeps a legacy activity max of 0 as drip-off while verification still releases verifiedUnlockCredits', async () => {
-    const values = {
-      stagedSignupGrantEnabled: 'true',
-      signupGrantActivityMaxCredits: '0',
-      verifiedUnlockCredits: '9000',
-    };
-    const off = await resolveSignupGrantSchedule(settings(values));
-    expect([off.dripCap, off.unlockCredits, off.paysFlat]).toEqual([0, 9000, false]);
-    expect(await newSignupGrant(settings({ ...values, signupGrantCredits: '1000' }))).toMatchObject({
-      signupCredits: 1000,
-      unlockCredits: 9000,
-    });
-  });
-
-  it('ignores the retired toggles and defaultFreeCredits while the schedule keys are unset', async () => {
-    const preMigration = {
-      stagedSignupGrantEnabled: 'false',
-      signupGrantActivityEnabled: 'false',
-      defaultFreeCredits: '10000',
-      signupGrantCredits: '1000',
-      verifiedUnlockCredits: '9000',
-      signupGrantActivityDailyCredits: '1000',
-      signupGrantActivityMaxCredits: '9000',
-    };
-    expect(await resolveSignupGrantSchedule(settings(preMigration))).toEqual({
-      initialCredits: 1000,
-      dailyCredits: 0,
-      dripCap: 9000,
-      unlockCredits: 9000,
-      paysFlat: false,
-      inviteBonusCredits: 0,
-      dripCapSource: 'legacy',
-    });
-    expect(await newSignupGrant(settings(preMigration))).toMatchObject({ signupCredits: 1000, unlockCredits: 9000 });
-    expect(await resolveSignupGrantSchedule(settings({}))).toMatchObject({
-      initialCredits: 0,
-      dripCap: 0,
-      paysFlat: false,
-      dripCapSource: 'default',
-    });
-  });
-
-  it('keeps the legacy daily amount only while the retired activity toggle is on', async () => {
-    const values = { stagedSignupGrantEnabled: 'true', signupGrantActivityDailyCredits: '1000' };
-    expect((await resolveSignupGrantSchedule(settings(values))).dailyCredits).toBe(0);
-    expect(
-      (await resolveSignupGrantSchedule(settings({ ...values, signupGrantActivityEnabled: true }))).dailyCredits
-    ).toBe(1000);
-  });
-
-  it('locks and drips nothing when staging is on and both legacy cap rows are absent', async () => {
-    const schedule = await resolveSignupGrantSchedule(settings({ stagedSignupGrantEnabled: 'true' }));
-    expect(schedule).toEqual({
-      initialCredits: 0,
-      dailyCredits: 0,
-      dripCap: 0,
-      unlockCredits: 0,
-      paysFlat: false,
-      inviteBonusCredits: 0,
-      dripCapSource: 'default',
-    });
-  });
-
-  it('reads an absent verification unlock as 0 next to a stored activity max', async () => {
-    const values = { stagedSignupGrantEnabled: 'true', signupGrantActivityMaxCredits: '5000' };
-    expect(await resolveSignupGrantSchedule(settings(values))).toMatchObject({
-      dripCap: 0,
-      unlockCredits: 0,
-      dripCapSource: 'legacy',
-    });
-  });
-
-  it('caps the drip at the activity max default when only the verification unlock is stored', async () => {
-    const values = { stagedSignupGrantEnabled: 'true', verifiedUnlockCredits: '20000' };
-    expect(await resolveSignupGrantSchedule(settings(values))).toMatchObject({
-      dripCap: 9000,
-      unlockCredits: 20000,
-      dripCapSource: 'default',
-    });
-  });
-
-  it('leaves a stored drip cap in charge of both drip and unlock', async () => {
-    const values = { stagedSignupGrantEnabled: 'true', signupGrantDripCap: '12000', verifiedUnlockCredits: '20000' };
-    expect(await resolveSignupGrantSchedule(settings(values))).toMatchObject({
+  it('reads all four keys in one batched call when the repository offers it', async () => {
+    const findBySettingNames = async (names: string[]) =>
+      names.includes('signupGrantDripCap') ? [{ settingName: 'signupGrantDripCap', settingValue: '12000' }] : [];
+    const reader = { findBySettingName: async () => null, findBySettingNames } as unknown as Parameters<
+      typeof resolveSignupGrantSchedule
+    >[0];
+    expect(await resolveSignupGrantSchedule(reader)).toMatchObject({
       dripCap: 12000,
       unlockCredits: 12000,
       dripCapSource: 'setting',

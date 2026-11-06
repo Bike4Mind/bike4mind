@@ -58,11 +58,9 @@ describe('createUniqueOAuthUser', () => {
     expect(mockCreate.mock.calls[1][0]).not.toHaveProperty('signupGrant');
   });
 
-  it('enrolls the schedule grant, not defaultFreeCredits, with the retired staged toggle off', async () => {
+  it('enrolls the schedule grant with nothing locked under a drip cap of 0', async () => {
     mockFindSetting.mockImplementation(async (name: string) => ({
       settingValue: {
-        stagedSignupGrantEnabled: 'false',
-        defaultFreeCredits: '5000',
         signupGrantInitialCredits: '40',
         signupGrantDripCap: '0',
       }[name],
