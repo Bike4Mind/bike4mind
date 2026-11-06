@@ -24,6 +24,7 @@ import {
   SSE_KEEPALIVE,
   type CompletionSource,
   type CompletionSseErrorCode,
+  type IMessage,
   type SSEErrorEvent,
   type TurnUsage,
 } from '@bike4mind/common';
@@ -363,7 +364,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         creditHolds: createCompletionCreditHolds(logger),
         userId,
         model: body.model,
-        messages: body.messages,
+        messages: body.messages as IMessage[],
         options: body.options,
         db: {
           adminSettings: adminSettingsRepository,
