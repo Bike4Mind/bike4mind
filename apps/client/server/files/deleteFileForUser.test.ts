@@ -188,6 +188,19 @@ describe('deleteFileForUser', () => {
     expect(mockUnpublish).toHaveBeenCalledWith('u1', { kind: 'fabfile', fabFileIds: [FILE_ID] }, { logger });
   });
 
+  it('still resolves, recomputes lake stats and logs when the unpublish fails', async () => {
+    mockUnpublish.mockRejectedValue(new Error('publish db down'));
+    deleteResolves('deleted');
+
+    expect(await deleteFileForUser(req, FILE_ID)).toBe('deleted');
+
+    expect(mockRecompute).toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('unpublishing'),
+      expect.objectContaining({ error: 'publish db down', fabFileId: FILE_ID, userId: 'u1' })
+    );
+  });
+
   it("leaves the owner's pages up when a sharee only unshares the file", async () => {
     mockFindById.mockResolvedValue({ userId: 'owner', tags: [] });
     deleteResolves('unshared', 0, { userId: 'owner' });

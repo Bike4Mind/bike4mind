@@ -478,6 +478,16 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
       );
     });
 
+    it('still returns 200 with the new last-notebook id when the unpublish fails', async () => {
+      mockDeleteSession.mockResolvedValue({ id: 'other-session' });
+      mockUnpublish.mockRejectedValue(new Error('publish db down'));
+      const { req, res } = fire({ method: 'DELETE' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({ newLastNotebookId: 'other-session' });
+      expect(mockLogEvent).toHaveBeenCalled();
+    });
+
     it('unpublishes nothing when the delete is refused', async () => {
       mockDeleteSession.mockRejectedValue(new NotFoundError('Session not found'));
       const { req, res } = fire({ method: 'DELETE' });
