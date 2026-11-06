@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { AdminSettings } from '@bike4mind/database';
+import { AdminSettings, adminSettingsRepository } from '@bike4mind/database';
+import { resolveSignupGrantSchedule } from '@bike4mind/common';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
 import migration, { PIN_MARKER_COLLECTION } from './20260921237480_pin-signup-grant-schedule-keys';
 import { isStoredToggleOn, signupGrantScheduleFromValues, storedGrantCredits } from './legacySignupGrantSchedule';
@@ -44,21 +45,6 @@ const seed = (rows: Record<string, string>) =>
 const value = async (settingName: string) => (await AdminSettings.findOne({ settingName }).lean())?.settingValue;
 const scheduleValues = async () => Promise.all(SCHEDULE_KEYS.map(value));
 const marker = () => mongoose.connection.collection(PIN_MARKER_COLLECTION).findOne({ kind: 'pins' });
-
-// The resolver once the legacy keys are no longer read: only the schedule keys, with registry defaults.
-async function simplifiedSchedule() {
-  const read = async (key: (typeof SCHEDULE_KEYS)[number]) => storedGrantCredits(key, await value(key));
-  const cap = await read('signupGrantDripCap');
-  const dripCap = cap ?? 0;
-  return {
-    initialCredits: (await read('signupGrantInitialCredits')) ?? 0,
-    dailyCredits: (await read('signupGrantDailyCredits')) ?? 0,
-    dripCap,
-    unlockCredits: dripCap,
-    paysFlat: cap === 0,
-    inviteBonusCredits: (await read('signupGrantInviteBonusCredits')) ?? 0,
-  };
-}
 
 const SHAPES: [string, Record<string, string>][] = [
   ['empty database', {}],
@@ -108,7 +94,10 @@ describe('pin signup grant schedule keys migration', () => {
     await seed(rows);
     const before = await legacyRuntimeSchedule();
     await migration.up();
-    expect(await simplifiedSchedule()).toEqual({ ...before, dripCapSource: undefined });
+    expect(await resolveSignupGrantSchedule(adminSettingsRepository)).toEqual({
+      ...before,
+      dripCapSource: (await value('signupGrantDripCap')) === undefined ? 'default' : 'setting',
+    });
   });
 
   it('pins all but the cap on an empty database', async () => {

@@ -10,7 +10,10 @@ const h = vi.hoisted(() => ({
   cap: '9000',
 }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: h.post } }));
-vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries: h.invalidate }) }));
+vi.mock('@tanstack/react-query', () => {
+  const queryClient = { invalidateQueries: h.invalidate };
+  return { useQueryClient: () => queryClient };
+});
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { id: 'u1', signupGrant: h.grant } }),
 }));
