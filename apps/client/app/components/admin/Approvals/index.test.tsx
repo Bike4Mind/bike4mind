@@ -78,7 +78,7 @@ describe('Approvals queue', () => {
     renderQueue();
 
     expect((screen.getByTestId('admin-approve-btn') as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByTestId('admin-reject-btn').textContent).toBe('Withdraw');
+    expect(screen.getByTestId('admin-withdraw-btn').textContent).toBe('Withdraw');
   });
 
   it('asks for a reason before rejecting', () => {

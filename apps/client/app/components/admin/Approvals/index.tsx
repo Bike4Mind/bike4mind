@@ -274,6 +274,7 @@ const Approvals: React.FC = () => {
       );
     }
     if (row.status !== 'pending') return null;
+    const isRequester = !!currentUser?.id && row.requestedBy?.id === currentUser.id;
     const hint = row.canDecide ? '' : decideHint(row, currentUser?.id);
     return (
       <Stack direction="row" spacing={0.5}>
@@ -296,9 +297,9 @@ const Approvals: React.FC = () => {
           variant="plain"
           color="neutral"
           onClick={() => setRejecting(row)}
-          data-testid="admin-reject-btn"
+          data-testid={isRequester ? 'admin-withdraw-btn' : 'admin-reject-btn'}
         >
-          {!!row.requestedBy && row.requestedBy.id === currentUser?.id ? 'Withdraw' : 'Reject'}
+          {isRequester ? 'Withdraw' : 'Reject'}
         </Button>
       </Stack>
     );
@@ -339,7 +340,13 @@ const Approvals: React.FC = () => {
             title="Nothing waiting"
             description="Requests appear here when an action needs a second admin."
             action={
-              <Button size="sm" variant="outlined" color="neutral" onClick={() => setStatus('all')}>
+              <Button
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                onClick={() => setStatus('all')}
+                data-testid="admin-approvals-show-all-btn"
+              >
                 Show all requests
               </Button>
             }
