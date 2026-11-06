@@ -753,6 +753,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'fd103df5f8b6caa0d4d0e1b4397e7324565612ed1e7ac29cc5c7facecb6fdec9'
   ),
   broker(
+    'queue:infra/subscriptionReconciliationDeadLetter.ts:subscriptionReconciliationDlq',
+    'b84252bf5bb727b63bc13381e878d877e2d33ce431c80243b0ba479c90fcb8c4'
+  ),
+  broker(
     'queue:infra/serviceHealthAlarms.ts:ServiceHealthAlarmHandlerDlq',
     '6b4dee3c8d196df99d5167e3b8e68c215c9cd5ec5a1d2b482027edb7ab444870'
   ),
@@ -1033,6 +1037,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     }
   ),
   gap('schedule:infra/cron.ts:revenueSnapshot', '7362008fcc90113d2b09beb4abced26b05b1bb41a3e933cb5d2535ac7e07f6cd'),
+  gap(
+    'schedule:infra/cron.ts:subscriptionReconciliation',
+    '5ecf7b3d61f56bc8e5713af17065c9c7b48b1a66ca5688f6ad0d5b7c72d16f19',
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
+  ),
   wired('schedule:infra/cron.ts:scheduleTaskCron', 'f74b7fd7eda3fce0d1fd6da03668b66d356fe51e5ce228d02e81d2a13316adb7', {
     source: 'apps/workers/src/selfhost/taskScheduler.ts',
     symbol: 'registerTaskScheduler',
@@ -1095,9 +1104,9 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/cron.ts:youngAccountSpendAlert',
-    'a558cc053bc3978e871a25020244927a1c19b2205ff283bd8d51de48b7df416a',
+    '0fdfbcaf8af6ffe9c4e387cf32b5e6e8ea3ab73a8c4a5e24f84e5150bfa6a80e',
     'Hosted production abuse alert to Slack; not applicable to a portable deployment.',
-    ['ssm:GetParameter']
+    ['cloudwatch:DescribeAlarms', 'cloudwatch:PutMetricAlarm', 'import:@aws-sdk/client-cloudwatch', 'ssm:GetParameter']
   ),
   hostedOnly(
     'schedule:infra/cron.ts:spendMonitor',
@@ -1121,7 +1130,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/signupIpRetention.ts',
       symbol: 'registerSignupIpRetention',
-      fingerprint: '0c313edef4ce27ecfa5a27f06f3eb3765dd6b22efd7cbe2d17278623b20deef4',
+      fingerprint: '969bed6cde6dafb23b320883c779caff4c30686bce073f671c27da06190f92a6',
     }
   ),
   wired(

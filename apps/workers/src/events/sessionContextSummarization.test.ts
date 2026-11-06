@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   complete: vi.fn(),
   recordUsage: vi.fn(),
   findUser: vi.fn(),
+  payerCanFund: vi.fn(),
 }));
 
 vi.mock('@workers/utils/eventContext', () => ({ withEventContext: (handler: unknown) => handler }));
@@ -25,6 +26,7 @@ vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   },
 }));
 vi.mock('@workers/events/recordSessionOperationalUsage', () => ({ recordSessionOperationalUsage: h.recordUsage }));
+vi.mock('@workers/events/sessionOperationalCreditGate', () => ({ payerCanFundSessionOperation: h.payerCanFund }));
 
 import { handler } from './sessionContextSummarization';
 
@@ -39,6 +41,7 @@ describe('sessionContextSummarization stopped turns', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.findUser.mockResolvedValue({ id: 'user-1' });
+    h.payerCanFund.mockResolvedValue(true);
     h.session = { id: 'session-1', userId: 'user-1', contextSummary: 'Existing context' };
     h.quests = [
       { id: '000000000000000000000001', prompt: 'partial ask', status: 'stopped', replies: ['partial answer'] },
@@ -88,6 +91,15 @@ describe('sessionContextSummarization stopped turns', () => {
       expect(h.update).not.toHaveBeenCalled();
     }
   );
+
+  it('leaves the summary boundary alone and runs no model when the payer cannot fund the operation', async () => {
+    h.payerCanFund.mockResolvedValue(false);
+    await run();
+    expect(h.payerCanFund).toHaveBeenCalledWith(expect.objectContaining({ payerId: 'user-1' }));
+    expect(h.complete).not.toHaveBeenCalled();
+    expect(h.recordUsage).not.toHaveBeenCalled();
+    expect(h.update).not.toHaveBeenCalled();
+  });
 
   it('does not run the model when the account lookup fails', async () => {
     h.findUser.mockRejectedValueOnce(new Error('database unavailable'));

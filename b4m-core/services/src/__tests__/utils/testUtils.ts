@@ -94,6 +94,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   deleteManyInIds: vi.fn(),
   softDeleteByIdsForUserBatch: vi.fn(),
   findAllByIds: vi.fn(),
+  findPageByIds: vi.fn(),
   findExistingIdsByIds: vi.fn(),
   findExistingIdsIncludingDeletedByIds: vi.fn(),
   findCitableFieldsByIds: vi.fn(),
@@ -221,6 +222,7 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     listByUserId: vi.fn(),
     findRecentlyUpdatedByUserId: vi.fn(),
     findAllByIds: vi.fn(),
+    findPageByIds: vi.fn(),
     findSessionIdsByUserId: vi.fn(),
     attachAgent: vi.fn(),
     // Returns a promise so the caller's `.catch(...)` on the auto-add write works in every test.
@@ -337,6 +339,7 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     shareable: createMockShareableRepository<IOrganizationDocument>(),
     search: vi.fn(),
     findByStripeCustomerId: vi.fn(),
+    findSeatsByStripeCustomerIds: vi.fn(),
     incrementCurrentStorage: vi.fn(),
     setCurrentStorageIfUnchanged: vi.fn(),
     findCurrentStorageSize: vi.fn(),

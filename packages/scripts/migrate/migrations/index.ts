@@ -293,10 +293,18 @@ import EnsureReferralInviterIndexes from './20260921239500_ensure-referral-invit
 import EnsureHeldCreditRewardUserStatusIndex from './20260921239600_ensure-heldcreditreward-user-status-index';
 import DropRetiredUnlockSettings from './20260921239700_drop-retired-unlock-settings';
 import EnsureFabFilePendingUploadIndex from './20260921239800_ensure-fabfile-pending-upload-index';
+import BackfillAnalyticsUserDayActive from './20260921239850_backfill-analytics-user-day-active';
 import EnsureOverwatchUserDayInternalIndex from './20260921239900_ensure-overwatch-user-day-internal-index';
 import EnsureUserDeletionScheduledForIndex from './20260921239970_ensure-user-deletion-scheduledfor-index';
+import EnsureBillingMismatchIndexes from './20260921239985_ensure-billing-mismatch-indexes';
 import EnsureStripeDisputeIndexes from './20260921239980_ensure-stripe-dispute-indexes';
 import ConvertLegacyQuestPlansToFiles from './20260921239990_convert-legacy-quest-plans-to-files';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import PinSignupGrantScheduleKeys from './20260921237480_pin-signup-grant-schedule-keys';
+// Id stays below SeedSignupGrantPools, whose test orders every signup migration before it.
+import DropQuestSignupActivity from './20260921237490_drop-quest-signup-activity';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import DropRetiredGrantSettings from './20260921239996_drop-retired-grant-settings';
 import EnsureUserLimitEventIndexes from './20260921240010_ensure-user-limit-event-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EnsureBillingEventIndexes from './20260921240030_ensure-billing-event-indexes';
@@ -505,6 +513,8 @@ const coreMigrations: MigrationFile[] = [
   QueueHeldSignupGrantsForRiskReview,
   SeedSignupGrantSchedule,
   PinSignupGrantInitialAndCap,
+  PinSignupGrantScheduleKeys,
+  DropQuestSignupActivity,
   SeedSignupGrantPools,
   EnsureHeldCreditRewardIndexes,
   EnsureQuestSessionKeysetIndex,
@@ -519,11 +529,14 @@ const coreMigrations: MigrationFile[] = [
   EnsureHeldCreditRewardUserStatusIndex,
   DropRetiredUnlockSettings,
   EnsureFabFilePendingUploadIndex,
+  BackfillAnalyticsUserDayActive,
   EnsureOverwatchUserDayInternalIndex,
   EnsureAutoContainmentDecisionIndexes,
   EnsureUserDeletionScheduledForIndex,
+  EnsureBillingMismatchIndexes,
   EnsureStripeDisputeIndexes,
   ConvertLegacyQuestPlansToFiles,
+  DropRetiredGrantSettings,
   EnsureUserLimitEventIndexes,
   EnsureBillingEventIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.

@@ -99,6 +99,19 @@ describe('POST /api/subscribers/generate-invite - admin audit', () => {
     expect(res._getStatusCode()).toBe(201);
     expect(res._getJSONData()).toEqual(expect.objectContaining({ emailSent: false, inviteCode: 'CODE-123' }));
   });
+
+  it('escapes a markup name in the invite email, both in the default body and an admin-edited one', async () => {
+    const probe = '<img src=x onerror=alert(1)>';
+    await run({ firstName: probe, lastName: '<b>x</b>' });
+    await run({ firstName: 'Jane', emailBody: `Hi ${probe}` });
+
+    for (const [{ body: html, subject }] of h.publish.mock.calls as [{ body: string; subject: string }][]) {
+      expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+      expect(html).not.toContain('<img src=x');
+      expect(subject).not.toContain('<');
+    }
+    expect(h.publish).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('POST /api/subscribers/generate-invite - delegated permission', () => {

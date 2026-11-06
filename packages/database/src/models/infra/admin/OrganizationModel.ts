@@ -236,6 +236,15 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     return this.organizationModel.findOne({ stripeCustomerId });
   }
 
+  /** Seat counts keyed by Stripe customer id, in one query. Not on the interface: only the billing reconciliation needs it. */
+  async findSeatsByStripeCustomerIds(stripeCustomerIds: string[]): Promise<Map<string, number>> {
+    if (stripeCustomerIds.length === 0) return new Map();
+    const orgs = await this.organizationModel
+      .find({ stripeCustomerId: { $in: stripeCustomerIds } }, { stripeCustomerId: 1, seats: 1 })
+      .lean();
+    return new Map(orgs.map(org => [org.stripeCustomerId as string, org.seats as number]));
+  }
+
   /**
    * `session` lets a caller that charges inside a transaction (the S3 charge's compare-and-set claim,
    * the delete routes) move the org counter atomically with the row write. Not on the interface:

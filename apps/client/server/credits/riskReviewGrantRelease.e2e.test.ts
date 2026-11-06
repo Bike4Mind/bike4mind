@@ -29,9 +29,8 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 let server: Awaited<ReturnType<typeof createMongoReplSet>>;
 const config: Record<string, string> = {
-  stagedSignupGrantEnabled: 'true',
-  signupGrantCredits: '12',
-  verifiedUnlockCredits: '28',
+  signupGrantInitialCredits: '12',
+  signupGrantDripCap: '28',
   signupGrantRiskPolicy: JSON.stringify({
     enabled: true,
     version: 'synthetic',

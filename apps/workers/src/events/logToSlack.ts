@@ -1,7 +1,7 @@
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { CloudWatchLogsEvent, Context } from 'aws-lambda';
 import { notifyEventLogsToSlack } from '@bike4mind/utils';
-import { Logger } from '@bike4mind/observability';
+import { Logger, redactLogText } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { adminSettingsRepository } from '@bike4mind/database';
@@ -80,8 +80,10 @@ export const ingest = async (event: CloudWatchLogsEvent, _context: Context) => {
       // Format: timestamp\trequestId\tlogLevel\tjsonPayload\n
       // Fargate lines carry no prefix - the whole message is the raw JSON payload - so
       // only take a positional field when the line is actually tab-separated.
-      const parts: string[] = logEvent.message.split('\t');
-      const rawMessage = parts.length > 1 ? parts[3] || logEvent.message : logEvent.message;
+      // Raw `console.*` lines skip the Logger's redaction, and this payload leaves for the SRE agent.
+      const line = redactLogText(logEvent.message);
+      const parts: string[] = line.split('\t');
+      const rawMessage = parts.length > 1 ? parts[3] || line : line;
 
       // Try to parse structured JSON for richer metadata
       let errorMessage = rawMessage;

@@ -80,11 +80,14 @@ export type MatchContext = {
   catalog: PlanCatalog;
   /** The search, already resolved to a condition on subscription fields. */
   searchCondition?: Condition;
+  /** The `mismatch` filter, already resolved to a condition on the ids of rows with an open finding. */
+  mismatchCondition?: Condition;
 };
 
 export function buildAdminSubscriptionsMatch(filter: AdminSubscriptionsFilter, context: MatchContext): Condition {
   const conditions: Condition[] = [];
   if (context.searchCondition) conditions.push(context.searchCondition);
+  if (filter.mismatch && context.mismatchCondition) conditions.push(context.mismatchCondition);
   if (filter.status?.length) conditions.push({ status: { $in: filter.status } });
   if (filter.plan?.length) conditions.push(planCondition(filter.plan, context.catalog));
   if (filter.interval) {

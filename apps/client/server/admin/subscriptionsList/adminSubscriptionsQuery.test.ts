@@ -109,6 +109,14 @@ describe('buildAdminSubscriptionsMatch', () => {
     );
     expect(conditions).toEqual([searchCondition, { status: { $in: ['active'] } }, { source: 'stripe' }]);
   });
+
+  it('ANDs the resolved mismatch condition only when the filter asks for it', () => {
+    const mismatchCondition = { _id: { $in: ['row_1'] } };
+    expect(buildAdminSubscriptionsMatch({ mismatch: 'yes' }, { ...context, mismatchCondition })).toEqual(
+      mismatchCondition
+    );
+    expect(buildAdminSubscriptionsMatch({}, { ...context, mismatchCondition })).toEqual({});
+  });
 });
 
 describe('viewConditions', () => {

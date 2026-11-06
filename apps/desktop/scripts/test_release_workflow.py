@@ -127,6 +127,25 @@ class ReleaseWorkflowTest(unittest.TestCase):
                 self.assertLess(body.rindex('pnpm build'), body.index(check))
                 self.assertLess(body.index(check), body.index('electron-builder'))
 
+    def test_orphaned_reservation_is_released_before_reserving(self):
+        # The version job treats any reservation on an older main commit as abandoned; that holds only
+        # while main runs share one group that never cancels a run in progress.
+        concurrency = yaml.safe_load(WORKFLOW)['concurrency']
+        self.assertEqual(concurrency['group'], 'desktop-release-${{ github.event.pull_request.number || github.ref }}')
+        self.assertEqual(concurrency['cancel-in-progress'], "${{ github.event_name == 'pull_request' }}")
+        self.assertIn('reclaim: ${{ steps.version.outputs.reclaim }}', job('version'))
+        publish = job('publish')
+        discard = publish.split('- name: Discard orphaned distribution draft', 1)[1].split('- name:', 1)[0]
+        self.assertIn("if: needs.version.outputs.reclaim != ''", discard)
+        self.assertIn('GH_TOKEN: ${{ steps.distribution-token.outputs.token }}', discard)
+        self.assertIn('run: python3 apps/desktop/scripts/discard-orphaned-draft.py', discard)
+        reserve = publish.split('- name: Reserve protected source version tag', 1)[1].split('- name:', 1)[0]
+        self.assertIn('RECLAIM_SHA: ${{ needs.version.outputs.reclaim }}', reserve)
+        order = [publish.index(f'- name: {name}') for name in
+                 ('Check distribution destination', 'Discard orphaned distribution draft',
+                  'Reserve protected source version tag', 'Publish desktop release')]
+        self.assertEqual(order, sorted(order))
+
     def test_token_guard_fails_closed(self):
         guard = next(line.strip() for line in WORKFLOW.splitlines()
                      if 'if [ -z "$GH_TOKEN" ]; then' in line)

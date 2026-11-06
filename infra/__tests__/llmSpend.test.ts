@@ -94,6 +94,7 @@ beforeEach(() => {
   vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR', undefined);
   vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC', undefined);
   vi.stubEnv('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR', undefined);
+  vi.stubEnv('YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR', undefined);
   vi.stubEnv('LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN', undefined);
   vi.stubGlobal('aws', {
     cloudwatch: {
@@ -306,6 +307,34 @@ describe('LLM spend alarms', () => {
     });
   });
 
+  it('warns on hourly spend by accounts under 7 days old at a lower line than the page', async () => {
+    await load();
+    expect(resources.alarm).toHaveBeenCalledWith('youngAccountSpendRateWarn', {
+      name: 'test-app-production-young-account-spend-rate-warn',
+      alarmDescription:
+        'Estimated LLM spend per hour by accounts under 7 days old at or above the configured USD warn line',
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'EstimatedUsdYoungAccounts',
+      namespace: 'test-app/production/LLMSpend',
+      period: 3600,
+      statistic: 'Sum',
+      threshold: 2,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+  });
+
+  it('exports the page and warn hourly alarms, in that order, for the threshold override', async () => {
+    const { youngAccountSpendAlarms } = await load();
+    expect(youngAccountSpendAlarms.map(alarm => (alarm.arn as unknown as { value: string }).value)).toEqual([
+      'alarm-arn-youngAccountSpendRate',
+      'alarm-arn-youngAccountSpendRateWarn',
+    ]);
+  });
+
   it('alarms on 5-minute spend by accounts under 7 days old', async () => {
     await load();
     expect(resources.alarm).toHaveBeenCalledWith('llmSpendYoungAccounts', {
@@ -348,12 +377,14 @@ describe('LLM spend alarms', () => {
   it('reads the configured ceilings', async () => {
     vi.stubEnv('LLM_SPEND_ALARM_USD_PER_5MIN', '60');
     vi.stubEnv('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR', '9');
+    vi.stubEnv('YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR', '4');
     vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR', '30');
     vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC', '90');
     vi.stubEnv('LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN', '7');
     await load();
     const fixed: Record<string, number> = {
       youngAccountSpendRate: 9,
+      youngAccountSpendRateWarn: 4,
       llmSpendYoungAccounts: 7,
       completionCreditOverdraft: 1,
       'llmSpendHourly-anthropic': 90,
@@ -373,6 +404,11 @@ describe('LLM spend alarms', () => {
   it('rejects a malformed young-account ceiling', async () => {
     vi.stubEnv('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR', '0');
     await expect(load()).rejects.toThrow(/YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR/);
+  });
+
+  it('rejects a malformed young-account warn line', async () => {
+    vi.stubEnv('YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR', '1.5');
+    await expect(load()).rejects.toThrow(/YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR/);
   });
 
   it('rejects a malformed young-account 5-minute ceiling', async () => {
@@ -473,11 +509,12 @@ describe('LLM spend dashboard', () => {
 describe('LLM spend stage gating', () => {
   it.each(['dev', 'production'])('creates resources on %s', async stage => {
     await load(stage);
-    expect(resources.alarm).toHaveBeenCalledTimes(PROVIDERS.length * 2 + 3);
+    expect(resources.alarm).toHaveBeenCalledTimes(PROVIDERS.length * 2 + 4);
     expect(resources.dashboard).toHaveBeenCalledTimes(1);
   });
   it('creates nothing on an unmonitored stage', async () => {
-    await load('preview');
+    const { youngAccountSpendAlarms } = await load('preview');
+    expect(youngAccountSpendAlarms).toEqual([]);
     expect(resources.filter).not.toHaveBeenCalled();
     expect(resources.alarm).not.toHaveBeenCalled();
     expect(resources.dashboard).not.toHaveBeenCalled();
@@ -493,6 +530,7 @@ describe('LLM spend stage gating', () => {
     expect(contract.deployEnv).toContain('LLM_SPEND_ALARM_USD_PER_HOUR');
     expect(contract.deployEnv).toContain('LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC');
     expect(contract.deployEnv).toContain('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR');
+    expect(contract.deployEnv).toContain('YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR');
     expect(contract.deployEnv).toContain('LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN');
     expect(readFileSync(new URL('../index.ts', import.meta.url), 'utf8')).toContain("export * from './llmSpend';");
   });

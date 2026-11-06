@@ -5,6 +5,7 @@ import { OperationsModelService } from '@bike4mind/server-utils/services/operati
 import { ChatModelName, IMessage, MessageContentObject } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
+import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
 import mongoose from 'mongoose';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import { isStoppedBeforeReply } from '@bike4mind/utils';
@@ -57,6 +58,11 @@ export const handler = withEventContext(async (event, logger) => {
   const user = await userRepository.findById(session.userId);
   if (!user || aiAccessDeniedMessage(user)) {
     logger.warn(`Skipping context summarization for session ${sessionId}: user missing or AI access held`);
+    return;
+  }
+
+  // The boundary is left where it is, so the window is summarized on a later turn once the payer can fund it.
+  if (!(await payerCanFundSessionOperation({ payerId: user.id, operation: 'context summarization', logger }))) {
     return;
   }
 

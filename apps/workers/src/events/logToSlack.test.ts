@@ -56,9 +56,11 @@ vi.mock('@bike4mind/common', () => ({
   resolveFullConfig: (...args: unknown[]) => mockResolveFullConfig(...args),
 }));
 
-vi.mock('@bike4mind/observability', () => {
+vi.mock('@bike4mind/observability', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/observability')>();
   const logger: Record<string, unknown> = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return {
+    redactLogText: actual.redactLogText,
     Logger: vi.fn(function () {
       return logger;
     }),
@@ -119,6 +121,17 @@ describe('logToSlack.ingest — SRE dispatch', () => {
     expect(payload.errorMessage).toBe('Drain window expired with in-flight quests');
     expect(payload.functionName).toBe('chatCompletion');
     expect(payload.logGroup).toBe('/sst/cluster/dev/ChatCompletion');
+  });
+
+  it('scrubs contact details and credentials from a raw console line before dispatching it', async () => {
+    const consoleLine = `2026-01-01\treq-1\tERROR\tTypeError: send failed for jane@example.com with Bearer abc.def`;
+
+    await ingest(makeCwEvent(consoleLine), ctx);
+
+    const [, payload] = mockSendToQueue.mock.calls[0] as [string, Record<string, unknown>];
+    expect(JSON.stringify(payload)).not.toContain('jane@');
+    expect(JSON.stringify(payload)).not.toContain('abc.def');
+    expect(payload.stackTrace).toBe('TypeError: send failed for ***@example.com with Bearer [REDACTED]');
   });
 
   it('sets dryRun on the dispatched payload when the repo is in dry-run mode', async () => {

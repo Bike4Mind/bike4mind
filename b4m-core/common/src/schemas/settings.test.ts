@@ -7,6 +7,8 @@ import {
   userReadableSettingKeys,
   redactSettingSecrets,
   redactSettingSecretsForBroadcast,
+  broadcastSafeSettingKeys,
+  allSettingDefinitions,
   buildPublicSettingsProjection,
   experimentalFeatureSettingKeys,
   experimentalNonGroupSettingKeys,
@@ -1570,6 +1572,20 @@ describe('spend monitor settings', () => {
   });
 });
 
+describe('young-account spend alarm override settings', () => {
+  it.each(['youngAccountSpendPageUsdPerHour', 'youngAccountSpendWarnUsdPerHour'] as const)(
+    '%s defaults to 0, accepts fractions, rejects negatives and stays admin-only',
+    key => {
+      const setting = settingsMap[key];
+      expect(setting.schema.parse(undefined)).toBe(0);
+      expect(setting.schema.parse('2.5')).toBe(2.5);
+      expect(setting.schema.safeParse(-1).success).toBe(false);
+      expect(API_SERVICE_GROUPS.CREDITS.settings.some(entry => entry.key === key)).toBe(true);
+      expect(new Set<string>(userReadableSettingKeys()).has(key)).toBe(false);
+    }
+  );
+});
+
 describe('preference arena settings exposure', () => {
   it('keeps every arena setting except the enabled flag out of the user-readable set', () => {
     const readable = new Set<string>(userReadableSettingKeys());
@@ -1581,12 +1597,7 @@ describe('preference arena settings exposure', () => {
 
 describe('stageHiddenSettingKeys', () => {
   it('hides the deprecated drip settings and preview test mode on production stages', () => {
-    expect(stageHiddenSettingKeys(true).sort()).toEqual([
-      'signupGrantActivityMinDays',
-      'signupGrantActivityMinMessages',
-      'signupGrantActivityPreviewTestMode',
-      'signupGrantDailyBudget',
-    ]);
+    expect(stageHiddenSettingKeys(true).sort()).toEqual(['signupGrantActivityPreviewTestMode']);
   });
 
   it('hides nothing elsewhere', () => {
@@ -1621,5 +1632,26 @@ describe('per-call provider cost settings (billed web_search / web_fetch)', () =
   it('puts the search cost beside the other search provider settings', () => {
     expect(API_SERVICE_GROUPS.SEARCH.settings.map(s => s.key)).toContain('SerpApiSearchCostUsd');
     expect(settingsMap.SerpApiSearchCostUsd.group).toBe(API_SERVICE_GROUPS.SEARCH.id);
+  });
+});
+
+describe('broadcastSafeSettingKeys', () => {
+  it('withholds every isSensitive setting and the nested-secret sreAgentConfig', () => {
+    const keys = broadcastSafeSettingKeys();
+    expect(keys).not.toContain('openaiDemoKey');
+    expect(keys).not.toContain('sreAgentConfig');
+    const sensitiveKeys = allSettingDefinitions()
+      .filter(definition => definition.isSensitive)
+      .map(definition => definition.key);
+    expect(sensitiveKeys.length).toBeGreaterThan(0);
+    expect(keys.filter(key => sensitiveKeys.includes(key))).toEqual([]);
+  });
+
+  it('keeps the non-sensitive settings clients render live', () => {
+    expect(broadcastSafeSettingKeys()).toEqual(expect.arrayContaining(['EnableQuestMaster', 'EnableArtifacts']));
+  });
+
+  it('never admits a setting name with no definition', () => {
+    expect(broadcastSafeSettingKeys()).not.toContain('someRemovedSettingName');
   });
 });

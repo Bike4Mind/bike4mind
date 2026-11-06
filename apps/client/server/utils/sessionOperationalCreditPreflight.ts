@@ -44,6 +44,11 @@ export interface SessionOperationalCreditPreflightArgs {
   operationCount: number;
   /** Named in the refusal message, e.g. 'session tagging'. */
   operation: string;
+  /**
+   * Resolves the model the queued call actually runs on, for work that does not use the operations
+   * model (memento extraction runs on the chat turn's model). Called only on a would-be refusal.
+   */
+  resolveModelInfo?: () => Promise<ModelInfo>;
   logger?: Logger;
 }
 
@@ -95,9 +100,9 @@ type BillingOrg = Awaited<ReturnType<typeof organizationRepository.findById>>;
  * and modelCatalog.ts:78-81 calls it the intended fail-loud signal, so it only ever reaches a
  * reader as a gap: price-seed lag, or the per-process `_modelCache` serving this process a map
  * the SessionEvents process already prices from. Inferring "free" from it would waive the charge
- * here while settlement debits normally - and this pre-flight is the sole `maxCreditsPerMember`
- * enforcement point on these paths (recordOperationalUsage.ts:84-88), so a false waive costs
- * more than the ordinary fail-open elsewhere in this file. Requiring the flag is what keeps that
+ * here, and this pre-flight is the sole `maxCreditsPerMember` enforcement point on these paths
+ * (see the PER-MEMBER CAP note in recordOperationalUsage), so a false waive would skip that cap
+ * even though the settlement debit is floored at zero. Requiring the flag is what keeps that
  * gap out; requiring every tier to be zero is what keeps a mislabelled model from exploiting
  * the flag.
  */
@@ -111,9 +116,8 @@ function settlesFreeForAnyVolume(modelInfo: ModelInfo): boolean {
 }
 
 /**
- * Resolved through the same `getOperationsModel()` the handlers themselves call
- * (sessionSummarization.ts:64, sessionTagging.ts:135) so the gate and the charge cannot disagree
- * about which model is in play.
+ * Resolved to the model the queued call runs on: the operations model, unless `resolveModelInfo`
+ * is passed (mementos do, with the chat turn's model).
  *
  * Imported dynamically and reached only on a would-be refusal: it reads an admin setting and
  * builds the whole model catalog, far too much work to spend on the happy path confirming what
@@ -121,16 +125,17 @@ function settlesFreeForAnyVolume(modelInfo: ModelInfo): boolean {
  * rather than fail-opening like the reads above - those cannot produce a verdict at all without
  * succeeding, whereas here a verdict already exists and "priced" is the accurate default.
  */
-async function operationalSpendSettlesFree(logger?: Logger): Promise<boolean> {
+async function operationalSpendSettlesFree(
+  resolveModelInfo: (() => Promise<ModelInfo>) | undefined,
+  logger?: Logger
+): Promise<boolean> {
   try {
+    if (resolveModelInfo) return settlesFreeForAnyVolume(await resolveModelInfo());
     const { OperationsModelService } = await import('@bike4mind/server-utils/services/operationsModelService');
     const { modelInfo } = await OperationsModelService.getOperationsModel();
     return settlesFreeForAnyVolume(modelInfo);
   } catch (err) {
-    logger?.warn(
-      '[sessionOperationalCreditPreflight] failed to resolve the operations model; keeping the refusal',
-      err
-    );
+    logger?.warn('[sessionOperationalCreditPreflight] failed to resolve the model in play; keeping the refusal', err);
     return false;
   }
 }
@@ -179,7 +184,9 @@ function resolveRefusalReason({
  * Scoped to the `SessionEvents` publishers that are NOT already behind a gated primary action:
  * `POST /api/sessions/[id]/tag`, `POST /api/sessions/[id]/summary`, the project-attach fan-out
  * and the admin spider. The rest (auto-naming, context summarization, the image/video handlers)
- * publish downstream of a completed chat, which runs its own reservation.
+ * publish downstream of a completed chat, whose settlement can leave the payer at zero; the
+ * handlers re-check through `apps/workers/src/events/sessionOperationalCreditGate` before their
+ * model call.
  *
  * A CHECK, not a reservation: settlement moves the balance itself, so reserving here would
  * charge the same work twice. The gap that leaves is the same one every check-then-charge
@@ -193,6 +200,7 @@ export async function checkSessionOperationalCredits({
   userId,
   operationCount,
   operation,
+  resolveModelInfo,
   logger,
 }: SessionOperationalCreditPreflightArgs): Promise<SessionOperationalCreditVerdict> {
   if (operationCount <= 0) return { allowed: true };
@@ -294,12 +302,12 @@ export async function checkSessionOperationalCredits({
   // Last question before refusing, and only worth asking here: MIN_CREDITS_PER_OPERATION is a
   // nominal proxy for a cost that can legitimately be zero, and a 422 on free work is a
   // regression against the ungated behavior this replaced.
-  if (await operationalSpendSettlesFree(logger)) {
+  if (await operationalSpendSettlesFree(resolveModelInfo, logger)) {
     // warn, not info: a waived refusal is the designed path, but it is still a refusal this gate
     // declined to enforce, and the operations model being costless is worth seeing when someone
     // asks why a zero-balance account is running summaries.
     logger?.warn(
-      `[sessionOperationalCreditPreflight] waiving ${operation} refusal; the operations model settles free at any volume`
+      `[sessionOperationalCreditPreflight] waiving ${operation} refusal; its model settles free at any volume`
     );
     return { allowed: true };
   }

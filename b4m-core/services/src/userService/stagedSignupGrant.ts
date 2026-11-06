@@ -558,39 +558,6 @@ async function unlockWithHeldTranche(
   return { ...remainder, creditsGranted, currentCredits: remainder.currentCredits ?? tranche.currentCredits };
 }
 
-let unsetDripCapAlertDay: string | undefined;
-let unsetDripCapAlertInFlight = false;
-
-/**
- * Fire-and-forget, at most once per UTC day per process (so once per warm Lambda container, not once globally):
- * the drip is paying from the registry default cap.
- * The day is marked only after a delivered alert, so a failed post retries on the next drip.
- */
-function notifyUnsetDripCap(protection: GrantAdapters['db']['signupProtection'], fallback: number) {
-  const today = new Date().toISOString().slice(0, 10);
-  if (!protection?.notifyConfig || unsetDripCapAlertDay === today || unsetDripCapAlertInFlight) return;
-  unsetDripCapAlertInFlight = true;
-  protection
-    .notifyConfig({ setting: 'signupGrantDripCap', fallback })
-    .then(
-      () => {
-        unsetDripCapAlertDay = today;
-      },
-      error => {
-        console.warn('[signup-grant] Unset drip cap alert failed', error);
-      }
-    )
-    .finally(() => {
-      unsetDripCapAlertInFlight = false;
-    });
-}
-
-/** Test seam: clears the once-per-day alert dedupe. */
-export function resetUnsetDripCapAlert() {
-  unsetDripCapAlertDay = undefined;
-  unsetDripCapAlertInFlight = false;
-}
-
 export type HeldUnlockReleaseResult = { scanned: number; released: number; creditsPaid: number; failed: number };
 
 /**
@@ -690,9 +657,8 @@ export async function dripSignupGrant(
 ): Promise<GrantFreeCreditsResult> {
   if (period !== undefined && !/^preview:\d{1,4}:\d+$/.test(period)) return noGrant();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return noGrant();
-  const { dailyCredits, dripCap, dripCapSource } = await resolveDripLimits(adapters.db.adminSettings);
+  const { dailyCredits, dripCap } = await resolveDripLimits(adapters.db.adminSettings);
   if (!(dailyCredits > 0) || !(dripCap > 0)) return noGrant();
-  if (dripCapSource === 'default') notifyUnsetDripCap(adapters.db.signupProtection, dripCap);
   const user = await adapters.db.users.findById(userId);
   if (!user?.signupGrant || user.signupGrant.unlockForfeited || hasPaidSignupDrip(user.signupGrant, day, period))
     return noGrant();

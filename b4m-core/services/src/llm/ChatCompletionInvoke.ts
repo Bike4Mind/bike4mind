@@ -36,7 +36,6 @@ import {
 import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { classifyQueryComplexity } from './queryComplexityClassifier';
 import { filterBuiltInTools } from './tools/toolManager';
-import { randomUUID } from 'crypto';
 
 export class ChatCompletionInvoke {
   public db: IChatCompletionServiceOptions['db'];
@@ -394,8 +393,6 @@ export class ChatCompletionInvoke {
               // `null` is not an option: ChatAckSchema types errorCode as an optional enum and rejects null.
               q.errorCode = undefined;
               q.turnTiming = undefined;
-              // A later API-key attempt must not inherit a first-party attempt's evidence.
-              if (authOrigin !== 'session') delete q.signupActivity;
               await this.db.quests.update(
                 {
                   id: q.id,
@@ -412,13 +409,7 @@ export class ChatCompletionInvoke {
                   promptMeta: q.promptMeta,
                   agentIds: q.agentIds,
                 },
-                {
-                  unset: [
-                    'errorCode',
-                    'turnTiming',
-                    ...(authOrigin !== 'session' ? (['signupActivity'] as const) : []),
-                  ],
-                }
+                { unset: ['errorCode', 'turnTiming'] }
               );
               return q;
             })
@@ -430,9 +421,6 @@ export class ChatCompletionInvoke {
               timestamp: now,
               replies: [],
               status: 'running',
-              ...(authOrigin === 'session' && this.user.id === userId && this.user.signupGrant
-                ? { signupActivity: { userId, turnId: randomUUID(), startedAt: now } }
-                : {}),
               promptMeta,
               agentIds: session.agentIds || [],
               // Session-bound by the guard above, so the chain a correction claims to extend is

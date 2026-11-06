@@ -47,4 +47,12 @@ describe('active session heartbeat route', () => {
     expect(mocks.heartbeat).toHaveBeenCalledExactlyOnceWith('me');
     expect(json).toHaveBeenCalledWith(result);
   });
+
+  it('passes the spent flag through to the client', async () => {
+    const result = { creditsGranted: 0, paidToday: false, withheld: false, activeSeconds: 0, spent: true };
+    mocks.heartbeat.mockResolvedValue(result);
+    const json = vi.fn();
+    await mocks.handler!({ user: { id: 'me' } }, { json });
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ spent: true }));
+  });
 });

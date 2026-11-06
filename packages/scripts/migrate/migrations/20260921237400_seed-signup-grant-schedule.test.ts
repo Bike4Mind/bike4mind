@@ -1,11 +1,20 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { resolveSignupGrantSchedule } from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
 import migration from './20260921237400_seed-signup-grant-schedule';
+import { isStoredToggleOn, signupGrantScheduleFromValues, storedGrantCredits } from './legacySignupGrantSchedule';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+
+// The runtime resolver as it read the retired keys, rebuilt from the frozen helper.
+async function legacyRuntimeSchedule() {
+  const raw = new Map((await AdminSettings.find({}).lean()).map(row => [row.settingName, row.settingValue]));
+  return signupGrantScheduleFromValues(
+    key => (key === 'defaultFreeCredits' ? undefined : storedGrantCredits(key, raw.get(key))),
+    { staged: true, activity: isStoredToggleOn(raw.get('signupGrantActivityEnabled')) }
+  );
+}
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 
@@ -41,7 +50,6 @@ const stored = async () =>
       }).lean()
     ).map(row => [row.settingName, row.settingValue])
   );
-const repo = { findBySettingName: (settingName: string) => AdminSettings.findOne({ settingName }).lean() } as never;
 
 describe('seed signup grant schedule migration', () => {
   it('seeds a staged environment with the schedule it already runs', async () => {
@@ -61,7 +69,7 @@ describe('seed signup grant schedule migration', () => {
       signupGrantDripCap: '9000',
       signupGrantInviteBonusCredits: '0',
     });
-    expect(await resolveSignupGrantSchedule(repo)).toMatchObject({ dripCap: 9000, dripCapSource: 'setting' });
+    expect(await legacyRuntimeSchedule()).toMatchObject({ dripCap: 9000, dripCapSource: 'setting' });
   });
 
   it('seeds a staged-off environment with the flat grant, no drip and no locked remainder', async () => {
@@ -128,7 +136,7 @@ describe('seed signup grant schedule migration', () => {
       signupGrantDailyCredits: '1000',
       signupGrantInviteBonusCredits: '0',
     });
-    expect(await resolveSignupGrantSchedule(repo)).toMatchObject({
+    expect(await legacyRuntimeSchedule()).toMatchObject({
       dripCap: 3000,
       unlockCredits: 9000,
       dailyCredits: 1000,
@@ -140,7 +148,7 @@ describe('seed signup grant schedule migration', () => {
     await seed({ ...dripping, signupGrantActivityMaxCredits: '9000', verifiedUnlockCredits: '3000' });
     await migration.up();
     expect((await stored()).signupGrantDripCap).toBe('3000');
-    expect(await resolveSignupGrantSchedule(repo)).toMatchObject({
+    expect(await legacyRuntimeSchedule()).toMatchObject({
       dripCap: 3000,
       unlockCredits: 3000,
       dripCapSource: 'setting',
@@ -157,7 +165,7 @@ describe('seed signup grant schedule migration', () => {
     await seed({ ...dripping, verifiedUnlockCredits: '20000' });
     await migration.up();
     expect(await stored()).not.toHaveProperty('signupGrantDripCap');
-    expect(await resolveSignupGrantSchedule(repo)).toMatchObject({ dripCap: 9000, unlockCredits: 20000 });
+    expect(await legacyRuntimeSchedule()).toMatchObject({ dripCap: 9000, unlockCredits: 20000 });
   });
 
   it('seeds every key with no old rows at all', async () => {
