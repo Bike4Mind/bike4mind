@@ -36,6 +36,7 @@ export * from './imageModerationReviewAlarms';
 export * from './accountCreationAlarms';
 export * from './analyticsRollup';
 export * from './llmSpend';
+export * from './youngAccountSpendAlert';
 export * from './providerSpend';
 export * from './authAbuseAlarms';
 export * from './apiProbeDetector';
