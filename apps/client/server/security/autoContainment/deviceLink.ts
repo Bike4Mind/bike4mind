@@ -53,6 +53,17 @@ export type DeviceLinkResult =
     }
   | { status: 'recorded'; detectionId: string; assessed: boolean; containment: AutoContainmentOutcome | null };
 
+/** The detection was recorded but its assessment failed; the claim stays so a retry does not duplicate it. */
+export class DeviceLinkAssessError extends Error {
+  constructor(
+    readonly detectionId: string,
+    cause: unknown
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'DeviceLinkAssessError';
+  }
+}
+
 export type DeviceLinkDeps = DeviceLinkReaders & {
   loadConfig: () => Promise<DeviceLinkConfig | null>;
   loadAccounts: (userIds: string[]) => Promise<DeviceLinkRow[]>;
@@ -166,8 +177,12 @@ async function recordLink(
     await deps.releaseClaim(userId);
     throw error;
   }
-  const { assessed, containment } = await deps.assessAndContain(detectionId);
-  return { status: 'recorded', detectionId, assessed, containment };
+  try {
+    const { assessed, containment } = await deps.assessAndContain(detectionId);
+    return { status: 'recorded', detectionId, assessed, containment };
+  } catch (error) {
+    throw new DeviceLinkAssessError(detectionId, error);
+  }
 }
 
 /** Applies the rule to one account. Throws only on a database failure. */
@@ -190,6 +205,9 @@ export type DeviceLinkSweepReport = {
   linked: number;
   recorded: number;
   alreadyRecorded: number;
+  /** Accounts whose detection was recorded but whose assessment failed. */
+  assessFailed: number;
+  /** Accounts whose detection could not be recorded. */
   failed: number;
 };
 
@@ -213,6 +231,7 @@ export async function sweepDeviceLinks(
     linked: 0,
     recorded: 0,
     alreadyRecorded: 0,
+    assessFailed: 0,
     failed: 0,
   };
   const config = await deps.loadConfig();
@@ -238,7 +257,8 @@ export async function sweepDeviceLinks(
       if (outcome.status === 'recorded') report.recorded += 1;
       else report.alreadyRecorded += 1;
     } catch (error) {
-      report.failed += 1;
+      if (error instanceof DeviceLinkAssessError) report.assessFailed += 1;
+      else report.failed += 1;
       deps.onError?.(userId, error);
     }
   }
