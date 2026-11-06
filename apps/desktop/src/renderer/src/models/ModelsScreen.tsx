@@ -104,8 +104,10 @@ function NoLocalRuntime({
       >
         <Typography level="body-sm" data-testid="models-no-runtime-text">
           Desktop got no answer from {address}.
-          {launch?.canStart || launch?.programPending ? '' : ' If Ollama is not installed, install it.'} To use models
-          on another machine instead, point Desktop at its server.
+          {launch === undefined || launch?.canStart || launch?.programPending
+            ? ''
+            : ' If Ollama is not installed, install it.'}{' '}
+          To use models on another machine instead, point Desktop at its server.
         </Typography>
         {isWindows && onOpenModelServers && (
           <Typography level="body-sm" data-testid="models-no-runtime-wsl-hint">

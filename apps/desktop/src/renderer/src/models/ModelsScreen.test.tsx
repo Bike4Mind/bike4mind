@@ -1425,6 +1425,17 @@ describe('ModelsScreen installed', () => {
     expect(q('models-no-runtime-text')?.textContent).not.toContain('install it');
   });
 
+  it('shows no Install button or sentence until the model server list has loaded', async () => {
+    bridge.status = DOWN;
+    (window as unknown as { b4m: { modelServers: { list: () => Promise<unknown> } } }).b4m.modelServers.list = () =>
+      new Promise(() => {});
+    await mount(undefined, 'curated');
+    expect(q('models-no-runtime-text')).not.toBeNull();
+    expect(q('models-no-runtime-text')?.textContent).not.toContain('install it');
+    expect(q('models-install-ollama-btn')).toBeNull();
+    expect(q('ollama-start-hint')).toBeNull();
+  });
+
   it('offers Install when the model server list cannot be read', async () => {
     bridge.status = DOWN;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

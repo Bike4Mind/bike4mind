@@ -500,7 +500,7 @@ describe('ModelServerRegistry launching servers', () => {
     }
   });
 
-  it('looks again at once on a user check, but never runs two looks at a time', async () => {
+  it('looks again at once on a user check, but never runs more than two looks at a time', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const { registry, launchers } = setup();
@@ -519,17 +519,21 @@ describe('ModelServerRegistry launching servers', () => {
       await vi.advanceTimersByTimeAsync(2_000);
 
       let found: (value: { path: string }) => void = () => {};
-      vi.mocked(launchers.program).mockReturnValueOnce(new Promise(resolve => (found = resolve)));
+      vi.mocked(launchers.program)
+        .mockReturnValueOnce(new Promise(resolve => (found = resolve)))
+        .mockReturnValue(new Promise(() => {}));
       for (let click = 0; click < 4; click++) {
         const checked = registry.check('local', { lookAgain: true });
         await vi.advanceTimersByTimeAsync(2_000);
         await checked;
       }
-      expect(launchers.program).toHaveBeenCalledTimes(3);
+      expect(launchers.program).toHaveBeenCalledTimes(4);
       found({ path: '/opt/fake/bin' });
       await vi.advanceTimersByTimeAsync(0);
-      await registry.check('local', { lookAgain: true });
-      expect(launchers.program).toHaveBeenCalledTimes(4);
+      const last = registry.check('local', { lookAgain: true });
+      await vi.advanceTimersByTimeAsync(2_000);
+      await last;
+      expect(launchers.program).toHaveBeenCalledTimes(5);
     } finally {
       vi.useRealTimers();
     }
@@ -549,6 +553,63 @@ describe('ModelServerRegistry launching servers', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('waits the whole 30 seconds between looks', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    try {
+      const { registry, launchers } = setup();
+      vi.mocked(launchers.program).mockResolvedValue({ problem: 'Desktop could not find Ollama on this computer.' });
+      await registry.check('local');
+      await vi.advanceTimersByTimeAsync(29_999);
+      await registry.check('local');
+      expect(launchers.program).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await registry.check('local');
+      expect(launchers.program).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not look again on a user check until two full seconds after the last look began', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    try {
+      const { registry, launchers } = setup();
+      vi.mocked(launchers.program).mockResolvedValue({ problem: 'Desktop could not find Ollama on this computer.' });
+      await registry.check('local');
+      await vi.advanceTimersByTimeAsync(1_999);
+      await registry.check('local', { lookAgain: true });
+      expect(launchers.program).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await registry.check('local', { lookAgain: true });
+      expect(launchers.program).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('looks again on a user check even while an earlier look is still stuck, below the outstanding cap', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    try {
+      const { registry, launchers } = setup();
+      vi.mocked(launchers.program).mockReturnValue(new Promise(() => {}));
+      const first = registry.check('local');
+      await vi.advanceTimersByTimeAsync(2_000);
+      await first;
+      expect(launchers.program).toHaveBeenCalledTimes(1);
+      const second = registry.check('local', { lookAgain: true });
+      await vi.advanceTimersByTimeAsync(2_000);
+      await second;
+      expect(launchers.program).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports a look as pending before the first health check has settled', async () => {
+    const { registry } = setup();
+    expect((await local(registry)).launch).toMatchObject({ canStart: false, programPending: true });
   });
 
   it('starts no new look while two abandoned looks are still outstanding', async () => {

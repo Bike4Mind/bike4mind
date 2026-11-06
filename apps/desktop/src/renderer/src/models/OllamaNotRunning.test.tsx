@@ -6,7 +6,7 @@ import type { ModelServerLaunchView, ModelServerMutationResult } from '@shared/m
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { OLLAMA_NOT_RUNNING, OLLAMA_START_HINT } from './localRuntimeCopy';
-import { ComposerOllamaNotice, OllamaNotRunning, START_WAIT_MS, STARTED_SHOW_MS } from './OllamaNotRunning';
+import { ComposerOllamaNotice, OllamaNotRunning } from './OllamaNotRunning';
 
 // jsdom ships no matchMedia, and Joy's colour-scheme provider asks for one on mount.
 window.matchMedia ??= ((query: string) => ({
@@ -101,6 +101,13 @@ describe('OllamaNotRunning', () => {
     expect(check).toHaveBeenCalledTimes(1);
   });
 
+  it('shows no start hint until the launch view has loaded', () => {
+    show(<OllamaNotRunning launch={undefined} onStarted={vi.fn()} />);
+    expect(q('ollama-not-running')).not.toBeNull();
+    expect(q('ollama-start-btn')).toBeNull();
+    expect(q('ollama-start-hint')).toBeNull();
+  });
+
   it('rechecks on Check again and runs the caller retry', () => {
     const onRetry = vi.fn();
     show(<OllamaNotRunning launch={launchView({ canStart: false })} onStarted={vi.fn()} onRetry={onRetry} />);
@@ -184,11 +191,13 @@ describe('OllamaNotRunning', () => {
     const onStarted = render(launchView());
     act(() => q('ollama-start-btn')?.click());
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(START_WAIT_MS);
+      await vi.advanceTimersByTimeAsync(44_999);
     });
-    expect(q('ollama-start-error')?.textContent).toBe(
-      `Ollama did not start: no answer within ${START_WAIT_MS / 1000} seconds.`
-    );
+    expect(q('ollama-start-error')).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(q('ollama-start-error')?.textContent).toBe('Ollama did not start: no answer within 45 seconds.');
     expect(onStarted).not.toHaveBeenCalled();
     expect(q('ollama-start-btn')?.getAttribute('aria-disabled')).toBe('true');
     act(() => q('ollama-start-btn')?.click());
@@ -210,7 +219,7 @@ describe('OllamaNotRunning', () => {
     const onStarted = render(launchView());
     act(() => q('ollama-start-btn')?.click());
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(START_WAIT_MS);
+      await vi.advanceTimersByTimeAsync(45_000);
     });
     pending.resolve({ ok: false, error: 'port 11434 is in use' });
     await act(async () => {
@@ -243,7 +252,11 @@ describe('OllamaNotRunning', () => {
     expect(q('ollama-start-done')).not.toBeNull();
     expect(q('ollama-start-btn')).toBeNull();
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(STARTED_SHOW_MS);
+      await vi.advanceTimersByTimeAsync(14_999);
+    });
+    expect(q('ollama-start-done')).not.toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
     });
     expect(q('ollama-start-done')).toBeNull();
     expect(q('ollama-start-btn')).not.toBeNull();

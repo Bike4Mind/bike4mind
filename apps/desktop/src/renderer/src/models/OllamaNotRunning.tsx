@@ -152,7 +152,7 @@ export function OllamaNotRunning({
               Ollama did not start: {error}
             </Typography>
           )}
-          {!canStart && !launch?.programPending && (
+          {launch !== undefined && !canStart && !launch?.programPending && (
             <Typography level={textLevel} data-testid="ollama-start-hint">
               {OLLAMA_START_HINT}
             </Typography>

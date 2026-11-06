@@ -603,7 +603,10 @@ export class ModelServerRegistry {
     if (id === undefined) return this.checkAll();
     if (id === LOCAL_SERVER_ID) {
       const state = this.launchState(id);
-      if (options.lookAgain && Date.now() - state.programAt >= LOOK_AGAIN_MIN_MS) state.programAt = 0;
+      if (options.lookAgain && Date.now() - state.programAt >= LOOK_AGAIN_MIN_MS) {
+        state.programAt = 0;
+        state.lookingSince = null;
+      }
       await this.checkLocal();
     } else {
       const entry = this.entries.get(id);
@@ -1003,7 +1006,7 @@ export class ModelServerRegistry {
       ...(missingOllama ? { programMissing: missingOllama } : {}),
       // At the cap no new look can start, so stop waiting and let the Models screen offer Install.
       ...(missingOllama === undefined &&
-      target.health.state === 'unreachable' &&
+      (target.health.state === 'unreachable' || target.health.state === 'unknown') &&
       (this.launchStates.get(id)?.looksOutstanding ?? 0) < MAX_LOOKS_OUTSTANDING
         ? { programPending: true }
         : {}),
