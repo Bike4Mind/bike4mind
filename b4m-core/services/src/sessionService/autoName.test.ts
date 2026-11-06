@@ -92,3 +92,51 @@ describe('autoName write-time re-check', () => {
     await expect(autoName({ sessionId: 's1' }, adapters as never, writer)).rejects.toThrow(NotFoundError);
   });
 });
+
+describe('autoName input', () => {
+  const makeAdapters = (history: Record<string, unknown>[], files?: { find: ReturnType<typeof vi.fn> }) => ({
+    db: {
+      sessions: {
+        findById: vi.fn().mockResolvedValue({ id: 's1' }),
+        update: vi.fn(),
+      },
+      quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(history) },
+      ...(files ? { files } : {}),
+    },
+    createCompletion: vi.fn().mockResolvedValue('Title'),
+    logger: { info: vi.fn(), warn: vi.fn() },
+  });
+  const sentPrompt = (adapters: ReturnType<typeof makeAdapters>) =>
+    adapters.createCompletion.mock.calls[0][0] as string;
+
+  it('names from a turn that has no reply yet', async () => {
+    const adapters = makeAdapters([{ prompt: 'Plan a trip to Kyoto', reply: null, replies: [] }]);
+
+    await autoName({ sessionId: 's1' }, adapters as never);
+
+    expect(sentPrompt(adapters)).toContain('Request: Plan a trip to Kyoto');
+    expect(sentPrompt(adapters)).not.toContain('Answer:');
+    expect(adapters.db.sessions.update).toHaveBeenCalledWith({ id: 's1', name: 'Title', isAutoNamed: true });
+  });
+
+  it('lists the attachment names of each turn', async () => {
+    const files = { find: vi.fn().mockResolvedValue([{ id: 'f1', fileName: 'q3-forecast.xlsx' }]) };
+    const adapters = makeAdapters([{ prompt: 'summarize', reply: null, fabFileIds: ['f1'] }], files);
+
+    await autoName({ sessionId: 's1' }, adapters as never);
+
+    expect(files.find).toHaveBeenCalledWith({ _id: { $in: ['f1'] } });
+    expect(sentPrompt(adapters)).toContain('Request: summarize\nAttachments: q3-forecast.xlsx');
+  });
+
+  it('still names when the attachment lookup fails', async () => {
+    const files = { find: vi.fn().mockRejectedValue(new Error('db down')) };
+    const adapters = makeAdapters([{ prompt: 'summarize', reply: null, fabFileIds: ['f1'] }], files);
+
+    await autoName({ sessionId: 's1' }, adapters as never);
+
+    expect(adapters.logger.warn).toHaveBeenCalled();
+    expect(sentPrompt(adapters)).toContain('Request: summarize');
+    expect(sentPrompt(adapters)).not.toContain('Attachments:');
+  });
+});

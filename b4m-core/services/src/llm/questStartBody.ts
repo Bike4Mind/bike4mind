@@ -125,6 +125,11 @@ export const QuestStartBodySchema = z
      * the derived breakdown (`promptMeta.context.systemPromptDetails`) is the persisted half.
      */
     includeSystemPrompt: z.boolean().optional(),
+    /**
+     * Invoke already published the notebook's AutoName event at turn start, so the after-reply
+     * AutoNameSessionFeature is skipped. Server-set by ChatCompletionInvoke, never from a client body.
+     */
+    autoNameDispatched: z.boolean().optional(),
   })
   .transform((b): typeof b & { authOrigin: AuthOrigin } => ({
     ...b,
