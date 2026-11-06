@@ -210,8 +210,8 @@ const MIN_REPLY_TOKENS = 256;
 
 /**
  * The max_tokens to send on a context the server fixes, which refuses (vLLM) a prompt plus
- * max_tokens past it: the limit when it fits, the room left when it does not, and none when that
- * room is too small, so the server answers in whatever is left. The margin covers the estimate.
+ * max_tokens past it: the limit when it fits, the room left when it does not, and undefined when that
+ * room is too small; the caller then sends the turn's cap and sizes a retry from the refusal.
  */
 export function replyLimit(
   context: number | undefined,

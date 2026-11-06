@@ -931,6 +931,29 @@ describe('OpenAICompatibleChat max output on a context the server fixes', () => 
     expect(bodies.map(body => body.max_tokens)).toEqual([2048, CONTEXT - 7000]);
   });
 
+  it('adds the tool definitions to the messages when an OpenAI refusal reports them apart', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetch: FetchLike = async (url, init) => {
+      if (String(url).endsWith('/v1/models'))
+        return Response.json({ object: 'list', data: [{ id: 'qwen3-8b', object: 'model', max_model_len: CONTEXT }] });
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (bodies.length > 1) return sse([delta({ content: 'ok' }, 'stop'), '[DONE]']);
+      return Response.json(
+        {
+          error: {
+            message:
+              "This model's maximum context length is 8192 tokens. However, you requested 9000 tokens (6000 in the messages, 1000 in the functions, 2000 in the completion). Please reduce the length of the messages, functions, or completion.",
+          },
+        },
+        { status: 400 }
+      );
+    };
+    const client = chat(fetch, 'vllm');
+    await client.listModels();
+    await collect(client, ask(400, 2048));
+    expect(bodies.map(body => body.max_tokens)).toEqual([2048, CONTEXT - 7000]);
+  });
+
   it('asks again with the room left and without the tools the server refused', async () => {
     const bodies: Record<string, unknown>[] = [];
     const fetch: FetchLike = async (url, init) => {

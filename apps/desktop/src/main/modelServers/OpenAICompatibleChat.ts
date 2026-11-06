@@ -193,9 +193,11 @@ function roomAfterRefusal(refusal: string, sent: number, context: number | undef
   };
   const limit = count(/maximum context length is (\d+)/i) ?? context;
   if (limit === undefined) return undefined;
+  const inMessages = count(/(\d+) (?:tokens )?in the messages/i);
+  const inFunctions = count(/(\d+) (?:tokens )?in the functions/i);
   const prompt =
     count(/messages resulted in (\d+) tokens/i) ??
-    count(/(\d+) (?:tokens )?in the messages/i) ??
+    (inMessages === undefined ? undefined : inMessages + (inFunctions ?? 0)) ??
     count(/(\d+) input tokens/i);
   if (prompt !== undefined) return limit - prompt;
   const requested = count(/you requested (\d+) tokens/i);
