@@ -804,6 +804,16 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.approvals',
+    section: 'admin',
+    label: 'Approvals',
+    description: 'Approve or reject sensitive admin actions another admin submitted for a second approval',
+    navigationType: 'tab',
+    target: '75', // AdminTab.Approvals
+    keywords: ['approvals', 'approve', 'two-person', 'pending admin actions', 'second admin'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.oauth_clients',
     section: 'admin',
     label: 'OAuth clients',
