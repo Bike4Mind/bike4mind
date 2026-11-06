@@ -1981,13 +1981,10 @@ describe('runLoopSchedulerTick - parallel lanes', () => {
       })
     ).toJSON();
 
-    await runLoopSchedulerTick(NOW, logger);
-    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
-    expect(h.startAgentExecution.mock.calls[0][0]).toMatchObject({ loopRunKind: 'triage' });
-
-    await Loop.updateOne({ _id: loop.id }, { $set: { nextRunAt: NOW } });
+    // One tick: the triage lane leaves the loop due, so a free lane takes the ticket with a priority.
     await runLoopSchedulerTick(NOW, logger);
     expect(h.startAgentExecution).toHaveBeenCalledTimes(2);
+    expect(h.startAgentExecution.mock.calls[0][0]).toMatchObject({ loopRunKind: 'triage' });
     expect(h.startAgentExecution.mock.calls[1][0]).toMatchObject({ workItemId: tickets[0].id });
     expect(h.startAgentExecution.mock.calls[1][0]).not.toHaveProperty('loopRunKind');
     expect((await ticketOf(untriaged.id)).status).toBe('open');
@@ -2122,16 +2119,18 @@ describe('runLoopSchedulerTick - parallel lanes', () => {
     expect(caps()[2]).toBeCloseTo(13 - 1 - 6.5);
   });
 
-  it("holds the loop on budget when a lane's share is under one iteration", async () => {
+  it('opens only the lanes the budget covers an iteration for', async () => {
+    persistRuns();
     const late = new Date('2026-10-29T23:30:00Z');
-    // 0.015 left covers one 0.01-credit iteration, but not two lanes' shares of it.
-    const { loop, tickets } = await loopWithTickets(2, { budgetCreditsPerDay: 0.015, maxConcurrent: 2 });
+    // 0.015 left covers one 0.01-credit iteration, not two: one lane opens with all of it, the other ticket waits.
+    const { tickets } = await loopWithTickets(2, { budgetCreditsPerDay: 0.015, maxConcurrent: 2 });
 
     await runLoopSchedulerTick(late, logger);
 
-    expect(h.startAgentExecution).not.toHaveBeenCalled();
-    expect((await reload(loop.id)).hold).toMatchObject({ kind: 'capacity', limit: 'budget' });
-    for (const t of tickets) expect((await ticketOf(t.id)).status).toBe('open');
+    expect(caps()).toHaveLength(1);
+    expect(caps()[0]).toBeCloseTo(0.015);
+    const statuses = await Promise.all(tickets.map(async t => (await ticketOf(t.id)).status));
+    expect(statuses.sort()).toEqual(['in_progress', 'open']);
   });
 
   it('caps a single-lane loop exactly as before', async () => {
@@ -2289,6 +2288,27 @@ describe('runLoopSchedulerTick - priority policy', () => {
       await runLoopSchedulerTick(NOW, logger);
 
       expect(h.startAgentExecution.mock.calls[0][0]).toMatchObject({ workItemId: p1.id, ticketPriority: 'p1' });
+    });
+
+    it('holds a loop with a lane running until 00:00 UTC when only p2/p3 are ready', async () => {
+      const loop = await createLoop({
+        stages: STAGES,
+        p2RunsPerDay: 1,
+        maxConcurrent: 2,
+        activeExecutionIds: ['busy'],
+      });
+      executions.busy = { status: 'running', updatedAt: NOW, createdAt: NOW };
+      await createTicket(loop.id, { prioritySetBy: 'owner' });
+      await p2RunToday(loop.id);
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(h.startAgentExecution).not.toHaveBeenCalled();
+      expect(await reload(loop.id)).toMatchObject({
+        status: 'live',
+        nextRunAt: MIDNIGHT,
+        hold: { kind: 'priority_budget', until: MIDNIGHT, at: NOW },
+      });
     });
 
     it('holds the loop until 00:00 UTC instead of a goal run when only p2/p3 are ready, and does not flag it idle', async () => {

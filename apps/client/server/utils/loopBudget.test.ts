@@ -16,8 +16,13 @@ describe('laneCreditCap', () => {
     expect(laneCreditCap(9, 0, 0.5)).toBe(9);
   });
 
-  it('refuses a share under one iteration, and passes no cap through', () => {
-    expect(laneCreditCap(1, 3, 0.5)).toBe('too_small');
+  it('splits over only as many lanes as the cap covers iterations', () => {
+    expect(laneCreditCap(1, 3, 0.5)).toBe(0.5);
+    expect(laneCreditCap(0.7, 3, 0.5)).toBe(0.7);
+  });
+
+  it('refuses a cap under one iteration, and passes no cap through', () => {
+    expect(laneCreditCap(0.4, 3, 0.5)).toBe('too_small');
     expect(laneCreditCap(undefined, 3, 0.5)).toBeUndefined();
   });
 });

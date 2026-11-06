@@ -900,8 +900,15 @@ async function dispatchLoop(
     // Untriaged tickets come first: a triage run sets their priorities and works no ticket. It takes a lane, and
     // one is enough: while it runs, the other lanes work only tickets that have a priority.
     const untriaged = await workItemRepository.listUntriagedForLoop(loop.userId, loop.id, LOOP_TRIAGE_BATCH);
-    if (untriaged.length > 0 && !(await triageInFlight(loop)))
-      return await dispatchTriage(loop, untriaged, now, logger);
+    if (untriaged.length > 0 && !(await triageInFlight(loop))) {
+      // Free lanes beside the triage stay due for the tickets that already have a priority.
+      const more =
+        claimable(
+          loop,
+          (await listReady(loop)).filter(ticket => ticket.priority)
+        ).length > 0;
+      return await dispatchTriage(loop, untriaged, now, logger, more);
+    }
     const p2 = await applyP2Cap(loop, now);
     onlyPriorities = p2.onlyPriorities;
     ready = (await listReady(loop)).filter(ticket => untriaged.length === 0 || ticket.priority);
@@ -999,7 +1006,13 @@ async function dispatchLoop(
  * fold keeps the loop's memory. Its fold sets p2 on any ticket it was shown but left untriaged, so a skipped ticket
  * cannot hold the loop on triage; one that set nothing still folds as idle and backs off.
  */
-async function dispatchTriage(loop: ILoop, untriaged: IWorkItem[], now: Date, logger: Logger): Promise<LaneOpened> {
+async function dispatchTriage(
+  loop: ILoop,
+  untriaged: IWorkItem[],
+  now: Date,
+  logger: Logger,
+  more = false
+): Promise<LaneOpened> {
   const model = loop.triageModel ?? loop.model;
   let result: Awaited<ReturnType<typeof startAgentExecution>>;
   try {
@@ -1028,7 +1041,7 @@ async function dispatchTriage(loop: ILoop, untriaged: IWorkItem[], now: Date, lo
     await loopRepository.releaseLease(loop.id);
     throw error;
   }
-  return settleDispatch(loop, null, result, now, logger);
+  return settleDispatch(loop, null, result, now, logger, more);
 }
 
 /**

@@ -63,8 +63,9 @@ export async function loopLaneLimits(): Promise<{ maxActiveRuns: number; lanesPe
 
 /**
  * One lane's credit cap: an even share of the admitted cap across the lanes the loop can still open (this one
- * included), so lanes started together never reserve more than the budget left. `too_small` when the share does
- * not cover one iteration (`minPrice`); undefined (no cap) when the admission had none.
+ * included), so lanes started together never reserve more than the budget left. The split is over at most as many
+ * lanes as the cap covers iterations (`minPrice`), so a cap one lane could use is never split into shares none can.
+ * `too_small` when the whole cap is under one iteration; undefined (no cap) when the admission had none.
  */
 export function laneCreditCap(
   admissionCap: number | undefined,
@@ -72,7 +73,7 @@ export function laneCreditCap(
   minPrice: number
 ): number | undefined | 'too_small' {
   if (admissionCap === undefined) return undefined;
-  const share = admissionCap / Math.max(1, lanesLeft);
+  const share = admissionCap / Math.max(1, Math.min(lanesLeft, Math.floor(admissionCap / minPrice)));
   return share < minPrice ? 'too_small' : share;
 }
 
