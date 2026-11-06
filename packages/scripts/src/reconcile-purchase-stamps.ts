@@ -34,7 +34,7 @@ import { Resource } from 'sst';
 import Stripe from 'stripe';
 import { Config } from '../utils/config';
 import { reconcilePurchaseStamps } from './reconcilePurchaseStamps';
-import { summaryMessage } from './reconcilePurchaseStampsCli';
+import { createNotify, exitCodeFor, requireWebsocketEndpoint, summaryMessage } from './reconcilePurchaseStampsCli';
 import {
   createStripeLookups,
   openReportFile,
@@ -43,9 +43,6 @@ import {
 } from './reconcilePurchaseStampsStripe';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-
-// Same keys purchaseReversal.ts (apps/client/server/billing) invalidates on a revocation.
-const INVALIDATED_QUERY_KEYS = [['llm', 'models'], ['entitlements']];
 
 async function main() {
   // Strict: an unknown or malformed flag fails instead of running as something else.
@@ -69,17 +66,10 @@ async function main() {
     }
   }
 
-  let endpoint = '';
-  if (values.apply) {
-    try {
-      endpoint = Resource.websocket.managementEndpoint;
-    } catch {
-      endpoint = '';
-    }
-    if (!endpoint) {
-      console.error('--apply needs the websocket endpoint; run inside an SST shell for the stage');
-      process.exit(2);
-    }
+  const endpoint = requireWebsocketEndpoint(values.apply, () => Resource.websocket.managementEndpoint);
+  if (endpoint === null) {
+    console.error('--apply needs the websocket endpoint; run inside an SST shell for the stage');
+    process.exit(2);
   }
 
   // No MONGODB_URI env override: the database must belong to the same stage as the websocket endpoint.
@@ -90,10 +80,7 @@ async function main() {
   const result = await reconcilePurchaseStamps({
     apply: values.apply,
     ...createStripeLookups(stripe),
-    notify: userId =>
-      Promise.allSettled(
-        INVALIDATED_QUERY_KEYS.map(queryKey => sendToClient(userId, endpoint, { action: 'invalidate_query', queryKey }))
-      ),
+    notify: createNotify(endpoint, sendToClient),
   });
 
   const counts = { keep: 0, clear: 0 };
@@ -121,7 +108,7 @@ async function main() {
         : 'Dry run only. Re-run with --apply to write.'
     );
   }
-  process.exit(result.blocking > 0 ? 2 : result.errors.length > 0 ? 1 : 0);
+  process.exit(exitCodeFor(result));
 }
 
 main().catch(error => {
