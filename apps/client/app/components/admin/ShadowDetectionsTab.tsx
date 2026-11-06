@@ -22,6 +22,7 @@ import {
   SELF_ASSESSED_SHADOW_DETECTORS,
   SHADOW_DETECTORS,
   shadowDetectionPrecision,
+  shadowDetectionSignalTrip,
   type AccountCampaignIgnoredReason,
   type AccountCampaignRelationship,
   type ShadowDetectionAccount,
@@ -30,6 +31,8 @@ import {
   type ShadowDetectionBurstPeers,
   type ShadowDetectionNetwork,
   type ShadowDetectionPayment,
+  type ShadowDetectionSignal,
+  type ShadowDetectionSignalRule,
   type ShadowDetectionSummaryRow,
   type ShadowDetectionVerdict,
   type ShadowDetectionVerdictSource,
@@ -70,6 +73,7 @@ import {
   type ShadowDetectionRow,
 } from '@client/app/hooks/data/shadowDetections';
 import { ShadowDetectionAssessmentPanel } from './ShadowDetectionAssessmentPanel';
+import { DetectionsIntro, EnforceBarTile, TermHelp, VERDICT_GUIDES } from './shadowDetectionExplainer';
 import { VerdictEvalPanel } from './VerdictEvalPanel';
 import { DETECTOR_LABELS } from './shadowDetectorLabels';
 import { getErrorMessage } from '@client/app/utils/error';
@@ -119,9 +123,32 @@ const ACCOUNT_STATUS_DISPLAY: Record<ShadowDetectionAccountStatus, { label: stri
   missing: { label: 'Not found', tone: 'neutral' },
 };
 
-const VERDICT_SOURCE_LABELS: Record<Exclude<ShadowDetectionVerdictSource, 'review'>, string> = {
-  suspension: 'Recorded when the reviewer suspended the account',
-  reinstatement: 'Recorded when the reviewer reinstated the account',
+const VERDICT_SOURCE_ACTIONS: Record<Exclude<ShadowDetectionVerdictSource, 'review'>, string> = {
+  suspension: 'suspended',
+  reinstatement: 'reinstated',
+};
+
+type VerdictEntry = ShadowDetectionRow['verdicts'][number];
+type ReviewerNames = ReadonlyMap<string, string | null>;
+
+const latestVerdictEntry = (row: ShadowDetectionRow): VerdictEntry | null =>
+  row.verdicts.reduce<VerdictEntry | null>(
+    (latest, entry) => (!latest || entry.reviewedAt > latest.reviewedAt ? entry : latest),
+    null
+  );
+
+const reviewerLabel = (reviewers: ReviewerNames, reviewerId: string) =>
+  reviewers.get(reviewerId) ?? `reviewer ${reviewerId}`;
+
+const isAutomatic = (entry: VerdictEntry) => entry.source === 'suspension' || entry.source === 'reinstatement';
+
+/** Who set a verdict: the reviewer, or the admin action that graded it automatically. */
+const verdictAttribution = (entry: VerdictEntry, reviewers: ReviewerNames): string => {
+  const name = reviewerLabel(reviewers, entry.reviewerId);
+  if (entry.source === 'suspension' || entry.source === 'reinstatement') {
+    return `Automatic: account ${VERDICT_SOURCE_ACTIONS[entry.source]} by ${name}`;
+  }
+  return `By ${name}`;
 };
 
 // Users shown per row before collapsing into "+N"; the verdict dialog links every one.
@@ -130,12 +157,13 @@ const VISIBLE_USER_IDS = 2;
 /**
  * What the list response says beside the detections: each named account as it is now, the burst peers
  * of signupNetworkBurst rows, and for each row the other unreviewed listed detections naming one of its
- * accounts (so one verdict can settle them together).
+ * accounts (so one verdict can settle them together), and the display name of each verdict's reviewer.
  */
 export type DetectionContext = {
   accounts: ReadonlyMap<string, ShadowDetectionAccount>;
   burstPeers: ReadonlyMap<string, ShadowDetectionBurstPeers>;
   related: ReadonlyMap<string, readonly ShadowDetectionRow[]>;
+  reviewers: ReviewerNames;
 };
 
 const EMPTY_RELATED: readonly ShadowDetectionRow[] = [];
@@ -375,29 +403,118 @@ const SignalValue: React.FC<{ value: number | null }> = ({ value }) =>
     <>{value.toLocaleString()}</>
   );
 
-const SignalList: React.FC<{ row: ShadowDetectionRow }> = ({ row }) => (
-  <Stack gap={0.5} data-testid="shadow-detection-signals">
-    <Typography level="body-xs" sx={muted}>
-      Signals{row.windowMinutes !== null ? ` (window: ${row.windowMinutes.toLocaleString()} minutes)` : ''}
-    </Typography>
-    {row.signals.length === 0 ? (
-      <Typography level="body-sm" sx={muted}>
-        No signals recorded.
-      </Typography>
-    ) : (
-      <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
-        {row.signals.map(signal => (
-          <Typography key={signal.key} component="li" level="body-sm">
-            {signal.label}: <SignalValue value={signal.observed} /> observed, threshold{' '}
-            <SignalValue value={signal.threshold} />
-          </Typography>
-        ))}
-      </Box>
-    )}
-  </Stack>
-);
+const RULE_TEXT: Record<ShadowDetectionSignalRule, (threshold: string) => string> = {
+  above: threshold => `more than ${threshold}`,
+  atLeast: threshold => `${threshold} or more`,
+  below: threshold => `under ${threshold}`,
+  atMost: threshold => `${threshold} or less`,
+};
 
-const VerdictHistory: React.FC<{ row: ShadowDetectionRow; now: number }> = ({ row, now }) => {
+/**
+ * Why the detector fired: the signals that crossed their rule (SHADOW_DETECTION_SIGNAL_RULES in common),
+ * then every other signal as context. A detection with no known tripped rule falls back to its summary.
+ */
+const SignalList: React.FC<{ row: ShadowDetectionRow }> = ({ row }) => {
+  const tripped: { signal: ShadowDetectionSignal; rule: ShadowDetectionSignalRule }[] = [];
+  const context: ShadowDetectionSignal[] = [];
+  for (const signal of row.signals) {
+    const rule = shadowDetectionSignalTrip(signal);
+    if (rule) tripped.push({ signal, rule });
+    else context.push(signal);
+  }
+  const withinWindow = row.windowMinutes !== null ? ` within ${row.windowMinutes.toLocaleString()} minutes` : '';
+  return (
+    <Stack gap={1} data-testid="shadow-detection-signals">
+      <Stack gap={0.5} data-testid="shadow-detection-trigger">
+        <Typography level="body-xs" sx={muted}>
+          Why it was flagged
+        </Typography>
+        {tripped.length === 0 ? (
+          <Typography level="body-sm">Flagged: {row.summary}</Typography>
+        ) : (
+          <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+            {tripped.map(({ signal, rule }) => (
+              <Typography
+                key={signal.key}
+                component="li"
+                level="body-sm"
+                data-testid={`shadow-detection-trigger-${signal.key}`}
+              >
+                {signal.label}: <strong>{signal.observed?.toLocaleString()}</strong>
+                {withinWindow} (rule: {RULE_TEXT[rule](signal.threshold?.toLocaleString() ?? '')})
+              </Typography>
+            ))}
+          </Box>
+        )}
+      </Stack>
+      {context.length > 0 && (
+        <Stack gap={0.5} data-testid="shadow-detection-signal-context">
+          <Typography level="body-xs" sx={muted}>
+            Context
+          </Typography>
+          <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+            {context.map(signal => (
+              <Typography key={signal.key} component="li" level="body-sm">
+                {signal.label}: <SignalValue value={signal.observed} />
+                {signal.threshold !== null && (
+                  <Typography component="span" sx={muted}>
+                    {' '}
+                    (threshold {signal.threshold.toLocaleString()})
+                  </Typography>
+                )}
+              </Typography>
+            ))}
+          </Box>
+        </Stack>
+      )}
+    </Stack>
+  );
+};
+
+/** The current verdict's author and reason, under the dialog's current-verdict chip. */
+const CurrentVerdictAttribution: React.FC<{ row: ShadowDetectionRow; reviewers: ReviewerNames }> = ({
+  row,
+  reviewers,
+}) => {
+  const entry = latestVerdictEntry(row);
+  if (!row.verdict || !entry) return null;
+  return (
+    <Stack gap={0.25} data-testid="shadow-detection-dialog-verdict-attribution">
+      <Typography level="body-xs" sx={muted}>
+        {verdictAttribution(entry, reviewers)} on {formatUtc(new Date(entry.reviewedAt))}
+      </Typography>
+      <Typography level="body-sm" sx={{ overflowWrap: 'anywhere' }}>
+        {entry.reason}
+      </Typography>
+    </Stack>
+  );
+};
+
+/** "Automatic" or "By <reviewer>" under a row's verdict chip. */
+const RowVerdictAttribution: React.FC<{ row: ShadowDetectionRow; reviewers: ReviewerNames }> = ({ row, reviewers }) => {
+  const entry = latestVerdictEntry(row);
+  if (!row.verdict || !entry) return null;
+  const label = isAutomatic(entry) ? 'Automatic' : `By ${reviewerLabel(reviewers, entry.reviewerId)}`;
+  return (
+    <Tooltip title={`${verdictAttribution(entry, reviewers)}: ${entry.reason}`}>
+      <Typography
+        level="body-xs"
+        noWrap
+        tabIndex={0}
+        sx={{ ...muted, maxWidth: '100%' }}
+        data-testid={`shadow-detection-verdict-by-${row.id}`}
+      >
+        {label}
+      </Typography>
+    </Tooltip>
+  );
+};
+
+const VerdictHistory: React.FC<{ row: ShadowDetectionRow; now: number; reviewers: ReviewerNames }> = ({
+  row,
+  now,
+  reviewers,
+}) => {
   const newestFirst = [...row.verdicts].sort((a, b) => b.reviewedAt.localeCompare(a.reviewedAt));
   return (
     <Stack gap={0.5} data-testid="shadow-detection-history">
@@ -422,14 +539,9 @@ const VerdictHistory: React.FC<{ row: ShadowDetectionRow; now: number }> = ({ ro
             <Typography level="body-sm" sx={{ overflowWrap: 'anywhere' }}>
               {entry.reason}
             </Typography>
-            <Typography level="body-xs" fontFamily="code" sx={muted}>
-              Reviewer {entry.reviewerId}
+            <Typography level="body-xs" sx={muted} data-testid="shadow-detection-history-source">
+              {verdictAttribution(entry, reviewers)}
             </Typography>
-            {entry.source && entry.source !== 'review' && (
-              <Typography level="body-xs" sx={muted} data-testid="shadow-detection-history-source">
-                {VERDICT_SOURCE_LABELS[entry.source]}
-              </Typography>
-            )}
           </Stack>
         ))
       )}
@@ -452,22 +564,30 @@ const SummaryStrip: React.FC<{ row: ShadowDetectionSummaryRow }> = ({ row }) => 
   const testId = `shadow-detection-summary-${row.detector}-v${row.policyVersion}`;
   return (
     <Stack gap={1} data-testid={testId}>
-      <Typography level="title-sm" sx={{ color: 'admin.ink' }}>
-        {DETECTOR_LABELS[row.detector]}, policy v{row.policyVersion}
-      </Typography>
+      <Stack direction="row" alignItems="center" gap={0.25}>
+        <Typography level="title-sm" sx={{ color: 'admin.ink' }}>
+          {DETECTOR_LABELS[row.detector]}, policy v{row.policyVersion}
+        </Typography>
+        <Box sx={{ display: 'flex', my: -1, '& svg': { fontSize: 16 } }}>
+          <TermHelp term="policy" />
+        </Box>
+      </Stack>
       <StatStrip aria-label={`${DETECTOR_LABELS[row.detector]} policy v${row.policyVersion}`}>
         <StatTile
           label="Recorded"
+          help={<TermHelp term="recorded" />}
           value={row.recorded}
           comparison={row.noAction > 0 ? `${row.noAction.toLocaleString()} would not act` : undefined}
         />
         <StatTile
           label="Graded"
+          help={<TermHelp term="graded" />}
           value={graded}
           comparison={`${(row.recorded - row.noAction - graded).toLocaleString()} unreviewed`}
         />
         <StatTile
           label="Precision"
+          help={<TermHelp term="precision" />}
           value={
             <Box component="span" data-testid={`${testId}-precision`}>
               {precision.value}
@@ -477,9 +597,11 @@ const SummaryStrip: React.FC<{ row: ShadowDetectionSummaryRow }> = ({ row }) => 
         />
         <StatTile
           label="False positives"
+          help={<TermHelp term="falsePositives" />}
           value={row.legitimateHuman + row.legitimateAutomation}
           comparison={`${row.legitimateHuman.toLocaleString()} human, ${row.legitimateAutomation.toLocaleString()} automation`}
         />
+        <EnforceBarTile row={row} testId={testId} />
       </StatStrip>
     </Stack>
   );
@@ -662,6 +784,29 @@ const useVerdictShortcuts = (onPick: (verdict: ShadowDetectionVerdict) => void) 
   }, [onPick]);
 };
 
+/** Grading changes no account; this points the reviewer at where the account itself is acted on. */
+const AbuseNextStep: React.FC<{ userIds: readonly string[] }> = ({ userIds }) => {
+  if (userIds.length === 0) return null;
+  return (
+    <Typography level="body-xs" sx={muted} data-testid="shadow-detection-next-step">
+      Looks like abuse?{' '}
+      {userIds.length === 1 ? (
+        <Link
+          to="/admin/users/$userId"
+          params={{ userId: userIds[0] }}
+          data-testid="shadow-detection-next-step-link"
+          style={{ color: 'inherit' }}
+        >
+          Suspend from the user page
+        </Link>
+      ) : (
+        'Suspend each account from its user page, linked above'
+      )}
+      . Suspending with an abuse reason also grades its open detections.
+    </Typography>
+  );
+};
+
 const VerdictPicker: React.FC<{
   value: ShadowDetectionVerdict | null;
   onChange: (verdict: ShadowDetectionVerdict) => void;
@@ -680,9 +825,19 @@ const VerdictPicker: React.FC<{
             key={option}
             value={option}
             label={
-              <Stack direction="row" gap={1} alignItems="center" component="span">
-                <span>{VERDICT_DISPLAY[option].label}</span>
-                <Kbd>{index + 1}</Kbd>
+              <Stack gap={0.25} component="span">
+                <Stack direction="row" gap={1} alignItems="center" component="span">
+                  <span>{VERDICT_DISPLAY[option].label}</span>
+                  <Kbd>{index + 1}</Kbd>
+                </Stack>
+                <Typography
+                  component="span"
+                  level="body-xs"
+                  sx={muted}
+                  data-testid={`shadow-detection-verdict-guide-${option}`}
+                >
+                  {VERDICT_GUIDES[option]}
+                </Typography>
               </Stack>
             }
             slotProps={{ input: { 'data-testid': `shadow-detection-verdict-option-${option}` } }}
@@ -812,8 +967,10 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
           </Typography>
           <VerdictChip verdict={row.verdict} testId="shadow-detection-dialog-current-verdict" />
         </Stack>
+        <CurrentVerdictAttribution row={row} reviewers={context.reviewers} />
       </Stack>
       <DialogActors row={row} now={now} context={context} />
+      <AbuseNextStep userIds={row.userIds} />
       {conflict && (
         <Alert color="warning" data-testid="shadow-detection-verdict-conflict">
           {conflict} Its current verdict and history are shown below.
@@ -837,7 +994,7 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
       {!SELF_ASSESSED_SHADOW_DETECTORS.includes(row.detector) && (
         <ShadowDetectionAssessmentPanel detectionId={row.id} enabled />
       )}
-      <VerdictHistory row={row} now={now} />
+      <VerdictHistory row={row} now={now} reviewers={context.reviewers} />
     </ActionDialog>
   );
 };
@@ -904,13 +1061,15 @@ export const ShadowDetectionsTab: React.FC = () => {
   const listed = detections.data?.data;
   const accounts = detections.data?.accounts;
   const burstPeers = detections.data?.burstPeers;
+  const reviewers = detections.data?.reviewers;
   const context = useMemo<DetectionContext>(
     () => ({
       accounts: new Map((accounts ?? []).map(account => [account.userId, account])),
       burstPeers: new Map((burstPeers ?? []).map(peers => [peers.detectionId, peers])),
       related: relatedUnreviewed(listed ?? []),
+      reviewers: new Map((reviewers ?? []).map(reviewer => [reviewer.userId, reviewer.name])),
     }),
-    [listed, accounts, burstPeers]
+    [listed, accounts, burstPeers, reviewers]
   );
   const accountGroups = useMemo(() => (groupAccounts ? groupByAccount(listed ?? []) : []), [groupAccounts, listed]);
   // Grouped rows sit together so a group never splits across the table's pages.
@@ -991,6 +1150,7 @@ export const ShadowDetectionsTab: React.FC = () => {
     {
       id: 'wouldAction',
       label: 'Would',
+      help: <TermHelp term="would" />,
       render: row => (
         <StatusChip
           tone={ACTION_DISPLAY[row.wouldAction].tone}
@@ -999,13 +1159,18 @@ export const ShadowDetectionsTab: React.FC = () => {
         />
       ),
       sortValue: row => ACTION_DISPLAY[row.wouldAction].label,
-      width: '7rem',
+      width: '8.5rem',
     },
     { id: 'actor', label: 'Actor', render: row => <Actor row={row} context={context} />, width: '18rem' },
     {
       id: 'verdict',
       label: 'Verdict',
-      render: row => <VerdictChip verdict={row.verdict} testId={`shadow-detection-verdict-${row.id}`} />,
+      render: row => (
+        <Stack gap={0.25} alignItems="flex-start" sx={{ minWidth: 0 }}>
+          <VerdictChip verdict={row.verdict} testId={`shadow-detection-verdict-${row.id}`} />
+          <RowVerdictAttribution row={row} reviewers={context.reviewers} />
+        </Stack>
+      ),
       sortValue: row => (row.verdict ? VERDICT_DISPLAY[row.verdict].label : ''),
       width: '11rem',
     },
@@ -1049,6 +1214,7 @@ export const ShadowDetectionsTab: React.FC = () => {
         count={detections.data && !detections.data.truncated ? rows.length : undefined}
         description="Detectors record what they would have done to an account or network. Nothing here changes an account: grade each detection so its precision can be measured."
       />
+      <DetectionsIntro />
       {summary.length > 0 && (
         <Stack gap={2} data-testid="shadow-detection-summary">
           {summary.map(row => (

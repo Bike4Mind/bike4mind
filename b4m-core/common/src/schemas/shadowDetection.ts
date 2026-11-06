@@ -58,6 +58,44 @@ export const shadowDetectionSignalSchema = z.object({
 });
 export type ShadowDetectionSignal = z.infer<typeof shadowDetectionSignalSchema>;
 
+/** How a signal is compared with its threshold when it trips its detector. */
+export type ShadowDetectionSignalRule = 'above' | 'atLeast' | 'below' | 'atMost';
+
+/**
+ * The comparison each producer applies, keyed by signal key. Must stay in sync with the producers:
+ * signupNetworkAlerts (ipSignups, asnSignups), paymentRisk (youngAccount, sharedCard, manyCards*),
+ * strongLink (blockedSignupIpLinks, hoursToBlockedLink), accountCampaignSignals (directMembers, axes)
+ * and signupDomainHoldAssessment (confidence). A key not listed here is shown as context, never as
+ * the reason a detector fired.
+ */
+export const SHADOW_DETECTION_SIGNAL_RULES: Readonly<Record<string, ShadowDetectionSignalRule>> = {
+  ipSignups: 'above',
+  asnSignups: 'above',
+  sharedCard: 'above',
+  manyCardsPerAccount: 'above',
+  manyCardsPerNetwork: 'above',
+  youngAccount: 'below',
+  blockedSignupIpLinks: 'atLeast',
+  hoursToBlockedLink: 'atMost',
+  directMembers: 'atLeast',
+  axes: 'atLeast',
+  confidence: 'atLeast',
+};
+
+/** The signal's rule when it has one and its observed value met it; null otherwise. */
+export function shadowDetectionSignalTrip(signal: ShadowDetectionSignal): ShadowDetectionSignalRule | null {
+  const rule = SHADOW_DETECTION_SIGNAL_RULES[signal.key];
+  const { observed, threshold } = signal;
+  if (!rule || observed === null || threshold === null) return null;
+  const met = {
+    above: observed > threshold,
+    atLeast: observed >= threshold,
+    below: observed < threshold,
+    atMost: observed <= threshold,
+  }[rule];
+  return met ? rule : null;
+}
+
 export const shadowDetectionNetworkSchema = z.object({
   ip: z.string().nullable(),
   asn: z.number().nullable(),
@@ -161,6 +199,13 @@ export const shadowDetectionAccountSchema = z.object({
 });
 export type ShadowDetectionAccount = z.infer<typeof shadowDetectionAccountSchema>;
 
+/** A reviewer named in the listed detections' verdict histories; `name` is null for a missing account. */
+export const shadowDetectionReviewerSchema = z.object({
+  userId: z.string(),
+  name: z.string().nullable(),
+});
+export type ShadowDetectionReviewer = z.infer<typeof shadowDetectionReviewerSchema>;
+
 /** Burst peers listed per detection; `truncated` says more accounts signed up in the window. */
 export const SHADOW_DETECTION_BURST_PEER_LIMIT = 10;
 
@@ -182,6 +227,8 @@ export const shadowDetectionListSchema = z.object({
   /** Every account the listed detections and their burst peers name. */
   accounts: z.array(shadowDetectionAccountSchema),
   burstPeers: z.array(shadowDetectionBurstPeersSchema),
+  /** Everyone who recorded a verdict on the listed detections, so the page can name them. */
+  reviewers: z.array(shadowDetectionReviewerSchema),
 });
 export type ShadowDetectionList = z.infer<typeof shadowDetectionListSchema>;
 
@@ -244,4 +291,32 @@ export function shadowDetectionPrecision(row: ShadowDetectionSummaryRow): number
   const falsePositives = row.legitimateHuman + row.legitimateAutomation;
   const conclusive = row.confirmedAbuse + falsePositives;
   return conclusive === 0 ? null : row.confirmedAbuse / conclusive;
+}
+
+/**
+ * The bar a detector version should clear before an admin moves autoContainmentConfig.mode from shadow
+ * to enforce: enough conclusive verdicts to trust the ratio, and precision at or above the floor. It
+ * is guidance shown on the Detections page; nothing enforces it, and the mode is one setting for every
+ * detector.
+ */
+export const SHADOW_DETECTION_ENFORCE_BAR = { minConclusive: 50, minPrecision: 0.95 } as const;
+
+export type ShadowDetectionReadiness = {
+  /** collecting: too few conclusive verdicts yet; below_bar / ready: enough, judged by precision. */
+  status: 'collecting' | 'below_bar' | 'ready';
+  conclusive: number;
+  precision: number | null;
+};
+
+export function shadowDetectionReadiness(row: ShadowDetectionSummaryRow): ShadowDetectionReadiness {
+  const conclusive = row.confirmedAbuse + row.legitimateHuman + row.legitimateAutomation;
+  const precision = shadowDetectionPrecision(row);
+  if (conclusive < SHADOW_DETECTION_ENFORCE_BAR.minConclusive || precision === null) {
+    return { status: 'collecting', conclusive, precision };
+  }
+  return {
+    status: precision >= SHADOW_DETECTION_ENFORCE_BAR.minPrecision ? 'ready' : 'below_bar',
+    conclusive,
+    precision,
+  };
 }
