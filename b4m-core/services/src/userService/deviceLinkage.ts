@@ -8,6 +8,10 @@
  * A device is the exact (screen size, pixel ratio, user agent) triple a sign-in records
  * (ILoginRecord). The IP is deliberately not part of it: a VPN rotates the IP, the device stays.
  *
+ * The rule matches isBanned only (Suspend/Contain), unlike the IP strong-link rule
+ * (apps/client/server/security/autoContainment/strongLink.ts), which also counts dispute-locked and
+ * moderated accounts as blocked.
+ *
  * Like the account campaign sweep (accountCampaigns.ts), a shared value is never evidence on its own:
  * - A mainstream device profile (one phone model on one browser build) is shared by unrelated people,
  *   so a profile seen on signups from DEVICE_LINK_POLICY.commonDeviceMinNetworks or more distinct
