@@ -362,10 +362,10 @@ describe('overseer actions', () => {
     });
 
     it('still succeeds with a run in flight, and says so', async () => {
-      workerOverrides = { activeExecutionId: 'x-worker' };
+      workerOverrides = { activeExecutionIds: ['x-worker'] };
       const result = JSON.parse(await act('loop_run_now'));
       expect(result).toMatchObject({ running: true });
-      expect(result.note).toMatch(/when this one ends/);
+      expect(result.note).toMatch(/when a lane frees up/);
     });
 
     it.each(['paused', 'needs_you', 'error', 'draft'])('refuses a %s loop', async status => {

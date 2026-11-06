@@ -79,11 +79,14 @@ describe('loop liveness thresholds', () => {
     expect(idleAlarmCandidate({ ...base, nextRunAt: ago(44) }, now)).toBe(false);
     expect(idleAlarmCandidate({ ...base, status: 'paused' }, now)).toBe(false);
     expect(idleAlarmCandidate({ ...base, status: 'error' }, now)).toBe(false);
-    expect(idleAlarmCandidate({ ...base, activeExecutionId: 'exec-1' }, now)).toBe(false);
+    expect(idleAlarmCandidate({ ...base, activeExecutionIds: ['exec-1'] }, now)).toBe(false);
     expect(idleAlarmCandidate({ ...base, leaseUntil: new Date(now.getTime() + MIN) }, now)).toBe(false);
     expect(idleAlarmCandidate({ ...base, leaseUntil: ago(1) }, now)).toBe(true);
     expect(idleAlarmCandidate({ ...base, idleStreak: 1 }, now)).toBe(false);
     expect(idleAlarmCandidate({ ...base, hold: { kind: 'capacity', at: now } }, now)).toBe(false);
+    for (const limit of ['loop', 'user', 'server', 'budget'] as const) {
+      expect(idleAlarmCandidate({ ...base, hold: { kind: 'capacity', limit, at: now } }, now)).toBe(false);
+    }
     const pacedUntil = (until: Date) => ({ ...base, hold: { kind: 'pacing' as const, until, at: ago(60) } });
     // A pacing hold left behind after an owner reschedule (nextRunAt moved off `until`) or one that lapsed
     // no longer hides an idle loop; a live one keeps nextRunAt in the future, so it is never past due.

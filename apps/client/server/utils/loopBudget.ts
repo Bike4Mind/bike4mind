@@ -9,16 +9,10 @@ import {
 import { getAvailableModels, resolveDeprecatedModelId, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { apiKeyService, creditService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
+import { MAX_CONCURRENT_EXECUTIONS_PER_USER } from './executionLimits';
 
 /** Floor on an iteration's price in budget checks, so an unpriceable model still needs some allowance left. */
 export const MIN_ITERATION_CREDITS = 0.01;
-
-/**
- * Loop runs in flight at once across all users. Loop and interactive runs share the AgentExecutor's
- * `reserved` concurrency (infra/agentExecutor.ts); keep this well below it so interactive runs keep most slots.
- * Read by the scheduler (apps/workers/src/cron/loopScheduler.ts) and the Run now route's pre-check.
- */
-export const MAX_ACTIVE_LOOP_RUNS = 4;
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -43,6 +37,44 @@ export async function userLoopsDailyCap(
   const own = positive(user?.loopsDailyCredits);
   const set = [admin, own].filter((cap): cap is number => cap !== undefined);
   return { admin, user: own, effective: set.length > 0 ? Math.min(...set) : undefined };
+}
+
+/** The AgentExecutor's `reserved` concurrency (infra/agentExecutor.ts); keep in sync. Loop runs never take all of it. */
+export const LOOP_EXECUTOR_RESERVED = 10;
+
+const clampSetting = (value: unknown, fallback: number, max: number): number =>
+  Math.min(max, Math.max(1, typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback));
+
+/**
+ * Cloud loop lanes in flight at once: server-wide (`LoopsMaxActiveRuns`, at most the executor's reserved slots) and
+ * per user across their loops (`LoopsCloudLanesPerUser`, always leaving one of the user's run slots for chat).
+ * Clamped here as well as in the settings schema, so a bad stored value can never exceed either bound.
+ */
+export async function loopLaneLimits(): Promise<{ maxActiveRuns: number; lanesPerUser: number }> {
+  const [maxActiveRuns, lanesPerUser] = await Promise.all([
+    adminSettingsRepository.getSettingsValue('LoopsMaxActiveRuns'),
+    adminSettingsRepository.getSettingsValue('LoopsCloudLanesPerUser'),
+  ]);
+  return {
+    maxActiveRuns: clampSetting(maxActiveRuns, 4, LOOP_EXECUTOR_RESERVED),
+    lanesPerUser: clampSetting(lanesPerUser, 2, MAX_CONCURRENT_EXECUTIONS_PER_USER - 1),
+  };
+}
+
+/**
+ * One lane's credit cap: an even share of the admitted cap across the lanes the loop can still open (this one
+ * included), so lanes started together never reserve more than the budget left. The split is over at most as many
+ * lanes as the cap covers iterations (`minPrice`), so a cap one lane could use is never split into shares none can.
+ * `too_small` when the whole cap is under one iteration; undefined (no cap) when the admission had none.
+ */
+export function laneCreditCap(
+  admissionCap: number | undefined,
+  lanesLeft: number,
+  minPrice: number
+): number | undefined | 'too_small' {
+  if (admissionCap === undefined) return undefined;
+  const share = admissionCap / Math.max(1, Math.min(lanesLeft, Math.floor(admissionCap / minPrice)));
+  return share < minPrice ? 'too_small' : share;
 }
 
 /** What a daily budget allows spent by `now`: 1/24 in the first UTC hour, all of it in the last. Unspent allowance carries forward. */
@@ -109,7 +141,7 @@ export const PRIORITIES_OVER_P2_CAP: WorkItemPriority[] = ['p0', 'p1'];
 
 /** Why a loop run was not admitted; `paced` carries when its paced allowances next cover one iteration. */
 export type LoopAdmission =
-  | { ok: true; creditCap?: number }
+  | { ok: true; creditCap?: number; iterationCredits: number }
   | { ok: false; kind: 'credits' | 'loop_budget' | 'user_budget' }
   | { ok: false; kind: 'paced'; readyAt: Date };
 
@@ -117,7 +149,8 @@ export type LoopAdmission =
  * Admission before a loop run on `model`, in order: the payer can cover one iteration, the loop's daily budget
  * and the owner's all-loops budget each have one iteration left, and their paced allowances cover one. Side-effect
  * free: the scheduler's `admit` (apps/workers/src/cron/loopScheduler.ts) pauses or defers on a refusal, the desktop
- * runner claim (loopRunner.ts) only refuses. On admission, `creditCap` is the run's cap (undefined: none).
+ * runner claim (loopRunner.ts) only refuses. On admission, `creditCap` is the run's cap (undefined: none) and
+ * `iterationCredits` the one-iteration price the budget checks used (0 with no budget).
  */
 export async function loopAdmission(loop: ILoop, model: string, now: Date): Promise<LoopAdmission> {
   let pricing: Promise<number> | undefined;
@@ -158,6 +191,7 @@ export async function loopAdmission(loop: ILoop, model: string, now: Date): Prom
 
   return {
     ok: true,
+    iterationCredits: iteration,
     creditCap: runCreditCap([
       ...budgets.map(({ budget, spent }) => budget - spent),
       ...paced.map(({ remaining }) => remaining),

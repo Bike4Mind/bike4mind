@@ -6,6 +6,7 @@
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { adminSettingsRepository, loopRepository } from '@bike4mind/database';
 import {
+  LOOP_MAX_CONCURRENT,
   LOOP_MERGE_POLICIES,
   LOOP_P2_RUNS_PER_DAY_MAX,
   LOOP_SERVICE_LEVEL_HOURS_MAX,
@@ -205,6 +206,13 @@ export async function validateLoopOversees(value: unknown, loopId: string | unde
 export function validateLoopInterval(value: unknown): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < INTERVAL_MIN || value > INTERVAL_MAX) {
     throw new BadRequestError(`intervalMinutes must be an integer from ${INTERVAL_MIN} to ${INTERVAL_MAX}`);
+  }
+  return value;
+}
+
+export function validateLoopMaxConcurrent(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > LOOP_MAX_CONCURRENT) {
+    throw new BadRequestError(`maxConcurrent must be a whole number from 1 to ${LOOP_MAX_CONCURRENT}`);
   }
   return value;
 }

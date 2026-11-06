@@ -48,11 +48,13 @@ import {
   BUDGET_PAUSE_REASON,
   dispatchLoopNow,
   LOOP_LEASE_MS,
-  MAX_ACTIVE_LOOP_RUNS,
   MAX_CONSECUTIVE_FAILURES,
   runLoopSchedulerTick,
   USER_BUDGET_PAUSE_REASON,
 } from './loopScheduler';
+
+/** The default LoopsMaxActiveRuns. */
+const MAX_ACTIVE_LOOP_RUNS = 4;
 import { STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import { makeDueIfReady } from '@server/utils/loopTickets';
 import { buildLoopQuery } from '@server/utils/loopMemory';
@@ -135,7 +137,7 @@ describe('runLoopSchedulerTick', () => {
       enabledTools: ['web_search', 'mcp__srv__do_thing'],
     });
     const after = await reload(due.id);
-    expect(after).toMatchObject({ lastExecutionId: 'exec-1', activeExecutionId: 'exec-1' });
+    expect(after).toMatchObject({ lastExecutionId: 'exec-1', activeExecutionIds: ['exec-1'] });
     expect(after.nextRunAt).toEqual(new Date(NOW.getTime() + 15 * 60_000));
     expect(after.leaseUntil).toBeUndefined();
   });
@@ -157,7 +159,7 @@ describe('runLoopSchedulerTick', () => {
   });
 
   it('does not re-dispatch a loop whose last run is still active, even past its lease', async () => {
-    await createLoop({ activeExecutionId: 'exec-0', leaseUntil: PAST });
+    await createLoop({ activeExecutionIds: ['exec-0'], leaseUntil: PAST });
     executions['exec-0'] = { status: 'running', updatedAt: NOW };
 
     await runLoopSchedulerTick(NOW, logger);
@@ -166,19 +168,19 @@ describe('runLoopSchedulerTick', () => {
   });
 
   it('pauses the loop when its run was refused for credits', async () => {
-    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: new Date(NOW.getTime() + 60_000) });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: new Date(NOW.getTime() + 60_000) });
     executions['exec-0'] = { status: 'failed', failureReason: 'insufficient_credits', error: { message: 'x' } };
 
     await runLoopSchedulerTick(NOW, logger);
 
     const after = await reload(loop.id);
     expect(after).toMatchObject({ status: 'paused', statusReason: 'Out of credits', autoResume: 'credits' });
-    expect(after.activeExecutionId).toBeUndefined();
+    expect(after.activeExecutionIds ?? []).toEqual([]);
   });
 
   it('keeps a failing loop live until the failure limit, then moves it to error', async () => {
     const loop = await createLoop({
-      activeExecutionId: 'exec-0',
+      activeExecutionIds: ['exec-0'],
       consecutiveFailures: MAX_CONSECUTIVE_FAILURES - 2,
       nextRunAt: new Date(NOW.getTime() + 60_000),
     });
@@ -186,14 +188,14 @@ describe('runLoopSchedulerTick', () => {
     await runLoopSchedulerTick(NOW, logger);
     expect(await reload(loop.id)).toMatchObject({ status: 'live', statusReason: 'LLM API returned 500' });
 
-    await Loop.updateOne({ _id: loop.id }, { $set: { activeExecutionId: 'exec-00' } });
+    await Loop.updateOne({ _id: loop.id }, { $set: { activeExecutionIds: ['exec-00'] } });
     executions['exec-00'] = { status: 'aborted' };
     await runLoopSchedulerTick(NOW, logger);
     expect(await reload(loop.id)).toMatchObject({ status: 'error', statusReason: 'Run aborted' });
   });
 
   it('never shows the owner a raw executor error', async () => {
-    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: new Date(NOW.getTime() + 60_000) });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: new Date(NOW.getTime() + 60_000) });
     executions['exec-0'] = {
       status: 'failed',
       error: { message: 'connect ECONNREFUSED internal-db.cluster.local:27017' },
@@ -205,7 +207,7 @@ describe('runLoopSchedulerTick', () => {
   });
 
   it('records a run whose execution doc is gone as a failure', async () => {
-    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: new Date(NOW.getTime() + 60_000) });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: new Date(NOW.getTime() + 60_000) });
     await runLoopSchedulerTick(NOW, logger);
     expect(await reload(loop.id)).toMatchObject({ statusReason: 'Run not found', consecutiveFailures: 1 });
   });
@@ -213,7 +215,7 @@ describe('runLoopSchedulerTick', () => {
   it('does not move a loop the owner paused to error', async () => {
     const loop = await createLoop({
       status: 'paused',
-      activeExecutionId: 'exec-0',
+      activeExecutionIds: ['exec-0'],
       consecutiveFailures: MAX_CONSECUTIVE_FAILURES - 1,
     });
     executions['exec-0'] = { status: 'aborted' };
@@ -224,17 +226,17 @@ describe('runLoopSchedulerTick', () => {
   });
 
   it('never stale-folds a run that is waiting on its children', async () => {
-    const loop = await createLoop({ activeExecutionId: 'exec-0' });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'] });
     executions['exec-0'] = { status: 'awaiting_subagent', updatedAt: new Date(NOW.getTime() - 5 * 60 * 60_000) };
 
     await runLoopSchedulerTick(NOW, logger);
 
-    expect((await reload(loop.id)).activeExecutionId).toBe('exec-0');
+    expect((await reload(loop.id)).activeExecutionIds).toEqual(['exec-0']);
     expect(h.startAgentExecution).not.toHaveBeenCalled();
   });
 
   it('folds a run that went quiet past the stale threshold as a failure', async () => {
-    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: new Date(NOW.getTime() + 60_000) });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: new Date(NOW.getTime() + 60_000) });
     executions['exec-0'] = { status: 'running', updatedAt: new Date(NOW.getTime() - 60 * 60_000) };
 
     await runLoopSchedulerTick(NOW, logger);
@@ -253,6 +255,7 @@ describe('runLoopSchedulerTick', () => {
     expect(after.leaseUntil).toBeUndefined();
     expect(after.nextRunAt).toEqual(PAST);
     expect(after.status).toBe('live');
+    expect(after.hold).toMatchObject({ kind: 'capacity', limit: 'user' });
   });
 
   it('does not let a loop that could not start block the other due loops', async () => {
@@ -264,7 +267,7 @@ describe('runLoopSchedulerTick', () => {
 
     expect(h.startAgentExecution.mock.calls.map(([input]) => input.userId)).toEqual(['user-1', 'user-2']);
     expect((await reload(stuck.id)).leaseUntil).toBeUndefined();
-    expect((await reload(other.id)).activeExecutionId).toBe('exec-1');
+    expect((await reload(other.id)).activeExecutionIds).toEqual(['exec-1']);
   });
 
   it('tracks a dispatch_failed run that already has an execution doc', async () => {
@@ -279,7 +282,7 @@ describe('runLoopSchedulerTick', () => {
     await runLoopSchedulerTick(NOW, logger);
 
     const after = await reload(loop.id);
-    expect(after).toMatchObject({ activeExecutionId: 'exec-7', lastExecutionId: 'exec-7' });
+    expect(after).toMatchObject({ activeExecutionIds: ['exec-7'], lastExecutionId: 'exec-7' });
     expect(after.nextRunAt).toEqual(NOW);
   });
 
@@ -369,7 +372,7 @@ describe('runLoopSchedulerTick', () => {
   });
 
   it('still advances a run whose answer has no memory block', async () => {
-    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: new Date(NOW.getTime() + 60_000) });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: new Date(NOW.getTime() + 60_000) });
     executions['exec-0'] = { status: 'completed', result: { answer: 'plain answer' } };
 
     await runLoopSchedulerTick(NOW, logger);
@@ -425,7 +428,7 @@ describe('runLoopSchedulerTick - tickets', () => {
   });
 
   it('a completed run advances its ticket, and from the second-to-last stage closes it', async () => {
-    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: LATER });
     const ticket = await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0' });
     executions['exec-0'] = { status: 'completed', result: { answer: 'done' } };
 
@@ -443,10 +446,10 @@ describe('runLoopSchedulerTick - tickets', () => {
   });
 
   it('a failed run blocks its ticket; an out-of-credits run returns it to open', async () => {
-    const failing = await createLoop({ activeExecutionId: 'exec-f', nextRunAt: LATER });
+    const failing = await createLoop({ activeExecutionIds: ['exec-f'], nextRunAt: LATER });
     const blocked = await createTicket(failing.id, { status: 'in_progress', executionId: 'exec-f' });
     executions['exec-f'] = { status: 'aborted' };
-    const broke = await createLoop({ activeExecutionId: 'exec-c', nextRunAt: LATER });
+    const broke = await createLoop({ activeExecutionIds: ['exec-c'], nextRunAt: LATER });
     const reopened = await createTicket(broke.id, { status: 'in_progress', executionId: 'exec-c' });
     executions['exec-c'] = { status: 'failed', failureReason: 'insufficient_credits', error: { message: 'x' } };
 
@@ -458,7 +461,7 @@ describe('runLoopSchedulerTick - tickets', () => {
   });
 
   it('respects a ticket the run blocked itself', async () => {
-    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: LATER });
     const ticket = await createTicket(loop.id, {
       status: 'blocked',
       statusReason: 'needs a login',
@@ -476,7 +479,7 @@ describe('runLoopSchedulerTick - tickets', () => {
   });
 
   it('runs the next ready ticket right after a fold, and waits the interval when none is left', async () => {
-    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: LATER });
     await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0' });
     const next = await createTicket(loop.id, { title: 'Next one' });
     executions['exec-0'] = { status: 'completed', result: { answer: 'done' } };
@@ -487,7 +490,7 @@ describe('runLoopSchedulerTick - tickets', () => {
     expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
     expect(h.startAgentExecution.mock.calls[0][0].query).not.toContain(next.id);
 
-    const quiet = await createLoop({ activeExecutionId: 'exec-q', nextRunAt: LATER });
+    const quiet = await createLoop({ activeExecutionIds: ['exec-q'], nextRunAt: LATER });
     await createTicket(quiet.id, { stage: 'doing', status: 'in_progress', executionId: 'exec-q' });
     executions['exec-q'] = { status: 'completed', result: { answer: 'done' } };
 
@@ -583,12 +586,12 @@ describe('runLoopSchedulerTick - unsure', () => {
   });
 
   it('parks a gate-paused run once: event logged, ticket blocked as unsure, loop freed without a failure', async () => {
-    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: LATER });
     const ticket = await createTicket(loop.id);
     executions['exec-0'] = paused();
 
     await runLoopSchedulerTick(NOW, logger);
-    await Loop.updateOne({ _id: loop.id }, { $set: { activeExecutionId: 'exec-0' } });
+    await Loop.updateOne({ _id: loop.id }, { $set: { activeExecutionIds: ['exec-0'] } });
     await runLoopSchedulerTick(NOW, logger);
 
     const events = await eventsOf(loop.id);
@@ -605,12 +608,12 @@ describe('runLoopSchedulerTick - unsure', () => {
     expect(await ticketOf(ticket.id)).toMatchObject({ status: 'blocked', statusReason: 'Unsure: thin results' });
     const after = await reload(loop.id);
     expect(after).toMatchObject({ status: 'live', consecutiveFailures: 0, runCount: 0 });
-    expect(after.activeExecutionId).toBeUndefined();
+    expect(after.activeExecutionIds ?? []).toEqual([]);
     expect(after.statusReason).toBeUndefined();
   });
 
   it('never folds a gate-paused run as stalled', async () => {
-    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: LATER });
     const ticket = await createTicket(loop.id);
     executions['exec-0'] = paused(new Date(1000), new Date(NOW.getTime() - STALE_ACTIVE_MS - 60_000));
 
@@ -621,7 +624,7 @@ describe('runLoopSchedulerTick - unsure', () => {
   });
 
   it("works the loop's next ready ticket while the unsure one stays blocked", async () => {
-    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: LATER });
     const unsure = await createTicket(loop.id);
     const next = await createTicket(loop.id, { title: 'Next one', status: 'open', executionId: undefined });
     executions['exec-0'] = paused();
@@ -678,7 +681,7 @@ describe('runLoopSchedulerTick - unsure', () => {
   });
 
   it('leaves a ticket the run parked with loop_ticket_unsure blocked, and never folds the answered ask', async () => {
-    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: LATER });
     const ticket = await createTicket(loop.id, { status: 'blocked', statusReason: 'Unsure: EU or US?' });
     await loopEventRepository.recordUnsure({
       source: 'asked',
@@ -757,7 +760,7 @@ describe('runLoopSchedulerTick - unsure', () => {
   });
 
   it('treats a run stopped at the gate before a tick parked it as a rejected unsure, not a success', async () => {
-    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: LATER });
     const ticket = await createTicket(loop.id);
     executions['exec-0'] = {
       userId: 'user-1',
@@ -775,7 +778,7 @@ describe('runLoopSchedulerTick - unsure', () => {
     });
     const after = await reload(loop.id);
     expect(after).toMatchObject({ runCount: 0, consecutiveFailures: 0, memory: { notes: '' } });
-    expect(after.activeExecutionId).toBeUndefined();
+    expect(after.activeExecutionIds ?? []).toEqual([]);
     const events = await eventsOf(loop.id);
     expect(events).toHaveLength(1);
     expect(events[0].resolution).toMatchObject({ outcome: 'rejected', by: 'user-1', at: NOW });
@@ -910,7 +913,7 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
     await runLoopSchedulerTick(MIDNIGHT, logger);
 
     const after = await reload(loop.id);
-    expect(after).toMatchObject({ status: 'live', activeExecutionId: 'exec-1' });
+    expect(after).toMatchObject({ status: 'live', activeExecutionIds: ['exec-1'] });
     expect(after.autoResume).toBeUndefined();
     expect(after.statusReason).toBeUndefined();
     expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
@@ -922,7 +925,7 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
 
   it('keeps a credit pause while the balance is empty and resumes once it is positive', async () => {
     balance = { currentCredits: 0 };
-    const loop = await createLoop({ activeExecutionId: 'exec-0', lastExecutionId: 'exec-0' });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], lastExecutionId: 'exec-0' });
     executions['exec-0'] = { status: 'failed', failureReason: 'insufficient_credits', error: { message: 'x' } };
     await runLoopSchedulerTick(NOW, logger);
 
@@ -934,7 +937,7 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
     h.pushLoopChanged.mockClear();
     await runLoopSchedulerTick(NOW, logger);
 
-    expect(await reload(loop.id)).toMatchObject({ status: 'live', activeExecutionId: 'exec-1' });
+    expect(await reload(loop.id)).toMatchObject({ status: 'live', activeExecutionIds: ['exec-1'] });
     // The resume's own push, before the dispatch's.
     expect(h.pushLoopChanged.mock.invocationCallOrder[0]).toBeLessThan(
       h.startAgentExecution.mock.invocationCallOrder[0]
@@ -980,7 +983,7 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
 
   it('keeps an owner pause made during a run that is then refused for credits', async () => {
     balance = { currentCredits: 100 };
-    const loop = await createLoop({ status: 'paused', activeExecutionId: 'exec-0', lastExecutionId: 'exec-0' });
+    const loop = await createLoop({ status: 'paused', activeExecutionIds: ['exec-0'], lastExecutionId: 'exec-0' });
     executions['exec-0'] = { status: 'failed', failureReason: 'insufficient_credits', error: { message: 'x' } };
 
     await runLoopSchedulerTick(NOW, logger);
@@ -989,7 +992,7 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
     const after = await reload(loop.id);
     expect(after.status).toBe('paused');
     expect(after.autoResume).toBeUndefined();
-    expect(after.activeExecutionId).toBeUndefined();
+    expect(after.activeExecutionIds ?? []).toEqual([]);
   });
 
   it('starts no run and keeps the owner pause when it lands before the budget pause is written', async () => {
@@ -1266,7 +1269,7 @@ describe('runLoopSchedulerTick - stage config', () => {
     const loop = await createLoop({
       stages: STAGES,
       stageConfig: [{ stage: 'review', runner: 'desktop' }],
-      activeExecutionId: 'exec-0',
+      activeExecutionIds: ['exec-0'],
       nextRunAt: LATER,
     });
     const ticket = await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0' });
@@ -1307,7 +1310,7 @@ describe('runLoopSchedulerTick - safety and pacing', () => {
 
   it('dispatches no loop with 4 loop runs in flight, and at most 2 with 2 in flight', async () => {
     for (let i = 0; i < 4; i++) {
-      await createLoop({ activeExecutionId: `busy-${i}`, nextRunAt: LATER });
+      await createLoop({ activeExecutionIds: [`busy-${i}`], nextRunAt: LATER });
       executions[`busy-${i}`] = running();
     }
     for (let i = 0; i < 5; i++) await createLoop({ userId: `due-${i}` });
@@ -1315,7 +1318,10 @@ describe('runLoopSchedulerTick - safety and pacing', () => {
     await runLoopSchedulerTick(NOW, logger);
     expect(h.startAgentExecution).not.toHaveBeenCalled();
 
-    await Loop.updateMany({ activeExecutionId: { $in: ['busy-0', 'busy-1'] } }, { $unset: { activeExecutionId: '' } });
+    await Loop.updateMany(
+      { activeExecutionIds: { $in: ['busy-0', 'busy-1'] } },
+      { $unset: { activeExecutionIds: '' } }
+    );
     await runLoopSchedulerTick(NOW, logger);
     expect(h.startAgentExecution).toHaveBeenCalledTimes(2);
   });
@@ -1337,8 +1343,9 @@ describe('runLoopSchedulerTick - safety and pacing', () => {
 
     await runLoopSchedulerTick(NOW, logger);
 
-    expect(h.startAgentExecution).toHaveBeenCalledTimes(4);
-    expect(h.startAgentExecution.mock.calls.map(call => call[0].userId)).toContain('user-b');
+    // user-a stops at its 2 cloud lanes (LoopsCloudLanesPerUser default), well under the 4 server-wide.
+    const users = h.startAgentExecution.mock.calls.map(call => call[0].userId);
+    expect(users.sort()).toEqual(['user-a', 'user-a', 'user-b']);
   });
 
   it('pauses a loop whose payer cannot cover one iteration, without creating an execution', async () => {
@@ -1389,7 +1396,8 @@ describe('runLoopSchedulerTick - safety and pacing', () => {
         createdAt: NOW,
       } as never);
       executions[id] = { status: 'running', updatedAt: NOW };
-      await createLoop({ activeExecutionId: id, nextRunAt: new Date(NOW.getTime() + 3_600_000) });
+      // Another owner's loops hold the lanes, so user-1's lane cap does not apply; the runs still bill user-1.
+      await createLoop({ userId: 'user-2', activeExecutionIds: [id], nextRunAt: new Date(NOW.getTime() + 3_600_000) });
     }
     await createLoop();
 
@@ -1472,7 +1480,7 @@ describe('runLoopSchedulerTick - safety and pacing', () => {
 
   it("returns a capped run's ticket to open without counting a failure, and says why on the loop", async () => {
     h.startAgentExecution.mockResolvedValue({ ok: false, reason: 'concurrent_limit' });
-    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: LATER });
     const ticket = await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0', runCount: 1 });
     executions['exec-0'] = { status: 'failed', failureReason: 'credit_cap', creditCap: 12.5, error: { message: 'x' } };
 
@@ -1487,12 +1495,12 @@ describe('runLoopSchedulerTick - safety and pacing', () => {
       consecutiveFailures: 0,
       statusReason: 'Last run stopped at its credit cap (12.5 credits)',
     });
-    expect(after.activeExecutionId).toBeUndefined();
+    expect(after.activeExecutionIds ?? []).toEqual([]);
   });
 
   it("returns a ticket stopped by a new account's spend cap to open without counting a failure", async () => {
     h.startAgentExecution.mockResolvedValue({ ok: false, reason: 'concurrent_limit' });
-    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: LATER });
     const ticket = await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0', runCount: 1 });
     executions['exec-0'] = { status: 'failed', failureReason: 'spend_cap', error: { message: 'x' } };
 
@@ -1535,11 +1543,12 @@ describe('runLoopSchedulerTick - safety and pacing', () => {
     // An answer without a memory block becomes the notes, so the same answer again leaves memory unchanged.
     const loop = await createLoop({ nextRunAt: LATER, memory: { notes: 'nothing new', nextAction: '' } });
     const idleRun = async (n: number) => {
-      await Loop.updateOne({ _id: loop.id }, { $set: { activeExecutionId: `idle-${n}` } });
+      await Loop.updateOne({ _id: loop.id }, { $set: { activeExecutionIds: [`idle-${n}`] } });
       executions[`idle-${n}`] = {
         status: 'completed',
         result: { answer: 'nothing new' },
-        createdAt: PAST,
+        // Started after the last fold wrote memory, as a real next run is, so its memory replaces the loop's.
+        createdAt: NOW,
         completedAt: NOW,
       };
       await runLoopSchedulerTick(NOW, logger);
@@ -1557,7 +1566,7 @@ describe('runLoopSchedulerTick - safety and pacing', () => {
 
   it('does not back off a run that a Run now, edit or directive landed during', async () => {
     const memory = { notes: 'same', nextAction: '' };
-    const loop = await createLoop({ nextRunAt: NOW, memory, activeExecutionId: 'reset-mid-run', idleResetAt: NOW });
+    const loop = await createLoop({ nextRunAt: NOW, memory, activeExecutionIds: ['reset-mid-run'], idleResetAt: NOW });
     executions['reset-mid-run'] = {
       status: 'completed',
       result: { answer: 'same' },
@@ -1572,14 +1581,14 @@ describe('runLoopSchedulerTick - safety and pacing', () => {
 
   it('does not back off a run that changed memory or touched a ticket', async () => {
     const memory = { notes: 'same', nextAction: '' };
-    const loop = await createLoop({ nextRunAt: LATER, idleStreak: 2, memory, activeExecutionId: 'touched' });
+    const loop = await createLoop({ nextRunAt: LATER, idleStreak: 2, memory, activeExecutionIds: ['touched'] });
     const ticket = await createTicket(loop.id, { status: 'blocked', statusReason: 'x' });
     await WorkItem.collection.updateOne({ _id: new mongoose.Types.ObjectId(ticket.id) }, { $set: { updatedAt: PAST } });
     executions.touched = { status: 'completed', result: { answer: 'same' }, createdAt: PAST, completedAt: NOW };
     await runLoopSchedulerTick(NOW, logger);
     expect((await reload(loop.id)).idleStreak).toBe(0);
 
-    await Loop.updateOne({ _id: loop.id }, { $set: { activeExecutionId: 'changed', idleStreak: 2 } });
+    await Loop.updateOne({ _id: loop.id }, { $set: { activeExecutionIds: ['changed'], idleStreak: 2 } });
     executions.changed = { status: 'completed', result: { answer: 'news' }, createdAt: NOW, completedAt: NOW };
     await runLoopSchedulerTick(NOW, logger);
     expect((await reload(loop.id)).idleStreak).toBe(0);
@@ -1607,9 +1616,9 @@ describe('runLoopSchedulerTick - liveness', () => {
   const LONG_DUE = minutesAgo(50);
   const LATER = new Date(NOW.getTime() + 60 * 60_000);
   const keys = async () => (await Inbox.find({ deletedAt: null }).lean()).map(notice => notice.sourceKey);
-  /** A loop the scheduler cannot start this tick (the user's concurrent-run limit), so it stays due. */
+  /** A loop the scheduler cannot start this tick (an invoke that failed before any run doc), so it stays due. */
   const refuseStarts = () =>
-    h.startAgentExecution.mockResolvedValue({ ok: false, reason: 'concurrent_limit', message: 'busy' });
+    h.startAgentExecution.mockResolvedValue({ ok: false, reason: 'dispatch_failed', message: 'busy' });
 
   describe('idle with work', () => {
     it('flags a live loop far past due with a ready ticket, then clears it and its notice once it runs', async () => {
@@ -1702,7 +1711,7 @@ describe('runLoopSchedulerTick - liveness', () => {
 
     it('marks loops left out by the global run cap as capacity holds, recomputed each tick', async () => {
       for (let i = 0; i < 4; i++) {
-        await createLoop({ activeExecutionId: `busy-${i}`, nextRunAt: LATER });
+        await createLoop({ userId: `busy-user-${i}`, activeExecutionIds: [`busy-${i}`], nextRunAt: LATER });
         executions[`busy-${i}`] = { status: 'running', updatedAt: NOW, createdAt: NOW };
       }
       const waiting = await createLoop({ nextRunAt: LONG_DUE });
@@ -1710,13 +1719,13 @@ describe('runLoopSchedulerTick - liveness', () => {
 
       await runLoopSchedulerTick(NOW, logger);
       expect(h.startAgentExecution).not.toHaveBeenCalled();
-      expect(await reload(waiting.id)).toMatchObject({ hold: { kind: 'capacity', at: NOW } });
+      expect(await reload(waiting.id)).toMatchObject({ hold: { kind: 'capacity', limit: 'server', at: NOW } });
       expect((await reload(waiting.id)).alarm).toBeUndefined();
 
-      await Loop.updateMany({ activeExecutionId: 'busy-0' }, { $unset: { activeExecutionId: '' } });
+      await Loop.updateMany({ activeExecutionIds: ['busy-0'] }, { $unset: { activeExecutionIds: '' } });
       await runLoopSchedulerTick(NOW, logger);
       const started = await reload(waiting.id);
-      expect(started.activeExecutionId).toBe('exec-1');
+      expect(started.activeExecutionIds).toEqual(['exec-1']);
       expect(started.hold).toBeUndefined();
     });
 
@@ -1741,7 +1750,7 @@ describe('runLoopSchedulerTick - liveness', () => {
       completedAt: new Date(minutes * 60_000),
     });
     const startLong = async (ageMinutes: number, overrides: Record<string, unknown> = {}) => {
-      const loop = await createLoop({ activeExecutionId: 'exec-long', nextRunAt: LATER });
+      const loop = await createLoop({ activeExecutionIds: ['exec-long'], nextRunAt: LATER });
       executions['exec-long'] = {
         id: 'exec-long',
         userId: 'user-1',
@@ -1852,7 +1861,7 @@ describe('runLoopSchedulerTick - liveness', () => {
     });
 
     it('waits while the loop has a run in flight that could still link the claim', async () => {
-      const loop = await createLoop({ activeExecutionId: 'exec-a', nextRunAt: LATER });
+      const loop = await createLoop({ activeExecutionIds: ['exec-a'], nextRunAt: LATER });
       executions['exec-a'] = { status: 'running', updatedAt: NOW, createdAt: NOW };
       const unlinked = await createTicket(loop.id, { status: 'in_progress' });
       await age(unlinked.id, minutesAgo(60));
@@ -1862,7 +1871,13 @@ describe('runLoopSchedulerTick - liveness', () => {
     });
 
     it('reopens a ticket whose run is gone or finished; leaves the active, resumed and desktop runs alone', async () => {
-      const loop = await createLoop({ activeExecutionId: 'exec-active', nextRunAt: LATER });
+      // exec-active is the loop's second lane, so any lane id counts as live.
+      const loop = await createLoop({
+        maxConcurrent: 2,
+        activeExecutionIds: ['exec-other', 'exec-active'],
+        nextRunAt: LATER,
+      });
+      executions['exec-other'] = { status: 'running', updatedAt: NOW, createdAt: NOW };
       executions['exec-active'] = { status: 'running', updatedAt: NOW, createdAt: NOW };
       executions['exec-done'] = { status: 'completed' };
       executions['exec-resumed'] = { status: 'completed' };
@@ -1905,6 +1920,225 @@ describe('runLoopSchedulerTick - liveness', () => {
         expect(await ticketOf(t.id)).toMatchObject({ status: 'in_progress', runCount: 1 });
       }
     });
+  });
+});
+
+describe('runLoopSchedulerTick - parallel lanes', () => {
+  const settings = (values: Record<string, unknown>) =>
+    vi
+      .mocked(adminSettingsRepository.getSettingsValue)
+      .mockImplementation((async (key: string) => (key === 'EnableLoops' ? true : values[key])) as never);
+  const createTicket = async (loopId: string, title: string, userId = 'user-1') =>
+    (
+      await WorkItem.create({ userId, loopId, title, stage: 'todo', status: 'open', dependencies: [], priority: 'p2' })
+    ).toJSON();
+  const ticketOf = async (id: string) => (await WorkItem.findById(id))!.toJSON();
+  const loopWithTickets = async (count: number, overrides: Record<string, unknown> = {}) => {
+    const loop = await createLoop({ maxConcurrent: 3, ...overrides });
+    const tickets = [];
+    for (let i = 0; i < count; i++) {
+      tickets.push(await createTicket(loop.id, `T${i}`, (overrides.userId as string | undefined) ?? 'user-1'));
+    }
+    return { loop, tickets };
+  };
+  /** Each started run gets a real execution doc carrying its creditCap, so later lanes' admission reserves it. */
+  const persistRuns = () =>
+    h.startAgentExecution.mockImplementation(async (params: Record<string, unknown>) => {
+      const doc = await agentExecutionRepository.create({
+        userId: params.userId,
+        sessionId: params.sessionId,
+        questId: params.questId,
+        loopId: params.loopId,
+        query: 'q',
+        model: params.model,
+        status: 'running',
+        approvedTools: [],
+        deniedTools: [],
+        iterationBilling: [],
+        totalCreditsUsed: 0,
+        ...(params.creditCap !== undefined && { creditCap: params.creditCap }),
+        ...(params.loopRunKind !== undefined && { loopRunKind: params.loopRunKind }),
+        lambdaInvocationCount: 1,
+        childExecutionIds: [],
+        createdAt: NOW,
+      } as never);
+      executions[doc.id] = { status: 'running', updatedAt: NOW, createdAt: NOW };
+      return { ok: true, executionId: doc.id };
+    });
+  const caps = () => h.startAgentExecution.mock.calls.map(call => call[0].creditCap as number);
+
+  it('runs one triage in a lane, and while it runs the other lanes work only tickets with a priority', async () => {
+    persistRuns();
+    const { loop, tickets } = await loopWithTickets(1);
+    const untriaged = (
+      await WorkItem.create({
+        userId: 'user-1',
+        loopId: loop.id,
+        title: 'New',
+        stage: 'todo',
+        status: 'open',
+        dependencies: [],
+      })
+    ).toJSON();
+
+    // One tick: the triage lane leaves the loop due, so a free lane takes the ticket with a priority.
+    await runLoopSchedulerTick(NOW, logger);
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(2);
+    expect(h.startAgentExecution.mock.calls[0][0]).toMatchObject({ loopRunKind: 'triage' });
+    expect(h.startAgentExecution.mock.calls[1][0]).toMatchObject({ workItemId: tickets[0].id });
+    expect(h.startAgentExecution.mock.calls[1][0]).not.toHaveProperty('loopRunKind');
+    expect((await ticketOf(untriaged.id)).status).toBe('open');
+    expect((await reload(loop.id)).activeExecutionIds).toHaveLength(2);
+  });
+
+  it('waits an interval after an unconfirmed dispatch on a multi-lane loop', async () => {
+    const { loop } = await loopWithTickets(2);
+    h.startAgentExecution.mockResolvedValue({
+      ok: false,
+      reason: 'dispatch_failed',
+      message: 'unconfirmed',
+      executionId: 'exec-7',
+    });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    const after = await reload(loop.id);
+    expect(after.activeExecutionIds).toEqual(['exec-7']);
+    expect(after.nextRunAt).toEqual(new Date(NOW.getTime() + 15 * 60_000));
+  });
+
+  it('holds a loop with a lane running on budget when the all-loops budget runs out', async () => {
+    settings({ LoopsDailyCreditsPerUser: 50 });
+    vi.mocked(userRepository.findById).mockResolvedValue({ currentCredits: 1000, loopsDailyCredits: 30 } as never);
+    vi.spyOn(agentExecutionRepository, 'sumLoopCreditsForUser').mockResolvedValue(30);
+    const { loop } = await loopWithTickets(1, { activeExecutionIds: ['exec-0'] });
+    executions['exec-0'] = { status: 'running', updatedAt: NOW, createdAt: NOW };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    const after = await reload(loop.id);
+    expect(after).toMatchObject({ status: 'live', activeExecutionIds: ['exec-0'] });
+    expect(after.hold).toMatchObject({ kind: 'capacity', limit: 'budget' });
+    expect(after.leaseUntil).toBeUndefined();
+  });
+
+  it('opens a lane per ready ticket up to the per-user lane limit, never two runs on one ticket', async () => {
+    const { loop, tickets } = await loopWithTickets(3);
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    const after = await reload(loop.id);
+    expect(after.activeExecutionIds).toEqual(['exec-1', 'exec-2']);
+    expect(after.hold).toMatchObject({ kind: 'capacity', limit: 'user' });
+    const linked = await Promise.all(tickets.map(t => ticketOf(t.id)));
+    expect(linked.map(t => t.executionId)).toEqual(['exec-1', 'exec-2', undefined]);
+    expect(linked[2].status).toBe('open');
+  });
+
+  it("holds on the loop's own lanes when they are all busy with tickets waiting", async () => {
+    const { loop } = await loopWithTickets(3, { maxConcurrent: 2 });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(await reload(loop.id)).toMatchObject({
+      activeExecutionIds: ['exec-1', 'exec-2'],
+      hold: { kind: 'capacity', limit: 'loop' },
+    });
+  });
+
+  it('spreads the server-wide lanes one per user per pass', async () => {
+    settings({ LoopsMaxActiveRuns: 2 });
+    await loopWithTickets(3);
+    await loopWithTickets(3, { userId: 'user-2', sessionId: 'session-2' });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution.mock.calls.map(call => call[0].userId).sort()).toEqual(['user-1', 'user-2']);
+  });
+
+  it('folds only the lane that finished, and the next tick refills it', async () => {
+    const { loop, tickets } = await loopWithTickets(3, { maxConcurrent: 2 });
+    await runLoopSchedulerTick(NOW, logger);
+
+    executions['exec-1'] = { status: 'completed', result: { answer: 'done' }, createdAt: NOW, completedAt: NOW };
+    executions['exec-2'] = { status: 'running', updatedAt: NOW, createdAt: NOW };
+    await runLoopSchedulerTick(NOW, logger);
+
+    const after = await reload(loop.id);
+    expect(after.activeExecutionIds).toEqual(['exec-2', 'exec-3']);
+    expect(after.runCount).toBe(1);
+    // The advanced ticket is ready again one stage on, so furthest-stage-first gives it the freed lane.
+    expect(await ticketOf(tickets[0].id)).toMatchObject({ stage: 'doing', executionId: 'exec-3' });
+    expect((await ticketOf(tickets[1].id)).executionId).toBe('exec-2');
+  });
+
+  it('never claims one ticket twice or exceeds maxConcurrent across concurrent ticks', async () => {
+    const { loop, tickets } = await loopWithTickets(3, { maxConcurrent: 2 });
+
+    await Promise.all([runLoopSchedulerTick(NOW, logger), runLoopSchedulerTick(NOW, logger)]);
+
+    const after = await reload(loop.id);
+    expect(after.activeExecutionIds!.length).toBeLessThanOrEqual(2);
+    const linked = (await Promise.all(tickets.map(t => ticketOf(t.id)))).map(t => t.executionId).filter(Boolean);
+    expect(new Set(linked).size).toBe(linked.length);
+    expect(linked.sort()).toEqual([...after.activeExecutionIds!].sort());
+  });
+
+  it('starts no goal run beside a running lane, and pushes the loop to its next interval', async () => {
+    const loop = await createLoop({ maxConcurrent: 2, activeExecutionIds: ['busy'] });
+    executions.busy = { status: 'running', updatedAt: NOW, createdAt: NOW };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    const after = await reload(loop.id);
+    expect(after.nextRunAt).toEqual(new Date(NOW.getTime() + 15 * 60_000));
+    expect(after.leaseUntil).toBeUndefined();
+  });
+
+  it("splits the budget across the lanes it opens, and a finished lane's leftover returns", async () => {
+    persistRuns();
+    // At 12:00 a 24-credit budget's paced allowance is 13: two lanes get 6.5 each.
+    const { loop } = await loopWithTickets(3, { budgetCreditsPerDay: 24, maxConcurrent: 2 });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(caps()).toHaveLength(2);
+    expect(caps()[0]).toBeCloseTo(6.5);
+    expect(caps()[1]).toBeCloseTo(6.5);
+
+    // The first lane finishes having used 1 credit: its reservation drops to 1, so the next lane gets 13 - 1 - 6.5.
+    const [first] = (await reload(loop.id)).activeExecutionIds!;
+    await agentExecutionRepository.update({ id: first, status: 'completed', totalCreditsUsed: 1 } as never);
+    executions[first] = { status: 'completed', result: { answer: 'done' }, createdAt: NOW, completedAt: NOW };
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(caps()).toHaveLength(3);
+    expect(caps()[2]).toBeCloseTo(13 - 1 - 6.5);
+  });
+
+  it('opens only the lanes the budget covers an iteration for', async () => {
+    persistRuns();
+    const late = new Date('2026-10-29T23:30:00Z');
+    // 0.015 left covers one 0.01-credit iteration, not two: one lane opens with all of it, the other ticket waits.
+    const { tickets } = await loopWithTickets(2, { budgetCreditsPerDay: 0.015, maxConcurrent: 2 });
+
+    await runLoopSchedulerTick(late, logger);
+
+    expect(caps()).toHaveLength(1);
+    expect(caps()[0]).toBeCloseTo(0.015);
+    const statuses = await Promise.all(tickets.map(async t => (await ticketOf(t.id)).status));
+    expect(statuses.sort()).toEqual(['in_progress', 'open']);
+  });
+
+  it('caps a single-lane loop exactly as before', async () => {
+    persistRuns();
+    await loopWithTickets(3, { budgetCreditsPerDay: 24, maxConcurrent: 1 });
+    await runLoopSchedulerTick(NOW, logger);
+    expect(caps()).toHaveLength(1);
+    expect(caps()[0]).toBeCloseTo(13);
   });
 });
 
@@ -1992,7 +2226,7 @@ describe('runLoopSchedulerTick - priority policy', () => {
 
     it("folds a triage run without touching the loop's memory", async () => {
       const memory = { notes: 'kept', nextAction: 'keep going' };
-      const loop = await createLoop({ stages: STAGES, activeExecutionId: 'exec-t', memory });
+      const loop = await createLoop({ stages: STAGES, activeExecutionIds: ['exec-t'], memory });
       executions['exec-t'] = {
         status: 'completed',
         loopRunKind: 'triage',
@@ -2005,12 +2239,12 @@ describe('runLoopSchedulerTick - priority policy', () => {
 
       const folded = await reload(loop.id);
       expect(folded.memory).toMatchObject(memory);
-      expect(folded.activeExecutionId).toBeUndefined();
+      expect(folded.activeExecutionIds ?? []).toEqual([]);
       expect(folded.lastRunAt).toEqual(NOW);
     });
 
     it('sets p2 at the fold on a ticket the triage run was shown but left, so ticket work goes on', async () => {
-      const loop = await createLoop({ stages: STAGES, activeExecutionId: 'exec-t' });
+      const loop = await createLoop({ stages: STAGES, activeExecutionIds: ['exec-t'] });
       const skipped = await createTicket(loop.id, { priority: undefined, prioritySetBy: undefined });
       const unseen = await createTicket(loop.id, { priority: undefined, prioritySetBy: undefined });
       const owned = await createTicket(loop.id, { priority: 'p1', prioritySetBy: 'owner' });
@@ -2054,6 +2288,27 @@ describe('runLoopSchedulerTick - priority policy', () => {
       await runLoopSchedulerTick(NOW, logger);
 
       expect(h.startAgentExecution.mock.calls[0][0]).toMatchObject({ workItemId: p1.id, ticketPriority: 'p1' });
+    });
+
+    it('holds a loop with a lane running until 00:00 UTC when only p2/p3 are ready', async () => {
+      const loop = await createLoop({
+        stages: STAGES,
+        p2RunsPerDay: 1,
+        maxConcurrent: 2,
+        activeExecutionIds: ['busy'],
+      });
+      executions.busy = { status: 'running', updatedAt: NOW, createdAt: NOW };
+      await createTicket(loop.id, { prioritySetBy: 'owner' });
+      await p2RunToday(loop.id);
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(h.startAgentExecution).not.toHaveBeenCalled();
+      expect(await reload(loop.id)).toMatchObject({
+        status: 'live',
+        nextRunAt: MIDNIGHT,
+        hold: { kind: 'priority_budget', until: MIDNIGHT, at: NOW },
+      });
     });
 
     it('holds the loop until 00:00 UTC instead of a goal run when only p2/p3 are ready, and does not flag it idle', async () => {
@@ -2237,7 +2492,7 @@ describe('dispatchLoopNow', () => {
 
     expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
     expect(await ticketOf(ticket.id)).toMatchObject({ status: 'in_progress', executionId: 'exec-1' });
-    expect(await reload(loop.id)).toMatchObject({ activeExecutionId: 'exec-1' });
+    expect(await reload(loop.id)).toMatchObject({ activeExecutionIds: ['exec-1'] });
     expect(h.pushLoopChanged).toHaveBeenCalledWith('user-1', loop.id, logger);
   });
 
@@ -2253,18 +2508,18 @@ describe('dispatchLoopNow', () => {
 
   it('does nothing when EnableLoops is off', async () => {
     vi.mocked(adminSettingsRepository.getSettingsValue).mockResolvedValue(false as never);
-    const loop = await createLoop({ activeExecutionId: 'exec-0' });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'] });
     executions['exec-0'] = { status: 'completed', result: { answer: 'done' } };
 
     await dispatchLoopNow(loop.id, NOW, logger);
 
     expect(h.startAgentExecution).not.toHaveBeenCalled();
-    expect(await reload(loop.id)).toMatchObject({ activeExecutionId: 'exec-0' });
+    expect(await reload(loop.id)).toMatchObject({ activeExecutionIds: ['exec-0'] });
   });
 
   it('starts nothing while every loop run slot is taken', async () => {
     for (let i = 0; i < MAX_ACTIVE_LOOP_RUNS; i++)
-      await createLoop({ activeExecutionId: `busy-${i}`, nextRunAt: LATER });
+      await createLoop({ activeExecutionIds: [`busy-${i}`], nextRunAt: LATER });
     const loop = await createLoop();
 
     await dispatchLoopNow(loop.id, NOW, logger);
@@ -2274,20 +2529,20 @@ describe('dispatchLoopNow', () => {
   });
 
   it('folds a finished run, advances its ticket and starts the next run in the same call', async () => {
-    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: LATER });
     const ticket = await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0' });
     executions['exec-0'] = { status: 'completed', result: { answer: 'done' } };
 
     await dispatchLoopNow(loop.id, NOW, logger);
 
     expect(await ticketOf(ticket.id)).toMatchObject({ stage: 'doing', status: 'in_progress', executionId: 'exec-1' });
-    expect(await reload(loop.id)).toMatchObject({ activeExecutionId: 'exec-1', runCount: 1 });
+    expect(await reload(loop.id)).toMatchObject({ activeExecutionIds: ['exec-1'], runCount: 1 });
   });
 
   it('gives a freed slot to the longest-due loop, not back to the loop whose run ended', async () => {
     for (let i = 0; i < MAX_ACTIVE_LOOP_RUNS - 1; i++)
-      await createLoop({ activeExecutionId: `busy-${i}`, nextRunAt: LATER });
-    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+      await createLoop({ activeExecutionIds: [`busy-${i}`], nextRunAt: LATER });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: LATER });
     await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0' });
     executions['exec-0'] = { status: 'completed', result: { answer: 'done' } };
     const waiting = await createLoop({ userId: 'user-2', nextRunAt: new Date(PAST.getTime() - 60_000) });
@@ -2295,8 +2550,8 @@ describe('dispatchLoopNow', () => {
     await dispatchLoopNow(loop.id, NOW, logger);
 
     expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
-    expect(await reload(waiting.id)).toMatchObject({ activeExecutionId: 'exec-1' });
-    expect((await reload(loop.id)).activeExecutionId).toBeUndefined();
+    expect(await reload(waiting.id)).toMatchObject({ activeExecutionIds: ['exec-1'] });
+    expect((await reload(loop.id)).activeExecutionIds ?? []).toEqual([]);
     // The fold still shows on the ended loop's page.
     expect(h.pushLoopChanged).toHaveBeenCalledWith('user-1', loop.id, logger);
   });
@@ -2309,8 +2564,8 @@ describe('dispatchLoopNow', () => {
     await dispatchLoopNow(loop.id, NOW, logger);
 
     expect(h.startAgentExecution).toHaveBeenCalledTimes(2);
-    expect((await reload(waiting.id)).activeExecutionId).toBe('exec-1');
-    expect((await reload(loop.id)).activeExecutionId).toBe('exec-2');
+    expect((await reload(waiting.id)).activeExecutionIds).toEqual(['exec-1']);
+    expect((await reload(loop.id)).activeExecutionIds).toEqual(['exec-2']);
     expect(await ticketOf(ticket.id)).toMatchObject({ status: 'in_progress', executionId: 'exec-2' });
   });
 
@@ -2349,7 +2604,7 @@ describe('dispatchLoopNow', () => {
   });
 
   it('with the tick and events firing together on a finished run, folds it once and starts one next run', async () => {
-    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const loop = await createLoop({ activeExecutionIds: ['exec-0'], nextRunAt: LATER });
     const ticket = await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0' });
     executions['exec-0'] = { status: 'completed', result: { answer: 'done' } };
 
@@ -2361,6 +2616,6 @@ describe('dispatchLoopNow', () => {
 
     expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
     expect(await ticketOf(ticket.id)).toMatchObject({ stage: 'doing', status: 'in_progress', executionId: 'exec-1' });
-    expect(await reload(loop.id)).toMatchObject({ activeExecutionId: 'exec-1', runCount: 1 });
+    expect(await reload(loop.id)).toMatchObject({ activeExecutionIds: ['exec-1'], runCount: 1 });
   });
 });
