@@ -74,6 +74,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.restriction_lifted': { category: 'access', severity: 'notice', write: 'strict' },
 
   'user.deleted': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.deletion.scheduled': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.deletion.cancelled': { category: 'account', severity: 'notice', write: 'strict' },
   'user.deletion.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
   // notice, not critical like user.deleted: the sweep carrying out a user's own scheduled deletion.
   'user.deletion.completed': { category: 'account', severity: 'notice', write: 'strict' },

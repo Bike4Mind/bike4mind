@@ -9,6 +9,8 @@ import type { AdminUserProfile } from '../userProfileModel';
 
 const ACTION_SENTENCES: Readonly<Record<string, string>> = {
   'user.mfa.reset': 'Reset two-factor authentication',
+  'user.deletion.scheduled': 'Scheduled account deletion',
+  'user.deletion.cancelled': 'Cancelled scheduled deletion',
   'user.impersonation.started': 'Started signing in as this user',
   'user.impersonation.ended': 'Stopped signing in as this user',
   'user.sessions.revoked': 'Signed this user out everywhere',

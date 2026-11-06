@@ -5,7 +5,7 @@ import { FormControl, FormLabel, Input, Stack, Textarea, Typography } from '@mui
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
-import { isThrottleExempt } from '@bike4mind/common';
+import { ACCOUNT_DELETION_GRACE_DAYS, isThrottleExempt } from '@bike4mind/common';
 import { useDeleteUser, useLoginAsUser } from '@client/app/hooks/data/user';
 import { useForceResetMFA } from '@client/app/hooks/data/mfa';
 import { useSendSystemMessage } from '@client/app/hooks/data/inbox';
@@ -13,7 +13,7 @@ import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, undoAdminReason, use
 import { useAdminUserUpdate, adminUpdateErrorMessage } from './useAdminUserUpdate';
 import { warnSubscriptionCancelFailures } from './warnSubscriptionCancelFailures';
 import type { ProfileDialogProps } from './profileActions';
-import { accountStatus, displayName } from '../userProfileModel';
+import { accountStatus, displayName, formatDeletionDay } from '../userProfileModel';
 
 /** POST to one of the admin user endpoints, refresh the user, toast a failure and rethrow it. */
 const useAdminUserPost = (userId: string, failure: string) => {
@@ -372,6 +372,106 @@ export const DeleteUserDialog: React.FC<ProfileDialogProps & { onDeleted: () => 
       onConfirm={handleConfirm}
       data-testid="delete-user-dialog"
     />
+  );
+};
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+// The GDPR month runs from receipt; past this the purge lands later than it, which support should note.
+const DELETION_RECEIPT_WINDOW_DAYS = 30;
+
+/** The admin's calendar day as YYYY-MM-DD: the date input works in local time, toISOString does not. */
+const localDay = (date: Date): string =>
+  [date.getFullYear(), date.getMonth() + 1, date.getDate()].map(n => String(n).padStart(2, '0')).join('-');
+
+/** For a user who cannot sign in: same lockdown, 14-day grace and purge as self-serve deletion. */
+export const ScheduleDeletionDialog: React.FC<ProfileDialogProps> = ({ user, onClose }) => {
+  const post = useAdminUserPost(user.id, 'Could not schedule the deletion');
+  const [receivedAt, setReceivedAt] = useState('');
+  const [now] = useState(() => Date.now());
+  const today = localDay(new Date(now));
+  const purgeOn = new Date(now + ACCOUNT_DELETION_GRACE_DAYS * DAY_MS);
+  const late = !!receivedAt && Date.parse(receivedAt) + DELETION_RECEIPT_WINDOW_DAYS * DAY_MS < purgeOn.getTime();
+  const dateInvalid = !!receivedAt && receivedAt > today;
+
+  const handleConfirm = async (reason: string) => {
+    await post('schedule-deletion', { receivedAt, reason });
+    onClose();
+    toast.success(`Deletion scheduled for ${displayName(user)}`);
+  };
+
+  return (
+    <ActionDialog
+      open
+      onClose={onClose}
+      title={`Schedule deletion for ${displayName(user)}`}
+      description={`Starts the same deletion as the user's own request. They are signed out everywhere, their API keys and connected apps are revoked and their subscriptions are canceled, none of which is restored by a cancel. They are emailed, and the account is purged after ${ACCOUNT_DELETION_GRACE_DAYS} days unless the deletion is cancelled. Verify the request came from the email on file first.`}
+      reasonPresets={ADMIN_REASON_PRESETS.deletionVerification}
+      typedConfirm={
+        user.email ? { expected: user.email, noun: 'email address' } : { expected: user.id, noun: 'user ID' }
+      }
+      confirmLabel="Schedule deletion"
+      tone="danger"
+      blockedReason={
+        !receivedAt
+          ? 'Enter the date the request email arrived.'
+          : dateInvalid
+            ? 'The date cannot be in the future.'
+            : null
+      }
+      onConfirm={handleConfirm}
+      data-testid="schedule-deletion-dialog"
+    >
+      <FormControl>
+        <FormLabel>Request email received</FormLabel>
+        <Input
+          type="date"
+          value={receivedAt}
+          onChange={event => setReceivedAt(event.target.value)}
+          slotProps={{ input: { max: today, 'data-testid': 'schedule-deletion-dialog-received-input' } }}
+        />
+      </FormControl>
+      {late && (
+        <Typography level="body-sm" color="warning" data-testid="schedule-deletion-dialog-late-warning">
+          The purge lands more than {DELETION_RECEIPT_WINDOW_DAYS} days after receipt. Note the delay in the
+          verification note.
+        </Typography>
+      )}
+      <ChangePreview
+        before={accountStatus(user).label}
+        after={`Deletion on ${formatDeletionDay(purgeOn)}`}
+        data-testid="schedule-deletion-dialog-preview"
+      />
+    </ActionDialog>
+  );
+};
+
+/** Clears a pending deletion through the same path as the user's own cancel; the user is emailed. */
+export const CancelDeletionDialog: React.FC<ProfileDialogProps> = ({ user, onClose }) => {
+  const post = useAdminUserPost(user.id, 'Could not cancel the deletion');
+
+  const handleConfirm = async (reason: string) => {
+    await post('cancel-deletion', { reason });
+    onClose();
+    toast.success('Deletion cancelled');
+  };
+
+  return (
+    <ActionDialog
+      open
+      onClose={onClose}
+      title={`Cancel scheduled deletion for ${displayName(user)}`}
+      description="Restores access and emails the user. Their API keys, connected apps, subscriptions and published pages stay revoked; they set those up again."
+      reasonPresets={ADMIN_REASON_PRESETS.deletionCancel}
+      confirmLabel="Cancel deletion"
+      onConfirm={handleConfirm}
+      data-testid="cancel-deletion-dialog"
+    >
+      <ChangePreview
+        before={user.deletion ? `Deletion on ${formatDeletionDay(user.deletion.scheduledFor)}` : 'Deletion scheduled'}
+        after="Active"
+        data-testid="cancel-deletion-dialog-preview"
+      />
+    </ActionDialog>
   );
 };
 
