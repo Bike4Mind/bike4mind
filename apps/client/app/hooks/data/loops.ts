@@ -1,4 +1,10 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type InvalidateQueryFilters,
+  type QueryClient,
+} from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import type {
@@ -81,7 +87,11 @@ export interface ILoopTicketsResponse {
   runner?: { online: boolean; lanesFree: number; waitingReason?: string } | null;
 }
 
-/** Every loops query shares the `['loops']` prefix, so one invalidation refreshes list, detail, tickets and events. */
+/**
+ * Every loops query shares the `['loops']` prefix. `['loops', id]` covers one loop's detail, tickets and events;
+ * the list is `all` matched `exact`. The server pushes `invalidate_query ['loops', id]` when a run changes a loop
+ * (apps/client/server/utils/loopDispatch.ts `pushLoopChanged`), so keep these shapes in sync with it.
+ */
 export const loopKeys = {
   all: ['loops'] as const,
   detail: (id: string) => ['loops', id] as const,
@@ -102,7 +112,8 @@ export type LoopFormPayload = Pick<ILoop, 'name' | 'goal' | 'intervalMinutes' | 
 };
 
 const LIST_POLL_MS = 30_000;
-const DETAIL_POLL_MS = 15_000;
+// The WebSocket push is the fast path; this poll is the fallback when it is down.
+const DETAIL_POLL_MS = 60_000;
 
 /** A 409 means the loop or ticket moved under us (e.g. a run claimed it): show why and reload. */
 function onLoopError(queryClient: QueryClient) {
@@ -114,13 +125,21 @@ function onLoopError(queryClient: QueryClient) {
   };
 }
 
-function useLoopMutation<TVars, TData = unknown>(fn: (vars: TVars) => Promise<TData>, onSuccess?: () => void) {
+const listOnly: InvalidateQueryFilters = { queryKey: loopKeys.all, exact: true };
+const oneLoop = (id: string): InvalidateQueryFilters[] => [{ queryKey: loopKeys.detail(id) }, listOnly];
+
+/** `invalidate` names the queries the write touched; they refetch in the background, the mutation does not wait. */
+function useLoopMutation<TVars, TData = unknown>(
+  fn: (vars: TVars) => Promise<TData>,
+  invalidate: (vars: TVars) => InvalidateQueryFilters[],
+  onSuccess?: (data: TData) => void
+) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: fn,
-    onSuccess: () => {
-      onSuccess?.();
-      return queryClient.invalidateQueries({ queryKey: loopKeys.all });
+    onSuccess: (data, vars) => {
+      onSuccess?.(data);
+      invalidate(vars).forEach(filters => void queryClient.invalidateQueries(filters));
     },
     onError: onLoopError(queryClient),
   });
@@ -185,16 +204,21 @@ export const useLoopsBudget = () =>
 /** Sets the caller's all-loops daily cap; null clears it. */
 export const useSetLoopsBudget = () =>
   useLoopMutation(
-    async (dailyCredits: number | null) => (await api.put<ILoopsBudget>('/api/loops/budget', { dailyCredits })).data
+    async (dailyCredits: number | null) => (await api.put<ILoopsBudget>('/api/loops/budget', { dailyCredits })).data,
+    () => [{ queryKey: loopKeys.budget }, listOnly]
   );
 
 export const useCreateLoop = () =>
-  useLoopMutation(async (payload: LoopFormPayload) => (await api.post<ILoop>('/api/loops', payload)).data);
+  useLoopMutation(
+    async (payload: LoopFormPayload) => (await api.post<ILoop>('/api/loops', payload)).data,
+    () => [listOnly]
+  );
 
 export const useUpdateLoop = () =>
   useLoopMutation(
     async ({ id, ...patch }: Partial<LoopFormPayload> & { id: string; status?: LoopStatus }) =>
-      (await api.patch<ILoop>(`/api/loops/${id}`, patch)).data
+      (await api.patch<ILoop>(`/api/loops/${id}`, patch)).data,
+    ({ id }) => oneLoop(id)
   );
 
 /**
@@ -213,23 +237,67 @@ export const useDeleteLoop = () => {
   });
 };
 
+/** `waitingReason` is set when the run cannot start right away (already running, no free slot, budget, pacing). */
 export const useRunLoop = () =>
   useLoopMutation(
-    (id: string) => api.post(`/api/loops/${id}/run`),
-    () => toast.success('Runs within 5 minutes')
+    async (id: string) => (await api.post<ILoop & { waitingReason?: string }>(`/api/loops/${id}/run`)).data,
+    id => oneLoop(id),
+    data => (data?.waitingReason ? toast.info(data.waitingReason) : toast.success('Starting now'))
   );
 
 export const useCreateLoopTicket = () =>
   useLoopMutation(
     (body: { loopId: string; title: string; description?: string; stage: string; priority?: WorkItemPriority }) =>
-      api.post('/api/work-items', body)
+      api.post('/api/work-items', body),
+    ({ loopId }) => [{ queryKey: loopKeys.detail(loopId) }]
   );
 
-/** A stage change is an owner move (fresh run allowance); a priority change is not. */
-export const useMoveLoopTicket = () =>
-  useLoopMutation(({ id, ...patch }: { id: string; stage?: string; priority?: WorkItemPriority }) =>
-    api.patch(`/api/work-items/${id}`, patch)
-  );
+export type MoveLoopTicketVars = { loopId: string; id: string; stage?: string; priority?: WorkItemPriority };
+
+/** Shared with LoopTicketBoard, which locks only the cards whose move is still saving. */
+export const MOVE_LOOP_TICKET_KEY = ['loops', 'move'] as const;
+
+/**
+ * A stage change is an owner move (fresh run allowance); a priority change is not.
+ * Optimistic: the card moves in the tickets cache at once and rolls back if the save fails.
+ */
+export const useMoveLoopTicket = () => {
+  const queryClient = useQueryClient();
+  const onError = onLoopError(queryClient);
+  return useMutation({
+    mutationKey: MOVE_LOOP_TICKET_KEY,
+    mutationFn: ({ loopId: _loopId, id, ...patch }: MoveLoopTicketVars) => api.patch(`/api/work-items/${id}`, patch),
+    onMutate: async ({ loopId, id, stage, priority }) => {
+      const key = loopKeys.tickets(loopId);
+      await queryClient.cancelQueries({ queryKey: key });
+      const previous = queryClient.getQueryData<ILoopTicketsResponse>(key);
+      if (previous) {
+        const ticket = previous.stages.flatMap(group => group.tickets).find(t => t.id === id);
+        if (ticket) {
+          const moved = { ...ticket, ...(stage && { stage }), ...(priority && { priority }) };
+          queryClient.setQueryData<ILoopTicketsResponse>(key, {
+            ...previous,
+            stages: previous.stages.map(group => {
+              const rest = group.tickets.filter(t => t.id !== id);
+              return { ...group, tickets: group.stage === (moved.stage ?? '') ? [...rest, moved] : rest };
+            }),
+          });
+        }
+      }
+      return { previous };
+    },
+    onError: (error, { loopId }, context) => {
+      if (context?.previous) queryClient.setQueryData(loopKeys.tickets(loopId), context.previous);
+      onError(error);
+    },
+    onSettled: (_data, _error, { loopId }) => {
+      // The last move to settle refetches, so a refetch does not overwrite a move still saving.
+      if (queryClient.isMutating({ mutationKey: MOVE_LOOP_TICKET_KEY }) > 1) return;
+      void queryClient.invalidateQueries({ queryKey: loopKeys.tickets(loopId) });
+      void queryClient.invalidateQueries({ queryKey: loopKeys.detail(loopId), exact: true });
+    },
+  });
+};
 
 /** Withdraw a directive or overrule a push-back; invalidates every loop, so both sides' logs refresh. */
 export const useOverrideDirective = () =>
@@ -244,7 +312,8 @@ export const useOverrideDirective = () =>
       eventId: string;
       action: LoopDirectiveOwnerAction;
       note?: string;
-    }) => api.post(`/api/loops/${loopId}/events/${eventId}/override`, { action, ...(note && { note }) })
+    }) => api.post(`/api/loops/${loopId}/events/${eventId}/override`, { action, ...(note && { note }) }),
+    () => [{ queryKey: loopKeys.all }]
   );
 
 /** The owner's answer to a question a run asked with loop_ticket_unsure; a resume needs the answer as `note`. */
@@ -266,5 +335,6 @@ export const useResolveUnsure = () =>
           outcome,
           ...(note && { note }),
         })
-      ).data
+      ).data,
+    () => [{ queryKey: loopKeys.all }]
   );

@@ -13,6 +13,7 @@ import {
   priorityPatch,
   ticketMovePatch,
 } from '@server/utils/loopTickets';
+import { requestLoopDispatch } from '@server/utils/loopDispatch';
 import {
   validateWorkItemDependencies,
   validateWorkItemDescription,
@@ -132,7 +133,7 @@ const handler = baseApi()
       throw new NotFoundError('Work item not found for id: ' + id);
     }
 
-    if (loop) await makeDueIfReady(loop);
+    if (loop && (await makeDueIfReady(loop))) await requestLoopDispatch(loop.id, req.logger);
     res.json(updated);
   })
   .delete(async (req, res) => {

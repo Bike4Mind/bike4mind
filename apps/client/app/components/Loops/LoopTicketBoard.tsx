@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useMutationState } from '@tanstack/react-query';
 import {
   Box,
   Button,
@@ -30,9 +31,11 @@ import {
   type WorkItemStatus,
 } from '@bike4mind/common';
 import {
+  MOVE_LOOP_TICKET_KEY,
   useCreateLoopTicket,
   useMoveLoopTicket,
   type ILoopTicket,
+  type MoveLoopTicketVars,
   type ILoopTicketsResponse,
 } from '@client/app/hooks/data/loops';
 import { LoopMarkdown } from './loopUi';
@@ -72,17 +75,22 @@ const byPriorityThenAge = (a: ILoopTicket, b: ILoopTicket) =>
 const TRIAGE = 'triage';
 
 function TicketCard({
+  loopId,
   ticket,
   loop,
   stages,
+  saving,
   desktop,
   runner,
   runLimit,
   onViewRun,
 }: {
+  loopId: string;
   ticket: ILoopTicket;
   loop: Pick<ILoop, 'serviceLevelHours'>;
   stages: string[];
+  /** This card's own move is still saving: only it locks, the rest of the board stays usable. */
+  saving: boolean;
   /** The ticket's stage is worked by a desktop runner, never by a cloud run. */
   desktop: boolean;
   runner?: ILoopTicketsResponse['runner'];
@@ -192,8 +200,10 @@ function TicketCard({
         <Select
           size="sm"
           value={ticket.stage ?? null}
-          disabled={moveTicket.isPending || ticket.status === 'in_progress'}
-          onChange={(_, stage) => stage && stage !== ticket.stage && moveTicket.mutate({ id: ticket.id, stage })}
+          disabled={saving || ticket.status === 'in_progress'}
+          onChange={(_, stage) =>
+            stage && stage !== ticket.stage && moveTicket.mutate({ loopId, id: ticket.id, stage })
+          }
           sx={{ flex: 1 }}
           data-testid="loop-ticket-stage-select"
         >
@@ -213,9 +223,9 @@ function TicketCard({
           size="sm"
           value={ticket.priority ?? null}
           placeholder="Triage"
-          disabled={moveTicket.isPending || ticket.status === 'in_progress' || ticket.epic}
+          disabled={saving || ticket.status === 'in_progress' || ticket.epic}
           onChange={(_, priority) =>
-            priority && priority !== ticket.priority && moveTicket.mutate({ id: ticket.id, priority })
+            priority && priority !== ticket.priority && moveTicket.mutate({ loopId, id: ticket.id, priority })
           }
           data-testid="loop-ticket-priority-select"
         >
@@ -349,6 +359,10 @@ export default function LoopTicketBoard({
   onViewRun: (executionId: string) => void;
 }) {
   const [adding, setAdding] = useState(false);
+  const savingIds = useMutationState({
+    filters: { mutationKey: MOVE_LOOP_TICKET_KEY, status: 'pending' },
+    select: mutation => (mutation.state.variables as MoveLoopTicketVars).id,
+  });
   const desktopStages = new Set(desktopStagesOf(loop));
   const all = data?.stages.flatMap(group => group.tickets) ?? [];
   // Same order the scheduler picks in (WorkItemModel.listReadyForLoop): priority, furthest stage, then oldest.
@@ -398,9 +412,11 @@ export default function LoopTicketBoard({
             ].map(ticket => (
               <TicketCard
                 key={ticket.id}
+                loopId={loop.id}
                 ticket={ticket}
                 loop={loop}
                 stages={loop.stages}
+                saving={savingIds.includes(ticket.id)}
                 desktop={!!ticket.stage && desktopStages.has(ticket.stage)}
                 runner={data?.runner}
                 runLimit={data?.runLimit}

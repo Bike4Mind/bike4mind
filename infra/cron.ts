@@ -1,7 +1,7 @@
 import { execFileSync, execSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { computeHelpCorpusHash } from '@bike4mind/infra';
-import { DEFAULT_LAMBDA_ENVIRONMENT, runsLoopScheduler, runsScheduledJobs } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, runsLoopScheduler, runsScheduledJobs, SINGLE_RECORD_BATCH } from './constants';
 import { emailJobQueue } from './emailMarketing';
 import { allSecrets } from './secrets';
 import { eventBus } from './bus';
@@ -19,6 +19,7 @@ import {
   generationCallbackQueue,
   generationJobQueue,
   riskEvidenceQueue,
+  loopDispatchQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
 import { appUrlForLambdaEnv, router, routerDistributionId } from './router';
@@ -858,14 +859,16 @@ const loopSchedulerCron =
           handler: 'apps/workers/src/cron/loopScheduler.handler',
           runtime: 'nodejs24.x',
           timeout: '2 minutes',
-          // startAgentExecution resolves the executor through the AgentExecutor link.
-          link: [...allSecrets, agentExecutor],
+          // startAgentExecution resolves the executor through the AgentExecutor link; websocketApi pushes
+          // loop changes to open loop pages (pushLoopChanged).
+          link: [...allSecrets, agentExecutor, websocketApi],
           environment: {
             ...DEFAULT_LAMBDA_ENVIRONMENT,
           },
           permissions: [
             loopSchedulerDeadLetter.sendPermission,
             { actions: ['lambda:InvokeFunction'], resources: [agentExecutor.arn] },
+            { actions: ['execute-api:ManageConnections'], resources: ['*'] },
           ],
           transform: loopSchedulerDeadLetter.functionTarget,
           logging: {
@@ -885,6 +888,35 @@ const loopSchedulerCron =
 if (loopSchedulerCron && loopSchedulerDeadLetter) {
   loopSchedulerDeadLetter.allowRules([$util.output(loopSchedulerCron)]);
 }
+
+// Loop dispatch - starts one loop's next run within seconds of the event that made it due, so loops do not
+// wait for the tick above. Same stages as the scheduler (the queue only exists there); same gate in code.
+const loopDispatchSubscription = loopDispatchQueue?.subscribe(
+  {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/queueHandlers/loopDispatch.handler',
+    runtime: 'nodejs24.x',
+    // Within the queue's 2-minute visibility timeout (infra/queues.ts).
+    timeout: '1 minute',
+    link: [...allSecrets, agentExecutor, websocketApi],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      { actions: ['lambda:InvokeFunction'], resources: [agentExecutor.arn] },
+      { actions: ['execute-api:ManageConnections'], resources: ['*'] },
+    ],
+    logging: {
+      retention: '1 week',
+    },
+  },
+  {
+    ...SINGLE_RECORD_BATCH,
+    // Bounds how far concurrent dispatches can overshoot MAX_ACTIVE_LOOP_RUNS (see dispatchLoopNow).
+    // 2 is the lowest value AWS accepts.
+    transform: { eventSourceMapping: { scalingConfig: { maximumConcurrency: 2 } } },
+  }
+);
 
 // Data Lake Research Schedule - fires research configs whose cadence is due, skipping any lake whose
 // pending-proposal queue is at the config's review limit. 15 minutes is plenty for a daily-at-most
@@ -1642,6 +1674,7 @@ export {
   securityScanSchedulerCron,
   deepAgentWakeCron,
   loopSchedulerCron,
+  loopDispatchSubscription,
   dataLakeResearchScheduleCron,
   telemetryCleanupCron,
   signupIpRetentionCron,

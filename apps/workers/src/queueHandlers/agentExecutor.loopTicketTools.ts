@@ -33,6 +33,8 @@ import {
   unsureReason,
 } from '@server/utils/loopTickets';
 import { assertDependenciesUsable } from '@server/utils/workItemDependencies';
+import { pushLoopChanged, requestLoopDispatch } from '@server/utils/loopDispatch';
+import { Logger } from '@bike4mind/observability';
 import {
   validateWorkItemDependencies,
   validateWorkItemDescription,
@@ -48,6 +50,8 @@ const LIST_LIMIT = 100;
 /** Same text for another user's loop and a missing one, so a refusal never confirms a foreign loop exists. */
 export const LOOP_NOT_FOUND = 'loop not found';
 const TICKET_NOT_FOUND = 'ticket not found';
+// Only for the best-effort dispatch and push warnings; the tools have no request logger in scope.
+const logger = new Logger();
 const QUESTION_MAX = 1000;
 const SPLIT_MIN = 2;
 const SPLIT_MAX = 20;
@@ -126,6 +130,12 @@ export async function asToolResult(run: () => Promise<unknown>): Promise<string>
 
 export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicketScope): Record<string, ToolDefinition> {
   let creates = 0;
+
+  /** After a ticket write: make the loop due if it has a ready ticket, ask for a dispatch, refresh its open page. */
+  const ticketsChanged = async (loop: ILoop) => {
+    if (await makeDueIfReady(loop)) await requestLoopDispatch(loop.id, logger);
+    await pushLoopChanged(userId, loop.id, logger);
+  };
 
   const ownLoop = async (id: unknown): Promise<ILoop> => {
     const loop = typeof id === 'string' ? await loopRepository.findByIdAndUserId(id, userId) : null;
@@ -229,7 +239,7 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
             ...(move.statusReason && { statusReason: move.statusReason }),
             ...(move.blockedOn && { blockedOn: move.blockedOn }),
           } as Omit<IWorkItem, 'id' | 'createdAt' | 'updatedAt'>);
-          await makeDueIfReady(loop);
+          await ticketsChanged(loop);
           return summarize(created);
         }),
       toolSchema: {
@@ -321,7 +331,7 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
           // Conditional on the status the patch was computed from, so a concurrent fold is not overwritten.
           const updated = await workItemRepository.updateForUser(existing.id, userId, patch, existing.status);
           if (!updated) throw new ConflictError('ticket changed while saving; list it again and retry');
-          await makeDueIfReady(loop);
+          await ticketsChanged(loop);
           return summarize(updated);
         }),
       toolSchema: {
@@ -389,7 +399,7 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
           const updated = await workItemRepository.updateForUser(existing.id, userId, patch, existing.status);
           // Not an error: the question is already recorded, and a retry would ask it twice.
           if (!updated) return 'Question recorded for the owner. The ticket changed meanwhile, so it was not parked.';
-          await makeDueIfReady(loop);
+          await ticketsChanged(loop);
           return summarize(updated);
         }),
       toolSchema: {

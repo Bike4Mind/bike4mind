@@ -13,6 +13,13 @@ import { getSettingsByNames } from '@bike4mind/utils';
 /** Floor on an iteration's price in budget checks, so an unpriceable model still needs some allowance left. */
 export const MIN_ITERATION_CREDITS = 0.01;
 
+/**
+ * Loop runs in flight at once across all users. Loop and interactive runs share the AgentExecutor's
+ * `reserved` concurrency (infra/agentExecutor.ts); keep this well below it so interactive runs keep most slots.
+ * Read by the scheduler (apps/workers/src/cron/loopScheduler.ts) and the Run now route's pre-check.
+ */
+export const MAX_ACTIVE_LOOP_RUNS = 4;
+
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;

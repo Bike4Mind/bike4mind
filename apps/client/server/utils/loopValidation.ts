@@ -281,10 +281,11 @@ const CLIENT_TRANSITIONS: Partial<Record<LoopStatus, readonly LoopStatus[]>> = {
 };
 
 /**
- * The patch for a client-requested status change. Going `live` schedules the next run
- * (now if the loop never ran, else one interval after the last run) and clears the
- * failure state, so an errored loop the owner has fixed starts clean. Every owner move
- * clears `autoResume`: pausing a loop the scheduler paused makes it an owner pause.
+ * The patch for a client-requested status change. Going `live` clears the failure state, so an errored loop
+ * the owner has fixed starts clean, and schedules the next run: now when restarting from `error` or
+ * `needs_you` (the cause is fixed, so it should not wait out an interval), else now if the loop never ran or
+ * one interval after its last run. Every owner move clears `autoResume`: pausing a loop the scheduler paused
+ * makes it an owner pause.
  */
 export function nextStatusPatch(loop: ILoop, requested: unknown, now: Date): Record<string, unknown> {
   if (requested === loop.status) {
@@ -298,7 +299,7 @@ export function nextStatusPatch(loop: ILoop, requested: unknown, now: Date): Rec
 
   return {
     status: 'live',
-    nextRunAt: nextRunAtFor(loop, now),
+    nextRunAt: loop.status === 'error' || loop.status === 'needs_you' ? now : nextRunAtFor(loop, now),
     consecutiveFailures: 0,
     statusReason: null,
     autoResume: null,

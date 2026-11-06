@@ -40,6 +40,7 @@ import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessCo
 import { loopAdmission, p2RunsLeft, PRIORITIES_OVER_P2_CAP } from './loopBudget';
 import { buildLoopQuery, LOOP_PROMPT_ANSWERS, LOOP_PROMPT_DIRECTIVES, parseLoopMemory } from './loopMemory';
 import { advancePatch, makeDueIfReady, ticketRunLimit } from './loopTickets';
+import { pushLoopChanged, requestLoopDispatch } from './loopDispatch';
 import { relayToViewers } from './relayToViewers';
 
 /** Tickets one list returns, across all of the user's loops. */
@@ -204,6 +205,7 @@ export async function claimRunnerTicket(
       runnerLeaseUntil: leaseUntil,
     });
     logger.info(`[Loops] Desktop run ${runId} claimed ticket ${ticket.id} of loop ${loop.id}`);
+    await pushLoopChanged(userId, loop.id, logger);
     return {
       ticket: runnerTicket(loop, claimed),
       runId,
@@ -483,8 +485,11 @@ export async function completeRunnerRun(
       now
     );
   }
-  // The ticket's next stage may be a cloud one.
-  if (loop && body.outcome === 'advanced') await makeDueIfReady(loop, now);
+  if (loop) {
+    // The ticket's next stage may be a cloud one.
+    if (body.outcome === 'advanced' && (await makeDueIfReady(loop, now))) await requestLoopDispatch(loop.id, logger);
+    await pushLoopChanged(userId, loop.id, logger);
+  }
 
   const checkpoint = (run.checkpoint ?? {}) as RunnerCheckpoint;
   await relayToViewers(

@@ -132,6 +132,7 @@ import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAcce
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
 import { resolveLoopTicketTools } from './agentExecutor.loopTicketTools';
 import { resolveLoopDirectiveTools } from './agentExecutor.loopDirectiveTools';
+import { requestLoopDispatch } from '@server/utils/loopDispatch';
 // Artifact launch-gate. Same admin-AND-caller resolution the chat pipeline uses; see that module's
 // header for why the start-payload/doc precedence is the part worth pinning in a test.
 import {
@@ -1027,6 +1028,7 @@ async function processExecution(
     logger,
     emitMetric,
   });
+  let loopId: string | undefined;
 
   try {
     // Load execution document
@@ -1034,6 +1036,7 @@ async function processExecution(
     if (!execution) {
       throw new Error(`AgentExecution ${executionId} not found`);
     }
+    loopId = execution.loopId;
 
     // Check abort before starting
     if (execution.abortedAt) {
@@ -3727,6 +3730,9 @@ async function processExecution(
     }
   } finally {
     await inflightSteps.drain();
+    // A loop run ended, paused or handed off: ask for the loop's fold and next run now rather than on the
+    // scheduler tick. A hand-off or a run still going makes the dispatch a no-op (its claim fails).
+    if (loopId) await requestLoopDispatch(loopId, logger);
   }
 }
 

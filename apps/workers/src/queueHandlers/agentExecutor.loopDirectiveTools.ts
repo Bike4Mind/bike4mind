@@ -35,6 +35,11 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ConflictError } from '@bike4mind/server-utils/utils/errors';
 import { nextStatusPatch } from '@server/utils/loopValidation';
 import { asToolResult, LOOP_NOT_FOUND } from './agentExecutor.loopTicketTools';
+import { pushLoopChanged, requestLoopDispatch } from '@server/utils/loopDispatch';
+import { Logger } from '@bike4mind/observability';
+
+// Only for the best-effort dispatch and push warnings; the tools have no request logger in scope.
+const logger = new Logger();
 
 /**
  * Counted in the DB by `executionId`, so it holds across continuations.
@@ -220,14 +225,16 @@ export function buildLoopDirectiveTools({
             throw new ConflictError('loop changed before it could be run; it is no longer live');
           }
           const logged = await logAction(overseer, target, 'run_now', 'Run now', reason);
+          await requestLoopDispatch(target.id, logger);
+          await pushLoopChanged(userId, target.id, logger);
           return {
             id: logged.id,
             loopId: target.id,
             due: true,
             running: !!target.activeExecutionId,
             note: target.activeExecutionId
-              ? 'A run is in flight; the next one starts after it, on a scheduler tick, if budget and pacing allow.'
-              : 'It starts on the next scheduler tick (within 5 minutes) if budget and pacing allow.',
+              ? 'A run is in flight; the next run starts when this one ends, if budget and pacing allow.'
+              : 'It starts within seconds if budget, pacing and the run cap allow.',
           };
         }),
       toolSchema: actionSchema(
@@ -269,6 +276,8 @@ export function buildLoopDirectiveTools({
           if (!resumed) throw new ConflictError('loop changed while resuming');
           const was = target.statusReason ? `${target.status}: ${target.statusReason}` : target.status;
           const logged = await logAction(overseer, target, 'resume', `Resume (was ${was})`, reason);
+          await requestLoopDispatch(target.id, logger);
+          await pushLoopChanged(userId, target.id, logger);
           return { id: logged.id, loopId: target.id, status: resumed.status, nextRunAt: resumed.nextRunAt };
         }),
       toolSchema: actionSchema(
@@ -310,6 +319,7 @@ export function buildLoopDirectiveTools({
             at: new Date(),
           });
           if (!updated) throw new ConflictError('directive changed while answering; it may have been withdrawn');
+          await pushLoopChanged(userId, directive.fromLoopId, logger);
           return { id: updated.id, state: updated.state };
         }),
       toolSchema: {
@@ -394,6 +404,7 @@ export function buildLoopDirectiveTools({
           await loopRepository
             .endBackoff(target.id, new Date(Date.now() + target.intervalMinutes * 60_000))
             .catch(() => undefined);
+          await pushLoopChanged(userId, target.id, logger);
           return { id: created.id, loopId: target.id, state: created.state };
         }),
       toolSchema: {
