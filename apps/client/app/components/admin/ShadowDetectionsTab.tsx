@@ -1069,7 +1069,7 @@ export const ShadowDetectionsTab: React.FC = () => {
       sortValue: row => ACTION_DISPLAY[row.wouldAction].label,
       width: '7rem',
     },
-    { id: 'actor', label: 'Actor', render: row => <Actor row={row} context={context} />, width: '20rem' },
+    { id: 'actor', label: 'Actor', render: row => <Actor row={row} context={context} />, width: '18rem' },
     {
       id: 'verdict',
       label: 'Verdict',
@@ -1227,9 +1227,10 @@ export const ShadowDetectionsTab: React.FC = () => {
         loading={detections.isPending}
         error={detections.error ? "Couldn't load detections." : undefined}
         onRetry={() => void detections.refetch()}
+        onRowActivate={setGrading}
         rowActions={rowActions}
         // The fixed-width columns plus room for the summary; narrower screens scroll sideways.
-        minWidth="64rem"
+        minWidth="76rem"
         empty={
           <EmptyState
             title={emptyTitle}
