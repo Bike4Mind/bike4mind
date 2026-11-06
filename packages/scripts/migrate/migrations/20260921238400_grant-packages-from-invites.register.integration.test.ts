@@ -128,7 +128,7 @@ describe('invites migrated to grant packages', () => {
     expect((await User.findById(alias.id).lean())?.grantPackageId ?? null).toBeNull();
   });
 
-  it('keeps a storage-only invite on the ReferralCreditsAmount fallback', async () => {
+  it('enrolls a storage-only invite in the staged signup grant', async () => {
     await AdminSettings.create({ settingName: 'ReferralCreditsAmount', settingValue: '40' });
     await RegistrationInvite.create({
       code: 'LEGACY-STORAGE',
@@ -141,7 +141,9 @@ describe('invites migrated to grant packages', () => {
 
     const user = await signUp('storageonly', 'LEGACY-STORAGE');
     const stored = await User.findById(user.id).lean();
-    expect(stored?.currentCredits).toBe(40);
+    expect(stored?.currentCredits).toBe(0);
+    expect(stored?.signupGrant).toMatchObject({ signupCredits: expect.any(Number) });
+    expect(stored?.pendingCreditGrant ?? null).toBeNull();
     expect(stored?.storageLimit).toBe(5000);
   });
 });

@@ -1471,6 +1471,40 @@ describe('/api/otc/verify - partner-domain invite bypass', () => {
     expect(releasedAfterCommit).toBe(true);
   });
 
+  it('releases the staged default grant of a no-amount invite code after the invite transaction', async () => {
+    mockReleasePending.mockResolvedValue({
+      released: true,
+      creditsGranted: 10,
+      currentCredits: 10,
+      patch: { tags: [] },
+    });
+    mockClearPending.mockResolvedValue({ tags: [] });
+    mockFindUserById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 10 });
+    mockRegisterViaOTC.mockResolvedValue({
+      id: 'user-1',
+      tokenVersion: 0,
+      currentCredits: 0,
+      tags: ['Customer', PENDING_FREE_CREDITS_TAG],
+      pendingCreditGrant: null,
+    });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.inviteCode = 'BULK123';
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRegisterViaOTC).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ deferFreeCreditRelease: true })
+    );
+    expect(mockReleasePending).toHaveBeenCalledTimes(1);
+    expect(mockReleasePending.mock.calls[0][0]).toEqual({
+      id: 'user-1',
+      tags: ['Customer', PENDING_FREE_CREDITS_TAG],
+      pendingCreditGrant: null,
+    });
+  });
+
   it('leaves the credit release to registerViaOTC when there is no invite transaction', async () => {
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
     await handler(req, res);

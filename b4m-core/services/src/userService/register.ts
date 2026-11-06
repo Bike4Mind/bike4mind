@@ -177,17 +177,17 @@ export const registerUser = async (
   }
 
   // Resolve the invite (if any) and the free-credit / storage grant. Two paths:
-  //   - invite path - validate the code, resolve subscriber/invite/admin credits. The
-  //     resolved amount is NOT granted here: it is persisted as
-  //     `pendingCreditGrant` + the pending-free-credits tag and released only once email
-  //     ownership is proven. releasePendingFreeCredits (freeCredits.ts) does the release on
+  //   - invite path - validate the code and resolve an operator-sized amount (grant package,
+  //     subscriber or the invite's own credits). That amount is NOT granted here: it is
+  //     persisted as `pendingCreditGrant` + the pending-free-credits tag and released only once
+  //     email ownership is proven. releasePendingFreeCredits (freeCredits.ts) does the release on
   //     every path: OTC registration (registerViaOTC), email-link verify (/api/email/verify),
   //     first OTC login (/api/otc/verify), OAuth signup and promote-on-link
   //     (verifyCallback.ts, okta/callback.ts), and the backfillPendingFreeCredits script.
+  //     A referral code, or any code that sizes no amount, enrolls a staged `signupGrant` instead.
   //   - open-registration path - gated behind the `allowOpenRegistration` master switch
   //     (default OFF, so existing invite-only behavior is preserved exactly). When enabled,
-  //     no code is needed; the `defaultFreeCredits` grant is DEFERRED the same way (tag
-  //     only, no pendingCreditGrant - the amount is read from settings at grant time).
+  //     no code is needed and the account enrolls a staged `signupGrant`, released the same way.
   //   Either way no unverified account ever holds credits. This is safe because the
   //     pre-request credit reservation in ChatCompletionProcess makes it impossible to spend
   //     beyond the credits eventually granted - a free user's hard ceiling is their balance.
@@ -208,9 +208,12 @@ export const registerUser = async (
   const invite = resolvedInvite?.invite ?? null;
   let grantPackage: IGrantPackageDocument | null = null;
   // A legacy package (migrated from an invite's own amounts) keeps the pre-package rules: subscriber
-  // amounts win, it never claims the inbox, and a 0 amount falls back to ReferralCreditsAmount.
+  // amounts win, its own amount never claims the inbox, and a 0 amount takes the staged signup grant
+  // (which claims the inbox on payout, like any default grant).
   let packageGrantsCredits = false;
   let freeCredits = 0;
+  // True when an operator sized this signup's grant (package, subscriber or invite credits).
+  let explicitAmount = false;
   let storageLimitOverride: number | null = null;
 
   if (invite) {
@@ -268,15 +271,19 @@ export const registerUser = async (
     const inviteCredits = (grantPackage?.legacy ? grantPackage.credits : invite.startingCredits) || 0;
     const inviteStorage = (grantPackage?.legacy ? grantPackage.storageMb : invite.startingStorage) || 0;
 
-    // Priority: package > subscriber > invite code > admin default. A non-legacy package's amount is
-    // authoritative even at 0; a legacy package stands in for the invite's own amounts.
+    // Priority: package > subscriber > invite code. A non-legacy package's amount is authoritative
+    // even at 0; a legacy package stands in for the invite's own amounts. Only a referral code
+    // falls back to ReferralCreditsAmount (the invitee floor, matching referralInviteCredits).
+    explicitAmount = packageGrantsCredits || subscriberCredits > 0 || inviteCredits > 0;
     freeCredits = packageGrantsCredits
       ? grantPackage!.credits
       : subscriberCredits > 0
         ? subscriberCredits
         : inviteCredits > 0
           ? inviteCredits
-          : (parseInt(referralCredits?.settingValue || '0', 10) ?? 0);
+          : resolvedInvite!.isReferral
+            ? parseInt(referralCredits?.settingValue || '0', 10) || 0
+            : 0;
 
     // Priority: non-legacy package > subscriber > invite code (or legacy package) > default (1000)
     const signupStorage =
@@ -306,13 +313,13 @@ export const registerUser = async (
   }
 
   const isReferralInvite = resolvedInvite?.isReferral ?? false;
-  // A referral that resolves no credits is never worse off than signing up without the code.
-  const referralTakesDefaultGrant =
-    isReferralInvite && freeCredits <= 0 && (allowOpenRegistration || Boolean(skipInviteCheck));
+  // A referral resolving no credits, and an admin bulk, unlimited or pre-source code sizing no amount,
+  // take the default staged grant.
+  const takesDefaultGrant = Boolean(invite) && (isReferralInvite ? freeCredits <= 0 : !explicitAmount);
 
   // invite-resolved credits are deferred behind the same pending tag as the
   // open-registration grant; the amount travels on the user doc.
-  if (freeCredits > 0 || referralTakesDefaultGrant) {
+  if (freeCredits > 0 || takesDefaultGrant) {
     tags = [...new Set([...tags, PENDING_FREE_CREDITS_TAG])];
   }
 
@@ -326,9 +333,9 @@ export const registerUser = async (
     }
   }
 
-  // Open signups and refer-a-friend invitees trickle their grant; admin and unlimited codes keep the flat grant.
+  // Every self-serve signup trickles its grant; only an operator-sized amount stays flat.
   const referralGrant =
-    !hasInviteCode || referralTakesDefaultGrant
+    !hasInviteCode || takesDefaultGrant
       ? await newSignupGrant(db.adminSettings)
       : isReferralInvite && freeCredits > 0
         ? await newSignupGrant(db.adminSettings, freeCredits)

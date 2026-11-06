@@ -282,8 +282,8 @@ const INTERNAL_STAFF_ENTITLEMENTS: EntitlementKey[] = ['optihashi:pro'];
  * DOMAIN_GRANT_ROWS) receives the SUM of these amounts for every entitlement
  * key their verified email confers (an implied key never paying twice - see
  * `signupCreditsForKeys`), granted ONCE at email verification
- * (apps/client/pages/api/email/verify.ts) - ADDITIVE on top of the flat
- * `defaultFreeCredits` open-registration grant, and with NO cap.
+ * (apps/client/pages/api/email/verify.ts) - ADDITIVE on top of the signup
+ * grant, and with NO cap.
  *
  * Keyed on the entitlement, not the domain: any domain (external customer or
  * internal staff) that confers `optihashi:pro` grants the matching credits
