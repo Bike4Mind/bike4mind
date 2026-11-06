@@ -27,7 +27,11 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { truncateIp } from '@bike4mind/server-utils/utils/ip';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
-import { liveDeviceLinkDeps, sweepDeviceLinks } from '@server/security/autoContainment/deviceLink';
+import {
+  DeviceLinkAssessError,
+  liveDeviceLinkDeps,
+  sweepDeviceLinks,
+} from '@server/security/autoContainment/deviceLink';
 
 export const ACCOUNT_CAMPAIGN_WINDOW_HOURS = 72;
 /** Newest signups scanned per run; a busier window is cut and reported as truncated. */
@@ -145,11 +149,19 @@ export async function handler(_event: unknown, context: Context) {
     ...liveDeviceLinkDeps(logger),
     loadRecent: loadRecentDeviceLinkAccounts,
     onError: (userId, error) =>
-      logger.error('Device-link detection failed to record', { userId, error: String(error) }),
+      logger.error(
+        error instanceof DeviceLinkAssessError
+          ? 'Device-link detection recorded but failed to assess'
+          : 'Device-link detection failed to record',
+        { userId, error: String(error) }
+      ),
   });
   logger.log('Device-link sweep finished', deviceLinks);
 
   // Thrown after the whole run so one bad group cannot starve the rest, but the invocation still fails.
   if (report.failed > 0) throw new Error(`Account campaign sweep failed to record ${report.failed} group(s)`);
   if (deviceLinks.failed > 0) throw new Error(`Device-link sweep failed to record ${deviceLinks.failed} account(s)`);
+  if (deviceLinks.assessFailed > 0) {
+    throw new Error(`Device-link sweep recorded but failed to assess ${deviceLinks.assessFailed} account(s)`);
+  }
 }
