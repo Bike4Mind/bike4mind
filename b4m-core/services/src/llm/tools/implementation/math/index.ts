@@ -148,10 +148,9 @@ async function evaluateMath(params: MathParams): Promise<string> {
         // Convert to standard form (everything on left side = 0)
         const equation = rightSide === '0' ? leftSide : `(${leftSide}) - (${rightSide})`;
 
+        // Try different solving approaches
+        let solutions;
         try {
-          // Try different solving approaches
-          let solutions;
-
           // Method 1: Use mathjs solve function with string format
           try {
             solutions = math.evaluate(`solve("${equation} = 0", "${variable}")`);
@@ -183,20 +182,20 @@ async function evaluateMath(params: MathParams): Promise<string> {
               throw e2;
             }
           }
-
-          if (solutions === null || solutions === undefined) {
-            return 'No solutions found for this equation.';
-          }
-
-          return Array.isArray(solutions)
-            ? `Solutions: ${solutions.map(s => `${variable} = ${math.format(s, { precision: params.precision })}`).join(', ')}`
-            : `Solution: ${variable} = ${math.format(solutions, { precision: params.precision })}`;
         } catch (solveError) {
           Logger.globalInstance.debug('❌ Math Tool: Solve error:', solveError);
           throw new MathInputError(
             `Could not solve equation "${expression}". The equation format may not be supported or may have no real solutions.`
           );
         }
+
+        if (solutions === null || solutions === undefined) {
+          return 'No solutions found for this equation.';
+        }
+
+        return Array.isArray(solutions)
+          ? `Solutions: ${solutions.map(s => `${variable} = ${math.format(s, { precision: params.precision })}`).join(', ')}`
+          : `Solution: ${variable} = ${math.format(solutions, { precision: params.precision })}`;
       }
     }
 
