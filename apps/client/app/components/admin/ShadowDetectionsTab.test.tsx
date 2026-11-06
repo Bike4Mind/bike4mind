@@ -255,6 +255,16 @@ describe('ShadowDetectionsTab', () => {
     expect(signals.textContent).not.toContain('n/a');
   });
 
+  it('opens the verdict dialog from a row click and labels the icon action', async () => {
+    m.useShadowDetections.mockReturnValue(queryResult(list({ data: [detection()] })));
+    renderTab();
+    expect(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`).getAttribute('aria-label')).toBe(
+      'Record verdict'
+    );
+    fireEvent.click(within(screen.getByTestId(`shadow-detection-row-${DETECTION_ID}`)).getByText(detection().summary));
+    expect(await screen.findByTestId('shadow-detection-signals')).toBeTruthy();
+  });
+
   it('links every account the detection names in the verdict dialog', async () => {
     const userIds = ['b', 'c', 'd', 'e'].map(char => char.repeat(24));
     m.useShadowDetections.mockReturnValue(queryResult(list({ data: [detection({ userIds })] })));
