@@ -39,6 +39,17 @@ describe('admin layout primitives', () => {
     expect(screen.getByTestId('create-account')).toBeVisible();
   });
 
+  it('renders the page title as the h1 and a nested sub-view title as an h2', () => {
+    renderToolkit(
+      <>
+        <AdminPageHeader title="Security" />
+        <AdminPageHeader title="Active defense" level="section" />
+      </>
+    );
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Security');
+    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Active defense');
+  });
+
   it('renders statistic values, comparisons and optional sparklines', () => {
     renderToolkit(
       <StatStrip>

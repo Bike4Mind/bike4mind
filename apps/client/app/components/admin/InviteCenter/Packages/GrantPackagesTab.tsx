@@ -162,6 +162,7 @@ const GrantPackagesTab = ({ embedded = false }: { embedded?: boolean }) => {
   return (
     <Box sx={embedded ? undefined : { px: 3, py: 2 }}>
       <AdminPageHeader
+        level={embedded ? 'section' : 'page'}
         title="Grant packages"
         count={data?.meta.total}
         description="Signup credits that invite codes and partner rules draw from, with optional caps."
