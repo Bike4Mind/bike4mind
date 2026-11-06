@@ -47,6 +47,13 @@ export { createTranscriptionUploadContract, createTranscriptionContract } from '
 export { createSessionContract } from './contracts/sessionCreate.contract';
 export { listSessionsContract } from './contracts/sessionList.contract';
 export { listSessionQuestsContract } from './contracts/sessionQuests.contract';
+export { listSessionFilesContract } from './contracts/sessionFiles.contract';
+export { searchSessionsContract } from './contracts/sessionSemanticSearch.contract';
+export {
+  getSessionMessageContract,
+  updateSessionMessageContract,
+  deleteSessionMessageContract,
+} from './contracts/sessionMessages.contract';
 export { listCreditTransactionsContract } from './contracts/creditTransactions.contract';
 export { getWhatsNewMediaContract, listWhatsNewContract } from './contracts/whatsNew.contract';
 export {
