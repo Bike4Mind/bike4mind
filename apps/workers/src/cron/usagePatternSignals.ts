@@ -81,7 +81,7 @@ async function loadSettings() {
   };
 }
 
-type Candidate = { _id: mongoose.Types.ObjectId; emailVerifiedAt?: Date | null };
+type Candidate = { _id: mongoose.Types.ObjectId; emailVerifiedAt?: Date | null; createdAt?: Date };
 
 /**
  * Recently active accounts that pay nothing (no admin, ban, purchase or admin trust approval),
@@ -104,7 +104,7 @@ async function findFreeTierCandidates(since: Date): Promise<Candidate[]> {
         apiKeyTrustApproved: { $ne: true },
         lastCreditsPurchasedAt: null,
       },
-      { emailVerifiedAt: 1 }
+      { emailVerifiedAt: 1, createdAt: 1 }
     ).lean<Candidate[]>(),
     UserUsagePatternSignals.find({ userId: { $in: ids } }, { userId: 1, computedAt: 1 }).lean<
       { userId: string; computedAt: Date }[]
@@ -131,6 +131,9 @@ type LeanFreshUser = {
 };
 type LeanLedgerRow = { type: string; credits: number; reason?: string; source?: string; createdAt: Date };
 
+const isPastFreshWindow = (signedUpAt: Date, now: Date, config: UsagePatternSignalsConfig) =>
+  now.getTime() - signedUpAt.getTime() > config.scriptedDrainFreshHours * MS_PER_HOUR;
+
 /**
  * The fresh-account sequence for the scriptedGrantDrain signal, or null when the account is older
  * than scriptedDrainFreshHours. Reads the user's 2FA and sign-in records and its first ledger rows
@@ -149,7 +152,7 @@ export async function gatherGrantDrainFacts(
     'loginRecords.logoutTime': 1,
   }).lean<LeanFreshUser>();
   const signedUpAt = user?.createdAt;
-  if (!signedUpAt || now.getTime() - signedUpAt.getTime() > config.scriptedDrainFreshHours * MS_PER_HOUR) return null;
+  if (!signedUpAt || isPastFreshWindow(signedUpAt, now, config)) return null;
 
   const rows = await CreditTransaction.find(
     { ownerId: userId, ownerType: CreditHolderType.User, createdAt: { $gte: signedUpAt } },
@@ -158,8 +161,9 @@ export async function gatherGrantDrainFacts(
     .sort({ createdAt: 1, _id: 1 })
     .limit(GRANT_DRAIN_LEDGER_LIMIT)
     .lean<LeanLedgerRow[]>();
-  const usage = rows.filter(row => isUsageType(row.type));
-  const largest = usage.reduce<LeanLedgerRow | null>(
+  // Post-turn operational jobs (source system) are not turns the user ran.
+  const turnRows = rows.filter(row => isUsageType(row.type) && row.source !== 'system');
+  const largest = turnRows.reduce<LeanLedgerRow | null>(
     (best, row) => (best === null || Math.abs(row.credits) > Math.abs(best.credits) ? row : best),
     null
   );
@@ -175,8 +179,7 @@ export async function gatherGrantDrainFacts(
       .filter(row => row.type === 'generic_add' && SIGNUP_GRANT_REASON.test(row.reason ?? ''))
       .reduce((sum, row) => sum + Math.abs(row.credits), 0),
     largestTurn: largest ? { at: largest.createdAt, credits: Math.abs(largest.credits) } : null,
-    // Post-turn operational jobs (source system) are not turns the user ran.
-    turns: usage.filter(row => row.source !== 'system').length,
+    turns: turnRows.length,
     loggedOutAt: latestSignIn?.logoutTime ?? null,
   };
 }
@@ -247,6 +250,7 @@ async function recordScriptedDrainOnce(input: RecordShadowDetectionInput, userId
 async function gatherFacts(
   userId: string,
   emailVerifiedAt: Date | null,
+  createdAt: Date | null,
   now: Date,
   config: UsagePatternSignalsConfig
 ): Promise<userService.UsagePatternFacts> {
@@ -310,7 +314,8 @@ async function gatherFacts(
     completions: windowRows.length,
     emailVerifiedAt,
     firstApiKeyAt: firstKey?.createdAt ?? null,
-    grantDrain: await gatherGrantDrainFacts(userId, now, config),
+    grantDrain:
+      createdAt && isPastFreshWindow(createdAt, now, config) ? null : await gatherGrantDrainFacts(userId, now, config),
   };
 }
 
@@ -354,7 +359,7 @@ export async function runUsagePatternSignals(
         result.skippedPaid++;
         continue;
       }
-      const facts = await gatherFacts(userId, user.emailVerifiedAt ?? null, now, config);
+      const facts = await gatherFacts(userId, user.emailVerifiedAt ?? null, user.createdAt ?? null, now, config);
       const signals = userService.computeUsagePatternSignals(facts, config);
       await userUsagePatternSignalsRepository.upsertLatest(userId, signals, now);
       result.analyzed++;
