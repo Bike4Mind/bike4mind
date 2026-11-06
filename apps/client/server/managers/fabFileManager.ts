@@ -12,28 +12,16 @@ const EMBEDDING_TOKEN_LIMITS = {
   CHUNK_OVERLAP: 100, // Overlap between chunks for continuity
 };
 
-/**
- * Safely generate embeddings for text that might exceed token limits
- * This is a simplified version for FAB file processing
- */
-async function generateSafeEmbedding(embeddingService: BoundEmbeddingModel, text: string): Promise<number[]> {
+/** Truncates text that would exceed the model's input limit (for FAB chunks, this shouldn't happen normally). */
+function truncateForEmbedding(embeddingService: BoundEmbeddingModel, text: string): string {
   const maxTokens = Math.min(embeddingService.maxInputTokens - 100, EMBEDDING_TOKEN_LIMITS.MAX_EMBEDDING_TOKENS);
 
-  // Estimate token count (rough estimation: 1 token ≈ 3.5 characters)
+  // Estimate token count (rough estimation: 1 token ~ 3.5 characters)
   const estimatedTokens = Math.ceil(text.length / 3.5);
+  if (estimatedTokens <= maxTokens) return text;
 
-  // If text is within limits, generate embedding directly
-  if (estimatedTokens <= maxTokens) {
-    return await embedOne(embeddingService, text);
-  }
-
-  // Text is too large - truncate it (for FAB chunks, this shouldn't happen normally)
   Logger.warn(`FAB file chunk exceeds embedding token limit (${estimatedTokens} > ${maxTokens}), truncating...`);
-
-  const maxChunkLength = Math.floor(maxTokens * 3.5);
-  const truncatedText = text.slice(0, maxChunkLength);
-
-  return await embedOne(embeddingService, truncatedText);
+  return text.slice(0, Math.floor(maxTokens * 3.5));
 }
 
 export const generateNewFabFile = (data: IFabFile): IFabFile => {
@@ -68,8 +56,12 @@ export const getFabFileById = async (
   return FabFile.findOne({ _id: fabFileId, ...accessibleBy(ability, action).ofType(FabFile) });
 };
 
-export const getVector = async (embeddingProvider: BoundEmbeddingModel, text: string): Promise<number[]> => {
-  // Use safe embedding generation to avoid exceeding the model's token limit
-  const response = await generateSafeEmbedding(embeddingProvider, text);
-  return response;
-};
+export const getVector = async (embeddingProvider: BoundEmbeddingModel, text: string): Promise<number[]> =>
+  embedOne(embeddingProvider, truncateForEmbedding(embeddingProvider, text));
+
+/** One provider call for many texts (providers batch and bound concurrency internally); order matches `texts`. */
+export const getVectors = async (
+  embeddingProvider: BoundEmbeddingModel,
+  texts: readonly string[]
+): Promise<number[][]> =>
+  (await embeddingProvider.embed(texts.map(text => truncateForEmbedding(embeddingProvider, text)))).vectors;

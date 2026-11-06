@@ -1,4 +1,4 @@
-import { getVector } from '@server/managers/fabFileManager';
+import { getVector, getVectors } from '@server/managers/fabFileManager';
 import {
   bindEmbeddingModel,
   buildEmbeddingRegistry,
@@ -397,11 +397,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
       let newVectors: number[][];
       try {
-        const usesSafeSingleEmbedding =
-          missTexts.length === 1 || embeddingBackendForModel(embeddingModel) !== ModelBackend.OpenAI;
-        newVectors = usesSafeSingleEmbedding
-          ? await Promise.all(missTexts.map(text => getVector(embeddingProvider, text)))
-          : (await embeddingProvider.embed(missTexts)).vectors;
+        if (missTexts.length === 1) newVectors = [await getVector(embeddingProvider, missTexts[0])];
+        else if (embeddingBackendForModel(embeddingModel) === ModelBackend.OpenAI)
+          newVectors = (await embeddingProvider.embed(missTexts)).vectors;
+        else newVectors = await getVectors(embeddingProvider, missTexts);
       } catch (providerErr) {
         await creditReservation?.refund();
         // The provider call failed, so the reserved money was never spent: return it to the

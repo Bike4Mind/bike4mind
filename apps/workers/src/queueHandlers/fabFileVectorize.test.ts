@@ -31,6 +31,7 @@ const h = vi.hoisted(() => ({
   findAccessibleById: vi.fn(),
   markFailedIfNotAlready: vi.fn(),
   getVector: vi.fn(),
+  getVectors: vi.fn(),
   getEmbedding: vi.fn(),
   updateFileStatus: vi.fn(),
   incrementCounter: vi.fn(async () => ({ failedFiles: 1, processingFailedFiles: 1 })),
@@ -117,7 +118,7 @@ vi.mock('@bike4mind/database', () => ({
   User: { findById: vi.fn(async () => ({ id: 'u1' })) },
   withTransaction: vi.fn((fn: () => unknown) => fn()),
 }));
-vi.mock('@server/managers/fabFileManager', () => ({ getVector: h.getVector }));
+vi.mock('@server/managers/fabFileManager', () => ({ getVector: h.getVector, getVectors: h.getVectors }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
   embeddingCacheService: { getEmbedding: h.getEmbedding, setEmbedding: vi.fn().mockResolvedValue(undefined) },
@@ -166,6 +167,7 @@ vi.mock('@bike4mind/common', async () => {
     SupportedEmbeddingModelSchema: z.string(),
     getEmbeddingModelCost: vi.fn(() => 0.0001),
     getQuestErrorCode: actual.getQuestErrorCode,
+    ModelBackend: actual.ModelBackend,
     isTerminalCreditRefusal: actual.isTerminalCreditRefusal,
     usdToCredits: actual.usdToCredits,
     // Pinned: settlement rounding is a coin flip.
@@ -220,6 +222,7 @@ import { fabFileChunkRepository, User } from '@bike4mind/database';
 import { FabFileSourceType } from '@bike4mind/common';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
+import { embeddingBackendForModel } from '@bike4mind/utils/embeddingProviders';
 import { dispatch } from './fabFileVectorize';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
@@ -367,6 +370,32 @@ describe('fabFileVectorize handler - stored error copy on vectorization failure'
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
     expect(h.getVector).toHaveBeenCalledWith(expect.objectContaining({ model: expect.any(String) }), text);
+  });
+
+  it('embeds many non-OpenAI cache misses in one batched provider call, in chunk order', async () => {
+    const chunkIds = Array.from({ length: 40 }, (_, i) => `c${i}`);
+    h.findAccessibleById.mockResolvedValue({ ...unvectorizedFile(undefined), chunkCount: chunkIds.length });
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockImplementation(async (id: string) => ({
+      id,
+      text: `text ${id}`,
+      tokenCount: 5,
+    }));
+    h.getVectors.mockImplementation(async (_bound: unknown, texts: readonly string[]) =>
+      texts.map(() => [0.1, 0.2, 0.3])
+    );
+    vi.mocked(embeddingBackendForModel).mockReturnValue('voyage' as never);
+    try {
+      await dispatch(makeEvent({ ...payload, chunkIds }), {} as never, mockLogger);
+    } finally {
+      vi.mocked(embeddingBackendForModel).mockReturnValue('openai' as never);
+    }
+
+    expect(h.getVectors).toHaveBeenCalledTimes(1);
+    expect(h.getVectors).toHaveBeenCalledWith(
+      expect.objectContaining({ model: expect.any(String) }),
+      chunkIds.map(id => `text ${id}`)
+    );
+    expect(h.getVector).not.toHaveBeenCalled();
   });
 
   it('persists user-safe copy for a turn-attached file on an embedding-auth failure', async () => {
