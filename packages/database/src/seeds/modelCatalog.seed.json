@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-11-05T14:53:33.795Z",
-  "notice": "Fallback defaults last maintained on 2026-11-05. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-11-06T04:51:42.061Z",
+  "notice": "Fallback defaults last maintained on 2026-11-06. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -1002,6 +1002,58 @@
         },
         "description": "FLUX.2 Pro (Preview) - Preview build of FLUX.2 Pro, sharing its generation and editing request contract.",
         "rank": 8
+      }
+    },
+    {
+      "modelId": "flux-3-image",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "flux-3-image",
+        "vendor": "black-forest-labs",
+        "backend": "bfl",
+        "type": "image",
+        "name": "FLUX 3 Image",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "FLUX 3 Image - Flagship FLUX 3 model with web-grounded prompts, for high-fidelity generation and reference-guided transforms with up to ten reference images.",
+        "rank": 13
+      }
+    },
+    {
+      "modelId": "flux-3-image-klein",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "flux-3-image-klein",
+        "vendor": "black-forest-labs",
+        "backend": "bfl",
+        "type": "image",
+        "name": "FLUX 3 Image Klein",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "FLUX 3 Image Klein - Fast, low-cost FLUX 3 model for generation and reference-guided transforms with up to ten reference images.",
+        "rank": 14
       }
     },
     {

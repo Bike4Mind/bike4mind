@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { GEMINI_IMAGE_MODELS, ImageModels } from '@bike4mind/common';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
-import { ASPECT_RATIO_INERT_NOTE, ignoresAspectRatio, ignoresUpsamplingAndSeed, withInertNote } from './inertImageSettings';
+import {
+  ASPECT_RATIO_INERT_NOTE,
+  ignoresAspectRatio,
+  ignoresOutputFormat,
+  ignoresSeed,
+  ignoresUpsamplingAndSeed,
+  seedInertNote,
+  withInertNote,
+} from './inertImageSettings';
 
 describe('ignoresUpsamplingAndSeed', () => {
   it('is true for every Gemini image model', () => {
@@ -19,6 +27,26 @@ describe('ignoresUpsamplingAndSeed', () => {
     expect(ignoresUpsamplingAndSeed(undefined)).toBe(false);
     expect(ignoresUpsamplingAndSeed(null)).toBe(false);
     expect(ignoresUpsamplingAndSeed('')).toBe(false);
+  });
+});
+
+describe('ignoresSeed and ignoresOutputFormat', () => {
+  it('marks Seed and Output Format inert on flux-3-image, whose endpoint defines neither', () => {
+    expect(ignoresSeed(ImageModels.FLUX_3_IMAGE)).toBe(true);
+    expect(ignoresOutputFormat(ImageModels.FLUX_3_IMAGE)).toBe(true);
+    expect(seedInertNote(ImageModels.FLUX_3_IMAGE)).toBe(FIELD_TOOLTIPS.unsupportedByFlux3Image);
+  });
+
+  it('keeps both live on FLUX 3 Image Klein and the other BFL models', () => {
+    for (const model of [ImageModels.FLUX_3_IMAGE_KLEIN, ImageModels.FLUX_2_PRO, ImageModels.FLUX_PRO_1_1]) {
+      expect(ignoresSeed(model)).toBe(false);
+      expect(ignoresOutputFormat(model)).toBe(false);
+    }
+  });
+
+  it('still marks Seed inert on Gemini, with the Gemini note', () => {
+    expect(ignoresSeed(ImageModels.GEMINI_3_PRO_IMAGE)).toBe(true);
+    expect(seedInertNote(ImageModels.GEMINI_3_PRO_IMAGE)).toBe(FIELD_TOOLTIPS.unsupportedByGeminiImage);
   });
 });
 

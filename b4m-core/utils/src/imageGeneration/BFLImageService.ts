@@ -7,7 +7,11 @@ import {
   type BFLImageModel,
   isBflUltraImageModel,
   isFlux2ImageModel,
+  isFlux3ImageModel,
+  takesBflInputImageList,
   getMaxReferenceImages,
+  supportsBflOutputFormat,
+  supportsBflSeed,
   supportsPromptUpsampling,
   toNonWebpOutputFormat,
 } from '@bike4mind/common';
@@ -54,6 +58,12 @@ const redactInputImages = (body: Record<string, unknown>): Record<string, unknow
     ])
   );
 
+/** BFL statuses meaning the task is still running. FLUX 3 reports Reasoning and Generating before Ready. */
+const IN_PROGRESS_STATUSES = new Set(['Pending', 'Reasoning', 'Generating']);
+
+/** Request-body keys holding image data, redacted before the body is logged. */
+const IMAGE_DATA_KEY = /^(?:image_prompt|input_image(?:_\d+)?|images)$/;
+
 export class BFLImageService extends AIImageService {
   private baseUrl = 'https://api.bfl.ai/v1';
 
@@ -72,10 +82,15 @@ export class BFLImageService extends AIImageService {
     if (!Number.isFinite(value)) {
       return BFL_SAFETY_TOLERANCE.DEFAULT;
     }
-    const clamped = Math.min(Math.max(value, BFL_SAFETY_TOLERANCE.MIN), BFL_SAFETY_TOLERANCE.MAX);
-    if (clamped !== value) {
+    // BFL documents safety_tolerance as an integer; FLUX 3 rejects a fractional one with a 422.
+    const rounded = Math.round(value);
+    if (rounded !== value) {
+      Logger.globalInstance.debug(`[BFLImageService] safety_tolerance ${value} rounded to ${rounded}`);
+    }
+    const clamped = Math.min(Math.max(rounded, BFL_SAFETY_TOLERANCE.MIN), BFL_SAFETY_TOLERANCE.MAX);
+    if (clamped !== rounded) {
       Logger.globalInstance.warn(
-        `[BFLImageService] safety_tolerance ${value} clamped to ${clamped} (hard cap ${BFL_SAFETY_TOLERANCE.MAX})`
+        `[BFLImageService] safety_tolerance ${rounded} clamped to ${clamped} (hard cap ${BFL_SAFETY_TOLERANCE.MAX})`
       );
     }
     return clamped;
@@ -119,13 +134,19 @@ export class BFLImageService extends AIImageService {
   ): Promise<string[]> {
     try {
       const referenceImages = [...new Set([...(image_prompt ? [image_prompt] : []), ...reference_images])];
-      if (reference_images.length && !isFlux2ImageModel(model)) {
+      if (reference_images.length && !takesBflInputImageList(model)) {
         throw new Error(`Model ${model} does not support multiple reference images`);
       }
-      if (isFlux2ImageModel(model) && referenceImages.length > getMaxReferenceImages(model)) {
+      if (takesBflInputImageList(model) && referenceImages.length > getMaxReferenceImages(model)) {
         throw new Error(`Model ${model} accepts at most ${getMaxReferenceImages(model)} reference images`);
       }
-      const referenceFields = isFlux2ImageModel(model) ? flux2InputImageFields(referenceImages) : { image_prompt };
+      const referenceFields = isFlux3ImageModel(model)
+        ? referenceImages.length
+          ? { images: referenceImages }
+          : {}
+        : isFlux2ImageModel(model)
+          ? flux2InputImageFields(referenceImages)
+          : { image_prompt };
       const promptUpsamplingFields = promptUpsamplingBodyFields(model, prompt_upsampling);
       // Generate n images in parallel
       const urls = await Promise.all(
@@ -135,23 +156,34 @@ export class BFLImageService extends AIImageService {
             prompt: string;
             image_prompt?: string;
             safety_tolerance: number;
-            seed: number | null;
-            output_format: string;
+            seed?: number | null;
+            output_format?: string;
             user: string;
             aspect_ratio?: string;
             width?: number;
             height?: number;
             [key: string]: unknown;
-          } = {
-            prompt,
-            safety_tolerance: this.clampSafetyTolerance(safety_tolerance),
-            seed,
-            output_format: output_format || 'jpeg',
-            ...modelSpecificOptions,
-            ...referenceFields,
-            ...promptUpsamplingFields,
-            user,
-          };
+          } = isFlux3ImageModel(model)
+            ? // FLUX 3 rejects any field it does not define (422), so the body is built from an
+              // allowlist and caller-supplied extras are not spread in.
+              {
+                prompt,
+                safety_tolerance: this.clampSafetyTolerance(safety_tolerance),
+                ...(supportsBflSeed(model) ? { seed } : {}),
+                ...(supportsBflOutputFormat(model) ? { output_format: output_format || 'jpeg' } : {}),
+                ...referenceFields,
+                user,
+              }
+            : {
+                prompt,
+                safety_tolerance: this.clampSafetyTolerance(safety_tolerance),
+                seed,
+                output_format: output_format || 'jpeg',
+                ...modelSpecificOptions,
+                ...referenceFields,
+                ...promptUpsamplingFields,
+                user,
+              };
 
           if (isBflUltraImageModel(model)) {
             // For Ultra models, use aspect_ratio
@@ -180,10 +212,13 @@ export class BFLImageService extends AIImageService {
             prompt: prompt.length > 100 ? `${prompt.slice(0, 100)}...` : prompt,
             ...Object.fromEntries(
               Object.entries(cleanedBody)
-                .filter(
-                  ([key, value]) => /^(?:image_prompt|input_image(?:_\d+)?)$/.test(key) && typeof value === 'string'
-                )
-                .map(([key, value]) => [key, `[BASE64_DATA_${String(value).length}_CHARS]`])
+                .filter(([key]) => IMAGE_DATA_KEY.test(key))
+                .map(([key, value]) => [
+                  key,
+                  Array.isArray(value)
+                    ? value.map(image => `[BASE64_DATA_${String(image).length}_CHARS]`)
+                    : `[BASE64_DATA_${String(value).length}_CHARS]`,
+                ])
             ),
           };
           Logger.globalInstance.log('BFL Image generation request body:', safeRequestBody);
@@ -551,9 +586,9 @@ export class BFLImageService extends AIImageService {
       }
     }
 
-    // Running out of attempts while BFL still says Pending is a slow provider. Any other status
-    // (e.g. `Task not found`, or one added later) means polling itself is broken, which must page.
-    if (lastStatus !== 'Pending') {
+    // Running out of attempts while BFL still reports the task running is a slow provider. Any other
+    // status (e.g. `Task not found`, or one added later) means polling itself is broken, which must page.
+    if (typeof lastStatus !== 'string' || !IN_PROGRESS_STATUSES.has(lastStatus)) {
       throw new Error(`BFL polling ended on unexpected status: ${String(lastStatus)}`);
     }
     throw new ImageProviderUnavailableError(

@@ -43,11 +43,13 @@ Once the model generates your image, you can view, download, or edit the result.
 - **FLUX Kontext**: Transform existing images based on prompts
 - **FLUX.2 Max, Pro, Pro (Preview), and Flex**: Generate images or transform attached images with up to eight input images in total
 - **FLUX.2 Klein 9B, Klein 9B (Preview), and Klein 4B**: Smaller models with up to four input images in total
+- **FLUX 3 Image and FLUX 3 Image Klein**: Generate images or transform attached images with up to ten input images in total
 
-To use FLUX.2 references, attach images to your current message, select a FLUX.2 generation model,
-and describe the result. The first attached image and every additional reference count toward the
+To use FLUX.2 or FLUX 3 references, attach images to your current message, select one of those
+models, and describe the result. The first attached image and every additional reference count toward the
 model's total input limit. These transformations use image generation; masked editing uses the
-separate image editing model. Klein models do not offer prompt upsampling.
+separate image editing model. FLUX.2 Klein and FLUX 3 models do not offer prompt upsampling, and
+FLUX 3 Image does not take a seed or an output format, so those settings have no effect on it.
 
 ### Generation Settings
 
@@ -144,6 +146,9 @@ FLUX.2 uses a flat credit charge per generated image at the model's first-megapi
 outputs and reference images do not increase that charge. This is a product price, rather than a
 quote of the provider's full megapixel cost.
 
+FLUX 3 also uses a flat credit charge per generated image, set at the price of the provider tier that
+covers the largest size you can pick. Smaller sizes do not reduce that charge.
+
 Check your credit balance in Profile > Credit Analytics.
 
 ---
@@ -157,10 +162,11 @@ Check your credit balance in Profile > Credit Analytics.
 - Verify you have API keys configured for the image provider (OpenAI or Black Forest Labs)
 - Try a simpler prompt first
 
-### Too Many FLUX.2 Inputs
+### Too Many FLUX.2 or FLUX 3 Inputs
 
-Count the primary image and additional references together: Max, Pro, and Flex accept eight inputs;
-Klein accepts four. A continued conversation may carry forward its previous image as the primary.
+Count the primary image and additional references together: FLUX.2 Max, Pro, and Flex accept eight
+inputs; FLUX.2 Klein accepts four; FLUX 3 Image and FLUX 3 Image Klein accept ten. A continued
+conversation may carry forward its previous image as the primary.
 Remove references or start a fresh request if the generation reports that the total is too high.
 
 ### Poor Quality Results

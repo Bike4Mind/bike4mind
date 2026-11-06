@@ -8,7 +8,7 @@ import {
 import {
   IMAGES_PER_EDIT_REQUEST,
   getMaxReferenceImages,
-  isBflImageModel,
+  supportsBflSeed,
   isBflUltraImageModel,
   isExtendedGptImageQuality,
   isGPTImage25Model,
@@ -127,7 +127,7 @@ export function getImageModelCapabilities(model: ImageModels): ImageModelCapabil
     supports: {
       transparentBackground: supportsTransparentBackground(model),
       // OpenAIImageService forwards a seed, but OpenAI's image API documents none to honour it.
-      seed: isBflImageModel(model),
+      seed: supportsBflSeed(model),
       qualities: resolveQualities(model),
       maxImages: requiresImageInput(model) ? IMAGES_PER_EDIT_REQUEST : MAX_IMAGES_PER_REQUEST,
       maxReferenceImages: getMaxReferenceImages(model),
