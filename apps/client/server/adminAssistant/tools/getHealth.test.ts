@@ -81,6 +81,14 @@ describe('getHealthTool', () => {
     });
   });
 
+  it('caps a long stored probe error', async () => {
+    getHealthSummary.mockResolvedValue([summary({ status: 'unhealthy', error: 'e'.repeat(1_000) })]);
+
+    const result = await runTool({});
+
+    expect(result.data.integrations[0].error).toHaveLength(300);
+  });
+
   it('fails closed when a source throws', async () => {
     getHealthSummary.mockRejectedValue(new Error('db down'));
 

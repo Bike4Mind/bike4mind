@@ -5,6 +5,9 @@ import { getSystemHealthStatus } from '@server/admin/systemHealth/getSystemHealt
 import { defineAdminTool } from '../defineAdminTool';
 import { toIso } from '../formatters';
 
+// Stored probe errors can quote upstream responses or URLs; the model only needs the gist.
+const MAX_ERROR_CHARS = 300;
+
 export const getHealthTool = defineAdminTool({
   name: 'admin_get_health',
   description:
@@ -20,6 +23,7 @@ export const getHealthTool = defineAdminTool({
         return {
           ...summary,
           lastCheckedAt: neverChecked ? null : toIso(summary.lastCheckedAt),
+          error: summary.error?.slice(0, MAX_ERROR_CHARS) ?? null,
           neverChecked,
           circuitBreaker: await getStatus(summary.integration),
         };
