@@ -12,6 +12,7 @@ import {
   SHADOW_DETECTORS,
   SHADOW_DETECTION_BURST_PEER_LIMIT,
   type ShadowDetectionAccount,
+  type ShadowDetectionReviewer,
   type ShadowDetectionAction,
   type ShadowDetectionBurstPeers,
   type ShadowDetectionItem,
@@ -574,9 +575,11 @@ class ShadowDetectionRepository {
    * per distinct IP, served by user_signupMeta_ip); and the current status, signup method and balance
    * of every account the detections and those peers name.
    */
-  async listContext(
-    items: ShadowDetectionItem[]
-  ): Promise<{ accounts: ShadowDetectionAccount[]; burstPeers: ShadowDetectionBurstPeers[] }> {
+  async listContext(items: ShadowDetectionItem[]): Promise<{
+    accounts: ShadowDetectionAccount[];
+    burstPeers: ShadowDetectionBurstPeers[];
+    reviewers: ShadowDetectionReviewer[];
+  }> {
     const burstPeers = await this.findBurstPeers(items);
     const ids = [...new Set([...items.flatMap(item => item.userIds), ...burstPeers.flatMap(peers => peers.userIds)])];
     const validIds = ids.filter(id => Types.ObjectId.isValid(id));
@@ -598,7 +601,22 @@ class ShadowDetectionRepository {
         currentCredits: doc.currentCredits ?? null,
       };
     });
-    return { accounts, burstPeers };
+    return { accounts, burstPeers, reviewers: await this.findReviewers(items) };
+  }
+
+  private async findReviewers(items: ShadowDetectionItem[]): Promise<ShadowDetectionReviewer[]> {
+    const ids = [...new Set(items.flatMap(item => item.verdicts.map(entry => entry.reviewerId)))];
+    const validIds = ids.filter(id => Types.ObjectId.isValid(id));
+    const docs =
+      validIds.length === 0
+        ? []
+        : await User.find({ _id: { $in: validIds } })
+            .select('name username email')
+            .lean<{ _id: Types.ObjectId; name?: string | null; username?: string | null; email?: string | null }[]>();
+    const nameOf = new Map(
+      docs.map(doc => [doc._id.toString(), doc.name?.trim() || doc.username || doc.email || null] as const)
+    );
+    return ids.map(userId => ({ userId, name: nameOf.get(userId) ?? null }));
   }
 
   private async findBurstPeers(items: ShadowDetectionItem[]): Promise<ShadowDetectionBurstPeers[]> {
@@ -651,7 +669,11 @@ class ShadowDetectionRepository {
     reason: string;
     reviewerId: string;
   }): Promise<{ updated: ShadowDetectionItem[]; conflicts: ShadowDetectionItem[]; notFound: string[] }> {
-    const result = { updated: [] as ShadowDetectionItem[], conflicts: [] as ShadowDetectionItem[], notFound: [] as string[] };
+    const result = {
+      updated: [] as ShadowDetectionItem[],
+      conflicts: [] as ShadowDetectionItem[],
+      notFound: [] as string[],
+    };
     const unique = [...new Map(input.items.map(item => [item.id, item])).values()];
     for (const { id, expectedRevision } of unique) {
       const outcome = await this.addVerdict({ ...input, id, expectedRevision });

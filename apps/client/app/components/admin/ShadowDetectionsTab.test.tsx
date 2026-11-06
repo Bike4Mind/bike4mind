@@ -48,6 +48,7 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 
 import ShadowDetectionsTab, { formatPaymentAmount } from './ShadowDetectionsTab';
+import { DETECTIONS_INTRO_DISMISSED_KEY } from './shadowDetectionExplainer';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -97,6 +98,7 @@ const list = (over: Partial<ShadowDetectionListResponse> = {}): ShadowDetectionL
   summary: [summaryRow()],
   accounts: [],
   burstPeers: [],
+  reviewers: [],
   ...over,
 });
 
@@ -110,6 +112,7 @@ const queryResult = (data: ShadowDetectionListResponse) => ({
 describe('ShadowDetectionsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     m.search = {};
     m.verdictError = null;
     m.useShadowDetections.mockReturnValue(queryResult(list()));
@@ -251,7 +254,9 @@ describe('ShadowDetectionsTab', () => {
     renderTab();
     fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
     const signals = await screen.findByTestId('shadow-detection-signals');
-    expect(signals.textContent).toContain('Signups from one IP: - observed, threshold 1');
+    expect(screen.getByTestId('shadow-detection-signal-context').textContent).toContain(
+      'Signups from one IP: - (threshold 1)'
+    );
     expect(signals.textContent).not.toContain('n/a');
   });
 
@@ -500,7 +505,7 @@ describe('ShadowDetectionsTab', () => {
       within(screen.getByTestId('shadow-detection-history')).getByText('Known customer or integration')
     ).toBeTruthy();
     expect(screen.getByTestId('shadow-detection-history-source').textContent).toBe(
-      'Recorded when the reviewer reinstated the account'
+      'Automatic: account reinstated by reviewer dddddddddddddddddddddddd'
     );
 
     // Re-deciding sends the revision the admin now sees.
@@ -705,5 +710,180 @@ describe('ShadowDetectionsTab', () => {
         `shadow-detection-row-${OTHER_ID}`,
       ]);
     });
+  });
+});
+
+describe('ShadowDetectionsTab explanations', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.localStorage.clear();
+    m.search = {};
+    m.verdictError = null;
+    m.useShadowDetections.mockReturnValue(queryResult(list()));
+  });
+
+  it('explains the page until dismissed, remembers that, and reopens on request', () => {
+    const { unmount } = renderTab();
+    expect(screen.getByTestId('shadow-detection-intro').textContent).toContain('shadow mode');
+
+    fireEvent.click(screen.getByTestId('shadow-detection-intro-dismiss-btn'));
+    expect(screen.queryByTestId('shadow-detection-intro')).toBeNull();
+    expect(window.localStorage.getItem(DETECTIONS_INTRO_DISMISSED_KEY)).toBe('true');
+    unmount();
+
+    renderTab();
+    expect(screen.queryByTestId('shadow-detection-intro')).toBeNull();
+    fireEvent.click(screen.getByTestId('shadow-detection-intro-show-btn'));
+    expect(screen.getByTestId('shadow-detection-intro')).toBeTruthy();
+    expect(window.localStorage.getItem(DETECTIONS_INTRO_DISMISSED_KEY)).toBeNull();
+  });
+
+  it('defines the terms on the summary and the Would column', () => {
+    renderTab();
+    for (const term of ['policy', 'recorded', 'graded', 'precision', 'falsePositives', 'enforceBar', 'would']) {
+      expect(screen.getAllByTestId(`shadow-detection-help-${term}`).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('shows conclusive verdicts toward the enforce bar', () => {
+    renderTab();
+    // 12 conclusive of the 50 needed.
+    const bar = screen.getByTestId('shadow-detection-summary-signupNetworkBurst-v1-enforce-bar');
+    expect(bar.textContent).toBe('12 / 50');
+    expect(bar.getAttribute('data-status')).toBe('collecting');
+    expect(screen.getByText('38 more conclusive to go')).toBeTruthy();
+  });
+
+  it('marks a detector that cleared the bar as ready', () => {
+    m.useShadowDetections.mockReturnValue(
+      queryResult(list({ summary: [summaryRow({ confirmedAbuse: 60, legitimateHuman: 1, legitimateAutomation: 0 })] }))
+    );
+    renderTab();
+    const bar = screen.getByTestId('shadow-detection-summary-signupNetworkBurst-v1-enforce-bar');
+    expect(bar.textContent).toBe('50 / 50');
+    expect(bar.getAttribute('data-status')).toBe('ready');
+  });
+
+  it('guides each verdict and points to the user page for acting on abuse', () => {
+    m.useShadowDetections.mockReturnValue(
+      queryResult(list({ data: [detection({ userIds: ['bbbbbbbbbbbbbbbbbbbbbbbb'] })] }))
+    );
+    renderTab();
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    expect(screen.getByTestId('shadow-detection-verdict-guide-insufficient_evidence').textContent).toContain(
+      'two signups from one home IP'
+    );
+    expect(screen.getByTestId('shadow-detection-next-step-link').getAttribute('href')).toBe(
+      '/admin/users/bbbbbbbbbbbbbbbbbbbbbbbb'
+    );
+  });
+
+  it('sends a reviewer to each account page when the detection names several', () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    expect(screen.getByTestId('shadow-detection-next-step').textContent).toContain(
+      'Suspend each account from its user page'
+    );
+    expect(screen.queryByTestId('shadow-detection-next-step-link')).toBeNull();
+  });
+});
+
+describe('ShadowDetectionsTab why explanations', () => {
+  const REVIEWER_ID = 'dddddddddddddddddddddddd';
+  const graded = (source: 'review' | 'suspension') =>
+    detection({
+      verdict: 'confirmed_abuse',
+      verdicts: [
+        {
+          verdict: 'insufficient_evidence',
+          reason: 'Earlier look',
+          reviewerId: REVIEWER_ID,
+          reviewedAt: '2026-10-30T12:00:00.000Z',
+        },
+        {
+          verdict: 'confirmed_abuse',
+          reason: 'Signup farm',
+          reviewerId: REVIEWER_ID,
+          reviewedAt: '2026-10-31T09:00:00.000Z',
+          source,
+        },
+      ],
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.localStorage.clear();
+    m.search = {};
+    m.verdictError = null;
+  });
+
+  it('names the signal that crossed its rule and keeps the rest as context', () => {
+    m.useShadowDetections.mockReturnValue(
+      queryResult(
+        list({
+          data: [
+            detection({
+              signals: [
+                { key: 'ipSignups', label: 'Self-serve signups from this IP', observed: 3, threshold: 2 },
+                { key: 'asnSignups', label: 'Signups from this network', observed: 3, threshold: 10 },
+                { key: 'hostingNetwork', label: 'Hosting network', observed: 1, threshold: null },
+              ],
+            }),
+          ],
+        })
+      )
+    );
+    renderTab();
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    expect(screen.getByTestId('shadow-detection-trigger-ipSignups').textContent).toBe(
+      'Self-serve signups from this IP: 3 within 180 minutes (rule: more than 2)'
+    );
+    expect(screen.queryByTestId('shadow-detection-trigger-asnSignups')).toBeNull();
+    const context = screen.getByTestId('shadow-detection-signal-context').textContent;
+    expect(context).toContain('Signups from this network: 3 (threshold 10)');
+    expect(context).toContain('Hosting network: 1');
+  });
+
+  it('falls back to the summary when no signal has a known rule', () => {
+    m.useShadowDetections.mockReturnValue(queryResult(list()));
+    renderTab();
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    expect(screen.getByTestId('shadow-detection-trigger').textContent).toContain(
+      'Flagged: 3 signups from one IP in 180 minutes'
+    );
+  });
+
+  it('attributes a manual verdict to its reviewer in the row, the dialog and the history', () => {
+    m.useShadowDetections.mockReturnValue(
+      queryResult(list({ data: [graded('review')], reviewers: [{ userId: REVIEWER_ID, name: 'Test Admin' }] }))
+    );
+    renderTab();
+    expect(screen.getByTestId(`shadow-detection-verdict-by-${DETECTION_ID}`).textContent).toBe('By Test Admin');
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    const attribution = screen.getByTestId('shadow-detection-dialog-verdict-attribution').textContent;
+    expect(attribution).toContain('By Test Admin on');
+    expect(attribution).toContain('Signup farm');
+    expect(screen.getAllByTestId('shadow-detection-history-source').map(node => node.textContent)).toEqual([
+      'By Test Admin',
+      'By Test Admin',
+    ]);
+  });
+
+  it('marks a verdict recorded by a suspension as automatic', () => {
+    m.useShadowDetections.mockReturnValue(
+      queryResult(list({ data: [graded('suspension')], reviewers: [{ userId: REVIEWER_ID, name: null }] }))
+    );
+    renderTab();
+    expect(screen.getByTestId(`shadow-detection-verdict-by-${DETECTION_ID}`).textContent).toBe('Automatic');
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    expect(screen.getByTestId('shadow-detection-dialog-verdict-attribution').textContent).toContain(
+      `Automatic: account suspended by reviewer ${REVIEWER_ID} on`
+    );
+  });
+
+  it('shows no attribution on an unreviewed detection', () => {
+    m.useShadowDetections.mockReturnValue(queryResult(list()));
+    renderTab();
+    expect(screen.queryByTestId(`shadow-detection-verdict-by-${DETECTION_ID}`)).toBeNull();
   });
 });

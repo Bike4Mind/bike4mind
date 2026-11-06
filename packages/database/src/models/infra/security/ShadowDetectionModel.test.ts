@@ -393,14 +393,20 @@ describe('shadowDetectionRepository', () => {
 
     it('reports each named account status, signup method and balance', async () => {
       const active = await insertUser({ currentCredits: 120, acquisition: { signupMethod: 'google' } });
-      const suspended = await insertUser({ isBanned: true, currentCredits: 0, authProviders: [{ strategy: 'github' }] });
+      const suspended = await insertUser({
+        isBanned: true,
+        currentCredits: 0,
+        authProviders: [{ strategy: 'github' }],
+      });
       const deleted = await insertUser({ deletedAt: new Date() });
       const missing = new Types.ObjectId().toString();
       const id = await shadowDetectionRepository.record(
         detection({ detector: 'youngAccountSpend', network: null, userIds: [active, suspended, deleted, missing] })
       );
 
-      const { accounts } = await shadowDetectionRepository.listContext([(await shadowDetectionRepository.findById(id))!]);
+      const { accounts } = await shadowDetectionRepository.listContext([
+        (await shadowDetectionRepository.findById(id))!,
+      ]);
 
       expect(accounts).toEqual([
         { userId: active, status: 'active', signupMethod: 'google', currentCredits: 120 },
@@ -422,6 +428,32 @@ describe('shadowDetectionRepository', () => {
 
       expect(context.burstPeers).toEqual([{ detectionId: id, userIds: [peer], truncated: false }]);
       expect(context.accounts.map(account => account.userId)).toEqual([actor, peer]);
+    });
+
+    it('names the reviewers of the listed detections, falling back from name to username to email', async () => {
+      const named = await insertUser({ name: 'Test Admin' });
+      const emailOnly = await insertUser({ email: 'reviewer@example.test' });
+      const gone = new Types.ObjectId().toString();
+      const id = await shadowDetectionRepository.record(detection());
+      for (const [revision, reviewerId] of [named, emailOnly, gone].entries()) {
+        await shadowDetectionRepository.addVerdict({
+          id,
+          expectedRevision: revision,
+          verdict: 'insufficient_evidence',
+          reason: 'Not enough data to decide',
+          reviewerId,
+        });
+      }
+
+      const { reviewers } = await shadowDetectionRepository.listContext([
+        (await shadowDetectionRepository.findById(id))!,
+      ]);
+
+      expect(reviewers).toEqual([
+        { userId: named, name: 'Test Admin' },
+        { userId: emailOnly, name: 'reviewer@example.test' },
+        { userId: gone, name: null },
+      ]);
     });
   });
 
