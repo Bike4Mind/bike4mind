@@ -138,7 +138,7 @@ describe('listRunnerTickets', () => {
     const theirs = await createLoop({ userId: 'user-2' });
     await createTicket(theirs.id, { userId: 'user-2' });
 
-    expect(await listRunnerTickets(USER, NOW)).toEqual([
+    expect((await listRunnerTickets(USER, NOW)).tickets).toEqual([
       {
         ticketId: ready.id,
         title: 'Add the button',
@@ -150,7 +150,8 @@ describe('listRunnerTickets', () => {
     ]);
   });
 
-  it('skips a loop that has spent its daily budget', async () => {
+  it('holds a loop that has spent its daily budget, with the reason, and only when it has work', async () => {
+    const idle = await createLoop({ budgetCreditsPerDay: 5, name: 'Idle' });
     const loop = await createLoop({ budgetCreditsPerDay: 5 });
     await createTicket(loop.id);
     await AgentExecution.create({
@@ -164,8 +165,24 @@ describe('listRunnerTickets', () => {
       totalCreditsUsed: 5,
       createdAt: NOW,
     });
+    await AgentExecution.create({
+      userId: USER,
+      sessionId: 'session-1',
+      questId: 'session-1',
+      query: 'q',
+      model: 'm',
+      status: 'completed',
+      loopId: idle.id,
+      totalCreditsUsed: 5,
+      createdAt: NOW,
+    });
 
-    expect(await listRunnerTickets(USER, NOW)).toEqual([]);
+    expect(await listRunnerTickets(USER, NOW)).toEqual({
+      tickets: [],
+      held: [
+        { loopId: loop.id, loopName: 'Ship it', repoHint: 'acme/app', reason: 'The loop has spent its daily budget' },
+      ],
+    });
   });
 });
 
@@ -179,7 +196,7 @@ describe('listRunnerTickets priority', () => {
     const low = await createTicket(newer.id, { priority: 'p3' });
     const high = await createTicket(older.id, { priority: 'p0' });
 
-    expect((await listRunnerTickets(USER, NOW)).map(ticket => ticket.ticketId)).toEqual([high.id, low.id]);
+    expect((await listRunnerTickets(USER, NOW)).tickets.map(ticket => ticket.ticketId)).toEqual([high.id, low.id]);
   });
 });
 
@@ -341,11 +358,11 @@ describe('claimRunnerTicket priority policy', () => {
     const p2 = await createTicket(loop.id, { title: 'p2' });
     await createTicket(loop.id, { title: 'p3', priority: 'p3' });
     const p1 = await createTicket(loop.id, { title: 'p1', priority: 'p1' });
-    expect(await listRunnerTickets(USER, NOW)).toHaveLength(3);
+    expect((await listRunnerTickets(USER, NOW)).tickets).toHaveLength(3);
 
     await p2RunToday(loop.id);
 
-    expect((await listRunnerTickets(USER, NOW)).map(ticket => ticket.ticketId)).toEqual([p1.id]);
+    expect((await listRunnerTickets(USER, NOW)).tickets.map(ticket => ticket.ticketId)).toEqual([p1.id]);
     expect(await claimRunnerTicket(USER, p2.id, NOW, logger)).toMatchObject({ status: 409, reason: 'p2_budget' });
     expect(await ticketOf(p2.id)).toMatchObject({ status: 'open', runCount: 0 });
     const { runId } = await claim(p1.id);
@@ -364,7 +381,7 @@ describe('claimRunnerTicket priority policy', () => {
   it('neither lists nor claims an untriaged ticket', async () => {
     const loop = await createLoop();
     const untriaged = await createTicket(loop.id, { priority: undefined });
-    expect(await listRunnerTickets(USER, NOW)).toEqual([]);
+    expect((await listRunnerTickets(USER, NOW)).tickets).toEqual([]);
     expect(await claimRunnerTicket(USER, untriaged.id, NOW, logger)).toMatchObject({
       status: 409,
       reason: 'untriaged',
@@ -541,7 +558,14 @@ describe('completeRunnerRun', () => {
       status: 'failed',
       error: { message: 'git crashed', callerSafe: true },
     });
-    expect(await loopOf(loop.id)).toMatchObject({ status: 'live', consecutiveFailures: 0 });
+    expect(await runOf(first.runId)).toMatchObject({ status: 'completed', failureReason: 'blocked' });
+    // Answerless runs still count as the loop's last run.
+    expect(await loopOf(loop.id)).toMatchObject({
+      status: 'live',
+      consecutiveFailures: 0,
+      lastRunAt: NOW,
+      runCount: 2,
+    });
   });
 
   it('reopens a released ticket uncounted, and leaves a ticket its owner moved alone', async () => {
@@ -553,6 +577,7 @@ describe('completeRunnerRun', () => {
     await WorkItem.updateOne({ _id: moved.id }, { $set: { status: 'open', stage: 'todo' } });
 
     await completeRunnerRun(USER, first.runId, { outcome: 'released', durationMs: 1 }, NOW, logger);
+    expect((await loopOf(loop.id)).lastRunAt).toBeUndefined();
     await completeRunnerRun(USER, second.runId, { outcome: 'advanced', answer: 'x', durationMs: 1 }, NOW, logger);
 
     expect(await ticketOf(released.id)).toMatchObject({ status: 'open', runCount: 0 });

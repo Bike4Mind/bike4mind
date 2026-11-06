@@ -9,6 +9,8 @@ const PresenceBody = z.object({
   lanesBusy: z.number().int().min(0).max(100),
   lanesFree: z.number().int().min(0).max(100),
   waitingReason: z.string().max(200).optional(),
+  /** The app is quitting: read as offline at once, not after RUNNER_PRESENCE_FRESH_MS. */
+  offline: z.literal(true).optional(),
 });
 
 /** The caller's desktop runner reporting in; the loop board shows it as online or offline. */
@@ -18,9 +20,9 @@ const handler = baseApi({ auth: 'jwtOnly' })
     await assertLoopsEnabled();
     const body = PresenceBody.safeParse(req.body);
     if (!body.success) throw new BadRequestError(body.error.issues[0]?.message || 'Invalid request body');
-    const { waitingReason, ...lanes } = body.data;
+    const { waitingReason, offline, ...lanes } = body.data;
     await loopRunnerPresenceRepository.upsertForUser(req.user!.id, {
-      seenAt: new Date(),
+      seenAt: offline ? new Date(0) : new Date(),
       ...lanes,
       ...(waitingReason?.trim() && { waitingReason: waitingReason.trim() }),
     });

@@ -164,6 +164,17 @@ describe('IterationStream — render', () => {
     expect(screen.getByText('Awaiting permission')).toBeInTheDocument();
   });
 
+  it('labels a completed run that handed its ticket to the user as Blocked', () => {
+    mocks.execution = makeExecution({ status: 'completed', failureReason: 'blocked', iterations: [step(0, 1)] });
+    render(
+      <TestWrapper>
+        <IterationStream executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+    expect(screen.getByText('Blocked')).toBeInTheDocument();
+    expect(screen.queryByText('Completed')).not.toBeInTheDocument();
+  });
+
   it('does not mount the PermissionCard when pendingPermission is undefined', () => {
     mocks.execution = makeExecution({ status: 'running' });
     render(

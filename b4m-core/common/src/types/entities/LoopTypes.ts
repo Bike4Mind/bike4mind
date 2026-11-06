@@ -184,6 +184,14 @@ export interface RunnerTicket {
   repoHint?: string;
 }
 
+/** A loop with ready desktop tickets that its budgets hold back now, with the reason to show. */
+export interface RunnerHeldLoop {
+  loopId: string;
+  loopName: string;
+  repoHint?: string;
+  reason: string;
+}
+
 export interface RunnerClaim {
   ticket: RunnerTicket;
   runId: string;

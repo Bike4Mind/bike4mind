@@ -188,7 +188,10 @@ const IterationStream: FC<IterationStreamProps> = ({
     return null;
   }
 
-  const statusMeta = STATUS_LABEL[execution.status] ?? { label: execution.status, color: 'neutral' as const };
+  const statusMeta =
+    execution.status === 'completed' && execution.failureReason === 'blocked'
+      ? { label: 'Blocked', color: 'warning' as const }
+      : (STATUS_LABEL[execution.status] ?? { label: execution.status, color: 'neutral' as const });
   const lastIteration = groups[groups.length - 1]?.iteration ?? 0;
 
   // The rendered accordions = groups minus final_answer-only ones (those are

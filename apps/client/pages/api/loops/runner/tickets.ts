@@ -8,7 +8,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: LOOP_RATE_LIMIT, windowMs: LOOP_RATE_WINDOW_MS, bucket: 'loops-runner-list' }))
   .get(async (req, res) => {
     await assertLoopsEnabled();
-    res.json({ tickets: await listRunnerTickets(req.user!.id, new Date()) });
+    res.json(await listRunnerTickets(req.user!.id, new Date()));
   });
 
 export default handler;

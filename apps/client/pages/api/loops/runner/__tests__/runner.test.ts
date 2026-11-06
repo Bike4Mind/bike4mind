@@ -90,9 +90,10 @@ describe('/api/loops/runner', () => {
   });
 
   it("lists the caller's tickets", async () => {
-    runner.listRunnerTickets.mockResolvedValue([{ ticketId: 't1' }]);
+    const list = { tickets: [{ ticketId: 't1' }], held: [{ loopId: 'l2', loopName: 'L', reason: 'Spent' }] };
+    runner.listRunnerTickets.mockResolvedValue(list);
     const res = await call('tickets', 'get');
-    expect(res._getJSONData()).toEqual({ tickets: [{ ticketId: 't1' }] });
+    expect(res._getJSONData()).toEqual(list);
     expect(runner.listRunnerTickets).toHaveBeenCalledWith('u1', expect.any(Date));
   });
 
@@ -159,6 +160,8 @@ describe('/api/loops/runner', () => {
   it('records presence, dropping a blank waiting reason', async () => {
     await call('presence', 'post', { body: { lanesBusy: 1, lanesFree: 3, waitingReason: '  ' } });
     expect(presence.upsertForUser).toHaveBeenCalledWith('u1', { seenAt: expect.any(Date), lanesBusy: 1, lanesFree: 3 });
+    await call('presence', 'post', { body: { lanesBusy: 0, lanesFree: 0, offline: true } });
+    expect(presence.upsertForUser).toHaveBeenLastCalledWith('u1', { seenAt: new Date(0), lanesBusy: 0, lanesFree: 0 });
     await expect(call('presence', 'post', { body: { lanesBusy: -1, lanesFree: 3 } })).rejects.toMatchObject({
       statusCode: 400,
     });

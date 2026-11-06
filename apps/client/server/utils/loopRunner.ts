@@ -20,6 +20,7 @@ import {
   type IWorkItem,
   type LoopProgressFrame,
   type RunnerClaim,
+  type RunnerHeldLoop,
   type RunnerOutcome,
   type RunnerTicket,
   type WorkItemPatch,
@@ -67,17 +68,33 @@ const clip = (reason: string) => reason.slice(0, REASON_MAX);
 
 /**
  * The open, ready tickets in the desktop stages of the user's live loops that pass admission: highest priority
- * across loops, then each loop's own order (finish first).
+ * across loops, then each loop's own order (finish first). A loop with ready tickets that admission holds back is
+ * `held`, with the reason, so the desktop can say why it is not running them.
  */
-export async function listRunnerTickets(userId: string, now: Date): Promise<RunnerTicket[]> {
+export async function listRunnerTickets(
+  userId: string,
+  now: Date
+): Promise<{ tickets: RunnerTicket[]; held: RunnerHeldLoop[] }> {
   const loops = (await loopRepository.listForUser(userId)).filter(
     loop => loop.status === 'live' && desktopStagesOf(loop).length > 0
   );
   const ready: { loop: ILoop; ticket: IWorkItem }[] = [];
+  const held: RunnerHeldLoop[] = [];
   for (const loop of loops) {
-    // ponytail: priced on the loop's model; the claim re-checks on the stage's model.
-    if (!(await loopAdmission(loop, loop.model, now)).ok) continue;
     const tickets = await workItemRepository.listReadyInStages(userId, loop.id, loop.stages, desktopStagesOf(loop));
+    if (tickets.length === 0) continue;
+    // ponytail: priced on the loop's model; the claim re-checks on the stage's model.
+    const admission = await loopAdmission(loop, loop.model, now);
+    if (!admission.ok) {
+      const { repoHint } = stageConfigOf(loop, tickets[0].stage);
+      held.push({
+        loopId: loop.id,
+        loopName: loop.name,
+        ...(repoHint && { repoHint }),
+        reason: ADMISSION_ERRORS[admission.kind],
+      });
+      continue;
+    }
     // Over the loop's p2 cap, p2 and p3 wait for tomorrow (the claim re-checks).
     const capped = tickets.some(ticket => !PRIORITIES_OVER_P2_CAP.includes(ticket.priority!))
       ? (await p2RunsLeft(loop, now)) === 0
@@ -87,10 +104,11 @@ export async function listRunnerTickets(userId: string, now: Date): Promise<Runn
     }
   }
   // Array.prototype.sort is stable, so equal priorities keep each loop's order.
-  return ready
+  const tickets = ready
     .sort((a, b) => workItemPriorityRank(a.ticket.priority) - workItemPriorityRank(b.ticket.priority))
     .slice(0, RUNNER_LIST_LIMIT)
     .map(({ loop, ticket }) => runnerTicket(loop, ticket));
+  return { tickets, held };
 }
 
 const runnerTicket = (loop: ILoop, ticket: IWorkItem): RunnerTicket => {
@@ -471,17 +489,22 @@ export async function completeRunnerRun(
       ? { status: 'failed', error: { message: clip(body.reason), callerSafe: true } }
       : body.outcome === 'released'
         ? { status: 'aborted' }
-        : { status: 'completed', ...(answer !== undefined && { result: { answer } }) };
+        : {
+            status: 'completed',
+            ...(body.outcome === 'blocked' && { failureReason: 'blocked' as const }),
+            ...(answer !== undefined && { result: { answer } }),
+          };
   if (
     !(await agentExecutionRepository.finishRunnerRun(run.id, userId, { ...set, runnerDurationMs: body.durationMs }))
   ) {
     return refuse(410, 'run_ended', 'The run is no longer active');
   }
-  if (loop && answer !== undefined) {
+  // Every run that did work counts as the loop's last run, with or without an answer; a release did none.
+  if (loop && body.outcome !== 'released') {
     await loopRepository.foldRunnerRun(
       loop.id,
       userId,
-      { ...parseLoopMemory(answer, loop.memory), updatedAt: now },
+      answer !== undefined ? { ...parseLoopMemory(answer, loop.memory), updatedAt: now } : loop.memory,
       now
     );
   }

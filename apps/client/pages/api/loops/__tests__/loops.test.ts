@@ -810,6 +810,9 @@ describe('GET /api/loops/:id/tickets', () => {
 
     presence.findByUserId.mockResolvedValue({ seenAt: new Date(Date.now() - 3 * 60_000), lanesFree: 2 });
     expect(await runnerOf()).toEqual({ online: false, lanesFree: 2 });
+    // What a quitting runner's offline presence stores (runner/presence.ts): offline at once.
+    presence.findByUserId.mockResolvedValue({ seenAt: new Date(0), lanesFree: 0 });
+    expect(await runnerOf()).toEqual({ online: false, lanesFree: 0 });
     presence.findByUserId.mockResolvedValue(null);
     expect(await runnerOf()).toEqual({ online: false, lanesFree: 0 });
 

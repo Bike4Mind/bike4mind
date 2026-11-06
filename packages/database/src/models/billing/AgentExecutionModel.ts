@@ -463,7 +463,8 @@ export interface IAgentExecution {
    * Schema is untyped at the Mongoose level so future variants can be added
    * without a migration; the TS union is the source of truth.
    */
-  failureReason?: 'abandoned' | 'insufficient_credits' | 'credit_cap' | 'spend_cap';
+  /** 'blocked': a desktop loop run that completed but handed its ticket to the user. */
+  failureReason?: 'abandoned' | 'insufficient_credits' | 'credit_cap' | 'spend_cap' | 'blocked';
 
   /**
    * Set when the abandoned-sweep's post-abandonment quest settlement fails for
