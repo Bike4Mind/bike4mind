@@ -1,4 +1,5 @@
 import {
+  canAccessAdmin,
   DEFAULT_WRITE_RATE_LIMIT_MODES,
   DEFAULT_WRITE_RATE_LIMIT_PER_MIN,
   hasDeveloperUserTag,
@@ -80,7 +81,7 @@ export async function defaultWriteRateLimit(req: Request, res: Response, next: N
     !user ||
     // API-key requests are already metered per key by apiKeyRateLimit.
     req.apiKeyInfo ||
-    user.isAdmin ||
+    canAccessAdmin(user) ||
     hasDeveloperUserTag(user.tags) ||
     isDevelopment()
   ) {

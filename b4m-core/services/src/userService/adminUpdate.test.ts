@@ -45,6 +45,7 @@ function makeAdapters(startingCredits: number) {
       existsOtherUserWithUsername: vi.fn().mockResolvedValue(false),
       existsOtherUserWithEmail: vi.fn().mockResolvedValue(false),
       setModerationStatus: vi.fn().mockResolvedValue(undefined),
+      setRiskReviewState: vi.fn().mockResolvedValue(true),
       incrementCredits,
     },
     organizations: { findById: vi.fn(), update: vi.fn() },
@@ -62,6 +63,7 @@ function makeAdapters(startingCredits: number) {
     target,
     deactivateAllByUserId: db.userApiKeys.deactivateAllByUserId,
     endConnections: db.realtimeConnections.endConnections,
+    setRiskReviewState: db.users.setRiskReviewState,
   };
 }
 
@@ -636,6 +638,49 @@ describe('adminUpdateUser - API key deactivation on entering a blocked state', (
       'write failed'
     );
     expect(deactivateAllByUserId).not.toHaveBeenCalled();
+  });
+});
+
+describe('adminUpdateUser - signup risk review on ban', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const scored = (reviewState: string) => ({
+    riskScore: { score: 60, signals: [], computedAt: new Date(), reviewState },
+  });
+
+  it.each(['pending', 'none', 'approved'])('moves a %s review to banned and reports it', async reviewState => {
+    const { adapters, target, setRiskReviewState } = makeAdapters(100);
+    Object.assign(target, scored(reviewState));
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, isBanned: true }, adapters);
+
+    expect(setRiskReviewState).toHaveBeenCalledExactlyOnceWith(TARGET_ID, reviewState, 'banned');
+    expect(result.bannedRiskReviewFrom).toBe(reviewState);
+  });
+
+  it('reports nothing when the review moved before the ban reached it', async () => {
+    const { adapters, target, setRiskReviewState } = makeAdapters(100);
+    Object.assign(target, scored('pending'));
+    setRiskReviewState.mockResolvedValueOnce(false);
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, isBanned: true }, adapters);
+
+    expect(result.bannedRiskReviewFrom).toBeNull();
+  });
+
+  it.each([
+    ['an unscored account', {}, { isBanned: true }],
+    ['a review already banned', scored('banned'), { isBanned: true }],
+    ['re-banning a banned user', { isBanned: true, ...scored('pending') }, { isBanned: true }],
+    ['unbanning, which leaves the review banned', { isBanned: true, ...scored('banned') }, { isBanned: false }],
+    ['an unrelated update', scored('pending'), { name: 'New Name' }],
+  ])('leaves the review alone for %s', async (_label, seed, patch) => {
+    const { adapters, target, setRiskReviewState } = makeAdapters(100);
+    Object.assign(target, seed);
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, ...patch }, adapters);
+
+    expect(setRiskReviewState).not.toHaveBeenCalled();
+    expect(result.bannedRiskReviewFrom).toBeNull();
   });
 });
 

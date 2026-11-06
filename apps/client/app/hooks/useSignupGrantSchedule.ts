@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import {
   isStoredToggleOn,
-  signupGrantScheduleFromValues,
+  runtimeSignupGrantSchedule,
   storedGrantCredits,
   type SignupGrantSchedule,
 } from '@bike4mind/common';
@@ -16,9 +16,9 @@ export function useSignupGrantSchedule(): SignupGrantSchedule {
   const { data } = useSettingsFromServer();
   return useMemo(() => {
     const rows = new Map((data ?? []).map(row => [row.settingName, row.settingValue as unknown]));
-    return signupGrantScheduleFromValues(key => storedGrantCredits(key, rows.get(key)), {
-      staged: isStoredToggleOn(rows.get('stagedSignupGrantEnabled')),
-      activity: isStoredToggleOn(rows.get('signupGrantActivityEnabled')),
-    });
+    return runtimeSignupGrantSchedule(
+      key => storedGrantCredits(key, rows.get(key)),
+      isStoredToggleOn(rows.get('signupGrantActivityEnabled'))
+    );
   }, [data]);
 }

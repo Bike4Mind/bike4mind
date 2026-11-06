@@ -59,6 +59,25 @@ describe('createUniqueOAuthUser', () => {
     expect(mockCreate.mock.calls[1][0]).not.toHaveProperty('signupGrant');
   });
 
+  it('enrolls the schedule grant, not defaultFreeCredits, with the retired staged toggle off', async () => {
+    mockFindSetting.mockImplementation(async (name: string) => ({
+      settingValue: {
+        stagedSignupGrantEnabled: 'false',
+        defaultFreeCredits: '5000',
+        signupGrantInitialCredits: '40',
+        signupGrantDripCap: '0',
+      }[name],
+    }));
+    await createUniqueOAuthUser({
+      name: 'Pat',
+      baseUsername: 'pat',
+      email: 'pat@example.test',
+      oauthCredentials,
+      pendingFreeCredits: true,
+    });
+    expect(mockCreate.mock.calls[0][0].signupGrant).toMatchObject({ signupCredits: 40, unlockCredits: 0 });
+  });
+
   describe('referral invite', () => {
     const referralInvite = { inviteId: 'invite-1', inviterId: 'inviter-1', grantCredits: 30 };
     beforeEach(() => {

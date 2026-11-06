@@ -320,7 +320,11 @@ const handler = baseApi().put(
           const snapshot = (await User.findById(userId)
             .select('isAdmin email isBanned isModerated disputePending moderation')
             .lean()) as AccountStateSnapshot | null;
-          const { user: updated, creditAdjustment } = await userService.adminUpdateUser(
+          const {
+            user: updated,
+            creditAdjustment,
+            bannedRiskReviewFrom,
+          } = await userService.adminUpdateUser(
             currentUser.id,
             changesCredits ? { ...body, creditReason } : { ...body, currentCredits: undefined, creditReason },
             {
@@ -357,7 +361,12 @@ const handler = baseApi().put(
               ...(after ? on : off),
               target: auditTarget,
               reason: statusChangeReason ?? parseAdminActionReason(body.statusChangeReason),
-              changes: [{ field, before, after }],
+              changes: [
+                { field, before, after },
+                ...(field === 'isBanned' && bannedRiskReviewFrom
+                  ? [{ field: 'riskScore.reviewState', before: bannedRiskReviewFrom, after: 'banned' }]
+                  : []),
+              ],
             });
           }
           if (creditAdjustment) {
