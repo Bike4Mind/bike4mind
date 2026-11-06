@@ -106,6 +106,13 @@ const compensate = async (req: Request, tag: string, approvalId: string, write: 
   }
 };
 
+/** A lost claim re-reads the record so a request expired by a concurrent reader answers 410, not 409. */
+const claimMissError = async (approvalId: string) => {
+  const current = await adminApprovalRepository.findById(approvalId).catch(() => null);
+  if (current?.status === 'expired') return expiredError();
+  return new ConflictError(`This request is already ${current?.status ?? 'decided'}.`);
+};
+
 /** A pending record past its expiry is closed as expired so it leaves the queue. */
 const assertPendingAndLive = async (req: Request, approval: AdminApproval, now: Date): Promise<void> => {
   if (approval.status === 'expired') throw expiredError();
@@ -208,7 +215,7 @@ export async function approveApproval(req: Request, id: string): Promise<Approve
     { now, notRequestedBy: approver.id },
     { decidedBy: { id: approver.id, name: displayNameOf(approver) }, decidedAt: now }
   );
-  if (!claimed) throw new ConflictError('This request was already decided or has expired.');
+  if (!claimed) throw await claimMissError(approval.id);
   // The claim re-reads the record, and these are the params that run.
   if (approvalParamsHash(claimed.paramsJson) !== claimed.paramsHash) {
     await compensate(req, '[ADMIN_APPROVAL_TAMPER_MARK_FAILED]', claimed.id, () =>
@@ -295,7 +302,7 @@ export async function rejectApproval(req: Request, id: string, reason: string): 
     { now },
     { decidedBy: { id: user.id, name: displayNameOf(user) }, decidedAt: now, decisionReason: reason }
   );
-  if (!rejected) throw new ConflictError('This request was already decided or has expired.');
+  if (!rejected) throw await claimMissError(approval.id);
   try {
     await recordAdminActionFromRequest(req, {
       action: 'admin.approval.rejected',

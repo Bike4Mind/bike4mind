@@ -235,6 +235,21 @@ describe('approveApproval', () => {
     expect(error).toHaveBeenCalledWith('[ADMIN_APPROVAL_APPROVE_ROLLBACK_FAILED]', expect.anything());
   });
 
+  it('answers 410 when a concurrent reader expired the record before the claim', async () => {
+    mocks.repo.findById.mockResolvedValueOnce(approvalOf()).mockResolvedValueOnce(approvalOf({ status: 'expired' }));
+    mocks.repo.claim.mockResolvedValueOnce(null);
+    await expect(approveApproval(fullAdmin(APPROVER), ID)).rejects.toMatchObject({ statusCode: 410 });
+  });
+
+  it('answers 409 naming the status when another admin won the claim', async () => {
+    mocks.repo.findById.mockResolvedValueOnce(approvalOf()).mockResolvedValueOnce(approvalOf({ status: 'executing' }));
+    mocks.repo.claim.mockResolvedValueOnce(null);
+    await expect(approveApproval(fullAdmin(APPROVER), ID)).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'This request is already executing.',
+    });
+  });
+
   it('still answers 410 when closing an expired record fails', async () => {
     mocks.repo.findById.mockResolvedValue(approvalOf({ expiresAt: new Date(Date.now() - 1) }));
     mocks.repo.finish.mockRejectedValueOnce(new Error('db down'));
