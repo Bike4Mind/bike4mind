@@ -59,6 +59,7 @@ import {
   defaultSpawnPlacement,
   findModelOption,
   isLocalBackend,
+  isAgentSession,
   isLocalModel,
   isResumableStop,
   isTurnBudgetStop,
@@ -4769,7 +4770,7 @@ export class ChatService {
         mode: parent.mode,
         ...(project ? { project: childProject(project, null) } : {}),
         ...(parent.grantedDirectories?.length ? { grantedDirectories: [...parent.grantedDirectories] } : {}),
-        origin: { parentSessionId: parent.id, depth, seedPrompt: opening.selection },
+        origin: { parentSessionId: parent.id, depth, seedPrompt: opening.selection, kind: 'side-chat' },
         // The same ceiling a spawn gets; see spawnSessionWithWorkspaceLease.
         approvalMode: parent.approvalMode === 'full' ? 'auto' : parent.approvalMode,
       });
@@ -5241,7 +5242,7 @@ export class ChatService {
       grew = false;
       for (const entry of sessions) {
         const parent = entry.origin?.parentSessionId;
-        if (!parent || !parents.has(parent) || parents.has(entry.id)) continue;
+        if (!parent || !isAgentSession(entry) || !parents.has(parent) || parents.has(entry.id)) continue;
         parents.add(entry.id);
         agents.push(entry);
         grew = true;
@@ -5914,6 +5915,7 @@ export class ChatService {
     return sessions.some(
       entry =>
         entry.origin?.parentSessionId === parentId &&
+        isAgentSession(entry) &&
         (this.hasTurnInFlight(entry.id) || (this.deps.queue?.list(entry.id).length ?? 0) > 0)
     );
   }

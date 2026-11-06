@@ -931,6 +931,15 @@ export type ChatMoveToBackgroundResult = { ok: true; process: BackgroundProcessI
  */
 export const MAX_SPAWN_DEPTH = 2;
 
+/**
+ * Whether a session is an agent its parent started, as opposed to a top-level conversation or a
+ * side chat the user drives. The agent surfaces (background panel, roster, quest readiness)
+ * list only these; the sidebar still nests every child under its parent.
+ */
+export function isAgentSession(session: { origin?: Pick<ChatSessionOrigin, 'kind'> }): boolean {
+  return session.origin !== undefined && session.origin.kind !== 'side-chat';
+}
+
 /** Whether this session may still start one under MAX_SPAWN_DEPTH. */
 export function canSpawnDeeper(session: { origin?: Pick<ChatSessionOrigin, 'depth'> }): boolean {
   return (session.origin?.depth ?? 0) < MAX_SPAWN_DEPTH;
@@ -1265,6 +1274,11 @@ export interface ChatSessionOrigin {
   depth: number;
   /** The prompt it was started with, so the row can say what it was sent off to do. */
   seedPrompt: string;
+  /**
+   * 'side-chat' for a child the user branched off a highlight (ChatService.startSideChat). It
+   * nests under its parent like a spawn but is not an agent; see isAgentSession.
+   */
+  kind?: 'side-chat';
 }
 
 interface ChatSessionMeta {

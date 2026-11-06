@@ -1,4 +1,5 @@
 import { messagesSinceBoundary, type ChatMessage, type ChatSession } from '@shared/chat';
+import { blockquote, clipText } from '@shared/quote';
 
 /** The longest selection a side chat carries; the rest is cut with a marker. */
 export const SIDE_CHAT_SELECTION_LIMIT = 6_000;
@@ -6,17 +7,6 @@ export const SIDE_CHAT_SELECTION_LIMIT = 6_000;
 export const SIDE_CHAT_CONTEXT_LIMIT = 12_000;
 /** No single parent message may take more than this of the excerpt. */
 const PER_MESSAGE_LIMIT = 2_000;
-
-function clip(text: string, limit: number): string {
-  return text.length <= limit ? text : `${text.slice(0, limit).trimEnd()} [...]`;
-}
-
-function quoteBlock(text: string): string {
-  return text
-    .split('\n')
-    .map(line => `> ${line}`.trimEnd())
-    .join('\n');
-}
 
 /**
  * The tail of the parent conversation a side chat opens with: the user's and the model's words
@@ -34,7 +24,7 @@ export function parentExcerpt(messages: readonly ChatMessage[], limit = SIDE_CHA
   for (let index = spoken.length - 1; index >= 0; index--) {
     const message = spoken[index];
     const speaker = message.system ? 'App' : message.role === 'user' ? 'User' : 'Assistant';
-    const line = `${speaker}: ${clip(message.content.trim(), PER_MESSAGE_LIMIT)}`;
+    const line = `${speaker}: ${clipText(message.content.trim(), PER_MESSAGE_LIMIT)}`;
     if (used + line.length > limit) break;
     lines.unshift(line);
     used += line.length;
@@ -50,16 +40,16 @@ export function sideChatOpening(
   parent: Pick<ChatSession, 'title' | 'messages'>,
   selection: string
 ): { content: string; display: string; selection: string } {
-  const selected = clip(selection.trim(), SIDE_CHAT_SELECTION_LIMIT);
+  const selected = clipText(selection.trim(), SIDE_CHAT_SELECTION_LIMIT);
   const excerpt = parentExcerpt(parent.messages);
   const content = [
     `This is a side chat branched from the conversation "${parent.title}". The user highlighted a ` +
       'passage there and wants to discuss it here, without adding to that conversation.',
     excerpt ? `Recent messages from that conversation, oldest first (may be truncated):\n\n${excerpt}` : '',
-    `The highlighted passage:\n\n${quoteBlock(selected)}`,
+    `The highlighted passage:\n\n${blockquote(selected)}`,
     "Treat the passage as the subject of the user's next message.",
   ]
     .filter(Boolean)
     .join('\n\n');
-  return { content, display: quoteBlock(selected), selection: selected };
+  return { content, display: blockquote(selected), selection: selected };
 }

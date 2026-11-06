@@ -407,7 +407,8 @@ export function ChatShell({
   // One quote at a time - a second Reply replaces the first, so "Regarding:" always names exactly
   // one passage; to discuss a longer stretch, highlight the longer stretch.
   const [quotes, setQuotes] = useState<Readonly<Record<string, string>>>({});
-  const [sideChatError, setSideChatError] = useState<string | null>(null);
+  // Keyed by the conversation it was raised in, so it does not follow the user into another one.
+  const [sideChatError, setSideChatError] = useState<{ sessionId: string; error: string } | null>(null);
   // Only the conversation screen counts as showing one: main polls what is on screen faster.
   const pullRequest = usePullRequest(screen === 'conversation' ? activeId : null);
   // What the browser pane trades width with; see BrowserPane.
@@ -985,7 +986,7 @@ export function ChatShell({
       setSideChatError(null);
       const result = await window.b4m.chat.startSideChat({ sessionId: activeId, selection: text });
       if (!result.ok) {
-        setSideChatError(result.error);
+        setSideChatError({ sessionId: activeId, error: result.error });
         return;
       }
       // Reread before opening it: the shell reselects away from an open session the list lacks.
@@ -1973,7 +1974,7 @@ export function ChatShell({
               </Box>
             )}
 
-            {sideChatError && (
+            {sideChatError?.sessionId === activeId && (
               <Box sx={contentColumnSx}>
                 <Alert
                   size="sm"
@@ -1983,7 +1984,7 @@ export function ChatShell({
                   onClick={() => setSideChatError(null)}
                   data-testid="chat-side-chat-error"
                 >
-                  {sideChatError}
+                  {sideChatError.error}
                 </Alert>
               </Box>
             )}
