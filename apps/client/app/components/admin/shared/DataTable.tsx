@@ -10,6 +10,8 @@ import type { AdminSelection } from './BulkActionBar';
 export type DataColumn<Row> = {
   id: string;
   label: string;
+  /** A help control after the header label, such as the definition of the term. */
+  help?: ReactNode;
   render: (row: Row) => ReactNode;
   /** Sorts the loaded rows locally. Ignored when the table's sort is controlled. */
   sortValue?: (row: Row) => string | number;
@@ -335,6 +337,20 @@ export function DataTable<Row>({
                     </Button>
                   ) : (
                     column.label
+                  )}
+                  {column.help && (
+                    <Box
+                      component="span"
+                      sx={{
+                        display: 'inline-flex',
+                        verticalAlign: 'middle',
+                        ml: 0.25,
+                        my: -1,
+                        '& svg': { fontSize: 16 },
+                      }}
+                    >
+                      {column.help}
+                    </Box>
                   )}
                 </th>
               ))}
