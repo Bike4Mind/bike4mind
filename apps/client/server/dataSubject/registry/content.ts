@@ -132,10 +132,14 @@ export const contentHolders = {
       { path: 'resolvedBy', matchBy: 'userId', action: 'anonymize' },
     ],
   },
-  // The owner's view log: the row stays for the artifact owner, the viewer's identity goes.
+  // The owner's view log: it goes with an erased personal page (as `purgeOwnerPublishedArtifacts` does),
+  // otherwise the row stays for the artifact owner and the viewer's identity goes.
   PublishedArtifactViewAudit: {
-    kind: 'holder',
-    references: [
+    kind: 'viaParent',
+    parent: 'PublishedArtifact',
+    foreignKey: 'publicId',
+    parentKey: 'publicId',
+    attribution: [
       {
         path: 'viewerId',
         matchBy: 'userId',

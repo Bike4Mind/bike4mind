@@ -179,6 +179,28 @@ export const billingHolders = {
     ],
   },
   // A dispute against an organization's or an unmatched charge is not a person.
+  // A Stripe webhook event on the person's subscription: invoices, refunds and disputes.
+  BillingEvent: {
+    kind: 'holder',
+    references: [
+      {
+        path: 'ownerId',
+        matchBy: 'userId',
+        where: { ownerType: 'user' },
+        action: 'retain',
+        reason: FINANCIAL_RECORD_REASON,
+      },
+    ],
+  },
+  // A subscription reconciliation finding. The next reconciliation run writes it again if the
+  // subscription still disagrees with Stripe. No `where`: its writers do not agree on the owner type's
+  // casing, and an organization id never equals a user id.
+  BillingMismatch: {
+    kind: 'holder',
+    references: [{ path: 'ownerId', matchBy: 'userId', action: 'deleteDocument' }],
+    // Which job resolved it ('reconciliation' or 'sync'), not a person.
+    unrelatedPaths: ['resolvedBy'],
+  },
   StripeDispute: {
     kind: 'holder',
     references: [
