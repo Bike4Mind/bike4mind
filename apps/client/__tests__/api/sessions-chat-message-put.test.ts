@@ -3,7 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const captured = vi.hoisted(() => ({ handlers: {} as Record<string, any> }));
 
 vi.mock('@bike4mind/database', () => ({
-  sessionRepository: { findById: vi.fn(), shareable: { findUpdateAccessById: vi.fn() } },
+  withTransaction: (work: () => Promise<unknown>) => work(),
+  sessionRepository: { findById: vi.fn(), update: vi.fn(), shareable: { findUpdateAccessById: vi.fn() } },
   questRepository: { findBySessionIdAndId: vi.fn(), updateInSession: vi.fn() },
 }));
 
