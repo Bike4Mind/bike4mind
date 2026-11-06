@@ -124,7 +124,9 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 
 - Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/quests/{id}/files\`,
   \`/api/v1/agent-executions[/{id}]\`
-- Sessions: \`/api/v1/sessions\`, \`/api/sessions/{id}\`, \`/api/v1/sessions/{id}/clone\`
+- Sessions: \`/api/v1/sessions\`, \`/api/sessions/{id}\`, \`/api/v1/sessions/{id}/clone\`,
+  \`/api/v1/sessions/{id}/files\`, \`/api/v1/sessions/semantic-search\`,
+  \`/api/v1/sessions/{id}/messages/{messageId}\`
 - Artifacts: \`/api/v1/artifacts\` (list, create), \`/api/v1/artifacts/{id}\` (get, update, delete),
   \`/api/v1/artifacts/{id}/versions[/{version}]\`
 - Agents: \`/api/v1/agents\`, \`/api/v1/agents/{id}\`
@@ -159,21 +161,6 @@ Image, video, music and chat work is asynchronous; the Async jobs section of the
 
 The sections below are still hand-written. Each row was checked against its route file, but
 treat the handler as authoritative.
-
-### Sessions (Notebooks)
-
-Session create, list, get, update, delete and clone are covered by the generated docs (see above). The routes
-below are still hand-written.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/sessions/[id]/files | List session files |
-| POST | /api/sessions/semantic-search | Semantic search across sessions |
-| GET | /api/sessions/[id]/chat/[messageId] | Get a specific message |
-| PUT | /api/sessions/[id]/chat/[messageId] | Update a message |
-| DELETE | /api/sessions/[id]/chat/[messageId] | Delete a message |
-
----
 
 ### Projects
 

@@ -72,3 +72,10 @@ const CHAT_MESSAGE_RESPONSE_FIELDS = {
  * as given, so routes must still apply redactPromptMetaForViewer for share viewers first.
  */
 export const chatMessageResponseSchema = z.object(passthroughShape(CHAT_MESSAGE_RESPONSE_FIELDS));
+
+/** Response for PUT /api/v1/sessions/{id}/messages/{messageId}. */
+export const updateChatMessageResponseSchema = z.object({
+  success: z.literal(true),
+  message: z.string(),
+  data: chatMessageResponseSchema,
+});

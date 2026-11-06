@@ -16,7 +16,10 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'GET /api/v1/quests/:id',
     'GET /api/v1/quests/:id/files',
     'GET /api/v1/sessions',
+    'GET /api/v1/sessions/:id/files',
+    'GET /api/v1/sessions/:id/messages/:messageId',
     'GET /api/v1/sessions/:id/quests',
+    'POST /api/v1/sessions/semantic-search',
   ],
   [ApiKeyScope.WRITE_NOTEBOOKS]: [
     'DELETE /api/sessions',
@@ -29,7 +32,10 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'GET /api/v1/artifacts/:id/versions/:version',
     'GET|POST /api/v1/sessions',
     'POST /api/v1/sessions/:id/clone',
+    'GET /api/v1/sessions/:id/files',
+    'GET|PUT|DELETE /api/v1/sessions/:id/messages/:messageId',
     'GET /api/v1/sessions/:id/quests',
+    'POST /api/v1/sessions/semantic-search',
   ],
   [ApiKeyScope.READ_FILES]: [
     'POST /api/ai/context-dry-run',

@@ -45,6 +45,13 @@ import { createTranscriptionUploadContract, createTranscriptionContract } from '
 import { createSessionContract } from './sessionCreate.contract';
 import { listSessionsContract } from './sessionList.contract';
 import { listSessionQuestsContract } from './sessionQuests.contract';
+import { listSessionFilesContract } from './sessionFiles.contract';
+import { searchSessionsContract } from './sessionSemanticSearch.contract';
+import {
+  getSessionMessageContract,
+  updateSessionMessageContract,
+  deleteSessionMessageContract,
+} from './sessionMessages.contract';
 import { listCreditTransactionsContract } from './creditTransactions.contract';
 import { getWhatsNewMediaContract, listWhatsNewContract } from './whatsNew.contract';
 import {
@@ -149,6 +156,11 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createSessionContract,
   listSessionsContract,
   listSessionQuestsContract,
+  listSessionFilesContract,
+  searchSessionsContract,
+  getSessionMessageContract,
+  updateSessionMessageContract,
+  deleteSessionMessageContract,
   listCreditTransactionsContract,
   listDataLakesContract,
   getDataLakeContract,

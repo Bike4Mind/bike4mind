@@ -11,26 +11,34 @@ import { createMocks } from 'node-mocks-http';
 // for that method and returns the SAME router, so they chain (.get(a).put(b).delete(c)), and the
 // final router itself is invoked as `handler(req, res)`, dispatching on req.method. Mocked here
 // closely enough to support that shape rather than a bare `(fn) => fn`, which breaks the chain.
-vi.mock('@server/middlewares/baseApi', () => {
-  function createRouter() {
-    const handlers: Record<string, any> = {};
-    const router: any = (req: any, res: any) => handlers[req.method?.toUpperCase()](req, res);
-    router.get = (fn: any) => {
-      handlers.GET = fn;
-      return router;
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: () => {
+    type Mw = (req: unknown, res: unknown, next: () => void) => unknown;
+    const used: Mw[] = [];
+    const compose =
+      (...handlers: Mw[]) =>
+      async (req: unknown, res: unknown) => {
+        for (const handler of [...used, ...handlers]) {
+          let advanced = false;
+          await handler(req, res, () => {
+            advanced = true;
+          });
+          if (!advanced) return;
+        }
+      };
+    const chain: Record<string, unknown> = {};
+    chain.use = (mw: Mw) => {
+      used.push(mw);
+      return chain;
     };
-    router.put = (fn: any) => {
-      handlers.PUT = fn;
-      return router;
-    };
-    router.delete = (fn: any) => {
-      handlers.DELETE = fn;
-      return router;
-    };
-    return router;
-  }
-  return { baseApi: () => createRouter() };
-});
+    chain.get = compose;
+    chain.put = compose;
+    chain.delete = compose;
+    return chain;
+  },
+  methodNotAllowedHandler: () => (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) =>
+    res.status(405).json({ error: 'Method not allowed' }),
+}));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: any) => fn,
@@ -68,6 +76,7 @@ const messageWithFunctionCalls = () => ({
   sessionId: 'sess-1',
   reply: 'hi',
   replies: ['hi'],
+  pendingAction: { tool: 'create_document', params: { body: 'PRIVATE DRAFT' }, ts: 1 },
   promptMeta: {
     functionCalls: [
       { name: 'web_search', parameters: {}, id: 'call_1', returnValue: 'PRIVATE TOOL OUTPUT', success: true },
@@ -90,10 +99,9 @@ describe('GET/PUT /api/sessions/[id]/chat/[messageId] - non-owner redaction', ()
     mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'jwt-user', users: [] });
     mockQuestFindBySessionIdAndId.mockResolvedValue(null);
     const { req, res } = fire();
-    await handler(req, res);
 
+    await expect(handler(req, res)).rejects.toMatchObject({ statusCode: 404 });
     expect(mockQuestFindBySessionIdAndId).toHaveBeenCalledWith('sess-1', 'quest-1');
-    expect(res._getStatusCode()).toBe(404);
   });
 
   it('GET strips returnValue for a sharee (jwt-user is not session.userId)', async () => {
@@ -104,7 +112,42 @@ describe('GET/PUT /api/sessions/[id]/chat/[messageId] - non-owner redaction', ()
     expect(res._getStatusCode()).toBe(200);
     const body = res._getJSONData();
     expect(JSON.stringify(body)).not.toContain('PRIVATE TOOL OUTPUT');
+    expect(JSON.stringify(body)).not.toContain('PRIVATE DRAFT');
     expect(body.promptMeta.functionCalls[0]).toMatchObject({ name: 'web_search', id: 'call_1', success: true });
+  });
+
+  it.each(['isGlobalRead', 'isGlobalWrite'] as const)('GET accepts %s and redacts owner-only fields', async flag => {
+    mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'owner', users: [], [flag]: true });
+    const { req, res } = fire();
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockQuestFindBySessionIdAndId).toHaveBeenCalledWith('sess-1', 'quest-1');
+    const body = res._getJSONData();
+    expect(JSON.stringify(body)).not.toContain('PRIVATE TOOL OUTPUT');
+    expect(body).not.toHaveProperty('pendingAction');
+  });
+
+  it('GET rejects an unrelated user before reading the message', async () => {
+    mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'owner', users: [{ userId: 'someone-else' }] });
+    const { req, res } = fire();
+
+    await expect(handler(req, res)).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockQuestFindBySessionIdAndId).not.toHaveBeenCalled();
+  });
+
+  it.each(['GET', 'PUT'])('%s binds messages to the resolved session id', async method => {
+    const sessionId = 'abcdef0123456789abcdef01';
+    mockSessionFindById.mockResolvedValue({ id: sessionId, userId: 'jwt-user', users: [] });
+    const { req, res } = fire({ method });
+    req.query.id = sessionId.toUpperCase();
+    await handler(req, res);
+
+    expect(mockSessionFindById).toHaveBeenCalledWith(sessionId.toUpperCase());
+    expect(mockQuestFindBySessionIdAndId).toHaveBeenCalledWith(sessionId, 'quest-1');
+    if (method === 'PUT') {
+      expect(mockQuestUpdate).toHaveBeenCalledWith(sessionId, expect.objectContaining({ id: 'quest-1' }));
+    }
   });
 
   it('GET leaves returnValue untouched for the session owner', async () => {
@@ -115,6 +158,7 @@ describe('GET/PUT /api/sessions/[id]/chat/[messageId] - non-owner redaction', ()
     expect(res._getStatusCode()).toBe(200);
     const body = res._getJSONData();
     expect(JSON.stringify(body)).toContain('PRIVATE TOOL OUTPUT');
+    expect(JSON.stringify(body)).toContain('PRIVATE DRAFT');
   });
 
   it('PUT strips returnValue for a sharee', async () => {
@@ -131,6 +175,7 @@ describe('GET/PUT /api/sessions/[id]/chat/[messageId] - non-owner redaction', ()
     expect(res._getStatusCode()).toBe(200);
     const body = res._getJSONData();
     expect(JSON.stringify(body)).not.toContain('PRIVATE TOOL OUTPUT');
+    expect(JSON.stringify(body)).not.toContain('PRIVATE DRAFT');
     expect(body.data.promptMeta.functionCalls[0]).toMatchObject({ name: 'web_search', id: 'call_1', success: true });
   });
 
@@ -142,6 +187,7 @@ describe('GET/PUT /api/sessions/[id]/chat/[messageId] - non-owner redaction', ()
     expect(res._getStatusCode()).toBe(200);
     const body = res._getJSONData();
     expect(JSON.stringify(body)).toContain('PRIVATE TOOL OUTPUT');
+    expect(JSON.stringify(body)).toContain('PRIVATE DRAFT');
   });
 });
 

@@ -18,7 +18,7 @@ const LEGACY_SEED = `
 3bb083db8e64 3dc9363baa1a 3df999299a2d 3e3eaf9cd77c 3e4176be1c48 3ec72e3ac0a3 3effb03d9325
 40f556547602 413f7c8082e4 419f21991350 41a8f5c2b662 41f918864b1c 42e07254368d 434a8e4932ed
 43d112295f48 46bd586deb06 49627b2c4d6b 49bddae03ab9 4b1fbd0505df 4b38e95bd3e3 4b56c2365175 4b7ce8871d5f
-4bd858496fa6 4bdf4b58eefe 4be8154314f1 4ca8d8bb3c82 4dc25ea3603f 4f71544360b9 5086931d9a00
+4bd858496fa6 4bdf4b58eefe 4be8154314f1 4ca8d8bb3c82 4dc25ea3603f 5086931d9a00
 5104cfb8d929 51423d9e0878 516d279ce4f4 5171252d9a94 51947f2b1cdb 51cf666f59e7 53d06dab635c
 545593ba3989 548b1206f618 55b27aa4d619 5605b2684050 58e7cd021cb6 5931a8193ada 5a5583cb1274
 5d5074ebd89b 6061ef57218e 60ffb54be1c8 642b95025886 64bf2def6df8 64ecbfe8b19b 65a4fc3788a6 65e21f6e4e9c
@@ -45,10 +45,10 @@ d312a05b0b11 d3e467aeaff4 d3eaab3ea5bc d62a191ecb73 d6ea87dfd1f3 d72c4c7fb8cb d7
 d8960e4f9824 d935bc3fc33f d9ef50186023 db2f2ec79ba9 db38b5af6ebf dba77c4f75e1 dcb472615f55 decee2b17e42
 dfe94bb65dd6 e1f44ac43bb5 e23d092bb96b e382e8b70179 e45612c7685b e469c9c36006 e46ab1a21ce4 e50fe3fb8c42
 e57e7baff157 e595cbe31df0 e5b445a66b3b e5fa24fb7ad2 ea1c26f079c0 ea47451367b2 eb064860e4cb eb393164d18a
-eb489128dd54 eb8ffcc904f4 ec21ea5d7155 ec85c1a61fa3 ed3e6176e5c7 ee1a91584891 efc5836a2d56 f01fbbb5a514
+eb489128dd54 eb8ffcc904f4 ec21ea5d7155 ed3e6176e5c7 ee1a91584891 efc5836a2d56 f01fbbb5a514
 f077a8409874 f2a758fff8dc f2b0a5d37469 f3a75784b4ba f3eaddde86e8 f582657aa6d2
 f6c79f784d66 f7313baf7c87 f7b1abb973f8 f7b767e8d08b f835f59b19c4 f87ac4f79b9c f968e17e377e f9b399174d48
-fab5d2fb8c6e fad1aeec6013 fbae6f7451be fbb811957a79 fc6ae97a0af2 fe869b6f837a ff38b81ff8b8 ffdd84ef0662
+fab5d2fb8c6e fad1aeec6013 fbb811957a79 fc6ae97a0af2 fe869b6f837a ff38b81ff8b8 ffdd84ef0662
 `;
 
 /** Checked by checkRouteScopePosture.test.ts; see routeScopePosture.ts for what each list means. */
@@ -319,12 +319,10 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/sessions/[id]/agents/trigger-proactive-messages',
     '/api/sessions/[id]/auto-rename',
     '/api/sessions/[id]/chat',
-    '/api/sessions/[id]/chat/[messageId]',
     '/api/sessions/[id]/chat/[messageId]/fork',
     '/api/sessions/[id]/chat/[messageId]/snip',
     '/api/sessions/[id]/chat/stop-reply',
     '/api/sessions/[id]/favorite',
-    '/api/sessions/[id]/files',
     '/api/sessions/[id]/questmaster-plans',
     '/api/sessions/[id]/summary',
     '/api/sessions/[id]/tag',
@@ -334,7 +332,6 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/sessions/download',
     '/api/sessions/favorites',
     '/api/sessions/recent-proactive-messages',
-    '/api/sessions/semantic-search',
     '/api/sessions/shared',
     '/api/settings',
     '/api/settings/fetch',

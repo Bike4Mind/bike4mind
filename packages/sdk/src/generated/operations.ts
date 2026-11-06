@@ -101,6 +101,10 @@ export const operations = {
     method: 'DELETE',
     path: '/api/sessions/{id}',
   },
+  deleteSessionMessage: {
+    method: 'DELETE',
+    path: '/api/v1/sessions/{id}/messages/{messageId}',
+  },
   editImage: {
     method: 'POST',
     path: '/api/v1/image-edits',
@@ -209,6 +213,10 @@ export const operations = {
     method: 'GET',
     path: '/api/sessions/{id}',
   },
+  getSessionMessage: {
+    method: 'GET',
+    path: '/api/v1/sessions/{id}/messages/{messageId}',
+  },
   getSkillMarketListing: {
     method: 'GET',
     path: '/api/v1/skills/market/listings/{id}',
@@ -277,6 +285,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/quests/{id}/files',
   },
+  listSessionFiles: {
+    method: 'GET',
+    path: '/api/v1/sessions/{id}/files',
+  },
   listSessionQuests: {
     method: 'GET',
     path: '/api/v1/sessions/{id}/quests',
@@ -341,6 +353,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/files/search',
   },
+  searchSessions: {
+    method: 'POST',
+    path: '/api/v1/sessions/semantic-search',
+  },
   sendChatMessage: {
     method: 'POST',
     path: '/api/chat',
@@ -380,6 +396,10 @@ export const operations = {
   updateSession: {
     method: 'PUT',
     path: '/api/sessions/{id}',
+  },
+  updateSessionMessage: {
+    method: 'PUT',
+    path: '/api/v1/sessions/{id}/messages/{messageId}',
   },
   withdrawSkillMarketListing: {
     method: 'DELETE',

@@ -638,6 +638,74 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/sessions/{id}/files': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List a session's files
+     * @description Lists every file a session draws on: the knowledge files attached to it, the files attached to its turns, and the files its tools generated. Each entry carries a short-lived signed `fileUrl`. Works for a session you own or one shared with you. A session that does not exist, was deleted, or is not visible to you is `404`. An API key needs `notebooks:read` or `notebooks:write`.
+     */
+    get: operations['listSessionFiles'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/sessions/semantic-search': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Search your sessions by meaning
+     * @description Finds the sessions of yours whose conversations match a query. By default it first keeps the messages that contain the query terms (after spelling correction and synonym expansion), then ranks them by embedding similarity, so a result is both on topic and close in meaning. Set `hybridMode` to `false` to rank every message by similarity alone, and `useReRanking` to have a language model verify the best candidates. Only sessions you own are searched. Messages without a stored embedding are embedded on the fly up to a cap; `partial` says the cap was hit. The query expansion, embeddings and re-rank run on platform keys and are billed in credits to the caller, reserved before each call and refunded if it fails. An API key needs `notebooks:read` or `notebooks:write`.
+     */
+    post: operations['searchSessions'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/sessions/{id}/messages/{messageId}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get a message of a session
+     * @description Reads one turn of a session conversation: the prompt, the reply, attachments, status and cost. Works for a session you own or one shared with you. A message of a session shared with you reads without `pendingAction` or the owner-only fields of `promptMeta`. A session or message that does not exist or was deleted is `404`. An API key needs `notebooks:read` or `notebooks:write`.
+     */
+    get: operations['getSessionMessage'];
+    /**
+     * Update a message of a session
+     * @description Edits one turn of a session conversation: replaces `reply` or `replies`, pins it, or records which suggested choice was picked. Only those fields are writable; any other key is ignored. Needs write access to the session: the owner, or a user or group it was shared with at the update level. A message of a session shared with you reads without `pendingAction` or the owner-only fields of `promptMeta`. A session or message that does not exist or was deleted is `404`. An API key needs `notebooks:write`.
+     */
+    put: operations['updateSessionMessage'];
+    post?: never;
+    /**
+     * Delete a message of a session
+     * @description Deletes one turn of a session conversation. It disappears from the session history; this cannot be undone through the API. Only the owner of the session may delete. A session you do not own, or a message that does not exist or was already deleted, is `404`. An API key needs `notebooks:write`.
+     */
+    delete: operations['deleteSessionMessage'];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/credits/transactions': {
     parameters: {
       query?: never;
@@ -4396,6 +4464,307 @@ export interface components {
         };
       }[];
       next_cursor: string | null;
+    };
+    listSessionFilesResponse200: {
+      isGlobalRead?: unknown;
+      isGlobalWrite?: unknown;
+      id?: unknown;
+      createdAt?: unknown;
+      updatedAt?: unknown;
+      userId?: unknown;
+      fileName?: unknown;
+      fileNameLower?: unknown;
+      fileSize?: unknown;
+      extractedCharCount?: unknown;
+      filePath?: unknown;
+      mimeType?: unknown;
+      organizationId?: unknown;
+      notes?: unknown;
+      type?: unknown;
+      public?: unknown;
+      chunkCount?: unknown;
+      vectorizedChunkCount?: unknown;
+      chunkedCharCount?: unknown;
+      maxChunkCharLength?: unknown;
+      embeddedChunkCount?: unknown;
+      embeddedCharCount?: unknown;
+      isChunking?: unknown;
+      chunkClaimedAt?: unknown;
+      chunkClaimConfirmedAt?: unknown;
+      chunked?: unknown;
+      chunkedPassageTokenTarget?: unknown;
+      chunkRebuildRequestedAt?: unknown;
+      chunkStallReason?: unknown;
+      noExtractableTextAt?: unknown;
+      chunkPolicyConflict?: unknown;
+      isVectorizing?: unknown;
+      vectorized?: unknown;
+      embeddingModel?: unknown;
+      chunkEmbeddingModelStampedAt?: unknown;
+      vectorizeEnqueueFailedAt?: unknown;
+      system?: unknown;
+      systemPriority?: unknown;
+      tags?: unknown;
+      primaryTag?: unknown;
+      status?: unknown;
+      moderationStatus?: unknown;
+      blockReason?: unknown;
+      moderationClaimedAt?: unknown;
+      moderationETag?: unknown;
+      moderationRevision?: unknown;
+      clientUpload?: unknown;
+      apiKeyId?: unknown;
+      uploadRejectedAt?: unknown;
+      storageChargedAt?: unknown;
+      storageExempt?: unknown;
+      moderationAttempts?: unknown;
+      moderationLastAttemptAt?: unknown;
+      error?: unknown;
+      fileUrl?: unknown;
+      presignedUrl?: unknown;
+      fileUrlExpireAt?: unknown;
+      sourceType?: unknown;
+      sourceMetadata?: unknown;
+      derivedFrom?: unknown;
+      automaticallyProcessed?: unknown;
+      dataLakeMetadata?: unknown;
+      contentHash?: unknown;
+      serverTextHash?: unknown;
+      batchId?: unknown;
+      relativePath?: unknown;
+      documentDate?: unknown;
+      documentDateSource?: unknown;
+      driveFileId?: unknown;
+      driveModifiedTime?: unknown;
+      driveMd5Checksum?: unknown;
+      sourceLakeId?: unknown;
+      driveConnectionId?: unknown;
+      githubConnectionId?: unknown;
+      githubPath?: unknown;
+      githubBlobSha?: unknown;
+      supersededInLakes?: unknown;
+      sessionId?: unknown;
+      archivedAt?: unknown;
+      dispatchedNotifications?: unknown;
+      versions?: unknown;
+      deletedAt?: unknown;
+      users?: {
+        userId?: unknown;
+        permissions?: unknown;
+        projectId?: unknown;
+        sessionId?: unknown;
+        extraData?: unknown;
+      }[];
+      groups?: {
+        groupId?: unknown;
+        permissions?: unknown;
+      }[];
+    }[];
+    searchSessionsResponse200: {
+      /** @description Matching sessions, best first. */
+      sessionIds: string[];
+      count: number;
+      /** @description Per-session scores in the same order as `sessionIds`. Omitted when you have no sessions. */
+      scores?: {
+        sessionId: string;
+        sessionName?: string;
+        /** @description Cosine similarity of the best matching message. */
+        maxSimilarity: number;
+        /** @description Messages in the session at or above `minSimilarity`. */
+        matchingMessages: number;
+        bestMatch?: {
+          similarity: number;
+          /** @description Opening of the best matching message, with its prompt and reply. */
+          snippet: string;
+        };
+      }[];
+      /** @description `true` when some messages were skipped because too many needed a fresh embedding. */
+      partial?: boolean;
+      /** @description `true` when many messages were skipped for that reason. */
+      suggestSpider?: boolean;
+      /** @description How the search ran. Omitted when you have no sessions. */
+      debug?: {
+        query: string;
+        correctedQuery?: string;
+        queryExpansionTimeMs?: number;
+        minSimilarity: number;
+        hybridMode: boolean;
+        keywords: string[];
+        keywordMatchCount: number | null;
+        messagesWithEmbedding: number;
+        messagesGenerated: number;
+        messagesSkipped: number;
+        maxOnTheFlyEmbeddings: number;
+        reRankingUsed: boolean;
+        reRankingTimeMs?: number;
+        candidatesReRanked?: number;
+        candidatesFiltered?: number;
+      };
+    };
+    searchSessionsResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+    };
+    /**
+     * @example {
+     *       "query": "quarterly budget review",
+     *       "topK": 10
+     *     }
+     */
+    searchSessionsRequest: {
+      /** @description What to look for in the content of your sessions. */
+      query: string;
+      /**
+       * @description Lowest cosine similarity a message needs to count as a match.
+       * @default 0.3
+       */
+      minSimilarity?: number;
+      /**
+       * @description Most sessions to return.
+       * @default 50
+       */
+      topK?: number;
+      /**
+       * @description Require a keyword match before semantic ranking. `false` ranks every message by similarity alone.
+       * @default true
+       */
+      hybridMode?: boolean;
+      /**
+       * @description Verify the best candidates with a language model and drop the ones it judges irrelevant.
+       * @default false
+       */
+      useReRanking?: boolean;
+    };
+    getSessionMessageResponse200: {
+      id?: unknown;
+      createdAt?: unknown;
+      updatedAt?: unknown;
+      deletedAt?: unknown;
+      sessionId?: unknown;
+      conversationItemId?: unknown;
+      openaiMessageId?: unknown;
+      claudeMessageId?: unknown;
+      type?: unknown;
+      timestamp?: unknown;
+      prompt?: unknown;
+      fabFileIds?: unknown;
+      agentIds?: unknown;
+      reply?: unknown;
+      replies?: unknown;
+      structuredReplies?: unknown;
+      toolResults?: unknown;
+      questMasterReply?: unknown;
+      images?: unknown;
+      videos?: unknown;
+      videoJobIds?: unknown;
+      generationJobs?: unknown;
+      agentVideoClipsClaimed?: unknown;
+      agentMusicTracksClaimed?: unknown;
+      oob?: unknown;
+      promptMeta?: unknown;
+      status?: unknown;
+      creditsUsed?: unknown;
+      errorCode?: unknown;
+      questMasterPlanId?: unknown;
+      agentExecutionId?: unknown;
+      correctsQuestId?: unknown;
+      clientFirstTokenTime?: unknown;
+      routingSource?: unknown;
+      pinned?: unknown;
+      researchModeResults?: unknown;
+      deepResearchState?: unknown;
+      fallbackInfo?: unknown;
+      promptEnhancement?: unknown;
+      pendingAction?: unknown;
+      attachmentNotices?: unknown;
+      attachmentDelivery?: unknown;
+      turnTiming?: unknown;
+      navigationIntents?: unknown;
+      suggestedChoices?: unknown;
+      attachmentList?: unknown;
+      uiSideEffects?: unknown;
+      jupyterNotebook?: unknown;
+    };
+    updateSessionMessageResponse200: {
+      /** @enum {boolean} */
+      success: true;
+      message: string;
+      data: {
+        id?: unknown;
+        createdAt?: unknown;
+        updatedAt?: unknown;
+        deletedAt?: unknown;
+        sessionId?: unknown;
+        conversationItemId?: unknown;
+        openaiMessageId?: unknown;
+        claudeMessageId?: unknown;
+        type?: unknown;
+        timestamp?: unknown;
+        prompt?: unknown;
+        fabFileIds?: unknown;
+        agentIds?: unknown;
+        reply?: unknown;
+        replies?: unknown;
+        structuredReplies?: unknown;
+        toolResults?: unknown;
+        questMasterReply?: unknown;
+        images?: unknown;
+        videos?: unknown;
+        videoJobIds?: unknown;
+        generationJobs?: unknown;
+        agentVideoClipsClaimed?: unknown;
+        agentMusicTracksClaimed?: unknown;
+        oob?: unknown;
+        promptMeta?: unknown;
+        status?: unknown;
+        creditsUsed?: unknown;
+        errorCode?: unknown;
+        questMasterPlanId?: unknown;
+        agentExecutionId?: unknown;
+        correctsQuestId?: unknown;
+        clientFirstTokenTime?: unknown;
+        routingSource?: unknown;
+        pinned?: unknown;
+        researchModeResults?: unknown;
+        deepResearchState?: unknown;
+        fallbackInfo?: unknown;
+        promptEnhancement?: unknown;
+        pendingAction?: unknown;
+        attachmentNotices?: unknown;
+        attachmentDelivery?: unknown;
+        turnTiming?: unknown;
+        navigationIntents?: unknown;
+        suggestedChoices?: unknown;
+        attachmentList?: unknown;
+        uiSideEffects?: unknown;
+        jupyterNotebook?: unknown;
+      };
+    };
+    /**
+     * @example {
+     *       "pinned": true
+     *     }
+     */
+    updateSessionMessageRequest: {
+      /** @description Replaces the stored reply text. */
+      reply?: string;
+      /** @description Replaces the stored list of alternative replies. */
+      replies?: string[];
+      /** @description Pins or unpins the message. */
+      pinned?: boolean;
+      /** @description Index of the suggested choice that was picked. Only the pick is writable, only once, and only when it is inside the options the server stored; otherwise it is ignored. */
+      selectedChoiceIndex?: number;
+    };
+    deleteSessionMessageResponse200: {
+      /** @description Confirmation text. */
+      msg: string;
     };
     listCreditTransactionsResponse200: {
       data: {
@@ -12956,6 +13325,798 @@ export interface operations {
         };
       };
       /** @description `limit` is out of range, or `cursor` is malformed or was issued by a different endpoint. A cursor is opaque: pass back exactly the `next_cursor` you were given. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  listSessionFiles: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The session's files. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['listSessionFilesResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key holds neither `notebooks:read` nor `notebooks:write`. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No session with that id is visible to the caller. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  searchSessions: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['searchSessionsRequest'];
+      };
+    };
+    responses: {
+      /** @description Matching sessions, best first. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['searchSessionsResponse200'];
+        };
+      };
+      /** @description The billing organization could not be resolved, or the deployment has no credential for the configured embedding provider. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key holds neither `notebooks:read` nor `notebooks:write`, or AI features are disabled on the account. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The body failed validation (`query` missing or blank, a number out of range), or the caller cannot afford the request - the last is tagged `errorCode: "insufficient_credits"`. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['searchSessionsResponse422'];
+        };
+      };
+      /** @description Per-user rate limit exceeded, or the account has too many completions in flight. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The search failed or the embedding model is not configured. */
+      500: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getSessionMessage: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+        messageId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The message. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getSessionMessageResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key holds neither `notebooks:read` nor `notebooks:write`, or the caller has no access to the session. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No session or message with those ids is visible to the caller. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  updateSessionMessage: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+        messageId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['updateSessionMessageRequest'];
+      };
+    };
+    responses: {
+      /** @description The updated message. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['updateSessionMessageResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `notebooks:write`, or the caller may not update the session (read-only share). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No session or message with those ids is visible to the caller. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  deleteSessionMessage: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+        messageId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The message was deleted. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['deleteSessionMessageResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `notebooks:write`. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No session or message with those ids is visible to the caller. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
