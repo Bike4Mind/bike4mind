@@ -1071,12 +1071,15 @@ export class ReActAgent extends EventEmitter {
     return this.context.selfReportConfidence ? `${withArtifact}\n\n${SELF_REPORT_CONFIDENCE_PROMPT}` : withArtifact;
   }
 
-  /** The trailing reminder source for a request: the caller's workflow state plus, after a tool result, the confidence nudge. */
+  /**
+   * The trailing reminder source for a request: the caller's workflow state plus, on every request after
+   * the first, the confidence nudge. The first request already carries the system-prompt instruction.
+   */
   private reminderProvider(
     workflowReminder: (() => string | null) | undefined,
-    followsToolResult: boolean
+    afterFirstIteration: boolean
   ): (() => string | null) | undefined {
-    if (!this.context.selfReportConfidence || !followsToolResult) return workflowReminder;
+    if (!this.context.selfReportConfidence || !afterFirstIteration) return workflowReminder;
     return () => [workflowReminder?.()?.trim(), SELF_REPORT_CONFIDENCE_REMINDER].filter(Boolean).join('\n\n');
   }
 
