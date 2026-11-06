@@ -441,34 +441,88 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** A change that would replace a list or map in the file with a value of another shape, dropping what it holds. */
+class ShapeMismatchError extends Error {}
+
+const shapeOf = (value: unknown) => (Array.isArray(value) ? 'array' : isJsonObject(value) ? 'object' : 'scalar');
+const hasOwnKey = (value: object, key: string) => Object.prototype.hasOwnProperty.call(value, key);
+const ownValue = (value: Record<string, unknown>, key: string) => (hasOwnKey(value, key) ? value[key] : undefined);
+
 /**
  * Applies what changed from `base` to `next` onto `target`, a value as the file holds it, and keeps everything else
- * in `target`: keys set or removed in objects, items added or removed in arrays, any other value replaced.
+ * in `target`: keys set or removed in objects, items added or removed in arrays, any other value replaced. Throws
+ * ShapeMismatchError rather than replace a `target` of another shape when either is a list or map.
  */
 function applyChanges(target: unknown, base: unknown, next: unknown): unknown {
   if (isDeepStrictEqual(base, next)) return target;
   // An empty map or list filled in where there was none is not a change.
   const empty = (isJsonObject(next) && Object.keys(next).length === 0) || (Array.isArray(next) && next.length === 0);
   if (base === undefined && target === undefined && empty) return undefined;
-  if (isJsonObject(base) && isJsonObject(next)) {
-    const out: Record<string, unknown> = isJsonObject(target) ? { ...target } : {};
-    for (const key of new Set([...Object.keys(base), ...Object.keys(next)])) {
-      if (next[key] === undefined) {
-        if (base[key] !== undefined) delete out[key];
+  if (target !== undefined && shapeOf(target) !== shapeOf(next)) throw new ShapeMismatchError();
+  if (isJsonObject(next)) {
+    const from = isJsonObject(base) ? base : {};
+    // No prototype, so keys such as __proto__ read from the file stay plain data.
+    const out: Record<string, unknown> = Object.create(null);
+    if (isJsonObject(target)) for (const key of Object.keys(target)) out[key] = target[key];
+    for (const key of new Set([...Object.keys(from), ...Object.keys(next)])) {
+      const nextValue = ownValue(next, key);
+      if (nextValue === undefined) {
+        if (ownValue(from, key) !== undefined) delete out[key];
         continue;
       }
-      const value = applyChanges(out[key], base[key], next[key]);
+      const value = applyChanges(out[key], ownValue(from, key), nextValue);
       if (value === undefined) delete out[key];
       else out[key] = value;
     }
     return out;
   }
-  if (Array.isArray(base) && Array.isArray(next) && Array.isArray(target)) {
+  if (Array.isArray(next) && Array.isArray(target)) {
+    const from = Array.isArray(base) ? base : [];
     const has = (list: unknown[], item: unknown) => list.some(entry => isDeepStrictEqual(entry, item));
-    const kept = target.filter(item => has(next, item) || !has(base, item));
-    return [...kept, ...next.filter(item => !has(base, item) && !has(kept, item))];
+    const kept = target.filter(item => has(next, item) || !has(from, item));
+    return [...kept, ...next.filter(item => !has(from, item) && !has(kept, item))];
   }
   return next;
+}
+
+/** Sets `server` in the file's mcpServers, array or name-keyed map, replacing any entry with its name. */
+function upsertRawMcpServer(raw: Record<string, unknown>, server: CliConfig['mcpServers'][0]): boolean {
+  const servers = raw.mcpServers;
+  if (servers === undefined) {
+    raw.mcpServers = [server];
+  } else if (Array.isArray(servers)) {
+    raw.mcpServers = [...servers.filter(entry => !(isJsonObject(entry) && entry.name === server.name)), server];
+  } else if (isJsonObject(servers)) {
+    const { name, ...entry } = server;
+    Object.defineProperty(servers, name, { value: entry, enumerable: true, configurable: true, writable: true });
+  } else {
+    throw new ShapeMismatchError();
+  }
+  return true;
+}
+
+/** Removes the server named `name` from the file's mcpServers, array or name-keyed map. */
+function removeRawMcpServer(raw: Record<string, unknown>, name: string): boolean {
+  const servers = raw.mcpServers;
+  if (Array.isArray(servers)) {
+    const kept = servers.filter(entry => !(isJsonObject(entry) && entry.name === name));
+    raw.mcpServers = kept;
+    return kept.length !== servers.length;
+  }
+  if (isJsonObject(servers) && hasOwnKey(servers, name)) {
+    delete servers[name];
+    return true;
+  }
+  return false;
+}
+
+/** Drops the items `drop` matches from the file's list at `key`; a value that is not a list is left alone. */
+function removeRawListItems(raw: Record<string, unknown>, key: string, drop: (item: unknown) => boolean): boolean {
+  const list = raw[key];
+  if (!Array.isArray(list)) return false;
+  const kept = list.filter(item => !drop(item));
+  raw[key] = kept;
+  return kept.length !== list.length;
 }
 
 /** The sign-in and backend fields as written to the file; read from it, each may be in any shape. */
@@ -1338,6 +1392,14 @@ export class ConfigStore {
       this.rawMcpJsonServers = null;
     }
 
+    const revoked = await this.patchInFallback(['trustedProjects', 'trustedMcpDefinitions'], raw => {
+      const dropped = removeRawListItems(raw, 'trustedProjects', p => p === target);
+      const definitions = raw.trustedMcpDefinitions;
+      if (!isJsonObject(definitions) || !hasOwnKey(definitions, target)) return dropped;
+      delete definitions[target];
+      return true;
+    });
+    if (revoked) return;
     await this.save();
   }
 
@@ -1347,19 +1409,17 @@ export class ConfigStore {
    * interactive session vs `b4m plugin add`) don't clobber each other's keys.
    */
   private async readDiskFeatures(): Promise<Record<string, boolean>> {
-    try {
-      const raw = JSON.parse(await fs.readFile(this.configPath, 'utf-8')) as {
-        features?: Record<string, unknown>;
-      };
-      // Return only boolean entries so callers that write this back (e.g.
-      // switchApiEnvironment) or merge over it can't reintroduce a bogus value.
-      return Object.fromEntries(Object.entries(raw.features ?? {}).filter(([, v]) => typeof v === 'boolean')) as Record<
-        string,
-        boolean
-      >;
-    } catch {
-      return {};
-    }
+    // A file that could not be read throws: read as empty, the merge would drop every feature key.
+    const text = await this.readConfigText();
+    const raw = text === null ? null : this.parseConfigText(text);
+    const features = raw?.features;
+    if (!isJsonObject(features)) return {};
+    // Return only boolean entries so callers that write this back (e.g.
+    // switchApiEnvironment) or merge over it can't reintroduce a bogus value.
+    return Object.fromEntries(Object.entries(features).filter(([, v]) => typeof v === 'boolean')) as Record<
+      string,
+      boolean
+    >;
   }
 
   /**
@@ -1405,15 +1465,9 @@ export class ConfigStore {
     snapshot: CliConfig,
     patch: GlobalConfigPatch | undefined
   ): Promise<CliConfig> {
-    let disk: Record<string, unknown>;
-    try {
-      const parsed: unknown = JSON.parse(await fs.readFile(this.configPath, 'utf-8'));
-      const result = z.record(z.string(), z.unknown()).safeParse(parsed);
-      if (!result.success) return next;
-      disk = result.data;
-    } catch {
-      return next;
-    }
+    const text = await this.readConfigText();
+    const disk = text === null ? null : this.parseConfigText(text);
+    if (!disk) return next;
     // A patch naming a key sets it; a whole config spread back (it carries `version`) only sets what it changed.
     const wholeConfig = patch !== undefined && Object.prototype.hasOwnProperty.call(patch, 'version');
     const changed = (key: 'defaultModel' | 'ollamaHost' | 'localDefaultModel') =>
@@ -1727,14 +1781,16 @@ export class ConfigStore {
       this.fallbackBase = null;
       return { ...next, ...(authFields ?? (await this.diskAuthFields())) };
     }
-    if (!raw) {
-      throw new Error(
-        `Could not save settings: ${this.configPath} failed validation, so it was left unchanged. Fix the file, or remove it to start over.`
-      );
-    }
+    if (!raw) throw this.invalidConfigError();
     const { auth: _baseAuth, authByEnv: _baseByEnv, apiConfig: _baseApi, ...from } = base;
     const { auth: _auth, authByEnv: _byEnv, apiConfig: _api, ...to } = next;
-    const merged = applyChanges(raw, from, to) as Record<string, unknown>;
+    let merged: Record<string, unknown>;
+    try {
+      merged = applyChanges(raw, from, to) as Record<string, unknown>;
+    } catch (error) {
+      if (error instanceof ShapeMismatchError) throw this.invalidConfigError();
+      throw error;
+    }
     if (authFields) {
       for (const key of ['auth', 'authByEnv', 'apiConfig'] as const) {
         if (authFields[key] === undefined) delete merged[key];
@@ -1742,6 +1798,38 @@ export class ConfigStore {
       }
     }
     return merged;
+  }
+
+  private invalidConfigError(): Error {
+    return new Error(
+      `Could not save settings: ${this.configPath} failed validation, so it was left unchanged. Fix the file, or remove it to start over.`
+    );
+  }
+
+  /**
+   * While the snapshot stands in for a file that failed validation, applies `mutate` to the file's own JSON in place
+   * of a save, and syncs `keys` of the snapshot base so a later save does not apply the change again. Returns false
+   * when not in that state or when there is no file, for the caller to save as usual.
+   */
+  private async patchInFallback(
+    keys: Array<keyof CliConfig>,
+    mutate: (raw: Record<string, unknown>) => boolean
+  ): Promise<boolean> {
+    if (!this.fallbackBase) return false;
+    let patched: boolean;
+    try {
+      patched = await this.exclusive(() =>
+        this.withConfigWriteLock(() => this.patchConfigText(mutate, () => this.invalidConfigError()))
+      );
+    } catch (error) {
+      if (error instanceof ShapeMismatchError) throw this.invalidConfigError();
+      throw error;
+    }
+    if (!patched) return false;
+    const base = this.fallbackBase as unknown as Record<string, unknown> | null;
+    const current = this.globalConfig as unknown as Record<string, unknown> | null;
+    if (base && current) for (const key of keys) base[key] = structuredClone(current[key]);
+    return true;
   }
 
   /**
@@ -1804,6 +1892,7 @@ export class ConfigStore {
     // Remove existing server with same name, then add (operates on GLOBAL only).
     g.mcpServers = g.mcpServers.filter(s => s.name !== server.name);
     g.mcpServers.push(server);
+    if (await this.patchInFallback(['mcpServers'], raw => upsertRawMcpServer(raw, server))) return;
     await this.save();
   }
 
@@ -1814,6 +1903,7 @@ export class ConfigStore {
     await this.load();
     const g = this.globalConfig!;
     g.mcpServers = g.mcpServers.filter(s => s.name !== name);
+    if (await this.patchInFallback(['mcpServers'], raw => removeRawMcpServer(raw, name))) return;
     await this.save();
   }
 
@@ -1853,6 +1943,8 @@ export class ConfigStore {
     const g = this.globalConfig!;
     if (g.trustedTools) {
       g.trustedTools = g.trustedTools.filter(t => t !== toolName);
+      const revoke = (raw: Record<string, unknown>) => removeRawListItems(raw, 'trustedTools', t => t === toolName);
+      if (await this.patchInFallback(['trustedTools'], revoke)) return;
       await this.save();
     }
   }
@@ -1871,6 +1963,8 @@ export class ConfigStore {
   async clearTrustedTools(): Promise<void> {
     await this.load();
     this.globalConfig!.trustedTools = [];
+    const revokeAll = (raw: Record<string, unknown>) => removeRawListItems(raw, 'trustedTools', () => true);
+    if (await this.patchInFallback(['trustedTools'], revokeAll)) return;
     await this.save();
   }
 
@@ -1974,7 +2068,7 @@ export class ConfigStore {
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') return null;
-      throw new Error(`Could not read the saved sign-in from ${this.configPath}: ${code ?? 'read failed'}`);
+      throw new Error(`Could not read ${this.configPath}: ${code ?? 'read failed'}`);
     }
   }
 
@@ -1986,7 +2080,7 @@ export class ConfigStore {
     } catch (error) {
       const position = error instanceof Error ? /position (\d+)/.exec(error.message)?.[1] : undefined;
       throw new Error(
-        `Could not read the saved sign-in from ${this.configPath}: not valid JSON${position ? ` (at position ${position})` : ''}`
+        `Could not read ${this.configPath}: not valid JSON${position ? ` (at position ${position})` : ''}`
       );
     }
     return typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
@@ -2152,11 +2246,14 @@ export class ConfigStore {
    * Applies `mutate` to the config file's raw JSON and writes it back when `mutate` returns true. The caller holds
    * the config write lock. Returns false when there is no file; rejects when it cannot be read or is not an object.
    */
-  private async patchConfigText(mutate: (raw: Record<string, unknown>) => boolean): Promise<boolean> {
+  private async patchConfigText(
+    mutate: (raw: Record<string, unknown>) => boolean,
+    notAnObject = () => new Error(`Could not update ${this.configPath}: it does not hold a JSON object`)
+  ): Promise<boolean> {
     const text = await this.readConfigText();
     if (text === null) return false;
     const raw = this.parseConfigText(text);
-    if (!raw) throw new Error(`Could not update ${this.configPath}: it does not hold a JSON object`);
+    if (!raw) throw notAnObject();
     if (mutate(raw)) await this.writeConfigFile(JSON.stringify(raw, null, 2));
     return true;
   }
@@ -2376,6 +2473,9 @@ export class ConfigStore {
       // Resolve to absolute path for comparison
       const resolvedPath = path.resolve(dirPath);
       g.additionalDirectories = g.additionalDirectories.filter(d => path.resolve(d) !== resolvedPath);
+      const removed = (d: unknown) => typeof d === 'string' && path.resolve(d) === resolvedPath;
+      const revoke = (raw: Record<string, unknown>) => removeRawListItems(raw, 'additionalDirectories', removed);
+      if (await this.patchInFallback(['additionalDirectories'], revoke)) return;
       await this.save();
     }
   }
