@@ -1,7 +1,13 @@
 import type { DeviceLinkRow, RecordShadowDetectionInput } from '@bike4mind/database';
-import { cacheRepository, loadDeviceLinkAccounts, shadowDetectionRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  cacheRepository,
+  loadDeviceLinkAccounts,
+  shadowDetectionRepository,
+} from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { userService } from '@bike4mind/services';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { assessShadowDetection } from '@server/security/abuseAssessment/abuseAssessment';
 import { linkedAccountGroupEvidence } from '@server/security/abuseAssessment/linkedAccountEvidence';
 import {
@@ -114,6 +120,11 @@ export function buildDeviceLinkDetection(
 export function liveDeviceLinkDeps(logger: Logger): DeviceLinkDeps {
   return {
     loadConfig: async () => {
+      const settings = await getSettingsMap(
+        { adminSettings: adminSettingsRepository },
+        { skipCache: true, names: ['shadowDetectionRecordingEnabled'] }
+      );
+      if (!getSettingsValue('shadowDetectionRecordingEnabled', settings, true)) return null;
       const config = await loadAutoContainmentConfig();
       return config.mode === 'off' || config.deviceLinkWindowHours === 0
         ? null

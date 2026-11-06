@@ -2,12 +2,17 @@ import { describe, expect, it, vi } from 'vitest';
 import type { DeviceLinkRow } from '@bike4mind/database';
 
 vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: {},
   cacheRepository: {},
   shadowDetectionRepository: {},
   countSignupsWithFingerprint: vi.fn(),
   findBannedDeviceLinkAccounts: vi.fn(),
   findDeviceBaselineAccounts: vi.fn(),
   loadDeviceLinkAccounts: vi.fn(),
+}));
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  getSettingsMap: vi.fn(),
 }));
 vi.mock('@server/security/abuseAssessment/abuseAssessment', () => ({ assessShadowDetection: vi.fn() }));
 vi.mock('@server/security/abuseAssessment/linkedAccountEvidence', () => ({ linkedAccountGroupEvidence: vi.fn() }));
@@ -17,7 +22,10 @@ vi.mock('./executor', () => ({
   loadAutoContainmentConfig: vi.fn(),
 }));
 
-import { checkDeviceLink, sweepDeviceLinks, type DeviceLinkDeps } from './deviceLink';
+import type { Logger } from '@bike4mind/observability';
+import { getSettingsMap } from '@bike4mind/utils';
+import { checkDeviceLink, liveDeviceLinkDeps, sweepDeviceLinks, type DeviceLinkDeps } from './deviceLink';
+import { loadAutoContainmentConfig } from './executor';
 import { evaluateDeviceLinks } from './deviceLinkEvaluation';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -226,5 +234,26 @@ describe('evaluateDeviceLinks', () => {
     );
 
     expect(results.get('new-user')?.linked).toBe(true);
+  });
+});
+
+describe('liveDeviceLinkDeps.loadConfig', () => {
+  const load = () => liveDeviceLinkDeps({} as unknown as Logger).loadConfig();
+  const withSettings = (value: boolean | undefined) =>
+    vi.mocked(getSettingsMap).mockResolvedValue(
+      (value === undefined ? {} : { shadowDetectionRecordingEnabled: value }) as Awaited<ReturnType<typeof getSettingsMap>>
+    );
+  const containment = { mode: 'shadow', deviceLinkWindowHours: 168, deviceLinkCommonNetworks: 5 };
+
+  it('returns null when shadow detection recording is off', async () => {
+    withSettings(false);
+    vi.mocked(loadAutoContainmentConfig).mockResolvedValue(containment as never);
+    expect(await load()).toBeNull();
+  });
+
+  it('returns the configured policy when recording is on', async () => {
+    withSettings(true);
+    vi.mocked(loadAutoContainmentConfig).mockResolvedValue(containment as never);
+    expect(await load()).toEqual({ windowHours: 168, commonNetworks: 5 });
   });
 });
