@@ -406,9 +406,18 @@ class ShadowDetectionRepository {
     return doc ? toItem(doc) : null;
   }
 
-  /** Ungraded detections recorded at or after `since`, newest first. */
-  async listUnreviewedSince(since: Date, limit: number): Promise<ShadowDetectionItem[]> {
-    const docs = await ShadowDetectionModel.find({ verdict: null, detectedAt: { $gte: since } })
+  /**
+   * Ungraded detections recorded at or after `since`, newest first. `excludeDetectors` filters in
+   * the query, so excluded detectors never take a slot from the `limit`.
+   */
+  async listUnreviewedSince(
+    since: Date,
+    limit: number,
+    options: { excludeDetectors?: readonly ShadowDetector[] } = {}
+  ): Promise<ShadowDetectionItem[]> {
+    const filter: Record<string, unknown> = { verdict: null, detectedAt: { $gte: since } };
+    if (options.excludeDetectors?.length) filter.detector = { $nin: [...options.excludeDetectors] };
+    const docs = await ShadowDetectionModel.find(filter)
       .sort({ detectedAt: -1, _id: -1 })
       .limit(limit)
       .lean<LeanShadowDetection[]>();
@@ -445,15 +454,29 @@ class ShadowDetectionRepository {
     return current ? { status: 'conflict', item: toItem(current) } : { status: 'not_found' };
   }
 
-  /** Counts per detector and policy version; verdict counts are on each record's latest verdict. */
+  /**
+   * Counts per detector and policy version; verdict counts are on each record's latest verdict and
+   * only for records that would have acted. A `wouldAction: 'none'` record counts in `recorded` and
+   * `noAction` only, so agreeing with it never moves precision.
+   */
   async summarize(): Promise<ShadowDetectionSummaryRow[]> {
     const rows = await ShadowDetectionModel.aggregate<{
-      _id: { detector: ShadowDetector; policyVersion: number; verdict: ShadowDetectionVerdict | null };
+      _id: {
+        detector: ShadowDetector;
+        policyVersion: number;
+        verdict: ShadowDetectionVerdict | null;
+        noAction: boolean;
+      };
       count: number;
     }>([
       {
         $group: {
-          _id: { detector: '$detector', policyVersion: '$policyVersion', verdict: { $ifNull: ['$verdict', null] } },
+          _id: {
+            detector: '$detector',
+            policyVersion: '$policyVersion',
+            verdict: { $ifNull: ['$verdict', null] },
+            noAction: { $eq: ['$wouldAction', 'none'] },
+          },
           count: { $sum: 1 },
         },
       },
@@ -466,13 +489,15 @@ class ShadowDetectionRepository {
         detector: _id.detector,
         policyVersion: _id.policyVersion,
         recorded: 0,
+        noAction: 0,
         confirmedAbuse: 0,
         legitimateHuman: 0,
         legitimateAutomation: 0,
         insufficientEvidence: 0,
       };
       row.recorded += count;
-      if (_id.verdict) row[VERDICT_COUNT_FIELDS[_id.verdict]] += count;
+      if (_id.noAction) row.noAction += count;
+      else if (_id.verdict) row[VERDICT_COUNT_FIELDS[_id.verdict]] += count;
       byPolicy.set(key, row);
     }
     return [...byPolicy.values()].sort(

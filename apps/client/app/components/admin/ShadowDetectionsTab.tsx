@@ -4,6 +4,7 @@ import { Link } from '@tanstack/react-router';
 import {
   SHADOW_DETECTION_LIST_LIMIT,
   SHADOW_DETECTION_VERDICTS,
+  SELF_ASSESSED_SHADOW_DETECTORS,
   SHADOW_DETECTORS,
   shadowDetectionPrecision,
   type AccountCampaignIgnoredReason,
@@ -65,6 +66,8 @@ const ACTION_DISPLAY: Record<ShadowDetectionAction, { label: string; tone: Admin
   restrict: { label: 'Restrict', tone: 'neutral' },
   suspend: { label: 'Suspend', tone: 'warn' },
   blockIp: { label: 'Block IP', tone: 'warn' },
+  confirmHold: { label: 'Confirm hold', tone: 'neutral' },
+  none: { label: 'None', tone: 'neutral' },
 };
 
 export const VERDICT_DISPLAY: Record<ShadowDetectionVerdict, { label: string; tone: AdminStatusTone }> = {
@@ -276,6 +279,7 @@ export const formatPrecision = (row: ShadowDetectionSummaryRow): { value: string
   return { value: `${Math.round(precision * 100)}%`, comparison: `of ${conclusive.toLocaleString()} conclusive` };
 };
 
+/** Graded and precision count only records that would have acted; `noAction` rows are listed only. */
 const SummaryStrip: React.FC<{ row: ShadowDetectionSummaryRow }> = ({ row }) => {
   const graded = row.confirmedAbuse + row.legitimateHuman + row.legitimateAutomation + row.insufficientEvidence;
   const precision = formatPrecision(row);
@@ -286,8 +290,16 @@ const SummaryStrip: React.FC<{ row: ShadowDetectionSummaryRow }> = ({ row }) => 
         {DETECTOR_LABELS[row.detector]}, policy v{row.policyVersion}
       </Typography>
       <StatStrip aria-label={`${DETECTOR_LABELS[row.detector]} policy v${row.policyVersion}`}>
-        <StatTile label="Recorded" value={row.recorded} />
-        <StatTile label="Graded" value={graded} comparison={`${(row.recorded - graded).toLocaleString()} unreviewed`} />
+        <StatTile
+          label="Recorded"
+          value={row.recorded}
+          comparison={row.noAction > 0 ? `${row.noAction.toLocaleString()} would not act` : undefined}
+        />
+        <StatTile
+          label="Graded"
+          value={graded}
+          comparison={`${(row.recorded - row.noAction - graded).toLocaleString()} unreviewed`}
+        />
         <StatTile
           label="Precision"
           value={
@@ -503,7 +515,9 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({ row, now, onClose, onRowC
         </RadioGroup>
       </FormControl>
       <SignalList row={row} />
-      <ShadowDetectionAssessmentPanel detectionId={row.id} enabled />
+      {!SELF_ASSESSED_SHADOW_DETECTORS.includes(row.detector) && (
+        <ShadowDetectionAssessmentPanel detectionId={row.id} enabled />
+      )}
       <VerdictHistory row={row} now={now} />
     </ActionDialog>
   );

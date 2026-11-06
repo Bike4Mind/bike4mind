@@ -454,6 +454,17 @@ Off by default behind the `abuseAssessmentEnabled` and `abuseAssessmentConfig` a
 | Judgment          | `result`, probabilities, confidence, or an `unknown` result with a failure code                        | 365 days (TTL on `assessedAt`) | Admin review                         |
 | Versions and cost | Model id and reported version, policy and evidence versions, cost in USD, trigger, requesting admin id | 365 days (TTL on `assessedAt`) | Admin review, budget accounting      |
 
+## Advisory signup domain hold assessments
+
+Off by default behind the `signupDomainHoldAssessmentEnabled` and `signupDomainHoldAssessmentConfig` admin settings, a scheduled job can ask a Decisions model to judge a signup domain hold placed on a recently registered domain as abuse, legitimate or insufficient evidence. The model receives only a summary computed by the platform: the domain's age in days, a mail-provider class, whether the domain's website answers and has content, signup counts and timing, and counts of distinct networks, network operators and countries across the held signups, with a hosting-network share. It never receives the domain name, an email, an IP, a network number, a user id or any text from the domain's website. Calls use the platform's provider key and a platform budget. A confident abuse judgment can only confirm the hold, which keeps the signups' free credits held; it never releases a hold, and an admin can still release it.
+
+| Data       | Storage                                                                                       | Lifetime                  | Purpose                 |
+| ---------- | --------------------------------------------------------------------------------------------- | ------------------------- | ----------------------- |
+| Judgment   | `SignupDomainReview.assessment`: judgment and confidence, or a failure code and attempt count | Lifetime of the hold row  | Admin review            |
+| Versions   | Model id, policy version, assessment time                                                     | Lifetime of the hold row  | Admin review            |
+| Detection  | A shadow detection per judged hold, with the held account ids and the summary's counts        | Shadow detection lifetime | Admin review, precision |
+| Call count | The domain name and a count of model calls for it, in the platform cache                      | 24 hours                  | Per-domain call cap     |
+
 ## Signup and login network metadata
 
 Every self-service signup stores the network it came from on the new account (`signupMeta`), written once. Every successful signup and sign-in also writes one `AuthEvent` row. Admin-created accounts and impersonation sessions write neither. The network number (ASN) and country come from headers the CDN sets; when they are absent the fields are empty, never guessed. A failed write never blocks sign-in. Both are visible only to admins, and both are deleted with the account, except for the coarse fields copied to Stripe (see below). The full IP on `signupMeta` is kept for the same 90 days as the `AuthEvent` rows; after that the daily `signupIpRetention` job replaces it with its /24 (IPv4) or /48 (IPv6) prefix. The other `signupMeta` fields stay for the account's lifetime. Two other stores keep sign-in IPs outside this retention: `User.loginRecords[].ip` holds the full IP of the most recent sign-ins for the account's lifetime, and `UserAuthAuditLog.actorIp` keeps it for 12 months (TTL index).
