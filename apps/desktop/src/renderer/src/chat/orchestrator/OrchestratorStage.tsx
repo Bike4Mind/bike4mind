@@ -9,7 +9,7 @@ import { ExampleQuestButtons } from './exampleQuests';
 import { questAgents, useFinale, type ParentReport } from './finale';
 import { FinaleBanner } from './FinaleBanner';
 import type { OrchestratorViewId } from './orchestratorPrefs';
-import { assignPersonas, type AgentPersona } from './tavern/agentPersona';
+import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
 import { ViewSwitcher } from './ViewSwitcher';

@@ -1,7 +1,6 @@
-import type { ChatMessage, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { describe, expect, it } from 'vitest';
-import { assignPersonas } from './tavern/agentPersona';
-import { buildRoster } from './roster';
+import { assignPersonas } from './agentPersona';
+import type { ChatMessage, ChatSessionStatus, ChatSessionSummary } from './chat';
 import {
   alertableSessions,
   enteredNeedsYou,
@@ -84,15 +83,21 @@ describe('rootSessionOf', () => {
 describe('needsYouTitle', () => {
   it('names an agent by the persona the Tavern shows, and a root by its title', () => {
     const sessions = [session('root', undefined, 'Audit'), session('child', 'root', 'Review the auth middleware')];
-    const persona = assignPersonas(
-      buildRoster({ sessions, statuses: new Map(), activity: new Map(), prSummaries: new Map(), rootId: 'root' })
-    ).get('child');
-    expect(needsYouTitle(sessions, new Map(), 'child', 'root')).toBe(`${persona?.label} needs you`);
-    expect(needsYouTitle(sessions, new Map(), 'root', 'root')).toBe('Audit needs you');
+    const persona = assignPersonas([
+      {
+        id: 'child',
+        createdAt: '2026-10-01T00:00:00.000Z',
+        title: 'Review the auth middleware',
+        seedPrompt: 'seed child',
+      },
+    ]).get('child');
+    expect(persona?.label).toMatch(/ the Warden$/);
+    expect(needsYouTitle(sessions, 'child', 'root')).toBe(`${persona?.label} needs you`);
+    expect(needsYouTitle(sessions, 'root', 'root')).toBe('Audit needs you');
   });
 
   it('falls back to a generic name for a session that is not listed', () => {
-    expect(needsYouTitle([], new Map(), 'ghost', 'ghost')).toBe('A session needs you');
+    expect(needsYouTitle([], 'ghost', 'ghost')).toBe('A session needs you');
   });
 });
 

@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentView } from './roster';
-import { assignPersonas } from './tavern/agentPersona';
+import { assignPersonas } from '@shared/agentPersona';
 import { TableView } from './TableView';
 import { agentFixture, createThemedMount, el } from './testUtils';
 

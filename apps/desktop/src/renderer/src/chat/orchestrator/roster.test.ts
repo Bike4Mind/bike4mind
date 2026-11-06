@@ -1,6 +1,8 @@
 import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
 import type { ChildOutcome } from '@shared/agentOutcome';
+import { assignPersonas } from '@shared/agentPersona';
+import { needsYouTitle } from '@shared/needsYou';
 import { describe, expect, it } from 'vitest';
 import type { AgentActivity } from './activity';
 import {
@@ -370,5 +372,28 @@ describe('spawnerName', () => {
 
   it('gives nothing when the spawner is off the roster', () => {
     expect(spawnerName(helper, [helper])).toBeUndefined();
+  });
+});
+
+describe('needsYouTitle parity', () => {
+  // Main names agents in its notices without a roster; the name must still be the one the stage shows.
+  it('names every agent by the persona the roster gives it', () => {
+    const sessions = [
+      summary('root', undefined),
+      summary('a', 'root', { title: 'Review: auth', createdAt: '2026-01-02T00:00:00.000Z' }),
+      summary('b', 'root', { title: 'Review: docs' }),
+      summary('c', 'a', { title: '  ' }),
+    ];
+    const roster = buildRoster({
+      sessions,
+      statuses: new Map(),
+      activity: new Map(),
+      prSummaries: new Map(),
+      rootId: 'root',
+    });
+    const personas = assignPersonas(roster);
+    for (const id of ['a', 'b', 'c']) {
+      expect(needsYouTitle(sessions, id, 'root')).toBe(`${personas.get(id)?.label} needs you`);
+    }
   });
 });
