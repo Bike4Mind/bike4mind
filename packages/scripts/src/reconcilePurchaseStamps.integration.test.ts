@@ -333,6 +333,20 @@ describe('reconcilePurchaseStamps', () => {
     expect(await stampOf(userId)).toBeNull();
   });
 
+  it('classifies only purchases that can back a stamped user', async () => {
+    const stamped = await seedUser();
+    const unstamped = await seedUser(null);
+    const org = await Organization.create({ name: 'Acme', userId: stamped, users: [], groups: [] });
+    await seedPurchase(stamped, 'pi_stamped');
+    await seedPurchase(unstamped, 'pi_unstamped');
+    await seedPurchase(org.id, 'pi_org', { ownerType: 'Organization' });
+    const classifyPurchase = vi.fn(async (): Promise<PurchaseClassification> => ({ kind: 'standing' }));
+
+    await run(true, { classifyPurchase }).promise;
+
+    expect(classifyPurchase.mock.calls.map(([pi]) => pi)).toEqual(['pi_stamped']);
+  });
+
   it('clears nothing on a second apply run', async () => {
     await seedUser();
     const buyer = await seedUser();

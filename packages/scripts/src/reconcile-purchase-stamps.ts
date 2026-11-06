@@ -2,12 +2,14 @@
 
 /**
  * Clear the paid-standing stamp (User.lastCreditsPurchasedAt) from users no completed, unreversed
- * purchase backs; like the webhook, an active subscription does not keep a stamp. Logic: ./reconcilePurchaseStamps.ts.
+ * purchase backs; like the webhook, an active subscription does not keep a stamp.
+ * Logic: ./reconcilePurchaseStamps.ts.
  *
- * Reads Stripe for each completed, unreversed purchase row with a payment intent: a full refund or
- * a lost dispute marks the row reversed. A row whose owner is missing is matched to a user through
- * the payment intent's customer and reported, never reassigned to that user; if a row with no
- * owner id stays unmatched, --apply refuses to write and a dry run warns that it would.
+ * Reads Stripe for each completed, unreversed user-owned purchase row with a payment intent that can
+ * back a stamp (its owner is stamped or missing): a full refund or a lost dispute marks the row
+ * reversed. A row whose owner is missing is matched to a user through the payment intent's customer
+ * and reported, never reassigned to that user; if a row with no owner id stays unmatched, --apply
+ * refuses to write and a dry run warns that it would.
  *
  * Flags:
  *   --apply           write (default is a dry run that changes nothing)
@@ -80,7 +82,7 @@ async function main() {
 
   // No MONGODB_URI env override: the database must belong to the same stage as the websocket endpoint.
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage));
-  const stripe = new Stripe(Config.STRIPE_SECRET_KEY);
+  const stripe = new Stripe(Config.STRIPE_SECRET_KEY, { maxNetworkRetries: 3 });
 
   console.log(`Mode: ${values.apply ? 'APPLY' : 'DRY RUN (no writes)'}`);
   const result = await reconcilePurchaseStamps({

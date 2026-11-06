@@ -96,8 +96,28 @@ export async function reconcilePurchaseStamps(options: ReconcileOptions): Promis
     { ownerId: 1, ownerType: 1, stripePaymentIntentId: 1 }
   ).lean<PurchaseRow[]>();
 
+  const stampedIds = new Set(
+    (await User.find({ lastCreditsPurchasedAt: { $ne: null } }, { _id: 1 }).lean<{ _id: unknown }[]>()).map(u =>
+      String(u._id)
+    )
+  );
+  const userOwnerIds = [
+    ...new Set(rows.filter(r => r.ownerType === CreditHolderType.User && r.ownerId).map(r => r.ownerId!)),
+  ];
+  const existing = new Set(
+    (
+      await User.find({ _id: { $in: userOwnerIds.filter(id => OBJECT_ID.test(id)) } }, { _id: 1 }).lean<
+        { _id: unknown }[]
+      >()
+    ).map(u => String(u._id))
+  );
+
+  // Only rows that can matter for a stamped user cost a Stripe call. A user stamped after the read above
+  // is still protected on apply by decide()'s findUnreversedPurchase re-check; a dry run may over-report them.
   const standingRows: PurchaseRow[] = [];
   for (const row of rows) {
+    if (row.ownerType !== CreditHolderType.User) continue;
+    if (row.ownerId && existing.has(row.ownerId) && !stampedIds.has(row.ownerId)) continue;
     const pi = row.stripePaymentIntentId;
     if (!pi) {
       standingRows.push(row);
@@ -121,17 +141,6 @@ export async function reconcilePurchaseStamps(options: ReconcileOptions): Promis
     if (classification.kind === 'unknown') recordError(pi, classification.error);
     standingRows.push(row);
   }
-
-  const userOwnerIds = [
-    ...new Set(standingRows.filter(r => r.ownerType === CreditHolderType.User && r.ownerId).map(r => r.ownerId!)),
-  ];
-  const existing = new Set(
-    (
-      await User.find({ _id: { $in: userOwnerIds.filter(id => OBJECT_ID.test(id)) } }, { _id: 1 }).lean<
-        { _id: unknown }[]
-      >()
-    ).map(u => String(u._id))
-  );
 
   const backed = new Set<string>();
   for (const row of standingRows) {
