@@ -116,8 +116,10 @@ export const contentHolders = {
     // CDN copies, which deleting the rows would not.
     beforeErasure: ['purgeOwnerPublishedArtifacts', 'purgeUserPublishedArtifacts'],
     references: [
-      // Only personal pages go.
+      // Only personal pages go. A project or organization page the purge could not transfer is only
+      // soft-deleted and keeps `ownerId`, so the owner is cleared (precedence is in types.ts).
       { path: 'ownerId', matchBy: 'userId', action: 'deleteDocument', where: { tier: 'user' } },
+      { path: 'ownerId', matchBy: 'userId', action: 'anonymize' },
       { path: 'deletedBy', matchBy: 'userId', action: 'anonymize' },
       { path: 'lastPublishedBy', matchBy: 'userId', action: 'anonymize' },
       { path: 'previousVersionMeta.publishedBy', matchBy: 'userId', action: 'anonymize' },
