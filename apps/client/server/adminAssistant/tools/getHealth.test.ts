@@ -10,7 +10,14 @@ vi.mock('@bike4mind/server-utils/services/integrationHealthService', () => ({
   getHealthSummary: (...args: unknown[]) => getHealthSummary(...args),
 }));
 
+const getStatus = vi.fn();
+vi.mock('@bike4mind/server-utils/services/integrationCircuitBreaker', () => ({
+  getStatus: (...args: unknown[]) => getStatus(...args),
+}));
+
 import { getHealthTool } from './getHealth';
+
+const breaker = { available: true, reason: null, mode: 'auto', autoTripped: false };
 
 const logger = { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
 const context = { user: { isAdmin: true }, userId: 'admin-1', logger } as unknown as Omit<ToolContext, 'config'>;
@@ -43,17 +50,21 @@ describe('getHealthTool', () => {
   beforeEach(() => {
     getSystemHealthStatus.mockReset().mockResolvedValue(systemStatus);
     getHealthSummary.mockReset().mockResolvedValue([summary()]);
+    getStatus.mockReset().mockResolvedValue(breaker);
   });
 
   it('combines the system config status with the stored integration checks', async () => {
     const result = await runTool({});
 
     expect(getHealthSummary).toHaveBeenCalledWith(logger);
+    expect(getStatus).toHaveBeenCalledWith('slack');
     expect(result).toEqual({
       ok: true,
       data: {
         ...systemStatus,
-        integrations: [{ ...summary(), lastCheckedAt: '2026-11-05T10:00:00.000Z' }],
+        integrations: [
+          { ...summary(), lastCheckedAt: '2026-11-05T10:00:00.000Z', neverChecked: false, circuitBreaker: breaker },
+        ],
       },
     });
   });
@@ -63,7 +74,11 @@ describe('getHealthTool', () => {
 
     const result = await runTool({});
 
-    expect(result.data.integrations[0]).toMatchObject({ status: 'unhealthy', lastCheckedAt: null });
+    expect(result.data.integrations[0]).toMatchObject({
+      status: 'unhealthy',
+      lastCheckedAt: null,
+      neverChecked: true,
+    });
   });
 
   it('fails closed when a source throws', async () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ToolContext } from '@bike4mind/services/llm/tools';
 
 const findOne = vi.fn();
@@ -22,7 +22,13 @@ const runTool = async (args: unknown) =>
   JSON.parse(await getSettingTool.implementation(context, undefined).toolFn(args));
 
 describe('getSettingTool', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
+    // Self-host unlocks enforceCredits, so it reads like any other setting.
+    vi.stubEnv('B4M_SELF_HOST', 'true');
     findOne.mockReset().mockResolvedValue(null);
     getSettingsValue.mockReset().mockResolvedValue(undefined);
   });
@@ -40,7 +46,7 @@ describe('getSettingTool', () => {
       key: 'openaiDemoKey',
       isSensitive: true,
       value: '********1234',
-      usingDefault: false,
+      source: 'stored',
     });
   });
 
@@ -62,17 +68,30 @@ describe('getSettingTool', () => {
         isSensitive: false,
         value: false,
         truncatedPreview: null,
-        usingDefault: false,
+        source: 'stored',
       },
     });
   });
 
-  it('flags the default when no row is stored or the stored value fails the schema', async () => {
+  it('reports the default when no row is stored or the stored value fails the schema', async () => {
     getSettingsValue.mockResolvedValue(true);
-    expect((await runTool({ key: 'enforceCredits' })).data).toMatchObject({ value: true, usingDefault: true });
+    expect((await runTool({ key: 'enforceCredits' })).data).toMatchObject({ value: true, source: 'default' });
 
     findOne.mockResolvedValue({ settingName: 'enforceCredits', settingValue: 'not-a-boolean' });
-    expect((await runTool({ key: 'enforceCredits' })).data).toMatchObject({ value: true, usingDefault: true });
+    expect((await runTool({ key: 'enforceCredits' })).data).toMatchObject({ value: true, source: 'default' });
+  });
+
+  it('reports a locked setting as locked even when a valid row is stored', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'false');
+    findOne.mockResolvedValue({ settingName: 'enforceCredits', settingValue: false });
+    getSettingsValue.mockResolvedValue(true);
+
+    expect((await runTool({ key: 'enforceCredits' })).data).toMatchObject({ value: true, source: 'locked' });
+  });
+
+  it('returns null rather than dropping the value when nothing resolves', async () => {
+    const raw = await getSettingTool.implementation(context, undefined).toolFn({ key: 'enforceCredits' });
+    expect(JSON.parse(raw).data).toMatchObject({ value: null, truncatedPreview: null });
   });
 
   it('sends a truncated JSON preview instead of a very large value', async () => {
@@ -104,6 +123,12 @@ describe('getSettingTool', () => {
     expect(findOne).not.toHaveBeenCalled();
   });
 
+  it('matches every search word anywhere, not the phrase as typed', async () => {
+    const result = await runTool({ search: 'credits enforce' });
+
+    expect(result.data.settings.map((setting: { key: string }) => setting.key)).toContain('enforceCredits');
+  });
+
   it('caps search results at 20 and flags the cut', async () => {
     const result = await runTool({ search: 'the' });
 
@@ -111,8 +136,17 @@ describe('getSettingTool', () => {
     expect(result.data.truncated).toBe(true);
   });
 
+  it('treats an empty or null parameter as omitted', async () => {
+    getSettingsValue.mockResolvedValue(true);
+
+    expect(await runTool({ key: 'enforceCredits', search: '' })).toMatchObject({ ok: true });
+    expect(await runTool({ key: 'enforceCredits', search: null })).toMatchObject({ ok: true });
+    expect(await runTool({ key: null, search: 'openai' })).toMatchObject({ ok: true });
+  });
+
   it('requires exactly one of key or search', async () => {
     expect(await runTool({})).toMatchObject({ ok: false, error: 'invalid_input' });
+    expect(await runTool({ key: '', search: '  ' })).toMatchObject({ ok: false, error: 'invalid_input' });
     expect(await runTool({ key: 'enforceCredits', search: 'credits' })).toMatchObject({
       ok: false,
       error: 'invalid_input',

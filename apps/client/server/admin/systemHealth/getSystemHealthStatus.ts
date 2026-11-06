@@ -149,7 +149,8 @@ async function getOAuthConfigStatus(): Promise<OAuthConfigStatus> {
 
 /**
  * Config-only introspection behind the System Health tab and the admin assistant's health tool:
- * no probe runs, nothing leaves the process, and only secret names (never values) are reported.
+ * no outbound probe runs (only env config and the identity-provider config are read), and only
+ * secret names, never values, are reported.
  */
 export async function getSystemHealthStatus(): Promise<SystemHealthResponse> {
   return {

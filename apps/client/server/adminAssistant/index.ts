@@ -15,8 +15,8 @@ export type { AdminToolResult } from './defineAdminTool';
 
 type AdminToolRegistry = Partial<Record<AdminAssistantToolName, ToolDefinition>>;
 
-// Each admin tool registers itself here.
-const ADMIN_TOOL_REGISTRY: AdminToolRegistry = {
+// Each admin tool registers itself here; a full Record so a declared name without a tool fails to compile.
+const ADMIN_TOOL_REGISTRY: Record<AdminAssistantToolName, ToolDefinition> = {
   admin_get_health: getHealthTool,
   admin_get_org: getOrgTool,
   admin_get_org_usage: getOrgUsageTool,
