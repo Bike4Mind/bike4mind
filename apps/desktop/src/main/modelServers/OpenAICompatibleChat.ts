@@ -195,8 +195,10 @@ function roomAfterRefusal(refusal: string, sent: number, context: number | undef
   if (limit === undefined) return undefined;
   const inMessages = count(/(\d+) (?:tokens )?in the messages/i);
   const inFunctions = count(/(\d+) (?:tokens )?in the functions/i);
+  const resulted = count(/messages resulted in (\d+) tokens/i);
+  if (resulted === undefined && inFunctions === undefined && /in the functions/i.test(refusal)) return undefined;
   const prompt =
-    count(/messages resulted in (\d+) tokens/i) ??
+    resulted ??
     (inMessages === undefined ? undefined : inMessages + (inFunctions ?? 0)) ??
     count(/(\d+) input tokens/i);
   if (prompt !== undefined) return limit - prompt;
