@@ -31,6 +31,8 @@ const PROGRAMS = [
   'echo',
   'printf',
   'rm',
+  'pgrep',
+  'docker',
 ];
 
 /** Commands that ran unasked on main and must still run as the mode allows, in a repository with a large node_modules. */
@@ -126,6 +128,10 @@ describe('commands main ran unasked', () => {
     const drepo = await repository('drepo', { 'docs/secret': 's', 'src/b.ts': 'b' });
     await rm(join(drepo, 'docs'), { recursive: true });
     await symlink(userData, join(drepo, 'docs'));
+    // brepo tracks `w/q .claude/settings.json`, which xargs splits into `w/q` and its own `.claude/settings.json`.
+    const brepo = await repository('brepo', { 'w/q .claude/settings.json': '{"hooks": {}}', 'src/b.ts': 'b' });
+    await mkdir(join(brepo, '.claude'));
+    await writeFile(join(brepo, '.claude', 'settings.json'), '{}');
     // prepo is a treeless partial clone whose missing trees would come from a host through core.sshCommand.
     git(proj, 'config', 'uploadpack.allowFilter', 'true');
     execFileSync('git', ['clone', '-q', '--filter=tree:0', '--no-checkout', `file://${proj}`, join(proj, 'prepo')]);
@@ -142,11 +148,15 @@ describe('commands main ran unasked', () => {
     await writeFile(join(proj, 'tar'), `#!/bin/sh\ntouch ${join(base, 'local-tar')}\nexit 1\n`);
     await writeFile(join(proj, 'gzip'), `#!/bin/sh\ntouch ${join(base, 'local-gzip')}\nexit 1\n`);
     await writeFile(join(proj, 'bin2', 'gzip'), `#!/bin/sh\ntouch ${join(base, 'project-gzip')}\nexit 1\n`);
+    await writeFile(join(proj, 'git'), `#!/bin/sh\ntouch ${join(base, 'local-git')}\nexit 1\n`);
+    await writeFile(join(proj, 'bin2', 'git'), `#!/bin/sh\ntouch ${join(base, 'project-git')}\nexit 1\n`);
     for (const program of [
       join(base, 'bin', 'tar'),
       join(proj, 'tar'),
       join(proj, 'gzip'),
       join(proj, 'bin2', 'gzip'),
+      join(proj, 'git'),
+      join(proj, 'bin2', 'git'),
     ]) {
       await chmod(program, 0o755);
     }
@@ -202,7 +212,6 @@ describe('commands main ran unasked', () => {
     ['find src -name "*.ts" -exec sed -i s/a/b/ {} +', '', unasked],
     ['rg -l foo | xargs cat', '', unasked],
     ["rg -l foo | xargs sed -i 's/a/b/'", '', unasked],
-    ['rg -l hooks | xargs sed -i s/a/b/', '', unasked],
     ["rg -l foo src | xargs sed -i 's/a/b/'", '', unasked],
     ['grep -rl foo src | xargs sed -i s/a/b/', '', unasked],
     ['grep -rl foo . | xargs sed -i s/foo/bar/g', '', unasked],
@@ -217,6 +226,16 @@ describe('commands main ran unasked', () => {
     ['ls src/*.ts | xargs wc -l', '', unasked],
     ['echo src/a.ts | xargs rm', '', unasked],
     ["printf '%s\\n' src/a.ts | xargs wc -l", '', unasked],
+    ['ls | xargs cat', '', unasked],
+    ['ls src | xargs cat', '', unasked],
+    ["find . -path ./node_modules -prune -o -name '*.ts' -print | xargs cat", '', unasked],
+    ['git status && git ls-files src | xargs wc -l', '', unasked],
+    ['pgrep node | xargs kill', '', unasked],
+    ['docker ps -q | xargs docker stop', '', unasked],
+    ['git branch --merged | xargs git branch -d', '', unasked],
+    ['git ls-files -z w | xargs -0 sed -i s/a/b/', 'brepo', unasked],
+    ['rg -l0 hooks w | xargs -0 sed -i s/a/b/', 'brepo', unasked],
+    ["find w -name '*.json' -print0 | xargs -0 sed -i s/a/b/", 'brepo', unasked],
     ['cat .claude/agents/x.md', '', unaskedNamingClaude],
     ['ls -la .claude/', '', unaskedNamingClaude],
     ['grep -r hooks .claude', '', unaskedNamingClaude],
@@ -240,8 +259,55 @@ describe('commands main ran unasked', () => {
     ['echo .claude/settings.json | xargs rm', ''],
     ['git diff --name-only | xargs npx prettier --write', 'srepo'],
     ['git reset --hard', 'lrepo'],
+    ['rg -l hooks | xargs sed -i s/a/b/', ''],
+    ["rg -l -g '*' hooks | xargs sed -i s/a/b/", ''],
+    ["rg --files -g '*' | xargs sed -i s/a/b/", ''],
+    ['export RIPGREP_CONFIG_PATH=/dev/null; rg -l foo | xargs sed -i s/a/b/', ''],
+    ["grep -rl hooks --exclude='*.json' --include='settings.json' . | xargs sed -i s/a/b/", ''],
+    [`grep -rli hook${String.fromCharCode(0x17f)} . | xargs sed -i s/a/b/`, ''],
+    ['find . -print -name zzz | xargs truncate -s 0', ''],
+    ['find . -exec truncate -s 0 {} + -name zzz', ''],
+    ["find . -maxdepth 1 -name '.c*' | xargs rm -rf", ''],
+    ["find . -maxdepth 1 -name '.c*' | xargs chmod -R 000", ''],
+    ["find . -maxdepth 1 -name '.c*' -exec rm -rf {} +", ''],
+    ["find . -maxdepth 1 -name '.c*' -exec chmod -R 000 {} +", ''],
+    ["find . -name '*.ts' -exec env sh -c 'echo x > .claude/settings.json' {} +", ''],
+    ["find . -name '*.ts' -exec timeout 5 sh -c 'echo x > .claude/settings.json' {} +", ''],
+    ["find . -name '*.ts' -exec cat {} + | xargs rm", ''],
+    ['export GIT_INDEX_FILE=/tmp/x; git ls-files src | xargs sed -i s/a/b/', ''],
+    ['git read-tree other && git diff --name-only --cached | xargs sed -i s/a/b/', ''],
+    ['git reset -q other -- . && git ls-files src | xargs sed -i s/a/b/', ''],
+    ['git add -f . && git ls-files src | xargs sed -i s/a/b/', ''],
+    ["echo '!.claude' > .ignore; rg -l foo | xargs sed -i s/a/b/", ''],
+    ['git ls-files w | xargs sed -i s/a/b/', 'brepo'],
+    ["find w -name '*.json' | xargs sed -i s/a/b/", 'brepo'],
+    ['rg -l hooks w | xargs sed -i s/a/b/', 'brepo'],
+    ['grep -rl hooks w | xargs sed -i s/a/b/', 'brepo'],
   ])('asks before %s (in proj/%s) rewrites settings', async (command, folder) => {
     expect(await judge(command, folder)).toMatchObject(asks);
+  });
+
+  it.each([
+    ['RIPGREP_CONFIG_PATH', 'rg -l foo | xargs sed -i s/a/b/', asks],
+    ['RIPGREP_CONFIG_PATH', 'rg -l --no-config foo | xargs sed -i s/a/b/', unasked],
+    ['GIT_INDEX_FILE', 'git ls-files src | xargs sed -i s/a/b/', asks],
+  ])('with %s set decides %s', async (variable, command, expected) => {
+    vi.stubEnv(variable, '/dev/null');
+    try {
+      expect(await judge(command)).toMatchObject(expected);
+    } finally {
+      vi.stubEnv(variable, undefined);
+    }
+  });
+
+  it.each([
+    "env sh -c 'echo x > .claude/settings.json'",
+    "timeout 5 sh -c 'echo x > .claude/settings.json'",
+    'python3 -c \'open(".claude/settings.json", "w")\'',
+  ])('decides find -exec %s as its xargs form', async program => {
+    expect(await judge(`find . -name '*.ts' -exec ${program} {} +`)).toEqual(
+      await judge(`find . -name '*.ts' | xargs ${program}`)
+    );
   });
 
   it.each(['git ls-files | xargs cat', 'git diff --name-only | xargs cat'])(
@@ -260,10 +326,22 @@ describe('commands main ran unasked', () => {
     expect(await exists(join(base, 'fetched'))).toBe(false);
   });
 
-  it('lists an archive with the tar on PATH, never one in the project or one on another host', async () => {
+  it('reads a settings file swapped for a FIFO without waiting on it', async () => {
+    const frepo = join(proj, 'frepo');
+    await mkdir(join(frepo, '.claude'), { recursive: true });
+    execFileSync('mkfifo', [join(frepo, '.claude', 'settings.json')]);
+
+    const started = Date.now();
+    expect(await judge('rg -l foo | xargs sed -i s/a/b/', 'frepo')).toMatchObject(asks);
+    // A blocked read only ends at the 5 s scan deadline.
+    expect(Date.now() - started).toBeLessThan(2500);
+  });
+
+  it('runs git and archive programs from PATH outside the project, never one in it or one on another host', async () => {
     const path = process.env.PATH ?? '';
     vi.stubEnv('PATH', `.:${join(proj, 'bin2')}:${join(base, 'bin')}:${path}`);
     try {
+      expect(await judge('git ls-files src | xargs wc -l')).toEqual(unasked);
       expect(await judge('tar -xf clean.tar')).toMatchObject({ full: true, allowed: true });
       expect(await judge('tar -xf clean.tar.gz')).toMatchObject({ full: true, allowed: true });
       const started = Date.now();
@@ -279,7 +357,7 @@ describe('commands main ran unasked', () => {
     expect(calls).toContain('clean.tar.gz');
     expect(calls).not.toContain('host.example');
     expect(calls).not.toMatch(/--file=-( |$)/m);
-    for (const marker of ['local-tar', 'local-gzip', 'project-gzip']) {
+    for (const marker of ['local-tar', 'local-gzip', 'project-gzip', 'local-git', 'project-git']) {
       expect(await exists(join(base, marker))).toBe(false);
     }
   });
