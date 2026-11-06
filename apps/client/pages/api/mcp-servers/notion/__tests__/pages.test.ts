@@ -74,7 +74,7 @@ describe('GET /api/mcp-servers/notion/pages - connection states', () => {
     expect(errorSpy).not.toHaveBeenCalled();
   });
 
-  it('keeps an unreadable stored token at error with a 500', async () => {
+  it('keeps a connection lookup failure at error with a 500', async () => {
     mockEnsureValidToken.mockRejectedValue(new Error('Failed to get valid Notion tokens'));
 
     const res = await call();

@@ -34,7 +34,10 @@ vi.mock('@bike4mind/common', async importOriginal => {
 
 // Mock token encryption
 vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
-  decryptToken: vi.fn((token: string) => (token ? `decrypted-${token}` : null)),
+  decryptToken: vi.fn((token: string) => {
+    if (token === 'undecryptable-token') throw new Error('Token decryption failed');
+    return token ? `decrypted-${token}` : null;
+  }),
   encryptEnvVariables: vi.fn((vars: Array<{ key: string; value: string }>) =>
     vars.map(v => ({ key: v.key, value: `encrypted-${v.value}` }))
   ),
@@ -98,18 +101,29 @@ describe('NotionTokenManager', () => {
       errorSpy.mockRestore();
     });
 
-    it('should still return null and log at error when the token cannot be decrypted', async () => {
+    it.each([
+      ['missing', ''],
+      ['undecryptable', 'undecryptable-token'],
+    ])('marks a connection with a %s stored token for reconnection, once at warn', async (_label, accessToken) => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       mockFindById.mockResolvedValue({
         id: 'user-123',
-        notionConnect: { status: 'connected', accessToken: '', workspaceId: 'ws-123', workspaceName: 'WS' },
+        notionConnect: { status: 'connected', accessToken, workspaceId: 'ws-123', workspaceName: 'WS' },
       });
 
-      const result = await NotionTokenManager.getValidTokens('user-123');
+      await expect(NotionTokenManager.getValidTokens('user-123')).rejects.toThrow(NotionReconnectRequiredError);
 
-      expect(result).toBeNull();
-      expect(errorSpy).toHaveBeenCalledWith('Failed to decrypt Notion access token for user:', 'user-123');
+      expect(mockUpdate).toHaveBeenCalledWith({
+        id: 'user-123',
+        'notionConnect.status': 'needs_reconnect',
+        'notionConnect.disconnectReason': expect.stringContaining('reconnect'),
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).not.toHaveBeenCalled();
       errorSpy.mockRestore();
+      warnSpy.mockRestore();
     });
 
     it('should throw NotionReconnectRequiredError when status is needs_reconnect', async () => {
@@ -165,10 +179,8 @@ describe('NotionTokenManager', () => {
 
       expect(mockUpdate).toHaveBeenCalledWith({
         id: 'user-123',
-        notionConnect: expect.objectContaining({
-          status: 'needs_reconnect',
-          disconnectReason: expect.any(String),
-        }),
+        'notionConnect.status': 'needs_reconnect',
+        'notionConnect.disconnectReason': expect.any(String),
       });
     });
 
@@ -236,9 +248,8 @@ describe('NotionTokenManager', () => {
 
       expect(mockUpdate).toHaveBeenCalledWith({
         id: 'user-123',
-        notionConnect: expect.objectContaining({
-          status: 'needs_reconnect',
-        }),
+        'notionConnect.status': 'needs_reconnect',
+        'notionConnect.disconnectReason': 'Your Notion connection has been revoked. Please reconnect your account.',
       });
     });
 
