@@ -30,13 +30,14 @@ async function judgedMembers(
   { from, to }: { from: string; to: string },
   legitOnly: boolean,
   now: Date,
-  expiresAt: number
+  expiresAt: number,
+  withTooNew: boolean
 ): Promise<{ members: FunnelMember[]; tooNew: number; createdFrom: string; createdTo: string }> {
   const createdFrom = `${from}T00:00:00.000Z`;
   const createdTo = `${shiftDay(to, 1)}T00:00:00.000Z`;
   const window = { start: new Date(createdFrom), end: new Date(createdTo) };
   const [cohort, legitIds] = await Promise.all([
-    classifyFunnelCohort(window, { now, deadlineMs: COHORT_MAX_TIME_MS, withTooNew: true, expiresAt }),
+    classifyFunnelCohort(window, { now, deadlineMs: COHORT_MAX_TIME_MS, withTooNew, expiresAt }),
     legitOnly
       ? signupVerdictUserIds(
           { ...window, verdict: 'legit' },
@@ -75,11 +76,11 @@ export async function getActivationFunnel(query: AnalyticsOverviewQuery, now: Da
   }
   const legitOnly = query.signups === 'legit';
   const expiresAt = Date.now() + FUNNEL_BUDGET_MS;
-  const current = await withinBudget(judgedMembers(window, legitOnly, now, expiresAt), expiresAt);
+  const current = await withinBudget(judgedMembers(window, legitOnly, now, expiresAt, true), expiresAt);
   // Only the tile's comparison needs the previous period: it runs once the funnel has loaded, in what is left
-  // of the budget, and its failure must not hide the funnel.
+  // of the budget, and its failure must not hide the funnel. Its too-new count is never shown, so it is not read.
   const previous = window.previous
-    ? await withinBudget(judgedMembers(window.previous, legitOnly, now, expiresAt), expiresAt).catch(error => {
+    ? await withinBudget(judgedMembers(window.previous, legitOnly, now, expiresAt, false), expiresAt).catch(error => {
         console.warn('activation funnel: previous-period comparison failed', error);
         return undefined;
       })

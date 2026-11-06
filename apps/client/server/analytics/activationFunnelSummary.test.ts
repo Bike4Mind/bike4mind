@@ -112,6 +112,12 @@ describe('getActivationFunnel', () => {
     expect(funnel).toMatchObject({ activationRate: { value: 100, previous: 0 } });
   });
 
+  it('reads too-new signups for the current period only', async () => {
+    mocks.classify.mockResolvedValue({ members: [], tooNewIds: [] });
+    await getActivationFunnel({ ...query, compare: 'prev' }, NOW);
+    expect(mocks.classify.mock.calls.map(([, options]) => options.withTooNew)).toEqual([true, false]);
+  });
+
   it('starts the previous period only once the current one has loaded', async () => {
     let resolveCurrent: (value: unknown) => void = () => {};
     mocks.classify
