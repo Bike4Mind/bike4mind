@@ -88,11 +88,7 @@
   },
   "rankings": {},
   "tiers": [
-    {
-      "memoryKind": "discrete",
-      "minGiB": 0,
-      "picks": [{ "slot": "best", "entry": "qwen3-5-0-8b", "build": "q8-0" }]
-    },
+    { "memoryKind": "discrete", "minGiB": 0, "picks": [{ "slot": "best", "entry": "qwen3-5-0-8b", "build": "q8-0" }] },
     {
       "memoryKind": "discrete",
       "minGiB": 8,
