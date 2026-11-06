@@ -24,6 +24,7 @@ import {
   generateSpeechTool,
   generateVideoSchema,
   generateVideoTool,
+  saveGeneratedImageTool,
 } from './mediaTools';
 import { MCP_READ_TOOLS, MCP_TOOLS } from './mcpTools';
 import { memoryDelete, memoryRead, memoryWrite } from './memoryTools';
@@ -144,6 +145,7 @@ const BY_NAME = new Map(
     exploreTool,
     ...MEDIA_TOOLS,
     generateVideoTool,
+    saveGeneratedImageTool,
     ...HOST_TOOLS,
     ...SUGGESTION_TOOLS,
     questComplete,
@@ -272,6 +274,8 @@ export function toolsForRequest(options: {
     ...(options.roots.length > 0 ? localTools(usesApplyPatch(options.modelId)) : []),
     ...(options.roots.length > 0 && options.explore ? [exploreTool] : []),
     ...(options.media ? MEDIA_TOOLS : []),
+    // Writes into the project, so it needs a granted folder as well as a session that generated something.
+    ...(options.media && options.roots.length > 0 ? [saveGeneratedImageTool] : []),
     ...(options.host ? HOST_TOOLS : []),
     ...(options.host && (options.suggestions ?? options.ask) ? SUGGESTION_TOOLS : []),
     ...(options.host && options.delegates ? [questComplete] : []),

@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AxiosError, AxiosHeaders } from 'axios';
@@ -6,10 +6,14 @@ import type { ChatMedia, ChatToolNotice } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MediaApiClient } from '../media/MediaApiClient';
 import { MediaStore } from '../media/MediaStore';
-import { generateImageTool, generateSpeechTool } from './mediaTools';
+import { generateImageTool, generateSpeechTool, saveGeneratedImageTool } from './mediaTools';
 import type { MediaContext, ToolContext } from './types';
 
 const SESSION = 'f1a2b3c4-0000-4000-8000-000000000001';
+
+/** Real PNG and JPEG signatures: the tools sniff the bytes, not the name. */
+const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+const JPEG_BYTES = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
 
 interface Harness {
   context: ToolContext;
@@ -18,9 +22,20 @@ interface Harness {
   notices: ChatToolNotice[];
   progress: string[];
   setRemote: ReturnType<typeof vi.fn>;
+  /** Images attached for the model to see, by media type. */
+  shown: string[];
+  /** A granted folder, for the save tool. */
+  root: string;
 }
 
-async function harness(options: { imageModels?: string[]; remoteSessionId?: string } = {}): Promise<Harness> {
+async function harness(
+  options: {
+    imageModels?: string[];
+    remoteSessionId?: string;
+    vision?: boolean;
+    generated?: 'png' | 'jpeg' | 'jpeg-as-png';
+  } = {}
+): Promise<Harness> {
   const client = {
     generateImage: vi.fn().mockResolvedValue({ questId: 'q1', remoteSessionId: 'nb1' }),
     getQuest: vi.fn().mockResolvedValue({
@@ -29,7 +44,15 @@ async function harness(options: { imageModels?: string[]; remoteSessionId?: stri
       sessionId: 'nb1',
       files: [{ name: 'a.png', url: 'https://cdn.example/generated/a.png', isImage: true, isAudio: false }],
     }),
-    fetchGenerated: vi.fn().mockResolvedValue({ bytes: Buffer.from('png'), contentType: 'image/png' }),
+    fetchGenerated: vi
+      .fn()
+      .mockResolvedValue(
+        options.generated === 'jpeg'
+          ? { bytes: JPEG_BYTES, contentType: 'image/jpeg' }
+          : options.generated === 'jpeg-as-png'
+            ? { bytes: JPEG_BYTES, contentType: 'image/png' }
+            : { bytes: PNG_BYTES, contentType: 'image/png' }
+      ),
     synthesizeSpeech: vi.fn().mockResolvedValue({
       audio: Buffer.from('id3').toString('base64'),
       format: 'mp3',
@@ -43,6 +66,8 @@ async function harness(options: { imageModels?: string[]; remoteSessionId?: stri
   const notices: ChatToolNotice[] = [];
   const progress: string[] = [];
   const setRemote = vi.fn().mockResolvedValue(undefined);
+  const shown: string[] = [];
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-mediatools-root-')));
 
   const mediaContext: MediaContext = {
     client: client as unknown as MediaApiClient,
@@ -61,11 +86,25 @@ async function harness(options: { imageModels?: string[]; remoteSessionId?: stri
     notices,
     progress,
     setRemote,
+    shown,
+    root,
     context: {
-      roots: [],
+      roots: [root],
+      workingDirectory: root,
       signal: new AbortController().signal,
       sessionId: SESSION,
       media: mediaContext,
+      images: {
+        vision: options.vision ?? true,
+        prepare: (bytes, mediaType) => ({
+          bytes,
+          mediaType,
+          width: 1024,
+          height: 1024,
+          sourceWidth: 1024,
+          sourceHeight: 1024,
+        }),
+      },
       report: {
         progress: text => progress.push(text),
         media: item => media.push(item),
@@ -75,10 +114,16 @@ async function harness(options: { imageModels?: string[]; remoteSessionId?: stri
         ownContent: () => undefined,
         diff: () => undefined,
         detail: () => undefined,
-        image: () => undefined,
+        image: (_bytes, mimeType) => shown.push(mimeType),
       },
     },
   };
+}
+
+/** Run a generation and return the id it reported, the way the model would read it back. */
+async function generate(h: Harness): Promise<string> {
+  await generateImageTool.run({ prompt: 'a lantern' }, h.context);
+  return h.media[0].url.split('/').pop() ?? '';
 }
 
 describe('generate_image', () => {
@@ -131,15 +176,28 @@ describe('generate_image', () => {
     await expect(generateImageTool.approval!({ prompt: 'x' }, h.context)).rejects.toThrow(/no image-generation/);
   });
 
-  it('reports the image to the UI and tells the model it cannot see it', async () => {
+  it('reports the image to the UI and attaches it for the model to see', async () => {
     const h = await harness();
     const result = await generateImageTool.run({ prompt: 'a bicycle' }, h.context);
 
     expect(h.media).toHaveLength(1);
     expect(h.media[0]).toMatchObject({ kind: 'image', caption: 'a bicycle' });
-    expect(result).toMatch(/cannot see the result/);
-    // The bytes are never handed to the model - only the fact that they exist.
+    expect(h.shown).toEqual(['image/png']);
+    expect(result).toMatch(/attached so you can see them too/);
+    expect(result).toMatch(/shown again with the user's next\s+message/);
+    expect(result).toContain(h.media[0].url.split('/').pop());
+    // The local media URL is the renderer's business, never the model's.
     expect(result).not.toContain('b4m-media://');
+  });
+
+  it('tells a model that reads no images it was not shown the result, and not to describe it', async () => {
+    const h = await harness({ vision: false });
+    const result = await generateImageTool.run({ prompt: 'a bicycle' }, h.context);
+
+    expect(h.media).toHaveLength(1);
+    expect(h.shown).toEqual([]);
+    expect(result).toMatch(/could not be shown the result: the current model does not accept images/);
+    expect(result).toMatch(/Do not describe what you have not seen/);
   });
 
   it('remembers the notebook the server filed the first generation under', async () => {
@@ -155,6 +213,94 @@ describe('generate_image', () => {
   it('refuses without a signed-in session rather than failing at the network', async () => {
     const context: ToolContext = { roots: [], signal: new AbortController().signal };
     await expect(generateImageTool.run({ prompt: 'x' }, context)).rejects.toThrow(/not signed in/);
+  });
+});
+
+describe('save_generated_image', () => {
+  it('copies a generated image into the project, after naming the target in the approval', async () => {
+    const h = await harness();
+    const id = await generate(h);
+
+    const prompt = await saveGeneratedImageTool.approval!({ id, path: 'refs/lantern.png' }, h.context);
+    expect(prompt.detail).toContain(join(h.root, 'refs', 'lantern.png'));
+
+    const result = await saveGeneratedImageTool.run({ id, path: 'refs/lantern.png' }, h.context);
+    expect(result).toContain(join(h.root, 'refs', 'lantern.png'));
+    expect(await readFile(join(h.root, 'refs', 'lantern.png'))).toEqual(PNG_BYTES);
+  });
+
+  // The save usually comes in a later turn than the generation, when the agent no longer sees the
+  // image, so the save is what puts it back in front of the agent before it models from it.
+  it('shows the saved image to the agent again', async () => {
+    const h = await harness();
+    const id = await generate(h);
+    h.shown.length = 0;
+
+    const result = await saveGeneratedImageTool.run({ id, path: 'refs/lantern.png' }, h.context);
+    expect(h.shown).toEqual(['image/png']);
+    expect(result).toMatch(/You see it below this result in this reply only/);
+  });
+
+  it('tells a model that reads no images it was not shown the saved image', async () => {
+    const h = await harness({ vision: false });
+    const id = await generate(h);
+
+    const result = await saveGeneratedImageTool.run({ id, path: 'refs/lantern.png' }, h.context);
+    expect(h.shown).toEqual([]);
+    expect(result).toMatch(/could not be shown it: the current model does not accept images/);
+  });
+
+  // A viewer or slicer trusts the extension, so a JPEG saved as .png would open as a broken file.
+  it('corrects the extension to the type the bytes really are', async () => {
+    const h = await harness({ generated: 'jpeg' });
+    const id = await generate(h);
+
+    const result = await saveGeneratedImageTool.run({ id, path: 'lantern.png' }, h.context);
+    expect(result).toContain(join(h.root, 'lantern.jpg'));
+    expect(result).toMatch(/corrected/);
+    expect(await readFile(join(h.root, 'lantern.jpg'))).toEqual(JPEG_BYTES);
+  });
+
+  it('trusts the bytes over the content type the server reported', async () => {
+    const h = await harness({ generated: 'jpeg-as-png' });
+    const id = await generate(h);
+
+    const result = await saveGeneratedImageTool.run({ id, path: 'lantern.png' }, h.context);
+    expect(result).toContain(join(h.root, 'lantern.jpg'));
+    expect(await readFile(join(h.root, 'lantern.jpg'))).toEqual(JPEG_BYTES);
+  });
+
+  it('adds the extension when the path has none', async () => {
+    const h = await harness();
+    const id = await generate(h);
+    await saveGeneratedImageTool.run({ id, path: 'lantern' }, h.context);
+    expect(await readFile(join(h.root, 'lantern.png'))).toEqual(PNG_BYTES);
+  });
+
+  it('never replaces an existing file, and says so before the user is asked', async () => {
+    const h = await harness();
+    const id = await generate(h);
+    await writeFile(join(h.root, 'lantern.png'), 'keep me');
+
+    await expect(saveGeneratedImageTool.approval!({ id, path: 'lantern.png' }, h.context)).rejects.toThrow(
+      /already exists/
+    );
+    expect(await readFile(join(h.root, 'lantern.png'), 'utf8')).toBe('keep me');
+  });
+
+  it('refuses a path outside the shared folders before the user is asked', async () => {
+    const h = await harness();
+    const id = await generate(h);
+    const elsewhere = join(await realpath(tmpdir()), 'b4m-not-granted', 'lantern.png');
+
+    await expect(saveGeneratedImageTool.approval!({ id, path: elsewhere }, h.context)).rejects.toThrow();
+  });
+
+  it('refuses an id this conversation did not generate', async () => {
+    const h = await harness();
+    await expect(
+      saveGeneratedImageTool.approval!({ id: '00000000-0000-4000-8000-000000000000.png', path: 'x.png' }, h.context)
+    ).rejects.toThrow(/not an image generated in this conversation/);
   });
 });
 

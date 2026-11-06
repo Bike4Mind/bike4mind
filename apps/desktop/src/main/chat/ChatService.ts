@@ -185,7 +185,8 @@ import { findStaleResults, historyRounds, sentHistory, toolResultContent } from 
 import { stalePlanReminder, unfinishedPlanReminder } from './planReminder';
 import { buildExploreContext, shouldOfferExplore } from './explore';
 import { MediaApiClient } from './media/MediaApiClient';
-import type { MediaStore } from './media/MediaStore';
+import { type MediaStore, parseMediaUrl } from './media/MediaStore';
+import { fitToolImage, MAX_TOOL_IMAGE_INPUT_BYTES, sniffImageType } from './tools/toolImages';
 import type { VideoJobScheduler } from './media/VideoJobScheduler';
 import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
@@ -210,6 +211,7 @@ import { SkillsPromptCache } from './skills/prompt';
 import { skillSource, type SkillCatalog } from './skills/SkillCatalog';
 import type { McpManager, McpToolBinding } from './mcp/McpManager';
 import { desktopAppGuidance, mcpGuidance, mcpServerLines } from './mcp/prompt';
+import { GENERATED_IMAGE_TOOL } from './tools/mediaTools';
 import { describeFlags, modelSafeRequest, planMcpServerRequest } from './tools/mcpTools';
 import type { AccessStore } from './tools/AccessStore';
 import { forgetSessionWrites } from './tools/sessionScripts';
@@ -3124,6 +3126,9 @@ export class ChatService {
       } else {
         wire = await toCompletionMessages(session, readAttachment);
       }
+      if (!resume && images?.vision) {
+        prependToPrompt(wire, await this.previousReplyImages(session, images));
+      }
       const systemMessage = () =>
         buildSystemMessage(
           toolsSupported ? roots : [],
@@ -4044,6 +4049,55 @@ export class ChatService {
       const stranded = queue.giveBack(sessionId, [next], 'refused', result.error);
       void this.strandRelay(sessionId, stranded).catch(() => undefined);
     });
+  }
+
+  /**
+   * Content blocks re-showing the images generate_image made in the reply just before this prompt.
+   * A tool's image turn is never replayed (see sentRounds), so without this the model cannot see
+   * the picture a "turn this into a 3D model" refers to. Only that one reply, to bound the cost.
+   */
+  private async previousReplyImages(session: ChatSession, images: ImageContext): Promise<unknown[]> {
+    const store = this.deps.media;
+    if (!store) return [];
+    const history = sentHistory(session.messages);
+    if (history.at(-1)?.role !== 'user') return [];
+    const reply: ChatMessage[] = [];
+    for (let index = history.length - 2; index >= 0 && history[index].role === 'assistant'; index--) {
+      reply.unshift(history[index]);
+    }
+    const generated = reply
+      .flatMap(message => message.toolCalls ?? [])
+      .filter(call => call.name === GENERATED_IMAGE_TOOL && call.status === 'done')
+      .flatMap(call => (call.media ?? []).filter(item => item.kind === 'image'));
+
+    const shown: { image: { mediaType: string; data: string } }[] = [];
+    for (const item of generated) {
+      const location = parseMediaUrl(item.url);
+      const stored = location ? await store.read(location.sessionId, location.name) : null;
+      const type = stored ? sniffImageType(stored.bytes) : null;
+      if (!stored || !type || stored.bytes.length > MAX_TOOL_IMAGE_INPUT_BYTES) {
+        this.deps.logger.warn(`CHAT: not re-showing generated image ${item.url}: missing or unreadable`);
+        continue;
+      }
+      const fitted = fitToolImage(images, stored.bytes, type);
+      if (!fitted.ok) {
+        this.deps.logger.warn(`CHAT: not re-showing generated image ${item.url}: ${fitted.reason}`);
+        continue;
+      }
+      shown.push({ image: { mediaType: fitted.mediaType, data: fitted.bytes.toString('base64') } });
+    }
+    const { kept } = withinImageBudget(shown);
+    if (kept.length === 0) return [];
+    return [
+      {
+        type: 'text',
+        text: `${kept.length === 1 ? 'Image' : 'Images'} ${GENERATED_IMAGE_TOOL} made in the previous reply, shown again because the user may be referring to ${kept.length === 1 ? 'it' : 'them'}.`,
+      },
+      ...kept.map(({ image }) => ({
+        type: 'image',
+        source: { type: 'base64', media_type: image.mediaType, data: image.data },
+      })),
+    ];
   }
 
   /** Images a finished call asked to show the model, handed over once. */
@@ -7361,8 +7415,9 @@ const MEDIA_GUIDANCE: readonly string[] = [
   'Each of these SPENDS THE USER CREDITS and each asks them to approve it first, so use one only',
   'when the user has asked for that thing - never to check whether it works, and never as a',
   'flourish alongside a text answer. If they decline, do not try a variation; ask what they want.',
-  'The result is shown or played to the USER and is never returned to you: you cannot see the',
-  'image or hear the audio. Never describe what a generated image depicts or how audio sounds.',
+  'The result is shown or played to the USER. A generated image is also attached for you to see',
+  'when your model reads images (its result says whether it was); audio never is. Never describe',
+  'an image you were not shown or how audio sounds.',
 ];
 
 /**
@@ -7604,6 +7659,30 @@ function describeRootChange(before: readonly string[], after: readonly string[])
     ...after.filter(root => !before.includes(root)).map(path => ({ path, shared: true })),
     ...before.filter(root => !after.includes(root)).map(path => ({ path, shared: false })),
   ];
+}
+
+/**
+ * Put blocks ahead of the new prompt's own content, the way an attachment's images go. Inside the
+ * prompt rather than a turn of their own, so roles still alternate and no tool_result turn is touched.
+ */
+function prependToPrompt(wire: CompletionMessage[], blocks: unknown[]): void {
+  // A deferred-tools turn ends with a system tool-change message after the prompt.
+  const prompt = wire.findLast(message => message.role !== 'system');
+  if (blocks.length === 0 || prompt?.role !== 'user') return;
+  const own = typeof prompt.content === 'string' ? [{ type: 'text', text: prompt.content }] : prompt.content;
+  if (!Array.isArray(own)) return;
+  prompt.content = [...blocks, ...own.filter(block => !isEmptyText(block))];
+}
+
+function isEmptyText(block: unknown): boolean {
+  return (
+    typeof block === 'object' &&
+    block !== null &&
+    'type' in block &&
+    block.type === 'text' &&
+    'text' in block &&
+    block.text === ''
+  );
 }
 
 /**
