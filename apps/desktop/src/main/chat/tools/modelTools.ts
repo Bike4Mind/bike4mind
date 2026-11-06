@@ -25,9 +25,14 @@ import { requireString, type ModelContext, type ToolContext, type ToolDefinition
  * and the `<name>-turntable.webm` clip model_record renders on request.
  */
 
-/** The contract the build expects. Must stay in step with the engine worker in model3d/engineProtocol.ts. */
+/**
+ * The contract the build expects. Must stay in step with the engine worker in model3d/engineProtocol.ts
+ * (the time limit below is its BUILD_TIMEOUT_MS; a test pins the two together).
+ */
 const MODEL_FILE_CONTRACT = [
   'A model is a JavaScript ES module named <name>.model.js, built with the manifold-3d CSG library.',
+  'Every save is built on its own and must finish within 5 seconds, so each save is a complete, valid module, never a',
+  'half-written one: a stage that adds parts still returns every part so far.',
   'It may not import anything; `m` is the manifold module (m.Manifold, m.CrossSection) and `p` holds the param values.',
   "Optional: `export const units = 'mm'` (default) or 'm'; `export const params = { width: { value: 60, min: 20, max: 200, step: 1 } }` (the user gets a slider per param).",
   'Default export: a function returning a Manifold, or an array of { name, color, shape } parts (color as #rrggbb). Z is up.',
@@ -169,11 +174,20 @@ export const modelView: ToolDefinition = {
   schema: {
     name: 'model_view',
     description: [
-      'Open a 3D model in the live model pane beside the chat and build it. The pane re-renders on every save of the file,',
-      'and every good build of a .model.js also writes <name>.glb beside it (metres, per-part materials) for game engines.',
-      'Returns the build result: size, parts, triangle count and params, or the error with its line so you can fix it.',
-      'Create the file first with the file tools, then call this. Also opens existing .glb and .stl files to look at.',
-      'Check the result with model_screenshot before telling the user it is done.',
+      'Open a 3D model in the live model pane beside the chat and build it. The pane rebuilds on every save of the file and',
+      'prints new parts in as they appear, and every good build of a .model.js also writes <name>.glb beside it (metres,',
+      'per-part materials) for game engines. Returns the build result: size, parts, triangle count and params, or the error',
+      'with its line so you can fix it. On a file that is already open it returns the result of the latest save.',
+      'Also opens existing .glb and .stl files to look at.',
+      'Build a new model in stages, so the user watches it take shape instead of waiting on one long write:',
+      '1. Write a short first version with the file tools (the base and the main body, no fine detail), then call this as',
+      '   soon as the write returns. That opens the pane.',
+      '2. Add the rest in a few further saves, editing the file in place (say the secondary parts, then small details',
+      '   such as rivets, trim or handles). After each save returns, call this to get its build result and fix any error',
+      '   before the next stage. Two to four stages suit a detailed model; a simple one may need only the first.',
+      'Never call this in the same batch as the write or edit it should check: tools in one batch run together, so it can',
+      'read the file before the save lands and report the previous build.',
+      '3. Check the finished model with model_screenshot before telling the user it is done.',
       '',
       MODEL_FILE_CONTRACT,
     ].join('\n'),
