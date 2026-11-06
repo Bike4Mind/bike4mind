@@ -14,6 +14,7 @@ import {
   type ModelView,
 } from '@shared/model3d';
 import { enableShadows, ModelComposer, ModelStage } from './modelStage';
+import { applyTexture, boxProjectUvs } from './proceduralTextures';
 
 /**
  * three.js side of the model pane: meshes from the sandboxed engine become a scene, exports and
@@ -48,10 +49,11 @@ function srgb(hex: string): THREE.Color {
 
 /**
  * glTF PBR plus the KHR material extensions GLTFExporter writes: clearcoat, sheen, transmission
- * with ior and volume thickness, and emissive strength. Unset fields keep three's defaults, so a
- * part that sets none of them exports as plain metallic-roughness.
+ * with ior and volume thickness, emissive strength and anisotropy. Unset fields keep three's
+ * defaults, so a part that sets none of them exports as plain metallic-roughness. A `texture` adds
+ * colour, roughness and bump maps (bump is viewer-only: glTF has no bump map).
  */
-export function partMaterial(part: ModelPartMesh): THREE.MeshPhysicalMaterial {
+export function partMaterial(part: ModelPartMesh, units: ModelUnits = 'mm'): THREE.MeshPhysicalMaterial {
   const color = srgb(part.color || DEFAULT_PART_COLOR);
   const material = new THREE.MeshPhysicalMaterial({
     color,
@@ -77,6 +79,7 @@ export function partMaterial(part: ModelPartMesh): THREE.MeshPhysicalMaterial {
     material.emissive.copy(srgb(part.emissive));
     material.emissiveIntensity = part.emissiveIntensity ?? 1;
   }
+  if (part.texture !== undefined) applyTexture(material, part.texture, units);
   // The viewer's pick highlight borrows emissive, then puts these back.
   material.userData.emissive = material.emissive.getHex(THREE.LinearSRGBColorSpace);
   material.userData.emissiveIntensity = material.emissiveIntensity;
@@ -101,8 +104,11 @@ export function buildModelObject(parts: ModelPartMesh[], units: ModelUnits): THR
     geometry.setAttribute('position', new THREE.BufferAttribute(part.positions.slice(), 3));
     geometry.setIndex(new THREE.BufferAttribute(part.indices, 1));
     geometry.translate(-pivot[0], -pivot[1], -pivot[2]);
-    const material = partMaterial(part);
-    const mesh = new THREE.Mesh(shadedGeometry(geometry, part.smooth === true, units), material);
+    const material = partMaterial(part, units);
+    const shaded = shadedGeometry(geometry, part.smooth === true, units);
+    // Only a textured part carries UVs; both shaded forms are non-indexed, as the projection needs.
+    if (part.texture !== undefined) boxProjectUvs(shaded, part.texture, units);
+    const mesh = new THREE.Mesh(shaded, material);
     mesh.name = part.name;
     return mesh;
   });

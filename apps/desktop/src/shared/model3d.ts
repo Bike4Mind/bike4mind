@@ -10,6 +10,10 @@ export type ModelKind = 'model' | 'glb' | 'stl';
 
 export type ModelUnits = 'mm' | 'm';
 
+/** Procedural surface detail a part can carry: wood grain or brushed metal, tinted by its colour. */
+export const MODEL_TEXTURES = ['wood', 'brushed'] as const;
+export type ModelTexture = (typeof MODEL_TEXTURES)[number];
+
 export type ModelParam = { value: number; min: number; max: number; step: number };
 
 export type ModelPartMesh = {
@@ -57,6 +61,8 @@ export type ModelPartMesh = {
   emissive?: string;
   /** With `emissive`: how strongly it glows, 0 or more. Absent means 1. */
   emissiveIntensity?: number;
+  /** Procedural surface detail; the grain or brushing runs along the part's longest side. */
+  texture?: ModelTexture;
 };
 
 /** glTF's KHR_materials_ior bounds three clamps to; outside them a renderer would disagree. */
@@ -318,6 +324,8 @@ function partMaterialError(part: ModelPartMesh): string | null {
     return `${name} has an emissive that is not a #rrggbb colour.`;
   if (part.smooth !== undefined && typeof part.smooth !== 'boolean')
     return `${name} has a smooth that is not true or false.`;
+  if (part.texture !== undefined && !(MODEL_TEXTURES as readonly unknown[]).includes(part.texture))
+    return `${name} has a texture that is not one of: ${MODEL_TEXTURES.join(', ')}.`;
   return null;
 }
 
