@@ -1,10 +1,5 @@
 import { CreditHolderType, type PurchaseReversalReason } from '@bike4mind/common';
-import {
-  CreditTransaction,
-  User,
-  creditTransactionRepository,
-  userRepository,
-} from '@bike4mind/database';
+import { CreditTransaction, User, creditTransactionRepository, userRepository } from '@bike4mind/database';
 
 /**
  * Clears User.lastCreditsPurchasedAt (the paid-standing stamp) from users nothing backs any more:
