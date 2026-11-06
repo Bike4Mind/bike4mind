@@ -1,7 +1,8 @@
-import { userRepository, withTransaction } from '@bike4mind/database';
+import { erasureRecordRepository, userRepository, withTransaction } from '@bike4mind/database';
 import type { IUserDocument, IUserRepository } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
+import { erasureIdHash, erasureKeyId, erasurePseudonym } from '@bike4mind/server-utils/privacy/erasureHash';
 import { emitBillingEvent } from '@server/analytics/signupEvents';
 import { wholeDaysBetween } from '@server/analytics/billingEventDetails';
 import { resolveUserType } from '@server/analytics/resolveUserType';
@@ -70,7 +71,8 @@ async function emitAccountDeleted(account: IUserDocument | null, initiatedBy: Ha
  *
  * `commitDelete` runs the caller's own delete (its authorization and notifications) with a users
  * repository whose `delete` captures integration grants and billing references, then deletes the row
- * in a transaction with the context hooks. Admin subscription cancellation precedes the delete; a
+ * in a transaction with the context hooks, writing the hash-only ErasureRecord in that same
+ * transaction (server/users/reapplyErasure.ts repeats the erasure from it after a restore). Admin subscription cancellation precedes the delete; a
  * cancellable self-serve purge defers cancellation until its guarded delete commits. The purge and the
  * account_deleted event run in a `finally`: a throw after the commit (a failed notification) must not
  * skip them, because a retry would find no row and nothing would run them again.
@@ -109,6 +111,14 @@ export async function hardDeleteUser<T>(
           result = await withTransaction(async () => {
             await context.assertInTransaction?.();
             const deleted = await userRepository.delete(id);
+            // A throw aborts the delete: an erasure with no record could not be repeated after a restore.
+            await erasureRecordRepository.record({
+              idHash: erasureIdHash(id),
+              keyId: erasureKeyId(),
+              pseudonym: erasurePseudonym(id),
+              erasedAt: new Date(),
+              initiatedBy: context.initiatedBy,
+            });
             await context.recordInTransaction?.(target, cancellation);
             return deleted;
           });
