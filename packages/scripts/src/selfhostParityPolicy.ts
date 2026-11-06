@@ -1085,7 +1085,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     ]
   ),
   hostedOnly(
-    'schedule:infra/cron.ts:youngAccountSpendAlert',
+    'schedule:infra/youngAccountSpendAlert.ts:youngAccountSpendAlert',
     '0fdfbcaf8af6ffe9c4e387cf32b5e6e8ea3ab73a8c4a5e24f84e5150bfa6a80e',
     'Hosted production abuse alert to Slack; not applicable to a portable deployment.',
     ['cloudwatch:DescribeAlarms', 'cloudwatch:PutMetricAlarm', 'import:@aws-sdk/client-cloudwatch', 'ssm:GetParameter']
