@@ -167,10 +167,8 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
 const UNRECORDED_IMAGE_GENERATION: GeneratedAssetMetadata = { generator: 'image', provider: 'unknown', prompt: '' };
 
 /**
- * The generation record of the file the image producers saved alongside this chat image (ImageGeneration /
- * ImageEdit stamp `sourceMetadata.generatedOutputKey`), so the copy carries the same request. Searched within the
- * chats whose turns reference the key, which the partial sessionId index serves. `ownFileId` is set when that file
- * belongs to the caller, who gets it back as-is instead of a duplicate.
+ * Matched within the chats that reference the key, which the partial sessionId index serves, to find the file the
+ * image producers saved for it. `ownFileId` is set only when that file is the caller's, to be returned as-is.
  */
 async function findOriginalGeneration(
   imageKey: string,
@@ -178,6 +176,7 @@ async function findOriginalGeneration(
 ): Promise<{ generation: GeneratedAssetMetadata; ownFileId?: string } | undefined> {
   const sessionIds = await questRepository.findSessionIdsByImage(imageKey);
   if (sessionIds.length === 0) return undefined;
+  // Deliberately wide (soft-deleted, other users' sessions, no userId filter): authz already ran and the bytes are the same image.
   const file = await fabFileRepository.findOne({
     sourceType: FabFileSourceType.TOOL_GENERATED,
     'sourceMetadata.sessionId': { $in: sessionIds },
