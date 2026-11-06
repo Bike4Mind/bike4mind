@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import mongoose from 'mongoose';
+import mongoose, { type PipelineStage } from 'mongoose';
 import {
   PENDING_FREE_CREDITS_TAG,
   signupGrantDripOpen,
@@ -213,7 +213,11 @@ describe('signupGrantPendingRepository.listPending', () => {
     { sort: 'remaining' as const },
     { sort: 'remaining' as const, cursor: { id: idOf('dripping'), remaining: 200 } },
   ])('serves the shipped list aggregate from both partial indexes (%o)', async input => {
-    const pipeline = buildListPendingPipeline({ dripCap: DRIP_CAP, limit: 25, ...input });
+    const aggregate = vi.spyOn(User, 'aggregate');
+    await signupGrantPendingRepository.listPending({ dripCap: DRIP_CAP, limit: 25, ...input });
+    const pipeline = aggregate.mock.calls[0]?.[0] as PipelineStage[];
+    aggregate.mockRestore();
+    expect(pipeline).toEqual(buildListPendingPipeline({ dripCap: DRIP_CAP, limit: 25, ...input }));
     const explain = await User.aggregate(pipeline).explain('queryPlanner');
     // Unsharded explain puts the pushed-down $match plan under the first stage's $cursor, or top level.
     const planner = JSON.stringify(

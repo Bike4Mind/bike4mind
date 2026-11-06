@@ -269,7 +269,10 @@ export const signupGrantPendingRepository = {
     return totals ?? { accountsWithRemaining: 0, totalRemaining: 0, totalDripRemaining: 0 };
   },
 
-  /** Count and oldest hold time of the accounts listPending labels `held` (either reason, not blocked). */
+  /**
+   * Count and oldest hold time of the accounts listPending labels `held` (either reason, not blocked).
+   * `oldestHeldAt` is null when no held account has a hold time recorded, even if `held` > 0.
+   */
   async heldQueue(): Promise<SignupGrantPendingQueue> {
     const filter = STATUS_PREMATCH.held;
     const [held, oldest] = await Promise.all([
