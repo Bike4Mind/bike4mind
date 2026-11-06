@@ -219,9 +219,9 @@ export function usersColumns({
           <Dash />
         ) : (
           <Stack direction="row" alignItems="center" justifyContent="flex-end" gap={1}>
-            <Box component="span" sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
+            <Typography component="span" sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
               {formatNumber(row.spend30d)}
-            </Box>
+            </Typography>
             <InlineBar value={row.spend30d} max={maxSpend} />
           </Stack>
         ),
