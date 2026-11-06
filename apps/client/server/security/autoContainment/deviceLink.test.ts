@@ -66,7 +66,7 @@ function makeDeps(overrides: Partial<DeviceLinkDeps> = {}): DeviceLinkDeps {
     claimOnce: vi.fn(async () => true),
     releaseClaim: vi.fn(async () => undefined),
     recordDetection: vi.fn(async () => 'detection-1'),
-    assessAndContain: vi.fn(async () => ({ assessed: true, contained: false })),
+    assessAndContain: vi.fn(async () => ({ assessed: true, containment: 'would_contain' as const })),
     now: () => NOW,
     ...overrides,
   };
@@ -78,7 +78,12 @@ describe('checkDeviceLink', () => {
 
     const result = await checkDeviceLink('new-user', deps);
 
-    expect(result).toEqual({ status: 'recorded', detectionId: 'detection-1', assessed: true, contained: false });
+    expect(result).toEqual({
+      status: 'recorded',
+      detectionId: 'detection-1',
+      assessed: true,
+      containment: 'would_contain',
+    });
     expect(deps.findBanned).toHaveBeenCalledWith([RARE_UA]);
     const detection = vi.mocked(deps.recordDetection).mock.calls[0][0];
     expect(detection).toMatchObject({
@@ -200,7 +205,7 @@ describe('sweepDeviceLinks', () => {
     const assessAndContain = vi
       .fn()
       .mockRejectedValueOnce(new Error('model down'))
-      .mockResolvedValue({ assessed: true, contained: false });
+      .mockResolvedValue({ assessed: true, containment: null });
     const deps = makeDeps({ assessAndContain });
 
     const report = await sweepDeviceLinks({
@@ -240,9 +245,13 @@ describe('evaluateDeviceLinks', () => {
 describe('liveDeviceLinkDeps.loadConfig', () => {
   const load = () => liveDeviceLinkDeps({} as unknown as Logger).loadConfig();
   const withSettings = (value: boolean | undefined) =>
-    vi.mocked(getSettingsMap).mockResolvedValue(
-      (value === undefined ? {} : { shadowDetectionRecordingEnabled: value }) as Awaited<ReturnType<typeof getSettingsMap>>
-    );
+    vi
+      .mocked(getSettingsMap)
+      .mockResolvedValue(
+        (value === undefined ? {} : { shadowDetectionRecordingEnabled: value }) as Awaited<
+          ReturnType<typeof getSettingsMap>
+        >
+      );
   const containment = { mode: 'shadow', deviceLinkWindowHours: 168, deviceLinkCommonNetworks: 5 };
 
   it('returns null when shadow detection recording is off', async () => {

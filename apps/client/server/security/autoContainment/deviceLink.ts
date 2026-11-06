@@ -1,3 +1,4 @@
+import type { AutoContainmentOutcome } from '@bike4mind/common';
 import type { DeviceLinkRow, RecordShadowDetectionInput } from '@bike4mind/database';
 import {
   adminSettingsRepository,
@@ -50,7 +51,7 @@ export type DeviceLinkResult =
         | 'already_banned'
         | Extract<userService.BanEvasionResult, { linked: false }>['reason'];
     }
-  | { status: 'recorded'; detectionId: string; assessed: boolean; contained: boolean };
+  | { status: 'recorded'; detectionId: string; assessed: boolean; containment: AutoContainmentOutcome | null };
 
 export type DeviceLinkDeps = DeviceLinkReaders & {
   loadConfig: () => Promise<DeviceLinkConfig | null>;
@@ -58,7 +59,7 @@ export type DeviceLinkDeps = DeviceLinkReaders & {
   claimOnce: (userId: string) => Promise<boolean>;
   releaseClaim: (userId: string) => Promise<unknown>;
   recordDetection: (input: RecordShadowDetectionInput) => Promise<string>;
-  assessAndContain: (detectionId: string) => Promise<{ assessed: boolean; contained: boolean }>;
+  assessAndContain: (detectionId: string) => Promise<{ assessed: boolean; containment: AutoContainmentOutcome | null }>;
 };
 
 const AXIS_LABELS: Record<userService.DeviceLinkAxis, string> = {
@@ -144,11 +145,9 @@ export function liveDeviceLinkDeps(logger: Logger): DeviceLinkDeps {
         logger,
         deps: { groupEvidence: linkedAccountGroupEvidence },
       });
-      if (outcome.status !== 'assessed') return { assessed: false, contained: false };
+      if (outcome.status !== 'assessed') return { assessed: false, containment: null };
       const run = await applyAutoContainment(outcome.item, liveAutoContainmentDeps(logger));
-      const contained =
-        run.status === 'decided' && (run.decision.outcome === 'contained' || run.decision.outcome === 'would_contain');
-      return { assessed: true, contained };
+      return { assessed: true, containment: run.status === 'decided' ? run.decision.outcome : null };
     },
   };
 }
@@ -167,8 +166,8 @@ async function recordLink(
     await deps.releaseClaim(userId);
     throw error;
   }
-  const { assessed, contained } = await deps.assessAndContain(detectionId);
-  return { status: 'recorded', detectionId, assessed, contained };
+  const { assessed, containment } = await deps.assessAndContain(detectionId);
+  return { status: 'recorded', detectionId, assessed, containment };
 }
 
 /** Applies the rule to one account. Throws only on a database failure. */
