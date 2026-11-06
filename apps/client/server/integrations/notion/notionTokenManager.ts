@@ -41,7 +41,9 @@ export class NotionTokenManager {
   private static readStoredToken(storedToken: string | null | undefined): string | null {
     try {
       return decryptToken(storedToken);
-    } catch {
+    } catch (error) {
+      // A missing key is a deployment fault, not a bad token: marking the connection would outlive the fix.
+      if (error instanceof Error && error.message.includes('is not configured')) throw error;
       // decryptToken already logs the cause at error.
       return null;
     }

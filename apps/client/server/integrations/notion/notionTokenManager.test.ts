@@ -36,6 +36,7 @@ vi.mock('@bike4mind/common', async importOriginal => {
 vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: vi.fn((token: string) => {
     if (token === 'undecryptable-token') throw new Error('Token decryption failed');
+    if (token === 'no-key-token') throw new Error('SECRET_ENCRYPTION_KEY is not configured');
     return token ? `decrypted-${token}` : null;
   }),
   encryptEnvVariables: vi.fn((vars: Array<{ key: string; value: string }>) =>
@@ -124,6 +125,19 @@ describe('NotionTokenManager', () => {
       expect(errorSpy).not.toHaveBeenCalled();
       errorSpy.mockRestore();
       warnSpy.mockRestore();
+    });
+
+    it('leaves the connection alone when the encryption key is not configured', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockFindById.mockResolvedValue({
+        id: 'user-123',
+        notionConnect: { status: 'connected', accessToken: 'no-key-token', workspaceId: 'ws-123', workspaceName: 'WS' },
+      });
+
+      await expect(NotionTokenManager.getValidTokens('user-123')).resolves.toBeNull();
+
+      expect(mockUpdate).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
     });
 
     it('should throw NotionReconnectRequiredError when status is needs_reconnect', async () => {
