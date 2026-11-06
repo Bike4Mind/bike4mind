@@ -139,7 +139,7 @@ void app.whenReady().then(async () => {
     mcp,
     browser,
     simulatorView,
-    modelView,
+    modelViews,
     pullRequests,
     claudeImport,
     spareWorktrees,
@@ -272,7 +272,7 @@ void app.whenReady().then(async () => {
     terminals.shutdownSync();
     browser.closeAll();
     simulatorView.dispose();
-    modelView.dispose();
+    modelViews.dispose();
   });
 
   // Ctrl-C in a dev terminal, or a `kill` of the app. Children other than WSL commands lead their own

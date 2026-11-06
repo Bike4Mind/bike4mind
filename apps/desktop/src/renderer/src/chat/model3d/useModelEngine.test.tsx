@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import * as THREE from 'three';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ModelBuildOutcome, ModelViewState } from '@shared/model3d';
+import { EMPTY_MODEL_STATE, type ModelBuildOutcome, type ModelViewState } from '@shared/model3d';
 import { useModelEngine, type ModelEngine } from './useModelEngine';
 
 // The drawing and GLB encoding are three.js work covered elsewhere; this file is about build order.
@@ -38,7 +38,10 @@ const BUILT: ModelBuildOutcome = {
 type BuildRequest = { type: 'build'; id: number; print: boolean };
 
 let host: HTMLDivElement;
-let emitState: (state: ModelViewState) => void = () => {};
+let emitUpdate: (update: { sessionId: string; state: ModelViewState }) => void = () => {};
+const emitState = (state: ModelViewState, sessionId = 'chat-a') => emitUpdate({ sessionId, state });
+let activeSession: string | null = 'chat-a';
+let captureListeners: ((request: { sessionId: string; id: string; views: string[]; pose: string }) => void)[] = [];
 let root: Root;
 let engine: ModelEngine;
 let model: {
@@ -48,7 +51,7 @@ let model: {
 };
 
 function Harness() {
-  engine = useModelEngine(false);
+  engine = useModelEngine(false, activeSession);
   return null;
 }
 
@@ -74,6 +77,8 @@ function reply(frame: HTMLIFrameElement, data: unknown) {
 }
 
 beforeEach(() => {
+  activeSession = 'chat-a';
+  captureListeners = [];
   model = {
     writeGlb: vi.fn(async () => '/project/chest.glb'),
     reportBuild: vi.fn(async () => {}),
@@ -82,12 +87,17 @@ beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = {
     model: {
       ...model,
-      onState: (listener: (state: ModelViewState) => void) => {
-        emitState = listener;
+      onState: (listener: typeof emitUpdate) => {
+        emitUpdate = listener;
         return () => {};
       },
-      getState: async () => STATE,
-      onCaptureRequest: () => () => {},
+      getState: vi.fn(async (sessionId: string) => (sessionId === 'chat-a' ? STATE : EMPTY_MODEL_STATE)),
+      onCaptureRequest: (listener: (typeof captureListeners)[number]) => {
+        captureListeners.push(listener);
+        return () => {
+          captureListeners = captureListeners.filter(entry => entry !== listener);
+        };
+      },
       captureResult: vi.fn(),
       setParam: vi.fn(),
       openDialog: vi.fn(),
@@ -120,8 +130,8 @@ describe('useModelEngine', () => {
 
     reply(frame, { type: 'built', id: 1, outcome: BUILT });
     await flush();
-    expect(model.writeGlb).toHaveBeenCalledWith(expect.objectContaining({ generation: 1 }));
-    expect(model.reportBuild).toHaveBeenCalledWith(expect.objectContaining({ generation: 1, ok: true }));
+    expect(model.writeGlb).toHaveBeenCalledWith('chat-a', expect.objectContaining({ generation: 1 }));
+    expect(model.reportBuild).toHaveBeenCalledWith('chat-a', expect.objectContaining({ generation: 1, ok: true }));
     expect(requests.at(-1)).toEqual(expect.objectContaining({ type: 'build', id: 2, print: false }));
   });
 
@@ -143,14 +153,14 @@ describe('useModelEngine', () => {
 
     reply(frame, { type: 'built', id: 2, outcome: BUILT });
     await flush();
-    expect(model.reportBuild).toHaveBeenCalledWith(expect.objectContaining({ generation: 2, ok: true }));
+    expect(model.reportBuild).toHaveBeenCalledWith('chat-a', expect.objectContaining({ generation: 2, ok: true }));
     expect(requests.at(-1)).toEqual(expect.objectContaining({ id: 3, print: true }));
 
     reply(frame, { type: 'built', id: 3, outcome: BUILT });
     await act(async () => {
       expect(await exported).toBe('/project/chest.stl');
     });
-    expect(model.saveExport).toHaveBeenCalledWith(expect.objectContaining({ format: 'stl' }));
+    expect(model.saveExport).toHaveBeenCalledWith('chat-a', expect.objectContaining({ format: 'stl' }));
   });
 
   it('reports why the GLB was not written', async () => {
@@ -159,7 +169,51 @@ describe('useModelEngine', () => {
     reply(frame, { type: 'built', id: 1, outcome: BUILT });
     await flush();
     expect(model.reportBuild).toHaveBeenCalledWith(
+      'chat-a',
       expect.objectContaining({ ok: true, glbError: 'EROFS: read-only file system' })
     );
+  });
+
+  it("starts a new conversation with no model while another conversation's stays open", async () => {
+    activeSession = 'chat-b';
+    act(() => root.render(<Harness />));
+    await flush();
+    expect(engine.state.path).toBeNull();
+
+    act(() => emitState({ ...STATE, generation: 2 }, 'chat-a'));
+    await flush();
+    expect(engine.state.path).toBeNull();
+    expect(engine.status).toBe('idle');
+    expect(document.querySelector('[data-testid="model-engine-frame"]')).toBeNull();
+  });
+
+  it("brings a conversation's model back when switching to it, and drops it on leaving", async () => {
+    const { frame } = await mountWithEngine();
+    reply(frame, { type: 'built', id: 1, outcome: BUILT });
+    await flush();
+    expect(engine.state.path).toBe(STATE.path);
+
+    activeSession = 'chat-b';
+    act(() => root.render(<Harness />));
+    // No frame of the previous chat's model: it is gone on the same render.
+    expect(engine.state.path).toBeNull();
+    expect(engine.object).toBeNull();
+    await flush();
+
+    activeSession = 'chat-a';
+    act(() => root.render(<Harness />));
+    await flush();
+    expect(engine.state.path).toBe(STATE.path);
+    expect(window.b4m.model.getState).toHaveBeenLastCalledWith('chat-a');
+  });
+
+  it("leaves another conversation's screenshot request to the background builder", async () => {
+    const { frame } = await mountWithEngine();
+    reply(frame, { type: 'built', id: 1, outcome: BUILT });
+    await flush();
+    for (const listener of captureListeners)
+      listener({ sessionId: 'chat-b', id: 'shot', views: ['front'], pose: 'rest' });
+    await flush();
+    expect(window.b4m.model.captureResult).not.toHaveBeenCalled();
   });
 });

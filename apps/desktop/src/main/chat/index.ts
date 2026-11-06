@@ -83,7 +83,7 @@ import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
 import { registerModelProtocol } from './model3d/engineProtocol';
-import { ModelLiveView } from './model3d/ModelLiveView';
+import { ModelLiveViews } from './model3d/ModelLiveViews';
 import { modelIpcHandlers } from './model3d/modelIpc';
 import { ChatService, sessionForRenderer, type ChatServiceDeps } from './ChatService';
 import { DeferredToolsSetting, parseDeferredToolsOverride } from './DeferredToolsSetting';
@@ -300,8 +300,8 @@ export interface RegisteredChat {
   browser: BrowserManager;
   /** The live iOS Simulator view, whose stream is stopped on quit. */
   simulatorView: SimulatorLiveView;
-  /** The 3D model pane's open file, whose watcher is stopped on quit. */
-  modelView: ModelLiveView;
+  /** Each conversation's open 3D model, whose watchers are stopped on quit. */
+  modelViews: ModelLiveViews;
   /** Each conversation's pull request, and the timers that watch it. */
   pullRequests: PrMonitor;
   /** Import from Claude; started once the window is up so it never delays launch. */
@@ -684,8 +684,8 @@ export function registerChat(
       })
   );
 
-  const modelView = new ModelLiveView({
-    state: state => send(IPC_CHANNELS.modelState, state),
+  const modelViews = new ModelLiveViews({
+    state: (sessionId, state) => send(IPC_CHANNELS.modelState, { sessionId, state }),
     // One rendering is enough: the focused app window, else the first.
     captureTarget: () => {
       const target = focusedAppWindow();
@@ -748,7 +748,7 @@ export function registerChat(
     pullRequests,
     screen: desktopScreenCapturer(app.getName()),
     ...(process.platform === 'darwin' ? { simulator: { driver: simulatorDriver, view: simulatorView } } : {}),
-    model: modelView,
+    model: modelViews,
     prepareImage: prepareToolImage,
     history,
     local,
@@ -1114,6 +1114,7 @@ export function registerChat(
     }
     await service.deleteSession(sessionId, removeWorktree === true);
     await pullRequests.forget(sessionId);
+    modelViews.forget(sessionId);
   });
   registerSidebarIpc(ipcMain, sidebarSections, sessionId =>
     store.get(sessionId).then(
@@ -1272,7 +1273,7 @@ export function registerChat(
     return mcp.state();
   });
 
-  modelIpcHandlers(modelView);
+  modelIpcHandlers(modelViews);
   ipcMain.handle(IPC_CHANNELS.simulatorGetState, () => simulatorView.current());
   ipcMain.handle(IPC_CHANNELS.simulatorListDevices, async () =>
     process.platform === 'darwin' ? (await simulatorDriver.devices()).devices : []
@@ -1480,7 +1481,7 @@ export function registerChat(
     mcp,
     browser,
     simulatorView,
-    modelView,
+    modelViews,
     pullRequests,
     claudeImport,
     spareWorktrees,
