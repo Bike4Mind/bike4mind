@@ -29955,6 +29955,7 @@
                 "api",
                 "slack",
                 "cli",
+                "desktop",
                 "agent"
               ],
               "description": "Lists only sessions created through this channel. `web` also matches sessions with no recorded origin."

@@ -1,7 +1,9 @@
 import {
+  CLIENT_SURFACES,
   DEVELOPER_USER_TAGS,
   hasDeveloperUserTag,
   type AccountDeletionSource,
+  type ClientSurface,
   type ILoginRecord,
   type IUserDocument,
   type OrganizationMemberRole,
@@ -98,3 +100,18 @@ export const LEVEL_LABELS: Readonly<Record<string, string>> = {
 export const latestSignIn = (user: Pick<AdminUserListItem, 'loginRecords'>): ILoginRecord | null =>
   [...(user.loginRecords ?? [])].sort((a, b) => new Date(b.loginTime).getTime() - new Date(a.loginTime).getTime())[0] ??
   null;
+
+export const CLIENT_SURFACE_LABELS: Readonly<Record<ClientSurface, string>> = {
+  web: 'Web',
+  desktop: 'Desktop',
+  cli: 'CLI',
+  api: 'API',
+};
+
+/** Just the client names, for a narrow column, e.g. "Web \u00b7 Desktop"; null when none are recorded. */
+export const clientSurfacesSummary = (user: Pick<AdminUserProfile, 'clientUsage'>): string | null => {
+  const names = CLIENT_SURFACES.filter(surface => user.clientUsage?.[surface]).map(
+    surface => CLIENT_SURFACE_LABELS[surface]
+  );
+  return names.length > 0 ? names.join(' \u00b7 ') : null;
+};
