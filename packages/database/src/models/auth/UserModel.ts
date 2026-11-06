@@ -869,7 +869,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
 
   /**
    * Accounts created in [from, to] that share the signup IP, the signup JA4, a mailbox (any
-   * `+tag` of `mailbox.local@mailbox.domain`) or a mail domain with the caller's account. Each
+   * `+tag` of `mailbox.local` at any of `mailbox.domains`, dots ignored for Gmail) or a mail domain with the caller's account. Each
    * criterion is optional; with none, nothing is read. Bounded by `limit` and the createdAt range.
    */
   async findSignupLinkCandidates(input: {
@@ -878,7 +878,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     to: Date;
     ip: string | null;
     ja4: string | null;
-    mailbox: { local: string; domain: string } | null;
+    mailbox: { local: string; domains: string[]; ignoreDots: boolean } | null;
     mailDomain: string | null;
     limit: number;
   }): Promise<UserSignupLinkCandidate[]> {
@@ -886,9 +886,9 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     if (input.ip) criteria.push({ 'signupMeta.ip': input.ip });
     if (input.ja4) criteria.push({ 'signupMeta.ja4': input.ja4 });
     if (input.mailbox) {
-      const local = escapeRegExp(input.mailbox.local);
-      const domain = escapeRegExp(input.mailbox.domain);
-      criteria.push({ email: { $regex: `^${local}(\\+[^@]*)?@${domain}$`, $options: 'i' } });
+      const local = [...input.mailbox.local].map(escapeRegExp).join(input.mailbox.ignoreDots ? '\\.?' : '');
+      const domains = input.mailbox.domains.map(escapeRegExp).join('|');
+      criteria.push({ email: { $regex: `^${local}(\\+[^@]*)?@(${domains})$`, $options: 'i' } });
     }
     if (input.mailDomain) criteria.push({ email: { $regex: `@${escapeRegExp(input.mailDomain)}$`, $options: 'i' } });
     if (criteria.length === 0) return [];

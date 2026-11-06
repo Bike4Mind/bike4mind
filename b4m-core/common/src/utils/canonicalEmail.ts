@@ -67,3 +67,19 @@ export function canonicalizeEmail(email: string): string | null {
   }
   return `${localPart}@${mailboxDomain}`;
 }
+
+/**
+ * How to find every stored address that canonicalizes to the same mailbox as `email`: the
+ * canonical local part, every domain that delivers to it, and whether dots in the stored local
+ * part are insignificant (Gmail). Null when `canonicalizeEmail` is.
+ */
+export function mailboxAliasesOf(email: string): { local: string; domains: string[]; ignoreDots: boolean } | null {
+  const canonical = canonicalizeEmail(email);
+  if (!canonical) return null;
+  const at = canonical.lastIndexOf('@');
+  const domain = canonical.slice(at + 1);
+  const domains = GMAIL_DOMAINS.has(domain)
+    ? [...GMAIL_DOMAINS]
+    : [domain, ...[...SAME_MAILBOX_DOMAINS].filter(([, target]) => target === domain).map(([alias]) => alias)];
+  return { local: canonical.slice(0, at), domains, ignoreDots: GMAIL_DOMAINS.has(domain) };
+}

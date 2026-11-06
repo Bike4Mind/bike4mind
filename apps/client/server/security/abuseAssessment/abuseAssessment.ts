@@ -226,13 +226,15 @@ export async function summarizeDetection(
 ): Promise<AbuseAssessmentFeatureSummary> {
   const [summaries, profiles] = await Promise.all([
     userRepository.findRiskEvidenceSummaries(detection.userIds),
-    (deps.loadAccountProfiles ?? loadAccountProfiles)(detection.userIds).catch((error: unknown) => {
-      logger.warn('Abuse assessment account profiles failed; assessing without them', {
-        detectionId: detection.id,
-        errorName: error instanceof Error ? error.name : typeof error,
-      });
-      return new Map<string, AbuseAssessmentAccountProfile>();
-    }),
+    (deps.loadAccountProfiles ?? (ids => loadAccountProfiles(ids, undefined, logger)))(detection.userIds).catch(
+      (error: unknown) => {
+        logger.warn('Abuse assessment account profiles failed; assessing without them', {
+          detectionId: detection.id,
+          errorName: error instanceof Error ? error.name : typeof error,
+        });
+        return new Map<string, AbuseAssessmentAccountProfile>();
+      }
+    ),
   ]);
   const accounts: AssessedAccountSource[] = summaries.map(account => ({
     ...account,
