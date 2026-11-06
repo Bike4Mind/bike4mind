@@ -67,7 +67,7 @@ function makeDeps(overrides: Partial<DeviceLinkDeps> = {}): DeviceLinkDeps {
     loadConfig: vi.fn(async () => ({ windowHours: 168, commonNetworks: 5 })),
     loadAccounts: vi.fn(async () => [newcomer]),
     findBanned: vi.fn(async () => [banned]),
-    findBaseline: vi.fn(async () => [newcomer, banned]),
+    findBaseline: vi.fn(async () => ({ rows: [newcomer, banned], truncated: false })),
     isCommonFingerprint: vi.fn(async () => false),
     claimOnce: vi.fn(async () => true),
     releaseClaim: vi.fn(async () => undefined),
@@ -131,7 +131,7 @@ describe('checkDeviceLink', () => {
     const deps = makeDeps({
       loadAccounts: vi.fn(async () => [row('new-user', phone)]),
       findBanned: vi.fn(async () => [{ ...banned, ...phone }]),
-      findBaseline: vi.fn(async () => baseline),
+      findBaseline: vi.fn(async () => ({ rows: baseline, truncated: false })),
     });
 
     expect(await checkDeviceLink('new-user', deps)).toEqual({ status: 'skipped', reason: 'common_device_only' });
@@ -249,6 +249,60 @@ describe('evaluateDeviceLinks', () => {
     );
 
     expect(results.get('new-user')?.linked).toBe(true);
+  });
+
+  const config = { windowHours: 168, commonNetworks: 5 };
+  const phoneBaseline = [64510, 64511, 64512, 64513, 64514].map(asn =>
+    row(`phone-${asn}`, { devices: [PHONE_DEVICE], asn })
+  );
+  // The newcomer and the banned account share both a mainstream phone and the rare device.
+  const both = { devices: [PHONE_DEVICE, RARE_DEVICE] };
+
+  it('re-reads a truncated chunk per user agent, so a mainstream agent cannot hide a rare one', async () => {
+    const findBaseline = vi.fn(async (userAgents: string[]) =>
+      userAgents.length > 1
+        ? { rows: phoneBaseline, truncated: true }
+        : userAgents[0] === PHONE_UA
+          ? { rows: phoneBaseline, truncated: true }
+          : { rows: [], truncated: false }
+    );
+    const results = await evaluateDeviceLinks([row('new-user', both)], config, {
+      ...makeDeps({ findBanned: vi.fn(async () => [{ ...banned, ...both }]) }),
+      findBaseline,
+    });
+
+    expect(findBaseline).toHaveBeenCalledWith([RARE_UA], expect.any(Date));
+    expect(results.get('new-user')).toMatchObject({ linked: true, deviceNetworkSpread: 0 });
+  });
+
+  it('treats a device as common when its user agent read stays truncated', async () => {
+    const results = await evaluateDeviceLinks([row('new-user', both)], config, {
+      ...makeDeps({ findBanned: vi.fn(async () => [{ ...banned, ...both }]) }),
+      findBaseline: vi.fn(async () => ({ rows: [], truncated: true })),
+    });
+
+    expect(results.get('new-user')).toEqual({ linked: false, reason: 'common_device_only' });
+  });
+
+  it('fails closed for user agents past the single-agent re-read cap', async () => {
+    const agents = Array.from({ length: 12 }, (_, index) => `${RARE_UA} Build/${index}`);
+    const devices = agents.map(userAgent => ({ ...RARE_DEVICE, userAgent }));
+    // Each re-read agent measures as common; only the two past the cap are left, with no rows at all.
+    const commonFor = (userAgent: string) =>
+      [64510, 64511, 64512, 64513, 64514].map(asn =>
+        row(`seen-${asn}-${userAgent}`, { devices: [{ ...RARE_DEVICE, userAgent }], asn })
+      );
+    const findBaseline = vi.fn(async (userAgents: string[]) =>
+      userAgents.length > 1 ? { rows: [], truncated: true } : { rows: commonFor(userAgents[0]), truncated: false }
+    );
+    const results = await evaluateDeviceLinks([row('new-user', { devices })], config, {
+      ...makeDeps({ findBanned: vi.fn(async () => [{ ...banned, devices }]) }),
+      findBaseline,
+    });
+
+    // One chunk read plus ten single-agent reads; without the fail-closed rule the last two would link.
+    expect(findBaseline).toHaveBeenCalledTimes(11);
+    expect(results.get('new-user')).toEqual({ linked: false, reason: 'common_device_only' });
   });
 });
 

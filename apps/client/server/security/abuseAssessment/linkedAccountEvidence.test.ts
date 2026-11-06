@@ -1,18 +1,29 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { UserSignupLinkFacts } from '@bike4mind/database';
 
-vi.mock('@bike4mind/database', () => ({ usageEventRepository: {}, userRepository: {} }));
+vi.mock('@bike4mind/database', () => ({
+  loadDeviceLinkAccounts: vi.fn(),
+  usageEventRepository: {},
+  userRepository: {},
+}));
 vi.mock('@bike4mind/services', () => ({ userService: {} }));
 vi.mock('@server/billing/linkedAccounts', () => ({ findLinkedAccounts: vi.fn() }));
 vi.mock('@server/security/autoContainment/deviceLinkEvaluation', () => ({
-  DEFAULT_DEVICE_LINK_CONFIG: {},
+  DEFAULT_DEVICE_LINK_CONFIG: { windowHours: 168, commonNetworks: 5 },
   evaluateDeviceLinks: vi.fn(),
   liveDeviceLinkReaders: {},
 }));
 vi.mock('@server/security/autoContainment/executor', () => ({ loadAutoContainmentConfig: vi.fn() }));
 
 import type { LinkedAccount } from '@server/billing/linkedAccounts';
-import { buildLinkedAccountEvidence, type LinkedAccountEvidenceDeps } from './linkedAccountEvidence';
+import { loadDeviceLinkAccounts } from '@bike4mind/database';
+import { evaluateDeviceLinks } from '@server/security/autoContainment/deviceLinkEvaluation';
+import { loadAutoContainmentConfig } from '@server/security/autoContainment/executor';
+import {
+  buildLinkedAccountEvidence,
+  liveLinkedAccountEvidenceDeps,
+  type LinkedAccountEvidenceDeps,
+} from './linkedAccountEvidence';
 
 const HOUR_MS = 60 * 60 * 1000;
 const NOW = new Date('2026-11-05T10:00:00Z');
@@ -147,5 +158,36 @@ describe('buildLinkedAccountEvidence', () => {
 
   it('returns null for a detection with no accounts', async () => {
     expect(await buildLinkedAccountEvidence([], () => null, makeDeps())).toBeNull();
+  });
+});
+
+describe('liveLinkedAccountEvidenceDeps.bannedDeviceLinks', () => {
+  const configWith = (deviceLinkWindowHours: number, deviceLinkCommonNetworks: number) =>
+    ({ deviceLinkWindowHours, deviceLinkCommonNetworks }) as unknown as Awaited<
+      ReturnType<typeof loadAutoContainmentConfig>
+    >;
+
+  it('evaluates with the configured window and common-network threshold', async () => {
+    vi.mocked(loadAutoContainmentConfig).mockResolvedValueOnce(configWith(24, 9));
+    vi.mocked(loadDeviceLinkAccounts).mockResolvedValueOnce([]);
+    vi.mocked(evaluateDeviceLinks).mockResolvedValueOnce(new Map());
+
+    await liveLinkedAccountEvidenceDeps.bannedDeviceLinks(['u1']);
+
+    expect(evaluateDeviceLinks).toHaveBeenLastCalledWith([], { windowHours: 24, commonNetworks: 9 }, expect.anything());
+  });
+
+  it('falls back to the default window when the rule is switched off with a zero window', async () => {
+    vi.mocked(loadAutoContainmentConfig).mockResolvedValueOnce(configWith(0, 7));
+    vi.mocked(loadDeviceLinkAccounts).mockResolvedValueOnce([]);
+    vi.mocked(evaluateDeviceLinks).mockResolvedValueOnce(new Map());
+
+    await liveLinkedAccountEvidenceDeps.bannedDeviceLinks(['u1']);
+
+    expect(evaluateDeviceLinks).toHaveBeenLastCalledWith(
+      [],
+      { windowHours: 168, commonNetworks: 7 },
+      expect.anything()
+    );
   });
 });

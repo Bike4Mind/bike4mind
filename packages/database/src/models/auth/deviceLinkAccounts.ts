@@ -118,25 +118,27 @@ export async function findBannedDeviceLinkAccounts(input: {
 }
 
 /**
- * Accounts created since `since` with a sign-in from any of the given user agents: the baseline the
- * common-device guard measures a device's spread over. Served by the createdAt index.
+ * Accounts created since `since` with a sign-in from any of the given user agents, newest first,
+ * capped at `limit`: the baseline the common-device guard measures a device's spread over. Served by
+ * the createdAt index. `truncated` means older matching accounts were left out, so the spread of a
+ * device absent from (or thin in) the rows is unknown, not low.
  */
 export async function findDeviceBaselineAccounts(input: {
   userAgents: readonly string[];
   since: Date;
   limit: number;
-}): Promise<DeviceLinkRow[]> {
+}): Promise<{ rows: DeviceLinkRow[]; truncated: boolean }> {
   const userAgents = userAgentsSchema.parse([...new Set(input.userAgents)].slice(0, MAX_USER_AGENTS));
   const users = await User.find(
     { createdAt: { $gte: input.since }, 'loginRecords.userAgent': { $in: userAgents } },
     PROJECTION
   )
     .sort({ createdAt: -1, _id: -1 })
-    .limit(input.limit)
+    .limit(input.limit + 1)
     .maxTimeMS(MAX_TIME_MS)
     .lean<LeanDeviceUser[]>()
     .exec();
-  return users.map(toRow);
+  return { rows: users.slice(0, input.limit).map(toRow), truncated: users.length > input.limit };
 }
 
 /** Signups since `since` with this JA4; served by user_signup_fingerprint_window. */
