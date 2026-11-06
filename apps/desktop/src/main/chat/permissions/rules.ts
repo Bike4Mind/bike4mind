@@ -376,24 +376,25 @@ function holdsSettings(tree: string): boolean {
   }
 }
 
-function floorRefuses(shell: ShellReach, roots: readonly GuardRoot[]): boolean {
-  if (NAMES_RULE_FILE.test(caseFolded(shell.script)) || scriptNamesRoot(shell.script, roots)) return true;
+/** `byName` refuses any text or path that merely names `.claude` or the rules file, as no allow rule may cover it. */
+function floorRefuses(shell: ShellReach, roots: readonly GuardRoot[], byName = true): boolean {
+  if ((byName && NAMES_RULE_FILE.test(caseFolded(shell.script))) || scriptNamesRoot(shell.script, roots)) return true;
+  const named = (path: string): boolean => byName && namesRuleFile(path);
   const files = [...(shell.paths ?? []), ...(shell.writes ?? [])];
-  if (files.some(path => isProtectedPath(path, roots) || namesRuleFile(path))) return true;
+  if (files.some(path => isProtectedPath(path, roots) || named(path))) return true;
   if (shell.globFolders?.some(folder => isProtectedFolder(folder, roots))) return true;
   if (shell.dotlessGlobFolders?.some(folder => isProtectedFolder(folder, roots, true))) return true;
   // A rewritten tree holding a `.claude` folder may rewrite the settings in it.
-  return (shell.writtenTrees ?? []).some(
-    tree => isProtectedFolder(tree, roots) || namesRuleFile(tree) || holdsSettings(tree)
-  );
+  return (shell.writtenTrees ?? []).some(tree => isProtectedFolder(tree, roots) || named(tree) || holdsSettings(tree));
 }
 
 /**
- * Whether a shell call names a permission file or reaches a protected root, the floor no allow rule
- * lifts. Exported so auto mode asks wherever the rules would refuse.
+ * Whether a shell call reaches a protected root, a settings file, or a rewritten tree holding `.claude`: the floor
+ * no allow rule lifts, less the refusal of anything that merely names `.claude`, which auto mode leaves to the
+ * file tools' rules.
  */
 export function shellReachesProtected(shell: ShellReach, roots: readonly string[]): boolean {
-  return floorRefuses(shell, roots.map(guardRoot));
+  return floorRefuses(shell, roots.map(guardRoot), false);
 }
 
 function hostMatches(host: string, rule: { host: string; wildcard: boolean }): boolean {

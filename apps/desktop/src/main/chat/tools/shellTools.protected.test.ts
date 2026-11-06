@@ -510,7 +510,7 @@ describe('shell commands that reach a protected location', () => {
     });
 
     it.each([
-      'for f in .cl*; do cat "$f"; done',
+      'for f in .cl*; do cp evil.json "$f"; done',
       'for f in ../*; do cp x "$f"; done',
       'for f in src/*; do f=.claude; cp evil.json "$f"/settings.local.json; done',
       'for f in src/*; do cd ..; cp -r payload/. "$f"; done',
@@ -730,7 +730,9 @@ describe('shell commands that reach a protected location', () => {
       'find lk -type l | xargs cat',
       "find lk | xargs grep -r ''",
       'find . -name v | xargs cat',
-      'rg -l x lk | xargs cat',
+      'rg -l x lk/in | xargs cat',
+      'grep -rl x lk/in | xargs cat',
+      'grep -Rl x lk | xargs cat',
     ])('asks in every mode before %s', async command => {
       for (const scenario of scenarios) {
         expect(await judge(command, scenario), scenario).toEqual(refusedEverywhere);

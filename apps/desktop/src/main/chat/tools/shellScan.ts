@@ -25,7 +25,7 @@ import {
   resolveWithinRootsPhysically,
   type OperandReader,
 } from './paths';
-import { gitToplevel, inPlaceWrites, type GitScript } from './shellWrites';
+import { findLinks, gitToplevel, indexHoldsLink, inPlaceWrites, type GitScript } from './shellWrites';
 import { wslLocation, wslUncPath, wslUserEnvironment } from '../../wsl/wslPath';
 
 export interface ShellCommand {
@@ -2250,6 +2250,9 @@ function loopBinds(
   return !new RegExp(`(^|[^\\w$])${name}(\\[[^\\]]*\\])?\\+?=|\\$\\{${name}:?=`).test(body);
 }
 
+/** Shells xargs may hand listed names to, as a script's arguments the scan cannot follow. */
+const XARGS_SHELLS = new Set(['sh', 'bash', 'dash', 'zsh', 'ksh', 'mksh', 'fish', 'busybox']);
+
 /** Programs whose arguments name no file, so input words handed to them reach nothing. */
 const NAMES_NOTHING = new Set(['echo', 'printf', 'basename', 'dirname', 'true', 'false']);
 
@@ -2271,14 +2274,24 @@ const LS_FILES_LISTS = /^(-[zcomd]+|--(cached|others|modified|deleted|exclude-st
 function listsNames(raw: readonly string[]): Listing | null {
   if (raw.some(isDynamic) || isWrapper(raw[0] ?? '')) return null;
   const [program, ...args] = raw.map(unquote);
-  const orHere = (folders: string[]): Listing => ({ folders: folders.length > 0 ? folders : ['.'], tracked: false });
+  const orHere = (folders: string[], links: Listing['links'] = 'walk'): Listing => ({
+    folders: folders.length > 0 ? folders : ['.'],
+    tracked: false,
+    links,
+  });
   if (program === 'find') {
     if (args[0]?.startsWith('-') && !/^-(name|iname|path|ipath|type|maxdepth|mindepth)$/.test(args[0])) return null;
     if (args.some(arg => /^-(follow|files0-from)$/.test(arg))) return null;
     if (!containedCommand(raw) || args.some(arg => /^-(printf|fprintf|ls|fls|fprint0?)$/.test(arg))) return null;
     const end = args.findIndex(arg => /^[-(!]/.test(arg));
-    return orHere(end === -1 ? args : args.slice(0, end));
+    const tests = end === -1 ? [] : args.slice(end);
+    // An ANDed `-type f` or `-type d` prints no link, so there is nothing to look for.
+    const typed =
+      !tests.some(test => ['-o', '-or', ',', '(', ')', '!', '-not'].includes(test)) &&
+      tests.some((test, index) => test === '-type' && ['f', 'd'].includes(tests[index + 1] ?? ''));
+    return { ...orHere(end === -1 ? args : args.slice(0, end), typed ? 'none' : 'find'), tests };
   }
+  if (program === 'grep' || program === 'egrep' || program === 'fgrep') return grepLists(args);
   if (program === 'rg') {
     const lists = args.some(arg => arg === '-l' || arg === '--files-with-matches' || arg === '--files');
     const operands: string[] = [];
@@ -2290,11 +2303,14 @@ function listsNames(raw: readonly string[]): Listing | null {
     }
     if (!lists || !containedCommand(raw)) return null;
     const patterned = !args.includes('--files') && !args.some(arg => /^(-[A-Za-z]*e|--regexp)(=|$)/.test(arg));
-    return orHere(patterned ? operands.slice(1) : operands);
+    // Without -L rg neither follows nor prints a link it meets while walking.
+    return orHere(patterned ? operands.slice(1) : operands, 'none');
   }
   if (program === 'git') {
     if (args[0] !== 'ls-files') return null;
     const operands: string[] = [];
+    // `--others` prints untracked links too, which only a walk finds; otherwise git lists its index.
+    const others = args.some(arg => arg === '--others' || /^-[a-z]*o/.test(arg));
     for (const arg of args.slice(1)) {
       if (arg.startsWith('-')) {
         if (!LS_FILES_LISTS.test(arg)) return null;
@@ -2307,15 +2323,48 @@ function listsNames(raw: readonly string[]): Listing | null {
         operands.push(arg);
       }
     }
-    return { ...orHere(operands), tracked: true };
+    return others ? orHere(operands) : { ...orHere(operands, 'index'), tracked: true };
   }
   return null;
 }
 
-/** The folders a lister walks; `tracked` when what it lists is git's index, links included. */
+/** `grep -r` with `-l` or `-L`, which prints file names and skips the links it meets below its operands. */
+function grepLists(args: readonly string[]): Listing | null {
+  let recursive = false;
+  let lists = false;
+  let patterned = true;
+  const operands: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] as string;
+    if (arg === '-e' || arg === '--regexp') {
+      patterned = false;
+      index++;
+    } else if (/^--(regexp|include|exclude|exclude-dir)=/.test(arg)) {
+      if (arg.startsWith('--regexp=')) patterned = false;
+    } else if (/^--(recursive|files-with-matches|files-without-match)$/.test(arg)) {
+      recursive ||= arg === '--recursive';
+      lists ||= arg !== '--recursive';
+    } else if (/^--(ignore-case|word-regexp|fixed-strings|extended-regexp|null|no-messages)$/.test(arg)) continue;
+    else if (/^-[rilLwFEsIZ]+$/.test(arg)) {
+      recursive ||= arg.includes('r');
+      lists ||= /[lL]/.test(arg);
+    } else if (arg.startsWith('-')) return null;
+    else operands.push(arg);
+  }
+  if (!recursive || !lists) return null;
+  const folders = patterned ? operands.slice(1) : operands;
+  return { folders: folders.length > 0 ? folders : ['.'], tracked: false, links: 'none' };
+}
+
+/**
+ * The folders a lister walks; `tracked` when what it lists is git's index, links included. `links` says how links
+ * it may print are found: a walk here, the system find with the lister's own `tests`, git's index, or none at all.
+ */
 interface Listing {
   folders: string[];
   tracked: boolean;
+  links: 'walk' | 'find' | 'index' | 'none';
+  tests?: string[];
 }
 
 /** A wrapper can change the executable, and these clients can start sending data just by changing flags. */
@@ -3782,9 +3831,18 @@ export async function scanShell(
      * as the path it is, by the same bounded walk a link-following command gets. A git listing holding a link,
      * which git prints whatever it points to, cannot.
      */
-    const listingChecked = async ({ folders, tracked }: Listing): Promise<boolean> => {
+    /**
+     * Whether what a lister prints can be followed: each folder is checked, with every link it may print, as a read,
+     * or for a `writing` consumer as a tree it rewrites, the check `sed -i src/*` gets.
+     */
+    const listingChecked = async (
+      { folders, tracked, links: found, tests }: Listing,
+      writing: boolean
+    ): Promise<boolean> => {
       if (state.lost || sep !== '/' || wslLocation(state.cwd) !== null) return false;
       const budget = { entries: WALK_ENTRIES };
+      const reach: Reach = writing ? 'write' : 'read';
+      const starts: string[] = [];
       for (const folder of folders) {
         const words = operandWords(folder, scope());
         if (words === null) return false;
@@ -3798,11 +3856,19 @@ export async function scanShell(
             (error: unknown) => (missing(error) ? false : null)
           );
           if (self === null || (self && tracked)) return false;
-          const links = self ? [root] : await linksUnder(root, budget, stopped);
+          const links = self ? [root] : found === 'walk' ? await linksUnder(root, budget, stopped) : [];
           if (links === null || (tracked && links.length > 0)) return false;
-          await checkArgument(word, 'read', true);
-          for (const link of links) await checkArgument(exactWord(link), 'read', true);
+          if (writing) noteWrite(folder, writtenTrees);
+          await checkArgument(word, reach, true);
+          for (const link of links) await checkArgument(exactWord(link), reach, true);
+          starts.push(word.text);
         }
+      }
+      if (found === 'index' && (await indexHoldsLink(state.cwd, starts)) !== false) return false;
+      if (found === 'find') {
+        const links = await findLinks(state.cwd, starts, tests ?? []);
+        if (links === null) return false;
+        for (const link of links) await checkArgument(exactWord(link), reach, true);
       }
       return true;
     };
@@ -4004,16 +4070,17 @@ export async function scanShell(
       }
       const feeds = xargsFeeds(tokens);
       if (feeds && !NAMES_NOTHING.has(programName(unquote(wrapped ?? 'echo')))) {
-        // xargs runs its command on words it reads, which only a lister over checked, link-free folders keeps to them.
+        // xargs runs its command on words it reads, which only a lister over checked folders keeps to them.
         const consumer = withoutWrappers(tokens);
-        const folders = listerFeeds(node);
+        const writing = !onlyReads(consumer);
+        const listing = listerFeeds(node);
         if (
-          !onlyReads(consumer) ||
+          (writing && XARGS_SHELLS.has(programName(unquote(consumer[0] ?? '')))) ||
           feeds.file ||
-          folders === null ||
+          listing === null ||
           effects.folders.length > 0 ||
           stdinRedirected(node) ||
-          !(await listingChecked(folders))
+          !(await listingChecked(listing, writing))
         ) {
           unreadOperands++;
         }

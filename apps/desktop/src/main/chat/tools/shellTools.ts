@@ -396,7 +396,8 @@ export async function resolveCwd(
   return roots[0];
 }
 
-const NAMES_CLAUDE_FOLDER = /[\\/]\.claude([\\/]|$)/i;
+const CLAUDE_FOLDER = /[\\/]\.claude[\\/]*$/i;
+const CLAUDE_SETTINGS_NAME = /[\\/]\.claude[\\/]settings[^\\/]*$/i;
 
 /** Whether a folder the scan reaches whole holds or lies in one of `guarded`. */
 function foldersReach(scan: ShellScan, guarded: readonly string[]): boolean {
@@ -411,8 +412,9 @@ function foldersReach(scan: ShellScan, guarded: readonly string[]): boolean {
 
 /**
  * Whether a scanned command reaches a protected location: the app's own folders, a path the file tools
- * refuse to write (sandbox.ts `protectionFor`), a `.claude` folder, or anything the permission rules'
- * protected floor refuses (rules.ts `shellReachesProtected`), so auto mode asks wherever a rule could not allow.
+ * refuse to write (sandbox.ts `protectionFor`), a write that replaces a whole `.claude` folder, or anything
+ * the permission rules' protected floor refuses (rules.ts `shellReachesProtected`). As with the file tools,
+ * a script that only reads may read project settings unasked.
  */
 function reachesProtected(
   command: string,
@@ -420,13 +422,17 @@ function reachesProtected(
   protectedPaths: readonly string[],
   permissionPaths: readonly string[]
 ): boolean {
-  const named = [...(scan.paths ?? []), ...scan.writes];
+  const named = [...(scan.paths ?? []), ...scan.writes].filter(
+    path => !scan.readOnly || !CLAUDE_SETTINGS_NAME.test(path)
+  );
   const guarded = [...protectedPaths, ...permissionPaths];
+  // The scan names a `.claude` folder itself when a write reaches it whole (`cp x .claude`, `find . -delete`).
+  const replaced = [...scan.writes, ...scan.writtenTrees, ...(scan.readOnly ? [] : (scan.paths ?? []))];
   return (
     named.some(path => withinGuarded(guarded, [path]) || protectionFor([path], 'write') !== undefined) ||
-    named.some(path => NAMES_CLAUDE_FOLDER.test(path)) ||
+    replaced.some(path => CLAUDE_FOLDER.test(path)) ||
     foldersReach(scan, guarded) ||
-    shellReachesProtected({ script: command, ...scan }, guarded)
+    shellReachesProtected({ script: command, ...scan, paths: named }, guarded)
   );
 }
 

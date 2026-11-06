@@ -10,7 +10,7 @@ vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   const readdir = (async (...args: Parameters<typeof actual.readdir>) => {
     walked.reads++;
-    await new Promise(resolve => setTimeout(resolve, 2));
+    await new Promise(resolve => setTimeout(resolve, 5));
     return actual.readdir(...args);
   }) as typeof actual.readdir;
   return { ...actual, readdir, default: { ...actual, readdir } };
@@ -27,9 +27,11 @@ describe('a scan past its deadline', () => {
   });
 
   it('stops walking once it has answered', async () => {
+    await scanShell('true', root, [root]);
     const started = Date.now();
-    expect(await scanShell('cp -r tree out', root, [root], 20)).toBeNull();
-    expect(Date.now() - started).toBeLessThan(500);
+    // The walk alone takes over 2 s; the deadline leaves room for the scan to reach it under load.
+    expect(await scanShell('cp -r tree out', root, [root], 250)).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1000);
     const atExpiry = walked.reads;
     expect(atExpiry).toBeGreaterThan(0);
     let longest = 0;
