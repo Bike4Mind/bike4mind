@@ -10,6 +10,6 @@ export const DETECTOR_LABELS: Record<ShadowDetector, string> = {
   paymentRisk: 'Payment risk',
   signupIpLinkedToBlocked: 'Signup IP linked to blocked',
   signupDomainHold: 'Signup domain hold assessment',
-  deviceLinkedToBlocked: 'Device linked to banned',
+  deviceLinkedToBlocked: 'Device linked to banned account',
   scriptedGrantDrain: 'Scripted grant drain',
 };

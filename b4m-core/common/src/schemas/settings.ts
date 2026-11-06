@@ -1463,7 +1463,7 @@ export const UsagePatternSignalsConfigSchema = z.object({
       scriptedGrantDrain: z.number().min(0).max(100).prefault(50).meta({
         title: 'Scripted grant drain',
         description:
-          'Score added when a fresh account unlocks the activity grant, spends most signup grants in few turns, then logs out.',
+          'Score added when a fresh account unlocks the activity grant, spends most signup grants in few turns, then logs out. Equal to the default review threshold, so this signal alone flags needsReview.',
       }),
     })
     .prefault({})
