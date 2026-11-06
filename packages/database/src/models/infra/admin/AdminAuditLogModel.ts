@@ -10,7 +10,7 @@ import {
   type AuditReviewQueueEntry,
   type AuditReviewQueueQuery,
   type AuditSummary,
-  type IAdminAuditLogRepository,
+  type SubscriptionTimelineAuditLogRepository,
   type NewAdminAuditEntry,
 } from '@bike4mind/common';
 import { AdminAuditReviewModel, toAuditReview } from './AdminAuditReviewModel';
@@ -272,7 +272,7 @@ const writeErrorCode = (writeError: unknown): unknown => {
   return undefined;
 };
 
-class AdminAuditLogRepository implements IAdminAuditLogRepository {
+class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository {
   constructor(private readonly auditLogModel: Model<AdminAuditLogRecord>) {}
 
   async append(entry: NewAdminAuditEntry): Promise<AuditEntry> {
@@ -297,6 +297,18 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
         ? { 'target.kind': 'user', 'target.id': owner.id }
         : { $or: [{ organizationId: owner.id }, { 'target.kind': 'organization', 'target.id': owner.id }] };
     return this.listPage([ownerClause, { 'details.subscriptionId': { $in: subscriptionIds } }], page);
+  }
+
+  async listForSubscriptionOrOwner(
+    scope: { owner: { kind: 'user' | 'organization'; id: string }; subscriptionIds: string[] },
+    page: { limit: number; cursor?: AuditLogCursor }
+  ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }> {
+    const { owner, subscriptionIds } = scope;
+    const ownerClauses: FilterClause[] =
+      owner.kind === 'user'
+        ? [{ 'target.kind': 'user', 'target.id': owner.id }]
+        : [{ organizationId: owner.id }, { 'target.kind': 'organization', 'target.id': owner.id }];
+    return this.listPage([{ $or: [...ownerClauses, { 'details.subscriptionId': { $in: subscriptionIds } }] }], page);
   }
 
   private async listPage(
@@ -505,4 +517,6 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
   }
 }
 
-export const adminAuditLogRepository: IAdminAuditLogRepository = new AdminAuditLogRepository(AdminAuditLogModel);
+export const adminAuditLogRepository: SubscriptionTimelineAuditLogRepository = new AdminAuditLogRepository(
+  AdminAuditLogModel
+);

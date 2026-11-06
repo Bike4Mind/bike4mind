@@ -1,5 +1,11 @@
 # @bike4mind/observability
 
+## 1.0.2
+
+### Patch Changes
+
+- [#6213](https://github.com/Bike4Mind/bike4mind/pull/6213) [`70b2544`](https://github.com/Bike4Mind/bike4mind/commit/70b2544b9bb5725e5fe9a44dbd57aeb4b816d29c) Thanks [@jarlacut](https://github.com/jarlacut)! - scope request log context per request
+
 ## 1.0.1
 
 ### Patch Changes

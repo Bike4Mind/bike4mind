@@ -39,6 +39,7 @@ import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
 import type { ModelsInUse } from '../models/InstalledTab';
 import { ModelsScreen } from '../models/ModelsScreen';
+import { ComposerOllamaNotice } from '../models/OllamaNotRunning';
 import { useModelServers } from '../models/useModelHub';
 import { GlobeIcon, PanelRightIcon, PhoneIcon, SearchIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
@@ -584,6 +585,15 @@ export function ChatShell({
   const blockedReason = block.reason;
   const blockedAction =
     block.action === 'open-models' ? { label: 'Open Models', onClick: () => setScreen('models') } : null;
+  const reloadCatalog = catalog.reload;
+  const blockedNotice =
+    noLocal?.fix === 'start-ollama' ? (
+      <ComposerOllamaNotice
+        sessionId={activeId}
+        launch={modelServers?.find(server => server.id === LOCAL_SERVER_ID)?.launch}
+        reload={() => void reloadCatalog()}
+      />
+    ) : null;
 
   // Main saves the model a send would use as soon as one is listed, so the picker shows it.
   const settleLocalModel = conversation.settleLocalModel;
@@ -1800,6 +1810,7 @@ export function ChatShell({
             attachments={draft}
             blockedReason={blockedReason}
             blockedAction={blockedAction}
+            blockedNotice={blockedNotice}
             // Blocked rather than refused: a refused send has already cleared the box.
             notReady={
               auth?.reauthRequired && !(conversation.session && isLocalModel(conversation.session.model))

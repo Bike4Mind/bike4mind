@@ -494,6 +494,8 @@ export const SettingKeySchema = z.enum([
   'enableDomainIntelligence',
   'holdSignupsFromDomainsYoungerThanDays',
   'autoConfirmDisposableAggregateHolds',
+  'signupDomainHoldAssessmentEnabled',
+  'signupDomainHoldAssessmentConfig',
   'domainIntelligenceTimeoutMs',
   'paymentRiskAlertsEnabled',
   'paymentRiskYoungAccountMinutes',
@@ -564,6 +566,7 @@ export const SettingKeySchema = z.enum([
   'turnstileFailClosed',
   'turnstileSiteKey',
   'signupRiskScoring',
+  'signupRiskAutoApproval',
   'preferenceArenaEnabled',
   'preferenceArenaCreditsPerVote',
   'preferenceArenaDailyVoteCap',
@@ -815,6 +818,9 @@ export const IntentClassifierConfigSchema = z.object({
 
 export type IntentClassifierConfig = z.infer<typeof IntentClassifierConfigSchema>;
 
+export const LOW_CONFIDENCE_COMPLETION_MODES = ['block', 'annotate', 'off'] as const;
+export type LowConfidenceCompletionMode = (typeof LOW_CONFIDENCE_COMPLETION_MODES)[number];
+
 export const OrchestrationDefaultsSchema = z.object({
   /**
    * Tool names the synthetic profile is allowed to invoke. A DEFAULT toolbelt, not a gate:
@@ -917,6 +923,12 @@ export const OrchestrationDefaultsSchema = z.object({
   dagEnabled: z.boolean().default(true),
   /** LLM intent-classifier configuration. */
   intentClassifier: IntentClassifierConfigSchema.default(IntentClassifierConfigSchema.parse({})),
+  /**
+   * What the agent executor does when a run's final answer follows a below-threshold iteration:
+   * `annotate` emits `low_confidence_completion` and completes, `block` also pauses for review,
+   * `off` does neither. Omitted => `annotate`.
+   */
+  lowConfidenceCompletion: z.enum(LOW_CONFIDENCE_COMPLETION_MODES).optional(),
 });
 
 export type OrchestrationDefaults = z.infer<typeof OrchestrationDefaultsSchema>;
@@ -1491,6 +1503,28 @@ export const AutoContainmentConfigSchema = z.object({
 });
 export type AutoContainmentConfig = z.infer<typeof AutoContainmentConfigSchema>;
 
+/**
+ * Operator limits for the advisory assessment of young-domain signup holds
+ * (apps/client/server/security/signupDomainHoldAssessment). Every default spends nothing: no model and
+ * a zero budget. `signupDomainHoldAssessmentEnabled` gates all provider egress on top of this.
+ */
+export const SignupDomainHoldAssessmentConfigSchema = z.object({
+  /** Decisions model to ask; must be served here and have a platform key. Null means no calls. */
+  model: z.enum(DECISION_MODEL_IDS).nullable().prefault(null),
+  /** Platform spend per 24h window (opened by the first call), in USD, at each call's worst-case cost. */
+  dailyBudgetUsd: z.number().min(0).max(1000).prefault(0),
+  /** Provider calls per 24h window (opened by the first call). */
+  maxCallsPerDay: z.number().int().min(0).max(10_000).prefault(100),
+  /** Provider calls in flight at once, across all instances. */
+  maxConcurrency: z.number().int().min(1).max(10).prefault(1),
+  /** Holds assessed per triage run (every 10 minutes). */
+  maxAssessmentsPerRun: z.number().int().min(1).max(100).prefault(20),
+  /** Least confidence in an `abuse` verdict that confirms the hold; anything lower leaves it pending. */
+  minConfirmConfidence: z.number().min(0.5).max(1).prefault(0.9),
+});
+
+export type SignupDomainHoldAssessmentConfig = z.infer<typeof SignupDomainHoldAssessmentConfigSchema>;
+
 export enum ServerStatusEnum {
   Live = 'live',
   Maintenance = 'maintenance',
@@ -1540,6 +1574,41 @@ export const SignupRiskScoringSchema = z
   .strict();
 
 export type SignupRiskScoring = z.infer<typeof SignupRiskScoringSchema>;
+
+/**
+ * Rules that approve a pending signup risk review without an admin
+ * (apps/client/server/security/riskReviewAutoApproval.ts). Both only move pending to approved, which
+ * an admin can reopen; a model verdict never approves.
+ */
+export const SignupRiskAutoApprovalSchema = z
+  .object({
+    settledPayment: z
+      .object({
+        enabled: z.boolean().prefault(true),
+        /**
+         * Hours a successful payment must have stood, leaving time for an early fraud warning or dispute;
+         * 0 approves as the payment succeeds. Any refund, dispute or early fraud warning on the account,
+         * a partial or goodwill refund included, reopens this approval and rules the account out for good.
+         */
+        minPaymentAgeHours: z.number().int().min(0).max(720).prefault(24),
+      })
+      .strict()
+      .prefault({}),
+    quietAccount: z
+      .object({
+        enabled: z.boolean().prefault(false),
+        minAccountAgeDays: z.number().int().min(1).max(365).prefault(14),
+        /** Only accounts scoring at most this; set it near the review threshold to cover borderline rows only. */
+        maxScore: z.number().min(1).max(100).prefault(60),
+        /** Days since the score was last recomputed (by email verification or a new API key). */
+        minQuietDays: z.number().int().min(1).max(365).prefault(7),
+      })
+      .strict()
+      .prefault({}),
+  })
+  .strict();
+
+export type SignupRiskAutoApproval = z.infer<typeof SignupRiskAutoApprovalSchema>;
 
 export const CUSTOM_MCP_POLICY_MODES = ['off', 'presets_only', 'allowlist', 'any'] as const;
 export type CustomMcpPolicyMode = (typeof CUSTOM_MCP_POLICY_MODES)[number];
@@ -2412,10 +2481,13 @@ export const API_SERVICE_GROUPS = {
       { key: 'signupBurstWindowHours', order: 25 },
       { key: 'signupBurstAutoHold', order: 26 },
       { key: 'signupRiskScoring', order: 27 },
+      { key: 'signupRiskAutoApproval', order: 27.5 },
       { key: 'signupAnomaly', order: 28 },
       { key: 'enableDomainIntelligence', order: 29 },
       { key: 'holdSignupsFromDomainsYoungerThanDays', order: 30 },
       { key: 'autoConfirmDisposableAggregateHolds', order: 30.5 },
+      { key: 'signupDomainHoldAssessmentEnabled', order: 30.6 },
+      { key: 'signupDomainHoldAssessmentConfig', order: 30.7 },
       { key: 'domainIntelligenceTimeoutMs', order: 31 },
       { key: 'paymentRiskAlertsEnabled', order: 32 },
       { key: 'paymentRiskYoungAccountMinutes', order: 33 },
@@ -5576,6 +5648,24 @@ export const settingsMap = {
     category: 'Users',
     schema: SignupRiskScoringSchema,
   }),
+  signupRiskAutoApproval: makeObjectSetting({
+    key: 'signupRiskAutoApproval',
+    name: 'Signup Risk Auto-Approval',
+    defaultValue: SignupRiskAutoApprovalSchema.parse({}),
+    description:
+      'Approves a pending signup risk review without an admin. settledPayment: a successful card payment ' +
+      '(credit pack or subscription) that Stripe Radar rated normal, on a card no other account paid with in ' +
+      'the payment-attempt retention window, at least minPaymentAgeHours old. quietAccount (off by default): an account at least ' +
+      'minAccountAgeDays old, scoring at most maxScore, not rescored for minQuietDays and named in no open ' +
+      'shadow detection. Neither applies to a banned, suspended or disputed account, one whose payment unlock ' +
+      'was forfeited, one with a signup tranche held for review, or one an admin reopened. Each approval is ' +
+      'audited and listed in Risk review, where it can be reopened; a refund, dispute or early fraud warning ' +
+      'reopens a settledPayment approval automatically. A stored value that fails to parse turns ' +
+      'both rules off.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    schema: SignupRiskAutoApprovalSchema,
+  }),
   signupAnomaly: makeObjectSetting({
     key: 'signupAnomaly',
     name: 'Signup anomaly detection',
@@ -5624,6 +5714,26 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
       'Confirm Signup Domain Holds whose reason is disposable-aggregate without waiting for an admin, keeping their free credits held. Runs every 10 minutes on stages with scheduled jobs. Each one is recorded in the Admin Audit Log as a system action, and an admin can still Release it from Signup Domain Holds.',
+  }),
+  signupDomainHoldAssessmentEnabled: makeBooleanSetting({
+    key: 'signupDomainHoldAssessmentEnabled',
+    name: 'Advisory Assessment of Young-Domain Holds',
+    defaultValue: false,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Lets a Decisions model judge pending young-domain Signup Domain Holds (abuse, legitimate or insufficient evidence) from a summary of counts and flags: domain age, mail provider class, whether the site answers with content, signup timing and network spread. It never sees emails, IPs, the domain name or site text. It only ever confirms a hold (keeps free credits held) on a confident abuse verdict, recorded in the Admin Audit Log as a system action; it never releases one, and every other verdict leaves the hold for an admin. Paid from the platform key and budget. Off means no provider calls.',
+  }),
+  signupDomainHoldAssessmentConfig: makeObjectSetting({
+    key: 'signupDomainHoldAssessmentConfig',
+    name: 'Advisory Assessment of Young-Domain Holds: Model and Limits',
+    defaultValue: SignupDomainHoldAssessmentConfigSchema.parse({}),
+    description:
+      'The Decisions model to ask (it must have a platform key), the daily USD budget and call cap, concurrent calls, holds per 10-minute run, and the least confidence in an abuse verdict that confirms a hold. The defaults make no calls. The assessment only ever confirms; it never releases a hold.',
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    dependsOn: 'signupDomainHoldAssessmentEnabled',
+    schema: SignupDomainHoldAssessmentConfigSchema,
   }),
   domainIntelligenceTimeoutMs: makeNumberSetting({
     key: 'domainIntelligenceTimeoutMs',

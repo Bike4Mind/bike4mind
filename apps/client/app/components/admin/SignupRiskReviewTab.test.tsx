@@ -293,4 +293,63 @@ describe('SignupRiskReviewTab', () => {
     fireEvent.click(screen.getByTestId('signup-risk-reset-btn'));
     expect(empty.refetch).toHaveBeenCalled();
   });
+
+  describe('automatic approvals', () => {
+    const autoApproved = {
+      userId: 'u9',
+      email: 'payer@example.org',
+      username: 'payer',
+      score: 62,
+      policy: 'settled_payment' as const,
+      decidedAt: '2026-11-02T10:00:00.000Z',
+    };
+    const withAutoApproved = () =>
+      m.useSignupRiskReviews.mockReturnValue(
+        queue(ROWS, { data: { data: ROWS, truncated: false, reviewThreshold: 50, autoApproved: [autoApproved] } })
+      );
+    const reopen = async () => {
+      fireEvent.click(screen.getByTestId('signup-risk-reopen-u9'));
+      fireEvent.click(await screen.findByTestId('signup-risk-reopen-reason-preset-0'));
+      fireEvent.click(screen.getByTestId('signup-risk-reopen-confirm-btn'));
+    };
+
+    it('hides the section when nothing was approved automatically', () => {
+      renderTab();
+
+      expect(screen.queryByTestId('signup-risk-auto-approved')).toBeNull();
+    });
+
+    it('lists an automatic approval with its evidence and reopens it with a reason', async () => {
+      withAutoApproved();
+      m.mutate.mockImplementation((_decision, options: { onSuccess: (result: unknown) => void }) =>
+        options.onSuccess({ updatedUserIds: ['u9'], skippedUserIds: [], failedUserIds: [], grantReleasedUserIds: [] })
+      );
+      renderTab();
+
+      const listed = screen.getByTestId('signup-risk-auto-approved-row-u9');
+      expect(listed.textContent).toContain('payer@example.org');
+      expect(listed.textContent).toContain('Settled payment');
+
+      await reopen();
+
+      expect(m.mutate).toHaveBeenCalledWith(
+        { action: 'reopen', userIds: ['u9'], reason: 'Evidence needs a manual look' },
+        expect.anything()
+      );
+      await waitFor(() => expect(screen.queryByTestId('signup-risk-reopen-confirm-btn')).toBeNull());
+    });
+
+    it('keeps the dialog open and says so when the reopen failed on the server', async () => {
+      withAutoApproved();
+      m.mutate.mockImplementation((_decision, options: { onSuccess: (result: unknown) => void }) =>
+        options.onSuccess({ updatedUserIds: [], skippedUserIds: [], failedUserIds: ['u9'], grantReleasedUserIds: [] })
+      );
+      renderTab();
+
+      await reopen();
+
+      expect((await screen.findByTestId('signup-risk-reopen-error')).textContent).toContain('Reopening failed');
+      expect(screen.getByTestId('signup-risk-reopen-confirm-btn')).toBeTruthy();
+    });
+  });
 });

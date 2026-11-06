@@ -109,6 +109,8 @@ vi.mock('@server/billing/paymentFailureNotice', () => ({
   notifyPaymentFailed: (...args: unknown[]) => mockNotifyPaymentFailed(...args),
   notifyCanceledForNonPayment: vi.fn(),
 }));
+// The BillingEvent store has its own suite (server/billing/billingEventStore.test.ts).
+vi.mock('@server/billing/billingEventStore', () => ({ recordBillingEvent: vi.fn() }));
 
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postMessageToSlack: (...args: unknown[]) => mockPostMessageToSlack(...args),
@@ -163,6 +165,11 @@ vi.mock('@server/billing/paymentRisk', () => ({
   alertStripeRiskEvent: (...args: unknown[]) => mockAlertStripeRiskEvent(...args),
   screenPaymentOutcome: (...args: unknown[]) => mockScreenPaymentOutcome(...args),
   radarRiskLine: (...args: unknown[]) => mockRadarRiskLine(...args),
+}));
+
+const mockAutoApproveAfterPayment = vi.fn();
+vi.mock('@server/security/riskReviewAutoApproval', () => ({
+  autoApproveRiskReviewAfterPayment: (...args: unknown[]) => mockAutoApproveAfterPayment(...args),
 }));
 
 // The forfeit helpers have their own suite (server/credits/paymentUnlockForfeit.test.ts); here only the wiring.
@@ -392,11 +399,18 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
         },
         expect.anything()
       );
+      expect(mockAutoApproveAfterPayment).toHaveBeenCalledWith('user123', expect.anything());
+      // Auto-approval reads the Radar outcome and card fingerprint that screening records.
+      expect(mockAutoApproveAfterPayment.mock.invocationCallOrder[0]).toBeGreaterThan(
+        mockScreenPaymentOutcome.mock.invocationCallOrder[0]
+      );
 
       mockScreenPaymentOutcome.mockClear();
+      mockAutoApproveAfterPayment.mockClear();
       mockGrantCreditPurchase.mockResolvedValue('already_granted');
       await invokeWebhookWithEvent(event);
       expect(mockScreenPaymentOutcome).not.toHaveBeenCalled();
+      expect(mockAutoApproveAfterPayment).not.toHaveBeenCalled();
     });
 
     it("screens a subscription's payment intent as a subscription payment", async () => {
@@ -422,6 +436,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
         expect.objectContaining({ paymentIntentId: 'pi_sub', kind: 'subscription', outcome: 'succeeded' }),
         expect.anything()
       );
+      expect(mockAutoApproveAfterPayment).toHaveBeenCalledWith('user123', expect.anything());
     });
 
     it('alerts on and records a failed card attempt', async () => {

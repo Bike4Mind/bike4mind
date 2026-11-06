@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
 import type { AgentView } from '../roster';
 import { agentFixture, createThemedMount, el, query } from '../testUtils';
-import { assignPersonas } from './agentPersona';
+import { assignPersonas } from '@shared/agentPersona';
 import { DOOR_POINT, INNKEEPER_POINT, TAVERN_SLOTS } from './scene';
 import { TavernView } from './TavernView';
 
@@ -163,8 +163,8 @@ describe('TavernView', () => {
   });
 
   it("shows a preparing agent's setup step in its bubble", async () => {
-    await renderTavern([agentFixture('a', 'working', { preparing: 'dependencies' })]);
-    expect(el('orchestrator-tavern-bubble-a').textContent).toBe('Installing dependencies\u2026');
+    await renderTavern([agentFixture('a', 'working', { preparing: 'worktree' })]);
+    expect(el('orchestrator-tavern-bubble-a').textContent).toBe('Creating worktree\u2026');
   });
 
   it('shows the live activity, truncated, in a working agent bubble', async () => {

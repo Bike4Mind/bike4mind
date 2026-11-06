@@ -47,6 +47,7 @@ import {
   serverIdOfRuntime,
   serverManagement,
   sizesWithSavedLaunch,
+  OLLAMA_NOT_RUNNING,
   serverRuntimeId,
   WINDOWS_ORPHAN_HINT,
   type FlashAttention,
@@ -82,6 +83,12 @@ const LOCAL_TIMEOUT_MS = 1_500;
 export const HEALTH_INTERVAL_MS = 60_000;
 const RECHECK_AFTER_MS = 10_000;
 const OBSERVE_TTL_MS = 5 * 60_000;
+/** How often an Ollama Desktop could start is looked for on this computer, and how long a check waits on it. */
+const PROGRAM_TTL_MS = 30_000;
+const PROGRAM_WAIT_MS = 2_000;
+/** A user check looks again only this long after the last look began, so a click loop cannot rescan the disk per click. */
+const LOOK_AGAIN_MIN_MS = 2_000;
+const MAX_LOOKS_OUTSTANDING = 2;
 /** `dns.lookup` has no timeout of its own and can hang on a slow resolver. */
 const RESOLVE_TIMEOUT_MS = 5_000;
 /** How long a picker load waits on a down server's check before listing its last models. */
@@ -164,8 +171,8 @@ export interface ModelServerRegistryDeps {
   platform?: NodeJS.Platform;
   /** Each model's load settings from the Models screen, which every request for it carries. */
   loadSettings?: LoadSettingsReader;
-  /** How Desktop finds and starts the servers it runs; defaults to this computer's own (hostLaunchers). */
-  launchers?: Launchers;
+  /** How Desktop finds and starts the servers it runs: hostLaunchers in the app; tests pass inertLaunchers. */
+  launchers: Launchers;
   /** The launch variables of the Ollama at `url` on this computer; null when they cannot be read, as without this. */
   readOllamaEnv?(url: string): Promise<OllamaEnvironment | null>;
   /** Whether a loopback port is free; defaults to binding for an address probe and connecting for observation. */
@@ -200,6 +207,15 @@ interface LaunchState {
   lastObserved: Record<string, string> | null;
   /** The cache type and flash attention sizing last used, so a change can expire what was sized with the old ones. */
   sizedWith: string;
+  /** Why Desktop has no Ollama program to start: null when it found one, undefined until it has looked. */
+  missingOllama: string | null | undefined;
+  programAt: number;
+  /** Counts looks, so one that settles after a newer one started is dropped. */
+  programLook: number;
+  /** When the look still running started; null when none runs. */
+  lookingSince: number | null;
+  /** Looks not settled yet, given-up ones included. */
+  looksOutstanding: number;
 }
 
 const UNKNOWN_HEALTH: ModelServerHealth = {
@@ -578,12 +594,21 @@ export class ModelServerRegistry {
     return this.views();
   }
 
-  /** Rechecks one server, or every server and this computer when `id` is omitted. */
-  async check(id?: string): Promise<ModelServerView[]> {
+  /**
+   * Rechecks one server, or every server and this computer when `id` is omitted. `lookAgain`: a user asked, so look for
+   * the Ollama program now rather than waiting out PROGRAM_TTL_MS, unless a look began within LOOK_AGAIN_MIN_MS.
+   */
+  async check(id?: string, options: { lookAgain?: boolean } = {}): Promise<ModelServerView[]> {
     await this.load();
     if (id === undefined) return this.checkAll();
-    if (id === LOCAL_SERVER_ID) await this.checkLocal();
-    else {
+    if (id === LOCAL_SERVER_ID) {
+      const state = this.launchState(id);
+      if (options.lookAgain && Date.now() - state.programAt >= LOOK_AGAIN_MIN_MS) {
+        state.programAt = 0;
+        state.lookingSince = null;
+      }
+      await this.checkLocal();
+    } else {
       const entry = this.entries.get(id);
       if (entry) await this.checkEntry(entry);
     }
@@ -900,7 +925,7 @@ export class ModelServerRegistry {
         version: null,
         latencyMs: null,
         checkedAt: new Date().toISOString(),
-        error: 'Ollama is not running on this computer.',
+        error: OLLAMA_NOT_RUNNING,
       };
     }
     await this.observe(LOCAL_SERVER_ID);
@@ -963,19 +988,28 @@ export class ModelServerRegistry {
     const busy = this.supervisor.busy(id);
     const settingsProblem = launchSettingsProblem(settings, target.runtime);
     const lastObserved = target.runtime === 'ollama' ? (this.launchStates.get(id)?.lastObserved ?? null) : null;
+    // Only "This computer": a saved loopback address may be a tunnel to another machine's Ollama.
+    const missingOllama = id === LOCAL_SERVER_ID && owner === 'none' ? this.launchStates.get(id)?.missingOllama : null;
     return {
       runtime: target.runtime,
       owner,
       busy,
       settings,
       pendingRestart: !!owned && !sameLaunch(owned.settings, settings),
-      canStart: owner === 'none' && target.health.state === 'unreachable' && !settingsProblem,
+      canStart: owner === 'none' && target.health.state === 'unreachable' && !settingsProblem && missingOllama === null,
       problem:
         owner === 'remote'
           ? null
           : owner === 'other' && target.port !== null && this.launchStates.get(id)?.portHeld
             ? portHeldMessage(target.port)
             : (this.supervisor.problem(id) ?? settingsProblem),
+      ...(missingOllama ? { programMissing: missingOllama } : {}),
+      // At the cap no new look can start, so stop waiting and let the Models screen offer Install.
+      ...(missingOllama === undefined &&
+      (target.health.state === 'unreachable' || target.health.state === 'unknown') &&
+      (this.launchStates.get(id)?.looksOutstanding ?? 0) < MAX_LOOKS_OUTSTANDING
+        ? { programPending: true }
+        : {}),
       observed: owner === 'other' ? (this.launchStates.get(id)?.observed ?? null) : null,
       sizingKvCacheType: this.kvCacheType(id) ?? 'f16',
       sizingFlashAttention: this.flashAttention(id) ?? 'auto',
@@ -1034,7 +1068,46 @@ export class ModelServerRegistry {
       state.observedAt = Date.now();
       state.observedVersion = target.health.version;
     }
+    if (id === LOCAL_SERVER_ID && owner === 'none' && target.health.state === 'unreachable') {
+      await this.findOllama(id, state);
+    }
     this.sizingChanged(id);
+  }
+
+  /**
+   * Looks for the Ollama program Start would run, at most every PROGRAM_TTL_MS and one look at a time; a look stuck
+   * past PROGRAM_TTL_MS is given up on, but never more than MAX_LOOKS_OUTSTANDING run at once. The check emits what a
+   * look finds in time; a slower look emits once when it settles, unless a newer look has started since.
+   */
+  private async findOllama(id: string, state: LaunchState): Promise<void> {
+    const now = Date.now();
+    if (state.looksOutstanding >= MAX_LOOKS_OUTSTANDING) return;
+    if (state.lookingSince !== null && now - state.lookingSince < PROGRAM_TTL_MS) return;
+    if (now - state.programAt < PROGRAM_TTL_MS) return;
+    state.programAt = now;
+    state.lookingSince = now;
+    state.looksOutstanding += 1;
+    const look = ++state.programLook;
+    // A synchronous throw takes the same path as a rejected look, so it never escapes into check().
+    const settled = Promise.resolve()
+      .then(() => this.supervisor.program('ollama', this.launchSettings(id)))
+      .then(
+        found => ('problem' in found ? found.problem : null),
+        (error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          this.deps.logger.warn(`MODEL SERVERS: looking for Ollama failed: ${message}`);
+          return `Desktop could not check for Ollama: ${message}`;
+        }
+      )
+      .then(missing => {
+        state.looksOutstanding -= 1;
+        if (look === state.programLook) state.lookingSince = null;
+        if (look !== state.programLook || state.missingOllama === missing) return false;
+        state.missingOllama = missing;
+        return true;
+      });
+    if ((await within(settled, PROGRAM_WAIT_MS, 'late' as const)) !== 'late') return;
+    void settled.then(changed => changed && this.emit());
   }
 
   private launchState(id: string): LaunchState {
@@ -1047,6 +1120,11 @@ export class ModelServerRegistry {
         observedVersion: null,
         lastObserved: null,
         sizedWith: sizingKey(undefined, undefined),
+        missingOllama: undefined,
+        programAt: 0,
+        programLook: 0,
+        lookingSince: null,
+        looksOutstanding: 0,
       };
       this.launchStates.set(id, state);
     }

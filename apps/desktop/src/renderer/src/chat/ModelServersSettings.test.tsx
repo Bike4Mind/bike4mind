@@ -650,6 +650,19 @@ describe('ModelServersSettings launch settings', () => {
     expect(byTestId('model-servers-launch-start-btn')).toBeNull();
   });
 
+  it('says plainly, not as a warning, that it found no Ollama to start, with no Start', async () => {
+    const programMissing =
+      'Desktop could not find Ollama on this computer. Install it from ollama.com, then check again.';
+    await show({
+      ...LOCAL,
+      health: { ...health, state: 'unreachable' },
+      launch: launch({ canStart: false, programMissing }),
+    });
+    expect(byTestId('model-servers-launch-program-missing')?.textContent).toBe(programMissing);
+    expect(byTestId('model-servers-launch-problem')).toBeNull();
+    expect(byTestId('model-servers-launch-start-btn')).toBeNull();
+  });
+
   it('keeps saved launch settings over what it read from the server', async () => {
     const prefill = { settings: { kvCacheType: 'q8_0' as const }, from: 'OLLAMA_KV_CACHE_TYPE=q8_0' };
     await show({ ...LOCAL, launch: launch({ prefill, settings: { flashAttention: 'on' } }) });

@@ -7,6 +7,7 @@ import { EditCreditsPerCycleDialog, parseCreditsPerCycle } from './EditCreditsPe
 import { RemoveSubscriptionDialog } from './RemoveSubscriptionDialog';
 import { CancelSubscriptionDialog } from './CancelSubscriptionDialog';
 import { ResumeSubscriptionDialog } from './ResumeSubscriptionDialog';
+import { SyncFromStripeDialog } from './SyncFromStripeDialog';
 import {
   OWNER_ID,
   STRIPE_ROW,
@@ -21,12 +22,16 @@ const mocks = vi.hoisted(() => ({
   remove: vi.fn(),
   cancel: vi.fn(),
   resume: vi.fn(),
+  sync: vi.fn(),
+  preview: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/data/adminSubscriptionDetail', () => ({
   useAdminSubscriptionCompChange: () => ({ mutateAsync: mocks.comp }),
   useAdminSubscriptionCancel: () => ({ mutateAsync: mocks.cancel }),
   useAdminSubscriptionResume: () => ({ mutateAsync: mocks.resume }),
+  useAdminSubscriptionSync: () => ({ mutateAsync: mocks.sync }),
+  useAdminSubscriptionSyncPreview: () => mocks.preview(),
 }));
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useUpdateSubscriptionCredits: () => ({ mutateAsync: mocks.credits }),
@@ -261,6 +266,102 @@ describe('RemoveSubscriptionDialog', () => {
   it('refuses a live Stripe row', () => {
     openRemove(buildDetail({ subscription: STRIPE_ROW }));
     expect(screen.getByTestId('remove-subscription-dialog-hint')).toHaveTextContent('Cancel it first');
+  });
+});
+
+describe('SyncFromStripeDialog', () => {
+  const previewOf = (data: object | undefined, extra: object = {}) =>
+    mocks.preview.mockReturnValue({ data, isLoading: false, isError: false, ...extra });
+
+  it('shows the field diff and syncs with the previewed row version', async () => {
+    previewOf({
+      changes: [{ field: 'quantity', before: '1', after: '3' }],
+      stripeMissing: false,
+      stripeStatus: 'active',
+      updatedAt: '2026-10-02T00:00:00.000Z',
+    });
+    mocks.sync.mockResolvedValue({});
+    const { onClose } = open(SyncFromStripeDialog, buildDetail({ subscription: STRIPE_ROW }));
+
+    expect(screen.getByTestId('sync-subscription-change-quantity-before')).toHaveTextContent('1');
+    expect(screen.getByTestId('sync-subscription-change-quantity-after')).toHaveTextContent('3');
+    pickReason('sync-subscription-dialog');
+    confirm('sync-subscription-dialog');
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(mocks.sync).toHaveBeenCalledWith(expect.objectContaining({ expectedUpdatedAt: '2026-10-02T00:00:00.000Z' }));
+  });
+
+  it('refetches a conflict and retries with the refreshed preview version', async () => {
+    const initialVersion = '2026-10-02T00:00:00.000Z';
+    const refreshedVersion = '2026-10-02T00:01:00.000Z';
+    const refetch = vi.fn().mockResolvedValue({});
+    const previewData = {
+      changes: [{ field: 'quantity', before: '1', after: '3' }],
+      stripeMissing: false,
+      stripeStatus: 'active',
+      updatedAt: initialVersion,
+    };
+    previewOf(previewData, { refetch });
+    mocks.sync.mockRejectedValueOnce(new Error('This subscription changed'));
+    const detail = buildDetail({ subscription: STRIPE_ROW });
+    const onClose = vi.fn();
+    const onAudit = vi.fn();
+    const { rerender } = render(<SyncFromStripeDialog detail={detail} onClose={onClose} onAudit={onAudit} />, {
+      wrapper: SubscriptionTestWrapper,
+    });
+    pickReason('sync-subscription-dialog');
+    confirm('sync-subscription-dialog');
+    await waitFor(() => expect(refetch).toHaveBeenCalledTimes(1));
+    expect(onClose).not.toHaveBeenCalled();
+
+    previewOf({ ...previewData, updatedAt: refreshedVersion }, { refetch });
+    rerender(<SyncFromStripeDialog detail={detail} onClose={onClose} onAudit={onAudit} />);
+    await waitFor(() => expect(screen.getByTestId('sync-subscription-dialog-confirm-btn')).not.toBeDisabled());
+    confirm('sync-subscription-dialog');
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(mocks.sync.mock.calls.map(([body]) => body.expectedUpdatedAt)).toEqual([initialVersion, refreshedVersion]);
+  });
+
+  it('blocks the sync when the row already matches Stripe', () => {
+    previewOf({ changes: [], stripeMissing: false, stripeStatus: 'active', updatedAt: '2026-10-02T00:00:00.000Z' });
+    open(SyncFromStripeDialog, buildDetail({ subscription: STRIPE_ROW }));
+
+    pickReason('sync-subscription-dialog');
+    expect(screen.getByTestId('sync-subscription-dialog')).toHaveTextContent('Already in sync with Stripe');
+    expect(screen.getByTestId('sync-subscription-dialog-confirm-btn')).toBeDisabled();
+    confirm('sync-subscription-dialog');
+    expect(mocks.sync).not.toHaveBeenCalled();
+  });
+
+  it('blocks the sync while the preview loads', () => {
+    previewOf(undefined, { isLoading: true });
+    open(SyncFromStripeDialog, buildDetail({ subscription: STRIPE_ROW }));
+
+    pickReason('sync-subscription-dialog');
+    expect(screen.getByTestId('sync-subscription-dialog')).toHaveTextContent('Reading from Stripe');
+    expect(screen.getByTestId('sync-subscription-dialog-confirm-btn')).toBeDisabled();
+  });
+
+  it('blocks the sync when the preview fails', () => {
+    previewOf(undefined, { isError: true });
+    open(SyncFromStripeDialog, buildDetail({ subscription: STRIPE_ROW }));
+
+    pickReason('sync-subscription-dialog');
+    expect(screen.getByTestId('sync-subscription-dialog')).toHaveTextContent('Could not read the subscription');
+    expect(screen.getByTestId('sync-subscription-dialog-confirm-btn')).toBeDisabled();
+  });
+
+  it('warns that a subscription missing from Stripe is marked canceled', () => {
+    previewOf({
+      changes: [{ field: 'status', before: 'active', after: 'canceled' }],
+      stripeMissing: true,
+      stripeStatus: null,
+      updatedAt: '2026-10-02T00:00:00.000Z',
+    });
+    open(SyncFromStripeDialog, buildDetail({ subscription: STRIPE_ROW }));
+
+    expect(screen.getByTestId('sync-subscription-missing')).toHaveTextContent('marks this record canceled');
   });
 });
 

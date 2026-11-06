@@ -7,11 +7,13 @@ import { SubscriptionDetailStats } from './SubscriptionDetailStats';
 import { SubscriptionDetailTabs, subscriptionDetailPanelId, subscriptionDetailTabId } from './SubscriptionDetailTabs';
 import { OverviewTab } from './tabs/OverviewTab';
 import { SubscriptionAdminLogTab } from './tabs/SubscriptionAdminLogTab';
+import { SubscriptionTimelineTab } from './tabs/SubscriptionTimelineTab';
 import { ExtendCompDialog } from './actions/ExtendCompDialog';
 import { EndCompDialog } from './actions/EndCompDialog';
 import { EditCreditsPerCycleDialog } from './actions/EditCreditsPerCycleDialog';
 import { CancelSubscriptionDialog } from './actions/CancelSubscriptionDialog';
 import { ResumeSubscriptionDialog } from './actions/ResumeSubscriptionDialog';
+import { SyncFromStripeDialog } from './actions/SyncFromStripeDialog';
 import { RemoveSubscriptionDialog } from './actions/RemoveSubscriptionDialog';
 import type { SubscriptionDetailTab } from './subscriptionDetailSearch';
 import { ownerDisplayName, type SubscriptionAction } from './subscriptionDetailModel';
@@ -84,6 +86,8 @@ export const SubscriptionDetailView: React.FC<SubscriptionDetailViewProps> = ({
         return <ResumeSubscriptionDialog detail={detail} onClose={closeAction} onAudit={openAdminLog} />;
       case 'credits':
         return <EditCreditsPerCycleDialog detail={detail} onClose={closeAction} onAudit={openAdminLog} />;
+      case 'sync':
+        return <SyncFromStripeDialog detail={detail} onClose={closeAction} onAudit={openAdminLog} />;
       case 'remove':
         return (
           <RemoveSubscriptionDialog
@@ -106,6 +110,8 @@ export const SubscriptionDetailView: React.FC<SubscriptionDetailViewProps> = ({
             onOpenLedger={userId => void navigation.openUserLedger(userId)}
           />
         );
+      case 'timeline':
+        return <SubscriptionTimelineTab subscriptionId={detail.subscription.id} />;
       case 'admin':
         return <SubscriptionAdminLogTab subscriptionId={detail.subscription.id} />;
     }

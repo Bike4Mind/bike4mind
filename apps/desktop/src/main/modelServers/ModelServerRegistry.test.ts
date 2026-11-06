@@ -6,6 +6,7 @@ import type { ChatModelOption } from '@shared/chat';
 import type { ModelServerProbeResult } from '@shared/modelServers';
 import { LISTED_FRESH_MS, ModelServerRegistry, PICKER_CHECK_WAIT_MS, PICKER_LIST_WAIT_MS } from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';
+import { inertLaunchers } from './testLaunchers';
 import {
   describeSshFailure,
   SshConnectionError,
@@ -98,6 +99,7 @@ function registry(
   const listedLate = vi.fn();
   const edited = vi.fn();
   const instance = new ModelServerRegistry({
+    launchers: inertLaunchers(),
     store,
     logger: options.logger ?? { debug: () => undefined, warn: () => undefined },
     platform: options.platform,
@@ -155,6 +157,7 @@ describe('ModelServerRegistry', () => {
     const quiet = { debug: () => undefined, warn: () => undefined };
     const localSpecsChanged = vi.fn();
     const servers = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store: new ModelServerStore(cipher, file, quiet),
       logger: { debug: () => undefined, warn: () => undefined },
       fetchFor: fake.fetchFor,
@@ -189,6 +192,7 @@ describe('ModelServerRegistry', () => {
     // A restart reads this computer's specs back and says so, since sizing may have run on the probe alone.
     const restarted = vi.fn();
     const again = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store: new ModelServerStore(cipher, file, quiet),
       logger: quiet,
       fetchFor: fake.fetchFor,
@@ -307,6 +311,7 @@ describe('ModelServerRegistry', () => {
       { type: 'bearer', token: TOKEN }
     );
     const servers = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store: new ModelServerStore(noKeyring, file, silent),
       logger: silent,
       fetchFor: fake.fetchFor,
@@ -426,6 +431,7 @@ describe('ModelServerRegistry', () => {
     };
     const holder: { catalog?: ModelCatalog } = {};
     const servers = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store: new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined }),
       logger: { debug: () => undefined, warn: () => undefined },
       changed: () => holder.catalog?.expireLocal(),
@@ -1480,6 +1486,7 @@ describe('ModelServerRegistry', () => {
     };
     const store = new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined });
     const servers = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store,
       logger: { debug: () => undefined, warn: () => undefined },
       fetchFor,
@@ -1517,6 +1524,7 @@ describe('ModelServerRegistry', () => {
     };
     const store = new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined });
     const servers = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store,
       logger: { debug: () => undefined, warn: () => undefined },
       fetchFor,
@@ -1579,6 +1587,7 @@ describe('ModelServerRegistry', () => {
     const quiet = { debug: () => undefined, warn: () => undefined };
     const open = () =>
       new ModelServerRegistry({
+        launchers: inertLaunchers(),
         store: new ModelServerStore(cipher, file, quiet),
         logger: quiet,
         fetchFor,
@@ -1704,6 +1713,7 @@ describe('ModelServerRegistry SSH servers', () => {
       };
     const store = new ModelServerStore(cipher, file, { debug: () => undefined, warn: () => undefined });
     const instance = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store,
       logger: { debug: () => undefined, warn: () => undefined },
       fetchFor: fake.fetchFor,

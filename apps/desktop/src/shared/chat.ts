@@ -9,6 +9,7 @@
  * Credential-free like @shared/auth, for the same reason - see src/shared/ipc.ts.
  */
 
+import type { GithubRef } from './githubRefs';
 import type { GenerationJobState, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
 import type { ReasoningEffortSetting } from '@bike4mind/local-models/model-settings';
 import type { ChildOutcome } from './agentOutcome';
@@ -1362,6 +1363,8 @@ export interface ChatSessionSummary extends ChatSessionMeta {
   totalUsdCost?: number;
   /** Sum of usage.creditsUsed over all messages; absent when none reported it. */
   totalCredits?: number;
+  /** Issue and PR refs the transcript mentions, first seen first; absent when none. See githubRefs.ts. */
+  githubRefs?: GithubRef[];
 }
 
 export interface ChatSession extends ChatSessionMeta {
@@ -1561,14 +1564,13 @@ export interface ChatSessionStatusEvent {
 }
 
 /**
- * What a session is doing before its first reply: cutting its worktree, waiting on that
- * worktree's dependency install, or starting the turn itself.
+ * What a session is doing before its first reply: cutting its worktree, or starting the turn
+ * itself. A worktree's dependency install is not a step: it runs alongside the first turn.
  */
-export type SessionSetupStep = 'worktree' | 'dependencies' | 'starting';
+export type SessionSetupStep = 'worktree' | 'starting';
 
 export const SESSION_SETUP_LABEL: Record<SessionSetupStep, string> = {
   worktree: 'Creating worktree',
-  dependencies: 'Installing dependencies',
   starting: 'Starting up',
 };
 

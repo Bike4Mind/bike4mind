@@ -111,6 +111,6 @@ export function registerModelServersIpc(
   });
   ipc.handle(IPC_CHANNELS.modelServersRemove, (_event, id: unknown) => mutate(() => registry.remove(text(id, 64))));
   ipc.handle(IPC_CHANNELS.modelServersCheck, (_event, id: unknown) =>
-    registry.check(typeof id === 'string' ? text(id, 64) : undefined)
+    registry.check(typeof id === 'string' ? text(id, 64) : undefined, { lookAgain: true })
   );
 }

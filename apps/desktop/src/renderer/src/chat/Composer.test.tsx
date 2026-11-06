@@ -560,10 +560,23 @@ describe('the attach shortcut', () => {
     const onClick = vi.fn();
     mount({ onSend, blockedReason: 'No local model.', blockedAction: { label: 'Open Models', onClick } });
     expect(host?.querySelector('[data-testid="composer-blocked-reason"]')?.textContent).toContain('No local model.');
+    expect(host?.querySelector('[data-testid="composer-blocked-reason"]')?.getAttribute('role')).toBe('alert');
     act(() => (host?.querySelector('[data-testid="composer-blocked-action-btn"]') as HTMLElement).click());
     expect(onClick).toHaveBeenCalledOnce();
     expect((host?.querySelector('[data-testid="chat-send-btn"]') as HTMLButtonElement).disabled).toBe(true);
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('shows a blocking notice in place of the reason text and still blocks sending', () => {
+    mount({
+      blockedReason: 'Ollama is not running.',
+      blockedNotice: <span data-testid="composer-test-notice">notice</span>,
+    });
+    const banner = host?.querySelector('[data-testid="composer-blocked-reason"]');
+    expect(banner?.querySelector('[data-testid="composer-test-notice"]')).not.toBeNull();
+    expect(banner?.textContent).not.toContain('Ollama is not running.');
+    expect(banner?.getAttribute('role')).toBe('group');
+    expect((host?.querySelector('[data-testid="chat-send-btn"]') as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('advertises the chord on the attach button', () => {

@@ -25,6 +25,7 @@ import {
 } from './shared';
 import { SIGNUP_RISK_REVIEW_SEARCH_KEYS } from './signupRiskReviewSearch';
 import BulkAbuseResponseModal from './Users/BulkAbuseResponseModal';
+import { SignupRiskAutoApprovals } from './SignupRiskAutoApprovals';
 import { useOpenUserProfile } from './Users/Profile/useOpenUserProfile';
 import {
   useSignupRiskReviewDecision,
@@ -394,6 +395,11 @@ export const SignupRiskReviewTab: React.FC = () => {
           Suspend accounts
         </Button>
       </BulkActionBar>
+      <SignupRiskAutoApprovals
+        rows={reviews.data?.autoApproved ?? []}
+        now={now}
+        onRetry={() => void reviews.refetch()}
+      />
 
       <ActionDialog
         open={approving !== null}

@@ -111,6 +111,7 @@ describe('GET /api/admin/shadow-detections', () => {
         detector: 'signupNetworkBurst',
         policyVersion: 1,
         recorded: 4,
+        noAction: 0,
         confirmedAbuse: 1,
         legitimateHuman: 1,
         legitimateAutomation: 0,

@@ -1,5 +1,5 @@
 import type { AgentState, AgentView } from '../roster';
-import type { Epithet } from './agentPersona';
+import type { Epithet } from '@shared/agentPersona';
 import type { CharacterId, Pose } from './tavernArt';
 
 export type TavernZone = 'workbench' | 'bar' | 'hearth' | 'benches' | 'door';

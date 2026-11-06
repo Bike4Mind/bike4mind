@@ -99,6 +99,10 @@ export interface ModelServerLaunchView {
   canStart: boolean;
   /** Why Desktop cannot start it, or why its last start or run ended. */
   problem: string | null;
+  /** "This computer" only: Desktop found no Ollama program to start. Information, not a fault, for hosted-only users. */
+  programMissing?: string;
+  /** "This computer" only: Desktop has not finished looking for the Ollama program, so it cannot say yet. */
+  programPending?: boolean;
   /** Launch variables read from a server Desktop did not start, by name; null when Desktop cannot read them. */
   observed: Record<string, string> | null;
   /** The KV cache type fit sizes this server's models with. */
@@ -321,6 +325,8 @@ export function serverManagement(server: Pick<ModelServerView, 'local' | 'kind' 
 
 export const LOCAL_SERVER_ID = 'local';
 export const LOCAL_SERVER_NAME = 'This computer';
+/** The one wording for "no Ollama answers on this computer", in main and the renderer alike; a title, so no period. */
+export const OLLAMA_NOT_RUNNING = 'Ollama is not running on this computer';
 
 /** Runtime ids of saved servers, inside `local:<runtime>:<model>` model ids. */
 export const SERVER_RUNTIME_PREFIX = 'srv-';

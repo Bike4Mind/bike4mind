@@ -588,6 +588,11 @@ function LaunchSection({
           {launch.problem}
         </Alert>
       )}
+      {launch.programMissing && (
+        <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-launch-program-missing">
+          {launch.programMissing}
+        </Typography>
+      )}
       {open && (
         <Stack spacing={1} data-testid="model-servers-launch-form">
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>

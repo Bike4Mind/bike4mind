@@ -38,6 +38,8 @@ const mocks = vi.hoisted(() => ({
   markDisputeUserGone: vi.fn(),
   resolveLostUserDispute: vi.fn(),
   resolveWonDispute: vi.fn(),
+  recordBillingEvent: vi.fn(),
+  publishSubscriptionUpdated: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -97,7 +99,9 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: vi.fn() }));
-vi.mock('@server/utils/eventBus', () => ({ StripeEvents: {} }));
+vi.mock('@server/utils/eventBus', () => ({
+  StripeEvents: { CustomerSubscriptionUpdated: { publish: mocks.publishSubscriptionUpdated } },
+}));
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   CustomerType: {},
   customerExists: vi.fn(),
@@ -141,6 +145,8 @@ vi.mock('@server/billing/paymentFailureNotice', () => ({
   notifyPaymentFailed: mocks.notifyPaymentFailed,
   notifyCanceledForNonPayment: mocks.notifyCanceledForNonPayment,
 }));
+// The store itself (stage check, owner, projection) is covered in server/billing/billingEventStore.test.ts.
+vi.mock('@server/billing/billingEventStore', () => ({ recordBillingEvent: mocks.recordBillingEvent }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' }, App: { stage: 'test' } } }));
 
 import '@pages/api/stripe/webhook';
@@ -213,6 +219,14 @@ describe('signup unlock forfeits', () => {
 
   it('forfeits on a refunded charge before its credit purchase lookup', async () => {
     const charge = { id: 'ch_1', customer: 'cus_1', payment_intent: 'pi_1', refunds: { data: [{ id: 're_1' }] } };
+
+    await deliver({ type: 'charge.refunded', data: { object: charge } });
+
+    expect(mocks.forfeitHeldUnlockForRefund).toHaveBeenCalledExactlyOnceWith(charge, logger);
+  });
+
+  it('forfeits on a refunded charge that carries no refund list', async () => {
+    const charge = { id: 'ch_1', customer: 'cus_1', payment_intent: 'pi_1' };
 
     await deliver({ type: 'charge.refunded', data: { object: charge } });
 
@@ -995,5 +1009,108 @@ describe('charge.dispute.created - dispute record', () => {
       subject: 'organization',
       subjectId: 'org_1',
     });
+  });
+});
+
+describe('BillingEvent recording', () => {
+  const dispute = {
+    id: 'evt_dispute_1',
+    type: 'charge.dispute.created',
+    data: {
+      object: { id: 'dp_1', amount: 3000, currency: 'usd', reason: 'fraudulent', payment_intent: 'pi_1', charge: null },
+    },
+  };
+
+  beforeEach(() => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+    mocks.flagDisputePending.mockResolvedValue({ deactivatedKeys: false });
+  });
+
+  it('records the event after its side effects, with the owner the handler resolved', async () => {
+    const res = await deliver(dispute);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.recordBillingEvent).toHaveBeenCalledExactlyOnceWith(
+      dispute,
+      { owner: { ownerType: 'user', ownerId: 'user_1' } },
+      logger
+    );
+    expect(mocks.subtractCredits.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.recordBillingEvent.mock.invocationCallOrder[0]
+    );
+    expect(mocks.flagDisputePending.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.recordBillingEvent.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('records nothing and fails the delivery when a side effect fails, so the redelivery re-runs it', async () => {
+    mocks.subtractCredits.mockRejectedValueOnce(new Error('mongo down'));
+
+    await expect(deliver(dispute)).rejects.toThrow('mongo down');
+    expect(mocks.recordBillingEvent).not.toHaveBeenCalled();
+
+    const res = await deliver(dispute);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.subtractCredits).toHaveBeenCalledTimes(2);
+    expect(mocks.recordBillingEvent).toHaveBeenCalledOnce();
+  });
+
+  it('re-runs a replay under the per-entity key, which dedupes the clawback, and hands the same event id to the store', async () => {
+    await deliver(dispute);
+    mocks.subtractCredits.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }));
+
+    const res = await deliver(dispute);
+
+    expect(res._getStatusCode()).toBe(200);
+    // The duplicate-key clawback is a no-op, so the lot clawback that follows it runs only once.
+    expect(mocks.clawbackCreditLotsByStripeRef).toHaveBeenCalledOnce();
+    expect(mocks.recordBillingEvent).toHaveBeenCalledTimes(2);
+    expect(mocks.recordBillingEvent.mock.calls.map(([event]) => event.id)).toEqual(['evt_dispute_1', 'evt_dispute_1']);
+  });
+
+  it('records a worker-handled event once its publish succeeded, and not when the publish fails', async () => {
+    const updated = {
+      id: 'evt_upd_1',
+      type: 'customer.subscription.updated',
+      data: { object: { id: 'sub_1', object: 'subscription' } },
+    };
+
+    await deliver(updated);
+    expect(mocks.publishSubscriptionUpdated).toHaveBeenCalledWith({ subscriptionId: 'sub_1' });
+    expect(mocks.recordBillingEvent).toHaveBeenCalledExactlyOnceWith(updated, {}, logger);
+
+    mocks.publishSubscriptionUpdated.mockRejectedValueOnce(new Error('bus down'));
+    await expect(deliver(updated)).rejects.toThrow('bus down');
+    expect(mocks.recordBillingEvent).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    'invoice.paid',
+    'invoice.finalized',
+    'customer.subscription.trial_will_end',
+    'customer.subscription.created',
+  ])('hands an unhandled %s to the store and does nothing else', async type => {
+    const event = { id: 'evt_x', type, data: { object: { id: 'in_1', object: 'invoice' } } };
+
+    const res = await deliver(event);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.recordBillingEvent).toHaveBeenCalledExactlyOnceWith(event, {}, logger);
+    expect(mocks.markPastDue).not.toHaveBeenCalled();
+    expect(mocks.updateByStripeSubscriptionId).not.toHaveBeenCalled();
+    expect(mocks.publishSubscriptionUpdated).not.toHaveBeenCalled();
+    expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
+  });
+
+  it('marks a payment failure whose dunning email this delivery sent', async () => {
+    mocks.notifyPaymentFailed.mockResolvedValueOnce(true);
+
+    await deliver(failedInvoice());
+
+    expect(mocks.recordBillingEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'invoice.payment_failed' }),
+      { data: { dunningNoticeSent: true } },
+      logger
+    );
   });
 });
