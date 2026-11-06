@@ -83,6 +83,20 @@ describe('findBanEvasionLinks', () => {
     });
   });
 
+  it('keeps the timing window exact instead of rounding to whole hours', () => {
+    const windowMs = DEFAULT_DEVICE_LINK_POLICY.timingWindowHours * HOUR;
+    const link = (gapMs: number) =>
+      findBanEvasionLinks({
+        account: account('new', { networkPrefix: '192.0.2.0/24', asn: 64502 }),
+        blocked: [account('banned', { signedUpAt: new Date(T0.getTime() - gapMs), asn: 64501 })],
+        networkSpread: spread([[RARE, 1]]),
+        commonFingerprints: new Set(),
+      });
+
+    expect(link(windowMs).linked).toBe(true);
+    expect(link(windowMs + 0.4 * HOUR)).toEqual({ linked: false, reason: 'uncorroborated' });
+  });
+
   it('never links on a mainstream device, however close in time and network', () => {
     const banned = account('banned', { deviceKeys: [COMMON] });
     const result = findBanEvasionLinks({

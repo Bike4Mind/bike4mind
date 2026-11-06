@@ -1512,8 +1512,9 @@ export const AutoContainmentConfigSchema = z.object({
   strongLinkWindowHours: z.number().int().min(0).max(720).prefault(72),
   /**
    * Ban-evasion device linkage (security/autoContainment/deviceLink.ts): a new account used from the
-   * same device (screen, pixel ratio, user agent) as a banned account that signed up within this many
-   * hours of it is recorded and assessed at once. 0 turns the rule off.
+   * same uncommon device (screen, pixel ratio, user agent) as a banned account, plus one more agreeing
+   * signal (signups within this many hours, the same signup network, or the same uncommon TLS
+   * fingerprint), is recorded and assessed at once. 0 turns the rule off.
    */
   deviceLinkWindowHours: z.number().int().min(0).max(720).prefault(168),
   /** A device seen on signups from this many distinct networks in 30 days is mainstream, never evidence. */

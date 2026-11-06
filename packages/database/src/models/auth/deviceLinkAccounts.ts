@@ -13,6 +13,7 @@ export type DeviceLinkRow = {
   asn: number | null;
   isDatacenter: boolean | null;
   ja4: string | null;
+  isBanned?: boolean;
   devices: { screenResolution: string | null; devicePixelRatio: number | null; userAgent: string | null }[];
 };
 
@@ -22,12 +23,14 @@ const MAX_USER_AGENTS = 50;
 type LeanDeviceUser = {
   _id: { toString(): string };
   createdAt?: Date | null;
+  isBanned?: boolean | null;
   signupMeta?: { ip?: string | null; asn?: number | null; isDatacenter?: boolean | null; ja4?: string | null } | null;
   loginRecords?: { screenResolution?: string | null; devicePixelRatio?: number | null; userAgent?: string | null }[];
 };
 
 const PROJECTION = {
   createdAt: 1,
+  isBanned: 1,
   'signupMeta.ip': 1,
   'signupMeta.asn': 1,
   'signupMeta.isDatacenter': 1,
@@ -45,6 +48,7 @@ function toRow(user: LeanDeviceUser): DeviceLinkRow {
     asn: user.signupMeta?.asn ?? null,
     isDatacenter: user.signupMeta?.isDatacenter ?? null,
     ja4: user.signupMeta?.ja4 ?? null,
+    isBanned: user.isBanned === true,
     devices: (user.loginRecords ?? []).map(record => ({
       screenResolution: record.screenResolution ?? null,
       devicePixelRatio: record.devicePixelRatio ?? null,
