@@ -50,6 +50,7 @@ const ACTION_LABELS: Record<AdminApprovalAction, string> = {
   'user.subscription.grant': 'User subscription grant',
   'user.impersonate_admin': 'Impersonate an admin',
   'user.delete_admin': 'Delete an admin',
+  'user.schedule_admin_deletion': 'Schedule deletion for an admin',
 };
 
 const summaryOf = (row: AdminApprovalRow) => row.summary ?? ACTION_LABELS[row.action];

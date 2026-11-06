@@ -7,7 +7,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { ACCOUNT_DELETION_GRACE_DAYS, isThrottleExempt } from '@bike4mind/common';
 import { useDeleteUser, useLoginAsUser } from '@client/app/hooks/data/user';
-import { isApprovalPending } from '@client/app/hooks/data/adminApprovals';
+import { isApprovalPending, notifyApprovalSubmitted } from '@client/app/hooks/data/adminApprovals';
 import { useForceResetMFA } from '@client/app/hooks/data/mfa';
 import { useSendSystemMessage } from '@client/app/hooks/data/inbox';
 import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, undoAdminReason, useUndoToast } from '../../../shared';
@@ -21,8 +21,9 @@ const useAdminUserPost = (userId: string, failure: string) => {
   const queryClient = useQueryClient();
   const mutation = useMutation({
     mutationFn: async ({ path, body }: { path: string; body?: Record<string, unknown> }) =>
-      (await api.post(`/api/admin/users/${encodeURIComponent(userId)}/${path}`, body)).data,
-    onSuccess: () => {
+      (await api.post<unknown>(`/api/admin/users/${encodeURIComponent(userId)}/${path}`, body)).data,
+    onSuccess: (data: unknown) => {
+      if (isApprovalPending(data)) return notifyApprovalSubmitted(queryClient);
       void queryClient.invalidateQueries({ queryKey: ['users'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'email-verification'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'users', userId] });
@@ -152,7 +153,9 @@ export const EmailVerificationDialog: React.FC<ProfileDialogProps> = ({ user, on
     onClose();
     showUndo({
       message: verifying ? 'Email marked verified' : 'Email marked unverified',
-      onUndo: () => post(verifying ? 'unverify-email' : 'verify-email', { reason: undoAdminReason(reason) }),
+      onUndo: async () => {
+        await post(verifying ? 'unverify-email' : 'verify-email', { reason: undoAdminReason(reason) });
+      },
       onViewAudit: onAudit,
     });
   };
@@ -192,7 +195,9 @@ export const ApiKeyTrustDialog: React.FC<ProfileDialogProps> = ({ user, onClose,
     onClose();
     showUndo({
       message: approving ? 'Trusted for personal API keys' : 'API key trust removed',
-      onUndo: () => post('api-key-trust', { approved: !approving, reason: undoAdminReason(reason) }),
+      onUndo: async () => {
+        await post('api-key-trust', { approved: !approving, reason: undoAdminReason(reason) });
+      },
       onViewAudit: onAudit,
     });
   };
@@ -233,7 +238,9 @@ export const NewAccountSpendCapDialog: React.FC<ProfileDialogProps> = ({ user, o
     onClose();
     showUndo({
       message: lifting ? 'New-account spend cap lifted' : 'New-account spend cap restored',
-      onUndo: () => post('new-account-spend-cap', { lifted: !lifting, reason: undoAdminReason(reason) }),
+      onUndo: async () => {
+        await post('new-account-spend-cap', { lifted: !lifting, reason: undoAdminReason(reason) });
+      },
       onViewAudit: onAudit,
     });
   };
@@ -280,7 +287,9 @@ export const InternalAccountDialog: React.FC<ProfileDialogProps> = ({ user, onCl
     onClose();
     showUndo({
       message: marking ? 'Marked as internal' : 'No longer marked as internal',
-      onUndo: () => post('internal', { isInternal: !marking, reason: undoAdminReason(reason) }),
+      onUndo: async () => {
+        await post('internal', { isInternal: !marking, reason: undoAdminReason(reason) });
+      },
       onViewAudit: onAudit,
     });
   };
@@ -396,8 +405,9 @@ export const ScheduleDeletionDialog: React.FC<ProfileDialogProps> = ({ user, onC
   const dateInvalid = !!receivedAt && receivedAt > today;
 
   const handleConfirm = async (reason: string) => {
-    await post('schedule-deletion', { receivedAt, reason });
+    const response: unknown = await post('schedule-deletion', { receivedAt, reason });
     onClose();
+    if (isApprovalPending(response)) return;
     toast.success(`Deletion scheduled for ${displayName(user)}`);
   };
 

@@ -13,6 +13,7 @@ export const ADMIN_APPROVAL_ACTIONS = [
   'user.subscription.grant',
   'user.impersonate_admin',
   'user.delete_admin',
+  'user.schedule_admin_deletion',
 ] as const;
 export type AdminApprovalAction = (typeof ADMIN_APPROVAL_ACTIONS)[number];
 
