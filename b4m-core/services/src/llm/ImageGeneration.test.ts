@@ -593,6 +593,25 @@ describe('ImageGenerationService.invoke (image-parameter passthrough)', () => {
     expect(questInput.promptMeta.model.parameters).not.toHaveProperty('output_format');
   });
 
+  it('omits output_format from promptMeta.parameters for flux-3-image, which picks its own format', async () => {
+    const startImageGenerationProcess = vi.fn(async () => undefined);
+    const { service, create } = makeInvokeService(startImageGenerationProcess);
+
+    await service.invoke({
+      body: {
+        sessionId: 'session1',
+        prompt: 'a cat',
+        model: ImageModels.FLUX_3_IMAGE,
+        fabFileIds: [],
+        output_format: 'png',
+      } as any,
+      userId: 'user1',
+    });
+
+    const questInput = create.mock.calls[0][0];
+    expect(questInput.promptMeta.model.parameters).not.toHaveProperty('output_format');
+  });
+
   it('steps a gpt-image-2 selection down to gpt-image-1.5 when background is transparent', async () => {
     const startImageGenerationProcess = vi.fn(async () => undefined);
     const { service, create } = makeInvokeService(startImageGenerationProcess);

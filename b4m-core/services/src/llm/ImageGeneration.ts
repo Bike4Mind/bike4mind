@@ -36,6 +36,7 @@ import {
   GEMINI_IMAGE_MODELS,
   isBflImageModel,
   takesBflInputImageList,
+  supportsBflOutputFormat,
   getMaxReferenceImages,
   isGPTImageModel,
   rejectsTransparentBackground,
@@ -101,6 +102,9 @@ import type { ImageCreditHolds } from './imageCreditHolds';
 import { shouldSummarizeSession } from './ChatCompletionFeatures';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
+
+/** BFL models with no output_format field (flux-3-image): BFL picks the format, so none is persisted. */
+const bflPicksOutputFormat = (model: string): boolean => isBflImageModel(model) && !supportsBflOutputFormat(model);
 
 /**
  * The tier a GPT-Image request is both billed at and rendered at: standard -> medium,
@@ -365,7 +369,7 @@ export class ImageGenerationService {
         safety_tolerance: rest.safety_tolerance,
         prompt_upsampling: rest.prompt_upsampling,
         seed: rest.seed,
-        output_format: rest.output_format,
+        output_format: bflPicksOutputFormat(model) ? undefined : rest.output_format,
         background: rest.background,
         // `null` means "unset" for seed/output_format (both nullable), and PromptMetaZodSchema
         // declares these as plain optional numbers/enums, not nullable - a persisted `null` (the
@@ -1697,7 +1701,7 @@ export class ImageGenerationService {
         ...(seed != null && { seed }),
         ...(safety_tolerance !== undefined && { safety_tolerance }),
         prompt_upsampling,
-        ...(output_format && { output_format }),
+        ...(output_format && !bflPicksOutputFormat(model) && { output_format }),
         ...(background && { background }),
       };
       const derivedFrom = lineageOf(imageSource, fileImage, referenceImages);
