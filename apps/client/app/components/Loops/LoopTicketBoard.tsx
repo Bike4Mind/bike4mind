@@ -21,8 +21,8 @@ import {
   type ColorPaletteProp,
 } from '@mui/joy';
 import {
-  DEFAULT_WORK_ITEM_PRIORITY,
   desktopStagesOf,
+  LOOP_SERVICE_LEVEL_HOURS,
   WORK_ITEM_PRIORITIES,
   workItemPriorityRank,
   type ILoop,
@@ -61,11 +61,19 @@ const PRIORITY_CHIP: Record<WorkItemPriority, { color: ColorPaletteProp; variant
   p3: { color: 'neutral', variant: 'outlined' },
 };
 
+/** Untriaged tickets sort after p3: the scheduler picks none of them until a triage run sets a priority. */
+const rankOf = (ticket: ILoopTicket) =>
+  ticket.priority ? workItemPriorityRank(ticket.priority) : WORK_ITEM_PRIORITIES.length;
+
 const byPriorityThenAge = (a: ILoopTicket, b: ILoopTicket) =>
-  workItemPriorityRank(a.priority) - workItemPriorityRank(b.priority) || a.createdAt.localeCompare(b.createdAt);
+  rankOf(a) - rankOf(b) || a.createdAt.localeCompare(b.createdAt);
+
+/** The add modal's priority choice: none leaves the ticket to the loop's triage run. */
+const TRIAGE = 'triage';
 
 function TicketCard({
   ticket,
+  loop,
   stages,
   desktop,
   runner,
@@ -73,6 +81,7 @@ function TicketCard({
   onViewRun,
 }: {
   ticket: ILoopTicket;
+  loop: Pick<ILoop, 'serviceLevelHours'>;
   stages: string[];
   /** The ticket's stage is worked by a desktop runner, never by a cloud run. */
   desktop: boolean;
@@ -85,13 +94,57 @@ function TicketCard({
     <Card size="sm" variant="outlined" data-testid={`loop-ticket-${ticket.id}`}>
       <Typography level="title-sm">{ticket.title}</Typography>
       <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
-        <Chip size="sm" {...PRIORITY_CHIP[ticket.priority]} data-testid="loop-ticket-priority-chip">
-          {ticket.priority.toUpperCase()}
-        </Chip>
+        {ticket.priority ? (
+          <Chip size="sm" {...PRIORITY_CHIP[ticket.priority]} data-testid="loop-ticket-priority-chip">
+            {ticket.priority.toUpperCase()}
+          </Chip>
+        ) : (
+          !ticket.epic && (
+            <Chip
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              title="The loop's next triage run sets its priority"
+              data-testid="loop-ticket-untriaged"
+            >
+              Untriaged
+            </Chip>
+          )
+        )}
+        {ticket.demoted && (
+          <Chip
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            title="Moved to p3 by the loop's p2 runs per day; set a priority to keep it"
+            data-testid="loop-ticket-demoted"
+          >
+            Demoted
+          </Chip>
+        )}
+        {ticket.stale && ticket.priority && ticket.priority in LOOP_SERVICE_LEVEL_HOURS && (
+          <Chip
+            size="sm"
+            variant="soft"
+            color="warning"
+            title={`Waiting past its ${
+              loop.serviceLevelHours?.[ticket.priority as 'p0' | 'p1'] ??
+              LOOP_SERVICE_LEVEL_HOURS[ticket.priority as 'p0' | 'p1']
+            }h service level`}
+            data-testid="loop-ticket-stale"
+          >
+            Overdue
+          </Chip>
+        )}
+        {ticket.epic && (
+          <Chip size="sm" variant="soft" color="neutral" data-testid="loop-ticket-epic">
+            Epic: {ticket.childrenDone ?? 0}/{ticket.dependencies.length} children done
+          </Chip>
+        )}
         <Chip size="sm" variant="soft" color={STATUS_COLOR[ticket.status]}>
           {STATUS_LABEL[ticket.status]}
         </Chip>
-        {ticket.status === 'blocked' && ticket.blockedOn === 'dependencies' && (
+        {ticket.status === 'blocked' && ticket.blockedOn === 'dependencies' && !ticket.epic && (
           <Chip size="sm" variant="outlined" color="neutral" data-testid="loop-ticket-waiting-deps">
             Waiting on dependencies
           </Chip>
@@ -158,8 +211,9 @@ function TicketCard({
         </Select>
         <Select
           size="sm"
-          value={ticket.priority}
-          disabled={moveTicket.isPending || ticket.status === 'in_progress'}
+          value={ticket.priority ?? null}
+          placeholder="Triage"
+          disabled={moveTicket.isPending || ticket.status === 'in_progress' || ticket.epic}
           onChange={(_, priority) =>
             priority && priority !== ticket.priority && moveTicket.mutate({ id: ticket.id, priority })
           }
@@ -181,7 +235,7 @@ function AddTicketModal({ loop, onClose }: { loop: ILoop; onClose: () => void })
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [stage, setStage] = useState(loop.stages[0]);
-  const [priority, setPriority] = useState<WorkItemPriority>(DEFAULT_WORK_ITEM_PRIORITY);
+  const [priority, setPriority] = useState<WorkItemPriority | typeof TRIAGE>(TRIAGE);
   const [error, setError] = useState<string>();
 
   const submit = () => {
@@ -197,7 +251,7 @@ function AddTicketModal({ loop, onClose }: { loop: ILoop; onClose: () => void })
         title: trimmed,
         ...(description.trim() && { description: description.trim() }),
         stage,
-        priority,
+        ...(priority !== TRIAGE && { priority }),
       },
       { onSuccess: onClose }
     );
@@ -243,6 +297,7 @@ function AddTicketModal({ loop, onClose }: { loop: ILoop; onClose: () => void })
               onChange={(_, p) => p && setPriority(p)}
               data-testid="loop-ticket-priority-select-new"
             >
+              <Option value={TRIAGE}>Triage</Option>
               {WORK_ITEM_PRIORITIES.map(p => (
                 <Option key={p} value={p}>
                   {p.toUpperCase()}
@@ -300,12 +355,7 @@ export default function LoopTicketBoard({
   const stageIndex = (t: ILoopTicket) => loop.stages.indexOf(t.stage ?? '');
   const ready = all
     .filter(t => t.ready)
-    .sort(
-      (a, b) =>
-        workItemPriorityRank(a.priority) - workItemPriorityRank(b.priority) ||
-        stageIndex(b) - stageIndex(a) ||
-        a.createdAt.localeCompare(b.createdAt)
-    );
+    .sort((a, b) => rankOf(a) - rankOf(b) || stageIndex(b) - stageIndex(a) || a.createdAt.localeCompare(b.createdAt));
 
   return (
     <Stack gap={2}>
@@ -349,6 +399,7 @@ export default function LoopTicketBoard({
               <TicketCard
                 key={ticket.id}
                 ticket={ticket}
+                loop={loop}
                 stages={loop.stages}
                 desktop={!!ticket.stage && desktopStages.has(ticket.stage)}
                 runner={data?.runner}

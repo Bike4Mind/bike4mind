@@ -23,6 +23,7 @@ import {
   validateLoopModel,
   validateLoopName,
   validateLoopOversees,
+  validateLoopPriorityPolicy,
   validateLoopStageConfig,
   validateLoopStages,
   validateLoopTools,
@@ -86,6 +87,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
     if (body.oversees !== undefined) {
       patch.oversees = await validateLoopOversees(body.oversees, existing.id, req.user!.id);
     }
+    Object.assign(patch, validateLoopPriorityPolicy(body as Record<string, unknown>));
     const now = new Date();
     if (body.status !== undefined) Object.assign(patch, nextStatusPatch(existing, body.status, now));
     // A new interval on a live loop moves its next run, not just the one after. An unchanged one (the edit

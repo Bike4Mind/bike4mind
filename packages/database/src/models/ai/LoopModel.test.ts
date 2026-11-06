@@ -185,7 +185,9 @@ describe('LoopRepository', () => {
     const earlier = new Date(now.getTime() - 60_000);
     const alreadyDue = await create({ status: 'live', nextRunAt: earlier });
 
-    for (const loop of [live, paused, alreadyDue]) await loopRepository.makeDueNow(loop.id, now);
+    expect(await loopRepository.makeDueNow(live.id, now)).toBe(true);
+    expect(await loopRepository.makeDueNow(paused.id, now)).toBe(false);
+    expect(await loopRepository.makeDueNow(alreadyDue.id, now)).toBe(true);
 
     expect((await loopRepository.findByIdAndUserId(live.id, USER))?.nextRunAt).toEqual(now);
     expect((await loopRepository.findByIdAndUserId(paused.id, USER))?.nextRunAt).toEqual(later);
@@ -257,6 +259,35 @@ describe('LoopRepository', () => {
     expect(p?.nextRunAt).toEqual(now);
     expect(p?.leaseUntil).toBeUndefined();
     expect(p?.hold).toBeUndefined();
+  });
+
+  it('deferUntil writes a p2-cap hold the same way, replacing any other hold', async () => {
+    const now = new Date();
+    const midnight = new Date(now.getTime() + 3_600_000);
+    const loop = await create({ status: 'live', nextRunAt: now, hold: { kind: 'capacity', at: now } });
+    await loopRepository.deferUntil(loop.id, midnight, now, 'priority_budget');
+    expect(await loopRepository.findById(loop.id)).toMatchObject({
+      nextRunAt: midnight,
+      hold: { kind: 'priority_budget', until: midnight, at: now },
+    });
+  });
+
+  it('stores the priority settings and validates their ranges', async () => {
+    const loop = await create({
+      serviceLevelHours: { p0: 2 },
+      p2RunsPerDay: 3,
+      triageModel: 'cheap',
+      escalationModel: 'strong',
+      stageConfig: [{ stage: 'todo', escalationModel: 'stage-strong' }],
+    });
+    expect(await loopRepository.findById(loop.id)).toMatchObject({
+      serviceLevelHours: { p0: 2 },
+      p2RunsPerDay: 3,
+      triageModel: 'cheap',
+      escalationModel: 'strong',
+      stageConfig: [{ stage: 'todo', escalationModel: 'stage-strong' }],
+    });
+    await expect(create({ p2RunsPerDay: 1.5 })).rejects.toThrow();
   });
 
   describe('holds and alarms', () => {
@@ -353,7 +384,18 @@ describe('LoopRepository', () => {
       await create({ status: 'live', nextRunAt: now });
       await create({ status: 'live', nextRunAt: earlier, activeExecutionId: 'exec-1' });
       await create({ status: 'paused', nextRunAt: earlier });
-      expect((await loopRepository.listPastDueLive(earlier, 10)).map(loop => loop.id)).toEqual([older.id, old.id]);
+      await create({ status: 'live', nextRunAt: earlier, hold: { kind: 'capacity', at: now } });
+      await create({ status: 'live', nextRunAt: earlier, idleStreak: 2 });
+      const zeroStreak = await create({
+        status: 'live',
+        nextRunAt: new Date(earlier.getTime() - 30_000),
+        idleStreak: 0,
+      });
+      expect((await loopRepository.listPastDueLive(earlier, 10)).map(loop => loop.id)).toEqual([
+        older.id,
+        zeroStreak.id,
+        old.id,
+      ]);
     });
   });
 

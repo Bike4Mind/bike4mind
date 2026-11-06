@@ -28,6 +28,10 @@ export interface AgentExecutionTrace {
   error: string | null;
   steps: IAgentStep[];
   totalIterations: number | null;
+  model?: string;
+  /** Loop runs only. */
+  escalated?: boolean;
+  loopRunKind?: 'triage';
   children: AgentExecutionChildSnapshot[];
 }
 

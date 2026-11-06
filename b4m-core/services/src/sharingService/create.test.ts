@@ -592,6 +592,113 @@ describe('sharingService - createInvite (organization arm authority)', () => {
       { db }
     );
 
+  it('keeps an exact email recipient without an account so they can register before accepting', async () => {
+    db.users.findByIds.mockResolvedValue([]);
+    const invite = await createInvite(
+      asUser(OWNER_ID),
+      { id: ORG_ID, type: InviteType.Organization, permissions: [], recipients: [' New@Example.com '] },
+      { db }
+    );
+    expect(invite.recipients?.pending).toEqual(['new@example.com']);
+    expect(invite.remaining).toBe(1);
+    expect(invite.typedRecipients).toEqual(['new@example.com']);
+  });
+
+  it('refuses an unresolved organization username rather than making an unusable invite', async () => {
+    db.users.findByIds.mockResolvedValue([]);
+    await expect(
+      createInvite(
+        asUser(OWNER_ID),
+        { id: ORG_ID, type: InviteType.Organization, permissions: [], recipients: ['unknown-user'] },
+        { db }
+      )
+    ).rejects.toThrow('Could not find a user');
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['email', ' New@Example.com '],
+    ['id', RECIPIENT_ID],
+    ['username', 'new-user'],
+  ])('rejects a pending email recipient invited again by %s', async (recipientType, recipient) => {
+    const registeredUser = { id: RECIPIENT_ID, email: 'New@Example.com', username: 'new-user' };
+    db.users.findByIds.mockResolvedValue(recipientType === 'id' ? [registeredUser] : []);
+    db.users.findAllByEmailsOrUsernames.mockResolvedValue(recipientType === 'username' ? [registeredUser] : []);
+    db.invites.findAllByDocumentId.mockResolvedValue([
+      {
+        type: InviteType.Organization,
+        remaining: 1,
+        expiresAt: new Date(Date.now() + 60000),
+        recipients: { pending: ['NEW@example.com'] },
+      },
+    ]);
+
+    await expect(
+      createInvite(
+        asUser(OWNER_ID),
+        { id: ORG_ID, type: InviteType.Organization, permissions: [], recipients: [recipient] },
+        { db }
+      )
+    ).rejects.toThrow(new BadRequestError('A recipient already has a pending organization invitation'));
+
+    expect(db.invites.create).not.toHaveBeenCalled();
+    expect(db.invites.findAllByDocumentId).toHaveBeenCalledExactlyOnceWith(ORG_ID);
+  });
+
+  it('stores one normalized pending recipient when email and account aliases name the same person', async () => {
+    const registeredUser = { id: RECIPIENT_ID, email: 'New@Example.com', username: 'new-user' };
+    db.users.findByIds.mockResolvedValue([registeredUser]);
+    db.users.findAllByEmailsOrUsernames.mockResolvedValue([registeredUser]);
+    db.organizations.findById.mockResolvedValue({ ...organization, seats: 3 });
+
+    const invite = await createInvite(
+      asUser(OWNER_ID),
+      {
+        id: ORG_ID,
+        type: InviteType.Organization,
+        permissions: [],
+        recipients: [RECIPIENT_ID, 'new-user', ' NEW@example.com '],
+      },
+      { db }
+    );
+
+    expect(invite.recipients?.pending).toEqual(['new@example.com']);
+    expect(invite.remaining).toBe(1);
+  });
+
+  it.each(['expired', 'exhausted', 'other-type'] as const)(
+    'does not reserve an organization seat for an %s invitation',
+    async state => {
+      db.organizations.findById.mockResolvedValue({ ...organization, seats: 3 });
+      db.invites.findAllByDocumentId.mockResolvedValue([
+        {
+          type: state === 'other-type' ? InviteType.Project : InviteType.Organization,
+          remaining: state === 'exhausted' ? 0 : 1,
+          expiresAt: state === 'expired' ? new Date(0) : new Date(Date.now() + 60000),
+          recipients: { pending: ['R@x.com'] },
+        },
+      ]);
+      await expect(create(asUser(OWNER_ID))).resolves.toMatchObject({ id: 'invite-org-1' });
+    }
+  );
+
+  it.each([undefined, new Date('2099-01-01')])(
+    'reserves a seat for an active invitation with expiry %s',
+    async expiresAt => {
+      db.organizations.findById.mockResolvedValue({ ...organization, seats: 3 });
+      db.invites.findAllByDocumentId.mockResolvedValue([
+        {
+          type: InviteType.Organization,
+          remaining: 1,
+          expiresAt,
+          recipients: { pending: ['earlier@example.com'] },
+        },
+      ]);
+      await expect(create(asUser(OWNER_ID))).rejects.toThrow('Organization is full');
+      expect(db.invites.create).not.toHaveBeenCalled();
+    }
+  );
+
   it('allows the billing owner to create an org invite', async () => {
     const invite = await create(asUser(OWNER_ID));
 

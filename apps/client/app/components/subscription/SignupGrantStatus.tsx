@@ -26,6 +26,9 @@ export default function SignupGrantStatus() {
     <Stack spacing={1} data-testid="signup-grant-status">
       <Typography level="body-sm" data-testid="signup-grant-released">
         {grant.creditsReleased.toLocaleString('en-US')} signup credits released.
+        {grant.inviteBonusPaid && grant.inviteBonusPaid > 0
+          ? ` Plus a ${grant.inviteBonusPaid.toLocaleString('en-US')} invite bonus.`
+          : ''}
         {remaining > 0
           ? ` ${remaining.toLocaleString('en-US')} more credits are still locked.`
           : ' Your signup grant is fully released.'}

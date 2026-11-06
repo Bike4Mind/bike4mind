@@ -216,7 +216,9 @@ export function buildLoopDirectiveTools({
             throw new BadRequestError(`loop is ${target.status}; only a live loop can be run now`);
           }
           await checkDirectiveCap();
-          await loopRepository.makeDueNow(target.id, new Date());
+          if (!(await loopRepository.makeDueNow(target.id, new Date()))) {
+            throw new ConflictError('loop changed before it could be run; it is no longer live');
+          }
           const logged = await logAction(overseer, target, 'run_now', 'Run now', reason);
           return {
             id: logged.id,

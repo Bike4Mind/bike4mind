@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   csrf: vi.fn(() => 'csrf-middleware'),
   rate: vi.fn(() => 'rate-middleware'),
   eligibility: vi.fn(),
+  bonus: vi.fn(),
 }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config: unknown) => {
@@ -27,11 +28,13 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: mocks.csrf }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: mocks.rate }));
 vi.mock('@server/credits/activityUnlock', () => ({ unlockSignupGrantFromActivity: mocks.eligibility }));
+vi.mock('@server/credits/orgInviteBonus', () => ({ retryOrgInviteBonus: mocks.bonus }));
 await import('../signup-grant-eligibility');
 
 describe('self signup grant eligibility', () => {
   beforeEach(() => {
     mocks.eligibility.mockReset();
+    mocks.bonus.mockReset().mockResolvedValue(0);
   });
 
   it('requires first-party authentication, CSRF and a per-user request cap', () => {
@@ -50,5 +53,26 @@ describe('self signup grant eligibility', () => {
     );
     expect(mocks.eligibility).toHaveBeenCalledExactlyOnceWith('authenticated-user');
     expect(json).toHaveBeenCalledWith({ creditsGranted: 28, currentCredits: 40 });
+  });
+
+  it('retries the organization invite bonus after the unlock that can pay its tranche', async () => {
+    mocks.eligibility.mockResolvedValue({ creditsGranted: 28, currentCredits: 40 });
+    await mocks.handler!({ user: { id: 'user-1' } }, { json: vi.fn() });
+    expect(mocks.bonus).toHaveBeenCalledExactlyOnceWith('user-1');
+    expect(mocks.eligibility.mock.invocationCallOrder[0]).toBeLessThan(mocks.bonus.mock.invocationCallOrder[0]);
+  });
+
+  it('keeps the release result when the bonus retry fails', async () => {
+    mocks.eligibility.mockResolvedValue({ creditsGranted: 28, currentCredits: 40 });
+    mocks.bonus.mockRejectedValue(new Error('pool read failed'));
+    const json = vi.fn();
+    await mocks.handler!({ user: { id: 'user-1' } }, { json });
+    expect(json).toHaveBeenCalledWith({ creditsGranted: 28, currentCredits: 40 });
+  });
+
+  it('still retries the bonus when the unlock throws', async () => {
+    mocks.eligibility.mockRejectedValue(new Error('ledger down'));
+    await expect(mocks.handler!({ user: { id: 'user-1' } }, { json: vi.fn() })).rejects.toThrow('ledger down');
+    expect(mocks.bonus).toHaveBeenCalledExactlyOnceWith('user-1');
   });
 });

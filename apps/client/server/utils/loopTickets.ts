@@ -6,6 +6,8 @@ import {
   type LoopUnsureFields,
   type WorkItemBlocker,
   type WorkItemPatch,
+  type WorkItemPriority,
+  type WorkItemPrioritySetter,
   type WorkItemStatus,
 } from '@bike4mind/common';
 import { loopRepository, workItemRepository, type IPendingGate } from '@bike4mind/database';
@@ -93,6 +95,19 @@ export function ticketMovePatch(
   };
 }
 
+/**
+ * The one way a ticket's priority is written: with who set it and when, which the p2 demote (only an owner
+ * priority is sticky) and the service-level clock read. `null` clears all three.
+ */
+export const priorityPatch = (
+  priority: WorkItemPriority | null,
+  by: Exclude<WorkItemPrioritySetter, 'demote'>,
+  now = new Date()
+): Pick<WorkItemPatch, 'priority' | 'prioritySetAt' | 'prioritySetBy'> =>
+  priority === null
+    ? { priority: null, prioritySetAt: null, prioritySetBy: null }
+    : { priority, prioritySetAt: now, prioritySetBy: by };
+
 /** A ticket parked on its dependencies needs at least one still open, or nothing would ever reopen it. */
 export async function assertBlockedOnSatisfiable(
   userId: string,
@@ -148,12 +163,14 @@ export async function assertLoopTicketAccess(
 }
 
 /**
- * Makes a live loop due now when it has a ticket ready for a cloud run, so a new ticket does not wait out the
- * interval. Desktop-stage tickets never make it due: the cloud run would not work them.
+ * Makes a live loop due now when it has a ticket ready for a cloud run or one to triage, so a new ticket does not
+ * wait out the interval. Ready desktop-stage tickets never make it due: the cloud run would not work them.
  */
 export async function makeDueIfReady(loop: ILoop, now = new Date()): Promise<void> {
   if (loop.status !== 'live') return;
-  const ready = await workItemRepository.findNextReadyForLoop(loop.userId, loop.id, loop.stages, desktopStagesOf(loop));
+  const ready =
+    (await workItemRepository.findNextReadyForLoop(loop.userId, loop.id, loop.stages, desktopStagesOf(loop))) ??
+    (await workItemRepository.listUntriagedForLoop(loop.userId, loop.id, 1))[0];
   if (ready) await loopRepository.makeDueNow(loop.id, now);
 }
 

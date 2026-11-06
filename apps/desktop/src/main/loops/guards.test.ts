@@ -110,6 +110,15 @@ describe('runDeployCheck', () => {
     expect(await runDeployCheck(gh, { ...target, mergeSha: undefined }, clock())).toEqual({ ok: true });
     expect(calls).toEqual(['pr view', 'pr view', 'run list']);
   });
+
+  it('with no workflow, passes once a queued PR merges and reads no runs', async () => {
+    const { gh, calls } = fakeGh({
+      'pr view': ['{"state":"OPEN"}', '{"state":"MERGED","mergeCommit":{"oid":"m1"}}'],
+    });
+    const { workflow: _workflow, ...noWorkflow } = target;
+    expect(await runDeployCheck(gh, { ...noWorkflow, mergeSha: undefined }, clock())).toEqual({ ok: true });
+    expect(calls).toEqual(['pr view', 'pr view']);
+  });
 });
 
 describe('runSmoke', () => {

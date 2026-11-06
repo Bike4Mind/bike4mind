@@ -14,6 +14,8 @@ import {
   type AuthOrigin,
   AuthOriginSchema,
   type LoopGateOutcome,
+  WORK_ITEM_PRIORITIES,
+  type WorkItemPriority,
 } from '@bike4mind/common';
 export { AGENT_EXECUTION_STATUSES, ACTIVE_AGENT_EXECUTION_STATUSES, type AgentExecutionStatus };
 
@@ -348,6 +350,15 @@ export interface IAgentExecution {
    * owner's remaining daily budgets. The executor stops before an iteration that would cross it.
    */
   creditCap?: number;
+  /** A loop run's ticket and its priority at dispatch; the p2 daily cap counts runs by `ticketPriority`. */
+  workItemId?: string;
+  ticketPriority?: WorkItemPriority;
+  /** A ticket's last run before its run limit, on the loop's escalation model (`loopRunModel`). */
+  escalated?: boolean;
+  /** A triage run sets the priority of untriaged tickets; it works no ticket and leaves the loop memory alone. */
+  loopRunKind?: 'triage';
+  /** The untriaged tickets a triage run was shown; its fold sets p2 on any it left without a priority. */
+  triageWorkItemIds?: string[];
   /**
    * Set on a loop run a desktop runner works (apps/client/server/utils/loopRunner.ts). No executor runs it:
    * the runner posts its progress and outcome, and its lease (`runnerLeaseUntil`) keeps it alive.
@@ -830,6 +841,11 @@ const AgentExecutionSchema = new mongoose.Schema(
     enableLattice: { type: Boolean },
     loopId: { type: String },
     creditCap: { type: Number },
+    workItemId: { type: String },
+    ticketPriority: { type: String, enum: WORK_ITEM_PRIORITIES },
+    escalated: { type: Boolean },
+    loopRunKind: { type: String, enum: ['triage'] },
+    triageWorkItemIds: { type: [String], default: undefined },
     runner: { type: String, enum: ['desktop'] },
     runnerLeaseUntil: { type: Date },
     runnerDurationMs: { type: Number },
@@ -968,6 +984,11 @@ AgentExecutionSchema.index({ userId: 1, status: 1, parentExecutionId: 1, isBackg
 AgentExecutionSchema.index({ spawnedByExecutionId: 1, status: 1 }); // Abort cascade to background children
 AgentExecutionSchema.index({ parentExecutionId: 1, dagNodeId: 1 }); // Sibling lookup during DAG completion handler
 AgentExecutionSchema.index({ runnerLeaseUntil: 1 }, { sparse: true }); // listExpiredRunnerRuns
+// countLoopRunsByPriority (the loop p2 daily cap)
+AgentExecutionSchema.index(
+  { loopId: 1, ticketPriority: 1, createdAt: 1 },
+  { partialFilterExpression: { ticketPriority: { $exists: true } } }
+);
 AgentExecutionSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7776000 }); // 90-day TTL - preserves billing/audit data
 
 // --- List filters & summary projection (history viewer) ---
@@ -1260,6 +1281,16 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       { $group: { _id: null, credits: { $sum: credits } } },
     ]);
     return row?.credits ?? 0;
+  }
+
+  /** A loop's top-level ticket runs of `priority` since `since`, cloud and desktop, finished or not. */
+  async countLoopRunsByPriority(loopId: string, priority: WorkItemPriority, since: Date): Promise<number> {
+    return this.model.countDocuments({
+      loopId,
+      ticketPriority: priority,
+      createdAt: { $gte: since },
+      parentExecutionId: null,
+    });
   }
 
   /** A loop's newest top-level runs; `sessionId` (its notebook) narrows the scan like `sumCreditsByLoop`. */

@@ -8,11 +8,14 @@ import {
   LOOP_ALARM_KINDS,
   LOOP_AUTO_RESUME_KINDS,
   LOOP_HOLD_KINDS,
+  LOOP_P2_RUNS_PER_DAY_MAX,
+  LOOP_SERVICE_LEVEL_HOURS_MAX,
   LOOP_MERGE_POLICIES,
   LOOP_STAGE_RUNNERS,
   LOOP_STATUSES,
   LoopAlarmKind,
   LoopAutoResume,
+  LoopHoldKind,
   LoopStatus,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
@@ -110,10 +113,15 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
   }
 
   /** Pushes a claimed live loop's next run out without pausing it, and releases the claim. */
-  async deferUntil(id: string, nextRunAt: Date, now: Date): Promise<void> {
+  async deferUntil(
+    id: string,
+    nextRunAt: Date,
+    now: Date,
+    kind: Exclude<LoopHoldKind, 'capacity'> = 'pacing'
+  ): Promise<void> {
     const result = await this.loopModel.updateOne(
       { _id: id, status: 'live' },
-      { $set: { nextRunAt, hold: { kind: 'pacing', until: nextRunAt, at: now } }, $unset: { leaseUntil: '' } }
+      { $set: { nextRunAt, hold: { kind, until: nextRunAt, at: now } }, $unset: { leaseUntil: '' } }
     );
     if (result.matchedCount === 0) await this.releaseLease(id);
   }
@@ -139,7 +147,14 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
 
   async listPastDueLive(before: Date, limit: number): Promise<ILoop[]> {
     const results = await this.loopModel
-      .find({ status: 'live', nextRunAt: { $lte: before }, activeExecutionId: { $exists: false } })
+      // Capacity-held and backing-off loops never qualify, so they must not fill the window ahead of ones that do.
+      .find({
+        status: 'live',
+        nextRunAt: { $lte: before },
+        activeExecutionId: { $exists: false },
+        'hold.kind': { $ne: 'capacity' },
+        idleStreak: { $not: { $gt: 0 } },
+      })
       .sort({ nextRunAt: 1 })
       .limit(limit);
     return results.map(doc => doc.toJSON());
@@ -226,11 +241,12 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
   }
 
   /** Also ends an idle back-off: something changed, so the loop has work worth a run again. */
-  async makeDueNow(id: string, now: Date): Promise<void> {
+  async makeDueNow(id: string, now: Date): Promise<boolean> {
     // $min over a missing nextRunAt yields `now` (aggregation $min ignores missing values).
-    await this.loopModel.updateOne({ _id: id, status: 'live' }, [
+    const result = await this.loopModel.updateOne({ _id: id, status: 'live' }, [
       { $set: { nextRunAt: { $min: ['$nextRunAt', now] }, idleStreak: 0, idleResetAt: now } },
     ]);
+    return result.matchedCount > 0;
   }
 
   /** Ends a live loop's idle back-off without making it due now: it next runs by `nextRunAt` at the latest. */
@@ -302,6 +318,7 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
             stage: { type: String, required: true },
             instructions: { type: String },
             model: { type: String },
+            escalationModel: { type: String },
             tools: { type: [String], default: undefined },
             runner: { type: String, enum: LOOP_STAGE_RUNNERS },
             repoHint: { type: String },
@@ -320,6 +337,24 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
       type: Number,
       validate: { validator: (value: number) => value > 0, message: 'budgetCreditsPerDay must be positive' },
     },
+    // Kept in sync with validateLoopPriorityPolicy (apps/client/server/utils/loopValidation.ts).
+    serviceLevelHours: {
+      type: new Schema(
+        {
+          p0: { type: Number, min: 0, max: LOOP_SERVICE_LEVEL_HOURS_MAX },
+          p1: { type: Number, min: 0, max: LOOP_SERVICE_LEVEL_HOURS_MAX },
+        },
+        { _id: false }
+      ),
+    },
+    p2RunsPerDay: {
+      type: Number,
+      min: 0,
+      max: LOOP_P2_RUNS_PER_DAY_MAX,
+      validate: { validator: Number.isInteger, message: 'p2RunsPerDay must be an integer' },
+    },
+    triageModel: { type: String },
+    escalationModel: { type: String },
     status: { type: String, enum: LOOP_STATUSES, required: true, default: 'draft' },
     statusReason: { type: String },
     autoResume: { type: String, enum: LOOP_AUTO_RESUME_KINDS },

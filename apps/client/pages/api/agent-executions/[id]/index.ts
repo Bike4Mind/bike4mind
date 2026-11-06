@@ -49,6 +49,10 @@ const handler = baseApi().get(async (req: Request<{ id: string }>, res) => {
     error: trace.error,
     steps: trace.steps,
     totalIterations: trace.totalIterations,
+    // The loop run drawer's header (apps/client/app/routes/loops/$id.tsx).
+    model: trace.model,
+    escalated: trace.escalated,
+    loopRunKind: trace.loopRunKind,
     children,
   });
 });

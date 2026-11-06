@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -52,6 +52,11 @@ const values = (overrides: Partial<LoopFormValues> = {}): LoopFormValues => ({
   oversees: [],
   budget: '',
   stageConfig: {},
+  slaP0: '',
+  slaP1: '',
+  p2Cap: '',
+  triageModel: '',
+  escalationModel: '',
   ...overrides,
 });
 
@@ -414,6 +419,48 @@ describe('LoopFormModal stage settings', () => {
       }),
       expect.anything()
     );
+  });
+
+  it('sends a stage escalation model and the loop priority settings, and round-trips them on edit', () => {
+    renderForm(saved as never);
+    fireEvent.click(screen.getByTestId('loop-form-stage-settings-toggle'));
+    pick('loop-form-stage-escalation-model-0', 'Model Two');
+    fireEvent.change(screen.getByTestId('loop-form-sla-p0'), { target: { value: '0.05' } });
+    fireEvent.change(screen.getByTestId('loop-form-sla-p1'), { target: { value: '12' } });
+    fireEvent.change(screen.getByTestId('loop-form-p2-cap'), { target: { value: '1' } });
+    pick('loop-form-triage-model', 'Model Two');
+    pick('loop-form-escalation-model', 'Model Two');
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    const sent = {
+      stageConfig: [{ stage: 'todo', escalationModel: 'm2' }],
+      serviceLevelHours: { p0: 0.05, p1: 12 },
+      p2RunsPerDay: 1,
+      triageModel: 'm2',
+      escalationModel: 'm2',
+    };
+    expect(updateLoop.mutate).toHaveBeenCalledWith(expect.objectContaining(sent), expect.anything());
+    cleanup();
+
+    vi.clearAllMocks();
+    renderForm({ ...saved, ...sent } as never);
+    expect(screen.getByTestId('loop-form-sla-p0')).toHaveValue(0.05);
+    expect(screen.getByTestId('loop-form-p2-cap')).toHaveValue(1);
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(updateLoop.mutate).toHaveBeenCalledWith(expect.objectContaining(sent), expect.anything());
+  });
+
+  it('clears unset priority settings on edit and rejects out-of-range ones', () => {
+    expect(validateLoopForm(values(), 'edit').payload).toMatchObject({
+      serviceLevelHours: null,
+      p2RunsPerDay: null,
+      triageModel: null,
+      escalationModel: null,
+    });
+    expect(validateLoopForm(values(), 'create').payload).not.toHaveProperty('p2RunsPerDay');
+    expect(validateLoopForm(values({ slaP0: '0' }), 'create').errors.sla).toMatch(/above 0/);
+    expect(validateLoopForm(values({ slaP1: '721' }), 'create').errors.sla).toMatch(/720/);
+    expect(validateLoopForm(values({ p2Cap: '1.5' }), 'create').errors.p2Cap).toMatch(/whole number/);
+    expect(validateLoopForm(values({ p2Cap: '0' }), 'create').payload).toMatchObject({ p2RunsPerDay: 0 });
   });
 
   it('shows the saved config and drops it when its stage is removed', () => {
