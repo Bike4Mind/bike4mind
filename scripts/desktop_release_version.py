@@ -164,8 +164,9 @@ def split_orphans(releases, head):
     kept, orphans = [], {}
     for release in releases:
         tag = release['tag_name']
+        match = re.fullmatch(r'desktop-v(' + VERSION.pattern + r')', tag)
         if (release.get('draft') and tag not in WITHDRAWN_SOURCE_RELEASES
-                and re.fullmatch(r'desktop-v(' + VERSION.pattern + r')', tag)):
+                and match and match[1].startswith('0.')):
             sha = git('rev-parse', f'{release["target_commitish"]}^{{commit}}')
             if sha != head and subprocess.run(['git', 'merge-base', '--is-ancestor', sha, head]).returncode == 0:
                 orphans[tag] = sha

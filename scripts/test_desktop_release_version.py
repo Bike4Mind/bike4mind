@@ -206,6 +206,25 @@ class DesktopVersionTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             select_version(self.releases, '0.1.0')
 
+    def test_orphaned_major_draft_still_requires_beta_policy_change(self):
+        self.commit('fix(desktop): reserved build')
+        orphan = self.git('rev-parse', 'HEAD')
+        self.commit('fix(desktop): next commit')
+        for version in ('1.0.1', '2.0.0', '9.0.0'):
+            with self.subTest(version=version):
+                releases = self.releases + [{'tag_name': 'desktop-v' + version,
+                    'prerelease': False, 'draft': True, 'target_commitish': orphan}]
+                with self.assertRaisesRegex(ValueError, 'explicit beta policy change'):
+                    select_version(releases, '0.1.0')
+
+    def test_accidental_major_orphan_remains_excluded(self):
+        orphan = self.git('rev-parse', 'HEAD')
+        self.commit('fix(desktop): next commit')
+        releases = self.releases + [{'tag_name': 'desktop-v1.0.0',
+            'prerelease': False, 'draft': True, 'target_commitish': orphan}]
+        self.assertEqual(select_version(releases, '0.1.0'),
+                         ('0.1.1', True, 'desktop-v0.1.0', ''))
+
     def test_unrelated_breaking_change_is_ignored(self):
         self.commit('feat(web)!: change web contract', 'apps/client/app.ts')
         self.commit('fix(desktop): fix app')
