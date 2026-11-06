@@ -298,3 +298,176 @@ describe('a save that cannot read the file part way through', () => {
     expect(await readFile(configPath, 'utf-8')).toBe(contents);
   });
 });
+
+describe('after a refused save in a config this build cannot validate', () => {
+  it('keeps a sign-in read from the file', async () => {
+    await writeFile(configPath, JSON.stringify({ auth: signIn, trustedTools: 'notalist' }), { mode: 0o600 });
+    const store = new ConfigStore(configPath);
+    await store.reloadAuthTokens();
+
+    await expect(store.trustTool('file_read')).rejects.toThrow(`${configPath} failed validation`);
+
+    expect(await store.getAuthTokens()).toEqual(signIn);
+  });
+
+  it('keeps a backend address that was saved', async () => {
+    await writeFile(configPath, JSON.stringify({ trustedTools: 'notalist' }), { mode: 0o600 });
+    const store = new ConfigStore(configPath);
+    await store.setCustomApiUrl('https://self.example.com');
+
+    await expect(store.trustTool('file_read')).rejects.toThrow(`${configPath} failed validation`);
+
+    expect((await store.load()).apiConfig?.customUrl).toBe('https://self.example.com');
+  });
+
+  it('keeps the sign-in and backend address after a save that failed reading the file', async () => {
+    await writeFile(configPath, JSON.stringify({ auth: signIn, preferences: { theme: 'sepia' } }), { mode: 0o600 });
+    const store = new ConfigStore(configPath);
+    await store.reloadAuthTokens();
+    await store.setCustomApiUrl('https://self.example.com');
+    const realRead = fsPromises.readFile.bind(fsPromises);
+    let failed = false;
+    vi.spyOn(fsPromises, 'readFile').mockImplementation((async (...args: Parameters<typeof realRead>) => {
+      if (!failed && String(args[0]) === configPath) {
+        failed = true;
+        throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
+      }
+      return realRead(...args);
+    }) as typeof fsPromises.readFile);
+
+    await expect(store.save({ preferences: { exportFormat: 'json' } })).rejects.toThrow('EBUSY');
+
+    expect(await store.getAuthTokens()).toEqual(signIn);
+    expect((await store.load()).apiConfig?.customUrl).toBe('https://self.example.com');
+    expect((await store.load()).preferences.exportFormat).toBe('markdown');
+  });
+
+  it('keeps changes other callers made while the refused save was in flight', async () => {
+    await writeFile(configPath, JSON.stringify({ toolApiKeys: 'bad' }), { mode: 0o600 });
+    const store = new ConfigStore(configPath);
+    await store.trustTool('t1');
+    const internals = store as unknown as { mergeOverInvalidConfig: (...args: unknown[]) => Promise<unknown> };
+    const merge = internals.mergeOverInvalidConfig.bind(store);
+    let entered!: () => void;
+    const inside = new Promise<void>(resolve => (entered = resolve));
+    let release!: () => void;
+    const held = new Promise<void>(resolve => (release = resolve));
+    let calls = 0;
+    internals.mergeOverInvalidConfig = async (...args: unknown[]) => {
+      if (++calls === 1) {
+        entered();
+        await held;
+      }
+      return merge(...args);
+    };
+
+    const refused = store.save({ toolApiKeys: { serper: 'key-1' } });
+    await inside;
+    const untrusted = store.untrustTool('t1');
+    const trusted = store.trustTool('t2');
+    release();
+
+    await expect(refused).rejects.toThrow(`${configPath} failed validation`);
+    await untrusted;
+    await trusted;
+    expect(await readJson()).toEqual({ toolApiKeys: 'bad', trustedTools: ['t2'] });
+    expect((await store.load()).trustedTools).toEqual(['t2']);
+  });
+
+  it('saves a change made while an earlier save was writing', async () => {
+    await writeFile(configPath, JSON.stringify({ toolApiKeys: 'bad' }), { mode: 0o600 });
+    const store = new ConfigStore(configPath);
+    const internals = store as unknown as { mergeOverInvalidConfig: (...args: unknown[]) => Promise<unknown> };
+    const merge = internals.mergeOverInvalidConfig.bind(store);
+    let entered!: () => void;
+    const inside = new Promise<void>(resolve => (entered = resolve));
+    let release!: () => void;
+    const held = new Promise<void>(resolve => (release = resolve));
+    let calls = 0;
+    internals.mergeOverInvalidConfig = async (...args: unknown[]) => {
+      const merged = await merge(...args);
+      if (++calls === 1) {
+        entered();
+        await held;
+      }
+      return merged;
+    };
+
+    const first = store.save({ preferences: { theme: 'light' } });
+    await inside;
+    const trusted = store.trustTool('t1');
+    release();
+
+    await first;
+    await trusted;
+    expect(await readJson()).toEqual({ toolApiKeys: 'bad', preferences: { theme: 'light' }, trustedTools: ['t1'] });
+  });
+
+  it('keeps a change another caller made while the refused save waited its turn', async () => {
+    await writeFile(configPath, JSON.stringify({ toolApiKeys: 'bad' }), { mode: 0o600 });
+    const store = new ConfigStore(configPath);
+    await store.trustTool('t1');
+    const internals = store as unknown as { mergeOverInvalidConfig: (...args: unknown[]) => Promise<unknown> };
+    const merge = internals.mergeOverInvalidConfig.bind(store);
+    let entered!: () => void;
+    const inside = new Promise<void>(resolve => (entered = resolve));
+    let release!: () => void;
+    const held = new Promise<void>(resolve => (release = resolve));
+    let calls = 0;
+    internals.mergeOverInvalidConfig = async (...args: unknown[]) => {
+      const merged = await merge(...args);
+      if (++calls === 1) {
+        entered();
+        await held;
+      }
+      return merged;
+    };
+
+    const first = store.save({ preferences: { theme: 'light' } });
+    await inside;
+    const refused = store.save({ toolApiKeys: { serper: 'key-1' } });
+    const trusted = store.trustTool('t2');
+    release();
+
+    await first;
+    await expect(refused).rejects.toThrow(`${configPath} failed validation`);
+    await trusted;
+    expect((await readJson()).trustedTools).toEqual(['t1', 't2']);
+    expect((await store.load()).trustedTools).toEqual(['t1', 't2']);
+  });
+
+  it('keeps changes other callers made while a save that failed for another reason was in flight', async () => {
+    await writeFile(configPath, JSON.stringify({ toolApiKeys: 'bad' }), { mode: 0o600 });
+    const store = new ConfigStore(configPath);
+    await store.trustTool('t1');
+    const internals = store as unknown as { mergeOverInvalidConfig: (...args: unknown[]) => Promise<unknown> };
+    const merge = internals.mergeOverInvalidConfig.bind(store);
+    let entered!: () => void;
+    const inside = new Promise<void>(resolve => (entered = resolve));
+    let release!: () => void;
+    const held = new Promise<void>(resolve => (release = resolve));
+    let calls = 0;
+    internals.mergeOverInvalidConfig = async (...args: unknown[]) => {
+      if (++calls === 1) {
+        entered();
+        await held;
+        throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
+      }
+      return merge(...args);
+    };
+
+    const failed = store.save({ preferences: { exportFormat: 'json' } });
+    await inside;
+    const untrusted = store.untrustTool('t1');
+    const trusted = store.trustTool('t2');
+    release();
+
+    await expect(failed).rejects.toThrow('resource busy');
+    await untrusted;
+    await trusted;
+    expect(await readJson()).toEqual({ toolApiKeys: 'bad', trustedTools: ['t2'] });
+    const config = await store.load();
+    expect(config.trustedTools).toEqual(['t2']);
+    expect(config.preferences.exportFormat).toBe('markdown');
+  });
+});

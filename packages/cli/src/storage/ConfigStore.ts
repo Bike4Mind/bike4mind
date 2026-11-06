@@ -442,7 +442,20 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** A change that would replace a list or map in the file with a value of another shape, dropping what it holds. */
-class ShapeMismatchError extends Error {}
+class ShapeMismatchError extends Error {
+  /** Keys from the top of the config down to the value that differs in shape. */
+  readonly path: string[] = [];
+}
+
+/** A save refused over a file that failed validation; `key` names the top-level setting that caused it, if one did. */
+class RefusedSaveError extends Error {
+  constructor(
+    message: string,
+    readonly key?: string
+  ) {
+    super(message);
+  }
+}
 
 const shapeOf = (value: unknown) => (Array.isArray(value) ? 'array' : isJsonObject(value) ? 'object' : 'scalar');
 const hasOwnKey = (value: object, key: string) => Object.prototype.hasOwnProperty.call(value, key);
@@ -470,7 +483,13 @@ function applyChanges(target: unknown, base: unknown, next: unknown): unknown {
         if (ownValue(from, key) !== undefined) delete out[key];
         continue;
       }
-      const value = applyChanges(out[key], ownValue(from, key), nextValue);
+      let value: unknown;
+      try {
+        value = applyChanges(out[key], ownValue(from, key), nextValue);
+      } catch (error) {
+        if (error instanceof ShapeMismatchError) error.path.unshift(key);
+        throw error;
+      }
       if (value === undefined) delete out[key];
       else out[key] = value;
     }
@@ -1382,9 +1401,11 @@ export class ConfigStore {
     const target = root ? await safeRealpath(root) : this.projectRealPath;
     if (!target) return;
 
-    const g = this.globalConfig!;
-    g.trustedProjects = (g.trustedProjects || []).filter(p => p !== target);
-    if (g.trustedMcpDefinitions) delete g.trustedMcpDefinitions[target];
+    const untrust = (config: CliConfig) => {
+      config.trustedProjects = (config.trustedProjects || []).filter(p => p !== target);
+      if (config.trustedMcpDefinitions) delete config.trustedMcpDefinitions[target];
+    };
+    untrust(this.globalConfig!);
 
     if (target === this.projectRealPath) {
       this.projectTrusted = false;
@@ -1393,7 +1414,7 @@ export class ConfigStore {
       this.rawMcpJsonServers = null;
     }
 
-    const revoked = await this.patchInFallback(['trustedProjects', 'trustedMcpDefinitions'], raw => {
+    const revoked = await this.patchInFallback(untrust, raw => {
       const dropped = removeRawListItems(raw, 'trustedProjects', p => p === target);
       const definitions = raw.trustedMcpDefinitions;
       if (!isJsonObject(definitions) || !hasOwnKey(definitions, target)) return dropped;
@@ -1573,19 +1594,21 @@ export class ConfigStore {
 
   async clearModelServerCredential(serverId: string): Promise<void> {
     await this.load();
-    const saved = this.globalConfig!.modelServerCredentials;
-    if (this.fallbackBase && saved && hasOwnKey(saved, serverId)) {
+    const clear = (config: CliConfig) => {
+      const saved = config.modelServerCredentials;
+      if (!saved || !hasOwnKey(saved, serverId)) return;
       const { [serverId]: dropped, ...kept } = saved;
       void dropped;
-      this.globalConfig!.modelServerCredentials = kept;
-    }
+      config.modelServerCredentials = kept;
+    };
+    if (this.fallbackBase) clear(this.globalConfig!);
     const clearInFile = (raw: Record<string, unknown>) => {
       const credentials = raw.modelServerCredentials;
       if (!isJsonObject(credentials) || !hasOwnKey(credentials, serverId)) return false;
       delete credentials[serverId];
       return true;
     };
-    if (await this.patchInFallback(['modelServerCredentials'], clearInFile)) return;
+    if (await this.patchInFallback(clear, clearInFile)) return;
     await this.updateModelServerCredentials(current => {
       const { [serverId]: removed, ...rest } = current;
       void removed;
@@ -1689,22 +1712,35 @@ export class ConfigStore {
     opts?: { clearFeatures?: boolean; authFields?: DiskAuthFields }
   ): Promise<void> {
     const fallbackBase = this.fallbackBase;
+    let staged = fallbackBase ? structuredClone(this.globalConfig!) : null;
     try {
-      await this.writeGlobalLayer(config, opts);
+      await this.writeGlobalLayer(config, opts, snapshot => {
+        if (fallbackBase) staged = structuredClone(snapshot);
+      });
     } catch (error) {
       // A change that did not reach a file that failed validation is dropped, so later saves do not carry it again.
-      if (fallbackBase && this.fallbackBase === fallbackBase) await this.rollBackTo(fallbackBase);
+      if (fallbackBase && staged && this.fallbackBase === fallbackBase) {
+        await this.rollBackTo(fallbackBase, staged, error instanceof RefusedSaveError ? error.key : undefined);
+      }
       throw error;
     }
   }
 
-  /** Sets every top-level key of the global snapshot that differs from `base` back to its value there. */
-  private async rollBackTo(base: CliConfig): Promise<void> {
+  /**
+   * Undoes what a failed write staged: each top-level key (only `onlyKey` when the refusal named one) that differs
+   * from `base` and still holds the value the write tried to save. A key another caller changed since is theirs and
+   * is left alone, as are the sign-in and backend fields, which writers patch into the file directly.
+   */
+  private async rollBackTo(base: CliConfig, staged: CliConfig, onlyKey?: string): Promise<void> {
     const current = this.globalConfig as unknown as Record<string, unknown> | null;
     if (!current) return;
     const from = base as unknown as Record<string, unknown>;
+    const tried = staged as unknown as Record<string, unknown>;
     for (const key of new Set([...Object.keys(from), ...Object.keys(current)])) {
-      if (isDeepStrictEqual(ownValue(from, key), ownValue(current, key))) continue;
+      if (key === 'auth' || key === 'authByEnv' || key === 'apiConfig') continue;
+      if (onlyKey !== undefined && key !== onlyKey) continue;
+      const now = ownValue(current, key);
+      if (isDeepStrictEqual(ownValue(from, key), now) || !isDeepStrictEqual(ownValue(tried, key), now)) continue;
       if (ownValue(from, key) === undefined) delete current[key];
       else current[key] = structuredClone(from[key]);
     }
@@ -1716,8 +1752,9 @@ export class ConfigStore {
   }
 
   private async writeGlobalLayer(
-    config?: GlobalConfigPatch,
-    opts?: { clearFeatures?: boolean; authFields?: DiskAuthFields }
+    config: GlobalConfigPatch | undefined,
+    opts: { clearFeatures?: boolean; authFields?: DiskAuthFields } | undefined,
+    onStaged: (snapshot: CliConfig) => void
   ): Promise<void> {
     const global = this.globalConfig!;
     const authFields = opts?.authFields ?? (this.fallbackBase ? undefined : await this.diskAuthFields());
@@ -1783,14 +1820,18 @@ export class ConfigStore {
     if (!opts?.clearFeatures) {
       this.globalConfig = await this.mergeModelFields(this.globalConfig, global, config);
     }
+    // Over a file that failed validation the base must match what was written, so a change made while this write is
+    // in flight stays out of it and is saved by its own write.
+    const staged = this.fallbackBase ? structuredClone(this.globalConfig) : this.globalConfig;
+    onStaged(staged);
     const contents = this.fallbackBase
-      ? await this.mergeOverInvalidConfig(this.fallbackBase, this.globalConfig, opts?.authFields)
+      ? await this.mergeOverInvalidConfig(this.fallbackBase, staged, opts?.authFields)
       : { ...this.globalConfig, ...authFields };
 
     try {
       // Persist ONLY the global layer, never the merged effective config.
       await this.writeConfigFile(JSON.stringify(contents, null, 2));
-      if (this.fallbackBase) this.fallbackBase = structuredClone(this.globalConfig);
+      if (this.fallbackBase) this.fallbackBase = staged;
 
       // Set secure permissions (0600 - only owner can read/write)
       // This protects auth tokens and API keys from other users
@@ -1836,7 +1877,7 @@ export class ConfigStore {
     try {
       merged = applyChanges(raw, asJson(from), asJson(to)) as Record<string, unknown>;
     } catch (error) {
-      if (error instanceof ShapeMismatchError) throw this.invalidConfigError();
+      if (error instanceof ShapeMismatchError) throw this.invalidConfigError(error.path[0]);
       throw error;
     }
     if (authFields) {
@@ -1848,36 +1889,39 @@ export class ConfigStore {
     return merged;
   }
 
-  private invalidConfigError(): Error {
-    return new Error(
-      `Could not save settings: ${this.configPath} failed validation, so it was left unchanged. Fix the file, or remove it to start over.`
+  private invalidConfigError(key?: string): Error {
+    return new RefusedSaveError(
+      `Could not save settings: ${this.configPath} failed validation, so it was left unchanged. Fix the file, or remove it to start over.`,
+      key
     );
   }
 
   /**
    * While the snapshot stands in for a file that failed validation, applies `mutate` to the file's own JSON in place
-   * of a save, and syncs `keys` of the snapshot base so a later save does not apply the change again. Returns false
-   * when not in that state or when there is no file, for the caller to save as usual.
+   * of a save, then `change` (the same change, idempotent) to the snapshot and its base so a later save does not
+   * apply it again. Returns false when not in that state or when there is no file, for the caller to save as usual.
    */
   private async patchInFallback(
-    keys: Array<keyof CliConfig>,
+    change: (config: CliConfig) => void,
     mutate: (raw: Record<string, unknown>) => boolean
   ): Promise<boolean> {
     if (!this.fallbackBase) return false;
-    let patched: boolean;
     try {
-      patched = await this.exclusive(() =>
-        this.withConfigWriteLock(() => this.patchConfigText(mutate, () => this.invalidConfigError()))
-      );
+      return await this.exclusive(async () => {
+        const patched = await this.withConfigWriteLock(() =>
+          this.patchConfigText(mutate, () => this.invalidConfigError())
+        );
+        if (!patched) return false;
+        // Only this change goes into the base, so other changes still pending in memory are saved by their own writes.
+        if (this.fallbackBase) change(this.fallbackBase);
+        if (this.globalConfig) change(this.globalConfig);
+        this.config = await this.computeMerged();
+        return true;
+      });
     } catch (error) {
       if (error instanceof ShapeMismatchError) throw this.invalidConfigError();
       throw error;
     }
-    if (!patched) return false;
-    const base = this.fallbackBase as unknown as Record<string, unknown> | null;
-    const current = this.globalConfig as unknown as Record<string, unknown> | null;
-    if (base && current) for (const key of keys) base[key] = structuredClone(current[key]);
-    return true;
   }
 
   /**
@@ -1936,11 +1980,12 @@ export class ConfigStore {
    */
   async addMcpServer(server: CliConfig['mcpServers'][0]): Promise<void> {
     await this.load();
-    const g = this.globalConfig!;
     // Remove existing server with same name, then add (operates on GLOBAL only).
-    g.mcpServers = g.mcpServers.filter(s => s.name !== server.name);
-    g.mcpServers.push(server);
-    if (await this.patchInFallback(['mcpServers'], raw => upsertRawMcpServer(raw, server))) return;
+    const upsert = (config: CliConfig) => {
+      config.mcpServers = [...config.mcpServers.filter(s => s.name !== server.name), structuredClone(server)];
+    };
+    upsert(this.globalConfig!);
+    if (await this.patchInFallback(upsert, raw => upsertRawMcpServer(raw, server))) return;
     await this.save();
   }
 
@@ -1949,9 +1994,11 @@ export class ConfigStore {
    */
   async removeMcpServer(name: string): Promise<void> {
     await this.load();
-    const g = this.globalConfig!;
-    g.mcpServers = g.mcpServers.filter(s => s.name !== name);
-    if (await this.patchInFallback(['mcpServers'], raw => removeRawMcpServer(raw, name))) return;
+    const remove = (config: CliConfig) => {
+      config.mcpServers = config.mcpServers.filter(s => s.name !== name);
+    };
+    remove(this.globalConfig!);
+    if (await this.patchInFallback(remove, raw => removeRawMcpServer(raw, name))) return;
     await this.save();
   }
 
@@ -1990,9 +2037,12 @@ export class ConfigStore {
     await this.load();
     const g = this.globalConfig!;
     if (g.trustedTools) {
-      g.trustedTools = g.trustedTools.filter(t => t !== toolName);
+      const untrust = (config: CliConfig) => {
+        config.trustedTools = (config.trustedTools || []).filter(t => t !== toolName);
+      };
+      untrust(g);
       const revoke = (raw: Record<string, unknown>) => removeRawListItems(raw, 'trustedTools', t => t === toolName);
-      if (await this.patchInFallback(['trustedTools'], revoke)) return;
+      if (await this.patchInFallback(untrust, revoke)) return;
       await this.save();
     }
   }
@@ -2010,9 +2060,12 @@ export class ConfigStore {
    */
   async clearTrustedTools(): Promise<void> {
     await this.load();
-    this.globalConfig!.trustedTools = [];
+    const clear = (config: CliConfig) => {
+      config.trustedTools = [];
+    };
+    clear(this.globalConfig!);
     const revokeAll = (raw: Record<string, unknown>) => removeRawListItems(raw, 'trustedTools', () => true);
-    if (await this.patchInFallback(['trustedTools'], revokeAll)) return;
+    if (await this.patchInFallback(clear, revokeAll)) return;
     await this.save();
   }
 
@@ -2520,10 +2573,15 @@ export class ConfigStore {
     if (g.additionalDirectories) {
       // Resolve to absolute path for comparison
       const resolvedPath = path.resolve(dirPath);
-      g.additionalDirectories = g.additionalDirectories.filter(d => path.resolve(d) !== resolvedPath);
+      const remove = (config: CliConfig) => {
+        config.additionalDirectories = (config.additionalDirectories || []).filter(
+          d => path.resolve(d) !== resolvedPath
+        );
+      };
+      remove(g);
       const removed = (d: unknown) => typeof d === 'string' && path.resolve(d) === resolvedPath;
       const revoke = (raw: Record<string, unknown>) => removeRawListItems(raw, 'additionalDirectories', removed);
-      if (await this.patchInFallback(['additionalDirectories'], revoke)) return;
+      if (await this.patchInFallback(remove, revoke)) return;
       await this.save();
     }
   }
