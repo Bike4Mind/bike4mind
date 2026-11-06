@@ -1987,7 +1987,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
     const scored = this.scoreToolResult(toolName, observation, toolOutput);
     // Only a score nothing has verified yields to the model's own: an error, an empty result or a
     // tool validator's verdict is ground truth the model's pre-result estimate must not override.
-    const useSelfReport = !!selfReport && !toolFailed && (scored.source === 'default' || scored.source === 'heuristic');
+    const useSelfReport = !!selfReport && (scored.source === 'default' || scored.source === 'heuristic');
     const confidence = useSelfReport ? selfReport.confidence : scored.confidence;
     const confidenceSource: 'deterministic' | 'llm_self_report' | 'heuristic' | 'default' = useSelfReport
       ? 'llm_self_report'
