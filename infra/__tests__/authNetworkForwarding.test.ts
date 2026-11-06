@@ -36,7 +36,13 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-async function loadRouter(shared = false, prodCachePolicyId = '', sharedOriginRequestPolicyId = '') {
+async function loadRouter(
+  shared = false,
+  prodCachePolicyId = '',
+  sharedOriginRequestPolicyId = '',
+  stage = 'production',
+  sharedResponseFunctionArn = ''
+) {
   vi.resetModules();
   mocks.cdn.defaultCacheBehavior = mocks.defaultBehavior;
   delete mocks.cdn.orderedCacheBehaviors;
@@ -46,7 +52,10 @@ async function loadRouter(shared = false, prodCachePolicyId = '', sharedOriginRe
   vi.stubEnv('AUTH_NETWORK_ORIGIN_REQUEST_POLICY_ID', sharedOriginRequestPolicyId);
   vi.stubEnv('SERVER_DOMAIN', 'example.test');
   vi.stubEnv('APP_CERT_ARN', '');
-  vi.stubGlobal('$app', { stage: 'production' });
+  vi.stubEnv('IS_PREVIEW', '');
+  vi.stubEnv('PREVIEW_SHARED_RESPONSE_FUNCTION_ARN', sharedResponseFunctionArn);
+  vi.stubGlobal('$app', { stage });
+  vi.stubGlobal('$output', <T>(value: T) => ({ apply: <R>(callback: (resolved: T) => R) => callback(value) }));
   vi.stubGlobal('$dev', shared);
   vi.stubGlobal('$transform', vi.fn());
   vi.stubGlobal('$interpolate', (parts: TemplateStringsArray, ...values: unknown[]) =>
@@ -109,6 +118,16 @@ describe('authentication connection metadata forwarding', () => {
     expect(mocks.cdn.orderedCacheBehaviors).toHaveLength(3);
     for (const behavior of mocks.cdn.orderedCacheBehaviors ?? []) {
       expect(behavior.originRequestPolicyId).toBe('shared-auth-network-policy');
+    }
+  });
+
+  it("keeps the preview's shared viewer-response function on the authentication behaviors", async () => {
+    await loadRouter(false, '', '', 'pr123', 'shared-response-function');
+    const sharedResponse = { eventType: 'viewer-response', functionArn: 'shared-response-function' };
+    expect(mocks.cdn.defaultCacheBehavior.functionAssociations).toContainEqual(sharedResponse);
+    expect(mocks.cdn.orderedCacheBehaviors).toHaveLength(3);
+    for (const behavior of mocks.cdn.orderedCacheBehaviors ?? []) {
+      expect(behavior.functionAssociations).toEqual(mocks.cdn.defaultCacheBehavior.functionAssociations);
     }
   });
 
