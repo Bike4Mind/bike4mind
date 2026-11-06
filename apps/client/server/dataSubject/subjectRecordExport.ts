@@ -2,8 +2,18 @@ import { FabFile, mongoose } from '@bike4mind/database';
 import { findPersonalOrganizationIds, personalFilter } from '../users/purgeAccountContent';
 import { findOrganizationFileIds } from '@bike4mind/server-utils/users/purgeAccountFiles';
 import { holderExportScope, viaParentExportScope, type ExportScope, type ReferenceMatch } from './exportScope';
-import { DATA_HOLDER_REGISTRY, findUnclassifiedModels } from './registry';
+import { DATA_HOLDER_REGISTRY } from './registry';
 import { cloneContainers, matchingArrayElements, omitPath, setPath, valuesAt } from './documentPaths';
+import {
+  PARENT_KEY_BATCH,
+  QUERY_MAX_TIME_MS,
+  SubjectMatcher,
+  orderParentsFirst,
+  parentKeyPaths,
+  readDocuments,
+  type DataSubject,
+  type LeanDocument,
+} from './subjectMatcher';
 import type { DataHolder, DataHolderRegistry, UserReference } from './types';
 
 /**
@@ -13,15 +23,9 @@ import type { DataHolder, DataHolderRegistry, UserReference } from './types';
  * never exported, whatever the query matched.
  */
 
-export type DataSubject = { userId: string; email: string | null };
+export { assertEveryModelClassified, type DataSubject } from './subjectMatcher';
 export type ExportedRecord = Record<string, unknown>;
 
-type LeanDocument = Record<string, unknown> & { _id?: unknown };
-
-// One registry query must not hold the export: past this, the model fails and is reported omitted.
-const QUERY_MAX_TIME_MS = 60_000;
-// Parent keys per `$in` batch when collecting `viaParent` children.
-const PARENT_KEY_BATCH = 500;
 // Documents matched together, so the organization-file check reads its lakes and workspaces once per batch.
 const MATCH_BATCH = 200;
 // Sizing only orders the walk, so a collection that cannot be sized quickly is just walked last in its tier.
@@ -30,14 +34,6 @@ const SIZE_CONCURRENCY = 8;
 
 /** A reference whose own query failed; the model's other references are still exported. */
 export type FailedReference = { path: string; error: unknown };
-
-/** A model registered in this process that the registry does not classify fails the export loudly. */
-export function assertEveryModelClassified(modelNames: readonly string[]): void {
-  const unclassified = findUnclassifiedModels(modelNames);
-  if (unclassified.length > 0) {
-    throw new Error(`Data subject export refused: unclassified models ${unclassified.join(', ')}`);
-  }
-}
 
 /** An exported parent's key value, by its string form, with the scope the parent was exported at. */
 type ParentKeys = Map<string, { value: unknown; scope: ExportScope }>;
@@ -76,9 +72,6 @@ function referencesWithin(references: readonly UserReference[], arrayPath: strin
 const isRecord = (value: unknown): value is LeanDocument =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const isExported = (holder: DataHolder): boolean =>
-  holder.kind === 'subject' || holder.kind === 'holder' || holder.kind === 'viaParent';
-
 const withheldPathsOf = (holder: DataHolder): readonly string[] => {
   if (holder.kind === 'holder') return [...(holder.secretPaths ?? []), ...(holder.withheldPaths ?? [])];
   return holder.kind === 'subject' || holder.kind === 'viaParent' ? (holder.secretPaths ?? []) : [];
@@ -93,23 +86,20 @@ function withoutShadowedParts(elements: readonly unknown[], origins: ReadonlyMap
 export class SubjectRecordExport {
   /** Exported models in an order that puts every `viaParent` child after its parent. */
   readonly models: readonly string[];
-  private readonly keyPathsByParent = new Map<string, Set<string>>();
+  private readonly keyPathsByParent: Map<string, Set<string>>;
+  private readonly matcher: SubjectMatcher;
   private readonly parentScopes = new Map<string, ParentScopes>();
   private readonly completed = new Set<string>();
   private readonly failures = new Map<string, FailedReference[]>();
   private personalOrganizationIds: Promise<string[]> | undefined;
 
   constructor(
-    private readonly subject: DataSubject,
+    subject: DataSubject,
     private readonly registry: DataHolderRegistry = DATA_HOLDER_REGISTRY
   ) {
-    for (const holder of Object.values(registry)) {
-      if (holder.kind !== 'viaParent') continue;
-      const paths = this.keyPathsByParent.get(holder.parent) ?? new Set<string>();
-      paths.add(holder.parentKey ?? '_id');
-      this.keyPathsByParent.set(holder.parent, paths);
-    }
-    this.models = orderForWalk(registry);
+    this.matcher = new SubjectMatcher(subject);
+    this.keyPathsByParent = parentKeyPaths(registry);
+    this.models = orderParentsFirst(registry);
   }
 
   /**
@@ -134,7 +124,7 @@ export class SubjectRecordExport {
       }
     };
     await Promise.all(Array.from({ length: SIZE_CONCURRENCY }, sizeNext));
-    return orderForWalk(this.registry, model => sizes.get(model) ?? Number.MAX_SAFE_INTEGER);
+    return orderParentsFirst(this.registry, model => sizes.get(model) ?? Number.MAX_SAFE_INTEGER);
   }
 
   /** The references of `model` whose query failed while its records were read. */
@@ -168,7 +158,7 @@ export class SubjectRecordExport {
     // The subject's own references sit on OTHER people's User documents (who invited whom), which
     // are not this person's to take, so only their own document is exported, less the people it
     // names (their referrer, the admin who throttled them).
-    for await (const document of this.query(model, { _id: this.subject.userId })) {
+    for await (const document of readDocuments(model, { _id: this.matcher.subject.userId })) {
       yield this.withholdOthers(document, references);
     }
   }
@@ -211,13 +201,13 @@ export class SubjectRecordExport {
   ): AsyncGenerator<LeanDocument> {
     const queried = new Set<string>();
     for (const reference of references) {
-      const filter = this.filterFor(reference);
+      const filter = this.matcher.filterFor(reference);
       if (!filter) continue;
       const key = JSON.stringify(filter);
       if (queried.has(key)) continue;
       queried.add(key);
       try {
-        for await (const document of this.query(model, filter)) {
+        for await (const document of readDocuments(model, filter)) {
           const id = String(document._id);
           if (seen.has(id)) continue;
           seen.add(id);
@@ -249,13 +239,13 @@ export class SubjectRecordExport {
         reference =>
           reference.scope === 'personal' &&
           personal.get(reference)?.has(String(document._id)) &&
-          this.matches(document, reference)
+          this.matcher.matches(document, reference)
       )
     );
     if (candidates.length === 0) return new Set();
     return findOrganizationFileIds(
       candidates.map(document => FabFile.hydrate(document)),
-      this.subject.userId
+      this.matcher.subject.userId
     );
   }
 
@@ -284,7 +274,7 @@ export class SubjectRecordExport {
     const seen = new Set<string>();
     for (let start = 0; start < parentValues.length; start += PARENT_KEY_BATCH) {
       const batch = parentValues.slice(start, start + PARENT_KEY_BATCH);
-      for await (const document of this.query(model, { [holder.foreignKey]: { $in: batch } })) {
+      for await (const document of readDocuments(model, { [holder.foreignKey]: { $in: batch } })) {
         seen.add(String(document._id));
         const matches = this.matchesOn(document, attribution);
         const scope = viaParentExportScope(holder, parentScopeOf(document), matches);
@@ -305,38 +295,6 @@ export class SubjectRecordExport {
     }
   }
 
-  private query(model: string, filter: Record<string, unknown>): AsyncIterable<LeanDocument> {
-    // `throw` so a path the schema does not declare fails the model instead of being dropped from
-    // the filter, which would match every document in the collection.
-    return mongoose
-      .model(model)
-      .find(filter)
-      .setOptions({ strictQuery: 'throw' })
-      .maxTimeMS(QUERY_MAX_TIME_MS)
-      .lean<LeanDocument[]>()
-      .cursor();
-  }
-
-  private expectedValue(reference: UserReference): string | null {
-    return reference.matchBy === 'email' ? this.subject.email : this.subject.userId;
-  }
-
-  private filterFor(reference: UserReference): Record<string, unknown> | null {
-    const expected = this.expectedValue(reference);
-    if (!expected) return null;
-    return { ...reference.where, [reference.path]: { $in: this.storedForms(reference, expected) } };
-  }
-
-  private storedForms(reference: UserReference, expected: string): unknown[] {
-    if (reference.matchBy === 'email') {
-      // Exact forms keep the query on the index; a stored address in any other mixed case is missed
-      // here, and the JS re-match below compares case-insensitively.
-      return [...new Set([expected, expected.toLowerCase()])];
-    }
-    // A `Mixed` path is not cast by the schema and may hold either form.
-    return mongoose.isObjectIdOrHexString(expected) ? [expected, new mongoose.Types.ObjectId(expected)] : [expected];
-  }
-
   /**
    * Ids of the documents each `scope: 'personal'` reference may match, selected with the account
    * purge's own predicate so the export and the purge agree on what is the person's.
@@ -347,12 +305,12 @@ export class SubjectRecordExport {
       if (reference.scope !== 'personal') continue;
       const ids = new Set<string>();
       personal.set(reference, ids);
-      const filter = this.filterFor(reference);
+      const filter = this.matcher.filterFor(reference);
       if (!filter) continue;
-      this.personalOrganizationIds ??= findPersonalOrganizationIds(this.subject.userId);
+      this.personalOrganizationIds ??= findPersonalOrganizationIds(this.matcher.subject.userId);
       const scoped = {
         ...filter,
-        ...personalFilter(this.subject.userId, await this.personalOrganizationIds, reference.path),
+        ...personalFilter(this.matcher.subject.userId, await this.personalOrganizationIds, reference.path),
       };
       // The raw collection, as the purge runs it: Mongoose would cast its `''` organization id.
       const cursor = mongoose
@@ -380,39 +338,22 @@ export class SubjectRecordExport {
   ): ReferenceMatch[] {
     const matches: ReferenceMatch[] = [];
     for (const reference of references) {
-      if (!this.matches(document, reference)) continue;
+      if (!this.matcher.matches(document, reference)) continue;
       const id = String(document._id);
       if (reference.scope === 'personal' && (!personal.get(reference)?.has(id) || organizationFiles.has(id))) {
         continue;
       }
-      const isSubject = this.isSubject(reference);
+      const isSubject = this.matcher.isSubject(reference);
       // A path that reaches an array in the stored document is matched element by element.
       matches.push({ reference, throughArray: matchingArrayElements(document, reference.path, isSubject) !== null });
     }
     return matches;
   }
 
-  private matches(document: LeanDocument, reference: UserReference): boolean {
-    if (!valuesAt(document, reference.path).some(this.isSubject(reference))) return false;
-    return Object.entries(reference.where ?? {}).every(([path, wanted]) =>
-      valuesAt(document, path).some(value => String(value) === wanted)
-    );
-  }
-
-  private isSubject(reference: UserReference): (value: unknown) => boolean {
-    const expected = this.expectedValue(reference);
-    if (expected === null) return () => false;
-    if (reference.matchBy === 'email') {
-      const lowered = expected.toLowerCase();
-      return value => typeof value === 'string' && value.toLowerCase() === lowered;
-    }
-    return value => String(value) === expected;
-  }
-
   /** Whether the reference holds a value and none of it is this person. */
   private namesSomeoneElse(document: LeanDocument, reference: UserReference): boolean {
     const values = valuesAt(document, reference.path).filter(value => value !== null && value !== undefined);
-    return values.length > 0 && !values.some(this.isSubject(reference));
+    return values.length > 0 && !values.some(this.matcher.isSubject(reference));
   }
 
   private recordFor(
@@ -439,7 +380,7 @@ export class SubjectRecordExport {
     const throughArray = new Map<string, unknown[]>();
     const origins = new Map<unknown, unknown>();
     for (const reference of references) {
-      const isSubject = this.isSubject(reference);
+      const isSubject = this.matcher.isSubject(reference);
       const match = matchingArrayElements(document, reference.path, isSubject);
       if (match) {
         throughArray.set(match.arrayPath, valuesAt(document, match.arrayPath));
@@ -521,7 +462,7 @@ export class SubjectRecordExport {
         continue;
       }
       for (const { reference } of arrayMatches) {
-        const match = matchingArrayElements(document, path, this.isSubject(reference));
+        const match = matchingArrayElements(document, path, this.matcher.isSubject(reference));
         if (!match || match.elements.length === 0) continue;
         const kept = arrayElements.get(match.arrayPath) ?? [];
         const seen = new Set(kept);
@@ -567,29 +508,3 @@ const MAX_TIME_MS_EXPIRED = 50;
  */
 const isServerQueryFailure = (error: unknown): boolean =>
   error instanceof mongoose.mongo.MongoServerError && error.code === MAX_TIME_MS_EXPIRED;
-
-const WALK_TIER: Partial<Record<DataHolder['kind'], number>> = { subject: 0, holder: 1, viaParent: 2 };
-
-/**
- * Exported models by tier (the subject's own record, holders, then `viaParent` children), within a
- * tier by `sizeOf` then name, with every `viaParent` child after its parent.
- */
-function orderForWalk(registry: DataHolderRegistry, sizeOf: (model: string) => number = () => 0): string[] {
-  const ordered: string[] = [];
-  const visiting = new Set<string>();
-  const visit = (model: string) => {
-    if (ordered.includes(model)) return;
-    if (visiting.has(model)) throw new Error(`Data holder registry has a viaParent cycle at "${model}"`);
-    visiting.add(model);
-    const holder = registry[model];
-    if (holder?.kind === 'viaParent') visit(holder.parent);
-    visiting.delete(model);
-    ordered.push(model);
-  };
-  const exported = Object.entries(registry)
-    .filter(([, holder]) => isExported(holder))
-    .map(([model, holder]) => ({ model, tier: WALK_TIER[holder.kind] ?? 0, size: sizeOf(model) }))
-    .sort((a, b) => a.tier - b.tier || a.size - b.size || a.model.localeCompare(b.model));
-  for (const { model } of exported) visit(model);
-  return ordered;
-}

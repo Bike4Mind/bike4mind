@@ -301,6 +301,12 @@ const DLQ_REGISTRY = [
     describe: entityAt('Export job', 'exportJobId'),
   },
   {
+    label: 'account-erasure',
+    displayName: 'Account Erasure',
+    application: 'AccountErasure',
+    sourceQueue: 'accountErasureQueue',
+  },
+  {
     label: 'generation-job',
     displayName: 'Generation Job',
     application: 'GenerationJob',

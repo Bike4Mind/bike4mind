@@ -68,6 +68,7 @@ const menuEntries = (
       : { action: 'scheduleDeletion', label: 'Schedule deletion (user request)', danger: true },
     deletionBlocked
   ),
+  gateEntry({ action: 'erase', label: 'Erase user data', danger: true }, deletionBlocked),
   gateEntry({ action: 'delete', label: 'Delete user', danger: true }, deletionBlocked),
 ];
 
