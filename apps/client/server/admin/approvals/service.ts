@@ -97,12 +97,23 @@ const loadApproval = async (id: string): Promise<AdminApproval> => {
   return approval;
 };
 
+/** Runs a compensating status write; its own failure is logged so it never replaces the error being reported. */
+const compensate = async (req: Request, tag: string, approvalId: string, write: () => Promise<unknown>) => {
+  try {
+    await write();
+  } catch (error) {
+    req.logger.error(tag, { approvalId, error });
+  }
+};
+
 /** A pending record past its expiry is closed as expired so it leaves the queue. */
-const assertPendingAndLive = async (approval: AdminApproval, now: Date): Promise<void> => {
+const assertPendingAndLive = async (req: Request, approval: AdminApproval, now: Date): Promise<void> => {
   if (approval.status === 'expired') throw expiredError();
   if (approval.status !== 'pending') throw new ConflictError(`This request is already ${approval.status}`);
   if (isExpired(approval, now)) {
-    await adminApprovalRepository.finish(approval.id, 'pending', 'expired');
+    await compensate(req, '[ADMIN_APPROVAL_EXPIRE_FAILED]', approval.id, () =>
+      adminApprovalRepository.finish(approval.id, 'pending', 'expired')
+    );
     throw expiredError();
   }
 };
@@ -151,7 +162,9 @@ export async function requestApproval(
     });
   } catch (error) {
     // The request write is strict: an unaudited request must not stay approvable.
-    await adminApprovalRepository.finish(approval.id, 'pending', 'failed', { error: 'audit write failed' });
+    await compensate(req, '[ADMIN_APPROVAL_REQUEST_ROLLBACK_FAILED]', approval.id, () =>
+      adminApprovalRepository.finish(approval.id, 'pending', 'failed', { error: 'audit write failed' })
+    );
     throw error;
   }
   return { approvalId: approval.id, status: 'pending', expiresAt: approval.expiresAt };
@@ -183,7 +196,7 @@ export async function approveApproval(req: Request, id: string): Promise<Approve
     );
   }
   const now = new Date();
-  await assertPendingAndLive(approval, now);
+  await assertPendingAndLive(req, approval, now);
   if (approvalParamsHash(approval.paramsJson) !== approval.paramsHash) throw tamperedError();
 
   const redeemedByRequester = approval.action === 'user.impersonate_admin';
@@ -198,7 +211,9 @@ export async function approveApproval(req: Request, id: string): Promise<Approve
   if (!claimed) throw new ConflictError('This request was already decided or has expired.');
   // The claim re-reads the record, and these are the params that run.
   if (approvalParamsHash(claimed.paramsJson) !== claimed.paramsHash) {
-    await adminApprovalRepository.finish(claimed.id, to, 'failed', { error: 'stored params changed' });
+    await compensate(req, '[ADMIN_APPROVAL_TAMPER_MARK_FAILED]', claimed.id, () =>
+      adminApprovalRepository.finish(claimed.id, to, 'failed', { error: 'stored params changed' })
+    );
     throw tamperedError();
   }
 
@@ -212,7 +227,9 @@ export async function approveApproval(req: Request, id: string): Promise<Approve
       details,
     });
   } catch (error) {
-    await adminApprovalRepository.finish(claimed.id, to, 'failed', { error: 'audit write failed' });
+    await compensate(req, '[ADMIN_APPROVAL_APPROVE_ROLLBACK_FAILED]', claimed.id, () =>
+      adminApprovalRepository.finish(claimed.id, to, 'failed', { error: 'audit write failed' })
+    );
     throw error;
   }
   if (redeemedByRequester) return { approval: claimed };
@@ -226,13 +243,17 @@ export async function approveApproval(req: Request, id: string): Promise<Approve
       approval: claimed,
     });
   } catch (error) {
-    await adminApprovalRepository.finish(claimed.id, 'executing', 'failed', { error: errorMessage(error) });
-    await recordAdminActionFromRequest(req, {
-      action: 'admin.approval.failed',
-      target,
-      summary: `approved request failed: ${claimed.summary}`,
-      details: { ...details, error: errorMessage(error) },
-    });
+    await compensate(req, '[ADMIN_APPROVAL_MARK_FAILED_FAILED]', claimed.id, () =>
+      adminApprovalRepository.finish(claimed.id, 'executing', 'failed', { error: errorMessage(error) })
+    );
+    await compensate(req, '[ADMIN_APPROVAL_FAILED_AUDIT_FAILED]', claimed.id, () =>
+      recordAdminActionFromRequest(req, {
+        action: 'admin.approval.failed',
+        target,
+        summary: `approved request failed: ${claimed.summary}`,
+        details: { ...details, error: errorMessage(error) },
+      })
+    );
     throw error;
   }
   // The action already ran: a failed bookkeeping write is logged, never reported as a failed action.
@@ -266,7 +287,7 @@ export async function rejectApproval(req: Request, id: string, reason: string): 
     throw new ForbiddenError(missingAdminPermissionMessage(approval.requiredPermission));
   }
   const now = new Date();
-  await assertPendingAndLive(approval, now);
+  await assertPendingAndLive(req, approval, now);
   const rejected = await adminApprovalRepository.claim(
     approval.id,
     'pending',
@@ -285,15 +306,13 @@ export async function rejectApproval(req: Request, id: string, reason: string): 
     });
   } catch (error) {
     // An unaudited rejection must not stand; the request goes back to pending.
-    try {
-      await adminApprovalRepository.finish(rejected.id, 'rejected', 'pending', {
+    await compensate(req, '[ADMIN_APPROVAL_REJECT_ROLLBACK_FAILED]', rejected.id, () =>
+      adminApprovalRepository.finish(rejected.id, 'rejected', 'pending', {
         decidedBy: undefined,
         decidedAt: undefined,
         decisionReason: undefined,
-      });
-    } catch (rollbackError) {
-      req.logger.error('[ADMIN_APPROVAL_REJECT_ROLLBACK_FAILED]', { approvalId: rejected.id, error: rollbackError });
-    }
+      })
+    );
     throw error;
   }
   return rejected;

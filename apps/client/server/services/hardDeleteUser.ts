@@ -32,6 +32,8 @@ export type HardDeleteContext = {
   recordInTransaction?: (target: IUserDocument | null, cancellation: AccountSubscriptionCancellation) => Promise<void>;
   /** The delete's transaction failed after the subscription cancel, which cannot roll back. */
   onDeleteFailed?: (target: IUserDocument | null, cancellation: AccountSubscriptionCancellation) => Promise<void>;
+  /** The delete's transaction committed; anything that throws after this ran post-commit work only. */
+  onDeleteCommitted?: () => void;
 };
 
 /**
@@ -116,6 +118,7 @@ export async function hardDeleteUser<T>(
           throw error;
         }
         deleteCommitted = true;
+        context.onDeleteCommitted?.();
         if (cancelAfterDelete) {
           // Cancellation can win until the guarded delete commits. Do no external writes before
           // that point: a failed due-date guard must leave a restored account's subscriptions alone.

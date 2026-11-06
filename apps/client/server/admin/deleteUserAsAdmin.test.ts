@@ -36,6 +36,7 @@ import { deleteUserAsAdmin, executeApprovedAdminDelete } from './deleteUserAsAdm
 type DeleteContext = {
   onDeleteFailed: (target: unknown, cancellation: unknown) => Promise<void>;
   assertInTransaction?: () => Promise<void>;
+  onDeleteCommitted?: () => void;
 };
 
 const APPROVAL = { id: 'approval-1' } as AdminApproval;
@@ -71,16 +72,19 @@ describe('executeApprovedAdminDelete', () => {
   });
 
   it('reports success when a step after the committed delete throws', async () => {
-    mocks.findById.mockResolvedValueOnce({ id: 'target', isAdmin: true }).mockResolvedValueOnce(null);
-    mocks.hardDeleteUser.mockRejectedValue(new Error('slack down'));
+    mocks.findById.mockResolvedValue({ id: 'target', isAdmin: true });
+    mocks.hardDeleteUser.mockImplementation(async (_id: string, context: DeleteContext) => {
+      context.onDeleteCommitted?.();
+      throw new Error('slack down');
+    });
     await expect(executeApprovedAdminDelete(req, PARAMS, APPROVAL)).resolves.toEqual({ deletedUserId: 'target' });
     expect(req.logger.error).toHaveBeenCalledWith('[ADMIN_APPROVAL_DELETE_AFTER_COMMIT_FAILED]', expect.anything());
   });
 
-  it('fails when the delete throws and the target is still there', async () => {
-    mocks.findById.mockResolvedValue({ id: 'target', isAdmin: true });
-    mocks.hardDeleteUser.mockRejectedValue(new Error('txn aborted'));
-    await expect(executeApprovedAdminDelete(req, PARAMS, APPROVAL)).rejects.toThrow('txn aborted');
+  it('fails when the delete throws before committing, even if the target row is gone', async () => {
+    mocks.findById.mockResolvedValueOnce({ id: 'target', isAdmin: true }).mockResolvedValue(null);
+    mocks.hardDeleteUser.mockRejectedValue(new Error('user not found'));
+    await expect(executeApprovedAdminDelete(req, PARAMS, APPROVAL)).rejects.toThrow('user not found');
   });
 });
 

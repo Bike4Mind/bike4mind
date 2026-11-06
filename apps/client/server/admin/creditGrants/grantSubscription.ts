@@ -301,34 +301,36 @@ export async function grantSubscription(req: Request, params: GrantSubscriptionP
     // resolution is User-owned only - when the org-seat fast-follow lands
     // (ACCESS_MODEL §3.2), it must add a seat-holder fan-out for mapped
     // prices alongside these pushes.)
-    const promises: Promise<void>[] = [];
+    await notifyAfterCommit(req, async () => {
+      const promises: Promise<void>[] = [];
 
-    // Check if organization has users array and if it's populated
-    const orgUsers = targetOrganization.users;
-    if (orgUsers && Array.isArray(orgUsers) && orgUsers.length > 0) {
-      const userNotifications = orgUsers
-        .filter((orgUser: any) => orgUser && orgUser.userId)
-        .map((orgUser: any) =>
-          sendToClient(orgUser.userId, Resource.websocket.managementEndpoint, {
-            action: 'invalidate_query',
-            queryKey: ['subscriptions'],
-          })
-        );
-      promises.push(...userNotifications);
-    }
+      // Check if organization has users array and if it's populated
+      const orgUsers = targetOrganization.users;
+      if (orgUsers && Array.isArray(orgUsers) && orgUsers.length > 0) {
+        const userNotifications = orgUsers
+          .filter((orgUser: any) => orgUser && orgUser.userId)
+          .map((orgUser: any) =>
+            sendToClient(orgUser.userId, Resource.websocket.managementEndpoint, {
+              action: 'invalidate_query',
+              queryKey: ['subscriptions'],
+            })
+          );
+        promises.push(...userNotifications);
+      }
 
-    promises.push(
-      sendToClient(userId, Resource.websocket.managementEndpoint, {
-        action: 'invalidate_query',
-        queryKey: ['subscriptions'],
-      }),
-      sendToClient(userId, Resource.websocket.managementEndpoint, {
-        action: 'invalidate_query',
-        queryKey: ['organizations'],
-      })
-    );
+      promises.push(
+        sendToClient(userId, Resource.websocket.managementEndpoint, {
+          action: 'invalidate_query',
+          queryKey: ['subscriptions'],
+        }),
+        sendToClient(userId, Resource.websocket.managementEndpoint, {
+          action: 'invalidate_query',
+          queryKey: ['organizations'],
+        })
+      );
 
-    await notifyAfterCommit(req, () => Promise.all(promises));
+      await Promise.all(promises);
+    });
 
     return {
       success: true,

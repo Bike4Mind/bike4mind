@@ -94,6 +94,30 @@ describe('requestApproval', () => {
     expect(body).toMatchObject({ approvalId: ID, status: 'pending' });
     expect(auditActions()).toEqual(['admin.approval.requested']);
   });
+
+  it('rethrows the requested audit error when its rollback also fails', async () => {
+    mocks.repo.create.mockImplementation(async input => ({
+      ...input,
+      id: ID,
+      status: 'pending',
+      createdAt: new Date(),
+    }));
+    mocks.record.mockRejectedValueOnce(new Error('audit down'));
+    mocks.repo.finish.mockRejectedValueOnce(new Error('db down'));
+    const error = vi.fn();
+    const req = Object.assign(fullAdmin(REQUESTER), { logger: { error } });
+    await expect(
+      requestApproval(req, {
+        action: 'users.bulk',
+        params: PARAMS,
+        summary: 'Suspend 2 users',
+        reason: 'spam wave',
+        requiredPermission: 'users:moderate',
+        requiresFullAdmin: true,
+      })
+    ).rejects.toThrow('audit down');
+    expect(error).toHaveBeenCalledWith('[ADMIN_APPROVAL_REQUEST_ROLLBACK_FAILED]', expect.anything());
+  });
 });
 
 describe('approveApproval', () => {
@@ -188,6 +212,34 @@ describe('approveApproval', () => {
     await expect(approveApproval(fullAdmin(APPROVER), ID)).rejects.toThrow('cohort changed');
     expect(mocks.repo.finish).toHaveBeenCalledWith(ID, 'executing', 'failed', { error: 'cohort changed' });
     expect(auditActions()).toEqual(['admin.approval.approved', 'admin.approval.failed']);
+  });
+
+  it('rethrows the executor error when marking failed and the failed audit both throw', async () => {
+    mocks.execute.mockRejectedValue(new Error('cohort changed'));
+    mocks.repo.finish.mockRejectedValueOnce(new Error('db down'));
+    mocks.record.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('audit down'));
+    const error = vi.fn();
+    const req = Object.assign(fullAdmin(APPROVER), { logger: { error } });
+    await expect(approveApproval(req, ID)).rejects.toThrow('cohort changed');
+    expect(error).toHaveBeenCalledWith('[ADMIN_APPROVAL_MARK_FAILED_FAILED]', expect.anything());
+    expect(error).toHaveBeenCalledWith('[ADMIN_APPROVAL_FAILED_AUDIT_FAILED]', expect.anything());
+  });
+
+  it('rethrows the approved audit error when its rollback also fails', async () => {
+    mocks.record.mockRejectedValueOnce(new Error('audit down'));
+    mocks.repo.finish.mockRejectedValueOnce(new Error('db down'));
+    const error = vi.fn();
+    const req = Object.assign(fullAdmin(APPROVER), { logger: { error } });
+    await expect(approveApproval(req, ID)).rejects.toThrow('audit down');
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith('[ADMIN_APPROVAL_APPROVE_ROLLBACK_FAILED]', expect.anything());
+  });
+
+  it('still answers 410 when closing an expired record fails', async () => {
+    mocks.repo.findById.mockResolvedValue(approvalOf({ expiresAt: new Date(Date.now() - 1) }));
+    mocks.repo.finish.mockRejectedValueOnce(new Error('db down'));
+    const req = Object.assign(fullAdmin(APPROVER), { logger: { error: vi.fn() } });
+    await expect(approveApproval(req, ID)).rejects.toMatchObject({ statusCode: 410 });
   });
 
   it('still succeeds, and records no failure, when marking the record executed throws', async () => {

@@ -24,7 +24,13 @@ export const deletedUserTarget = (id: string, user: Pick<IUserDocument, 'name' |
 });
 
 /** Hard-deletes `userId` as `req.user`; shared by the delete route and the approved `user.delete_admin` executor. */
-export async function deleteUserAsAdmin(req: Request, userId: string, reason: string, approval?: AdminApproval) {
+export async function deleteUserAsAdmin(
+  req: Request,
+  userId: string,
+  reason: string,
+  approval?: AdminApproval,
+  onDeleteCommitted?: () => void
+) {
   const admin = req.user!;
   return hardDeleteUser(
     userId,
@@ -32,6 +38,7 @@ export async function deleteUserAsAdmin(req: Request, userId: string, reason: st
       deletedBy: String(admin.id),
       initiatedBy: 'admin',
       logger: req.logger,
+      onDeleteCommitted,
       // An approved delete re-reads the target in the delete's transaction, so a demotion racing it aborts it.
       ...(approval && { assertInTransaction: () => assertStillAdmin(userId) }),
       // The delete and its audit entry commit together; cascades and notifications run after.
@@ -105,11 +112,14 @@ export async function executeApprovedAdminDelete(req: Request, params: DeleteAdm
   }
   // Checked here too so a demoted target fails before the subscription cancel, which cannot roll back.
   await assertStillAdmin(params.userId);
+  let committed = false;
   try {
-    await deleteUserAsAdmin(req, params.userId, params.reason, approval);
+    await deleteUserAsAdmin(req, params.userId, params.reason, approval, () => {
+      committed = true;
+    });
   } catch (error) {
-    // Notifications and cleanup run after the delete commits; once the row is gone the approved action ran.
-    if (await userRepository.findById(params.userId)) throw error;
+    // Notifications and cleanup run after the delete commits; once it has committed the approved action ran.
+    if (!committed) throw error;
     req.logger.error('[ADMIN_APPROVAL_DELETE_AFTER_COMMIT_FAILED]', { approvalId: approval.id, error });
   }
   return { deletedUserId: params.userId };
