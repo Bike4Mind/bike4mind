@@ -13,6 +13,7 @@ import {
   type VerdictEvalReport,
   type VerdictEvalScore,
 } from '@client/app/utils/verdictEval';
+import type { SignupVerdict } from '@server/users/signupClassifier';
 
 /**
  * Grades the automated abuse verdicts against admin labels. Pure; the loader
@@ -57,7 +58,7 @@ export type EvalAccountOutcome = {
   reviewState: SignupRiskReviewState | null;
 };
 
-export type SignupChartVerdict = 'suspected' | 'legit' | 'unclassified';
+export type SignupChartVerdict = SignupVerdict;
 
 export type GradeVerdictsInput = {
   since: Date;

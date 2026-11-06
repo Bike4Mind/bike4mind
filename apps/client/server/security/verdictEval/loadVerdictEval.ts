@@ -36,8 +36,14 @@ export const VERDICT_EVAL_DETECTION_LIMIT = 2_000;
 export const VERDICT_EVAL_ACCOUNT_LIMIT = 5_000;
 const IN_CHUNK = 500;
 
-const SUSPEND_ACTIONS = ['user.suspended', 'user.bulk.contained'];
-const REINSTATE_ACTIONS = ['user.reinstated', 'user.bulk.undone'];
+const SUSPEND_ACTIONS = ['user.suspended', 'user.bulk.suspended', 'user.bulk.contained', 'abuse.bulk.ban'];
+const REINSTATE_ACTIONS = ['user.reinstated'];
+const REINSTATED_ENTRIES = [...REINSTATE_ACTIONS, 'user.bulk.undone'];
+// A bulk undo only reinstates when it reverted a suspend or contain; undoing a tag or credit change says nothing.
+const BULK_UNDONE_BAN = { action: 'user.bulk.undone', 'details.undoneAction': { $in: ['suspend', 'contain'] } };
+const LABEL_ACTIONS_FILTER = {
+  $or: [{ action: { $in: [...SUSPEND_ACTIONS, ...REINSTATE_ACTIONS] } }, BULK_UNDONE_BAN],
+};
 const LABEL_REVIEW_STATES: SignupRiskReviewState[] = ['approved', 'banned'];
 const OBJECT_ID = /^[0-9a-f]{24}$/;
 
@@ -149,7 +155,7 @@ export async function loadVerdictEvalInput(
     // Accounts an admin suspended, contained, reinstated or un-contained in the window, with or without a detection.
     AdminAuditLogModel.find(
       {
-        action: { $in: [...SUSPEND_ACTIONS, ...REINSTATE_ACTIONS] },
+        ...LABEL_ACTIONS_FILTER,
         occurredAt: { $gte: since },
         'target.kind': 'user',
       },
@@ -168,15 +174,15 @@ export async function loadVerdictEvalInput(
   ]);
   if (actedOn.length > VERDICT_EVAL_ACCOUNT_LIMIT || reviewed.length > VERDICT_EVAL_ACCOUNT_LIMIT) truncated = true;
 
-  const userIds = [
+  const allUserIds = [
     ...new Set([
       ...detections.flatMap(detection => detection.userIds),
       ...actedOn.map(entry => entry.target.id),
       ...reviewed.map(user => user._id.toString()),
     ]),
-  ]
-    .filter(id => OBJECT_ID.test(id))
-    .slice(0, VERDICT_EVAL_ACCOUNT_LIMIT);
+  ].filter(id => OBJECT_ID.test(id));
+  if (allUserIds.length > VERDICT_EVAL_ACCOUNT_LIMIT) truncated = true;
+  const userIds = allUserIds.slice(0, VERDICT_EVAL_ACCOUNT_LIMIT);
 
   const [audits, users] = await Promise.all([
     inChunks(userIds, chunk =>
@@ -184,7 +190,7 @@ export async function loadVerdictEvalInput(
         {
           'target.kind': 'user',
           'target.id': { $in: chunk },
-          action: { $in: [...SUSPEND_ACTIONS, ...REINSTATE_ACTIONS] },
+          ...LABEL_ACTIONS_FILTER,
         },
         { action: 1, 'actor.kind': 1, 'target.id': 1, occurredAt: 1 }
       )
@@ -223,7 +229,7 @@ export async function loadVerdictEvalInput(
     return {
       userId,
       adminSuspendedAt: latest(userId, SUSPEND_ACTIONS, true),
-      reinstatedAt: latest(userId, REINSTATE_ACTIONS, false),
+      reinstatedAt: latest(userId, REINSTATED_ENTRIES, false),
       blockedNow: user.isBanned === true || user.moderation?.status === 'suspended',
       reviewState: user.riskScore?.reviewState ?? null,
     };

@@ -19,7 +19,7 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
-import { buildVerdictEvalReport, type VerdictEvalDeps } from './loadVerdictEval';
+import { buildVerdictEvalReport, VERDICT_EVAL_ACCOUNT_LIMIT, type VerdictEvalDeps } from './loadVerdictEval';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -63,9 +63,16 @@ async function seedDetection(userIds: string[], verdict: string | null): Promise
   return _id.toString();
 }
 
-const audit = (action: string, userId: string, actorKind: 'user' | 'system', occurredAt: Date) =>
+const audit = (
+  action: string,
+  userId: string,
+  actorKind: 'user' | 'system',
+  occurredAt: Date,
+  details?: Record<string, unknown>
+) =>
   AdminAuditLogModel.collection.insertOne({
     action,
+    details,
     actor: { kind: actorKind, scope: 'platform', name: 'seed', wasAdmin: actorKind === 'user' },
     target: { kind: 'user', id: userId, displayName: 'seed' },
     occurredAt,
@@ -143,5 +150,47 @@ describe('buildVerdictEvalReport', () => {
     expect(signupVerdicts).toHaveBeenCalledWith(
       expect.objectContaining({ range: '7d', userIds: expect.arrayContaining([farm, lookalike, selfBanned]) })
     );
+  });
+
+  it('labels bulk admin suspensions and bans, and counts a bulk undo only when it reverted a suspend or contain', async () => {
+    const bulkSuspended = await seedUser({ createdAt: ago(10), isBanned: true });
+    const abuseBanned = await seedUser({ createdAt: ago(10), isBanned: true });
+    const taggedUndone = await seedUser({ createdAt: ago(10), isBanned: true });
+    const containUndone = await seedUser({ createdAt: ago(10), isBanned: false });
+
+    await audit('user.bulk.suspended', bulkSuspended, 'user', ago(8));
+    await audit('abuse.bulk.ban', abuseBanned, 'user', ago(8));
+    await audit('user.bulk.suspended', taggedUndone, 'user', ago(8));
+    await audit('user.bulk.undone', taggedUndone, 'user', ago(4), { undoneAction: 'addTag' });
+    await audit('user.bulk.contained', containUndone, 'user', ago(8));
+    await audit('user.bulk.undone', containUndone, 'user', ago(4), { undoneAction: 'contain' });
+
+    const signupVerdicts = async () =>
+      new Map([
+        [bulkSuspended, 'legit' as const],
+        [abuseBanned, 'legit' as const],
+        [taggedUndone, 'legit' as const],
+        [containUndone, 'suspected' as const],
+      ]);
+    const report = await buildVerdictEvalReport(7, { signupVerdicts }, NOW);
+
+    const sources = Object.fromEntries(report.disagreements.map(row => [row.userId, row.labelSource]));
+    expect(sources).toEqual({
+      [bulkSuspended]: 'adminSuspended',
+      [abuseBanned]: 'adminSuspended',
+      [taggedUndone]: 'adminSuspended',
+      [containUndone]: 'reinstated',
+    });
+  });
+
+  it('flags the report as truncated when the accounts to grade exceed the cap', async () => {
+    const ids = await Promise.all(
+      Array.from({ length: VERDICT_EVAL_ACCOUNT_LIMIT + 1 }, () => seedUser({ createdAt: ago(10) }))
+    );
+    await seedDetection(ids, null);
+
+    const report = await buildVerdictEvalReport(7, { signupVerdicts: async () => new Map() }, NOW);
+
+    expect(report.truncated).toBe(true);
   });
 });
