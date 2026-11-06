@@ -59,7 +59,9 @@ import { erasureIdHash } from '@bike4mind/server-utils/privacy/erasureHash';
 import {
   backfillErasureRecords,
   dbNameFromUri,
+  assertRecordsNotTarget,
   describeMongoTarget,
+  describeRecordsSource,
   exportErasureRecords,
   parseErasureExport,
   parseRecordsSource,
@@ -263,18 +265,24 @@ describe('reapplyErasures', () => {
     expect(result).toMatchObject({ matched: 1, reapplied: 1 });
   });
 
-  it('counts a failed purge step as failed, and prints no raw id for it', async () => {
+  it('counts a failed purge step after the row delete as failed, and prints no raw id for it', async () => {
     const erased = await seedAccount();
-    await erase(erased.id);
+    await hardDeleteUser(erased.id, { deletedBy: 'admin', initiatedBy: 'admin', logger }, users =>
+      users.delete(erased.id)
+    );
     const records = await allRecords();
+    await raw(Organization).deleteMany({ userId: erased.id }); // the admin path leaves content behind
+    await raw(Session).deleteMany({ userId: erased.id });
     await restore(erased.insertRows);
+    // An admin record skips the content purge, so the only caller is purgeDeletedUserData: after the delete.
     effects.artifacts.mockRejectedValueOnce(new Error(`cdn down for ${erased.id}`));
     const lines: string[] = [];
     const result = await reapplyErasures({ records, dryRun: false, log: m => lines.push(m) });
     expect(result).toMatchObject({ matched: 1, reapplied: 0, failed: 1 });
     expect(reapplyExitCode(result)).toBe(1);
+    expect(await raw(User).countDocuments({ _id: new mongoose.Types.ObjectId(erased.id) })).toBe(0);
     const out = lines.join('\n');
-    expect(out).toContain('FAILED');
+    expect(out).toContain('purge step(s) failed');
     expect(out).toContain('cdn down');
     expect(out).not.toContain(erased.id);
   });
@@ -337,6 +345,21 @@ describe('records source flags', () => {
   it('prints the target without credentials', () => {
     expect(describeMongoTarget('mongodb+srv://user:secret@c0.example.net/prod?x=1')).toBe('c0.example.net/prod');
     expect(describeMongoTarget('mongodb://127.0.0.1:27017')).toBe('127.0.0.1:27017/(no database)');
+  });
+
+  it('prints no part of a password holding a raw slash', () => {
+    const out = describeMongoTarget('mongodb://admin:ab/cd@db.example:27017/prod');
+    expect(out).toBe('db.example:27017/prod');
+    expect(out).not.toMatch(/ab|cd/);
+  });
+
+  it('prints the records source and refuses one equal to the target', () => {
+    const uri = parseRecordsSource(['--records-uri', 'mongodb://u:p@old.example:27017/prod?x=1']);
+    expect(describeRecordsSource(uri)).toBe('old.example:27017/prod');
+    expect(describeRecordsSource({ kind: 'file', file: 'e.json' })).toBe('file e.json');
+    expect(() => assertRecordsNotTarget(uri, 'mongodb://u:p@old.example:27017/prod')).toThrow(/--from-target/);
+    expect(() => assertRecordsNotTarget(uri, 'mongodb://new.example:27017/prod')).not.toThrow();
+    expect(() => assertRecordsNotTarget(uri, 'mongodb://old.example:27017/other')).not.toThrow();
   });
 });
 

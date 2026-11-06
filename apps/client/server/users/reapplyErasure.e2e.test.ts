@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-import { ErasureRecordModel, Organization, Session, User } from '@bike4mind/database';
+import { ErasureRecordModel, Organization, Session, User, erasureRecordRepository } from '@bike4mind/database';
 import { erasureIdHash } from '@bike4mind/server-utils/privacy/erasureHash';
 import {
   createMongoReplSet,
@@ -146,5 +146,22 @@ describe('reapplyErasure after a simulated restore', () => {
 
     const result = await reapplyErasure(id, { record, logger });
     expect(result.ownedOrganizationIds).toEqual([String(teamOrg)]);
+  });
+
+  it.each(['self', 'admin'] as const)('keeps the %s account when the record write fails', async initiatedBy => {
+    const { id, insertRows } = await seedAccount();
+    await hardDeleteUser(id, { deletedBy: id, initiatedBy, logger }, users => users.delete(id));
+    const record = (await ErasureRecordModel.findOne({ idHash: erasureIdHash(id) }).lean())!;
+    await ErasureRecordModel.deleteMany({});
+    await restoreAccount(id, insertRows);
+    const spy = vi.spyOn(erasureRecordRepository, 'record').mockRejectedValueOnce(new Error('write failed'));
+    try {
+      await expect(reapplyErasure(id, { record, logger })).rejects.toThrow('write failed');
+    } finally {
+      spy.mockRestore();
+    }
+    // The delete rolled back with the failed write: no row gone without its record.
+    expect(await raw(User).countDocuments({ _id: new mongoose.Types.ObjectId(id) })).toBe(1);
+    expect(await ErasureRecordModel.countDocuments({ idHash: record.idHash })).toBe(0);
   });
 });

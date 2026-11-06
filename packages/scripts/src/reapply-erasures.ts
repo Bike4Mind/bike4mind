@@ -5,7 +5,8 @@
  * billing, email, analytics or provider-revoke calls. Logic: ./reapplyErasures.ts.
  *
  * The target is the database named by MONGODB_URI (env, else the stage secret): it MUST be the restored
- * cluster. The target host and database are printed at startup; check them before --execute.
+ * cluster. The target and the records source are printed at startup as `Target:` and `Records:`; check
+ * both before --execute. A --records-uri equal to the target is refused.
  * Dry run by default; pass --execute to write. On --execute the usable records are also copied into the
  * target, so the erasures stay repeatable after the next restore.
  *
@@ -28,8 +29,10 @@
  * :selfhost script preloads the env-backed `sst` shim, so no SST links are needed; the env must hold
  * MONGODB_URI (the restored database), JWT_SECRET (the one the records were written under),
  * SESSION_SECRET and SECRET_ENCRYPTION_KEY (the shared config module reads them at import):
- *   pnpm --filter @bike4mind/scripts db:reapply-erasures:selfhost --export erasures.json
- *   pnpm --filter @bike4mind/scripts db:reapply-erasures:selfhost --records-file erasures.json --execute
+ *   pnpm --filter @bike4mind/scripts db:reapply-erasures:selfhost --export /var/backups/erasures.json
+ *   pnpm --filter @bike4mind/scripts db:reapply-erasures:selfhost --records-file /var/backups/erasures.json --execute
+ * A relative path resolves against packages/scripts, inside the checkout: keep the export outside it,
+ * somewhere a restore or a re-clone will not wipe.
  *
  * Other flags:
  *   --export <json>        write all records (hash-only) from the target to a file and exit
@@ -45,8 +48,10 @@
 import { readFile } from 'node:fs/promises';
 import { connectDB, erasureRecordRepository } from '@bike4mind/database';
 import {
+  assertRecordsNotTarget,
   backfillErasureRecords,
   describeMongoTarget,
+  describeRecordsSource,
   exportErasureRecords,
   parseErasureExport,
   parseRecordsSource,
@@ -75,6 +80,10 @@ async function main() {
 
   const mongoURI = await targetUri();
   console.log(`Target: ${describeMongoTarget(mongoURI)} (must be the restored cluster)`);
+  if (source) {
+    assertRecordsNotTarget(source, mongoURI);
+    console.log(`Records: ${describeRecordsSource(source)}`);
+  }
   await connectDB(mongoURI);
 
   if (exportFile) {

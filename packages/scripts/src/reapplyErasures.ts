@@ -60,11 +60,35 @@ export function parseRecordsSource(argv: string[]): RecordsSource {
   return { kind: 'uri', uri: uri as string, dbName };
 }
 
-/** `host/database` of a mongo uri, credentials dropped: safe to print. */
+/**
+ * `host/database` of a mongo uri, credentials dropped: safe to print. Everything through the last `@`
+ * goes, so a password holding a raw `/` (which the driver only rejects at connect) is not printed.
+ */
 export const describeMongoTarget = (uri: string): string => {
-  const m = /^mongodb(?:\+srv)?:\/\/(?:[^@/]*@)?([^/?]+)(?:\/([^?]*))?/.exec(uri);
-  return m ? `${m[1]}/${m[2] || '(no database)'}` : '(unparseable uri)';
+  const m = /^mongodb(?:\+srv)?:\/\/(.*)$/.exec(uri);
+  if (!m) return '(unparseable uri)';
+  const rest = m[1].slice(m[1].lastIndexOf('@') + 1);
+  const [host, ...path] = rest.split('?')[0].split('/');
+  return `${host}/${path.join('/') || '(no database)'}`;
 };
+
+/** What the operator sees for the records source; the target line sits beside it. */
+export const describeRecordsSource = (source: RecordsSource): string =>
+  source.kind === 'uri'
+    ? `${describeMongoTarget(source.uri).split('/')[0]}/${source.dbName}`
+    : source.kind === 'file'
+      ? `file ${source.file}`
+      : 'the target database';
+
+/**
+ * A `--records-uri` naming the target's own host and database reads the restored cluster, which lacks
+ * every erasure after the restore point and still looks like a clean run: refuse it.
+ */
+export function assertRecordsNotTarget(source: RecordsSource, targetUri: string): void {
+  if (source.kind === 'uri' && describeRecordsSource(source) === describeMongoTarget(targetUri)) {
+    throw new Error('--records-uri is the target database itself; use --from-target if its records survived');
+  }
+}
 
 /** Streams the records collection of another cluster (the pre-restore one), validating each row. */
 export async function* recordsFromCluster(uri: string, dbName: string): AsyncGenerator<IErasureRecord> {
