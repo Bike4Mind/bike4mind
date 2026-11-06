@@ -3,6 +3,7 @@ import { useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { ModelJoint, ModelView } from '@shared/model3d';
+import { newPartNames, startBuildIn } from './buildIn';
 import { explodeModel, frameCamera, poseJoints, VIEW_DIRECTIONS } from './modelScene';
 import { addGlowLights, enableShadows, ModelComposer, ModelStage, type StageLighting } from './modelStage';
 import {
@@ -119,6 +120,10 @@ export function ModelViewport({
   poseRef.current = pose;
   // How far apart the parts are now (0..1); the explode animation moves it towards `exploded`.
   const explodeAmount = useRef(0);
+  const buildFrame = useRef(0);
+  // The parts printing in and when they started, kept across rebuilds so a second pass of the same
+  // model (a re-render, a status change) carries the build on rather than cutting it short.
+  const building = useRef<{ frameKey: string | null; names: Set<string>; start: number } | null>(null);
   const pickedRef = useRef(picked);
   pickedRef.current = picked;
   const onPickRef = useRef(onPick);
@@ -133,6 +138,8 @@ export function ModelViewport({
     // No canvas MSAA: frames go through the composer, whose own target is multisampled.
     const renderer = new THREE.WebGLRenderer({ antialias: false });
     renderer.setPixelRatio(window.devicePixelRatio);
+    // Parts print in behind a clip plane (buildIn.ts).
+    renderer.localClippingEnabled = true;
     element.appendChild(renderer.domElement);
     renderer.domElement.dataset.testid = 'model-pane-canvas';
     const scene = new THREE.Scene();
@@ -299,6 +306,7 @@ export function ModelViewport({
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
       renderer.domElement.removeEventListener('pointerup', onPointerUp);
       clearTimeout(idleTimer);
+      cancelAnimationFrame(buildFrame.current);
       controls.dispose();
       composer.dispose();
       stage.dispose();
@@ -328,6 +336,10 @@ export function ModelViewport({
   useEffect(() => {
     const current = viewer.current;
     if (!current) return;
+    cancelAnimationFrame(buildFrame.current);
+    // Parts the agent just added print in; a model opened afresh builds up whole.
+    const previous = framedFor.current === frameKey ? shownObject.current : null;
+    const added = object && previous !== object ? newPartNames(previous, object) : new Set<string>();
     current.content.clear();
     current.stage.fit(object, { dark, grid, lighting });
     current.composer.fit(current.stage.bounds);
@@ -359,6 +371,23 @@ export function ModelViewport({
         current.reframe();
       }
       current.controls.update();
+      const carried = building.current?.frameKey === frameKey ? building.current : null;
+      const names = new Set([...(carried?.names ?? []), ...added]);
+      const start = carried?.start ?? performance.now();
+      building.current = null;
+      const build =
+        names.size && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+          ? startBuildIn(shown, names, start)
+          : null;
+      if (build) {
+        building.current = { frameKey, names, start };
+        buildFrame.current = requestAnimationFrame(function step(now) {
+          const printing = build.step(now);
+          current.render();
+          if (printing) buildFrame.current = requestAnimationFrame(step);
+          else building.current = null;
+        });
+      }
     }
     current.render();
   }, [object, wireframe, grid, lighting, dark, dimmed, frameKey]);
