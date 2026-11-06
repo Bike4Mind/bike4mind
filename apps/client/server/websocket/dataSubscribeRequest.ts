@@ -1,3 +1,4 @@
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
 import { DataSubscribeRequestAction, Permission } from '@bike4mind/common';
 import { z } from 'zod';

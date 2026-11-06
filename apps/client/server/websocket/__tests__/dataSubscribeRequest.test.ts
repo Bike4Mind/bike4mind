@@ -52,30 +52,30 @@ vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   Connection: { findOne: (...args: unknown[]) => mockConnectionFindOne(...(args as [])) },
-  AdminSettings: {},
-  ApiKey: {},
-  AppFile: {},
-  Artifact: {},
-  ArtifactVersion: {},
-  FabFile: {},
+  AdminSettings: { collection: { collectionName: 'adminsettings' } },
+  ApiKey: { collection: { collectionName: 'apikeys' } },
+  AppFile: { collection: { collectionName: 'appfiles' } },
+  Artifact: { collection: { collectionName: 'artifacts' } },
+  ArtifactVersion: { collection: { collectionName: 'artifactversions' } },
+  FabFile: { collection: { collectionName: 'fabfiles' } },
   findModelByCollectionName: (...args: unknown[]) => mockFindModelByCollectionName(...args),
-  Inbox: {},
+  Inbox: { collection: { collectionName: 'inboxes' } },
   Invite: { collection: { collectionName: 'invites' } },
   mongoose: {},
   Organization: { collection: { collectionName: 'organizations' } },
-  Project: {},
+  Project: { collection: { collectionName: 'projects' } },
   Quest: { collection: { collectionName: 'quests' } },
   QuestMasterPlan: { collection: { collectionName: 'questMasterPlans' } },
   realtimeConnectionRepository: {
     upsertSubscriber: (...args: unknown[]) => mockUpsertSubscriber(...args),
     removeConnectionSubscribers: (...args: unknown[]) => mockRemoveConnectionSubscribers(...args),
   },
-  User: { findById: vi.fn() },
+  User: { findById: vi.fn(), collection: { collectionName: 'users' } },
 }));
 
 const mockSessionFind = vi.fn();
 vi.mock('@bike4mind/database/auth', () => ({
-  Session: { find: (...args: unknown[]) => mockSessionFind(...args) },
+  Session: { find: (...args: unknown[]) => mockSessionFind(...args), collection: { collectionName: 'sessions' } },
 }));
 
 vi.mock('@casl/mongoose', () => ({
@@ -85,7 +85,7 @@ vi.mock('@casl/mongoose', () => ({
 }));
 
 vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
-  Subscription: {},
+  Subscription: { collection: { collectionName: 'subscriptions' } },
 }));
 
 vi.mock('@server/websocket/subscriptionScopes', () => ({
@@ -136,7 +136,8 @@ vi.mock('sst', () => ({
 
 import { func } from '../dataSubscribeRequest';
 import { Project, User } from '@bike4mind/database';
-import { inviteSubscriptionScope } from '@server/websocket/subscriptionScopes';
+import { accessibleBy } from '@casl/mongoose';
+import { adminSettingsSubscriptionScope, inviteSubscriptionScope } from '@server/websocket/subscriptionScopes';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const baseEvent = (accessToken = 'token-123') => ({
@@ -462,5 +463,56 @@ describe('dataSubscribeRequest - registered connection', () => {
 
     await expect(func(baseEvent() as any, {} as any, noopLogger as any)).rejects.toBeInstanceOf(UnauthorizedError);
     expect(mockUpsertSubscriber).not.toHaveBeenCalled();
+  });
+});
+
+describe('dataSubscribeRequest WS handler - admin settings scope', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    connectionRow = { userId: 'caller-1' };
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockVerifyToken.mockReturnValue({ id: 'caller-1' });
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      _id: { toString: () => 'caller-1' },
+      id: 'caller-1',
+      email: 'caller@example.test',
+      tokenVersion: undefined,
+    });
+    mockUpsertSubscriber.mockResolvedValue({ id: 'sub-doc-1' });
+  });
+
+  it('runs the adminsettings find and the persisted query through adminSettingsSubscriptionScope', async () => {
+    const accessibleScope = { accessible: 'admin-settings-ability-scope' };
+    const sentinelScope = { sentinel: 'admin-settings-subscription-scope' };
+    vi.mocked(accessibleBy).mockReturnValue({ ofType: vi.fn().mockReturnValue(accessibleScope) } as never);
+    vi.mocked(adminSettingsSubscriptionScope).mockReturnValue(sentinelScope as never);
+    const scoped = { $and: [{}, sentinelScope] };
+    const find = vi.fn().mockReturnValue({ setOptions: vi.fn().mockReturnValue({ getQuery: () => scoped }) });
+    mockFindModelByCollectionName.mockReturnValue({ find });
+
+    await func(
+      {
+        requestContext: { connectionId: 'conn-1' },
+        body: JSON.stringify({
+          action: 'subscribe_query',
+          accessToken: 'token-123',
+          subscriptionId: 'sub-1',
+          collectionName: 'adminsettings',
+          query: {},
+          fields: {},
+          fetchInitialData: false,
+        }),
+      } as any,
+      {} as any,
+      noopLogger as any
+    );
+
+    expect(adminSettingsSubscriptionScope).toHaveBeenCalledWith(accessibleScope);
+    expect(find.mock.calls[0][0]).toEqual({ $and: [expect.anything(), sentinelScope] });
+    expect(mockUpsertSubscriber).toHaveBeenCalledWith(
+      expect.objectContaining({ collectionName: 'adminsettings', query: scoped }),
+      expect.anything()
+    );
   });
 });
