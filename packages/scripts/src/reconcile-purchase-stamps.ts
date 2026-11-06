@@ -28,11 +28,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { connectDB } from '@bike4mind/database';
+import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 import Stripe from 'stripe';
 import { Config } from '../utils/config';
 import { reconcilePurchaseStamps } from './reconcilePurchaseStamps';
+import { summaryMessage } from './reconcilePurchaseStampsCli';
 import {
   createStripeLookups,
   openReportFile,
@@ -103,6 +105,14 @@ async function main() {
   if (reportFd !== null) {
     writeReportFile(reportFd, JSON.stringify(result, null, 2));
     console.log(`Report written to ${reportPath}`);
+  }
+  if (values.apply && !result.aborted && (result.cleared > 0 || result.reversals.length > 0)) {
+    try {
+      const posted = await postMessageToSlack(summaryMessage(Resource.App.stage, result));
+      if (!posted) console.warn('Slack summary was not posted');
+    } catch (error) {
+      console.warn('Slack summary failed:', error instanceof Error ? error.message : error);
+    }
   }
   if (!values.apply) {
     console.log(
