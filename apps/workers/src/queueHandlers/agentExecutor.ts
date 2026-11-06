@@ -3500,8 +3500,8 @@ async function processExecution(
     // A final-answer iteration runs no tools, so the per-iteration gate above never evaluates it.
     // Surface an answer that follows a below-threshold iteration here. `block` parks the run in
     // `paused` with the answer intact in the checkpoint: Stop accepts it, Continue keeps iterating.
-    // The mode is read from admin defaults here rather than the profile: the profile is only
-    // resolved on a new execution, so a continuation Lambda would otherwise lose the setting.
+    // The profile value wins when present; otherwise the admin default is read here, because the
+    // profile is only resolved on a new execution and a continuation Lambda would lose the setting.
     const completedOnAnswer =
       iterationResult?.isComplete && !iterationResult.reachedMaxIterations && !iterationResult.reachedMaxTotalTokens;
     const lowConfidenceCompletion =
