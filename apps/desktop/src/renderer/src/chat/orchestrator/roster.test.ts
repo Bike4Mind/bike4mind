@@ -93,13 +93,13 @@ describe('buildRoster', () => {
       ...noInput,
       statuses,
       preparing: new Map([
-        ['a', 'dependencies'],
+        ['a', 'starting'],
         ['c', 'worktree'],
       ]),
     });
     const byId = Object.fromEntries(roster.map(agent => [agent.id, agent]));
 
-    expect(byId.a).toMatchObject({ state: 'working', preparing: 'dependencies' });
+    expect(byId.a).toMatchObject({ state: 'working', preparing: 'starting' });
     expect(byId.b.preparing).toBeUndefined();
     expect(byId.c.preparing).toBeUndefined();
   });
