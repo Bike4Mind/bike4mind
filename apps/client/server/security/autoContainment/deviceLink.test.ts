@@ -139,6 +139,14 @@ describe('checkDeviceLink', () => {
     await expect(checkDeviceLink('new-user', deps)).rejects.toThrow('write failed');
     expect(deps.releaseClaim).toHaveBeenCalledWith('new-user');
   });
+
+  it('keeps the claim when assessment fails after the detection is recorded', async () => {
+    const deps = makeDeps({ assessAndContain: vi.fn(async () => Promise.reject(new Error('model down'))) });
+
+    await expect(checkDeviceLink('new-user', deps)).rejects.toThrow('model down');
+    expect(deps.recordDetection).toHaveBeenCalledTimes(1);
+    expect(deps.releaseClaim).not.toHaveBeenCalled();
+  });
 });
 
 describe('sweepDeviceLinks', () => {
@@ -170,6 +178,23 @@ describe('sweepDeviceLinks', () => {
       failed: 1,
     });
     expect(onError).toHaveBeenCalledWith('second-user', expect.any(Error));
+  });
+
+  it('counts an assessment failure as failed and still processes later accounts', async () => {
+    const assessAndContain = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('model down'))
+      .mockResolvedValue({ assessed: true, contained: false });
+    const deps = makeDeps({ assessAndContain });
+
+    const report = await sweepDeviceLinks({
+      ...deps,
+      loadRecent: vi.fn(async () => ({ rows: [newcomer, row('second-user')], truncated: false })),
+    });
+
+    expect(report).toMatchObject({ linked: 2, recorded: 1, failed: 1 });
+    expect(deps.recordDetection).toHaveBeenCalledTimes(2);
+    expect(deps.releaseClaim).not.toHaveBeenCalled();
   });
 
   it('reads nothing when disabled', async () => {
