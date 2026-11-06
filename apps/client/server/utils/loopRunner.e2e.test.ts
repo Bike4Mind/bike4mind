@@ -533,6 +533,7 @@ describe('completeRunnerRun', () => {
     const failed = await createTicket(loop.id);
     const first = await claim(blocked.id);
     const second = await claim(failed.id);
+    await Loop.updateOne({ _id: loop.id }, { $set: { memory: { notes: 'kept', nextAction: 'kept', updatedAt: NOW } } });
 
     await completeRunnerRun(
       USER,
@@ -565,6 +566,7 @@ describe('completeRunnerRun', () => {
       consecutiveFailures: 0,
       lastRunAt: NOW,
       runCount: 2,
+      memory: { notes: 'kept', nextAction: 'kept' },
     });
   });
 

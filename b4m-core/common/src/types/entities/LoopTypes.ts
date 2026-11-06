@@ -372,10 +372,11 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
    */
   resumeAutoPaused(id: string, kind: LoopAutoResume, now: Date): Promise<boolean>;
   /**
-   * Folds a finished desktop run into its loop: the new memory and `lastRunAt`, and one more `runCount`.
+   * Folds a finished desktop run into its loop: the new memory (left as is when undefined) and `lastRunAt`, and one
+   * more `runCount`.
    * Never touches `activeExecutionId`, which only cloud runs hold.
    */
-  foldRunnerRun(id: string, userId: string, memory: ILoopMemory, lastRunAt: Date): Promise<void>;
+  foldRunnerRun(id: string, userId: string, memory: ILoopMemory | undefined, lastRunAt: Date): Promise<void>;
   /**
    * Defers a claimed live loop to `nextRunAt` under a hold of `kind` (default pacing) and releases the claim. The one
    * write of the deferring holds; a loop carries one hold, and `markDispatched` clears it.

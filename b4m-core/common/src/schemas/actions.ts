@@ -1362,6 +1362,8 @@ export const AgentCompletedAction = z.object({
   totalIterations: z.number(),
   totalCreditsUsed: z.number(),
   mementoIds: z.array(z.string()).optional(),
+  /** 'blocked' when a desktop loop run finished but parked its ticket. */
+  failureReason: z.literal('blocked').optional(),
 });
 
 export const AgentFailedAction = z.object({

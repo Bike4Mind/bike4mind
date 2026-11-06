@@ -397,7 +397,7 @@ export function useAgentExecutionSubscriptions(): void {
     unsubscribers.push(
       subscribeToAction('completed', async (msg: IMessageDataToClient) => {
         if (msg.action !== 'completed') return;
-        store().markCompleted(msg.executionId, msg.answer, msg.totalCreditsUsed);
+        store().markCompleted(msg.executionId, msg.answer, msg.totalCreditsUsed, msg.failureReason);
         // Patch the user's optimistic prompt bubble with the final answer so
         // the chat history reflects the completed exchange immediately. The
         // server-side persistRunAsQuest writes the real Quest, which arrives

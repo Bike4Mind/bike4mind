@@ -448,7 +448,7 @@ describe('LoopRunner runs', () => {
       name: 'bash_execute',
       input: { command: 'gh pr create' },
       status: 'done',
-      preview: `Creating pull request\nhttps://github.com/someone-else/app/pull/3\n${PR}\n`,
+      preview: `Creating pull request\n${PR}\nhttps://github.com/someone-else/app/pull/3\n`,
     };
     h.emit({ type: 'tool-end', sessionId: 's1', messageId: 'm', call });
     await h.runner.releaseAll();
@@ -457,6 +457,45 @@ describe('LoopRunner runs', () => {
       reason: `The desktop app quit after opening ${PR} (branch b4m/s1); continue that PR`,
     });
     expect(h.runner.state().lastBlocked).toMatchObject({ ticketId: 't1', loopName: 'Docs loop' });
+  });
+
+  it('releases on quit when the only PR URL came from a call that did not open one', async () => {
+    await h.runner.tick();
+    const call: ChatToolCall = {
+      id: 'c1',
+      name: 'read_file',
+      input: { path: 'CHANGELOG.md' },
+      status: 'done',
+      preview: `- fix (${PR})\n`,
+    };
+    h.emit({ type: 'tool-end', sessionId: 's1', messageId: 'm', call });
+    await h.runner.releaseAll();
+    expect(h.completed[0].outcome).toMatchObject({ outcome: 'released' });
+  });
+
+  it('releases on quit when the opened PR is in another repository', async () => {
+    await h.runner.tick();
+    const call: ChatToolCall = {
+      id: 'c1',
+      name: 'bash_execute',
+      input: { command: 'gh pr create' },
+      status: 'done',
+      preview: 'https://github.com/someone-else/app/pull/3\n',
+    };
+    h.emit({ type: 'tool-end', sessionId: 's1', messageId: 'm', call });
+    await h.runner.releaseAll();
+    expect(h.completed[0].outcome).toMatchObject({ outcome: 'released' });
+  });
+
+  it('does not call it all declined when a call ran, even with an error', async () => {
+    await h.runner.tick();
+    const denied: ChatToolCall = { id: 'c1', name: 'bash_execute', input: { command: 'git push' }, status: 'denied' };
+    const errored: ChatToolCall = { id: 'c2', name: 'bash_execute', input: { command: 'pnpm test' }, status: 'error' };
+    h.emit({ type: 'tool-end', sessionId: 's1', messageId: 'm', call: denied });
+    h.emit({ type: 'tool-end', sessionId: 's1', messageId: 'm', call: errored });
+    h.done('s1', 'tried');
+    await vi.waitFor(() => expect(h.completed).toHaveLength(1));
+    expect(h.completed[0].outcome).not.toMatchObject({ reason: expect.stringContaining('declined') });
   });
 
   it('blocks when every action was declined, and shows it until the next claim', async () => {

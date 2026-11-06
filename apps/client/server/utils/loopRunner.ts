@@ -504,7 +504,7 @@ export async function completeRunnerRun(
     await loopRepository.foldRunnerRun(
       loop.id,
       userId,
-      answer !== undefined ? { ...parseLoopMemory(answer, loop.memory), updatedAt: now } : loop.memory,
+      answer !== undefined ? { ...parseLoopMemory(answer, loop.memory), updatedAt: now } : undefined,
       now
     );
   }
@@ -523,6 +523,7 @@ export async function completeRunnerRun(
             action: 'completed',
             executionId: run.id,
             ...(answer !== undefined && { answer }),
+            ...(set.failureReason === 'blocked' && { failureReason: 'blocked' as const }),
             totalIterations: checkpoint.iteration ?? 0,
             totalCreditsUsed: run.totalCreditsUsed,
           }

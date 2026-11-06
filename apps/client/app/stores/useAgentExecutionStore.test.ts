@@ -507,6 +507,13 @@ describe('useAgentExecutionStore — markCompleted', () => {
     markCompleted('exec-1', undefined, 0);
     expect(useAgentExecutionStore.getState().executions['exec-1'].totalCreditsUsed).toBe(0);
   });
+
+  it('keeps the blocked marker of a desktop loop run so the live view labels it', () => {
+    const { startExecution, markCompleted } = useAgentExecutionStore.getState();
+    startExecution('exec-1', 'session-A');
+    markCompleted('exec-1', undefined, 0, 'blocked');
+    expect(useAgentExecutionStore.getState().executions['exec-1'].failureReason).toBe('blocked');
+  });
 });
 
 describe('useAgentExecutionStore — startChild / selectActiveBackgroundChildrenForSession', () => {

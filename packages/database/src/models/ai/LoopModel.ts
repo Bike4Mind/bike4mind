@@ -288,8 +288,11 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     return result.modifiedCount > 0;
   }
 
-  async foldRunnerRun(id: string, userId: string, memory: ILoopMemory, lastRunAt: Date): Promise<void> {
-    await this.loopModel.updateOne({ _id: id, userId }, { $set: { memory, lastRunAt }, $inc: { runCount: 1 } });
+  async foldRunnerRun(id: string, userId: string, memory: ILoopMemory | undefined, lastRunAt: Date): Promise<void> {
+    await this.loopModel.updateOne(
+      { _id: id, userId },
+      { $set: { ...(memory && { memory }), lastRunAt }, $inc: { runCount: 1 } }
+    );
   }
 }
 

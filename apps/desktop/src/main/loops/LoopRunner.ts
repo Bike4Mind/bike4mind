@@ -3,6 +3,7 @@ import type {
   ChatApprovalMode,
   ChatSession,
   ChatStreamEvent,
+  ChatToolCall,
   CreateCodeSessionRequest,
   CreateCodeSessionResult,
 } from '@shared/chat';
@@ -68,8 +69,7 @@ export interface LoopRunnerDeps {
 
 export const RUNNER_MS = {
   /**
-   * While a lane is free and there is work or a window has focus. An idle runner backs off only to
-   * budget.ts BUDGET.idlePollMaxMs. The knobs to retire once Desktop has a socket client for the
+   * While a lane is free, and the idle and error pace too (budget.ts nextIdleDelay caps it here). The knobs to retire once Desktop has a socket client for the
    * server's loop-changed push (only the web page receives it today).
    */
   claimPoll: 10_000,
@@ -101,6 +101,9 @@ const USER_WIDE_REASON: Record<string, string> = {
 const CREDIT_STOP = /status 422\b/;
 
 const PR_URL = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/g;
+/** Only a call that creates a PR names the run's own PR; reads (CHANGELOGs, gh pr list) name others. */
+const opensPr = (call: ChatToolCall): boolean =>
+  typeof call.input.command === 'string' && /\bgh\s+pr\s+create\b/.test(call.input.command);
 
 /** Prefixed to every claim prompt: the agent otherwise went looking for the repository on disk. */
 const WORKTREE_LINE =
@@ -116,11 +119,14 @@ interface Lane {
   /** What the last approval card in this run asked for: the block reason if it goes unanswered. */
   pending?: string;
   merged?: { pr: PrRef; mergeSha?: string };
-  /** The last PR in the loop's repository the run's tools printed: a quit must not let a rerun open another. */
+  /** The PR in the loop's repository the run opened (or merged): a quit must not let a rerun open another. */
   prUrl?: string;
-  /** Tool calls of the run's own session that the user (or the approval mode) declined, and that ran. */
+  /** Tool calls of the run's own session that were declined (by the user or the approval mode). */
   denied: number;
-  succeeded: number;
+  /** Why the last declined call was refused. */
+  lastDenied?: string;
+  /** Tool calls of the run's own session that ran, whether they succeeded or errored. */
+  ran: number;
   /** Set once the run has an outcome; later events for it are ignored. */
   finished: boolean;
 }
@@ -331,7 +337,7 @@ export class LoopRunner {
       startedAt: this.now(),
       finished: false,
       denied: 0,
-      succeeded: 0,
+      ran: 0,
       batcher: new ProgressBatcher(
         frames => this.deps.client.progress(runId, frames),
         err => {
@@ -373,10 +379,14 @@ export class LoopRunner {
     if (!lane || lane.finished) return;
     const pending = pendingReason(event);
     if (pending) lane.pending = pending;
-    if (event.type === 'tool-end' && event.call.preview) this.notePr(lane, event.call.preview);
+    if (event.type === 'tool-end' && event.call.preview && opensPr(event.call)) this.notePr(lane, event.call.preview);
     if (event.sessionId !== lane.sessionId) return;
-    if (event.type === 'tool-end' && event.call.status === 'denied') lane.denied++;
-    if (event.type === 'tool-end' && event.call.status === 'done') lane.succeeded++;
+    if (event.type === 'tool-end' && event.call.status === 'denied') {
+      lane.denied++;
+      // A refusal without a card (path or loop-tool rules) carries its reason as the error.
+      lane.lastDenied = event.call.approvalDetail ? lane.pending : (event.call.error ?? lane.pending);
+    }
+    if (event.type === 'tool-end' && (event.call.status === 'done' || event.call.status === 'error')) lane.ran++;
     lane.batcher.push(event);
     if (event.type === 'error' && CREDIT_STOP.test(event.message)) {
       this.creditStop(lane.claim.ticket.loopId);
@@ -410,8 +420,8 @@ export class LoopRunner {
     if (children.some(id => this.deps.chat.isSessionBusy(id))) return;
     if (lane.finished) return;
     lane.finished = true;
-    if (lane.denied > 0 && lane.succeeded === 0) {
-      const reason = `Every action was declined: ${lane.pending ?? 'no detail'}`;
+    if (lane.denied > 0 && lane.ran === 0) {
+      const reason = `Every action was declined: ${lane.lastDenied ?? 'no detail'}`;
       await this.finish(lane, { outcome: 'blocked', reason, answer }, true);
       return;
     }

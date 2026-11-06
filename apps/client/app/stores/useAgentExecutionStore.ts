@@ -240,7 +240,12 @@ interface AgentExecutionState {
   /** Append a streaming token delta to the top-level agent's per-iteration buffer (live typing). */
   appendTextDelta: (executionId: string, iteration: number, delta: string) => void;
   recordCredits: (executionId: string, credits: number) => void;
-  markCompleted: (executionId: string, answer: string | undefined, totalCreditsUsed: number) => void;
+  markCompleted: (
+    executionId: string,
+    answer: string | undefined,
+    totalCreditsUsed: number,
+    failureReason?: string
+  ) => void;
   markFailed: (executionId: string, reason: string | undefined, message?: string) => void;
   markAborted: (executionId: string) => void;
   /** Optimistic: flag an execution as aborting the moment the user clicks Stop. */
@@ -622,7 +627,7 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
   // completed/failed/aborted run. Clear both on every terminal transition.
   // `isAborting` is cleared too, so an abort racing a completed/failed event
   // doesn't leave the flag set on a finished run.
-  markCompleted: (executionId, answer, totalCreditsUsed) =>
+  markCompleted: (executionId, answer, totalCreditsUsed, failureReason) =>
     set(state => ({
       executions: withExecution(state, executionId, exec => ({
         ...exec,
@@ -630,6 +635,7 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
         lifecycleRevision: ++lifecycleRevision,
         answer,
         totalCreditsUsed,
+        failureReason,
         pendingPermission: undefined,
         pendingGate: undefined,
         isAborting: false,
