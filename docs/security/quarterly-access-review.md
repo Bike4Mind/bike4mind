@@ -8,7 +8,7 @@ This page covers the app database part of the review. Other systems in scope (th
 
 The review runs in the first week of January, April, July and October. The daily `secretRotationNotifier` cron (09:00 UTC) posts the reminder to the LiveOps Slack channel on the first Monday of each of those months, in production only. The message names the quarter, lists the current counts and links back here. The same run logs the counts as one JSON line (`"report":"access-review"`) in the function's CloudWatch logs, so the quarter's starting point is on record even before anyone acts on it.
 
-The reminder needs the LiveOps Slack webhook admin setting. Without it the cron logs that the webhook is not configured and posts nothing. If the counts cannot be read, the cron logs the error and still posts any secrets due for rotation; start the review from the report below instead.
+The reminder needs the LiveOps Slack webhook admin setting. Without it the cron logs that the webhook is not configured and posts nothing. If the counts cannot be read or Slack does not accept the reminder, the cron logs the error and still posts any secrets due for rotation; start the review from the report below instead.
 
 ## What the report covers
 
@@ -16,16 +16,17 @@ The reminder needs the LiveOps Slack webhook admin setting. Without it the cron 
 
 - **Admin accounts:** every user with the full admin flag or any delegated admin permission, with account status (active, banned, deleted), last activity, and per-account counts of active sign-in sessions, trusted devices, passkeys, OAuth refresh tokens, paired bridge devices and active API keys.
 - **Privileged API keys:** active, unexpired keys owned by an admin account or carrying the `admin:*` scope, with owner, scopes, created, last used and expiry. Pass `--all-keys` to list every active key.
-- **Support access and impersonation:** live support access grants and live impersonation sessions, with the admin and the target account.
+- **Support access and impersonation:** live support access grants and live impersonation sessions, with the session ID, the admin and the target account.
 - **Counts:** admin accounts, active API keys (with admin-scoped, admin-owned, no-expiry and unused-for-90-days subsets), sign-in sessions, impersonation sessions, support access grants, trusted devices, passkeys, OAuth app grants, OAuth refresh tokens and paired bridge devices, across all users.
 
 ## Running the review
 
-Run from the repo root with production credentials. The output names real accounts, so write it outside the repository and never commit it; the script creates its files readable by the owner only.
+Run from the repo root with production credentials. The output names real accounts, so write it outside the repository and never commit it; the script writes its files readable by the owner only, including when replacing existing output files.
 
 1. **Enumerate.** Take the before snapshot:
 
    ```bash
+   mkdir -p ~/access-review
    npx sst shell --stage production pnpm --filter @bike4mind/scripts report:access-review \
      --out ~/access-review/before.md --json ~/access-review/before.json
    ```

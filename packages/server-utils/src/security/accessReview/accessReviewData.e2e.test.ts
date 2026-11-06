@@ -91,7 +91,14 @@ beforeAll(async () => {
   await AuthSessionModel.collection.insertMany([
     { sid: 's1', userId: fullId, revokedAt: null, expiresAt: future, impersonatedBy: null },
     { sid: 's2', userId: fullId, revokedAt: past, expiresAt: future },
-    { sid: 's3', userId: plainId, revokedAt: null, expiresAt: future },
+    {
+      sid: 's3',
+      userId: plainId,
+      revokedAt: null,
+      expiresAt: future,
+      impersonatedBy: delegatedId,
+      impersonationExpiresAt: future,
+    },
     {
       sid: 's4',
       userId: plainId,
@@ -132,9 +139,9 @@ beforeAll(async () => {
     { userId: fullId, deviceLabel: 'old', apiKeyId: 'b2', revokedAt: past },
   ]);
   await SupportAccess.collection.insertMany([
-    { sid: 'a1', userId: plainId, adminId: delegatedId, startedAt: past, expiresAt: future, endedAt: null },
+    { sid: 's3', userId: plainId, adminId: delegatedId, startedAt: past, expiresAt: future, endedAt: null },
     { sid: 'a2', userId: plainId, adminId: fullId, startedAt: past, expiresAt: future, endedAt: past },
-    { sid: 'a3', userId: plainId, adminId: formerAdminId, startedAt: longAgo, expiresAt: future },
+    { sid: 's4', userId: plainId, adminId: formerAdminId, startedAt: longAgo, expiresAt: future },
   ]);
 });
 
@@ -158,8 +165,8 @@ describe('collectAccessReview', () => {
       adminOwnedApiKeys: 1,
       apiKeysWithoutExpiry: 3,
       staleApiKeys: 1,
-      activeSessions: 4,
-      impersonationSessions: 1,
+      activeSessions: 3,
+      impersonationSessions: 2,
       supportAccessGrants: 2,
       trustedDevices: 1,
       passkeys: 2,
@@ -225,6 +232,7 @@ describe('collectAccessReview', () => {
 
     expect(snapshot.supportAccess).toEqual([
       {
+        sessionId: 's4',
         adminId: formerAdminId,
         adminEmail: null,
         userId: plainId,
@@ -232,6 +240,7 @@ describe('collectAccessReview', () => {
         expiresAt: future.toISOString(),
       },
       {
+        sessionId: 's3',
         adminId: delegatedId,
         adminEmail: null,
         userId: plainId,
@@ -241,6 +250,15 @@ describe('collectAccessReview', () => {
     ]);
     expect(snapshot.impersonation).toEqual([
       {
+        sessionId: 's3',
+        adminId: delegatedId,
+        adminEmail: null,
+        userId: plainId,
+        startedAt: null,
+        expiresAt: future.toISOString(),
+      },
+      {
+        sessionId: 's4',
         adminId: formerAdminId,
         adminEmail: null,
         userId: plainId,
@@ -253,6 +271,83 @@ describe('collectAccessReview', () => {
     for (const secret of ['NEVER_IN_REPORT', 'p2', 'keyHash', 'keyDigest', 'keyPrefix']) {
       expect(serialized).not.toContain(secret);
     }
+  });
+
+  it('excludes inactive sessions and support grants from both report paths', async () => {
+    const before = await collectAccessReview({ now });
+    const sessionCases = [
+      { sid: 'review-ordinary' },
+      { sid: 'review-empty-marker', impersonatedBy: '' },
+      { sid: 'review-live', impersonatedBy: delegatedId, impersonationExpiresAt: future },
+      { sid: 'review-ended', impersonatedBy: delegatedId, impersonationExpiresAt: future },
+      { sid: 'review-expired-impersonation', impersonatedBy: delegatedId, impersonationExpiresAt: past },
+      { sid: 'review-missing-deadline', impersonatedBy: delegatedId },
+      { sid: 'review-deadline-boundary', impersonatedBy: delegatedId, impersonationExpiresAt: now },
+      { sid: 'review-expired-session', expiresAt: past },
+      { sid: 'review-session-boundary', expiresAt: now },
+      { sid: 'review-revoked', revokedAt: past, impersonatedBy: delegatedId, impersonationExpiresAt: future },
+    ];
+    const supportCases = [
+      { sid: 'review-live' },
+      { sid: 'review-ended', endedAt: past },
+      { sid: 'review-expired-impersonation' },
+      { sid: 'review-missing-deadline' },
+      { sid: 'review-deadline-boundary' },
+      { sid: 'review-expired-session' },
+      { sid: 'review-session-boundary' },
+      { sid: 'review-revoked' },
+      { sid: 'review-missing-session' },
+    ];
+    const sessionIds = sessionCases.map(session => session.sid);
+    const supportIds = supportCases.map(grant => grant.sid);
+    try {
+      await AuthSessionModel.collection.insertMany(
+        sessionCases.map(session => ({ userId: fullId, revokedAt: null, expiresAt: future, ...session }))
+      );
+      await SupportAccess.collection.insertMany(
+        supportCases.map(grant => ({
+          userId: fullId,
+          adminId: delegatedId,
+          startedAt: past,
+          expiresAt: future,
+          endedAt: null,
+          ...grant,
+        }))
+      );
+      const after = await collectAccessReview({ now });
+      expect(after.counts.activeSessions).toBe(before.counts.activeSessions + 4);
+      expect(after.counts.impersonationSessions).toBe(before.counts.impersonationSessions + 2);
+      expect(after.admins.find(admin => admin.userId === fullId)?.activeSessions).toBe(5);
+      expect(after.counts.supportAccessGrants).toBe(before.counts.supportAccessGrants + 1);
+      expect(
+        after.impersonation
+          .filter(grant => grant.userId === fullId)
+          .map(grant => grant.sessionId)
+          .sort()
+      ).toEqual(['review-ended', 'review-live']);
+      expect(after.supportAccess.filter(grant => grant.userId === fullId)).toEqual([
+        {
+          sessionId: 'review-live',
+          adminId: delegatedId,
+          adminEmail: null,
+          userId: fullId,
+          startedAt: past.toISOString(),
+          expiresAt: future.toISOString(),
+        },
+      ]);
+      await expect(collectAccessReviewCounts(now)).resolves.toEqual(after.counts);
+    } finally {
+      await SupportAccess.collection.deleteMany({ sid: { $in: supportIds } });
+      await AuthSessionModel.collection.deleteMany({ sid: { $in: sessionIds } });
+    }
+  });
+
+  it('returns zero live support grants when all grants have expired', async () => {
+    const snapshot = await collectAccessReview({ now: future });
+    expect(snapshot.counts.supportAccessGrants).toBe(0);
+    expect(snapshot.supportAccess).toEqual([]);
+    expect(snapshot.counts.activeSessions).toBe(0);
+    expect(snapshot.counts.impersonationSessions).toBe(0);
   });
 
   it('lists every active key on request, oldest first', async () => {

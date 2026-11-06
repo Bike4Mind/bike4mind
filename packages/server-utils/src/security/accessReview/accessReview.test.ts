@@ -158,6 +158,7 @@ describe('formatAccessReviewMarkdown', () => {
         ],
         supportAccess: [
           {
+            sessionId: 'support-session-1',
             adminId: 'u1',
             adminEmail: 'one@example.org',
             userId: 'u7',
@@ -165,7 +166,7 @@ describe('formatAccessReviewMarkdown', () => {
             expiresAt: '2027-01-05T00:00:00.000Z',
           },
         ],
-        impersonation: [{ adminId: 'u3', adminEmail: null, userId: 'u8', startedAt: null, expiresAt: null }],
+        impersonation: [{ sessionId: 'impersonation-session-1', adminId: 'u3', adminEmail: null, userId: 'u8', startedAt: null, expiresAt: null }],
       })
     );
     expect(markdown).toContain(
@@ -175,11 +176,27 @@ describe('formatAccessReviewMarkdown', () => {
     expect(markdown).toContain('## Active API keys (2)');
     expect(markdown).toContain('Every active, unexpired API key.');
     expect(markdown).toContain(
-      '| k1 | deploy \\| bot key | one@example.org | yes | admin:*, ai:generate | 2026-01-02 | - | never |  |  |'
+      '| k1 | deploy \\| bot key | one@example.org | yes | admin:\\*, ai:generate | 2026-01-02 | - | never |  |  |'
     );
     expect(markdown).toContain('| k2 | reader | u9 | no | - | - | 2026-12-01 | 2027-06-01 |  |  |');
-    expect(markdown).toContain('| one@example.org | u7 | 2027-01-03 | 2027-01-05 |  |  |');
-    expect(markdown).toContain('| u3 | u8 | - | - |  |  |');
+    expect(markdown).toContain('| support-session-1 | one@example.org | u7 | 2027-01-03 | 2027-01-05 |  |  |');
+    expect(markdown).toContain('| impersonation-session-1 | u3 | u8 | - | - |  |  |');
+  });
+
+  it('identifies separate sessions for the same admin and target on the same day', () => {
+    const delegations = ['session-1', 'session-2'].map(sessionId => ({
+      sessionId,
+      adminId: 'admin-1',
+      adminEmail: 'admin@example.org',
+      userId: 'target-1',
+      startedAt: '2027-01-04T09:00:00.000Z',
+      expiresAt: '2027-01-04T10:00:00.000Z',
+    }));
+    const markdown = formatAccessReviewMarkdown(snapshot({ supportAccess: delegations, impersonation: delegations }));
+    for (const sessionId of ['session-1', 'session-2']) {
+      const row = `| ${sessionId} | admin@example.org | target-1 | 2027-01-04 | 2027-01-04 |  |  |`;
+      expect(markdown.split(row)).toHaveLength(3);
+    }
   });
 
   it('adds before, after and change columns against a baseline', () => {
@@ -196,6 +213,38 @@ describe('formatAccessReviewMarkdown', () => {
     expect(markdown).toContain('| Active API keys | 5 | 5 | 0 |');
     expect(markdown).toContain('| Passkeys | 1 | 3 | +2 |');
     expect(markdown).toContain('| Delegated admin accounts | - | 0 | - |');
+  });
+
+  it.each([
+    ['normal', 'normal'],
+    ['pipe|name', 'pipe\\|name'],
+    ['slash\\name', 'slash\\\\name'],
+    ['slash\\|pipe', 'slash\\\\\\|pipe'],
+    ['double\\\\|pipe', 'double\\\\\\\\\\|pipe'],
+    ['line\nbreak\tname', 'line break name'],
+    ['[label](https://example.org)', '\\[label\\](https://example.org)'],
+    ['<img src="https://example.org">', '&lt;img src="https://example.org"&gt;'],
+    ['&lt;name&gt;', '&amp;lt;name&amp;gt;'],
+    ['**name** `_key_`', '\\*\\*name\\*\\* \\`\\_key\\_\\`'],
+  ])('renders key name %j as literal text in one cell', (name, escapedName) => {
+    const markdown = formatAccessReviewMarkdown(
+      snapshot({
+        apiKeys: [
+          {
+            id: 'k1',
+            name,
+            ownerId: 'u1',
+            ownerEmail: 'owner@example.org',
+            ownerIsAdmin: false,
+            scopes: [],
+            createdAt: null,
+            lastUsedAt: null,
+            expiresAt: null,
+          },
+        ],
+      })
+    );
+    expect(markdown).toContain(`| k1 | ${escapedName} | owner@example.org | no | - | - | - | never |  |  |`);
   });
 });
 

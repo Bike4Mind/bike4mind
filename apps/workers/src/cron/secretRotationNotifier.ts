@@ -13,7 +13,10 @@ import { Resource } from 'sst';
 // Contained so a failed reminder neither blocks the secrets post nor makes a retry repost it.
 async function remindAccessReview(now: Date, slackWebhookUrl: string): Promise<string | undefined> {
   try {
-    return await sendAccessReviewReminder(now, text => postMessageToSlack(slackWebhookUrl, text));
+    return await sendAccessReviewReminder(now, async text => {
+      const posted = await postMessageToSlack(slackWebhookUrl, text);
+      if (!posted) throw new Error('Access review reminder was not accepted by Slack');
+    });
   } catch (error) {
     console.error('Access review reminder failed:', error);
     return undefined;

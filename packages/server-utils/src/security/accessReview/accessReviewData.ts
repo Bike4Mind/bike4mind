@@ -96,7 +96,11 @@ const collections = () => ({
 });
 
 function accessFilters(now: Date) {
-  const sessions = { revokedAt: null, expiresAt: { $gt: now } };
+  const sessions = {
+    revokedAt: null,
+    expiresAt: { $gt: now },
+    $or: [{ impersonatedBy: { $in: [null, ''] } }, { impersonationExpiresAt: { $gt: now } }],
+  };
   const liveKey = { status: ApiKeyStatus.ACTIVE, deletedAt: null };
   const unexpired = { $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }] };
   return {
@@ -112,6 +116,35 @@ function accessFilters(now: Date) {
     unexpired,
     activeKeys: { ...liveKey, ...unexpired },
   };
+}
+
+type SupportAccessDoc = { sid: string; adminId: string; userId: string; startedAt: Date; expiresAt: Date };
+
+function liveSupportAccessPipeline(now: Date): mongoose.PipelineStage[] {
+  const filters = accessFilters(now);
+  return [
+    { $match: filters.supportAccess },
+    {
+      $lookup: {
+        from: AuthSessionModel.collection.name,
+        localField: 'sid',
+        foreignField: 'sid',
+        pipeline: [{ $match: filters.impersonation }, { $project: { _id: 0, sid: 1 } }],
+        as: 'liveSession',
+      },
+    },
+    { $match: { 'liveSession.0': { $exists: true } } },
+    { $project: { _id: 0, sid: 1, adminId: 1, userId: 1, startedAt: 1, expiresAt: 1 } },
+  ];
+}
+
+async function countLiveSupportAccess(now: Date): Promise<number> {
+  const rows = await SupportAccess.collection
+    .aggregate<{ count: number }>([...liveSupportAccessPipeline(now), { $count: 'count' }], {
+      readPreference: 'secondaryPreferred',
+    })
+    .toArray();
+  return rows[0]?.count ?? 0;
 }
 
 async function countAccess(now: Date, adminIds: string[], fullAdmins: number): Promise<AccessReviewCounts> {
@@ -146,7 +179,7 @@ async function countAccess(now: Date, adminIds: string[], fullAdmins: number): P
     }),
     count(c.sessions, f.sessions),
     count(c.sessions, f.impersonation),
-    count(c.supportAccess, f.supportAccess),
+    countLiveSupportAccess(now),
     count(c.trustedDevices, f.trustedDevices),
     count(c.passkeys, f.passkeys),
     count(c.oauthGrants, f.oauthGrants),
@@ -252,11 +285,13 @@ export async function collectAccessReview(options: CollectAccessReviewOptions = 
     .lean<KeyDoc[]>();
 
   const [supportDocs, impersonationDocs, counts] = await Promise.all([
-    SupportAccess.find(f.supportAccess, { adminId: 1, userId: 1, startedAt: 1, expiresAt: 1 })
-      .sort({ startedAt: 1 })
-      .read('secondaryPreferred')
-      .lean<Array<{ adminId: string; userId: string; startedAt: Date; expiresAt: Date }>>(),
+    c.supportAccess
+      .aggregate<SupportAccessDoc>([...liveSupportAccessPipeline(now), { $sort: { startedAt: 1 } }], {
+        readPreference: 'secondaryPreferred',
+      })
+      .toArray(),
     AuthSessionModel.find(f.impersonation, {
+      sid: 1,
       impersonatedBy: 1,
       userId: 1,
       createdAt: 1,
@@ -264,7 +299,9 @@ export async function collectAccessReview(options: CollectAccessReviewOptions = 
     })
       .sort({ createdAt: 1 })
       .read('secondaryPreferred')
-      .lean<Array<{ impersonatedBy: string; userId: string; createdAt?: Date; impersonationExpiresAt: Date }>>(),
+      .lean<
+        Array<{ sid: string; impersonatedBy: string; userId: string; createdAt?: Date; impersonationExpiresAt: Date }>
+      >(),
     countAccess(now, adminIds, admins.filter(admin => admin.fullAdmin).length),
   ]);
 
@@ -278,7 +315,8 @@ export async function collectAccessReview(options: CollectAccessReviewOptions = 
   const emailOf = (id: string) => emails.get(id) ?? null;
   const adminIdSet = new Set(adminIds);
 
-  const delegation = (adminId: string, userId: string, startedAt?: Date, expiresAt?: Date) => ({
+  const delegation = (sessionId: string, adminId: string, userId: string, startedAt?: Date, expiresAt?: Date) => ({
+    sessionId,
     adminId,
     adminEmail: emailOf(adminId),
     userId,
@@ -286,10 +324,10 @@ export async function collectAccessReview(options: CollectAccessReviewOptions = 
     expiresAt: iso(expiresAt),
   });
   const supportAccess: AccessReviewDelegation[] = supportDocs.map(doc =>
-    delegation(doc.adminId, doc.userId, doc.startedAt, doc.expiresAt)
+    delegation(doc.sid, doc.adminId, doc.userId, doc.startedAt, doc.expiresAt)
   );
   const impersonation: AccessReviewDelegation[] = impersonationDocs.map(doc =>
-    delegation(doc.impersonatedBy, doc.userId, doc.createdAt, doc.impersonationExpiresAt)
+    delegation(doc.sid, doc.impersonatedBy, doc.userId, doc.createdAt, doc.impersonationExpiresAt)
   );
 
   return {

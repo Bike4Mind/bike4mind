@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   connectDB: vi.fn(),
   collectAccessReview: vi.fn(),
   readFileSync: vi.fn(),
-  writeFileSync: vi.fn(),
+  writeAccessReviewFile: vi.fn(),
 }));
 
 vi.mock('@bike4mind/db-core', () => ({ connectDB: mocks.connectDB }));
@@ -19,7 +19,8 @@ vi.mock('../utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://config/%ST
 vi.mock('@bike4mind/server-utils/security/accessReview/accessReviewData', () => ({
   collectAccessReview: mocks.collectAccessReview,
 }));
-vi.mock('node:fs', () => ({ readFileSync: mocks.readFileSync, writeFileSync: mocks.writeFileSync }));
+vi.mock('node:fs', () => ({ readFileSync: mocks.readFileSync }));
+vi.mock('./writeAccessReviewFile', () => ({ writeAccessReviewFile: mocks.writeAccessReviewFile }));
 
 const counts = Object.fromEntries(
   Object.keys(ACCESS_REVIEW_COUNT_LABELS).map(key => [key, 1])
@@ -103,7 +104,7 @@ describe('access-review entry point', () => {
     });
     expect(mocks.collectAccessReview).toHaveBeenCalledWith({ allApiKeys: false });
     expect(log).toHaveBeenCalledWith(expect.stringContaining('# Access review 2027-Q1'));
-    expect(mocks.writeFileSync).not.toHaveBeenCalled();
+    expect(mocks.writeAccessReviewFile).not.toHaveBeenCalled();
   });
 
   it('writes the report and snapshot next to the operator, comparing against a baseline', async () => {
@@ -116,12 +117,9 @@ describe('access-review entry point', () => {
     expect(mocks.connectDB).toHaveBeenCalledWith('mongodb://config/production', undefined, expect.anything());
     expect(mocks.readFileSync).toHaveBeenCalledWith('/operator/before.json', 'utf8');
     expect(mocks.collectAccessReview).toHaveBeenCalledWith({ allApiKeys: true });
-    expect(mocks.writeFileSync).toHaveBeenCalledWith('/operator/after.json', `${JSON.stringify(snapshot, null, 2)}\n`, {
-      mode: 0o600,
-    });
-    const [path, markdown, options] = mocks.writeFileSync.mock.calls[1];
+    expect(mocks.writeAccessReviewFile).toHaveBeenCalledWith('/operator/after.json', `${JSON.stringify(snapshot, null, 2)}\n`);
+    const [path, markdown] = mocks.writeAccessReviewFile.mock.calls[1];
     expect(path).toBe('/operator/after.md');
-    expect(options).toEqual({ mode: 0o600 });
     expect(markdown).toContain('| Full admin accounts | 3 | 1 | -2 |');
     expect(log).toHaveBeenCalledWith('Report written to /operator/after.md');
   });
@@ -129,9 +127,7 @@ describe('access-review entry point', () => {
   it('resolves paths against the working directory outside pnpm', async () => {
     await runCli('--out', 'review.md');
     await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
-    expect(mocks.writeFileSync).toHaveBeenCalledWith(resolve(process.cwd(), 'review.md'), expect.any(String), {
-      mode: 0o600,
-    });
+    expect(mocks.writeAccessReviewFile).toHaveBeenCalledWith(resolve(process.cwd(), 'review.md'), expect.any(String));
   });
 
   it('fails on a bad baseline before connecting', async () => {

@@ -41,6 +41,7 @@ export interface AccessReviewApiKey {
 
 /** An admin's live access to another account: a support access grant or an impersonation session. */
 export interface AccessReviewDelegation {
+  sessionId: string;
   adminId: string;
   adminEmail: string | null;
   userId: string;
@@ -108,7 +109,14 @@ export const isAccessReviewReminderDay = (date: Date): boolean =>
   date.getUTCMonth() % 3 === 0 && date.getUTCDate() <= 7 && date.getUTCDay() === 1;
 
 const cell = (value: string | number | null | undefined): string =>
-  value === null || value === undefined ? '-' : String(value).replace(/\|/g, '\\|').replace(/\s+/g, ' ');
+  value === null || value === undefined
+    ? '-'
+    : String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/[\\`*_[\]|]/g, '\\$&')
+        .replace(/\s+/g, ' ');
 
 const day = (iso: string | null): string => (iso ? iso.slice(0, 10) : '-');
 
@@ -148,7 +156,7 @@ function countsTable(counts: AccessReviewCounts, baseline?: AccessReviewBaseline
 }
 
 const delegationRows = (rows: AccessReviewDelegation[]) =>
-  rows.map(row => [row.adminEmail ?? row.adminId, row.userId, day(row.startedAt), day(row.expiresAt), '', '']);
+  rows.map(row => [row.sessionId, row.adminEmail ?? row.adminId, row.userId, day(row.startedAt), day(row.expiresAt), '', '']);
 
 /**
  * The review record: counts (with before/after when a baseline is given) and one row per grant of
@@ -228,11 +236,11 @@ export function formatAccessReviewMarkdown(snapshot: AccessReviewSnapshot, basel
     '',
     `## Active support access (${supportAccess.length})`,
     '',
-    ...table(['Admin', 'User id', 'Started', 'Expires', ...DECISION_HEADERS], delegationRows(supportAccess)),
+    ...table(['Session id', 'Admin', 'User id', 'Started', 'Expires', ...DECISION_HEADERS], delegationRows(supportAccess)),
     '',
     `## Active impersonation sessions (${impersonation.length})`,
     '',
-    ...table(['Admin', 'User id', 'Started', 'Expires', ...DECISION_HEADERS], delegationRows(impersonation)),
+    ...table(['Session id', 'Admin', 'User id', 'Started', 'Expires', ...DECISION_HEADERS], delegationRows(impersonation)),
     '',
     '## Revocations',
     '',
