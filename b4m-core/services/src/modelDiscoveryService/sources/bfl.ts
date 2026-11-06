@@ -41,7 +41,8 @@ export interface OpenApiDocument {
 }
 
 /** Properties that mean the model takes an image alongside the prompt. */
-const IMAGE_INPUT_PROPERTIES = ['image_prompt', 'input_image', 'image', 'person', 'garment'];
+// FLUX 3 takes its input images as one `images` array.
+const IMAGE_INPUT_PROPERTIES = ['image_prompt', 'input_image', 'images', 'image', 'person', 'garment'];
 
 const SCHEMA_REF_PREFIX = '#/components/schemas/';
 

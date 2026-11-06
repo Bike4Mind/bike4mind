@@ -244,6 +244,44 @@ export class BFLBackend implements ICompletionBackend {
         supportsSafetyTolerance: true,
         rank: 12,
       },
+      // FLUX 3 is priced per resolution tier, and a width/height request is billed at the smallest
+      // tier with at least as many pixels (https://docs.bfl.ai/quick_start/pricing). The flat
+      // per-image figure is the tier covering the largest size BFL_DIMENSION_BOUNDS allows
+      // (1440x1440, ~2.1MP), so no reachable size under-bills. That is the 2k tier ($0.100 for
+      // FLUX 3 Image, $0.014 for Klein): BFL publishes no FLUX 3 Image 1.5k price, and 1440x1440
+      // sits at the ~2MP boundary of the 1.5k tier, so the next tier up is the safe ceiling.
+      {
+        id: ImageModels.FLUX_3_IMAGE,
+        type: 'image',
+        name: 'FLUX 3 Image',
+        backend: ModelBackend.BFL,
+        contextWindow: 10000,
+        supportsImageVariation: true,
+        max_tokens: 10000,
+        pricing: {
+          1: { input: 1000, output: 1000 }, // $0.100 per image (2k tier)
+        },
+        description:
+          'FLUX 3 Image - Flagship FLUX 3 model with web-grounded prompts, for high-fidelity generation and editing with up to ten reference images.',
+        supportsSafetyTolerance: true,
+        rank: 13,
+      },
+      {
+        id: ImageModels.FLUX_3_IMAGE_KLEIN,
+        type: 'image',
+        name: 'FLUX 3 Image Klein',
+        backend: ModelBackend.BFL,
+        contextWindow: 10000,
+        supportsImageVariation: true,
+        max_tokens: 10000,
+        pricing: {
+          1: { input: 140, output: 140 }, // $0.014 per image (2k tier)
+        },
+        description:
+          'FLUX 3 Image Klein - Fast, low-cost FLUX 3 model for generation and editing with up to ten reference images.',
+        supportsSafetyTolerance: true,
+        rank: 14,
+      },
       // OpenAI models moved to OpenAI backend where they belong
     ];
   }

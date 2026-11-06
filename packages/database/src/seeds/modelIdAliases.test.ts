@@ -41,12 +41,19 @@ const INDEXES: Record<AggregatorName, ReturnType<typeof buildAggregatorKeyIndex>
  * rule, so a build that ships its price in code (the adapter literals) is what
  * lets it promote.
  *
+ * The litellm floor was lowered from 0.72 to 0.70 on 2026-11-06, when the FLUX 3
+ * image models took the seed to 138 ids and litellm to 99/138 (71.7%). litellm's
+ * black_forest_labs keys stop at FLUX.1, so the nine FLUX.2 and FLUX 3 ids cannot
+ * join it and no alias can name a key it does not publish. They lose no price:
+ * BFL image models bill from the adapter literals (FluxImageCostCalculator), not
+ * from an aggregator.
+ *
  * Raise these when the seed is next regenerated, never lower them without saying
  * why here.
  */
 const MIN_JOIN_RATE: Record<AggregatorName, number> = {
   modelsDev: 0.55,
-  litellm: 0.72,
+  litellm: 0.7,
 };
 
 describe('modelIdAliases seed', () => {
