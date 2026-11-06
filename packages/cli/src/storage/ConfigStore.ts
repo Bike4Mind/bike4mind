@@ -1360,14 +1360,15 @@ export class ConfigStore {
     if (!g.trustedProjects) g.trustedProjects = [];
     if (!g.trustedProjects.includes(target)) g.trustedProjects.push(target);
 
-    // Trusting the current root: load its layers so the re-merge in save() picks
-    // them up. B4M_NO_PROJECT_CONFIG still forces project config off entirely.
+    await this.save();
+
+    // Trusting the current root loads its layers, only once the trust is saved. B4M_NO_PROJECT_CONFIG still forces
+    // project config off entirely.
     if (target === this.projectRealPath && this.projectConfigDir && process.env.B4M_NO_PROJECT_CONFIG !== '1') {
       this.projectTrusted = true;
       await this.loadProjectLayers();
+      this.config = await this.computeMerged();
     }
-
-    await this.save();
     return true;
   }
 
@@ -1571,6 +1572,20 @@ export class ConfigStore {
   }
 
   async clearModelServerCredential(serverId: string): Promise<void> {
+    await this.load();
+    const saved = this.globalConfig!.modelServerCredentials;
+    if (this.fallbackBase && saved && hasOwnKey(saved, serverId)) {
+      const { [serverId]: dropped, ...kept } = saved;
+      void dropped;
+      this.globalConfig!.modelServerCredentials = kept;
+    }
+    const clearInFile = (raw: Record<string, unknown>) => {
+      const credentials = raw.modelServerCredentials;
+      if (!isJsonObject(credentials) || !hasOwnKey(credentials, serverId)) return false;
+      delete credentials[serverId];
+      return true;
+    };
+    if (await this.patchInFallback(['modelServerCredentials'], clearInFile)) return;
     await this.updateModelServerCredentials(current => {
       const { [serverId]: removed, ...rest } = current;
       void removed;
@@ -1670,6 +1685,37 @@ export class ConfigStore {
 
   /** persistGlobal's read-modify-write of the file; the caller holds the config write lock. */
   private async writeGlobal(
+    config?: GlobalConfigPatch,
+    opts?: { clearFeatures?: boolean; authFields?: DiskAuthFields }
+  ): Promise<void> {
+    const fallbackBase = this.fallbackBase;
+    try {
+      await this.writeGlobalLayer(config, opts);
+    } catch (error) {
+      // A change that did not reach a file that failed validation is dropped, so later saves do not carry it again.
+      if (fallbackBase && this.fallbackBase === fallbackBase) await this.rollBackTo(fallbackBase);
+      throw error;
+    }
+  }
+
+  /** Sets every top-level key of the global snapshot that differs from `base` back to its value there. */
+  private async rollBackTo(base: CliConfig): Promise<void> {
+    const current = this.globalConfig as unknown as Record<string, unknown> | null;
+    if (!current) return;
+    const from = base as unknown as Record<string, unknown>;
+    for (const key of new Set([...Object.keys(from), ...Object.keys(current)])) {
+      if (isDeepStrictEqual(ownValue(from, key), ownValue(current, key))) continue;
+      if (ownValue(from, key) === undefined) delete current[key];
+      else current[key] = structuredClone(from[key]);
+    }
+    try {
+      this.config = await this.computeMerged();
+    } catch {
+      // The merged view is rebuilt on the next successful save.
+    }
+  }
+
+  private async writeGlobalLayer(
     config?: GlobalConfigPatch,
     opts?: { clearFeatures?: boolean; authFields?: DiskAuthFields }
   ): Promise<void> {
@@ -1784,9 +1830,11 @@ export class ConfigStore {
     if (!raw) throw this.invalidConfigError();
     const { auth: _baseAuth, authByEnv: _baseByEnv, apiConfig: _baseApi, ...from } = base;
     const { auth: _auth, authByEnv: _byEnv, apiConfig: _api, ...to } = next;
+    // As JSON, so an in-memory item with an undefined key matches the same item read from the file.
+    const asJson = (value: unknown): unknown => JSON.parse(JSON.stringify(value));
     let merged: Record<string, unknown>;
     try {
-      merged = applyChanges(raw, from, to) as Record<string, unknown>;
+      merged = applyChanges(raw, asJson(from), asJson(to)) as Record<string, unknown>;
     } catch (error) {
       if (error instanceof ShapeMismatchError) throw this.invalidConfigError();
       throw error;

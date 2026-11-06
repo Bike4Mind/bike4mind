@@ -1,5 +1,5 @@
 import { promises as fsPromises } from 'fs';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -87,6 +87,78 @@ describe('saving over a config this build cannot validate', () => {
 
     await expect(new ConfigStore(configPath).trustTool('file_read')).rejects.toThrow(`${configPath} failed validation`);
     expect(await readFile(configPath, 'utf-8')).toBe(contents);
+  });
+
+  it('drops a refused change, so a later unrelated save writes only its own change', async () => {
+    await writeFile(configPath, JSON.stringify({ preferences: { theme: 'sepia' }, trustedTools: 'notalist' }), {
+      mode: 0o600,
+    });
+    const store = new ConfigStore(configPath);
+
+    await expect(store.trustTool('file_read')).rejects.toThrow(`${configPath} failed validation`);
+    await store.save({ preferences: { exportFormat: 'json' } });
+
+    expect(await readJson()).toEqual({
+      preferences: { theme: 'sepia', exportFormat: 'json' },
+      trustedTools: 'notalist',
+    });
+  });
+
+  it('writes an item once when the in-memory copy holds an undefined key', async () => {
+    await writeFile(configPath, JSON.stringify({ preferences: { theme: 'sepia' }, mcpServers: [] }), { mode: 0o600 });
+    const store = new ConfigStore(configPath);
+    await store.addMcpServer({
+      name: 'local',
+      command: 'local-mcp',
+      args: [],
+      env: {},
+      enabled: true,
+      headers: undefined,
+    });
+
+    await store.toggleMcpServer('local', false);
+
+    expect((await readJson()).mcpServers).toEqual([
+      { name: 'local', command: 'local-mcp', args: [], env: {}, enabled: false },
+    ]);
+  });
+
+  it('clears a model server secret from the file', async () => {
+    const credentials = { a: { secret: 'secret-a' }, b: { secret: 'secret-b' } };
+    const contents = JSON.stringify({ preferences: { theme: 'sepia' }, modelServerCredentials: credentials });
+    await writeFile(configPath, contents, { mode: 0o600 });
+
+    await new ConfigStore(configPath).clearModelServerCredential('a');
+
+    expect(await readJson()).toEqual({
+      preferences: { theme: 'sepia' },
+      modelServerCredentials: { b: { secret: 'secret-b' } },
+    });
+  });
+
+  it('leaves a folder untrusted, with no repo layers loaded, when saving the trust fails', async () => {
+    const projectDir = path.join(dir, 'proj');
+    await mkdir(path.join(projectDir, '.git'), { recursive: true });
+    await mkdir(path.join(projectDir, '.bike4mind'));
+    await writeFile(path.join(projectDir, '.bike4mind', 'config.json'), JSON.stringify({ defaultModel: 'repo-model' }));
+    await writeFile(configPath, JSON.stringify({ preferences: { theme: 'sepia' }, trustedProjects: 'notalist' }), {
+      mode: 0o600,
+    });
+    vi.stubEnv('B4M_NO_PROJECT_CONFIG', '0');
+    const originalCwd = process.cwd();
+    process.chdir(projectDir);
+    try {
+      const store = new ConfigStore(configPath);
+      await store.load();
+      expect(store.getProjectConfigDir()).not.toBeNull();
+
+      await expect(store.trustProject()).rejects.toThrow(`${configPath} failed validation`);
+
+      expect(store.isProjectTrusted()).toBe(false);
+      expect((store as unknown as { rawProjectConfig: unknown }).rawProjectConfig).toBeNull();
+    } finally {
+      process.chdir(originalCwd);
+    }
   });
 
   it('refuses a save over a file that does not hold a JSON object, and leaves it unchanged', async () => {
