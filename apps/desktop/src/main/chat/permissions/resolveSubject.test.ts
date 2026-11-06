@@ -1,7 +1,8 @@
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MAX_WALK_NAMES } from '../tools/paths';
 import { resolveSubject } from './resolveSubject';
 import { PermissionRuleSet, compileRule, parseRule } from './rules';
 
@@ -104,6 +105,45 @@ describe('resolveSubject', () => {
     });
     const underMissing = join(root, 'gone', 'n'.repeat(100), 'x');
     expect((await resolveSubject({ tool: 'file_write', paths: [underMissing] })).paths).toEqual([underMissing]);
+  });
+
+  // node:path stays win32 on a Windows runner, so faking darwin there would mix the two.
+  it.skipIf(process.platform === 'win32')(
+    'refuses a long UTF-8 name past the macOS PATH_MAX, which APFS could hold as a link',
+    async () => {
+      const dir = join(root, 'd'.repeat(250));
+      await mkdir(dir);
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+      Object.defineProperty(process, 'platform', { value: 'darwin' });
+      try {
+        pathMax.bytes = 1024;
+        const name = '中'.repeat(255);
+        expect(Buffer.byteLength(join(dir, name))).toBeGreaterThanOrEqual(1024);
+        await expect(resolveSubject({ tool: 'file_write', paths: [join(dir, name, 'x')] })).rejects.toMatchObject({
+          code: 'ENAMETOOLONG',
+        });
+        const short = join(root, '中'.repeat(100), 'x');
+        expect((await resolveSubject({ tool: 'file_write', paths: [short] })).paths).toEqual([short]);
+      } finally {
+        Object.defineProperty(process, 'platform', platform!);
+      }
+    }
+  );
+
+  it('refuses a path of more names than MAX_WALK_NAMES', async () => {
+    const most = join(root, ...Array.from({ length: MAX_WALK_NAMES }, () => 'a'));
+    expect((await resolveSubject({ tool: 'file_read', paths: [most] })).paths).toEqual([most]);
+    await expect(resolveSubject({ tool: 'file_read', paths: [join(most, 'a')] })).rejects.toMatchObject({
+      code: 'ENAMETOOLONG',
+    });
+  });
+
+  // Windows applies `..` to the name before it, so it never reaches the missing folder.
+  it.skipIf(process.platform === 'win32')('refuses `..` under a missing folder', async () => {
+    await mkdir(join(root, 'prot'));
+    await symlink(join(root, 'prot'), join(root, 'link'));
+    const path = [root, 'missing', '..', 'link', 'x'].join(sep);
+    await expect(resolveSubject({ tool: 'file_write', paths: [path] })).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('refuses a link that leads back to itself through a path realpath cannot read', async () => {

@@ -362,18 +362,38 @@ function nativeOrJsRealpath(path: string): string {
   }
 }
 
+/**
+ * Whether `code` from reading the link `name` at `candidate` means nothing by that name exists.
+ * APFS, HFS+ and drvfs take 255 UTF-16 units, up to 765 bytes, so ENAMETOOLONG proves the name too
+ * long only while `candidate` is under PATH_MAX; past it the path's length may be what failed.
+ */
+export function isMissingNameError(code: unknown, candidate: string, name: string): boolean {
+  if (!isMissingPathError(code, name)) return false;
+  if (code !== 'ENAMETOOLONG' || process.platform === 'win32') return true;
+  return Buffer.byteLength(candidate) < (process.platform === 'darwin' ? 1024 : 4096);
+}
+
 /** A path resolved as far as it exists, the rest kept as given, and whether all of it exists. */
 export interface NearestPath {
   path: string;
   exists: boolean;
 }
 
+/** What one resolution has walked: link hops and names, each bounded. */
+export interface NearestWalk {
+  hops: number;
+  names: number;
+}
+
+/** Half of Linux PATH_MAX: more names than any path the kernel accepts can hold. */
+export const MAX_WALK_NAMES = 2048;
+
 /**
  * `path` with symlinks resolved as far as it exists, the rest kept as given. Null when resolution
  * fails for any reason but a missing component (EACCES, ELOOP, ...): where it lands is then unknown.
  */
 export function realpathSyncNearest(path: string): string | null {
-  return nearestSync(path, { hops: 0 })?.path ?? null;
+  return nearestSync(path, { hops: 0, names: 0 })?.path ?? null;
 }
 
 /**
@@ -382,7 +402,7 @@ export function realpathSyncNearest(path: string): string | null {
  * Linux readlink past 4096, while the physical spelling may be short. A name that cannot be read
  * under an existing parent is null. resolveSubject's `nearest` mirrors this.
  */
-function nearestSync(path: string, walk: { hops: number }): NearestPath | null {
+function nearestSync(path: string, walk: NearestWalk): NearestPath | null {
   try {
     return { path: nativeOrJsRealpath(path), exists: true };
   } catch (error) {
@@ -390,13 +410,13 @@ function nearestSync(path: string, walk: { hops: number }): NearestPath | null {
     if (code !== 'ENAMETOOLONG' && !isMissingPathError(code, path)) return null;
   }
   const parentPath = dirname(path);
-  if (parentPath === path) return { path, exists: false };
+  if (++walk.names > MAX_WALK_NAMES || parentPath === path) return null;
   const parent = nearestSync(parentPath, walk);
   if (parent === null) return null;
   const name = basename(path);
   const candidate = join(parent.path, name);
-  // Nothing under a missing folder can be a link.
-  if (!parent.exists) return { path: candidate, exists: false };
+  // Nothing under a missing folder can be a link, but `..` climbs back out to where one can be.
+  if (!parent.exists) return name === '..' ? null : { path: candidate, exists: false };
   let target: string;
   try {
     target = readlinkSync(candidate);
@@ -409,8 +429,7 @@ function nearestSync(path: string, walk: { hops: number }): NearestPath | null {
         return null;
       }
     }
-    // ENAMETOOLONG for a name within NAME_MAX is a path too long to read, which could still be a link.
-    return isMissingPathError(code, name) ? { path: candidate, exists: false } : null;
+    return isMissingNameError(code, candidate, name) ? { path: candidate, exists: false } : null;
   }
   // A dangling link is still followed by a write, which creates its target.
   if (++walk.hops > MAX_LINK_HOPS) return null;

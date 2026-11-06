@@ -1,10 +1,11 @@
 import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  MAX_WALK_NAMES,
   ownLocation,
   PathAccessDenied,
   resolveWithinRoots,
@@ -393,6 +394,50 @@ describe('realpathSyncNearest', () => {
     expect(withRealPath(past)).toEqual([past]);
     const underMissing = join(base, 'gone', 'n'.repeat(100), 'x');
     expect(realpathSyncNearest(underMissing)).toBe(underMissing);
+  });
+
+  // node:path stays win32 on a Windows runner, so faking darwin there would mix the two.
+  it.skipIf(process.platform === 'win32')(
+    'returns null for a long UTF-8 name past the macOS PATH_MAX, which APFS could hold as a link',
+    async () => {
+      const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+      const dir = join(base, 'd'.repeat(250));
+      await mkdir(dir);
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+      Object.defineProperty(process, 'platform', { value: 'darwin' });
+      try {
+        limitPathMax(1024);
+        const name = '中'.repeat(255);
+        expect(Buffer.byteLength(join(dir, name))).toBeGreaterThanOrEqual(1024);
+        expect(realpathSyncNearest(join(dir, name, 'x'))).toBeNull();
+        const short = join(base, '中'.repeat(100), 'x');
+        expect(realpathSyncNearest(short)).toBe(short);
+      } finally {
+        Object.defineProperty(process, 'platform', platform!);
+      }
+    }
+  );
+
+  it('returns null when realpath reports even the root missing', () => {
+    vi.spyOn(realpathSync, 'native').mockImplementation(() => {
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    });
+    expect(realpathSyncNearest(join(tmpdir(), 'a'))).toBeNull();
+  });
+
+  it('returns null for a path of more names than MAX_WALK_NAMES', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+    const most = join(base, ...Array.from({ length: MAX_WALK_NAMES }, () => 'a'));
+    expect(realpathSyncNearest(most)).toBe(most);
+    expect(realpathSyncNearest(join(most, 'a'))).toBeNull();
+  });
+
+  // Windows applies `..` to the name before it, so it never reaches the missing folder.
+  it.skipIf(process.platform === 'win32')('returns null for `..` under a missing folder', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+    await mkdir(join(base, 'prot'));
+    await symlink(join(base, 'prot'), join(base, 'link'));
+    expect(realpathSyncNearest([base, 'missing', '..', 'link', 'x'].join(sep))).toBeNull();
   });
 
   it('returns null for a link that leads back to itself through a path realpath cannot read', async () => {
