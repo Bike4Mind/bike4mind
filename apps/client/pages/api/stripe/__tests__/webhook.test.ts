@@ -1001,6 +1001,9 @@ describe('charge.dispute.created - dispute record', () => {
       subject: 'organization',
       subjectId: 'org_1',
     });
+  });
+});
+
 describe('BillingEvent recording', () => {
   const dispute = {
     id: 'evt_dispute_1',
