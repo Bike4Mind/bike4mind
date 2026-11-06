@@ -78,6 +78,11 @@ export const resolveEmbeddingCredentials = (
   return value ? { config: { [field]: value }, missing: null } : { config: {}, missing: credential };
 };
 
+/**
+ * Only for callers free to choose the model (the admin default). Memento and alternateModelAnn paths are pinned to one
+ * vector space and must fail instead. An expired caller key is not "keyless": substituting Titan would query a space
+ * the corpus was never written in, so the requested model is kept and the expired-key error stands.
+ */
 export const resolveEmbeddingWithKeylessFallback = (
   model: SupportedEmbeddingModel,
   keys: EmbeddingKeyTable | null | undefined
@@ -90,7 +95,9 @@ export const resolveEmbeddingWithKeylessFallback = (
 };
 
 export const getDefaultEmbeddingModel = (config: EmbeddingConfig): SupportedEmbeddingModel => {
-  // Attached-file retrieval is keyed by persisted model, so this intentionally remains ada-002.
+  // Stays ada-002: attached-file cosine selection keys the query vector by one model and looks it up by each file's
+  // label, and unlabeled files resolve to ada-002. Moving this drops their similarity selection until that lookup
+  // embeds one query per distinct file label.
   if (usableEmbeddingApiKey(config.openaiApiKey)) return OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
   if (usableEmbeddingApiKey(config.voyageApiKey)) return VoyageAIEmbeddingModel.VOYAGE_3;
   if (config.ollamaBaseUrl) {
