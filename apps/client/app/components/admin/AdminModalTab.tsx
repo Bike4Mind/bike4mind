@@ -310,12 +310,14 @@ const ModalsAdminTab: React.FC = () => {
         }
       />
 
-      <AdminSearchInput
-        value={searchQuery}
-        onChange={setSearchQuery}
-        label="Search modals"
-        data-testid="admin-modals-search-input"
-      />
+      <Stack direction="row" alignItems="center" flexWrap="wrap" gap={1}>
+        <AdminSearchInput
+          value={searchQuery}
+          onChange={setSearchQuery}
+          label="Search modals"
+          data-testid="admin-modals-search-input"
+        />
+      </Stack>
 
       {modals.isFetching && <LinearProgress />}
 
