@@ -134,6 +134,25 @@ describe('NeedsYouMonitor with no window open', () => {
     expect(notices).toEqual([]);
   });
 
+  it('does not recount for a status change that neither enters nor leaves needs-action', async () => {
+    monitor.observe({ sessionId: 'agent', status: 'processing' });
+    monitor.observe({ sessionId: 'agent', status: 'done' });
+    await monitor.settled();
+    expect(deps.listSessions).not.toHaveBeenCalled();
+    expect(setBadge).not.toHaveBeenCalled();
+  });
+
+  it('recounts when a session enters needs-action and again when it leaves', async () => {
+    await enter('agent');
+    expect(setBadge).toHaveBeenCalledTimes(1);
+    expect(setBadge).toHaveBeenLastCalledWith(1);
+    sessions = [session('root'), session('plain')];
+    monitor.observe({ sessionId: 'agent', status: 'done' });
+    await monitor.settled();
+    expect(setBadge).toHaveBeenCalledTimes(2);
+    expect(setBadge).toHaveBeenLastCalledWith(0);
+  });
+
   it('keeps working after an update fails', async () => {
     deps.listSessions = vi.fn().mockRejectedValueOnce(new Error('disk')).mockResolvedValue(sessions);
     await enter('agent');
