@@ -100,9 +100,9 @@ type BillingOrg = Awaited<ReturnType<typeof organizationRepository.findById>>;
  * and modelCatalog.ts:78-81 calls it the intended fail-loud signal, so it only ever reaches a
  * reader as a gap: price-seed lag, or the per-process `_modelCache` serving this process a map
  * the SessionEvents process already prices from. Inferring "free" from it would waive the charge
- * here while settlement debits normally - and this pre-flight is the sole `maxCreditsPerMember`
- * enforcement point on these paths (recordOperationalUsage.ts:84-88), so a false waive costs
- * more than the ordinary fail-open elsewhere in this file. Requiring the flag is what keeps that
+ * here, and this pre-flight is the sole `maxCreditsPerMember` enforcement point on these paths
+ * (see the PER-MEMBER CAP note in recordOperationalUsage), so a false waive would skip that cap
+ * even though the settlement debit is floored at zero. Requiring the flag is what keeps that
  * gap out; requiring every tier to be zero is what keeps a mislabelled model from exploiting
  * the flag.
  */
@@ -116,9 +116,8 @@ function settlesFreeForAnyVolume(modelInfo: ModelInfo): boolean {
 }
 
 /**
- * Resolved through the same `getOperationsModel()` the handlers themselves call
- * (sessionSummarization.ts:64, sessionTagging.ts:135) so the gate and the charge cannot disagree
- * about which model is in play.
+ * Resolved to the model the queued call runs on: the operations model, unless `resolveModelInfo`
+ * is passed (mementos do, with the chat turn's model).
  *
  * Imported dynamically and reached only on a would-be refusal: it reads an admin setting and
  * builds the whole model catalog, far too much work to spend on the happy path confirming what
