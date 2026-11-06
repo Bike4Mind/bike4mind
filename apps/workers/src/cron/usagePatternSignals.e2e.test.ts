@@ -3,6 +3,9 @@ import mongoose from 'mongoose';
 import { CreditHolderType } from '@bike4mind/common';
 import {
   ApiKeyUsageLog,
+  Cache,
+  CreditTransaction,
+  ShadowDetectionModel,
   UsageEvent,
   User,
   UserApiKey,
@@ -40,6 +43,7 @@ const sampleConfig = {
   creditPollMinCount: 10,
   creditPollMinPerCompletion: 1,
   quickApiKeyMinutes: 15,
+  weights: { scriptedGrantDrain: 60 },
 };
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
@@ -114,9 +118,16 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await Promise.all(
-    [User, UserApiKey, UsageEvent, ApiKeyUsageLog, UserUsagePatternSignals].map(m =>
-      (m as unknown as mongoose.Model<unknown>).collection.deleteMany({})
-    )
+    [
+      User,
+      UserApiKey,
+      UsageEvent,
+      ApiKeyUsageLog,
+      UserUsagePatternSignals,
+      CreditTransaction,
+      ShadowDetectionModel,
+      Cache,
+    ].map(m => (m as unknown as mongoose.Model<unknown>).collection.deleteMany({}))
   );
   vi.clearAllMocks();
   h.getActiveSubscriptionsForUser.mockResolvedValue([]);
@@ -165,6 +176,7 @@ describe('runUsagePatternSignals', () => {
       ['regularCadence', true],
       ['creditPolling', true],
       ['quickApiKey', true],
+      ['scriptedGrantDrain', false],
     ]);
     const normal = await userUsagePatternSignalsRepository.findByUserId(typical);
     expect(normal).toMatchObject({ score: 0, needsReview: false });
@@ -340,5 +352,150 @@ describe('runUsagePatternSignals', () => {
     const scored = await UserUsagePatternSignals.find({ skipped: null }).lean();
     expect(scored.map(r => r.userId).sort()).toEqual([...free].sort());
     expect(await UserUsagePatternSignals.countDocuments({ skipped: 'paid', needsReview: false })).toBe(paid.length);
+  });
+
+  describe('scriptedGrantDrain', () => {
+    const at = (minutesAfterSignup: number, signupAt: Date) =>
+      new Date(signupAt.getTime() + minutesAfterSignup * MINUTE);
+
+    /**
+     * The farm sequence: signup grant, 2FA on, notebook activity unlock, one premium turn that spends
+     * nearly all of it, a post-turn system job, logout. Minutes are offsets from signup.
+     */
+    async function seedFreshAccount(options: {
+      mfa: boolean;
+      activityUnlock: boolean;
+      turns: { minute: number; credits: number; source?: string }[];
+      logoutMinute: number | null;
+      signupMinutesAgo?: number;
+    }) {
+      const signupAt = new Date(now.getTime() - (options.signupMinutesAgo ?? 50) * MINUTE);
+      const userId = await seedUser({
+        createdAt: signupAt,
+        emailVerifiedAt: signupAt,
+        ...(options.mfa ? { mfa: { totpEnabled: true, setupAt: at(2, signupAt) } } : {}),
+        loginRecords: [
+          {
+            loginTime: signupAt,
+            ...(options.logoutMinute === null ? {} : { logoutTime: at(options.logoutMinute, signupAt) }),
+            userAgent: 'Mozilla/5.0 (X11; Linux x86_64) Test/1.0',
+            browser: 'Chrome',
+            operatingSystem: 'Linux',
+            deviceType: 'Desktop',
+            screenResolution: '376x835',
+            viewportSize: '376x700',
+            colorDepth: 24,
+            pixelDepth: 24,
+            devicePixelRatio: 3.25,
+          },
+        ],
+      });
+      const ledger: Record<string, unknown>[] = [
+        { type: 'generic_add', credits: 1000, reason: 'signup_tranche', createdAt: at(0, signupAt) },
+        ...(options.activityUnlock
+          ? [{ type: 'generic_add', credits: 1000, reason: 'signup_unlock:activity', createdAt: at(4, signupAt) }]
+          : []),
+        ...options.turns.map(turn => ({
+          type: 'text_generation_usage',
+          credits: turn.credits,
+          source: turn.source ?? 'web',
+          createdAt: at(turn.minute, signupAt),
+        })),
+      ];
+      await CreditTransaction.collection.insertMany(
+        ledger.map(row => ({ ownerId: userId, ownerType: CreditHolderType.User, ...row }))
+      );
+      // The candidate scan finds accounts through recent usage.
+      await seedUsage(
+        userId,
+        options.turns.map(turn => at(turn.minute, signupAt)),
+        { source: 'web' }
+      );
+      return userId;
+    }
+
+    it('flags the farm sequence and records one shadow detection for it, across runs', async () => {
+      const farm = await seedFreshAccount({
+        mfa: true,
+        activityUnlock: true,
+        turns: [
+          { minute: 8, credits: 1990 },
+          { minute: 8.2, credits: 25, source: 'system' },
+        ],
+        logoutMinute: 12,
+      });
+
+      const first = await runUsagePatternSignals({ now });
+      expect(first).toMatchObject({ analyzed: 1, needsReview: 1, scriptedDrainDetections: 1 });
+      const stored = await userUsagePatternSignalsRepository.findByUserId(farm);
+      const drain = stored?.signals.find(signal => signal.id === 'scriptedGrantDrain');
+      expect(drain).toMatchObject({ triggered: true, value: 12 });
+
+      const detections = await ShadowDetectionModel.find({ detector: 'scriptedGrantDrain' }).lean();
+      expect(detections).toHaveLength(1);
+      expect(detections[0]).toMatchObject({ userIds: [farm], wouldAction: 'contain', verdict: null });
+      expect(detections[0].signals.find(signal => signal.key === 'largestTurnGrantShare')?.observed).toBe(1);
+
+      expect(await runUsagePatternSignals({ now })).toMatchObject({ scriptedDrainDetections: 0 });
+      expect(await ShadowDetectionModel.countDocuments({ detector: 'scriptedGrantDrain' })).toBe(1);
+      // Observation only: the account itself is untouched.
+      const user = await User.collection.findOne({ _id: new mongoose.Types.ObjectId(farm) });
+      expect(user?.isBanned).toBe(false);
+    });
+
+    it('does not flag a genuine new user who ran one big premium turn', async () => {
+      // OAuth-style signup: no 2FA, no activity unlock, varied use, no logout.
+      await seedFreshAccount({
+        mfa: false,
+        activityUnlock: false,
+        turns: [
+          { minute: 3, credits: 900 },
+          { minute: 15, credits: 20 },
+          { minute: 22, credits: 35 },
+          { minute: 40, credits: 15 },
+        ],
+        logoutMinute: null,
+      });
+      // Same big turn and logout, but without the 2FA step and with ordinary use.
+      await seedFreshAccount({
+        mfa: false,
+        activityUnlock: true,
+        turns: [{ minute: 6, credits: 1800 }],
+        logoutMinute: 10,
+      });
+
+      const result = await runUsagePatternSignals({ now });
+      expect(result).toMatchObject({ analyzed: 2, scriptedDrainDetections: 0 });
+      expect(await ShadowDetectionModel.countDocuments()).toBe(0);
+    });
+
+    it('does not flag the sequence when it ran slower than the window', async () => {
+      await seedFreshAccount({
+        mfa: true,
+        activityUnlock: true,
+        turns: [{ minute: 70, credits: 1990 }],
+        logoutMinute: 75,
+        signupMinutesAgo: 100,
+      });
+
+      expect(await runUsagePatternSignals({ now })).toMatchObject({ analyzed: 1, scriptedDrainDetections: 0 });
+    });
+
+    it('records nothing while shadow detection recording is off', async () => {
+      h.getSettingsMap.mockResolvedValue({
+        usagePatternSignalsEnabled: 'true',
+        usagePatternSignalsConfig: JSON.stringify(sampleConfig),
+        shadowDetectionRecordingEnabled: 'false',
+      });
+      await seedFreshAccount({
+        mfa: true,
+        activityUnlock: true,
+        turns: [{ minute: 8, credits: 1990 }],
+        logoutMinute: 12,
+      });
+
+      expect(await runUsagePatternSignals({ now })).toMatchObject({ needsReview: 1, scriptedDrainDetections: 0 });
+      expect(await ShadowDetectionModel.countDocuments()).toBe(0);
+    });
   });
 });
