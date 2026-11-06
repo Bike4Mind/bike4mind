@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mongoose } from '@bike4mind/database';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // Registered outside the `@bike4mind/database` barrel, so they register only when imported.
@@ -7,12 +7,14 @@ import '@server/models/UserSubscription';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { SubjectRecordExport, assertEveryModelClassified } from './subjectRecordExport';
 
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+
 let mongoServer: MongoMemoryServer | undefined;
 
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
-}, MONGO_TEST_TIMEOUT_MS);
+});
 
 afterAll(async () => {
   await mongoose.disconnect();
@@ -38,5 +40,5 @@ describe('SubjectRecordExport over the real registry', () => {
 
     expect(exporter.models.length).toBeGreaterThan(50);
     expect(failures).toEqual([]);
-  }, 120_000);
+  });
 });
