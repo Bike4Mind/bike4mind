@@ -44,6 +44,11 @@ export type ActionDialogProps = {
   /** Irreversible commands: the admin types `expected` before the commit unlocks. */
   typedConfirm?: TypedConfirm;
   pending?: boolean;
+  /**
+   * A second commit beside the primary one, gated the same way, e.g. "Save and next" in a review queue.
+   * Its button id is `<id>-secondary-btn`; the reason draft is kept for the caller's next item.
+   */
+  secondaryAction?: { label: string; onConfirm: (reason: string) => void | Promise<void> };
   /** Derived ids: `<id>-reason-input`, `<id>-confirm-btn`, `<id>-cancel-btn`, `<id>-hint`, `<id>-typed-input`. */
   'data-testid': string;
   /** Overrides individual derived ids where an existing test or page object depends on them. */
@@ -79,6 +84,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
   blockedReason = null,
   typedConfirm,
   pending = false,
+  secondaryAction,
   'data-testid': testId,
   testIds = {},
 }) => {
@@ -95,11 +101,11 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
     (!typedMatches && typedConfirm ? `Type the ${typedConfirm.noun} exactly to confirm.` : null);
   const busy = pending || submitting;
 
-  const handleConfirm = async () => {
+  const handleConfirm = async (confirm: (reason: string) => void | Promise<void> = onConfirm) => {
     if (hint || busy) return;
     setSubmitting(true);
     try {
-      await onConfirm(composeAdminReason(reason));
+      await confirm(composeAdminReason(reason));
     } catch {
       // The caller reports its own failure (toast); a rejection only means the dialog stays open.
     } finally {
@@ -166,6 +172,18 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
         <Button variant="plain" color="neutral" onClick={onClose} data-testid={`${testId}-cancel-btn`}>
           Cancel
         </Button>
+        {secondaryAction && (
+          <Button
+            variant="outlined"
+            color="neutral"
+            disabled={!!hint || busy}
+            aria-describedby={hint ? hintId : undefined}
+            onClick={() => void handleConfirm(secondaryAction.onConfirm)}
+            data-testid={`${testId}-secondary-btn`}
+          >
+            {secondaryAction.label}
+          </Button>
+        )}
         <Button
           variant="solid"
           color={tone === 'danger' ? 'danger' : 'primary'}

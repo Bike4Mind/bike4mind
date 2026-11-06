@@ -5,6 +5,8 @@ import {
   shadowDetectionItemSchema,
   shadowDetectionVerdictEntrySchema,
   type AbuseAssessmentRunResponse,
+  SHADOW_DETECTION_BULK_VERDICT_LIMIT,
+  type ShadowDetectionBulkVerdictRequest,
   type ShadowDetectionList,
   type ShadowDetectionListQuery,
   type ShadowDetectionVerdictRequest,
@@ -71,6 +73,40 @@ export function useShadowDetectionVerdict() {
       }
     },
     // A conflict also means the list is stale.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: SHADOW_DETECTIONS_QUERY_KEY }),
+  });
+}
+
+export type ShadowDetectionBulkVerdictResult = {
+  updated: ShadowDetectionRow[];
+  /** Moved since the reviewer read them; left alone and returned as they are now. */
+  conflicts: ShadowDetectionRow[];
+  notFound: string[];
+};
+
+/**
+ * One verdict and reason for several detections. Selections larger than the server's per-request
+ * limit go out in sequential batches and their results are merged.
+ */
+export function useShadowDetectionBulkVerdict() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (
+      request: Omit<ShadowDetectionBulkVerdictRequest, 'reason'> & { reason: string }
+    ): Promise<ShadowDetectionBulkVerdictResult> => {
+      const merged: ShadowDetectionBulkVerdictResult = { updated: [], conflicts: [], notFound: [] };
+      for (let start = 0; start < request.items.length; start += SHADOW_DETECTION_BULK_VERDICT_LIMIT) {
+        const items = request.items.slice(start, start + SHADOW_DETECTION_BULK_VERDICT_LIMIT);
+        const { data } = await api.post<ShadowDetectionBulkVerdictResult>(`${ENDPOINT}/verdicts`, {
+          ...request,
+          items,
+        });
+        merged.updated.push(...data.updated);
+        merged.conflicts.push(...data.conflicts);
+        merged.notFound.push(...data.notFound);
+      }
+      return merged;
+    },
     onSettled: () => queryClient.invalidateQueries({ queryKey: SHADOW_DETECTIONS_QUERY_KEY }),
   });
 }

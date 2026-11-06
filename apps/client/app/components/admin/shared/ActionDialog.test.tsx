@@ -76,6 +76,21 @@ describe('ActionDialog', () => {
     await waitFor(() => expect(onConfirm).toHaveBeenCalledWith('Goodwill credit'));
   });
 
+  it('offers a gated secondary commit that gets the same reason and not the primary handler', async () => {
+    const onConfirm = vi.fn();
+    const onSecondary = vi.fn();
+    openDialog({ onConfirm, secondaryAction: { label: 'Save and next', onConfirm: onSecondary } });
+    const secondary = screen.getByTestId('adjust-dialog-secondary-btn');
+
+    expect(secondary).toBeDisabled();
+    fireEvent.click(screen.getByTestId('adjust-dialog-reason-input-preset-0'));
+    expect(secondary).toBeEnabled();
+    fireEvent.click(secondary);
+
+    await waitFor(() => expect(onSecondary).toHaveBeenCalledWith('Goodwill credit'));
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
   it('combines a preset and a note as "Preset: note"', async () => {
     const onConfirm = vi.fn();
     const confirm = openDialog({ onConfirm });
