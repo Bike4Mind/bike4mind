@@ -51,6 +51,23 @@ describe('parseSelfReport', () => {
   });
 });
 
+describe('parseSelfReport with the empty think block models emit first', () => {
+  it('drops the empty block together with the tag', () => {
+    const { report, text } = parseSelfReport('<think></think><confidence score="1.0">straightforward</confidence>');
+    expect(report).toEqual({ confidence: 1, reason: 'straightforward' });
+    expect(text).toBe('');
+  });
+
+  it('drops the empty block even when the model sent no tag', () => {
+    expect(parseSelfReport('<think></think>Hello')).toEqual({ report: undefined, text: 'Hello' });
+    expect(parseSelfReport('<think>  \n </think>Hello').text).toBe('Hello');
+  });
+
+  it('keeps a think block that has content', () => {
+    expect(parseSelfReport('<think>pondering</think>Hello').text).toBe('<think>pondering</think>Hello');
+  });
+});
+
 describe('SelfReportStreamFilter', () => {
   const run = (deltas: string[]) => {
     const filter = new SelfReportStreamFilter();
@@ -91,5 +108,28 @@ describe('SelfReportStreamFilter', () => {
   it('only filters at the start: a later tag is left alone', () => {
     const { all } = run(['Hello ', '<confidence score="0.5">x</confidence>']);
     expect(all).toBe('Hello <confidence score="0.5">x</confidence>');
+  });
+  it('hides a tag that follows an empty think block, as seen from a real model', () => {
+    const stream = '<think></think><confidence score="1.0">Direct tool call, straightforward</confidence>Checking';
+    const { out, all } = run(stream.split(''));
+    expect(out.join('')).not.toMatch(/confid|<think/i);
+    expect(all).toBe('Checking');
+  });
+
+  it('hides a tag that follows an empty think block split across deltas', () => {
+    const { out, all } = run(['<think>', '</think>', '<confid', 'ence score="0.4">thin</confid', 'ence>\n', 'Go']);
+    expect(out.slice(0, 5).every(chunk => chunk === '')).toBe(true);
+    expect(all).toBe('Go');
+  });
+
+  it('drops an empty think block that is not followed by a tag', () => {
+    const { out, all } = run(['<think></think>', 'Hello', ' there']);
+    expect(out).toEqual(['', 'Hello', ' there']);
+    expect(all).toBe('Hello there');
+  });
+
+  it('passes a think block with content straight through', () => {
+    const { out } = run(['<think>pondering</think>Hi']);
+    expect(out).toEqual(['<think>pondering</think>Hi']);
   });
 });
