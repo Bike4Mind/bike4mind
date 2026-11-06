@@ -10,7 +10,7 @@ import type {
   CookieImportResult,
   CookieImportState,
 } from './browserCookies';
-import type { ClaudeImportResult, ClaudeImportState, ClaudeRemoveResult } from './claudeImport';
+import type { ClaudeImportKind, ClaudeImportResult, ClaudeImportState, ClaudeRemoveResult } from './claudeImport';
 import type { CapabilityLedgerState } from './capabilities';
 import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
 import type {
@@ -325,6 +325,8 @@ export const IPC_CHANNELS = {
   claudeImportChatExport: 'claude:import-chat-export',
   claudeImportSetWatchFolder: 'claude:set-watch-folder',
   claudeImportRemove: 'claude:remove-imported',
+  claudeImportSetWebSettings: 'claude:set-web-import',
+  claudeImportSyncWeb: 'claude:sync-web',
   /** main -> renderer push of the import state. */
   claudeImportStateChanged: 'claude:import-state-changed',
   /** main -> renderer push, batched: imported sessions were added or changed, so re-list. */
@@ -1193,7 +1195,9 @@ export interface DesktopApi {
     importChatExport(): Promise<ClaudeImportResult>;
     /** Opens a folder picker in main; `clear` stops watching instead. */
     setWatchFolder(clear: boolean): Promise<ClaudeImportState>;
-    remove(kind: 'claude-code' | 'claude-chat'): Promise<ClaudeRemoveResult>;
+    setWebSettings(patch: { enabled?: boolean }): Promise<ClaudeImportState>;
+    syncWeb(): Promise<ClaudeImportState>;
+    remove(kind: ClaudeImportKind): Promise<ClaudeRemoveResult>;
     onStateChanged(listener: (state: ClaudeImportState) => void): () => void;
     onSessionsChanged(listener: () => void): () => void;
   };

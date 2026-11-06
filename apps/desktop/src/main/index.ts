@@ -284,6 +284,7 @@ void app.whenReady().then(async () => {
 
   createWindow();
   claudeImport.start();
+  app.on('browser-window-focus', () => claudeImport.onWindowFocus());
   onAuthStateChanged(closeBrowsersOnScopeChange(auth.getState(), () => browser.closeAll()));
   let importScope = sessionScopeKeyOf(auth.getState());
   onAuthStateChanged(state => {

@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
-import type { ClaudeChatImportSummary, ClaudeCodeImportSettings } from '@shared/claudeImport';
+import type { ClaudeChatImportSummary, ClaudeCodeImportSettings, WebSyncSettings } from '@shared/claudeImport';
 import { assertScopeKey } from '../chat/sessionScope';
 import type { CodeMapState } from './claudeCodeMapper';
 
@@ -9,12 +9,14 @@ export interface ClaudeImportSettings {
   chatWatchFolder: string | null;
   /** When the folder was chosen (ms). Exports older than this were already there, in every account. */
   chatWatchSince: number;
+  web: WebSyncSettings;
 }
 
 export const DEFAULT_SETTINGS: ClaudeImportSettings = {
   code: { enabled: false, sourceFolder: null, projects: 'all', includeSubagents: false },
   chatWatchFolder: null,
   chatWatchSince: 0,
+  web: { enabled: false },
 };
 
 /** 'pending' is indexed but not read yet; 'removed' was deleted by the user and stays gone. */
@@ -37,6 +39,15 @@ export interface FileCursor {
   error?: string;
 }
 
+/** Where one web notebook's import stands. */
+export interface WebNotebookCursor {
+  sessionId: string;
+  /** The notebook's timestamps when last read; '' while a reply was still running, so it is read again. */
+  version: string;
+  status: Exclude<FileStatus, 'pending'>;
+  error?: string;
+}
+
 /** Per account: imports land in that account's sessions, so their bookkeeping does too. */
 export interface ScopeImportState {
   version: 1;
@@ -48,6 +59,10 @@ export interface ScopeImportState {
   lastChatImport: ClaudeChatImportSummary | null;
   /** Export zips already seen in the watched folder, path -> mtimeMs. */
   watchedSeen: Record<string, number>;
+  /** Web notebook id -> its cursor. */
+  webNotebooks: Record<string, WebNotebookCursor>;
+  webLastSyncAt: string | null;
+  webLastSyncMs: number | null;
 }
 
 function emptyScopeState(): ScopeImportState {
@@ -59,6 +74,9 @@ function emptyScopeState(): ScopeImportState {
     conversations: {},
     lastChatImport: null,
     watchedSeen: {},
+    webNotebooks: {},
+    webLastSyncAt: null,
+    webLastSyncMs: null,
   };
 }
 
@@ -81,6 +99,7 @@ export function sanitizeSettings(raw: unknown): ClaudeImportSettings {
     chatWatchFolder: absoluteOrNull(value.chatWatchFolder),
     chatWatchSince:
       typeof value.chatWatchSince === 'number' && Number.isFinite(value.chatWatchSince) ? value.chatWatchSince : 0,
+    web: { enabled: !!value.web && typeof value.web === 'object' && value.web.enabled === true },
   };
 }
 
@@ -111,7 +130,10 @@ export class ImportStateStore {
   ) {}
 
   async readSettings(): Promise<ClaudeImportSettings> {
-    this.settings ??= sanitizeSettings(await readJson(this.settingsPath));
+    if (this.settings) return this.settings;
+    const loaded = sanitizeSettings(await readJson(this.settingsPath));
+    // A write that landed while the file was being read is newer than what was read.
+    this.settings ??= loaded;
     return this.settings;
   }
 
