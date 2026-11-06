@@ -4931,8 +4931,7 @@ export const settingsMap = {
     min: 0,
     int: true,
     userReadable: true,
-    description:
-      'Credits a new account receives after email verification. While unset, Signup Grant Credits applies, else 0.',
+    description: 'Credits a new account receives after email verification. Unset means 0.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4944,7 +4943,7 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Credits paid for each day of qualifying activity until the drip cap is reached. Zero disables the drip. While unset, Signup Activity Daily Credits applies if the activity drip is enabled, else 0.',
+      'Credits paid for each day of qualifying activity until the drip cap is reached. Zero or unset disables the drip.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),

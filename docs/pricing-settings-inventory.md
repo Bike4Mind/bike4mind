@@ -43,19 +43,14 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 
 | Key | Admin tab | Code readers | Changes customer price | Proposed section |
 |---|---|---|---|---|
-| `allowOpenRegistration` | Growth and Pricing > Signup and starter credits | Registration (`b4m-core/services/src/userService/register.ts`), the login and register pages through `/api/settings/serverConfigPublic`, OTP and OAuth sign-in through `isOpenRegistrationAllowed` (`apps/client/server/utils/auth/openRegistration.ts`), and the starter-credit amount (`getOpenSignupStarterCredits` in `apps/client/server/utils/starterCredits.ts`). | no. Decides who receives `defaultFreeCredits`, so it changes platform cost, not price. | Signup and starter credits |
-| `defaultFreeCredits` | Growth and Pricing > Signup and starter credits | The verified-email grant (`b4m-core/services/src/userService/freeCredits.ts`, `register.ts`), the new-user welcome and plan cards (`NewUserWelcome.tsx`, `PlansSection.tsx`, `CreditsExplanation.tsx`), the publish share footer, the entitlements registry, and three backfill scripts in `packages/scripts`. | no. A free grant. | Signup and starter credits |
-| `signupGrantDailyBudget` | Admin Settings > User Management > Credits System > Signup Grant Daily Budget (deprecated; hidden on production stages) | None. Replaced by the two pools below and kept one release so the pool seed migration (`packages/scripts/migrate/migrations/20260921237500_seed-signup-grant-pools.ts`) can split its value between the pools (their sum never exceeds it; a cap of 1 seeds only the signup pool, so the trickle pool stays paused and alerting until an admin sets it). | no. Read only by that migration and the self-host worker's boot seed, which runs once per database (a `seedmarkers` row), so a pool row removed later is not re-seeded. To pause a pool, set it to 0. | Signup and starter credits |
+| `allowOpenRegistration` | Growth and Pricing > Signup and starter credits | Registration (`b4m-core/services/src/userService/register.ts`), the login and register pages through `/api/settings/serverConfigPublic`, OTP and OAuth sign-in through `isOpenRegistrationAllowed` (`apps/client/server/utils/auth/openRegistration.ts`), and the starter-credit amount (`getOpenSignupStarterCredits` in `apps/client/server/utils/starterCredits.ts`). | no. Decides who receives the signup grant (`signupGrantInitialCredits`), so it changes platform cost, not price. | Signup and starter credits |
 | `signupGrantSignupPoolDaily` | Admin Settings > User Management > Credits System > Signup Pool (credits per day) | The per-pool budget reservation (`resolvePoolBudget` and `reserveSignupGrantBudget` in `b4m-core/services/src/userService/signupGrantBudget.ts`), drawn by the initial signup grant (`freeCredits.ts`, the first tranche in `stagedSignupGrant.ts`) and held-grant releases (`heldSignupGrants.ts`). Paid credits (purchases, plan credits, seat grants) and operator-issued invite grants never draw it. | no. Caps free signup credits per UTC day; 0 or a missing/invalid value pauses them (missing alerts admins) and overflow is held, then paid oldest first by the hourly release. | Signup and starter credits |
 | `signupGrantTricklePoolDaily` | Admin Settings > User Management > Credits System > Trickle Pool (credits per day) | The same reservation with the trickle pool, drawn by the daily signup drip (`dripSignupGrant` in `stagedSignupGrant.ts`) and by gear and first-answer referral rewards (`payCreditReward` in `b4m-core/services/src/creditService/payCreditReward.ts`). | no. Caps free drip and reward credits per UTC day; 0 or a missing/invalid value pauses them (missing alerts admins). A drip past it is skipped for the day; a reward past it is queued and paid oldest first by the hourly release, and a drip waits while it would leave the pool unable to pay the oldest queued reward. It is independent of signup-pool holds. | Signup and starter credits |
-| `signupGrantActivityEnabled` | Admin Settings > User Management > Credits System > Signup Grant Activity Unlock | Legacy fallback only: while `signupGrantDailyCredits` is unset, on applies `signupGrantActivityDailyCredits` as the daily drip and off pays none (`signupGrantScheduleFromValues` in `b4m-core/common/src/signupGrant.ts`). The drip itself runs whenever the resolved daily amount is above 0 (`isDripScheduleOn` in `apps/client/server/credits/activityUnlock.ts`). | no. Kept for one release, then removed. | Signup and starter credits |
 | `signupGrantActivityMinActiveSeconds` | Admin Settings > User Management > Credits System > Signup Activity Minimum Active Seconds | The server-accrued active time a UTC day needs before the drip pays (`resolveRequiredActiveSeconds` in `activityUnlock.ts`, `recordActiveSession.ts`) and the "about N minutes" unlock copy (`newUserWelcomeModel.ts`). Clamped to 60-7200, default 60. | no. Sets how long a free drip takes to earn. | Signup and starter credits |
-| `signupGrantActivityDailyCredits` | Admin Settings > User Management > Credits System > Signup Activity Daily Credits | The per-day drip amount (`resolveDripLimits` in `stagedSignupGrant.ts`), the heartbeat gate and the unlock copy. Legacy fallback: applies only while `signupGrantDailyCredits` is unset and `signupGrantActivityEnabled` is on. | no. A free grant. | Signup and starter credits |
-| `signupGrantActivityMaxCredits` | Admin Settings > User Management > Credits System > Signup Activity Maximum Credits | Legacy fallback only: while `signupGrantDripCap` is unset and staging is on, the drip cap is the smaller of this and `verifiedUnlockCredits`, an unset row reading as its default (9000 here, 0 for `verifiedUnlockCredits`); 0 with staging off (`signupGrantScheduleFromValues` in `b4m-core/common/src/signupGrant.ts`). | no. Caps free credits. | Signup and starter credits |
 | `signupGrantActivityPreviewTestMode` | Admin Settings > User Management > Credits System > Signup Drip Preview Test Mode (not shown on `production` or `dev`) | Preview-only five-minute earning windows in `signupDripPeriod.ts`; default off. Only `pr<number>` stages honor the switch. Production/staging keep UTC days, and the platform budget still uses real UTC days. | no. Accelerates free-grant testing only. | Signup and starter credits |
-| `signupGrantInitialCredits` | Admin Settings > User Management > Credits System > Signup Grant Initial Credits | The post-verification tranche snapshotted at enrollment (`resolveSignupGrantSchedule` in `b4m-core/common/src/signupGrant.ts`) and the signup copy (`useSignupGrantSchedule.ts`, `useSignupGrantCredits.ts`). Unset falls back to `signupGrantCredits`, then `defaultFreeCredits`; a stored 0 is honoured. | no. A free grant. | Signup and starter credits |
-| `signupGrantDailyCredits` | Admin Settings > User Management > Credits System > Signup Grant Daily Credits | The per-day drip amount (`resolveSignupGrantSchedule`, read by `resolveDripLimits` in `stagedSignupGrant.ts`). Unset falls back to `signupGrantActivityDailyCredits`. | no. A free grant. | Signup and starter credits |
-| `signupGrantDripCap` | Admin Settings > User Management > Credits System > Signup Grant Drip Cap | The per-account drip total and the unlock pool snapshotted at enrollment (`resolveSignupGrantSchedule`). Unset falls back to the smaller of `signupGrantActivityMaxCredits` (9000 when unset) and `verifiedUnlockCredits` (0 when unset), or 0 with staging off. | no. Caps free credits. | Signup and starter credits |
+| `signupGrantInitialCredits` | Admin Settings > User Management > Credits System > Signup Grant Initial Credits | The post-verification tranche snapshotted at enrollment (`resolveSignupGrantSchedule` in `b4m-core/common/src/signupGrant.ts`) and the signup copy (`useSignupGrantSchedule.ts`, `useSignupGrantCredits.ts`). Unset reads as 0. | no. A free grant. | Signup and starter credits |
+| `signupGrantDailyCredits` | Admin Settings > User Management > Credits System > Signup Grant Daily Credits | The per-day drip amount (`resolveSignupGrantSchedule`, read by `resolveDripLimits` in `stagedSignupGrant.ts`). Unset reads as 0. | no. A free grant. | Signup and starter credits |
+| `signupGrantDripCap` | Admin Settings > User Management > Credits System > Signup Grant Drip Cap | The per-account drip total and the unlock pool snapshotted at enrollment (`resolveSignupGrantSchedule`). Unset reads as the registry default, 9000; a cap of 0 locks nothing and pays the initial tranche flat. | no. Caps free credits. | Signup and starter credits |
 | `signupGrantInviteBonusCredits` | Admin Settings > User Management > Credits System > Signup Grant Invite Bonus Credits | Registered only; no reader yet. Default 0. | no. | Signup and starter credits |
 | `ReferralCreditsAmount` | Growth and Pricing > Signup and starter credits | The referred-user grant at registration (`register.ts`), the referral send route (`apps/client/pages/api/reg-invites/refer.ts`) and the "invited person gets N credits" line (`ReferralModal.tsx`). | no. A free grant. | Signup and starter credits |
 | `ReferralFirstAnswerCredits` | Growth and Pricing > Referral rewards for inviters | The inviter payout when the invited friend has a first answer and a verified email (`apps/client/server/referrals/firstAnswerReward.ts`). Only friends who signed up on or after the first-value launch date (`FIRST_VALUE_LAUNCH_AT` in `apps/client/server/analytics/funnel.ts`) qualify. Default 0 (off). | no. A free grant. | Signup and starter credits |
@@ -99,11 +94,17 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | Markup and sale rate (`CREDITS_PER_USD_COST`, `MIN_PRICE_PER_CREDIT_USD`) | Deploy time only: `NEXT_PUBLIC_PRICE_MARGIN` and `NEXT_PUBLIC_USD_TO_CREDITS_RATE`, resolved in `b4m-core/common/src/pricing.ts`. No admin editor. | Every usage charge; the `pricePerCredit` floor; credit pack sizes; the Growth and Pricing derived values; `apps/client/app/utils/aiSettingsUtils.ts`. | yes | Credit pricing and conversion |
 | Credit packs (`CREDIT_PACKAGES`) | Code only: `apps/client/lib/credits/constants.ts`. Credits are derived from the price at `MIN_PRICE_PER_CREDIT_USD`. No admin editor. | `CreditsModal.tsx`, `CreditsSection.tsx`, `PaymentButton.tsx`, and the package purchase in `apps/client/lib/credits/utils.ts`. | yes | Plans, seats and packs |
 | Subscription plans (`SUBSCRIPTION_PLANS`) | Code (`apps/client/lib/userSubscriptions/constants.ts`) plus Stripe price IDs from `NEXT_PUBLIC_STRIPE_PRICE_*` env vars. The admin Subscriptions tab shows each subscriber's plan but has no plan editor. | Plan cards and checkout, `/api/subscriptions/subscribe`, the invoice credit grant in `apps/workers/src/lib/userSubscriptions/serverUtils.ts`, admin grants and partner signup rules. | yes | Plans, seats and packs |
-| Partner signup rules | Admin > Partner Signup Rules (`/api/admin/partner-signup-rules`) | `apps/client/server/entitlements/partnerRules.ts` and the partner-signup membership in `applyPartnerRuleMembership.ts`. Rule credits are added on top of `defaultFreeCredits`. | no. Free grants and plan membership. | Signup and starter credits |
+| Partner signup rules | Admin > Partner Signup Rules (`/api/admin/partner-signup-rules`) | `apps/client/server/entitlements/partnerRules.ts` and the partner-signup membership in `applyPartnerRuleMembership.ts`. Rule credits are added on top of the signup grant. | no. Free grants and plan membership. | Signup and starter credits |
 
 ## Findings
 
 - **Every key in scope has exactly one editor.**
+- **Retired signup grant keys are gone.** `defaultFreeCredits`, `signupGrantCredits`, `stagedSignupGrantEnabled`,
+  `verifiedUnlockCredits`, `signupGrantDailyBudget`, `signupGrantActivityEnabled`, `signupGrantActivityDailyCredits`,
+  `signupGrantActivityMaxCredits`, `signupGrantActivityMinMessages`, `signupGrantActivityMinDays` and `defaultSeats`
+  were removed from the registry. Migration `20260921237480_pin-signup-grant-schedule-keys` first pins the schedule
+  keys they used to supply, then `20260921239996_drop-retired-grant-settings` backs up and deletes their rows
+  (its `down` restores them).
 - **`pricePerCredit` prices a path no UI offers.** Only the per-credit branch of `/api/stripe/start-payment`
   reads it, and every purchase button in the app sells a credit pack. It is a candidate for the legacy-path
   cleanup in the admin settings epic.
@@ -138,26 +139,6 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`) appear because they 
 - `apps/client/server/utils/auth/openRegistration.ts`
 - `apps/client/server/utils/starterCredits.ts`
 - `b4m-core/services/src/userService/register.ts`
-
-</details>
-
-<details><summary><code>defaultFreeCredits</code> (15 files)</summary>
-
-- `apps/client/app/components/Session/NewUserWelcome.tsx`
-- `apps/client/app/components/Session/newUserWelcomeModel.ts`
-- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
-- `apps/client/app/components/admin/AdminSettingsTab.tsx`
-- `apps/client/app/components/subscription/CreditsExplanation.tsx`
-- `apps/client/app/components/subscription/PlansSection.tsx`
-- `apps/client/app/utils/shareFooter.ts`
-- `packages/server-utils/src/lib/entitlements/registry.ts`
-- `apps/client/server/utils/starterCredits.ts`
-- `b4m-core/common/src/types/entities/UserTypes.ts`
-- `b4m-core/services/src/userService/freeCredits.ts`
-- `b4m-core/services/src/userService/register.ts`
-- `packages/scripts/backfillOAuthStartingGrant.ts`
-- `packages/scripts/backfillPendingFreeCredits.ts`
-- `packages/scripts/oauthStartingGrantPlan.ts`
 
 </details>
 
