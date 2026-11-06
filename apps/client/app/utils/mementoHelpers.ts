@@ -38,9 +38,10 @@ export const buildMementosCSV = (mementos: IMemento[]): string => {
       m.fullContent,
       new Date(m.lastAccessedAt).toISOString(),
       (m.tags ?? []).join(';'),
-      (m.embedding ?? []).join(';'),
     ]
       .map(value => toCsvCell(value))
+      // Numbers only, so no quoting is needed; the formula guard would prefix a leading negative.
+      .concat((m.embedding ?? []).join(';'))
       .join(',')
   );
 
