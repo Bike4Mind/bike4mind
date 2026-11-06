@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { getEmbeddingModelCapabilities, isPlaceholderApiKey, truncateEmbedding } from '@bike4mind/common';
 import { EmbeddingAuthError } from '@bike4mind/fab-pipeline';
+import { defaultRetryDelayMs, fetchWithRetry } from '../fetchWithRetry';
 import { embeddingModelsOf } from '../models';
 import { assertOneVectorPerInput, preflightEmbeddingRequest, sumReportedTokens } from '../preflight';
 import type { EmbeddingContext, EmbeddingProvider, EmbeddingRequest, EmbeddingResult } from '../types';
@@ -30,10 +31,19 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
   readonly id = 'gemini';
   readonly models = embeddingModelsOf('gemini');
   private readonly apiKey: string;
+  private readonly retryDelayMs: (retry: number) => number;
 
-  constructor({ apiKey }: { apiKey?: string | null }) {
+  /** `retryDelayMs` is injectable so tests need not wait out real backoff. */
+  constructor({
+    apiKey,
+    retryDelayMs = defaultRetryDelayMs,
+  }: {
+    apiKey?: string | null;
+    retryDelayMs?: (retry: number) => number;
+  }) {
     if (!apiKey || isPlaceholderApiKey(apiKey)) throw new Error('Gemini embedding API key is not configured');
     this.apiKey = apiKey;
+    this.retryDelayMs = retryDelayMs;
   }
 
   async embed(request: EmbeddingRequest, context: EmbeddingContext = {}): Promise<EmbeddingResult> {
@@ -62,22 +72,23 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
   ): Promise<EmbeddingResult> {
     const model = `models/${request.model}`;
     const nativeWidth = getEmbeddingModelCapabilities(request.model).dimensions.native;
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/${model}:batchEmbedContents`, {
-      method: 'POST',
-      headers: { 'x-goog-api-key': this.apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        requests: inputs.map(text => ({
-          model,
-          content: { parts: [{ text }] },
-          ...(request.inputType && {
-            taskType: request.inputType === 'query' ? 'RETRIEVAL_QUERY' : 'RETRIEVAL_DOCUMENT',
-          }),
-        })),
-      }),
-      signal: context.signal
-        ? AbortSignal.any([context.signal, AbortSignal.timeout(60_000)])
-        : AbortSignal.timeout(60_000),
-    });
+    const response = await fetchWithRetry(
+      `https://generativelanguage.googleapis.com/v1beta/${model}:batchEmbedContents`,
+      {
+        method: 'POST',
+        headers: { 'x-goog-api-key': this.apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          requests: inputs.map(text => ({
+            model,
+            content: { parts: [{ text }] },
+            ...(request.inputType && {
+              taskType: request.inputType === 'query' ? 'RETRIEVAL_QUERY' : 'RETRIEVAL_DOCUMENT',
+            }),
+          })),
+        }),
+      },
+      { signal: context.signal, attemptTimeoutMs: 60_000, retryDelayMs: this.retryDelayMs }
+    );
     if (response.status === 401 || response.status === 403 || (await isInvalidApiKeyResponse(response))) {
       throw new EmbeddingAuthError('gemini', 'Gemini rejected the embedding credential');
     }

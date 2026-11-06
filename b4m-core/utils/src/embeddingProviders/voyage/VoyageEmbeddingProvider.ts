@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { isPlaceholderApiKey } from '@bike4mind/common';
 import { EmbeddingAuthError, VOYAGE_KEY_MISSING_MESSAGE } from '@bike4mind/fab-pipeline';
+import { defaultRetryDelayMs, fetchWithRetry } from '../fetchWithRetry';
 import { embeddingModelsOf } from '../models';
 import { assertOneVectorPerInput, preflightEmbeddingRequest, sumReportedTokens } from '../preflight';
 import type { EmbeddingContext, EmbeddingProvider, EmbeddingRequest, EmbeddingResult } from '../types';
@@ -16,13 +17,8 @@ const VOYAGE_MAX_INPUTS_PER_REQUEST = 128;
 // the smallest cap for every model keeps this one constant.
 const VOYAGE_MAX_CHARS_PER_REQUEST = 120_000;
 
-// Matches the voyageai SDK this replaces: two retries with exponential backoff and jitter, 60s per attempt.
-const VOYAGE_MAX_RETRIES = 2;
+// Matches the voyageai SDK this replaces: fetchWithRetry's two backoff retries, 60s per attempt.
 const VOYAGE_ATTEMPT_TIMEOUT_MS = 60_000;
-
-const defaultRetryDelayMs = (retry: number): number => 500 * 2 ** retry * (1 - Math.random() * 0.25);
-
-const isRetryableStatus = (status: number): boolean => status === 408 || status === 429 || status >= 500;
 
 /** Splits into consecutive batches within both the input-count and character budgets; an oversized input goes alone. */
 function createBatches(inputs: readonly string[]): string[][] {
@@ -104,7 +100,11 @@ export class VoyageEmbeddingProvider implements EmbeddingProvider {
       ...(inputType !== undefined && { input_type: inputType }),
       ...(outputDimension !== undefined && { output_dimension: outputDimension }),
     });
-    const response = await this.postWithRetry(body, context);
+    const response = await fetchWithRetry(
+      VOYAGE_EMBEDDINGS_URL,
+      { method: 'POST', headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' }, body },
+      { signal: context.signal, attemptTimeoutMs: VOYAGE_ATTEMPT_TIMEOUT_MS, retryDelayMs: this.retryDelayMs }
+    );
 
     if (response.status === 401 || response.status === 403) {
       throw new EmbeddingAuthError(
@@ -123,44 +123,5 @@ export class VoyageEmbeddingProvider implements EmbeddingProvider {
     const sorted = [...parsed.data].sort((a, b) => a.index - b.index);
     assertOneVectorPerInput('Voyage AI', inputs.length, sorted.length);
     return { vectors: sorted.map(item => item.embedding), inputTokens: parsed.usage?.total_tokens };
-  }
-
-  /** Retries network errors and 408/429/5xx; every other response (401, 403, other 4xx) is returned for the caller. */
-  private async postWithRetry(body: string, context: EmbeddingContext): Promise<Response> {
-    for (let retry = 0; ; retry++) {
-      context.signal?.throwIfAborted();
-      const signals = [AbortSignal.timeout(VOYAGE_ATTEMPT_TIMEOUT_MS), ...(context.signal ? [context.signal] : [])];
-      let response: Response | undefined;
-      try {
-        response = await fetch(VOYAGE_EMBEDDINGS_URL, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
-          body,
-          signal: AbortSignal.any(signals),
-        });
-      } catch (error) {
-        if (context.signal?.aborted || retry >= VOYAGE_MAX_RETRIES) throw error;
-      }
-      if (response && (!isRetryableStatus(response.status) || retry >= VOYAGE_MAX_RETRIES)) return response;
-      // Drain rather than cancel so the connection is reusable.
-      await response?.arrayBuffer().catch(() => undefined);
-      await this.sleep(this.retryDelayMs(retry), context.signal);
-    }
-  }
-
-  private sleep(ms: number, signal?: AbortSignal): Promise<void> {
-    return new Promise((resolve, reject) => {
-      signal?.throwIfAborted();
-      const onAbort = () => {
-        clearTimeout(timer);
-        reject(signal?.reason);
-      };
-      // Detach on resolve too: the caller's signal can outlive many sleeps, and each would otherwise keep a listener.
-      const timer = setTimeout(() => {
-        signal?.removeEventListener('abort', onAbort);
-        resolve();
-      }, ms);
-      signal?.addEventListener('abort', onAbort, { once: true });
-    });
   }
 }

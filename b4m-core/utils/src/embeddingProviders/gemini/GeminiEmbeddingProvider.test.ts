@@ -7,16 +7,22 @@ const model = GeminiEmbeddingModel.GEMINI_EMBEDDING_001;
 type WireRequest = { content: { parts: { text: string }[] }; taskType?: string };
 let requests: WireRequest[][] = [];
 let mode: 'success' | 'unauthorized' | 'invalidKey' | 'failure' = 'success';
-const provider = () => new GeminiEmbeddingProvider({ apiKey: 'gemini-test-key' });
+let rateLimitedAttempts = 0;
+const provider = () => new GeminiEmbeddingProvider({ apiKey: 'gemini-test-key', retryDelayMs: () => 0 });
 
 beforeEach(() => {
   requests = [];
   mode = 'success';
+  rateLimitedAttempts = 0;
   vi.stubGlobal(
     'fetch',
     vi.fn(async (_url: string, options: RequestInit) => {
       const body = JSON.parse(String(options.body)) as { requests: WireRequest[] };
       requests.push(body.requests);
+      if (rateLimitedAttempts > 0) {
+        rateLimitedAttempts--;
+        return new Response('{}', { status: 429 });
+      }
       if (mode === 'unauthorized') return new Response('{}', { status: 403 });
       if (mode === 'invalidKey') {
         // Gemini's actual answer to a bad key: 400 INVALID_ARGUMENT with an API_KEY_INVALID ErrorInfo.
@@ -74,6 +80,21 @@ describe('GeminiEmbeddingProvider', () => {
     expect(requests.map(batch => batch.length)).toEqual([100, 1]);
     expect(requests[0][0]).not.toHaveProperty('taskType');
     expect(result.inputTokens).toBe(202);
+  });
+
+  it('retries a 429 within the multi-batch loop and keeps batch order', async () => {
+    rateLimitedAttempts = 1;
+    const inputs = Array.from({ length: 150 }, (_, index) => `text ${index}`);
+    const result = await provider().embed({ model, inputs });
+    expect(requests.map(batch => batch.length)).toEqual([100, 100, 50]);
+    expect(result.vectors).toEqual(inputs.map(text => fakeEmbedding(text, 3072)));
+    expect(result.inputTokens).toBe(300);
+  });
+
+  it('gives up on a persistent 429 after the retry budget', async () => {
+    rateLimitedAttempts = Number.POSITIVE_INFINITY;
+    await expect(provider().embed({ model, inputs: ['a'] })).rejects.toThrow(/429/);
+    expect(requests).toHaveLength(3);
   });
 
   it('maps an invalid-key 400 to an auth error, but leaves any other 400 a plain failure', async () => {
