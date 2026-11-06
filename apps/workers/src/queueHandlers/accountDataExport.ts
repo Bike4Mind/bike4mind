@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'crypto';
-import { createWriteStream, promises as fs } from 'fs';
+import { createReadStream, createWriteStream, promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import { Readable, Transform } from 'stream';
@@ -15,6 +15,7 @@ import {
   mementoRepository,
   memoryLedgerRepository,
   memoryPrincipalKeyRepository,
+  mongoose,
   projectRepository,
   questRepository,
   sessionRepository,
@@ -30,8 +31,14 @@ import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-uti
 import {
   ACCOUNT_DATA_EXPORT_TTL_MS,
   accountDataExportKey,
+  adminDataExportKey,
   isMissingObjectError,
 } from '@bike4mind/server-utils/utils/accountDataExport';
+// Registered outside the `@bike4mind/database` barrel: unregistered, the registry walk cannot query
+// them and the index would list both as omitted.
+import '@bike4mind/server-utils/models/Subscription';
+import '@server/models/UserSubscription';
+import { SubjectRecordExport, assertEveryModelClassified } from '@server/dataSubject/subjectRecordExport';
 import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 import { createLedgerMemoryStore } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
 import { EmailEvents } from '@server/utils/eventBus';
@@ -42,6 +49,12 @@ const { NotebookExportService } = notebookExportService;
 const AccountDataExportPayload = z.object({
   exportJobId: z.uuid(),
   userId: z.string().min(1),
+  /**
+   * The admin who requested a data subject export of `userId` (apps/client/pages/api/admin/users/
+   * [userId]/data-export). Such an export adds the registry records, is stored under its own key and
+   * is fetched from the admin profile, so the subject is not emailed.
+   */
+  requestedBy: z.string().min(1).optional(),
 });
 
 // Original file bytes past this total are listed in files/index.json but not copied, so the zip
@@ -66,6 +79,12 @@ const isTransientError = (error: unknown) => {
 // Notebooks stop once two thirds of the time past the upload reserve is used, so files and
 // artifacts keep a share on both the 15-minute Lambda and the shorter self-host budget.
 const notebookReserveMs = (startingMs: number) => UPLOAD_RESERVE_MS + Math.max(0, startingMs - UPLOAD_RESERVE_MS) / 3;
+// The registry records, written first, stop once a third of that time is used, leaving the content
+// sections the rest. Relative, because the self-host budget (10 min) is shorter than the Lambda's.
+const recordsReserveMs = (startingMs: number) =>
+  UPLOAD_RESERVE_MS + (Math.max(0, startingMs - UPLOAD_RESERVE_MS) * 2) / 3;
+
+class RecordsTimeLimit extends Error {}
 
 type Archiver = archiver.Archiver;
 type Storage = ReturnType<typeof getFilesStorage>;
@@ -490,7 +509,22 @@ async function writeAgentsAndProjects(archive: Archiver, userId: string) {
   );
 }
 
-const readme = (exportedAt: Date) => `Your account data export
+const RECORDS_README = `
+records/           Admin data subject export only: every stored record that names this person, one
+                   NDJSON file per collection (records/<Model>.ndjson), walked from the data holder
+                   registry. Credentials, token hashes and other secrets are removed, and so is
+                   every other person named on a record. Where a record belongs to someone else and
+                   only lists this person (a shared notebook's members, the admin who acted on an
+                   account), just the entries or fields naming this person and the record id are
+                   included. Free text (notes, summaries) is exported as written.
+                   records/index.json lists every collection searched with its record count; an
+                   "omitted" value of time_limit or error means that collection is not included.
+`;
+
+const readme = (
+  exportedAt: Date,
+  includesRecords: boolean
+) => `${includesRecords ? 'Data subject export' : 'Your account data export'}
 Created: ${exportedAt.toISOString()}
 
 profile.json       Your profile: name, username, email, photo, and when the account was created.
@@ -518,15 +552,84 @@ Deleted items, other data shared with you by others, and credentials (passwords,
 two-factor secrets and connected-app grants) are not included. The exception is notebooks, which also
 include artifacts and files attached to them that others shared with you or made public, and messages
 and images that other participants added to a shared notebook.
-`;
+${includesRecords ? RECORDS_README : ''}`;
+
+type RecordsIndexEntry = { model: string; count: number; omitted?: 'time_limit' | 'error' };
+
+/**
+ * Streams one model's records to a scratch NDJSON file and returns how many there were. Throws
+ * `RecordsTimeLimit` once `outOfTime()`, so one large model cannot spend the content sections' share.
+ */
+async function writeModelRecords(
+  exporter: SubjectRecordExport,
+  model: string,
+  scratchPath: string,
+  outOfTime: () => boolean
+): Promise<number> {
+  let count = 0;
+  async function* lines() {
+    for await (const record of exporter.records(model)) {
+      if (outOfTime()) throw new RecordsTimeLimit(model);
+      count++;
+      yield `${JSON.stringify(record)}\n`;
+    }
+  }
+  await pipeline(Readable.from(lines()), createWriteStream(scratchPath));
+  return count;
+}
+
+/**
+ * The registry walk (apps/client/server/dataSubject): each model goes to a scratch file first, so a
+ * model that fails is listed as omitted without corrupting the zip entry being written.
+ */
+async function writeRegistryRecords(
+  archive: Archiver,
+  scratchDir: string,
+  subject: { userId: string; email: string | null },
+  remainingMs: () => number,
+  logger: Logger
+) {
+  assertEveryModelClassified(mongoose.modelNames());
+  const exporter = new SubjectRecordExport(subject);
+  const index: RecordsIndexEntry[] = [];
+  const reserveMs = recordsReserveMs(remainingMs());
+  const outOfTime = () => remainingMs() < reserveMs;
+  for (const model of exporter.models) {
+    if (outOfTime()) {
+      index.push({ model, count: 0, omitted: 'time_limit' });
+      continue;
+    }
+    const scratchPath = path.join(scratchDir, `records-${index.length}.ndjson`);
+    try {
+      const count = await writeModelRecords(exporter, model, scratchPath, outOfTime);
+      if (count > 0) await appendEntry(archive, createReadStream(scratchPath), `records/${model}.ndjson`);
+      index.push({ model, count });
+    } catch (error) {
+      if (isTransientError(error)) throw error;
+      if (error instanceof RecordsTimeLimit) {
+        index.push({ model, count: 0, omitted: 'time_limit' });
+        continue;
+      }
+      // A child of an omitted parent fails here too, so the gap shows for every collection it affects.
+      logger.error('Data subject export: collection omitted', { model, error });
+      index.push({ model, count: 0, omitted: 'error' });
+    } finally {
+      await fs.rm(scratchPath, { force: true });
+    }
+  }
+  await appendEntry(archive, json({ collections: index }), 'records/index.json');
+  return { collections: index.length, omitted: index.filter(entry => entry.omitted).length };
+}
 
 async function buildArchive(
   zipPath: string,
-  userId: string,
+  subject: { userId: string; email: string | null },
+  includeRecords: boolean,
   storage: Storage,
   remainingMs: () => number,
   logger: Logger
 ) {
+  const { userId } = subject;
   const output = createWriteStream(zipPath);
   const archive = archiver('zip', { zlib: { level: 6 } });
   const closed = new Promise<void>((resolve, reject) => {
@@ -540,8 +643,13 @@ async function buildArchive(
 
   const names = new ZipNames();
   try {
-    await appendEntry(archive, readme(new Date()), 'README.txt');
+    await appendEntry(archive, readme(new Date(), includeRecords), 'README.txt');
     await writeProfile(archive, userId);
+    // First, so the structured records a data subject request is about get the time budget before
+    // the bulk file copy.
+    const records = includeRecords
+      ? await writeRegistryRecords(archive, path.dirname(zipPath), subject, remainingMs, logger)
+      : null;
     const budget: ByteBudget = { copiedBytes: 0 };
     const { planned, fileIdByPath } = await planFiles(names, userId);
     const notebooks = await writeNotebooks(archive, names, userId, fileIdByPath, budget, remainingMs, logger);
@@ -558,6 +666,7 @@ async function buildArchive(
       filesOmitted: files.omitted,
       artifacts: artifacts.count,
       artifactsOmitted: artifacts.omitted,
+      ...(records && { recordCollections: records.collections, recordCollectionsOmitted: records.omitted }),
     });
   } catch (error) {
     archive.abort();
@@ -576,13 +685,18 @@ async function existingExport(storage: Storage, key: string) {
 }
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
-  const { exportJobId, userId } = secureParameters(JSON.parse(event.Records[0].body), AccountDataExportPayload);
-  logger.updateMetadata({ exportJobId, userId });
-  const key = accountDataExportKey(userId, exportJobId);
+  const { exportJobId, userId, requestedBy } = secureParameters(
+    JSON.parse(event.Records[0].body),
+    AccountDataExportPayload
+  );
+  logger.updateMetadata({ exportJobId, userId, requestedBy });
+  const forAdmin = requestedBy !== undefined;
+  const key = forAdmin ? adminDataExportKey(userId, exportJobId) : accountDataExportKey(userId, exportJobId);
   const removeSkippedExport = () => getFilesStorage().deletePermanently(key);
 
   const user = await userRepository.findById(userId);
-  if (!user?.email) {
+  // An admin export is fetched from the admin profile, so it does not need an address to deliver to.
+  if (!user || (!forAdmin && !user.email)) {
     logger.warn('Account data export skipped: the account is gone or has no email to deliver to');
     await removeSkippedExport();
     return;
@@ -650,7 +764,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'account-data-export-'));
       try {
         const zipPath = path.join(dir, 'account-data.zip');
-        await buildArchive(zipPath, userId, storage, () => context.getRemainingTimeInMillis(), logger);
+        await buildArchive(
+          zipPath,
+          { userId, email: user.email ?? null },
+          forAdmin,
+          storage,
+          () => context.getRemainingTimeInMillis(),
+          logger
+        );
         await assertLease();
         const uploadTimeoutMs = Math.min(UPLOAD_RESERVE_MS, context.getRemainingTimeInMillis() - 1000);
         if (uploadTimeoutMs <= 0) throw new Error('No remaining time to upload the account data export');
@@ -689,15 +810,21 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         await fs.rm(dir, { recursive: true, force: true });
       }
     } else {
-      logger.info('Account data export already built; re-sending the email');
+      logger.info('Account data export already built; not rebuilding it');
     }
 
     await assertLease();
+    if (forAdmin) {
+      logger.info('Data subject export ready for the requesting admin');
+      return;
+    }
     const email = buildAccountDataExportReadyEmail({
       downloadPageUrl: `${appUrl.replace(/\/+$/, '')}/account-data-export/${exportJobId}`,
       expiresAt: new Date(builtAt.getTime() + ACCOUNT_DATA_EXPORT_TTL_MS),
     });
-    await EmailEvents.Send.publish({ to: claimed.email || user.email, subject: email.subject, body: email.body });
+    const deliverTo = claimed.email || user.email;
+    if (!deliverTo) throw new Error('No email to deliver the account data export to');
+    await EmailEvents.Send.publish({ to: deliverTo, subject: email.subject, body: email.body });
   } finally {
     if (releaseLease) {
       await User.updateOne(

@@ -25,6 +25,7 @@ const menuEntries = (user: AdminUserProfile): MenuEntry[] => [
   { action: 'productAccess', label: 'Manage product access' },
   'divider',
   { action: 'compliance', label: 'Compliance record' },
+  { action: 'dataExport', label: 'Export user data' },
   { action: 'restrict', label: user.isModerated ? 'Lift restriction' : 'Restrict account' },
   { action: 'shadowTier', label: user.throttle?.tier === 'shadow' ? 'Remove limited tier' : 'Move to limited tier' },
   user.deletion

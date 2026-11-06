@@ -21,7 +21,12 @@
  *
  * What an export includes for a document matched by each action:
  * - `deleteDocument` / `retain`: the whole document minus `secretPaths`, plus its `viaParent` children.
- * - `anonymize`: the whole document minus `secretPaths`; it records this person.
+ *   Every other person on it is withheld: a reference that names someone else goes with its
+ *   `alsoRedact` and `identifies` fields, and an array a reference reads through keeps only this
+ *   person's elements.
+ * - `anonymize`, and `retain` with `exportScope: 'reference'`: the person only appears as who did
+ *   something, so only the matched reference (with its `alsoRedact` and `identifies` fields) and the
+ *   document id. The record itself is someone else's.
  * - `pullFromArray`: only the matching array elements and the document id. The rest of the document
  *   belongs to someone else (a notebook shared with this person) and is not this person's to take.
  */
@@ -57,6 +62,13 @@ export type UserReference = ErasureAction & {
    * personal file (`{ organizationId: null }`) is told apart from one their organization owns.
    */
   where?: Readonly<Record<string, string | null>>;
+  /**
+   * Fields beside `path` that describe the person it names (a cached name, email, request IP). An
+   * export to anyone else leaves them out. Erasure does not read this; it clears `alsoRedact`.
+   */
+  identifies?: readonly string[];
+  /** See the export rules above: the person is only the actor here, not a party to the record. */
+  exportScope?: 'reference';
 };
 
 export type AttributionReference = UserReference & { action: 'anonymize' };

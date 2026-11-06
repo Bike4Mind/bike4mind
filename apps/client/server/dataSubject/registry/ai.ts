@@ -33,6 +33,7 @@ export const aiHolders = {
         matchBy: 'userId',
         action: 'retain',
         reason: 'Immutable record of which administrator published a catalog version, kept for accountability',
+        exportScope: 'reference',
       },
     ],
   },

@@ -33,6 +33,11 @@ export const ADMIN_REASON_PRESETS = {
   userDeletion: ['User requested deletion', 'Spam or bot account', 'Terms of service violation', 'Duplicate account'],
   deletionVerification: ['Request sent from the email on file', 'Confirmed by reply from the email on file'],
   deletionCancel: ['User asked to cancel, identity verified', 'Scheduled in error'],
+  dataSubjectExport: [
+    'Access request from the user (GDPR Art. 15)',
+    'Portability request from the user (GDPR Art. 20)',
+    'Request from a legal authority',
+  ],
   mfaReset: ['Lost authenticator, identity verified', 'New device, identity verified'],
   sessionRevoke: ['Compromised account', 'Lost or stolen device', 'Suspicious sign-in', 'User request'],
   impersonation: ['Reproduce a reported bug', 'Investigate a support ticket', 'Check account configuration'],
