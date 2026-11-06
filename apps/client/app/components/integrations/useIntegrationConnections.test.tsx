@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   isAdmin: false,
   github: undefined as { connected: boolean } | undefined,
   mcpServers: undefined as Array<{ name: string; enabled: boolean }> | undefined,
+  flags: new Set<string>(),
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({
@@ -24,6 +25,12 @@ vi.mock('@client/app/hooks/data/mcpServers', () => ({
   useConnectAtlassian: () => ({ mutate: vi.fn(), isPending: false }),
   useConnectNotion: () => ({ mutate: vi.fn(), isPending: false }),
   useMcpServers: () => ({ data: h.mcpServers }),
+}));
+vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
+  useAdminSettingsCache: () => ({ isFeatureEnabled: (key: string) => h.flags.has(key) }),
+}));
+vi.mock('@client/app/hooks/useAccessToken', () => ({
+  useAccessToken: (selector: (s: { impersonating: boolean }) => unknown) => selector({ impersonating: false }),
 }));
 vi.mock('@client/app/hooks/data/useGitHubConnectionStatus', () => ({
   useGitHubConnectionStatus: () => ({ data: h.github }),
@@ -47,6 +54,7 @@ beforeEach(() => {
   h.isAdmin = false;
   h.github = undefined;
   h.mcpServers = undefined;
+  h.flags = new Set();
 });
 
 describe('useIntegrationConnections', () => {
@@ -135,6 +143,35 @@ describe('useIntegrationConnections', () => {
 
       await waitFor(() => expect(result.current.blog).toEqual({ connected: true }));
       expect(api.get).toHaveBeenCalledWith('/api/blog-integration');
+    });
+  });
+
+  describe('custom MCP connectors and their presets', () => {
+    const conn = (overrides: Record<string, unknown>) => ({ id: 'c', tools: [], ...overrides });
+
+    it('does not ask for connections while custom connectors are switched off', () => {
+      const { result } = renderConnections();
+      expect(api.get).not.toHaveBeenCalledWith('/api/mcp-connections');
+      expect(result.current['custom-mcp']).toEqual({ connected: false, needsReconnect: false });
+      expect(result.current.linear).toEqual({ connected: false, needsReconnect: false });
+    });
+
+    it('marks a preset by its presetId and the custom entry by the connections with none', async () => {
+      h.flags = new Set(['EnableCustomMcpConnectors']);
+      vi.mocked(api.get).mockResolvedValue({
+        data: [
+          conn({ id: 'a', presetId: 'linear', status: 'connected' }),
+          conn({ id: 'b', presetId: 'gitlab', status: 'needs_reconnect' }),
+          conn({ id: 'c', status: 'error' }),
+        ],
+      });
+      const { result } = renderConnections();
+
+      await waitFor(() => expect(result.current.linear).toEqual({ connected: true, needsReconnect: false }));
+      expect(api.get).toHaveBeenCalledWith('/api/mcp-connections');
+      expect(result.current.gitlab).toEqual({ connected: false, needsReconnect: true });
+      expect(result.current.airtable).toEqual({ connected: false, needsReconnect: false });
+      expect(result.current['custom-mcp']).toEqual({ connected: false, needsReconnect: false });
     });
   });
 

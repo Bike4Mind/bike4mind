@@ -18,6 +18,7 @@ export const INTEGRATION_IDS = [
   'jupyter',
   'claude-code',
   'mcp-cli',
+  'custom-mcp',
   'atlassian',
   'notion',
   'slack',
@@ -156,6 +157,17 @@ export const INTEGRATION_CATALOG: Record<IntegrationId, IntegrationDefinition> =
     logo: 'mcp-cli',
     stage: 'ga',
     capabilities: [{ id: 'mcp-cli-tools', label: 'Your MCP servers as CLI tools', kind: 'agent-tools', stage: 'ga' }],
+  },
+  'custom-mcp': {
+    name: 'Custom MCP connector',
+    description: 'Connect any remote MCP server by URL and use its tools in chat and agents.',
+    category: 'dev-tools',
+    logo: 'mcp-custom',
+    stage: 'beta',
+    flag: 'EnableCustomMcpConnectors',
+    capabilities: [
+      { id: 'custom-mcp-tools', label: 'Your remote MCP servers as tools', kind: 'agent-tools', stage: 'beta' },
+    ],
   },
   atlassian: {
     name: 'Jira and Confluence',

@@ -2,26 +2,34 @@ import { useState, useSyncExternalStore } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { isAxiosError } from 'axios';
-import { AuthStrategy, McpServerName, type IntegrationId } from '@bike4mind/common';
+import { AuthStrategy, MCP_PRESET_IDS, McpServerName, type IntegrationId } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useConnectGoogleDrive } from '@client/app/hooks/data/googleDrive';
 import { useConnectAtlassian, useConnectNotion, useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useGitHubConnectionStatus } from '@client/app/hooks/data/useGitHubConnectionStatus';
+import { useMcpConnections } from '@client/app/hooks/data/mcpConnections';
+import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { getStoredJupyterConfig, subscribeStoredJupyterConfig } from '@client/app/utils/jupyterBrowserClient';
 import type { Connections } from './galleryModel';
+import { connectionsFor, galleryConnectionState } from './customMcp/customMcpModel';
 
 /**
  * Whether the viewer has connected each integration, read from the same sources the
  * Profile > Integrations tab reads (the user document, the GitHub status probe, the MCP
- * server list, the blog-integration query). Integrations with no per-user connection
- * (history import, Claude Code, MCP via CLI) are simply absent.
+ * server list, the blog-integration query, the custom MCP connections). Integrations with no
+ * per-user connection (history import, Claude Code, MCP via CLI) are simply absent.
  */
 export function useIntegrationConnections(): Connections {
   const currentUser = useUser(s => s.currentUser);
   const isAdmin = useUser(s => s.isAdmin);
   const { data: github } = useGitHubConnectionStatus(currentUser?.id ?? '');
   const { data: mcpServers } = useMcpServers();
+  // The route answers an empty list while custom connectors are off, so skip the request then.
+  const { isFeatureEnabled } = useAdminSettingsCache();
+  const { data: mcpConnections = [] } = useMcpConnections({
+    enabled: isFeatureEnabled('EnableCustomMcpConnectors'),
+  });
   // Same key and fetcher as BlogIntegrationSection, so the two share one cache entry. Admins
   // only: the section, and so the Blog card, renders for nobody else.
   const { data: blog } = useQuery({
@@ -58,6 +66,8 @@ export function useIntegrationConnections(): Connections {
     blog: { connected: !!blog?.connected },
     okta: { connected: currentUser?.authProviders?.some(p => p.strategy === AuthStrategy.Okta) ?? false },
     jupyter: { connected: jupyterConfigured },
+    'custom-mcp': galleryConnectionState(connectionsFor(mcpConnections, undefined)),
+    ...Object.fromEntries(MCP_PRESET_IDS.map(id => [id, galleryConnectionState(connectionsFor(mcpConnections, id))])),
   };
 }
 

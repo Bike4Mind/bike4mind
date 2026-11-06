@@ -8,6 +8,7 @@ import { isAxiosError } from 'axios';
 import {
   AuthStrategy,
   INTEGRATION_CATEGORY_LABELS,
+  isMcpPresetId,
   type DerivedIntegration,
   type IntegrationCapabilityKind,
   type IntegrationId,
@@ -28,6 +29,7 @@ import JiraWebhookSection from '@client/app/components/ProfileModal/SettingsTabC
 import WebhookSubscriptionSection from '@client/app/components/ProfileModal/SettingsTabContent/WebhookSubscriptionSection';
 import McpSection from '@client/app/components/ProfileModal/SettingsTabContent/McpSection';
 import IntegrationLogo from './IntegrationLogo';
+import CustomMcpConnectorPanel from './customMcp/CustomMcpConnectorPanel';
 import { ADMIN_ONLY_NOTE, IntegrationStatusLabel, RequestButton, requestCountText } from './IntegrationStatusLabel';
 import type { ConnectionState } from './galleryModel';
 import { isConnectable, type ConnectableId } from './useIntegrationConnections';
@@ -296,8 +298,12 @@ const IntegrationDrawer = ({
             onClick={() => openInNewTab(CLI_DOCS_URL)}
           />
         );
+      case 'custom-mcp':
+        return <CustomMcpConnectorPanel />;
       default:
-        return null;
+        return isMcpPresetId(id) ? (
+          <CustomMcpConnectorPanel presetId={id} presetName={derived?.integration.name} />
+        ) : null;
     }
   };
 
