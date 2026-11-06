@@ -233,6 +233,20 @@ describe('data holder registry', () => {
     expect(schemaDeclaresPath(mongoose.model(parent).schema, parentKey)).toBe(true);
   });
 
+  it.each(classifiedModels.filter(name => DATA_HOLDER_REGISTRY[name].kind === 'viaParent'))(
+    '%s: its parent chain ends at a holder without a cycle',
+    modelName => {
+      const seen = [modelName];
+      let current: DataHolder | undefined = DATA_HOLDER_REGISTRY[modelName];
+      while (current?.kind === 'viaParent') {
+        expect(seen, `parent cycle through ${seen.join(' -> ')}`).not.toContain(current.parent);
+        seen.push(current.parent);
+        current = DATA_HOLDER_REGISTRY[current.parent];
+      }
+      expect(current?.kind, `chain ${seen.join(' -> ')} does not end at a holder`).toBe('holder');
+    }
+  );
+
   it.each(
     classifiedModels.flatMap(name => {
       return referencesOf(DATA_HOLDER_REGISTRY[name])
