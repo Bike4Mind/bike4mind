@@ -1,4 +1,4 @@
-import { stat, writeFile } from 'node:fs/promises';
+import { realpath, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
@@ -8,6 +8,15 @@ import type { ModelLiveView } from './ModelLiveView';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+async function sameLocation(a: string, b: string): Promise<boolean> {
+  if (basename(a) !== basename(b)) return false;
+  const [first, second] = await Promise.all([
+    realpath(dirname(a)).catch(() => null),
+    realpath(dirname(b)).catch(() => null),
+  ]);
+  return first !== null && first === second;
 }
 
 async function isSameFile(a: string, b: string): Promise<boolean> {
@@ -29,7 +38,10 @@ export async function writeExport(
 ): Promise<void> {
   const sibling = format === 'glb' && modelPath ? siblingGlbPath(modelPath) : null;
   const isSibling = async () =>
-    sibling !== null && (resolve(target) === resolve(sibling) || (await isSameFile(target, sibling)));
+    sibling !== null &&
+    (resolve(target) === resolve(sibling) ||
+      (await sameLocation(target, sibling)) ||
+      (await isSameFile(target, sibling)));
   if (await isSibling()) {
     await writeFile(target, stampModelPaneGlb(bytes));
     return;

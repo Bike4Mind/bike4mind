@@ -3,8 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, writeFile: vi.fn(actual.writeFile) };
+});
 vi.mock('electron', () => ({ BrowserWindow: {}, dialog: {}, ipcMain: {} }));
 
+const { writeFile: writeFileSpy } = await import('node:fs/promises');
 const { writeExport, parseBuildReport } = await import('./modelIpc');
 const { isModelPaneGlb } = await import('./glbMarker');
 
@@ -42,6 +47,16 @@ describe('writeExport', () => {
     expect(marked(join(root, 'chest.glb'))).toBe(true);
     writeFileSync(join(root, 'chest.glb'), glb());
     await writeExport('glb', glb(), join(alias, 'chest.glb'), model);
+    expect(marked(join(root, 'chest.glb'))).toBe(true);
+  });
+
+  it('writes a new sibling once, stamped, when reached through another spelling of its folder', async () => {
+    const { root, model } = project();
+    const alias = join(realpathSync(mkdtempSync(join(tmpdir(), 'model-alias-'))), 'proj');
+    symlinkSync(root, alias);
+    vi.mocked(writeFileSpy).mockClear();
+    await writeExport('glb', glb(), join(alias, 'chest.glb'), model);
+    expect(vi.mocked(writeFileSpy)).toHaveBeenCalledTimes(1);
     expect(marked(join(root, 'chest.glb'))).toBe(true);
   });
 
