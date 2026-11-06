@@ -142,7 +142,7 @@ export class AbuseAssessmentRepository {
       { $match: { detectionId: { $in: detectionIds }, result: { $ne: 'unknown' } } },
       // Only these fields are read; the feature summary can carry many accounts.
       { $project: { detectionId: 1, result: 1, confidence: 1, assessedAt: 1 } },
-      { $sort: { assessedAt: -1, _id: -1 } },
+      { $sort: { detectionId: 1, assessedAt: -1, _id: -1 } },
       { $group: { _id: '$detectionId', doc: { $first: '$$ROOT' } } },
     ]);
     return rows.map(row => row.doc);
