@@ -36,6 +36,7 @@ import { DispatchModel } from '../dispatchModel';
 import {
   applyAnthropicOutputCeiling,
   buildThinkingParams,
+  continuesToolTurnWithoutThinking,
   effortForComplexity,
   isAdaptiveThinkingByDefault,
   planReasoningEffort,
@@ -1150,7 +1151,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     applyAnthropicOutputCeiling(
       body,
       options.outputTokenCeiling,
-      currentModelInfo !== undefined && isAdaptiveThinkingByDefault(model, currentModelInfo)
+      currentModelInfo !== undefined &&
+        !continuesToolTurnWithoutThinking(filteredMessages as unknown as IMessage[]) &&
+        isAdaptiveThinkingByDefault(model, currentModelInfo)
     );
 
     // Log the complete payload for debugging

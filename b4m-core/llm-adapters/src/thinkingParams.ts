@@ -6,6 +6,7 @@ import {
   ModelBackend,
   NO_TEMPERATURE_MODELS,
   REASONING_SUPPORTED_MODELS,
+  type IMessage,
   type ModelInfo,
   type QueryComplexityType,
   type ReasoningEffort,
@@ -602,4 +603,18 @@ export function effortForComplexity(
 ): ReasoningEffort | undefined {
   if (!isAdaptiveThinkingByDefault(model, modelInfo)) return undefined;
   return complexity === 'simple' || complexity === 'contextual' ? 'low' : undefined;
+}
+
+/**
+ * True when the array ends in tool results answering an assistant tool_use message that does not
+ * open with a thinking block - the one shape the API refuses while thinking is on.
+ */
+export function continuesToolTurnWithoutThinking(messages: IMessage[]): boolean {
+  const last = messages.at(-1);
+  const previous = messages.at(-2);
+  if (last?.role !== 'user' || previous?.role !== 'assistant') return false;
+  if (!Array.isArray(last.content) || !last.content.some(block => block.type === 'tool_result')) return false;
+  if (!Array.isArray(previous.content) || !previous.content.some(block => block.type === 'tool_use')) return false;
+  const leadingType: unknown = previous.content[0]?.type;
+  return leadingType !== 'thinking' && leadingType !== 'redacted_thinking';
 }

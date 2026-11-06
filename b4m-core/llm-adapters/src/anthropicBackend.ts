@@ -65,6 +65,7 @@ import {
   buildThinkingParams,
   effortForComplexity,
   applyAnthropicOutputCeiling,
+  continuesToolTurnWithoutThinking,
   isAdaptiveThinkingByDefault,
   planReasoningEffort,
   resolveAnthropicEffort,
@@ -240,20 +241,6 @@ function tagToolDuration<E>(error: E, durationMs: number): E {
 function readToolDuration(error: unknown): number | undefined {
   if (!error || typeof error !== 'object') return undefined;
   return toolDurationsByError.get(error);
-}
-
-/**
- * True when the array ends in tool results answering an assistant tool_use message that does not
- * open with a thinking block - the one shape the API refuses while thinking is on.
- */
-function continuesToolTurnWithoutThinking(messages: IMessage[]): boolean {
-  const last = messages.at(-1);
-  const previous = messages.at(-2);
-  if (last?.role !== 'user' || previous?.role !== 'assistant') return false;
-  if (!Array.isArray(last.content) || !last.content.some(block => block.type === 'tool_result')) return false;
-  if (!Array.isArray(previous.content) || !previous.content.some(block => block.type === 'tool_use')) return false;
-  const leadingType: unknown = previous.content[0]?.type;
-  return leadingType !== 'thinking' && leadingType !== 'redacted_thinking';
 }
 
 export class AnthropicBackend implements ICompletionBackend {
@@ -1524,10 +1511,12 @@ export class AnthropicBackend implements ICompletionBackend {
         thinking.budget_tokens = maxThinkingBudget;
       }
     }
-    // A foreign tool turn has no thinking block to resume, so thinking must stay off there.
+    // A tool turn with no thinking block to resume must stay thinking-free, including a later round
+    // whose ceiling only now binds after an earlier round replayed a bare tool_use.
     const thinksByDefault =
       currentModelInfo !== undefined &&
       !continuesForeignToolTurn &&
+      !continuesToolTurnWithoutThinking(filteredMessages) &&
       isAdaptiveThinkingByDefault(model, currentModelInfo);
     if (applyAnthropicOutputCeiling(apiParams, options.outputTokenCeiling, thinksByDefault)) {
       this.isThinkingEnabled = true;

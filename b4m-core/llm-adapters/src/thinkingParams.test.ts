@@ -5,6 +5,7 @@ import {
   applyAnthropicOutputCeiling,
   belowReasoningFloor,
   buildThinkingParams,
+  continuesToolTurnWithoutThinking,
   DEFAULT_ANTHROPIC_EFFORT,
   DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT,
   isAdaptiveThinkingByDefault,
@@ -23,6 +24,7 @@ import {
   ModelBackend,
   type ModelInfo,
   type ReasoningEffort,
+  type IMessage,
 } from '@bike4mind/common';
 
 const baseModelInfo: ModelInfo = {
@@ -855,5 +857,27 @@ describe('isAdaptiveThinkingByDefault', () => {
       thinking: { type: 'adaptive' },
       output_config: { effort: 'medium' },
     });
+  });
+});
+
+describe('continuesToolTurnWithoutThinking', () => {
+  const toolUse = { type: 'tool_use', id: 't1', name: 'f', input: {} };
+  const result = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] };
+  const turn = (...assistant: object[]) => [{ role: 'assistant', content: assistant }, result] as unknown as IMessage[];
+
+  it('is true when the replayed tool_use does not open with a thinking block', () => {
+    expect(continuesToolTurnWithoutThinking(turn(toolUse))).toBe(true);
+    expect(continuesToolTurnWithoutThinking(turn({ type: 'text', text: 'hi' }, toolUse))).toBe(true);
+  });
+
+  it('is false when it opens with a thinking or redacted_thinking block', () => {
+    expect(continuesToolTurnWithoutThinking(turn({ type: 'thinking', thinking: '', signature: 's' }, toolUse))).toBe(
+      false
+    );
+    expect(continuesToolTurnWithoutThinking(turn({ type: 'redacted_thinking', data: 'd' }, toolUse))).toBe(false);
+  });
+
+  it('is false when the history does not end in tool results', () => {
+    expect(continuesToolTurnWithoutThinking([{ role: 'user', content: 'hi' }] as unknown as IMessage[])).toBe(false);
   });
 });
