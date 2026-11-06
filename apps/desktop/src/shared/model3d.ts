@@ -162,13 +162,40 @@ function scanBraces(source: string, start: number): { end: number; depths: Int32
   return null;
 }
 
+const PARAM_NUMBER = /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?=\s*[,}\r\n])/y;
+const VALUE_FIELD = /(?<![\w$-])value\s*:\s*/g;
+
+/** Where the plain number at `at` sits; null when the value there is not a plain number. */
+function plainNumberAt(block: string, at: number): { at: number; length: number } | null {
+  PARAM_NUMBER.lastIndex = at;
+  const number = PARAM_NUMBER.exec(block);
+  return number ? { at, length: number[0].length } : null;
+}
+
+/**
+ * The number of the first `value:` that is code one level inside the object opening at `open`,
+ * skipping a `value:` in a label string, a comment or a nested object. Null when that value is not
+ * a plain number, or the object has none.
+ */
+function valueFieldIn(block: string, depths: Int32Array, open: number): { at: number; length: number } | null {
+  let close = open + 1;
+  while (close < block.length && !(block[close] === '}' && depths[close] === 2)) close += 1;
+  VALUE_FIELD.lastIndex = open + 1;
+  for (let field = VALUE_FIELD.exec(block); field && field.index < close; field = VALUE_FIELD.exec(block)) {
+    if (depths[field.index + field[0].lastIndexOf(':')] === 2)
+      return plainNumberAt(block, field.index + field[0].length);
+  }
+  return null;
+}
+
 /**
  * Rewrite the default `value:` of one param inside `export const params = { ... }`.
  *
- * A scoped pattern match rather than a parser: the params block is found by its export line and
- * brace-matched, and within it exactly one `key: { ... value: <number>` or bare `key: <number>` must
- * match, the number being the whole value (not `10 * 2`). Zero or several matches return null so
- * the caller reports "not saved" instead of guessing.
+ * A scoped scan rather than a parser: the params block is found by its export line and
+ * brace-matched, the key must appear exactly once as code at the block's top level, and its value
+ * is either a bare number or an object whose first `value:` field is one. The number must be the
+ * whole value (not `10 * 2`). Anything else returns null so the caller reports "not saved"
+ * instead of guessing.
  */
 export function writeParamValue(source: string, key: string, value: number): string | null {
   if (!Number.isFinite(value)) return null;
@@ -179,21 +206,16 @@ export function writeParamValue(source: string, key: string, value: number): str
   if (!scan) return null;
   const { end, depths } = scan;
   const block = source.slice(start, end + 1);
-  const pattern = new RegExp(
-    `((?<![\\w$-])(['"]?)${escapeRegExp(key)}\\2\\s*:\\s*(\\{[^{}]*?\\bvalue\\s*:\\s*)?)(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)(?=\\s*[,}\\r\\n])`,
-    'g'
-  );
-  // Judged by where the number sits: in a string or comment it has depth 0 and is not code. The
-  // bare `key: N` form counts only at the block's top level (depth 1), and `key: { value: N }`
-  // only one level in, so neither matches another param's `min`/`max`/`step`/`value` field.
-  const matches = [...block.matchAll(pattern)].filter(
-    match => depths[match.index + match[1].length] === (match[3] === undefined ? 1 : 2)
-  );
-  if (matches.length !== 1) return null;
-  const [match] = matches;
+  const keyPattern = new RegExp(`(?<![\\w$-])(['"]?)${escapeRegExp(key)}\\1\\s*:\\s*`, 'g');
+  // Judged by the colon after the key: in a string or comment it has depth 0 and is not code, and
+  // only depth 1 is a param of this block rather than another param's `min`/`step`/`value` field.
+  const keys = [...block.matchAll(keyPattern)].filter(match => depths[match.index + match[0].lastIndexOf(':')] === 1);
+  if (keys.length !== 1) return null;
+  const after = keys[0].index + keys[0][0].length;
+  const number = block[after] === '{' ? valueFieldIn(block, depths, after) : plainNumberAt(block, after);
+  if (!number) return null;
   const rounded = Number(value.toPrecision(12));
-  const at = match.index + match[1].length;
-  const replaced = block.slice(0, at) + rounded + block.slice(at + match[4].length);
+  const replaced = block.slice(0, number.at) + rounded + block.slice(number.at + number.length);
   return source.slice(0, start) + replaced + source.slice(end + 1);
 }
 

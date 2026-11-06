@@ -2,6 +2,7 @@ import {
   DEFAULT_MODEL_VIEWS,
   MODEL_POSES,
   MODEL_VIEWS,
+  type ModelBuildReport,
   type ModelPose,
   type ModelView,
   formatModelSummary,
@@ -78,16 +79,30 @@ function parseViews(input: Record<string, unknown>): ModelView[] {
   return [...new Set(views)].slice(0, 6);
 }
 
+/**
+ * The pane is app-wide, so another session or the user can open a different file while this one
+ * waits; anything read back after an await is checked against the path this call settled on.
+ */
+function assertStillOpen(model: ModelContext, path: string): void {
+  if (model.view.current().path !== path)
+    throw new Error('The model pane switched to another file while this was running. Call again with your path.');
+}
+
 /** Opens `path` unless it is already the open model, then waits for its current build. */
-async function openAndBuild(model: ModelContext, requested: string | undefined, context: ToolContext) {
+async function openAndBuild(
+  model: ModelContext,
+  requested: string | undefined,
+  context: ToolContext
+): Promise<{ report: ModelBuildReport; path: string }> {
+  let path: string;
   if (requested) {
-    const path = await resolveModelPath(requested, context);
+    path = await resolveModelPath(requested, context);
     if (model.view.current().path !== path) await model.view.open(path);
   } else {
     const open = model.view.current().path;
     if (!open) throw new Error('No model is open. Pass the path of a .model.js file.');
-    // The pane is app-wide: the open model may be another project's, or one the user picked
-    // anywhere. Without a path, only act on it when it sits inside this session's folders.
+    // Without a path, only act on the open model when it sits inside this session's folders: it
+    // may be another project's, or one the user picked anywhere.
     const inside = await resolveWithinRoots(open, context.roots, context.workingDirectory).then(
       () => true,
       () => false
@@ -96,8 +111,12 @@ async function openAndBuild(model: ModelContext, requested: string | undefined, 
       throw new Error(
         "The model open in the pane is outside this session's folders. Pass the path of your model file."
       );
+    path = open;
   }
-  return model.view.waitForBuild();
+  assertStillOpen(model, path);
+  const report = await model.view.waitForBuild();
+  assertStillOpen(model, path);
+  return { report, path };
 }
 
 export const modelView: ToolDefinition = {
@@ -122,8 +141,7 @@ export const modelView: ToolDefinition = {
   },
   async run(input, context) {
     const model = requireModel(context);
-    const report = await openAndBuild(model, requireString(input, 'path'), context);
-    const path = model.view.current().path ?? '';
+    const { report, path } = await openAndBuild(model, requireString(input, 'path'), context);
     context.report?.label(`Showing ${path.split(/[\\/]/).pop() ?? 'model'}`);
     return formatModelSummary(report, model.view.glbPath() ?? undefined);
   },
@@ -156,12 +174,13 @@ export const modelScreenshot: ToolDefinition = {
     const views = parseViews(input);
     const pose = parsePose(input);
     const requested = typeof input.path === 'string' && input.path.trim() ? input.path.trim() : undefined;
-    const report = await openAndBuild(model, requested, context);
+    const { report, path } = await openAndBuild(model, requested, context);
     // The open model is app-wide, so without a path it may be another session's or the user's own pick.
-    const which = requested ? '' : `No path given; used the model open in the pane: ${model.view.current().path}\n`;
+    const which = requested ? '' : `No path given; used the model open in the pane: ${path}\n`;
     if (!report.ok) return `${which}${formatModelSummary(report)}`;
     const png = Buffer.from(await model.view.capture(views, pose));
-    const name = model.view.current().path?.split(/[\\/]/).pop() ?? 'model';
+    assertStillOpen(model, path);
+    const name = path.split(/[\\/]/).pop() ?? 'model';
     const shownAs = pose === 'open' ? `${views.join(', ')}, joints open` : views.join(', ');
     const kept = await model.keepScreenshot(png, `${name}: ${shownAs}`);
     if (kept) context.report?.media(kept);

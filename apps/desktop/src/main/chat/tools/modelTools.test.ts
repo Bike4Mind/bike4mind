@@ -149,6 +149,27 @@ describe('model_screenshot', () => {
     expect(view.capture).not.toHaveBeenCalled();
   });
 
+  it('refuses to report a model another caller opened during the build', async () => {
+    const { root, view, context } = setup();
+    const other = join(root, 'lamp.model.js');
+    view.waitForBuild.mockImplementationOnce(async () => {
+      await view.open(other);
+      return OK;
+    });
+    await expect(modelScreenshot.run({ path: 'chest.model.js' }, context)).rejects.toThrow(/switched to another file/);
+    expect(view.capture).not.toHaveBeenCalled();
+  });
+
+  it('refuses to show a capture of a model another caller opened during it', async () => {
+    const { root, view, context, keepScreenshot } = setup();
+    view.capture.mockImplementationOnce(async () => {
+      await view.open(join(root, 'lamp.model.js'));
+      return new Uint8Array([1]);
+    });
+    await expect(modelScreenshot.run({ path: 'chest.model.js' }, context)).rejects.toThrow(/switched to another file/);
+    expect(keepScreenshot).not.toHaveBeenCalled();
+  });
+
   it('needs an open model when no path is given, and validates views', async () => {
     const { context } = setup();
     await expect(modelScreenshot.run({}, context)).rejects.toThrow(/No model is open/);

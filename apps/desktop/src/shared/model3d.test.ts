@@ -110,6 +110,20 @@ describe('writeParamValue', () => {
     expect(writeParamValue(labelled, 'depth', 6)).toBe(labelled.replace('depth: 4', 'depth: 6'));
   });
 
+  it('finds the value past a label with braces, or a value: in a comment, that comes first', () => {
+    const labelFirst = SOURCE.replace('width: { value: 60,', "width: { label: '{w} mm', value: 60,");
+    expect(writeParamValue(labelFirst, 'width', 70)).toContain("width: { label: '{w} mm', value: 70,");
+    const commentFirst = SOURCE.replace('width: { value: 60,', 'width: { /* value: 3 */ value: 60,');
+    expect(writeParamValue(commentFirst, 'width', 70)).toContain('width: { /* value: 3 */ value: 70,');
+    const nested = SOURCE.replace('width: { value: 60,', 'width: { meta: { value: 1 }, value: 60,');
+    expect(writeParamValue(nested, 'width', 70)).toContain('meta: { value: 1 }, value: 70,');
+  });
+
+  it('refuses an object param with no value field of its own', () => {
+    const noValue = 'export const params = { width: { min: 1 }, depth: { value: 4 } };\n';
+    expect(writeParamValue(noValue, 'width', 3)).toBeNull();
+  });
+
   it('returns null when the key is missing', () => {
     expect(writeParamValue(SOURCE, 'height', 10)).toBeNull();
   });

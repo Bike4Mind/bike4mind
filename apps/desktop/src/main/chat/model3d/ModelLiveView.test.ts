@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { rm, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,13 +6,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelViewState } from '@shared/model3d';
 import { isModelPaneGlb } from './glbMarker';
 
-const fsControl = vi.hoisted(() => ({ failRename: false }));
+const fsControl = vi.hoisted(() => ({ failMove: false, beforeLink: null as ((to: string) => void) | null }));
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const fail = () => Promise.reject(new Error('EXDEV: cross-device link'));
   return {
     ...actual,
-    rename: (from: string, to: string) =>
-      fsControl.failRename ? Promise.reject(new Error('EXDEV: cross-device link')) : actual.rename(from, to),
+    rename: (from: string, to: string) => (fsControl.failMove ? fail() : actual.rename(from, to)),
+    link: (from: string, to: string) => {
+      if (fsControl.failMove) return fail();
+      fsControl.beforeLink?.(to);
+      return actual.link(from, to);
+    },
   };
 });
 import { ModelLiveView, type ModelCaptureRequest } from './ModelLiveView';
@@ -51,7 +56,8 @@ describe('ModelLiveView', () => {
   let view: ModelLiveView;
 
   beforeEach(() => {
-    fsControl.failRename = false;
+    fsControl.failMove = false;
+    fsControl.beforeLink = null;
     dir = mkdtempSync(join(tmpdir(), 'model-view-'));
     file = join(dir, 'chest.model.js');
     writeFileSync(file, SOURCE);
@@ -211,9 +217,31 @@ describe('ModelLiveView', () => {
     expect(generatorOf(join(dir, 'chest.glb'))).toBe('later');
   });
 
+  it('does not replace a GLB saved to the sibling path while the build was writing', async () => {
+    await view.open(file);
+    fsControl.beforeLink = to => writeFileSync(to, glb('saved meanwhile'));
+    await expect(view.writeGlb(1, glb('model'))).rejects.toThrow(/already exists and was not made/);
+    expect(generatorOf(join(dir, 'chest.glb'))).toBe('saved meanwhile');
+    expect(readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('refuses a sibling that is a directory or a link, even to a marked GLB', async () => {
+    const marked = join(dir, 'elsewhere.glb');
+    writeFileSync(marked, glb('earlier', { bike4mindModel: true }));
+    symlinkSync(marked, join(dir, 'chest.glb'));
+    await view.open(file);
+    await expect(view.writeGlb(1, glb('model'))).rejects.toThrow(/already exists/);
+    expect(generatorOf(marked)).toBe('earlier');
+    const other = join(dir, 'lamp.model.js');
+    writeFileSync(other, SOURCE);
+    mkdirSync(join(dir, 'lamp.glb'));
+    await view.open(other);
+    await expect(view.writeGlb(view.current().generation, glb('model'))).rejects.toThrow(/already exists/);
+  });
+
   it('removes its temporary file when the GLB cannot be moved into place', async () => {
     await view.open(file);
-    fsControl.failRename = true;
+    fsControl.failMove = true;
     await expect(view.writeGlb(1, glb('model'))).rejects.toThrow(/EXDEV/);
     expect(readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
     expect(view.glbPath()).toBeNull();

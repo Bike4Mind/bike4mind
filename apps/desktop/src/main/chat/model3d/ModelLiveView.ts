@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { type FSWatcher, watch } from 'node:fs';
-import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { link, lstat, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 import {
   EMPTY_MODEL_STATE,
@@ -12,7 +12,7 @@ import {
   siblingGlbPath,
   writeParamValue,
 } from '@shared/model3d';
-import { isModelPaneGlb, stampModelPaneGlb } from './glbMarker';
+import { isModelPaneGlbFile, stampModelPaneGlb } from './glbMarker';
 
 export type ModelCaptureRequest = { id: string; views: ModelView[]; pose: ModelPose };
 
@@ -43,6 +43,13 @@ type PendingCapture = { resolve: (bytes: Uint8Array) => void; reject: (error: Er
  * and the user's own Open dialog (modelIpc.ts), which may be anywhere. A tool call that names no
  * path works on whatever is open, including a file the user picked outside the roots.
  */
+function foreignGlbError(target: string): Error {
+  return new Error(
+    `${basename(target)} already exists and was not made by the model pane, so it was left alone. ` +
+      'Rename or move it to let this model write its GLB.'
+  );
+}
+
 export class ModelLiveView {
   private state: ModelViewState = EMPTY_MODEL_STATE;
   private watcher: FSWatcher | null = null;
@@ -159,8 +166,10 @@ export class ModelLiveView {
   /**
    * Writes the sibling `.glb` of the open `.model.js`, and nothing else; an opened asset has no
    * sibling, so it is never overwritten. An existing sibling is replaced only when it carries the
-   * model pane's marker (glbMarker.ts); otherwise the write is refused. Stale generations are dropped, before the write and again
-   * before the rename into place, so an older build that finishes writing last cannot win.
+   * model pane's marker (glbMarker.ts); otherwise the write is refused. The target is judged again
+   * just before the move, and a target that was absent is filled with an exclusive `link`, so a GLB
+   * saved there during the write is not replaced. Stale generations are dropped, before the write
+   * and again before the move, so an older build that finishes writing last cannot win.
    */
   writeGlb(generation: number, bytes: Uint8Array): Promise<string | null> {
     // Every app window builds each generation; the first write serves them all.
@@ -176,7 +185,7 @@ export class ModelLiveView {
     const target = siblingGlbPath(path);
     if (!target) return null;
     const stamped = stampModelPaneGlb(bytes);
-    await this.assertReplaceable(target);
+    await this.replaceable(target);
     const temporary = `${target}.${randomUUID()}.tmp`;
     try {
       await writeFile(temporary, stamped);
@@ -184,7 +193,14 @@ export class ModelLiveView {
         await rm(temporary, { force: true });
         return null;
       }
-      await rename(temporary, target);
+      if ((await this.replaceable(target)) === 'ours') {
+        await rename(temporary, target);
+      } else {
+        await link(temporary, target).catch((error: NodeJS.ErrnoException) => {
+          throw error.code === 'EEXIST' ? foreignGlbError(target) : error;
+        });
+        await rm(temporary, { force: true });
+      }
     } catch (error) {
       await rm(temporary, { force: true }).catch(() => undefined);
       throw error;
@@ -193,21 +209,18 @@ export class ModelLiveView {
     return target;
   }
 
-  /** The user approved writing the `.model.js`, never replacing a GLB they made themselves. */
-  private async assertReplaceable(target: string): Promise<void> {
-    let existing: Uint8Array;
-    try {
-      existing = await readFile(target);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+  /**
+   * Whether the sibling GLB is absent or one the pane wrote; throws for anything else. The user
+   * approved writing the `.model.js`, never replacing a GLB they made themselves.
+   */
+  private async replaceable(target: string): Promise<'absent' | 'ours'> {
+    const info = await lstat(target).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null;
       throw error;
-    }
-    if (!isModelPaneGlb(existing)) {
-      throw new Error(
-        `${basename(target)} already exists and was not made by the model pane, so it was left alone. ` +
-          'Rename or move it to let this model write its GLB.'
-      );
-    }
+    });
+    if (!info) return 'absent';
+    if (!info.isFile() || !(await isModelPaneGlbFile(target))) throw foreignGlbError(target);
+    return 'ours';
   }
 
   /** Read-modify-write of one param's default value; false means nothing was written. */

@@ -1,7 +1,10 @@
+import { open } from 'node:fs/promises';
+
 /**
  * The marker that tells a GLB the model pane wrote apart from one the user made (by hand, or
  * exported from Blender). ModelLiveView stamps it into every sibling GLB it writes and replaces an
- * existing sibling only when the marker is there, so a build never silently destroys a user asset.
+ * existing sibling only when the marker is there. The marker is self-asserted: it guards against
+ * accidents, not against a file crafted to carry it.
  */
 
 const GLB_MAGIC = 0x46546c67; // 'glTF'
@@ -9,6 +12,8 @@ const CHUNK_JSON = 0x4e4f534a; // 'JSON'
 const HEADER_BYTES = 12;
 const CHUNK_HEADER_BYTES = 8;
 const MARKER_KEY = 'bike4mindModel';
+// The pane's own JSON chunk is a few KB; a bigger one is not ours, and is never read whole.
+const MAX_MARKER_JSON_BYTES = 1024 * 1024;
 
 type GlbParts = { json: Record<string, unknown>; rest: Uint8Array };
 
@@ -38,6 +43,23 @@ export function isModelPaneGlb(bytes: Uint8Array): boolean {
   const parts = splitGlb(bytes);
   if (!parts || !isRecord(parts.json.asset) || !isRecord(parts.json.asset.extras)) return false;
   return parts.json.asset.extras[MARKER_KEY] === true;
+}
+
+/** Whether the file at `path` carries the marker, reading only its header and JSON chunk. */
+export async function isModelPaneGlbFile(path: string): Promise<boolean> {
+  const file = await open(path, 'r');
+  try {
+    const head = new Uint8Array(HEADER_BYTES + CHUNK_HEADER_BYTES);
+    const { bytesRead } = await file.read(head, 0, head.byteLength, 0);
+    if (bytesRead < head.byteLength) return false;
+    const jsonLength = new DataView(head.buffer).getUint32(HEADER_BYTES, true);
+    if (jsonLength > MAX_MARKER_JSON_BYTES) return false;
+    const prefix = new Uint8Array(head.byteLength + jsonLength);
+    const read = await file.read(prefix, 0, prefix.byteLength, 0);
+    return read.bytesRead === prefix.byteLength && isModelPaneGlb(prefix);
+  } finally {
+    await file.close();
+  }
 }
 
 /** The same GLB with the marker in `asset.extras`; throws when the bytes are not a GLB. */

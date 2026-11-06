@@ -1,12 +1,30 @@
 import { writeFile } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
-import type { ModelBuildReport } from '@shared/model3d';
+import { type ModelBuildReport, siblingGlbPath } from '@shared/model3d';
+import { stampModelPaneGlb } from './glbMarker';
 import type { ModelLiveView } from './ModelLiveView';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+/**
+ * The bytes an export writes to `target`. A GLB exported onto the open model's own sibling path
+ * carries the pane's marker, so the next build may replace it (ModelLiveView refuses unmarked
+ * siblings); exported anywhere else it stays an ordinary user asset.
+ */
+export function exportBytes(
+  format: 'glb' | 'stl',
+  bytes: Uint8Array,
+  target: string,
+  modelPath: string | null
+): Uint8Array {
+  const sibling = modelPath ? siblingGlbPath(modelPath) : null;
+  return format === 'glb' && sibling !== null && resolve(target) === resolve(sibling)
+    ? stampModelPaneGlb(bytes)
+    : bytes;
 }
 
 /** Only the fields main acts on; anything else the renderer sends is dropped. */
@@ -103,7 +121,7 @@ export function modelIpcHandlers(view: ModelLiveView): void {
     };
     const picked = await (window ? dialog.showSaveDialog(window, options) : dialog.showSaveDialog(options));
     if (picked.canceled || !picked.filePath) return null;
-    await writeFile(picked.filePath, value.bytes);
+    await writeFile(picked.filePath, exportBytes(format, value.bytes, picked.filePath, current));
     return picked.filePath;
   });
 
