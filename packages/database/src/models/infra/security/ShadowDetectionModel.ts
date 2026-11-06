@@ -18,7 +18,9 @@ import {
   type ShadowDetectionSummaryRow,
   type ShadowDetectionVerdict,
   type ShadowDetectionVerdictEntry,
+  type ShadowDetectionVerdictSource,
   type ShadowDetector,
+  SHADOW_DETECTION_VERDICT_SOURCES,
 } from '@bike4mind/common';
 import { User } from '../../auth/UserModel';
 
@@ -89,6 +91,7 @@ const VerdictEntrySchema = new Schema<ShadowDetectionVerdictEntry>(
     reason: { type: String, required: true },
     reviewerId: { type: String, required: true },
     reviewedAt: { type: Date, required: true },
+    source: { type: String, enum: SHADOW_DETECTION_VERDICT_SOURCES },
   },
   { _id: false }
 );
@@ -193,6 +196,22 @@ export type AddShadowDetectionVerdictResult =
 
 type LeanShadowDetection = Omit<IShadowDetectionDocument, keyof Document> & { _id: Types.ObjectId };
 
+/**
+ * Matches a record carrying a verdict graded on the Detections page. Entries from before `source`
+ * existed were all such reviews.
+ */
+const HAS_REVIEW_VERDICT = {
+  verdicts: { $elemMatch: { $or: [{ source: 'review' }, { source: { $exists: false } }] } },
+};
+
+export type AccountStatusVerdictInput = {
+  userId: string;
+  /** The suspend or reinstate reason, as audited. */
+  reason: string;
+  /** The admin who suspended or reinstated the account. */
+  reviewerId: string;
+};
+
 const VERDICT_COUNT_FIELDS = {
   confirmed_abuse: 'confirmedAbuse',
   legitimate_human: 'legitimateHuman',
@@ -244,6 +263,7 @@ const toItem = (doc: LeanShadowDetection): ShadowDetectionItem => ({
     reason: entry.reason,
     reviewerId: entry.reviewerId,
     reviewedAt: entry.reviewedAt,
+    ...(entry.source ? { source: entry.source } : {}),
   })),
   revision: doc.revision ?? 0,
 });
@@ -450,6 +470,7 @@ class ShadowDetectionRepository {
       reason: input.reason,
       reviewerId: input.reviewerId,
       reviewedAt: new Date(),
+      source: 'review',
     };
     const updated = await ShadowDetectionModel.findOneAndUpdate(
       { _id: input.id, revision: input.expectedRevision },
@@ -460,6 +481,72 @@ class ShadowDetectionRepository {
 
     const current = await ShadowDetectionModel.findById(input.id).lean<LeanShadowDetection>();
     return current ? { status: 'conflict', item: toItem(current) } : { status: 'not_found' };
+  }
+
+  /**
+   * An admin suspended the account for abuse: every ungraded detection naming it is graded
+   * confirmed_abuse. Graded records are left alone. Returns the records it graded.
+   */
+  async gradeForSuspension(input: AccountStatusVerdictInput): Promise<ShadowDetectionItem[]> {
+    const candidates = await ShadowDetectionModel.find({ userIds: input.userId, verdict: null }).lean<
+      LeanShadowDetection[]
+    >();
+    return this.appendStatusVerdicts(candidates, { verdict: null }, 'confirmed_abuse', 'suspension', input);
+  }
+
+  /**
+   * An admin reinstated the account: detections naming it are graded legitimate_human, replacing an
+   * ungraded state or a verdict recorded by a suspension. Skipped when a reviewer graded the record on
+   * the Detections page, when it already reads legitimate_human, or when it names another account that
+   * is still suspended (one reinstated member does not clear a burst). Returns the records it graded.
+   */
+  async gradeForReinstatement(input: AccountStatusVerdictInput): Promise<ShadowDetectionItem[]> {
+    const open = { verdict: { $ne: 'legitimate_human' }, $nor: [HAS_REVIEW_VERDICT] };
+    const candidates = await ShadowDetectionModel.find({ userIds: input.userId, ...open }).lean<
+      LeanShadowDetection[]
+    >();
+    const peerIds = [...new Set(candidates.flatMap(doc => doc.userIds ?? []).filter(id => id !== input.userId))].filter(
+      id => Types.ObjectId.isValid(id)
+    );
+    const suspendedPeers = new Set(
+      peerIds.length === 0
+        ? []
+        : (
+            await User.find({ _id: { $in: peerIds }, isBanned: true }, { _id: 1 }).lean<{ _id: Types.ObjectId }[]>()
+          ).map(({ _id }) => _id.toString())
+    );
+    const eligible = candidates.filter(doc => !(doc.userIds ?? []).some(id => suspendedPeers.has(id)));
+    return this.appendStatusVerdicts(eligible, open, 'legitimate_human', 'reinstatement', input);
+  }
+
+  /**
+   * Appends one verdict per record, each conditional on the revision it was read at and on `stillOpen`,
+   * so a reviewer grading the same record in between keeps their verdict.
+   */
+  private async appendStatusVerdicts(
+    candidates: LeanShadowDetection[],
+    stillOpen: Record<string, unknown>,
+    verdict: ShadowDetectionVerdict,
+    source: ShadowDetectionVerdictSource,
+    input: AccountStatusVerdictInput
+  ): Promise<ShadowDetectionItem[]> {
+    const graded: ShadowDetectionItem[] = [];
+    for (const doc of candidates) {
+      const entry: ShadowDetectionVerdictEntry = {
+        verdict,
+        reason: input.reason,
+        reviewerId: input.reviewerId,
+        reviewedAt: new Date(),
+        source,
+      };
+      const updated = await ShadowDetectionModel.findOneAndUpdate(
+        { _id: doc._id, revision: doc.revision, ...stillOpen },
+        { $push: { verdicts: entry }, $set: { verdict }, $inc: { revision: 1 } },
+        { new: true }
+      ).lean<LeanShadowDetection>();
+      if (updated) graded.push(toItem(updated));
+    }
+    return graded;
   }
 
   /**

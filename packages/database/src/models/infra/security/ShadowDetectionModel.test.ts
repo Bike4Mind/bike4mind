@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { Types } from 'mongoose';
 import { setupMongoTest } from '../../../__test__/utils';
+import { User } from '../../auth/UserModel';
 import {
   ShadowDetectionModel,
   shadowDetectionRepository,
@@ -129,7 +131,13 @@ describe('shadowDetectionRepository', () => {
     expect(result.item.verdict).toBe('confirmed_abuse');
     expect(result.item.revision).toBe(1);
     expect(result.item.verdicts).toEqual([
-      { verdict: 'confirmed_abuse', reason: 'Checked the cohort', reviewerId: 'admin1', reviewedAt: expect.any(Date) },
+      {
+        verdict: 'confirmed_abuse',
+        reason: 'Checked the cohort',
+        reviewerId: 'admin1',
+        reviewedAt: expect.any(Date),
+        source: 'review',
+      },
     ]);
   });
 
@@ -246,5 +254,112 @@ describe('shadowDetectionRepository', () => {
   it('declares the retention TTL on detectedAt', async () => {
     const ttl = ShadowDetectionModel.schema.indexes().find(([, options]) => options?.expireAfterSeconds !== undefined);
     expect(ttl).toEqual([{ detectedAt: 1 }, expect.objectContaining({ expireAfterSeconds: 365 * 24 * 60 * 60 })]);
+  });
+
+  describe('account status verdicts', () => {
+    const SUSPENDED = 'Abuse / automated signups';
+    const REINSTATED = 'Suspended in error';
+    const userId = new Types.ObjectId().toString();
+    const peerId = new Types.ObjectId().toString();
+
+    beforeEach(async () => {
+      await User.collection.deleteMany({});
+    });
+
+    const suspend = () =>
+      shadowDetectionRepository.gradeForSuspension({ userId, reason: SUSPENDED, reviewerId: 'admin1' });
+    const reinstate = () =>
+      shadowDetectionRepository.gradeForReinstatement({ userId, reason: REINSTATED, reviewerId: 'admin2' });
+    const stored = async (id: string) => (await shadowDetectionRepository.findById(id))!;
+
+    it('grades every ungraded detection naming a suspended account confirmed abuse', async () => {
+      const burst = await shadowDetectionRepository.record(detection({ userIds: [userId, peerId] }));
+      const spend = await shadowDetectionRepository.record(
+        detection({ detector: 'youngAccountSpend', userIds: [userId], network: null })
+      );
+      const unrelated = await shadowDetectionRepository.record(detection({ userIds: [peerId] }));
+
+      const graded = await suspend();
+
+      expect(graded.map(item => item.id).sort()).toEqual([burst, spend].sort());
+      expect((await stored(burst)).verdicts).toEqual([
+        {
+          verdict: 'confirmed_abuse',
+          reason: SUSPENDED,
+          reviewerId: 'admin1',
+          reviewedAt: expect.any(Date),
+          source: 'suspension',
+        },
+      ]);
+      expect(await stored(spend)).toMatchObject({ verdict: 'confirmed_abuse', revision: 1 });
+      expect(await stored(unrelated)).toMatchObject({ verdict: null, revision: 0 });
+    });
+
+    it('leaves a detection a reviewer already graded untouched on suspension', async () => {
+      const id = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
+      await grade(id, 0, 'legitimate_human');
+
+      expect(await suspend()).toEqual([]);
+      expect(await stored(id)).toMatchObject({ verdict: 'legitimate_human', revision: 1 });
+    });
+
+    it('appends legitimate human use after the suspension verdict on reinstatement', async () => {
+      const id = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
+      await suspend();
+
+      const graded = await reinstate();
+
+      expect(graded.map(item => item.id)).toEqual([id]);
+      const item = await stored(id);
+      expect(item.verdict).toBe('legitimate_human');
+      expect(item.verdicts.map(entry => [entry.verdict, entry.source])).toEqual([
+        ['confirmed_abuse', 'suspension'],
+        ['legitimate_human', 'reinstatement'],
+      ]);
+    });
+
+    it('grades an ungraded detection legitimate human use on reinstatement', async () => {
+      const id = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
+
+      await reinstate();
+
+      expect(await stored(id)).toMatchObject({ verdict: 'legitimate_human', revision: 1 });
+    });
+
+    it('never overrides a reviewer verdict on reinstatement, including one from before sources existed', async () => {
+      const reviewed = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
+      await grade(reviewed, 0, 'confirmed_abuse');
+      const legacy = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
+      await ShadowDetectionModel.updateOne(
+        { _id: legacy },
+        {
+          $set: { verdict: 'insufficient_evidence', revision: 1 },
+          $push: {
+            verdicts: { verdict: 'insufficient_evidence', reason: 'Old', reviewerId: 'a', reviewedAt: new Date() },
+          },
+        }
+      );
+
+      expect(await reinstate()).toEqual([]);
+      expect(await stored(reviewed)).toMatchObject({ verdict: 'confirmed_abuse', revision: 1 });
+      expect(await stored(legacy)).toMatchObject({ verdict: 'insufficient_evidence', revision: 1 });
+    });
+
+    it('keeps a burst graded while another account in it is still suspended', async () => {
+      await User.collection.insertOne({ _id: new Types.ObjectId(peerId), isBanned: true });
+      const id = await shadowDetectionRepository.record(detection({ userIds: [userId, peerId] }));
+      await suspend();
+
+      expect(await reinstate()).toEqual([]);
+      expect(await stored(id)).toMatchObject({ verdict: 'confirmed_abuse', revision: 1 });
+    });
+
+    it('does not repeat legitimate human use on a second reinstatement', async () => {
+      const id = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
+      await reinstate();
+
+      expect(await reinstate()).toEqual([]);
+      expect((await stored(id)).verdicts).toHaveLength(1);
+    });
   });
 });
