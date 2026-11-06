@@ -28,6 +28,7 @@ const ActiveDefenseTab = () => {
   return (
     <Stack spacing={2} data-testid="active-defense-tab">
       <AdminPageHeader
+        level="section"
         title="Active defense"
         description="Run live probes and review reproducible findings."
         actions={

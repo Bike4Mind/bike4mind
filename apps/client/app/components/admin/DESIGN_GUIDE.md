@@ -238,7 +238,7 @@ Build new admin pages from these, imported from `apps/client/app/components/admi
 
 | Component | Job | Rules |
 |---|---|---|
-| `AdminPageHeader` | Title, count or meta, page actions | The page `h1`. Actions sit top-right and wrap below the title on small screens. |
+| `AdminPageHeader` | Title, count or meta, page actions | The page `h1`. Actions sit top-right and wrap below the title on small screens. A sub-view rendered under a page that already has a header passes `level="section"` and gets a section-title `h2`. |
 | `EntityHeader` | Identity of a user, org or key | IDs and emails have a copy button. Times are relative, with the exact UTC time on hover. |
 | `StatStrip` / `StatTile` | 3 to 5 key numbers | One card, tiles divided by hairlines. Label, value, comparison line. Optional `StatSparkline`, and an optional `help` control beside the label that defines the term (16 px icon). No decorative icons. |
 | `StatusChip` | A status | One of the five tones, always with a text label. |
