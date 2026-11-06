@@ -1,8 +1,12 @@
+import { writeFile } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import {
   DEFAULT_MODEL_VIEWS,
+  MODEL_LIGHTINGS,
   MODEL_POSES,
   MODEL_VIEWS,
   type ModelBuildReport,
+  type ModelLighting,
   type ModelPose,
   type ModelView,
   formatModelSummary,
@@ -16,8 +20,9 @@ import { requireString, type ModelContext, type ToolContext, type ToolDefinition
 
 /**
  * The 3D model tools: open a model in the user's live pane and look at it. The agent writes and
- * edits `*.model.js` files with the ordinary file tools (and their approvals); these two only read,
- * plus the derived `<name>.glb` that ModelLiveView writes beside the model on each good build.
+ * edits `*.model.js` files with the ordinary file tools (and their approvals); these only read, plus
+ * two derived files beside the model: the `<name>.glb` that ModelLiveView writes on each good build,
+ * and the `<name>-turntable.webm` clip model_record renders on request.
  */
 
 /** The contract the build expects. Must stay in step with the engine worker in model3d/engineProtocol.ts. */
@@ -87,6 +92,19 @@ function parsePose(input: Record<string, unknown>): ModelPose {
   if (!(MODEL_POSES as readonly unknown[]).includes(raw))
     throw new Error(`pose must be one of: ${MODEL_POSES.join(', ')}`);
   return raw as ModelPose;
+}
+
+function parseLighting(input: Record<string, unknown>): ModelLighting {
+  const raw = input.lighting ?? 'studio';
+  if (!(MODEL_LIGHTINGS as readonly unknown[]).includes(raw))
+    throw new Error(`lighting must be one of: ${MODEL_LIGHTINGS.join(', ')}`);
+  return raw as ModelLighting;
+}
+
+/** Where a turntable clip of `modelPath` is saved: beside it, named after it and its lighting. */
+export function turntablePath(modelPath: string, lighting: ModelLighting): string {
+  const stem = basename(modelPath).replace(/\.(model\.js|glb|stl)$/i, '');
+  return join(dirname(modelPath), `${stem}${lighting === 'night' ? '-night' : ''}-turntable.webm`);
 }
 
 function parseViews(input: Record<string, unknown>): ModelView[] {
@@ -216,4 +234,43 @@ export const modelScreenshot: ToolDefinition = {
   },
 };
 
-export const MODEL_TOOLS: readonly ToolDefinition[] = [modelView, modelScreenshot];
+export const modelRecord: ToolDefinition = {
+  schema: {
+    name: 'model_record',
+    description: [
+      'Record a turntable video of the open 3D model: an 8 second 1080p WebM clip of one full orbit while every joint',
+      'swings through its range and back, saved beside the model as <name>-turntable.webm (<name>-night-turntable.webm',
+      'for night lighting). Use it when the user asks for a video, clip or showcase of the model, after checking the model',
+      'with model_screenshot. Night lighting shows the model by moonlight with its emissive parts glowing and lighting',
+      'what is near them; pick it when the model has glowing parts. You cannot see the clip; tell the user where it is.',
+    ].join(' '),
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'A model file to open first. Omit it to use the open model.' },
+        lighting: {
+          type: 'string',
+          enum: [...MODEL_LIGHTINGS],
+          description: 'studio (default): soft studio light. night: moonlight, with glowing parts lighting the scene.',
+        },
+      },
+    },
+  },
+  async run(input, context) {
+    const model = requireModel(context);
+    const lighting = parseLighting(input);
+    const requested = typeof input.path === 'string' && input.path.trim() ? input.path.trim() : undefined;
+    const { report, path } = await openAndBuild(model, requested, context);
+    if (!report.ok) return formatModelSummary(report);
+    const name = path.split(/[\\/]/).pop() ?? 'model';
+    context.report?.label(`Recording ${name}`);
+    const clip = await model.view.recordTurntable(lighting);
+    assertStillOpen(model, path);
+    const target = turntablePath(path, lighting);
+    await writeFile(target, clip);
+    context.report?.label(`Recorded ${name}`);
+    return `Saved a ${lighting} turntable of ${name} to ${target} (${(clip.length / 1e6).toFixed(1)} MB, 8 s, 1920x1080 WebM).`;
+  },
+};
+
+export const MODEL_TOOLS: readonly ToolDefinition[] = [modelView, modelScreenshot, modelRecord];

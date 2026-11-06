@@ -123,7 +123,7 @@ import type {
 } from './models';
 import type { AccountUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
-import type { ModelBuildReport, ModelExportFormat, ModelPose, ModelView, ModelViewState } from './model3d';
+import type { ModelBuildReport, ModelCaptureRequest, ModelExportFormat, ModelViewState } from './model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
 import type { LocalHistoryResult, LocalHistoryState } from './history';
 
@@ -1096,7 +1096,7 @@ export interface DesktopApi {
     saveExport(request: { format: ModelExportFormat; bytes: Uint8Array }): Promise<string | null>;
     captureResult(result: { id: string; bytes?: Uint8Array; error?: string }): void;
     onState(listener: (state: ModelViewState) => void): () => void;
-    onCaptureRequest(listener: (request: { id: string; views: ModelView[]; pose: ModelPose }) => void): () => void;
+    onCaptureRequest(listener: (request: ModelCaptureRequest) => void): () => void;
   };
   /** The live iOS Simulator view; `available` is false off macOS. */
   simulator: {

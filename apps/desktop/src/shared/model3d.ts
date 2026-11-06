@@ -65,6 +65,18 @@ export const MAX_IOR = 2.333;
 export const MODEL_MOTIONS = ['turn', 'slide'] as const;
 export type ModelMotion = (typeof MODEL_MOTIONS)[number];
 
+/** How the pane lights a model: the softbox studio, or moonlight in which glowing parts light the scene. */
+export const MODEL_LIGHTINGS = ['studio', 'night'] as const;
+export type ModelLighting = (typeof MODEL_LIGHTINGS)[number];
+
+/**
+ * What main asks the pane to render for the agent, answered on the capture-result channel: a
+ * contact sheet of fixed views (the default kind), or a turntable video clip.
+ */
+export type ModelCaptureRequest =
+  | { id: string; kind?: 'sheet'; views: ModelView[]; pose: ModelPose }
+  | { id: string; kind: 'turntable'; lighting: ModelLighting };
+
 /** What the model pane saves through its export dialog: the model as GLB or STL, or a turntable video. */
 export const MODEL_EXPORT_FORMATS = ['glb', 'stl', 'webm'] as const;
 export type ModelExportFormat = (typeof MODEL_EXPORT_FORMATS)[number];
