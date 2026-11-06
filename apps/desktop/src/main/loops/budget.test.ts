@@ -3,6 +3,7 @@ import {
   admit,
   hardFloorBreached,
   laneCapFor,
+  nextIdleDelay,
   parseMeminfo,
   parseSwapUsage,
   parseVmStat,
@@ -28,8 +29,7 @@ describe('admit', () => {
 
   it.each([
     ['all lanes are busy', { cores: 4 }, 1],
-    ['low memory', { freeBytes: 3 * GB }, 0],
-    ['swapping', { swapUsedBytes: 2 * GB }, 0],
+    ['low memory', { freeBytes: 1.5 * GB }, 0],
     ['the machine is busy', { loadRatio: 0.8 }, 0],
     ['low disk', { diskFreeBytes: 19 * GB }, 0],
     ['on battery', { onBattery: true }, 0],
@@ -52,6 +52,36 @@ describe('admit', () => {
   it('lets the first lane run while the user is active, and battery when allowed', () => {
     expect(admit({ ...idle, idleSeconds: 10 }, undefined, 0, settings)).toEqual({ ok: true });
     expect(admit({ ...idle, onBattery: true }, undefined, 0, { runOnBattery: true })).toEqual({ ok: true });
+  });
+
+  it('admits an 18 GB Mac in normal use: 3 GB free, 4.3 GB of swap that is not rising', () => {
+    const mac = { ...idle, cores: 12, freeBytes: 3 * GB, swapUsedBytes: 4.3 * GB };
+    expect(admit(mac, { ...mac, swapUsedBytes: 4.25 * GB }, 0, settings)).toEqual({ ok: true });
+    expect(admit({ ...mac, swapUsedBytes: 4.5 * GB }, mac, 0, settings)).toEqual({
+      ok: false,
+      reason: 'swap is rising',
+    });
+  });
+
+  it('runWhenBusy skips the memory, swap, load and activity holds only', () => {
+    const busyOn = { runOnBattery: false, runWhenBusy: true };
+    const strained = { ...idle, freeBytes: 0.5 * GB, swapUsedBytes: 9 * GB, loadRatio: 2, idleSeconds: 0 };
+    expect(admit(strained, { ...idle, swapUsedBytes: 1 * GB }, 1, busyOn)).toEqual({ ok: true });
+    expect(admit({ ...idle, freeBytes: 0.5 * GB }, undefined, 0, settings)).toMatchObject({ ok: false });
+    expect(admit({ ...strained, cores: 4 }, undefined, 1, busyOn)).toEqual({ ok: false, reason: 'all lanes are busy' });
+    expect(admit({ ...strained, onBattery: true }, undefined, 0, busyOn)).toEqual({ ok: false, reason: 'on battery' });
+    expect(admit({ ...strained, diskFreeBytes: 5 * GB }, undefined, 0, busyOn)).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('low disk'),
+    });
+  });
+});
+
+describe('nextIdleDelay', () => {
+  it('doubles up to 10 s and stays there', () => {
+    expect(nextIdleDelay(2_000)).toBe(4_000);
+    expect(nextIdleDelay(10_000)).toBe(10_000);
+    expect(nextIdleDelay(nextIdleDelay(10_000))).toBe(10_000);
   });
 });
 

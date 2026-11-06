@@ -37,6 +37,8 @@ export interface LoopRunnerSettings {
   runOnBattery: boolean;
   /** Lower than the machine's own cap only; see main/loops/budget.ts laneCapFor. */
   laneCap?: number;
+  /** Claim even when memory, swap, load or the user's activity would hold it; see budget.ts admit. */
+  runWhenBusy?: boolean;
 }
 
 export interface LoopRunnerTicket {
@@ -59,8 +61,10 @@ export interface LoopRunnerState {
   tickets: LoopRunnerTicket[];
   /** Why no new ticket is being claimed now, e.g. "on battery". Absent when nothing holds it. */
   waitingReason?: string;
-  /** Loops with work for this machine that the user has not approved yet. */
-  pendingApprovals: { loopId: string; loopName: string; repoHint?: string }[];
+  /** Loops with work for this machine that the user has not approved yet; `reason` when its budget holds it. */
+  pendingApprovals: { loopId: string; loopName: string; repoHint?: string; reason?: string }[];
+  /** The last run that ended blocked or failed, shown until the next claim. */
+  lastBlocked?: { ticketId: string; title: string; loopName: string; reason: string; at: string };
   policies: LoopPolicy[];
   /** The last thing that went wrong talking to the server, shown until the next good poll. */
   error?: string;

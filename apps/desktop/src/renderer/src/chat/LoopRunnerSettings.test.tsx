@@ -38,7 +38,21 @@ const state: LoopRunnerState = {
     },
   ],
   waitingReason: 'you are active',
-  pendingApprovals: [{ loopId: 'loop-2', loopName: 'Tests loop', repoHint: 'example-org/widgets' }],
+  pendingApprovals: [
+    {
+      loopId: 'loop-2',
+      loopName: 'Tests loop',
+      repoHint: 'example-org/widgets',
+      reason: 'The loop has spent its daily budget',
+    },
+  ],
+  lastBlocked: {
+    ticketId: 't0',
+    title: 'Bump the deps',
+    loopName: 'Docs loop',
+    reason: 'Every action was declined: Needs approval: git push',
+    at: '',
+  },
   policies: [{ loopId: 'loop-1', loopName: 'Docs loop', approvalMode: 'auto', directory: '/repo', approvedAt: '' }],
 };
 
@@ -95,6 +109,21 @@ it('approves a pending loop and shows why it failed', async () => {
     approvalMode: 'auto',
   });
   expect(byTestId('loop-runner-approve-error').textContent).toBe('That folder is not example-org/widgets.');
+});
+
+it('shows why a pending loop is held, and the last blocked run', () => {
+  expect(byTestId('loop-runner-pending').textContent).toContain(
+    'Tests loop (example-org/widgets) has work for this computer - The loop has spent its daily budget'
+  );
+  expect(byTestId('loop-runner-last-blocked').textContent).toBe(
+    'Last blocked: Bump the deps (Docs loop): Every action was declined: Needs approval: git push'
+  );
+});
+
+it('turns on running when the machine is busy, off by default', async () => {
+  expect((byTestId('loop-runner-busy-switch') as HTMLInputElement).checked).toBe(false);
+  await act(async () => byTestId('loop-runner-busy-switch').click());
+  expect(api.setSettings).toHaveBeenCalledWith({ runWhenBusy: true });
 });
 
 it('revokes a policy', async () => {

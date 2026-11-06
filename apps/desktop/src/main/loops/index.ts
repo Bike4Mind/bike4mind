@@ -89,6 +89,7 @@ export function registerLoopRunner(auth: AuthService, chat: ChatService, backgro
     const clean: Partial<LoopRunnerSettings> = {};
     if (typeof patch?.enabled === 'boolean') clean.enabled = patch.enabled;
     if (typeof patch?.runOnBattery === 'boolean') clean.runOnBattery = patch.runOnBattery;
+    if (typeof patch?.runWhenBusy === 'boolean') clean.runWhenBusy = patch.runWhenBusy;
     if (patch && 'laneCap' in patch) {
       clean.laneCap = Number.isInteger(patch.laneCap) && (patch.laneCap as number) >= 1 ? patch.laneCap : undefined;
     }

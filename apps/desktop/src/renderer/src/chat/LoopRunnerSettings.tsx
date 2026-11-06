@@ -47,7 +47,7 @@ export function LoopRunnerSettings({
   const api = window.b4m.loopRunner;
 
   const set = (patch: Partial<Settings>) => void api.setSettings(patch).then(onState);
-  const approve = async (loop: LoopRunnerState['pendingApprovals'][number]) => {
+  const approve = async ({ reason: _reason, ...loop }: LoopRunnerState['pendingApprovals'][number]) => {
     setError(null);
     const result = await api.approve({ ...loop, approvalMode: modes[loop.loopId] ?? 'auto' });
     if (result.ok) onState(result.state);
@@ -75,6 +75,11 @@ export function LoopRunnerSettings({
         <Typography level="body-xs" data-testid="loop-runner-lanes">
           {state.lanes.busy} of {state.lanes.cap} lanes busy
           {state.waitingReason ? ` - waiting: ${state.waitingReason}` : ''}
+        </Typography>
+      )}
+      {state.lastBlocked && (
+        <Typography level="body-xs" color="warning" data-testid="loop-runner-last-blocked">
+          Last blocked: {state.lastBlocked.title} ({state.lastBlocked.loopName}): {state.lastBlocked.reason}
         </Typography>
       )}
       {state.error && (
@@ -109,6 +114,7 @@ export function LoopRunnerSettings({
           <Typography level="body-sm" sx={{ flex: 1 }}>
             {loop.loopName}
             {loop.repoHint ? ` (${loop.repoHint})` : ''} has work for this computer
+            {loop.reason ? ` - ${loop.reason}` : ''}
           </Typography>
           <Select
             size="sm"
@@ -154,6 +160,14 @@ export function LoopRunnerSettings({
         endDecorator="Run on battery"
         sx={{ alignSelf: 'flex-start' }}
         slotProps={{ input: { 'data-testid': 'loop-runner-battery-switch' } }}
+      />
+      <Switch
+        size="sm"
+        checked={state.settings.runWhenBusy ?? false}
+        onChange={event => set({ runWhenBusy: event.target.checked })}
+        endDecorator="Run even when the machine is busy"
+        sx={{ alignSelf: 'flex-start' }}
+        slotProps={{ input: { 'data-testid': 'loop-runner-busy-switch' } }}
       />
       <Switch
         size="sm"

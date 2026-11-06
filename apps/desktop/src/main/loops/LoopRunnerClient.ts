@@ -1,5 +1,5 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { LoopProgressFrame, RunnerClaim, RunnerOutcome, RunnerTicket } from '@bike4mind/common';
+import type { LoopProgressFrame, RunnerClaim, RunnerHeldLoop, RunnerOutcome, RunnerTicket } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
 
 /**
@@ -8,12 +8,20 @@ import { isAxiosError } from 'axios';
  * (the device-flow token), behind the server's EnableLoops setting.
  */
 
-export type { RunnerClaim, RunnerOutcome, RunnerTicket };
+export type { RunnerClaim, RunnerHeldLoop, RunnerOutcome, RunnerTicket };
+
+export interface RunnerTicketList {
+  tickets: RunnerTicket[];
+  /** Loops with ready tickets their budgets hold back now. */
+  held: RunnerHeldLoop[];
+}
 
 export interface RunnerPresence {
   lanesBusy: number;
   lanesFree: number;
   waitingReason?: string;
+  /** The app is quitting: the server shows the runner offline at once rather than after the freshness window. */
+  offline?: true;
 }
 
 /** A claim the server turned down, with its `reason` (e.g. `claimed`, `lanes_full`, `credits`). */
@@ -39,7 +47,7 @@ export class LeaseLost extends Error {
 }
 
 export interface LoopRunnerApi {
-  listTickets(): Promise<RunnerTicket[]>;
+  listTickets(): Promise<RunnerTicketList>;
   claim(ticketId: string): Promise<RunnerClaim | ClaimRefused>;
   heartbeat(runId: string): Promise<void>;
   progress(runId: string, frames: LoopProgressFrame[]): Promise<void>;
@@ -69,9 +77,9 @@ export class HttpLoopRunnerClient implements LoopRunnerApi {
     return api;
   }
 
-  async listTickets(): Promise<RunnerTicket[]> {
-    const body = await this.client().get<{ tickets?: RunnerTicket[] }>(`${BASE}/tickets`);
-    return body.tickets ?? [];
+  async listTickets(): Promise<RunnerTicketList> {
+    const body = await this.client().get<Partial<RunnerTicketList>>(`${BASE}/tickets`);
+    return { tickets: body.tickets ?? [], held: body.held ?? [] };
   }
 
   async claim(ticketId: string): Promise<RunnerClaim | ClaimRefused> {

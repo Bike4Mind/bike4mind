@@ -10,7 +10,7 @@ import { DEFAULT_HOLD_LABELS, type LoopPolicy, type LoopRunnerState } from '@sha
 import { parsePullRequestUrl, type PrMergeMethod, type PrRef, type PrSnapshot } from '@shared/pullRequest';
 import type { AutomaticTurnResult } from '../chat/ChatService';
 import type { GhRunner } from '../pr/gh';
-import { admit, hardFloorBreached, laneCapFor, type MachineSample } from './budget';
+import { admit, hardFloorBreached, laneCapFor, nextIdleDelay, type MachineSample } from './budget';
 import { mergeDecision, readLabels, runDeployCheck, runSmoke, type SmokeDeps } from './guards';
 import {
   LeaseLost,
@@ -68,13 +68,15 @@ export interface LoopRunnerDeps {
 
 export const RUNNER_MS = {
   /**
-   * While a lane is free and there is work or a window has focus. The one knob to retire once the
-   * server pushes loop changes over a socket (Desktop has no socket client yet).
+   * While a lane is free and there is work or a window has focus. An idle runner backs off only to
+   * budget.ts BUDGET.idlePollMaxMs. The knobs to retire once Desktop has a socket client for the
+   * server's loop-changed push (only the web page receives it today).
    */
   claimPoll: 10_000,
   /** Every lane busy: presence only; a lane freeing runs a claim pass at once. */
   busyPoll: 15_000,
-  idlePollMax: 5 * 60_000,
+  /** Signed out: nothing can be listed until sign-in, which calls start() again. */
+  signedOutPoll: 5 * 60_000,
   heartbeat: 45_000,
   /** Worktrees older than this are removed even with a PR still open. */
   worktreeMaxAge: 7 * 24 * 60 * 60_000,
@@ -98,6 +100,12 @@ const USER_WIDE_REASON: Record<string, string> = {
  */
 const CREDIT_STOP = /status 422\b/;
 
+const PR_URL = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/g;
+
+/** Prefixed to every claim prompt: the agent otherwise went looking for the repository on disk. */
+const WORKTREE_LINE =
+  "You are already in this loop's repository: a git worktree that is your shell's current directory. Work there; do not search the filesystem for the repository.";
+
 interface Lane {
   claim: RunnerClaim;
   policy: LoopPolicy;
@@ -108,6 +116,11 @@ interface Lane {
   /** What the last approval card in this run asked for: the block reason if it goes unanswered. */
   pending?: string;
   merged?: { pr: PrRef; mergeSha?: string };
+  /** The last PR in the loop's repository the run's tools printed: a quit must not let a rerun open another. */
+  prUrl?: string;
+  /** Tool calls of the run's own session that the user (or the approval mode) declined, and that ran. */
+  denied: number;
+  succeeded: number;
   /** Set once the run has an outcome; later events for it are ignored. */
   finished: boolean;
 }
@@ -150,6 +163,7 @@ export class LoopRunner {
   private readonly creditStops = new Map<string, number>();
   private error: string | undefined;
   private pendingApprovals: LoopRunnerState['pendingApprovals'] = [];
+  private lastBlocked: LoopRunnerState['lastBlocked'];
   private cap = 1;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -204,7 +218,7 @@ export class LoopRunner {
       this.error = undefined;
     } catch (err) {
       this.error = err instanceof Error ? err.message : String(err);
-      this.idleDelay = Math.min(this.idleDelay * 2, RUNNER_MS.idlePollMax);
+      this.idleDelay = nextIdleDelay(this.idleDelay);
       next = this.idleDelay;
     } finally {
       this.ticking = false;
@@ -215,7 +229,7 @@ export class LoopRunner {
 
   private async poll(): Promise<number> {
     const env = this.deps.environment();
-    if (!env) return RUNNER_MS.idlePollMax;
+    if (!env) return RUNNER_MS.signedOutPoll;
     const settings = await this.deps.store.settings(env.key);
     const sample = await this.deps.sample();
     const previous = this.previous;
@@ -228,7 +242,7 @@ export class LoopRunner {
       await this.stopAll(breached);
     }
 
-    const tickets = await this.deps.client.listTickets();
+    const { tickets, held } = await this.deps.client.listTickets();
     const policies = new Map((await this.deps.store.policies(env.key)).map(policy => [policy.loopId, policy]));
     const running = new Set([...this.lanes.values()].map(lane => lane.claim.ticket.ticketId));
     const unapproved = new Map<string, LoopRunnerState['pendingApprovals'][number]>();
@@ -241,10 +255,13 @@ export class LoopRunner {
         });
       }
     }
+    for (const loop of held) if (!policies.has(loop.loopId)) unapproved.set(loop.loopId, loop);
     this.pendingApprovals = [...unapproved.values()];
 
     if (!breached) {
       this.waitingReason = undefined;
+      const heldApproved = held.find(loop => policies.has(loop.loopId));
+      const busyBefore = this.lanes.size;
       for (const ticket of tickets) {
         const policy = policies.get(ticket.loopId);
         if (!policy || running.has(ticket.ticketId)) continue;
@@ -263,6 +280,8 @@ export class LoopRunner {
         }
         await this.run(claim, policy);
       }
+      if (!this.waitingReason && heldApproved && this.lanes.size === busyBefore)
+        this.waitingReason = `${heldApproved.loopName}: ${heldApproved.reason}`;
     }
 
     await this.deps.client
@@ -278,7 +297,7 @@ export class LoopRunner {
       this.idleDelay = RUNNER_MS.claimPoll;
       return RUNNER_MS.claimPoll;
     }
-    this.idleDelay = Math.min(this.idleDelay * 2, RUNNER_MS.idlePollMax);
+    this.idleDelay = nextIdleDelay(this.idleDelay);
     return this.idleDelay;
   }
 
@@ -288,6 +307,7 @@ export class LoopRunner {
    */
   private async run(claim: RunnerClaim, policy: LoopPolicy): Promise<void> {
     const { runId } = claim;
+    this.lastBlocked = undefined;
     let sessionId: string | undefined;
     try {
       const created = await this.deps.chat.createCodeSession({ directory: policy.directory, workspace: true });
@@ -310,6 +330,8 @@ export class LoopRunner {
       sessionId,
       startedAt: this.now(),
       finished: false,
+      denied: 0,
+      succeeded: 0,
       batcher: new ProgressBatcher(
         frames => this.deps.client.progress(runId, frames),
         err => {
@@ -326,7 +348,7 @@ export class LoopRunner {
     this.updateBlocker();
 
     const started = await this.deps.chat
-      .startAutomaticTurn(sessionId, claim.prompt, {
+      .startAutomaticTurn(sessionId, `${WORKTREE_LINE}\n\n${claim.prompt}`, {
         kind: 'loop-runner',
         loopId: claim.ticket.loopId,
         ticketId: claim.ticket.ticketId,
@@ -351,7 +373,10 @@ export class LoopRunner {
     if (!lane || lane.finished) return;
     const pending = pendingReason(event);
     if (pending) lane.pending = pending;
+    if (event.type === 'tool-end' && event.call.preview) this.notePr(lane, event.call.preview);
     if (event.sessionId !== lane.sessionId) return;
+    if (event.type === 'tool-end' && event.call.status === 'denied') lane.denied++;
+    if (event.type === 'tool-end' && event.call.status === 'done') lane.succeeded++;
     lane.batcher.push(event);
     if (event.type === 'error' && CREDIT_STOP.test(event.message)) {
       this.creditStop(lane.claim.ticket.loopId);
@@ -362,6 +387,14 @@ export class LoopRunner {
     if (event.stopReason === 'aborted')
       void this.finish(lane, { outcome: 'blocked', reason: 'Stopped on the desktop' });
     else void this.turnDone(lane, event.content);
+  }
+
+  private notePr(lane: Lane, text: string): void {
+    const repo = lane.policy.repo ?? lane.policy.repoHint?.toLowerCase();
+    for (const [url] of text.matchAll(PR_URL)) {
+      const ref = parsePullRequestUrl(url);
+      if (ref && (!repo || `${ref.owner}/${ref.repo}`.toLowerCase() === repo)) lane.prUrl = ref.url;
+    }
   }
 
   /** ApprovalGate closed a card in a runner session: nobody can answer it, so the user gets the ticket. */
@@ -377,6 +410,11 @@ export class LoopRunner {
     if (children.some(id => this.deps.chat.isSessionBusy(id))) return;
     if (lane.finished) return;
     lane.finished = true;
+    if (lane.denied > 0 && lane.succeeded === 0) {
+      const reason = `Every action was declined: ${lane.pending ?? 'no detail'}`;
+      await this.finish(lane, { outcome: 'blocked', reason, answer }, true);
+      return;
+    }
     // The heartbeat keeps running through the checks, so a long deploy wait holds the lease.
     const outcome = await this.postTurnChecks(lane, answer).catch((err: unknown): Outcome => ({
       outcome: 'blocked',
@@ -463,6 +501,7 @@ export class LoopRunner {
         if (!snapshot.nodeId) return blocked('GitHub did not give the PR id needed to enqueue it.');
         await this.deps.github.enqueue(snapshot.nodeId, snapshot.headSha);
         lane.merged = { pr: ref };
+        lane.prUrl = ref.url;
         return `Added ${ref.url} to the merge queue.`;
       }
       await this.deps.github.merge(ref, decision.method, snapshot.headSha);
@@ -474,6 +513,7 @@ export class LoopRunner {
       .then(text => (JSON.parse(text) as { mergeCommit?: { oid?: string } | null }).mergeCommit?.oid)
       .catch(() => undefined);
     lane.merged = { pr: ref, ...(view ? { mergeSha: view } : {}) };
+    lane.prUrl = ref.url;
     return `Merged ${ref.url}.`;
   }
 
@@ -485,6 +525,28 @@ export class LoopRunner {
     if (lane.finished && !force) return;
     lane.finished = true;
     clearInterval(lane.heartbeat);
+    // Released, the ticket would be re-run from scratch and open a second PR: hand it to the user instead.
+    if (outcome.outcome === 'released' && lane.prUrl) {
+      const branch = await this.deps.chat
+        .getSession(lane.sessionId)
+        .then(session => session?.project?.workspaceBranch)
+        .catch(() => undefined);
+      const why = outcome.reason ? outcome.reason[0].toUpperCase() + outcome.reason.slice(1) : 'Stopped';
+      outcome = {
+        outcome: 'blocked',
+        reason: `${why} after opening ${lane.prUrl}${branch ? ` (branch ${branch})` : ''}; continue that PR`,
+      };
+    }
+    if (outcome.outcome === 'blocked' || outcome.outcome === 'failed') {
+      const { ticket } = lane.claim;
+      this.lastBlocked = {
+        ticketId: ticket.ticketId,
+        title: ticket.title,
+        loopName: ticket.loopName,
+        reason: outcome.reason,
+        at: new Date(this.now()).toISOString(),
+      };
+    }
     await this.stopSessions(lane.claim.runId);
     await lane.batcher.flush();
     lane.batcher.dispose();
@@ -533,6 +595,11 @@ export class LoopRunner {
     this.quitting = true;
     this.stop();
     await this.stopAll('the desktop app quit');
+    // Best effort and short: the board shows the runner offline now rather than after the freshness window.
+    await Promise.race([
+      this.deps.client.presence({ lanesBusy: 0, lanesFree: 0, offline: true }).catch(() => undefined),
+      this.sleep(2_000),
+    ]);
   }
 
   dispose(): void {
@@ -618,7 +685,7 @@ export class LoopRunner {
     while (this.deps.chat.isSessionBusy(sessionId) && this.now() < deadline) await this.sleep(100);
   }
 
-  state(): Pick<LoopRunnerState, 'lanes' | 'tickets' | 'waitingReason' | 'pendingApprovals' | 'error'> {
+  state(): Pick<LoopRunnerState, 'lanes' | 'tickets' | 'waitingReason' | 'pendingApprovals' | 'lastBlocked' | 'error'> {
     return {
       lanes: { cap: this.cap, busy: this.lanes.size },
       tickets: [...this.lanes.values()].map(lane => ({
@@ -633,6 +700,7 @@ export class LoopRunner {
       })),
       ...(this.waitingReason ? { waitingReason: this.waitingReason } : {}),
       pendingApprovals: this.pendingApprovals,
+      ...(this.lastBlocked ? { lastBlocked: this.lastBlocked } : {}),
       ...(this.error || this.creditStopped()
         ? {
             error:

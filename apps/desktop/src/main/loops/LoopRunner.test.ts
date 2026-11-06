@@ -10,6 +10,7 @@ import {
   type ClaimRefused,
   type LoopRunnerApi,
   type RunnerClaim,
+  type RunnerHeldLoop,
   type RunnerOutcome,
   type RunnerTicket,
 } from './LoopRunnerClient';
@@ -38,11 +39,12 @@ function harness(
     idleSeconds: 600,
   };
   const tickets: RunnerTicket[] = [ticket('t1')];
+  const held: RunnerHeldLoop[] = [];
   const completed: { runId: string; outcome: RunnerOutcome }[] = [];
   const progress: unknown[][] = [];
   let runs = 0;
   const client: LoopRunnerApi = {
-    listTickets: vi.fn(async () => tickets),
+    listTickets: vi.fn(async () => ({ tickets, held })),
     claim: vi.fn(async (ticketId: string): Promise<RunnerClaim | ClaimRefused> => {
       runs++;
       return {
@@ -170,6 +172,7 @@ function harness(
     completed,
     progress,
     tickets,
+    held,
     sample,
     sessions,
     approve,
@@ -205,7 +208,7 @@ describe('LoopRunner claiming', () => {
     expect(h.client.claim).toHaveBeenCalledWith('t1');
     expect(h.chat.createCodeSession).toHaveBeenCalledWith({ directory: '/repo', workspace: true });
     expect(h.chat.setApprovalMode).toHaveBeenCalledWith('s1', 'auto');
-    expect(h.chat.startAutomaticTurn).toHaveBeenCalledWith('s1', 'Work the ticket.', {
+    expect(h.chat.startAutomaticTurn).toHaveBeenCalledWith('s1', expect.stringMatching(/\n\nWork the ticket\.$/), {
       kind: 'loop-runner',
       loopId: 'loop-1',
       ticketId: 't1',
@@ -213,6 +216,30 @@ describe('LoopRunner claiming', () => {
       summary: 'Ticket t1',
     });
     expect(h.runner.state().pendingApprovals).toEqual([]);
+  });
+
+  it('tells the agent it is already in the repository worktree', async () => {
+    await h.approve();
+    await h.runner.tick();
+    expect(vi.mocked(h.chat.startAutomaticTurn).mock.calls[0][1]).toMatch(
+      /^You are already in this loop's repository: a git worktree that is your shell's current directory\./
+    );
+  });
+
+  it('shows why a held loop waits: next to Approve when unapproved, as the waiting reason once approved', async () => {
+    h.tickets.length = 0;
+    h.held.push({ loopId: 'loop-1', loopName: 'Docs loop', reason: 'The loop has spent its daily budget' });
+    await h.runner.tick();
+    expect(h.runner.state().pendingApprovals).toEqual([
+      { loopId: 'loop-1', loopName: 'Docs loop', reason: 'The loop has spent its daily budget' },
+    ]);
+    expect(h.runner.state().waitingReason).toBeUndefined();
+
+    await h.approve();
+    await h.runner.tick();
+    expect(h.runner.state().pendingApprovals).toEqual([]);
+    expect(h.runner.state().waitingReason).toBe('Docs loop: The loop has spent its daily budget');
+    expect(h.client.claim).not.toHaveBeenCalled();
   });
 
   it('stops claiming a revoked loop', async () => {
@@ -404,13 +431,68 @@ describe('LoopRunner runs', () => {
     expect(h.client.claim).toHaveBeenCalledTimes(1);
   });
 
-  it('releases everything on quit', async () => {
+  it('releases everything on quit and reports the runner offline', async () => {
     await h.runner.tick();
     await h.runner.releaseAll();
     expect(h.completed[0].outcome).toMatchObject({ outcome: 'released' });
+    expect(h.client.presence).toHaveBeenLastCalledWith({ lanesBusy: 0, lanesFree: 0, offline: true });
     expect(h.chat.endLoopRun).toHaveBeenCalledWith('run-1');
     // The GC waits for the next launch rather than holding the quit up.
     expect(h.chat.deleteSession).not.toHaveBeenCalled();
+  });
+
+  it('on quit, blocks rather than releases a run that opened a PR, so a rerun cannot open a second', async () => {
+    await h.runner.tick();
+    const call: ChatToolCall = {
+      id: 'c1',
+      name: 'bash_execute',
+      input: { command: 'gh pr create' },
+      status: 'done',
+      preview: `Creating pull request\nhttps://github.com/someone-else/app/pull/3\n${PR}\n`,
+    };
+    h.emit({ type: 'tool-end', sessionId: 's1', messageId: 'm', call });
+    await h.runner.releaseAll();
+    expect(h.completed[0].outcome).toMatchObject({
+      outcome: 'blocked',
+      reason: `The desktop app quit after opening ${PR} (branch b4m/s1); continue that PR`,
+    });
+    expect(h.runner.state().lastBlocked).toMatchObject({ ticketId: 't1', loopName: 'Docs loop' });
+  });
+
+  it('blocks when every action was declined, and shows it until the next claim', async () => {
+    await h.runner.tick();
+    const call: ChatToolCall = {
+      id: 'c1',
+      name: 'bash_execute',
+      input: { command: 'git push' },
+      status: 'awaiting-approval',
+      approvalDetail: 'git push',
+    };
+    h.emit({ type: 'tool-start', sessionId: 's1', messageId: 'm', call });
+    h.emit({ type: 'tool-end', sessionId: 's1', messageId: 'm', call: { ...call, status: 'denied' } });
+    h.done();
+    await h.settled();
+    expect(h.completed[0].outcome).toMatchObject({
+      outcome: 'blocked',
+      reason: 'Every action was declined: Needs approval: git push',
+    });
+    expect(h.runner.state().lastBlocked).toMatchObject({
+      title: 'Ticket t1',
+      reason: 'Every action was declined: Needs approval: git push',
+    });
+    await h.runner.tick();
+    expect(h.client.claim).toHaveBeenCalledTimes(2);
+    expect(h.runner.state().lastBlocked).toBeUndefined();
+  });
+
+  it('advances when a declined call was not the only one', async () => {
+    await h.runner.tick();
+    const call: ChatToolCall = { id: 'c1', name: 'file_read', input: {}, status: 'done' };
+    h.emit({ type: 'tool-end', sessionId: 's1', messageId: 'm', call });
+    h.emit({ type: 'tool-end', sessionId: 's1', messageId: 'm', call: { ...call, id: 'c2', status: 'denied' } });
+    h.done();
+    await h.settled();
+    expect(h.completed[0].outcome).toMatchObject({ outcome: 'advanced' });
   });
 });
 
@@ -567,7 +649,7 @@ describe('LoopRunner pacing', () => {
     expect(h.completed).toHaveLength(1);
   });
 
-  it(`polls every ${RUNNER_MS.claimPoll / 1000}s with a free lane, and backs off when idle`, async () => {
+  it(`polls every ${RUNNER_MS.claimPoll / 1000}s with a free lane, and never slower when idle`, async () => {
     h.runner.start();
     await vi.advanceTimersByTimeAsync(0);
     expect(h.runner.busy).toBe(1);
@@ -580,15 +662,23 @@ describe('LoopRunner pacing', () => {
     h.runner.start();
     await vi.advanceTimersByTimeAsync(0);
     expect(h.client.listTickets).toHaveBeenCalledTimes(1);
-    // Nothing to claim and no focus: 20s, then 40s.
-    await vi.advanceTimersByTimeAsync(RUNNER_MS.claimPoll);
-    expect(h.client.listTickets).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(RUNNER_MS.claimPoll);
-    expect(h.client.listTickets).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(3 * RUNNER_MS.claimPoll);
-    expect(h.client.listTickets).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(RUNNER_MS.claimPoll);
-    expect(h.client.listTickets).toHaveBeenCalledTimes(3);
+    // Nothing to claim and no focus: still every 10 s, poll after poll.
+    for (let polls = 2; polls <= 6; polls++) {
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(h.client.listTickets).toHaveBeenCalledTimes(polls);
+    }
+  });
+
+  it('retries a failing server every 10 s at most', async () => {
+    h.tickets.length = 0;
+    vi.mocked(h.client.listTickets).mockRejectedValue(new Error('server down'));
+    h.runner.start();
+    await vi.advanceTimersByTimeAsync(0);
+    for (let polls = 2; polls <= 6; polls++) {
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(h.client.listTickets).toHaveBeenCalledTimes(polls);
+    }
+    expect(h.runner.state().error).toBe('server down');
   });
 });
 

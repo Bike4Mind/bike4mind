@@ -10,8 +10,11 @@ const GB = 1024 ** 3;
  */
 export const BUDGET = {
   maxLanes: 4,
-  minFreeBytes: 4 * GB,
-  maxSwapBytes: 2 * GB,
+  /**
+   * macOS free (free + inactive + purgeable) on a 16-18 GB Mac in normal use sits around 3-6 GB, and
+   * swap there stays in the GBs for days, so only a rise in swap holds a claim, never its level.
+   */
+  minFreeBytes: 2 * GB,
   /** Swap growing by more than this between samples counts as rising. */
   swapRiseBytes: 128 * 1024 ** 2,
   maxLoadRatio: 0.8,
@@ -22,7 +25,14 @@ export const BUDGET = {
   idleSeconds: 120,
   /** Lanes allowed while the user is at the machine. */
   activeLanes: 1,
+  /** The longest an idle, signed-in runner waits between polls for new work. */
+  idlePollMaxMs: 10_000,
 } as const;
+
+/** The next idle (or failed) poll's delay: doubling from `previous`, capped at BUDGET.idlePollMaxMs. */
+export function nextIdleDelay(previous: number): number {
+  return Math.min(previous * 2, BUDGET.idlePollMaxMs);
+}
 
 export interface MachineSample {
   cores: number;
@@ -40,6 +50,8 @@ export interface MachineSample {
 export interface BudgetSettings {
   runOnBattery: boolean;
   laneCap?: number;
+  /** Skip the memory, swap, load and "you are active" holds; never the lane, battery or disk ones. */
+  runWhenBusy?: boolean;
 }
 
 /** A quarter of the cores, 1 to 4 lanes; the user may only lower it. */
@@ -63,14 +75,11 @@ export function admit(
   if (sample.diskFreeBytes !== null && sample.diskFreeBytes < BUDGET.diskFloorBytes) {
     return { ok: false, reason: `low disk (${gb(sample.diskFreeBytes)} free)` };
   }
+  if (settings.runWhenBusy) return { ok: true };
   if (sample.freeBytes < BUDGET.minFreeBytes) return { ok: false, reason: `low memory (${gb(sample.freeBytes)} free)` };
-  if (sample.swapUsedBytes !== null) {
-    if (sample.swapUsedBytes >= BUDGET.maxSwapBytes)
-      return { ok: false, reason: `swapping (${gb(sample.swapUsedBytes)})` };
-    const before = previous?.swapUsedBytes;
-    if (before != null && sample.swapUsedBytes - before > BUDGET.swapRiseBytes)
-      return { ok: false, reason: 'swap is rising' };
-  }
+  const before = previous?.swapUsedBytes;
+  if (sample.swapUsedBytes !== null && before != null && sample.swapUsedBytes - before > BUDGET.swapRiseBytes)
+    return { ok: false, reason: 'swap is rising' };
   if (sample.loadRatio !== null && sample.loadRatio >= BUDGET.maxLoadRatio)
     return { ok: false, reason: 'the machine is busy' };
   if (sample.idleSeconds < BUDGET.idleSeconds && busy >= BUDGET.activeLanes)
