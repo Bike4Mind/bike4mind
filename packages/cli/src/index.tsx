@@ -67,6 +67,7 @@ import {
   MODEL_SWITCH_BUSY_MESSAGE,
 } from './utils';
 import { getTokenCounter } from './utils/tokenCounter.js';
+import { reportCommandErrors } from './utils/reportCommandErrors.js';
 import { ConversationContext, reconstructTurnBlocks } from './context/ConversationContext.js';
 import { createReactiveCompactionHandler } from './utils/reactiveCompaction.js';
 import { buildWorkflowState } from './utils/workflowState.js';
@@ -2308,7 +2309,7 @@ function CliApp() {
     console.log(fellBack ? '✅ Session saved with local fallback handoff' : '✅ Session saved with refreshed handoff');
   };
 
-  const handleCommand = async (command: string, args: string[]) => {
+  const runCommand = async (command: string, args: string[]) => {
     // Check if this is a custom command first. A reserved name (built-in or
     // feature command) must never be served from the custom store - a repo-planted
     // `.claude/commands/help.md` would otherwise hijack dispatch, since this lookup
@@ -3813,6 +3814,7 @@ function CliApp() {
       }
     }
   };
+  const handleCommand = reportCommandErrors(runCommand, message => console.error(message));
 
   /**
    * Handle saving config from the interactive editor
@@ -4043,6 +4045,10 @@ function CliApp() {
               } else {
                 console.log('\nℹ️  Project config stays inert this session. Use /trust folder to trust it later.\n');
               }
+            } catch (error) {
+              console.error(
+                `Could not trust this folder: ${error instanceof Error ? error.message : String(error)}. Use /trust folder to try again.`
+              );
             } finally {
               setState(prev => ({ ...prev, folderTrustPrompt: null }));
               init().catch(err => {

@@ -4,6 +4,7 @@ import type { PermissionManager } from '../../../utils/PermissionManager.js';
 import { isHostAllowlisted } from './hostAllowlist.js';
 import type { InteractionMode } from '../../../bootstrap/types.js';
 import { commandTextOf } from '../toolPolicy.js';
+import { logger } from '../../../utils/Logger.js';
 
 export type AutoRunInput = {
   toolName: string;
@@ -108,5 +109,11 @@ export async function persistToolTrust(
       // Fall back to global if local persistence fails.
     }
   }
-  await configStore.trustTool(toolName);
+  try {
+    await configStore.trustTool(toolName);
+  } catch (error) {
+    // The tool stays trusted for this session; a failed save must not fail the tool call.
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.warn(`Trusted ${toolName} for this session only; could not save it: ${msg}`);
+  }
 }
