@@ -174,6 +174,11 @@ describe('ThreadDock', () => {
       trigger.setAttribute('aria-expanded', 'true');
       escape(trigger);
       trigger.remove();
+      const select = document.body.appendChild(document.createElement('button'));
+      select.setAttribute('aria-haspopup', 'listbox');
+      select.setAttribute('aria-expanded', 'false');
+      escape(select);
+      select.remove();
       const modal = document.createElement('div');
       modal.setAttribute('aria-modal', 'true');
       document.body.appendChild(modal);

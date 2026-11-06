@@ -57,8 +57,11 @@ export function escapeClosesDock(event: KeyboardEvent): boolean {
   if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented) return false;
   if (document.querySelector('[aria-modal="true"]')) return false;
   const target = event.target instanceof Element ? event.target : null;
-  // aria-expanded covers a select whose focus stays on its trigger while its listbox is open.
-  return !target?.closest('[role="menu"], [role="listbox"], [role="dialog"], [aria-expanded="true"]');
+  // A select keeps focus on its trigger while its listbox is open, and React may have flipped aria-expanded
+  // back to false before this runs, so any popup trigger is skipped too.
+  return !target?.closest(
+    '[role="menu"], [role="listbox"], [role="dialog"], [aria-expanded="true"], [aria-haspopup]:not([aria-haspopup="false"])'
+  );
 }
 
 /**

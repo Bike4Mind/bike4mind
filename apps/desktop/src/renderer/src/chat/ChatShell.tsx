@@ -145,6 +145,7 @@ function SessionHeader({ title, onRename }: { title: string; onRename: (title: s
         onKeyDown={event => {
           if (event.key === 'Enter') commit();
           if (event.key === 'Escape') {
+            event.preventDefault();
             setDraft(title);
             setEditing(false);
           }
