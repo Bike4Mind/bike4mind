@@ -5,11 +5,18 @@ import { ApiKeyScope } from '@bike4mind/common';
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => unknown> = {};
-    const chain = Object.assign((req: { method?: string }, res: unknown) => handlers[req.method ?? 'GET']?.(req, res), {
-      use: () => chain,
-      get: (fn: (req: unknown, res: unknown) => unknown) => ((handlers.GET = fn), chain),
-      _config: config,
-    });
+    const middlewares: ((req: unknown, res: unknown, next: () => void) => unknown)[] = [];
+    const chain = Object.assign(
+      async (req: { method?: string }, res: unknown) => {
+        for (const middleware of middlewares) await middleware(req, res, () => undefined);
+        return handlers[req.method ?? 'GET']?.(req, res);
+      },
+      {
+        use: (middleware: (typeof middlewares)[number]) => (middlewares.push(middleware), chain),
+        get: (fn: (req: unknown, res: unknown) => unknown) => ((handlers.GET = fn), chain),
+        _config: config,
+      }
+    );
     return chain;
   },
 }));
@@ -50,11 +57,12 @@ describe('GET /api/admin/revenue', () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
+      allowedMethods: ['GET'],
     });
   });
 
   it('refuses a non-admin before reading anything', async () => {
-    await expect(call({}, { ...ADMIN, isAdmin: false })).rejects.toThrow('Admin access required');
+    await expect(call({}, { ...ADMIN, isAdmin: false })).rejects.toThrow(/missing permission/i);
     expect(mockAdminRevenue).not.toHaveBeenCalled();
   });
 

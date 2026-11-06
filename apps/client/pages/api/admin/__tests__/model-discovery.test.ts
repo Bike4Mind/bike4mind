@@ -8,8 +8,15 @@ import { createMocks } from 'node-mocks-http';
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
-    const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
-    chain.use = () => chain;
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => unknown> = [];
+    const chain = async (req: { method: string }, res: unknown) => {
+      for (const middleware of middlewares) await middleware(req, res, () => undefined);
+      return handlers[req.method](req, res);
+    };
+    chain.use = (fn: (typeof middlewares)[number]) => {
+      middlewares.push(fn);
+      return chain;
+    };
     chain.get = (fn: (typeof handlers)[string]) => {
       handlers.GET = fn;
       return chain;
@@ -163,12 +170,12 @@ describe('/api/admin/model-discovery', () => {
 
   it.each(['GET', 'POST'] as const)('rejects a non-admin %s', async method => {
     const { run } = call({ method, isAdmin: false });
-    await expect(run()).rejects.toThrow('Admin access required');
+    await expect(run()).rejects.toThrow(/missing permission/i);
   });
 
   it('rejects a non-admin asking for one run by id', async () => {
     const { run } = call({ method: 'GET', isAdmin: false, query: { runId: 'run-1' } });
-    await expect(run()).rejects.toThrow('Admin access required');
+    await expect(run()).rejects.toThrow(/missing permission/i);
     expect(runById).not.toHaveBeenCalled();
   });
 

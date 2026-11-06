@@ -2,8 +2,8 @@ import { ApiKeyScope, ReleaseNotesConfigSchema } from '@bike4mind/common';
 import { withTransaction } from '@bike4mind/database';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { invalidateSettingsCache } from '@bike4mind/utils';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError, ConflictError } from '@bike4mind/server-utils/utils/errors';
 import { loadReleaseNotesConfig, RELEASE_NOTES_SETTING } from '@bike4mind/server-utils/releaseNotes/adminReleaseNotes';
 import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
 
@@ -12,19 +12,14 @@ const ConfigPatchSchema = ReleaseNotesConfigSchema.partial().strict();
 
 const REQUIRED_KEYS = ['enabled', 'modelId', 'embargoHours', 'denylist'];
 
-const requireAdmin = (user: { isAdmin?: boolean } | undefined) => {
-  if (!user?.isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-};
-
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', PUT: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
-    requireAdmin(req.user);
     return res.json(await loadReleaseNotesConfig(req.logger));
   })
   .put(async (req, res) => {
-    requireAdmin(req.user);
     const patch = ConfigPatchSchema.safeParse(req.body);
     if (!patch.success) {
       throw new BadRequestError(

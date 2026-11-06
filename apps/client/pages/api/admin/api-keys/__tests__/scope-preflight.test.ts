@@ -20,14 +20,21 @@ const mockRefs = vi.hoisted(() => ({
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
+  const middlewares: Array<(req: unknown, res: unknown, next: () => void) => unknown> = [];
   const chain: any = {
-    use: () => chain,
+    use: (middleware: (typeof middlewares)[number]) => {
+      middlewares.push(middleware);
+      return chain;
+    },
     post: () => chain,
     put: () => chain,
     delete: () => chain,
     patch: () => chain,
     get: (fn: any) => {
-      mockRefs.getHandler = fn;
+      mockRefs.getHandler = async (req, res) => {
+        for (const middleware of middlewares) await middleware(req, res, () => undefined);
+        return fn(req, res);
+      };
       return chain;
     },
   };
@@ -84,7 +91,7 @@ describe('GET /api/admin/api-keys/scope-preflight', () => {
 
   it('refuses a non-admin before touching the usage log', async () => {
     await expect(invoke({ endpointPrefix: '/api/x', scopes: 'admin:*' }, { isAdmin: false })).rejects.toThrow(
-      /Admin access required/
+      /missing permission/i
     );
     expect(findKeyTrafficByEndpointPrefix).not.toHaveBeenCalled();
   });
