@@ -7,7 +7,7 @@ import {
 
 /**
  * Admin-settings override of the hourly young-account spend alarms defined in infra/llmSpend.ts.
- * The settings hold USD per rolling hour; 0 or unset leaves the deployed threshold alone.
+ * The settings hold USD per rolling hour; 0 or unset leaves the current threshold unchanged.
  */
 export const YOUNG_ACCOUNT_ALARM_SETTING_KEYS = {
   page: 'youngAccountSpendPageUsdPerHour',
@@ -17,10 +17,10 @@ export const YOUNG_ACCOUNT_ALARM_SETTING_KEYS = {
 export type YoungAccountAlarmTier = keyof typeof YOUNG_ACCOUNT_ALARM_SETTING_KEYS;
 export type YoungAccountAlarmThresholds = Partial<Record<YoungAccountAlarmTier, number>>;
 
-interface ReconcileLogger {
+type ReconcileLogger = {
   log(message: string, data?: Record<string, unknown>): void;
   error(message: string, data?: Record<string, unknown>): void;
-}
+};
 
 function positiveNumber(raw: unknown): number | undefined {
   if (typeof raw !== 'number' && typeof raw !== 'string') return undefined;
@@ -65,8 +65,8 @@ function putWithThreshold(alarm: MetricAlarm, threshold: number): PutMetricAlarm
 }
 
 /**
- * Applies the desired thresholds to the live alarms. An unset tier keeps whatever the last deploy
- * set. Never throws: the override is best-effort beside the spend alert that calls it.
+ * Applies the desired thresholds to the live alarms. An unset tier keeps its current threshold,
+ * including a previous override. Never throws: the override is best-effort beside the spend alert that calls it.
  */
 export async function reconcileYoungAccountAlarmThresholds({
   client,
@@ -94,12 +94,19 @@ export async function reconcileYoungAccountAlarmThresholds({
         continue;
       }
       if (alarm.Threshold === threshold) continue;
-      await client.send(putWithThreshold(alarm, threshold));
-      logger.log('young-account-alarm-threshold-updated', {
-        alarmName: alarm.AlarmName,
-        oldThreshold: alarm.Threshold,
-        newThreshold: threshold,
-      });
+      try {
+        await client.send(putWithThreshold(alarm, threshold));
+        logger.log('young-account-alarm-threshold-updated', {
+          alarmName: alarm.AlarmName,
+          oldThreshold: alarm.Threshold,
+          newThreshold: threshold,
+        });
+      } catch (error) {
+        logger.error('young-account-alarm-threshold-update-failed', {
+          alarmName: alarm.AlarmName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   } catch (error) {
     logger.error('young-account-alarm-threshold-reconcile-failed', {

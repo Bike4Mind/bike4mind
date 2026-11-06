@@ -95,8 +95,10 @@ counts and the window.
 Each run logs `young-account-spend` with `windowStart`, `windowEnd` and the totals.
 
 Each run also applies the admin settings `youngAccountSpendPageUsdPerHour` and
-`youngAccountSpendWarnUsdPerHour` (0 = keep the deployed default) to the two hourly
-`EstimatedUsdYoungAccounts` alarms, so a change takes effect within the hour. A deploy that
+`youngAccountSpendWarnUsdPerHour` to the two hourly
+`EstimatedUsdYoungAccounts` alarms, so a positive change takes effect within the hour. Setting either
+value to 0 stops managing that threshold: its current value, including a previous override, stays
+until a deploy restores the deployed default. A deploy that
 changes the env default rewrites the threshold until the next hourly run re-applies the override.
 
 A breached run also records one shadow detection per listed account (detector

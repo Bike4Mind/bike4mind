@@ -439,6 +439,23 @@ describe('young-account spend handler', () => {
       });
     });
 
+    it('still reconciles when posting the spend alert fails', async () => {
+      mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
+      mocks.fetch.mockRejectedValue(new Error('Slack unavailable'));
+      await expect(handler(event)).rejects.toThrow('Slack unavailable');
+      expect(mocks.reconcileAlarmThresholds).toHaveBeenCalledOnce();
+    });
+
+    it('preserves a quiet-hour result when reading override settings fails', async () => {
+      mocks.findYoungAccountSpend.mockResolvedValue(summary(100, 2));
+      mocks.getSettingsMap.mockRejectedValue(new Error('settings unavailable'));
+      await expect(handler(event)).resolves.toMatchObject({ status: 'ok' });
+      expect(mocks.reconcileAlarmThresholds).not.toHaveBeenCalled();
+      expect(mocks.error).toHaveBeenCalledWith('young-account-alarm-threshold-reconcile-failed', {
+        error: 'settings unavailable',
+      });
+    });
+
     it('skips, with a log line, when the alarm names are not configured', async () => {
       vi.stubEnv('YOUNG_ACCOUNT_SPEND_WARN_ALARM_NAME', '');
       mocks.findYoungAccountSpend.mockResolvedValue(summary(100, 2));

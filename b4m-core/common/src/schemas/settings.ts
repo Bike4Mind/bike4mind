@@ -5446,7 +5446,7 @@ export const settingsMap = {
     defaultValue: 0,
     min: 0,
     description:
-      'Estimated provider USD per rolling hour spent by accounts under 7 days old at which the young-account spend alarm pages. 0 (default) uses the deployed default. A change is applied to the CloudWatch alarm by the hourly young-account spend job, so it takes up to an hour.',
+      'Estimated provider USD per rolling hour spent by accounts under 7 days old at which the young-account spend alarm pages. 0 (default) stops managing the threshold and leaves its current value unchanged, including any previous override, until a deploy restores the deployed default. A positive change is applied to the CloudWatch alarm by the hourly young-account spend job, so it takes up to an hour.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),
@@ -5456,7 +5456,7 @@ export const settingsMap = {
     defaultValue: 0,
     min: 0,
     description:
-      'Estimated provider USD per rolling hour spent by accounts under 7 days old at which the young-account spend warning posts. 0 (default) uses the deployed default. A change is applied to the CloudWatch alarm by the hourly young-account spend job, so it takes up to an hour.',
+      'Estimated provider USD per rolling hour spent by accounts under 7 days old at which the young-account spend warning posts. 0 (default) stops managing the threshold and leaves its current value unchanged, including any previous override, until a deploy restores the deployed default. A positive change is applied to the CloudWatch alarm by the hourly young-account spend job, so it takes up to an hour.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),

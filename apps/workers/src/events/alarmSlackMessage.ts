@@ -645,7 +645,10 @@ const formatNumber = (raw: string) => {
 
 /** USD keeps cents, or 4 decimals below a cent so a tiny nonzero spend does not read as 0.00. */
 export function formatAlarmNumber(value: number, unit?: string): string {
-  if (unit === 'USD') return value.toFixed(value === 0 || Math.abs(value) >= 0.01 ? 2 : 4);
+  if (unit === 'USD') {
+    const rounded = value.toFixed(value === 0 || Math.abs(value) >= 0.01 ? 2 : 4);
+    return value !== 0 && Number(rounded) === 0 ? String(Number(value.toPrecision(6))) : rounded;
+  }
   return Number.isInteger(value) ? String(value) : String(Number(value.toPrecision(6)));
 }
 

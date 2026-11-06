@@ -8,7 +8,7 @@ const readInfra = (name: string) => readFileSync(new URL(`../${name}`, import.me
 const cronSource = readInfra('cron.ts');
 // Execute the actual declaration, bounded before the next cron, without loading the full SST app.
 const declaration = cronSource.slice(
-  cronSource.indexOf('const youngAccountSpendAlert ='),
+  cronSource.indexOf('const [youngAccountSpendPageAlarm, youngAccountSpendWarnAlarm] ='),
   cronSource.indexOf('// Signup Grant Held Release')
 );
 
@@ -18,7 +18,13 @@ const MENTION = {
   permissions: [{ actions: ['ssm:GetParameter'], resources: ['alarm-slack-mention-arn'] }],
 };
 
-/** What the alarm-threshold override wiring resolves to on a monitored stage; declared above the slice. */
+/** Alarm resources supplied to the real threshold-override wiring below. */
+const SPEND_ALARMS = [
+  { name: 'app-production-young-account-spend-rate', arn: 'page-arn' },
+  { name: 'app-production-young-account-spend-rate-warn', arn: 'warn-arn' },
+];
+
+/** Expected permissions and environment produced by that wiring. */
 const ALARMS = {
   environment: {
     YOUNG_ACCOUNT_SPEND_ALARM_NAME: 'app-production-young-account-spend-rate',
@@ -33,7 +39,7 @@ function output<T>(value: T) {
   return { value, apply: <Result>(callback: (input: T) => Result) => callback(value) };
 }
 
-function loadCron(source = declaration, runsScheduledJobs = true) {
+function loadCron(source = declaration, runsScheduledJobs = true, youngAccountSpendAlarms = SPEND_ALARMS) {
   const policy = vi.fn(function (_name: string, _args: Record<string, unknown>) {});
   vi.stubGlobal('aws', { sqs: { QueuePolicy: policy } });
   vi.stubGlobal('$util', {
@@ -54,7 +60,7 @@ function loadCron(source = declaration, runsScheduledJobs = true) {
     runsScheduledJobs,
     youngAccountSpendAlertDeadLetter: deadLetter,
     youngAccountSpendAlertMention: MENTION,
-    youngAccountSpendAlarmArgs: ALARMS,
+    youngAccountSpendAlarms,
     sst: { aws: { Cron: cron } },
     lambdaVpc: {},
     allSecrets: [],
@@ -66,7 +72,7 @@ function loadCron(source = declaration, runsScheduledJobs = true) {
   const configuration = cron.mock.calls[0]?.[1];
   const transform = configuration?.transform as { target: Record<string, unknown> } | undefined;
   const target: Record<string, unknown> = { input: '{}', ...transform?.target };
-  return { cron, policy, target };
+  return { cron, policy, target, configuration };
 }
 
 function verifyDeadLetters(source = declaration) {
@@ -135,6 +141,30 @@ describe('young-account spend alert failure recovery', () => {
   ])('rejects a missing recovery link: %s', wiring => {
     expect(declaration).toContain(wiring);
     expect(() => verifyDeadLetters(declaration.replace(wiring, ''))).toThrow();
+  });
+
+  it.each([{ alarmResources: [] }, { alarmResources: SPEND_ALARMS.slice(0, 1) }])(
+    'omits alarm management when the alarm set is incomplete: $alarmResources',
+    ({ alarmResources }) => {
+      const { configuration } = loadCron(declaration, true, alarmResources);
+      expect(configuration?.function).toMatchObject({
+        environment: {
+          YOUNG_ACCOUNT_SPEND_ALARM_NAME: '',
+          YOUNG_ACCOUNT_SPEND_WARN_ALARM_NAME: '',
+        },
+        permissions: [{ actions: ['sqs:SendMessage'], resources: ['spend-alert-dlq'] }, ...MENTION.permissions],
+      });
+    }
+  );
+
+  it.each([
+    ['youngAccountSpendPageAlarm.name', "''"],
+    ['youngAccountSpendWarnAlarm.name', "''"],
+    ['youngAccountSpendAlarms.map(alarm => alarm.arn)', "['unrelated-alarm-arn']"],
+    ["['cloudwatch:DescribeAlarms', 'cloudwatch:PutMetricAlarm']", "['cloudwatch:DescribeAlarms']"],
+  ])('rejects broken threshold-override wiring: %s', (wiring, replacement) => {
+    expect(declaration).toContain(wiring);
+    expect(() => verifyDeadLetters(declaration.replace(wiring, replacement))).toThrow();
   });
 
   it('retains failures for 14 days and registers a standalone DLQ alarm', () => {

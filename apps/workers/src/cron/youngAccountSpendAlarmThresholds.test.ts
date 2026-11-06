@@ -8,12 +8,16 @@ import {
 
 describe('desiredYoungAccountAlarmThresholds', () => {
   it.each([
-    ['0', {}, {}],
     ['unset', {}, {}],
     ['negative', { youngAccountSpendPageUsdPerHour: '-3', youngAccountSpendWarnUsdPerHour: -1 }, {}],
     ['a non-numeric string', { youngAccountSpendPageUsdPerHour: 'abc', youngAccountSpendWarnUsdPerHour: ' ' }, {}],
     ['zero', { youngAccountSpendPageUsdPerHour: '0', youngAccountSpendWarnUsdPerHour: 0 }, {}],
     ['infinite', { youngAccountSpendPageUsdPerHour: 'Infinity' }, {}],
+    ['non-scalar', { youngAccountSpendPageUsdPerHour: true, youngAccountSpendWarnUsdPerHour: [] }, {}],
+    ['null', { youngAccountSpendPageUsdPerHour: null }, {}],
+    ['NaN', { youngAccountSpendPageUsdPerHour: NaN }, {}],
+    ['fraction', { youngAccountSpendPageUsdPerHour: ' 0.25 ' }, { page: 0.25 }],
+    ['exponent', { youngAccountSpendWarnUsdPerHour: '1e2' }, { warn: 100 }],
     ['valid', { youngAccountSpendPageUsdPerHour: '7.5', youngAccountSpendWarnUsdPerHour: 3 }, { page: 7.5, warn: 3 }],
   ])('reads %s', (_label, settings, expected) => {
     expect(desiredYoungAccountAlarmThresholds(settings)).toEqual(expected);
@@ -120,6 +124,30 @@ describe('reconcileYoungAccountAlarmThresholds', () => {
     });
     expect(puts().map(put => put.input.AlarmName)).toEqual([NAMES.warn]);
   });
+
+  it.each([new Error('AccessDenied'), 'network down'])(
+    'continues updating warn when page update fails: %s',
+    async error => {
+      send.mockImplementation(async (command: unknown) => {
+        if (command instanceof DescribeAlarmsCommand) {
+          return { MetricAlarms: [liveAlarm(NAMES.page, 5), liveAlarm(NAMES.warn, 2)] };
+        }
+        if (command instanceof PutMetricAlarmCommand && command.input.AlarmName === NAMES.page) throw error;
+        return {};
+      });
+      await expect(reconcile({ page: 8, warn: 3 })).resolves.toBeUndefined();
+      expect(puts().map(put => put.input.AlarmName)).toEqual([NAMES.page, NAMES.warn]);
+      expect(logger.error).toHaveBeenCalledWith('young-account-alarm-threshold-update-failed', {
+        alarmName: NAMES.page,
+        error: error instanceof Error ? error.message : error,
+      });
+      expect(logger.log).toHaveBeenCalledExactlyOnceWith('young-account-alarm-threshold-updated', {
+        alarmName: NAMES.warn,
+        oldThreshold: 2,
+        newThreshold: 3,
+      });
+    }
+  );
 
   it('logs a DescribeAlarms failure without throwing', async () => {
     send.mockRejectedValue(new Error('AccessDenied'));
