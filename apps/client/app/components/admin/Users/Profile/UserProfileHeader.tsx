@@ -26,6 +26,9 @@ const menuEntries = (user: AdminUserProfile): MenuEntry[] => [
   { action: 'compliance', label: 'Compliance record' },
   { action: 'restrict', label: user.isModerated ? 'Lift restriction' : 'Restrict account' },
   { action: 'shadowTier', label: user.throttle?.tier === 'shadow' ? 'Remove limited tier' : 'Move to limited tier' },
+  user.deletion
+    ? { action: 'cancelDeletion', label: 'Cancel scheduled deletion' }
+    : { action: 'scheduleDeletion', label: 'Schedule deletion (user request)', danger: true },
   { action: 'delete', label: 'Delete user', danger: true },
 ];
 

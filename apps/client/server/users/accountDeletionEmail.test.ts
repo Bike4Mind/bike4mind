@@ -35,7 +35,9 @@ describe('deletion-scheduled email', () => {
   });
 
   it('tells a support-scheduled user to contact support, not to sign in', async () => {
-    await sendAccountDeletionScheduledEmail('dev@example.test', new Date('2026-11-18T12:00:00Z'), { source: 'support' });
+    await sendAccountDeletionScheduledEmail('dev@example.test', new Date('2026-11-18T12:00:00Z'), {
+      source: 'support',
+    });
 
     const [message] = publish.mock.calls[0];
     expect(message.body).toContain('<strong>November 18, 2026 (UTC)</strong>');

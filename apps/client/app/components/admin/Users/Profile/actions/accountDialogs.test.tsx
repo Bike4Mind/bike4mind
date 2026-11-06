@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import {
   ApiKeyTrustDialog,
+  CancelDeletionDialog,
   DeleteUserDialog,
   EmailVerificationDialog,
   InternalAccountDialog,
   LoginAsDialog,
   ResetMfaDialog,
   RestrictDialog,
+  ScheduleDeletionDialog,
   SendMessageDialog,
   ShadowTierDialog,
 } from './accountDialogs';
@@ -45,7 +47,9 @@ vi.mock('@client/app/hooks/data/user', () => ({
 }));
 vi.mock('@client/app/hooks/data/mfa', () => ({ useForceResetMFA: () => ({ mutateAsync: mocks.resetMfa }) }));
 vi.mock('@client/app/hooks/data/inbox', () => ({ useSendSystemMessage: () => ({ mutateAsync: mocks.sendMessage }) }));
-vi.mock('sonner', () => ({ toast: { error: mocks.toastError, success: mocks.toastSuccess, warning: mocks.toastWarning } }));
+vi.mock('sonner', () => ({
+  toast: { error: mocks.toastError, success: mocks.toastSuccess, warning: mocks.toastWarning },
+}));
 
 const renderDialog = (
   ui: (user: AdminUserProfile, onClose: () => void) => React.ReactElement,
@@ -330,6 +334,105 @@ describe('account dialogs', () => {
           reason: 'Known integration',
         })
       );
+    });
+  });
+
+  describe('ScheduleDeletionDialog', () => {
+    const id = 'schedule-deletion-dialog';
+    const typeEmail = () =>
+      fireEvent.change(screen.getByTestId(`${id}-typed-input`), { target: { value: 'ada@example.com' } });
+    const pickDate = (value: string) =>
+      fireEvent.change(screen.getByTestId(`${id}-received-input`), { target: { value } });
+
+    it('blocks confirm until a date, a reason and the typed email are present', () => {
+      renderDialog((user, close) => <ScheduleDeletionDialog user={user} onClose={close} />);
+
+      expect(confirmButton(id)).toBeDisabled();
+      pickReason(id);
+      typeEmail();
+      expect(confirmButton(id)).toBeDisabled();
+      expect(hint(id)).toHaveTextContent('Enter the date the request email arrived.');
+      pickDate('2026-11-01');
+      expect(confirmButton(id)).toBeEnabled();
+    });
+
+    it('limits the date to today and blocks a future one', () => {
+      renderDialog((user, close) => <ScheduleDeletionDialog user={user} onClose={close} />);
+
+      expect(screen.getByTestId(`${id}-received-input`)).toHaveAttribute('max', new Date().toISOString().slice(0, 10));
+      pickReason(id);
+      typeEmail();
+      pickDate('2999-01-01');
+      expect(confirmButton(id)).toBeDisabled();
+      expect(hint(id)).toHaveTextContent('cannot be in the future');
+    });
+
+    it('warns, without blocking, when the purge lands over 30 days after receipt', () => {
+      renderDialog((user, close) => <ScheduleDeletionDialog user={user} onClose={close} />);
+
+      pickDate('2020-01-01');
+      expect(screen.getByTestId(`${id}-late-warning`)).toBeInTheDocument();
+      pickReason(id);
+      typeEmail();
+      expect(confirmButton(id)).toBeEnabled();
+    });
+
+    it('posts schedule-deletion with the received date and the verification note, then closes', async () => {
+      const { onClose } = renderDialog((user, close) => <ScheduleDeletionDialog user={user} onClose={close} />);
+      pickDate('2026-11-01');
+      pickReason(id);
+      typeEmail();
+
+      fireEvent.click(confirmButton(id));
+
+      await waitFor(() =>
+        expect(mocks.apiPost).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/schedule-deletion`, {
+          receivedAt: '2026-11-01',
+          reason: 'Request sent from the email on file',
+        })
+      );
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+    });
+
+    it('stays open and toasts when the server refuses', async () => {
+      mocks.apiPost.mockRejectedValue(new Error('nope'));
+      const { onClose } = renderDialog((user, close) => <ScheduleDeletionDialog user={user} onClose={close} />);
+      pickDate('2026-11-01');
+      pickReason(id);
+      typeEmail();
+
+      fireEvent.click(confirmButton(id));
+
+      await waitFor(() => expect(mocks.toastError).toHaveBeenCalled());
+      expect(onClose).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('CancelDeletionDialog', () => {
+    const id = 'cancel-deletion-dialog';
+    const pending = buildProfile({
+      deletion: {
+        requestedAt: new Date('2026-10-01T00:00:00Z'),
+        scheduledFor: new Date('2026-11-20T00:00:00Z'),
+        source: 'support',
+      },
+    });
+
+    it('requires a reason, then posts cancel-deletion with it', async () => {
+      const { onClose } = renderDialog((user, close) => <CancelDeletionDialog user={user} onClose={close} />, pending);
+
+      expect(screen.getByTestId(`${id}-preview-before`)).toHaveTextContent('Deletion on Nov 20, 2026 (UTC)');
+      expect(screen.getByTestId(`${id}-preview-after`)).toHaveTextContent('Active');
+      expect(confirmButton(id)).toBeDisabled();
+      pickReason(id);
+      fireEvent.click(confirmButton(id));
+
+      await waitFor(() =>
+        expect(mocks.apiPost).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/cancel-deletion`, {
+          reason: 'User asked to cancel, identity verified',
+        })
+      );
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
     });
   });
 

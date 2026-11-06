@@ -46,7 +46,11 @@ await import('../schedule-deletion');
 const REASON = 'Request sent from the email on file';
 const RECEIVED = '2026-11-01';
 
-const call = async (body: unknown, actor: { id?: string; isAdmin?: boolean; adminPermissions?: string[] } = { isAdmin: true }, userId = 'user-1') => {
+const call = async (
+  body: unknown,
+  actor: { id?: string; isAdmin?: boolean; adminPermissions?: string[] } = { isAdmin: true },
+  userId = 'user-1'
+) => {
   const { req, res } = createMocks({ method: 'POST', body, query: { userId } });
   const request = Object.assign(req, { user: { id: 'admin-1', ...actor } }) as unknown as Request;
   h.guard!(request, res as unknown as Response, () => {});
@@ -92,7 +96,11 @@ describe('POST /api/admin/users/[userId]/schedule-deletion', () => {
         action: 'user.deletion.scheduled',
         reason: REASON,
         target: expect.objectContaining({ kind: 'user', id: 'user-1' }),
-        details: { receivedAt: new Date(RECEIVED).toISOString(), scheduledFor: scheduledFor.toISOString(), source: 'support' },
+        details: {
+          receivedAt: new Date(RECEIVED).toISOString(),
+          scheduledFor: scheduledFor.toISOString(),
+          source: 'support',
+        },
       })
     );
     expect(res._getStatusCode()).toBe(202);
@@ -110,7 +118,9 @@ describe('POST /api/admin/users/[userId]/schedule-deletion', () => {
   });
 
   it('refuses a self target with a denied audit entry', async () => {
-    await expect(call({ receivedAt: RECEIVED, reason: REASON }, { id: 'admin-1', isAdmin: true }, 'admin-1')).rejects.toMatchObject({
+    await expect(
+      call({ receivedAt: RECEIVED, reason: REASON }, { id: 'admin-1', isAdmin: true }, 'admin-1')
+    ).rejects.toMatchObject({
       statusCode: 403,
     });
     expect(h.deny).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: 'user.deletion.denied' }));

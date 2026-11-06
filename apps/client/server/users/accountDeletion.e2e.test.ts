@@ -420,7 +420,9 @@ describe('support-scheduled deletion', () => {
     await clearAccountDeletion(requestFor('admin-1'), { userId, actorUserId: 'admin-1', recordInTransaction });
 
     expect((await User.findById(userId).lean<{ deletion?: unknown }>())!.deletion).toBeUndefined();
-    expect(recordInTransaction).toHaveBeenCalledWith(expect.objectContaining({ source: 'support', requestedAt: received }));
+    expect(recordInTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'support', requestedAt: received })
+    );
     expect(h.sendCancelledEmail).toHaveBeenCalledTimes(1);
   });
 

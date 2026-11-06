@@ -31,6 +31,8 @@ export const ADMIN_REASON_PRESETS = {
   roleChange: ['Joined the admin team', 'Left the admin team', 'Temporary on-call access'],
   subscriptionGrant: ['Pilot or partner access', 'Billing correction', 'Goodwill grant', 'Internal testing'],
   userDeletion: ['User requested deletion', 'Spam or bot account', 'Terms of service violation', 'Duplicate account'],
+  deletionVerification: ['Request sent from the email on file', 'Confirmed by reply from the email on file'],
+  deletionCancel: ['User asked to cancel, identity verified', 'Scheduled in error'],
   mfaReset: ['Lost authenticator, identity verified', 'New device, identity verified'],
   sessionRevoke: ['Compromised account', 'Lost or stolen device', 'Suspicious sign-in', 'User request'],
   impersonation: ['Reproduce a reported bug', 'Investigate a support ticket', 'Check account configuration'],

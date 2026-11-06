@@ -45,7 +45,11 @@ await import('../cancel-deletion');
 
 const REASON = 'User asked to cancel, identity verified';
 
-const call = async (body: unknown, actor: { id?: string; isAdmin?: boolean; adminPermissions?: string[] } = { isAdmin: true }, userId = 'user-1') => {
+const call = async (
+  body: unknown,
+  actor: { id?: string; isAdmin?: boolean; adminPermissions?: string[] } = { isAdmin: true },
+  userId = 'user-1'
+) => {
   const { req, res } = createMocks({ method: 'POST', body, query: { userId } });
   const request = Object.assign(req, { user: { id: 'admin-1', ...actor } }) as unknown as Request;
   h.guard!(request, res as unknown as Response, () => {});
@@ -69,7 +73,10 @@ describe('POST /api/admin/users/[userId]/cancel-deletion', () => {
   it('clears the deletion, audits before/after, and answers 204', async () => {
     const res = await call({ reason: REASON });
 
-    expect(h.core).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ userId: 'user-1', actorUserId: 'admin-1' }));
+    expect(h.core).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ userId: 'user-1', actorUserId: 'admin-1' })
+    );
     expect(h.audit).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -87,8 +94,12 @@ describe('POST /api/admin/users/[userId]/cancel-deletion', () => {
   });
 
   it('refuses a self target and a delegate without users:delete', async () => {
-    await expect(call({ reason: REASON }, { id: 'admin-1', isAdmin: true }, 'admin-1')).rejects.toMatchObject({ statusCode: 403 });
-    await expect(call({ reason: REASON }, { isAdmin: false, adminPermissions: [] })).rejects.toMatchObject({ statusCode: 403 });
+    await expect(call({ reason: REASON }, { id: 'admin-1', isAdmin: true }, 'admin-1')).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    await expect(call({ reason: REASON }, { isAdmin: false, adminPermissions: [] })).rejects.toMatchObject({
+      statusCode: 403,
+    });
     expect(h.core).not.toHaveBeenCalled();
   });
 
