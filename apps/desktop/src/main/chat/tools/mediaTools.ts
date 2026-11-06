@@ -41,6 +41,7 @@ import {
   type ToolDefinition,
   type ToolSchema,
 } from './types';
+import { realpathNearest } from './paths';
 import { resolveWritablePath, withPathLock } from './writeTools';
 
 /**
@@ -62,6 +63,7 @@ import { resolveWritablePath, withPathLock } from './writeTools';
  * image family on purpose: this runs on someone's credits at a model's discretion, so the
  * default is the low-cost one and a caller who wants better names it explicitly.
  */
+export const GENERATED_IMAGE_TOOL = 'generate_image';
 const PREFERRED_IMAGE_MODEL: string = ImageModels.GPT_IMAGE_1_MINI;
 
 const DEFAULT_TTS_PROVIDER: VoiceGenerationVendor = 'openai';
@@ -131,7 +133,7 @@ async function resolveImageModel(media: MediaContext, requested: string | undefi
 
 export const generateImageTool: ToolDefinition = {
   schema: {
-    name: 'generate_image',
+    name: GENERATED_IMAGE_TOOL,
     description:
       'Generate an image from a text prompt on the Bike4Mind server and show it to the user. ' +
       'Costs the user credits and takes tens of seconds. The result is attached for you to see too, when the ' +
@@ -271,7 +273,9 @@ async function planSave(input: Record<string, unknown>, context: ToolContext): P
   const generated = await locateGeneratedImage(requireString(input, 'id'), context, media.store);
   const requested = requireString(input, 'path');
 
-  const allowed = EXTENSIONS_BY_TYPE[generated.mimeType] ?? [];
+  // The bytes decide the type: the stored content type is whatever the server labelled it.
+  const type = sniffImageType(await readFile(generated.path)) ?? generated.mimeType;
+  const allowed = EXTENSIONS_BY_TYPE[type] ?? [];
   const extension = extname(requested);
   const matches = allowed.includes(extension.toLowerCase());
   const corrected = matches
@@ -346,7 +350,7 @@ export const saveGeneratedImageTool: ToolDefinition = {
 
   async run(input, context) {
     const plan = await planSave(input, context);
-    return withPathLock(plan.target, async () => {
+    return withPathLock(await realpathNearest(plan.target), async () => {
       if (context.signal.aborted) throw new Error('The turn was stopped before the image was saved.');
       context.beginWrite?.();
       // The target is proven inside a granted root, so every parent this creates is inside it too.

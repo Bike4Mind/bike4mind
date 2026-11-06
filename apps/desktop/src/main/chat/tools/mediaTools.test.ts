@@ -29,7 +29,12 @@ interface Harness {
 }
 
 async function harness(
-  options: { imageModels?: string[]; remoteSessionId?: string; vision?: boolean; generated?: 'png' | 'jpeg' } = {}
+  options: {
+    imageModels?: string[];
+    remoteSessionId?: string;
+    vision?: boolean;
+    generated?: 'png' | 'jpeg' | 'jpeg-as-png';
+  } = {}
 ): Promise<Harness> {
   const client = {
     generateImage: vi.fn().mockResolvedValue({ questId: 'q1', remoteSessionId: 'nb1' }),
@@ -44,7 +49,9 @@ async function harness(
       .mockResolvedValue(
         options.generated === 'jpeg'
           ? { bytes: JPEG_BYTES, contentType: 'image/jpeg' }
-          : { bytes: PNG_BYTES, contentType: 'image/png' }
+          : options.generated === 'jpeg-as-png'
+            ? { bytes: JPEG_BYTES, contentType: 'image/png' }
+            : { bytes: PNG_BYTES, contentType: 'image/png' }
       ),
     synthesizeSpeech: vi.fn().mockResolvedValue({
       audio: Buffer.from('id3').toString('base64'),
@@ -251,6 +258,15 @@ describe('save_generated_image', () => {
     const result = await saveGeneratedImageTool.run({ id, path: 'lantern.png' }, h.context);
     expect(result).toContain(join(h.root, 'lantern.jpg'));
     expect(result).toMatch(/corrected/);
+    expect(await readFile(join(h.root, 'lantern.jpg'))).toEqual(JPEG_BYTES);
+  });
+
+  it('trusts the bytes over the content type the server reported', async () => {
+    const h = await harness({ generated: 'jpeg-as-png' });
+    const id = await generate(h);
+
+    const result = await saveGeneratedImageTool.run({ id, path: 'lantern.png' }, h.context);
+    expect(result).toContain(join(h.root, 'lantern.jpg'));
     expect(await readFile(join(h.root, 'lantern.jpg'))).toEqual(JPEG_BYTES);
   });
 
