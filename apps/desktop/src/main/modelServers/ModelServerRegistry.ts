@@ -86,7 +86,7 @@ const OBSERVE_TTL_MS = 5 * 60_000;
 /** How often an Ollama Desktop could start is looked for on this computer, and how long a check waits on it. */
 const PROGRAM_TTL_MS = 30_000;
 const PROGRAM_WAIT_MS = 2_000;
-/** A user check looks again only this long after the last look began, so a click loop cannot spawn a shell per call. */
+/** A user check looks again only this long after the last look began, so a click loop cannot rescan the disk per click. */
 const LOOK_AGAIN_MIN_MS = 2_000;
 const MAX_LOOKS_OUTSTANDING = 2;
 /** `dns.lookup` has no timeout of its own and can hang on a slow resolver. */
@@ -1090,7 +1090,11 @@ export class ModelServerRegistry {
       .then(() => this.supervisor.program('ollama', this.launchSettings(id)))
       .then(
         found => ('problem' in found ? found.problem : null),
-        (error: unknown) => (error instanceof Error ? error.message : String(error))
+        (error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          this.deps.logger.warn(`MODEL SERVERS: looking for Ollama failed: ${message}`);
+          return `Desktop could not check for Ollama: ${message}`;
+        }
       )
       .then(missing => {
         state.looksOutstanding -= 1;

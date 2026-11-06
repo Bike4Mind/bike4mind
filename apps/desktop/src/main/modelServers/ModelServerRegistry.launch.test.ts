@@ -608,7 +608,7 @@ describe('ModelServerRegistry launching servers', () => {
       }
       expect(launchers.program).toHaveBeenCalledTimes(3);
       const launch = (await local(registry)).launch;
-      expect(launch).toMatchObject({ canStart: false, programMissing: 'no shell' });
+      expect(launch).toMatchObject({ canStart: false, programMissing: 'Desktop could not check for Ollama: no shell' });
       expect(launch?.programPending).toBeUndefined();
       await vi.advanceTimersByTimeAsync(0);
       expect(unhandled).not.toHaveBeenCalled();

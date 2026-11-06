@@ -1421,6 +1421,22 @@ describe('ModelsScreen installed', () => {
     await mount(undefined, 'curated');
     expect(q('ollama-start-btn')).toBeNull();
     expect(q('models-install-ollama-btn')).toBeNull();
+    expect(q('ollama-start-hint')).toBeNull();
+    expect(q('models-no-runtime-text')?.textContent).not.toContain('install it');
+  });
+
+  it('offers Install when the model server list cannot be read', async () => {
+    bridge.status = DOWN;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    (window as unknown as { b4m: { modelServers: { list: () => Promise<unknown> } } }).b4m.modelServers.list =
+      async () => {
+        throw new Error('ipc down');
+      };
+    await mount(undefined, 'curated');
+    expect(q('models-install-ollama-btn')).not.toBeNull();
+    expect(q('ollama-start-btn')).toBeNull();
+    expect(warn).toHaveBeenCalledWith('Listing model servers failed', expect.any(Error));
+    warn.mockRestore();
   });
 
   it('offers Install once main stops waiting on a look that never settled', async () => {

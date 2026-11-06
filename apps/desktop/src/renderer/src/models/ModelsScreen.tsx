@@ -103,8 +103,9 @@ function NoLocalRuntime({
         retryTestId="models-runtime-retry-btn"
       >
         <Typography level="body-sm" data-testid="models-no-runtime-text">
-          Desktop got no answer from {address}.{launch?.canStart ? '' : ' If Ollama is not installed, install it.'} To
-          use models on another machine instead, point Desktop at its server.
+          Desktop got no answer from {address}.
+          {launch?.canStart || launch?.programPending ? '' : ' If Ollama is not installed, install it.'} To use models
+          on another machine instead, point Desktop at its server.
         </Typography>
         {isWindows && onOpenModelServers && (
           <Typography level="body-sm" data-testid="models-no-runtime-wsl-hint">
@@ -475,7 +476,9 @@ export function ModelsScreen({
           <RuntimeStatusBar
             status={status}
             target={target}
-            launch={servers?.find(server => server.id === LOCAL_SERVER_ID)?.launch}
+            launch={
+              servers === null ? undefined : (servers.find(server => server.id === LOCAL_SERVER_ID)?.launch ?? null)
+            }
             onStarted={() => void refreshAll()}
             onRetry={() => void hub.refresh()}
             onOpenModelServers={onOpenModelServers}

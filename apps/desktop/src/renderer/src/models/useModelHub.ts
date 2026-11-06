@@ -144,7 +144,13 @@ export function useModelServers(): ModelServerView[] | null {
       installedCache.retain(next);
       setServers(next);
     };
-    void window.b4m.modelServers.list().then(take);
+    window.b4m.modelServers
+      .list()
+      .then(take)
+      .catch((error: unknown) => {
+        console.warn('Listing model servers failed', error);
+        take([]);
+      });
     const off = window.b4m.modelServers.onChanged(take);
     return () => {
       live = false;

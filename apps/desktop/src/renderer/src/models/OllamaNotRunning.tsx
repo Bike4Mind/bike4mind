@@ -44,7 +44,9 @@ export function useStartLocalOllama(launch: ModelServerLaunchView | null | undef
 
   // Servers are health-checked once a minute, so a view from before Ollama stopped would hide Start.
   const recheck = useCallback(() => {
-    window.b4m.modelServers.check(LOCAL_SERVER_ID).catch(() => undefined);
+    window.b4m.modelServers.check(LOCAL_SERVER_ID).catch((error: unknown) => {
+      console.warn('Rechecking this computer failed', error);
+    });
   }, []);
   const rechecked = useRef(false);
   useEffect(() => {
@@ -114,7 +116,7 @@ export function OllamaNotRunning({
   actions,
   children,
 }: {
-  /** This computer's launch view from the model servers list; null while it loads. */
+  /** This computer's launch view from the model servers list; undefined while it loads. */
   launch: ModelServerLaunchView | null | undefined;
   /** After a start that succeeded: reload whatever lists models. */
   onStarted: () => void;
@@ -150,7 +152,7 @@ export function OllamaNotRunning({
               Ollama did not start: {error}
             </Typography>
           )}
-          {!canStart && (
+          {!canStart && !launch?.programPending && (
             <Typography level={textLevel} data-testid="ollama-start-hint">
               {OLLAMA_START_HINT}
             </Typography>
