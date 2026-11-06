@@ -90,6 +90,7 @@ export const contentHolders = {
           'Safety incident kept for legal reporting obligations and to prevent repeat abuse (GDPR Art. 17(3)(b), (e))',
       },
       { path: 'falsePositiveBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'noActionBy', matchBy: 'userId', action: 'anonymize' },
       { path: 'reportedBy', matchBy: 'userId', action: 'anonymize' },
     ],
   },

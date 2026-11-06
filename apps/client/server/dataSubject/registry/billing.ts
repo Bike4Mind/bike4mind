@@ -71,6 +71,25 @@ export const billingHolders = {
       },
     ],
   },
+  // Admin attribution on an operator-owned package (`createdBy` is 'migration' on migrated rows).
+  GrantPackage: {
+    kind: 'holder',
+    references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
+  },
+  GrantPackageDayCount: {
+    kind: 'noUserData',
+    note: 'Per-package, per-day redemption counter against the daily cap; names no person.',
+  },
+  // A per-person dedupe claim; the credits themselves are on the ledger.
+  GrantPackageRedemption: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  // A reward queued for payout: held or paused rows are an outstanding financial obligation.
+  HeldCreditReward: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'retain', reason: FINANCIAL_RECORD_REASON }],
+  },
   ModelPrice: {
     kind: 'holder',
     references: [{ path: 'repricedBy', matchBy: 'userId', action: 'anonymize' }],
@@ -111,6 +130,20 @@ export const billingHolders = {
   RevenueSnapshot: {
     kind: 'noUserData',
     note: 'Aggregate MRR figures per day, per plan and per owner type; no row is about one person.',
+  },
+  // An alert scoped to a user names them in `scopeId`; the open-incident key repeats it.
+  SpendAlert: {
+    kind: 'holder',
+    references: [
+      {
+        path: 'scopeId',
+        matchBy: 'userId',
+        where: { scopeType: 'User' },
+        action: 'anonymize',
+        alsoRedact: ['openKey'],
+      },
+      { path: 'acknowledgedBy', matchBy: 'userId', action: 'anonymize' },
+    ],
   },
   SpendReconciliation: {
     kind: 'noUserData',
