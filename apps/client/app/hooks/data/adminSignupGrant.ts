@@ -72,9 +72,8 @@ export const useAdminSignupGrantPendingList = (filters: PendingListFilters) =>
   useInfiniteQuery({
     queryKey: [...PENDING_GRANTS_QUERY_KEY, 'pending', filters],
     queryFn: async ({ pageParam }): Promise<AdminSignupGrantPendingList> => {
-      const params: Record<string, string> = Object.fromEntries(
-        Object.entries(filters).filter((entry): entry is [string, string] => entry[1] !== undefined)
-      );
+      const params: Record<string, string> = {};
+      for (const [key, value] of Object.entries(filters)) if (value !== undefined) params[key] = value;
       if (pageParam) params.cursor = pageParam;
       const response = await api.get<AdminSignupGrantPendingList>('/api/admin/signup-grants/pending', { params });
       return response.data;

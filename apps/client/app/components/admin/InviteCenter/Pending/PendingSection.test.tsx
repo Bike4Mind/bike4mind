@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AdminSignupGrantPendingRow, AdminSignupGrantPendingSummary } from '@bike4mind/common';
@@ -29,6 +29,12 @@ vi.mock('@client/app/hooks/data/adminSignupGrant', () => ({
   useAdminSignupGrantPendingSummary: () => mocks.summary,
 }));
 
+vi.mock('./PendingBulkDialog', () => ({
+  PendingBulkDialog: ({ kind, userIds }: { kind: string; userIds: string[] }) => (
+    <div data-testid="pending-bulk-dialog-stub" data-kind={kind} data-ids={userIds.join(',')} />
+  ),
+}));
+
 const theme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => <CssVarsProvider theme={theme}>{children}</CssVarsProvider>;
 
@@ -47,8 +53,8 @@ const row = (overrides: Partial<AdminSignupGrantPendingRow> = {}): AdminSignupGr
   ...overrides,
 });
 
-const listOf = (rows: AdminSignupGrantPendingRow[], extra: Record<string, unknown> = {}) => ({
-  data: { pages: [{ data: rows, nextCursor: null, viewer: { canRelease: true } }] },
+const listOf = (rows: AdminSignupGrantPendingRow[], extra: Record<string, unknown> = {}, canRelease = true) => ({
+  data: { pages: [{ data: rows, nextCursor: null, viewer: { canRelease } }] },
   isPending: false,
   isError: false,
   hasNextPage: false,
@@ -63,6 +69,9 @@ const SUMMARY: AdminSignupGrantPendingSummary = {
   trickle: { day: '2026-11-06', spentToday: 150, limit: 1000, missing: false },
   queue: { held: 3, oldestHeldAt: '2026-11-02T00:00:00.000Z' },
 };
+
+const selectFirstRow = () =>
+  fireEvent.click(within(screen.getByTestId(`admin-table-select-${'a'.repeat(24)}`)).getByRole('checkbox'));
 
 const tiles = () => screen.getAllByTestId('admin-stat-tile').map(tile => tile.textContent);
 
@@ -186,5 +195,30 @@ describe('PendingSection', () => {
     render(<PendingSection />, { wrapper: Wrapper });
     fireEvent.click(screen.getByTestId(testId));
     expect(useAdminModal.getState().activeTab).toBe(tab);
+  });
+
+  it('opens the bulk dialog for the selected accounts', () => {
+    render(<PendingSection />, { wrapper: Wrapper });
+    expect(screen.queryByTestId('admin-bulk-action-bar')).not.toBeInTheDocument();
+    selectFirstRow();
+    fireEvent.click(screen.getByTestId('pending-bulk-block-btn'));
+    const dialog = screen.getByTestId('pending-bulk-dialog-stub');
+    expect(dialog).toHaveAttribute('data-kind', 'block');
+    expect(dialog).toHaveAttribute('data-ids', 'a'.repeat(24));
+    expect(screen.queryByTestId('admin-select-all-matching-btn')).not.toBeInTheDocument();
+  });
+
+  it('hides Release from a viewer who cannot release', () => {
+    mocks.list = listOf([row()], {}, false);
+    render(<PendingSection />, { wrapper: Wrapper });
+    selectFirstRow();
+    expect(screen.getByTestId('pending-bulk-block-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('pending-bulk-release-btn')).not.toBeInTheDocument();
+  });
+
+  it('shows Release to a full admin', () => {
+    render(<PendingSection />, { wrapper: Wrapper });
+    selectFirstRow();
+    expect(screen.getByTestId('pending-bulk-release-btn')).toBeInTheDocument();
   });
 });

@@ -1,4 +1,5 @@
-import { Button, Link, Stack } from '@mui/joy';
+import { useState } from 'react';
+import { Alert, Button, Link, Stack } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import type { AdminSignupGrantPendingRow } from '@bike4mind/common';
 import {
@@ -9,38 +10,26 @@ import {
 import { AdminTab } from '../../adminSidebarConfig';
 import {
   PENDING_HELD_REASONS,
-  PENDING_REASON_PARAM,
-  PENDING_SORT_PARAM,
+  PENDING_SEARCH_KEYS,
   PENDING_SORTS,
-  PENDING_SOURCE_PARAM,
   PENDING_SOURCES,
-  PENDING_STATUS_PARAM,
   PENDING_STATUSES,
 } from '../../inviteCenterSearch';
 import { useAdminModal } from '../../useAdminModal';
+import { BulkActionBar, type AdminSelection } from '../../shared/BulkActionBar';
 import { DataTable, type DataColumn } from '../../shared/DataTable';
 import { EmptyState } from '../../shared/EmptyState';
 import { RelativeTime } from '../../shared/EntityHeader';
 import { FilterBar, type AdminFilter } from '../../shared/FilterBar';
 import { StatStrip, StatTile } from '../../shared/StatStrip';
 import { StatusChip } from '../../shared/StatusChip';
-import { useAdminListUrlState, type AdminListSearchKeys } from '../../shared/useAdminListUrlState';
+import { useAdminListUrlState } from '../../shared/useAdminListUrlState';
+import { PendingBulkDialog } from './PendingBulkDialog';
+import { MAX_PENDING_BULK, type PendingBulkKind } from './usePendingBulkActions';
 
 const CREDITS = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const credits = (value: number) => CREDITS.format(value);
 const UNAVAILABLE = 'Unavailable';
-
-// The query and view keys are never written: this list has no search box and no saved views.
-const LIST_KEYS: AdminListSearchKeys = {
-  query: 'pendingQuery',
-  view: 'pendingView',
-  filters: {
-    status: PENDING_STATUS_PARAM,
-    heldReason: PENDING_REASON_PARAM,
-    source: PENDING_SOURCE_PARAM,
-    sort: PENDING_SORT_PARAM,
-  },
-};
 
 const STATUS_LABEL: Readonly<Record<(typeof PENDING_STATUSES)[number], string>> = {
   held: 'Held',
@@ -72,6 +61,8 @@ const FILTERS: readonly AdminFilter[] = [
 
 const pick = <T extends string>(allowed: readonly T[], value: string): T | undefined =>
   (allowed as readonly string[]).includes(value) ? (value as T) : undefined;
+
+const NO_SELECTION: AdminSelection = { mode: 'explicit', ids: [] };
 
 const SECTION_LINKS = [
   { label: 'Open Held signup grants', tab: AdminTab.HeldSignupGrants, testId: 'invite-center-open-held-grants-btn' },
@@ -131,7 +122,7 @@ const StateChips = ({ row }: { row: AdminSignupGrantPendingRow }) => (
 export function PendingSection() {
   const setActiveTab = useAdminModal(state => state.setActiveTab);
   const navigate = useNavigate();
-  const [listState, updateList] = useAdminListUrlState(LIST_KEYS);
+  const [listState, updateList] = useAdminListUrlState(PENDING_SEARCH_KEYS);
   const filters: PendingListFilters = {
     status: pick(PENDING_STATUSES, listState.filters.status),
     heldReason: pick(PENDING_HELD_REASONS, listState.filters.heldReason),
@@ -141,6 +132,14 @@ export function PendingSection() {
   const list = useAdminSignupGrantPendingList(filters);
   const rows = list.data?.pages.flatMap(page => page.data) ?? [];
   const filtered = Object.values(listState.filters).some(Boolean);
+  const canRelease = list.data?.pages[0]?.viewer.canRelease === true;
+  const [selection, setSelection] = useState<AdminSelection>(NO_SELECTION);
+  const [dialog, setDialog] = useState<PendingBulkKind | null>(null);
+  const [failed, setFailed] = useState<readonly string[]>([]);
+  // 'allMatching' is never offered: both bulk routes take explicit ids only.
+  const selectedIds = selection.mode === 'explicit' ? selection.ids : [];
+  const overCap = selectedIds.length > MAX_PENDING_BULK;
+  const emailOf = new Map(rows.map(row => [row.id, row.email ?? row.id]));
 
   const openCredits = (userId: string) =>
     navigate({ to: '/admin/users/$userId', params: { userId }, search: { tab: 'credits' } });
@@ -248,6 +247,41 @@ export function PendingSection() {
       </Stack>
       <PendingHeader />
       <FilterBar state={listState} filters={FILTERS} onChange={updateList} search={false} />
+      {failed.length > 0 && (
+        <Alert color="warning" variant="soft" data-testid="pending-bulk-failed">
+          Could not change: {failed.map(id => emailOf.get(id) ?? id).join(', ')}
+        </Alert>
+      )}
+      {selectedIds.length > 0 && (
+        <BulkActionBar
+          selection={selection}
+          totalMatching={selectedIds.length}
+          onSelectAllMatching={() => undefined}
+          onClear={() => setSelection(NO_SELECTION)}
+        >
+          {overCap && <span data-testid="pending-bulk-over-cap">Select {MAX_PENDING_BULK} accounts or fewer.</span>}
+          {canRelease && (
+            <Button
+              size="sm"
+              disabled={overCap}
+              data-testid="pending-bulk-release-btn"
+              onClick={() => setDialog('release')}
+            >
+              Release
+            </Button>
+          )}
+          <Button
+            size="sm"
+            color="danger"
+            variant="outlined"
+            disabled={overCap}
+            data-testid="pending-bulk-block-btn"
+            onClick={() => setDialog('block')}
+          >
+            Block
+          </Button>
+        </BulkActionBar>
+      )}
       <DataTable
         rows={rows}
         columns={columns}
@@ -258,6 +292,8 @@ export function PendingSection() {
         onRetry={() => void list.refetch()}
         empty={empty}
         pagination={false}
+        selection={selection}
+        onSelectionChange={setSelection}
         testId="pending-table"
         rowTestId={row => `pending-row-${row.id}`}
       />
@@ -274,6 +310,17 @@ export function PendingSection() {
             Load more
           </Button>
         </Stack>
+      )}
+      {dialog && (
+        <PendingBulkDialog
+          kind={dialog}
+          userIds={selectedIds}
+          onClose={() => setDialog(null)}
+          onDone={outcome => {
+            setFailed(outcome.failedIds);
+            setSelection(NO_SELECTION);
+          }}
+        />
       )}
     </Stack>
   );

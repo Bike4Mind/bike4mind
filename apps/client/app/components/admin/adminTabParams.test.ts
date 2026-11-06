@@ -14,6 +14,7 @@ import { SIGNUP_RISK_REVIEW_SEARCH_KEYS } from './signupRiskReviewSearch';
 import { EVENTS_SEARCH_KEYS } from './EventMetrics/eventsTabSearch';
 import { INTEGRATION_DEMAND_SEARCH_KEYS } from './integrationDemandSearch';
 import { ANALYTICS_SEARCH_KEYS } from './Analytics/analyticsTabSearch';
+import { PENDING_SEARCH_KEYS } from './inviteCenterSearch';
 import type { AdminListSearchKeys } from './shared/useAdminListUrlState';
 
 describe('ADMIN_TAB_PARAMS', () => {
@@ -371,6 +372,7 @@ describe('useAdminListUrlState keys', () => {
     EVENTS_SEARCH_KEYS,
     INTEGRATION_DEMAND_SEARCH_KEYS,
     ANALYTICS_SEARCH_KEYS,
+    PENDING_SEARCH_KEYS,
   };
   // Left out of the registry on purpose, so validateSearch strips them: free-text searches that can
   // hold personal data, and saved-view names that are not shareable yet.
@@ -383,6 +385,8 @@ describe('useAdminListUrlState keys', () => {
     'eventsSavedView',
     'analyticsQuery',
     'analyticsView',
+    'pendingQuery',
+    'pendingView',
   ]);
   const registered = new Set<string>(Object.values(ADMIN_TAB_PARAMS).flat());
 

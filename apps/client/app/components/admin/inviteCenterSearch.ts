@@ -15,6 +15,18 @@ export const PENDING_HELD_REASONS = ['budget_exhausted', 'risk_review'] as const
 export const PENDING_SOURCES = ['default', 'package'] as const;
 export const PENDING_SORTS = ['oldest', 'remaining'] as const;
 
+// The query and view keys are never written: the Pending list has no search box and no saved views.
+export const PENDING_SEARCH_KEYS = {
+  query: 'pendingQuery',
+  view: 'pendingView',
+  filters: {
+    status: PENDING_STATUS_PARAM,
+    heldReason: PENDING_REASON_PARAM,
+    source: PENDING_SOURCE_PARAM,
+    sort: PENDING_SORT_PARAM,
+  },
+};
+
 export const INVITE_CENTER_TAB_PARAMS = [
   INVITE_CENTER_SECTION_PARAM,
   PENDING_STATUS_PARAM,
