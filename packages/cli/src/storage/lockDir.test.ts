@@ -44,6 +44,14 @@ function misjudgeNextStat(): void {
   }) as typeof fsPromises.stat);
 }
 
+/** A lock directory held by `owner`, last touched `ageMs` ago (negative: in the future). */
+async function lockOwnedBy(owner: Record<string, unknown>, ageMs: number): Promise<void> {
+  await mkdir(lockPath);
+  await writeFile(path.join(lockPath, 'owner'), JSON.stringify(owner));
+  const touched = new Date(Date.now() - ageMs);
+  await utimes(lockPath, touched, touched);
+}
+
 async function staleLockAt(target: string): Promise<void> {
   await mkdir(target);
   await writeFile(path.join(target, 'owner'), JSON.stringify({ pid: 1, hostname: 'elsewhere', nonce: 'gone' }));
@@ -53,8 +61,6 @@ async function staleLockAt(target: string): Promise<void> {
 
 describe('withLockDir', () => {
   it('a holder whose lock a contender wrongly breaks finds it lost before its write, so only one writes', async () => {
-    // Hard links play no part in this scheme; a filesystem without them changes nothing.
-    vi.spyOn(fsPromises, 'link').mockRejectedValue(Object.assign(new Error('not supported'), { code: 'EPERM' }));
     const holderIn = gate();
     const contenderDone = gate();
     const writes: string[] = [];
@@ -156,35 +162,117 @@ describe('withLockDir', () => {
   });
 
   it('is not broken while its holder works longer than the stale limit', async () => {
+    // Wider than the shared limit, so a slow test host's timer delays stay well inside the heartbeat's margin.
+    const wide = { ...opts(), staleMs: 1_500 };
     const holderIn = gate();
     const contender = vi.fn(async () => 'ran');
     const holder = withLockDir(
       lockPath,
       async held => {
         holderIn.open();
-        await sleep(STALE_MS * 3);
+        await sleep(wide.staleMs * 2);
         await held.assertHeld();
         return 'held';
       },
-      opts()
+      wide
     );
     await holderIn.wait;
 
-    await expect(withLockDir(lockPath, contender, opts(STALE_MS * 2))).rejects.toThrow('held');
+    await expect(withLockDir(lockPath, contender, { ...wide, waitMs: wide.staleMs * 1.5 })).rejects.toThrow('held');
     expect(contender).not.toHaveBeenCalled();
     expect(await holder).toBe('held');
   });
 
-  it('breaks a lock whose holder stopped touching it, and one left by a holder on this host that exited', async () => {
+  it('breaks a lock whose holder stopped touching it', async () => {
     await staleLockAt(lockPath);
     expect(await withLockDir(lockPath, async () => 'ran', opts(100))).toBe('ran');
+  });
 
+  it('breaks early a lock whose holder on this host exited, once it has also missed a heartbeat', async () => {
+    await lockOwnedBy({ pid: 2_147_483_646, hostname: os.hostname(), nonce: 'exited' }, STALE_MS * 0.8);
+    expect(await withLockDir(lockPath, async () => 'ran', opts(50))).toBe('ran');
+  });
+
+  it('waits on a freshly touched lock whose pid looks exited, as one from another pid namespace would', async () => {
+    await lockOwnedBy({ pid: 2_147_483_646, hostname: os.hostname(), nonce: 'other-namespace' }, 0);
+    await expect(withLockDir(lockPath, async () => 'ran', opts(50))).rejects.toThrow('held');
+  });
+
+  it('breaks early a lock this process left behind once it missed a heartbeat', async () => {
+    await lockOwnedBy({ pid: process.pid, hostname: os.hostname(), nonce: 'released-but-left' }, STALE_MS * 0.8);
+    expect(await withLockDir(lockPath, async () => 'ran', opts(50))).toBe('ran');
+  });
+
+  it('breaks a lock touched more than the stale limit in the future', async () => {
+    await lockOwnedBy({ pid: 1, hostname: 'elsewhere', nonce: 'future' }, -STALE_MS * 2);
+    expect(await withLockDir(lockPath, async () => 'ran', opts(50))).toBe('ran');
+  });
+
+  it('breaks a lock directory whose owner file was never written, once it ages out', async () => {
     await mkdir(lockPath);
-    await writeFile(
-      path.join(lockPath, 'owner'),
-      JSON.stringify({ pid: 2_147_483_646, hostname: os.hostname(), nonce: 'exited' })
-    );
-    expect(await withLockDir(lockPath, async () => 'ran', opts(100))).toBe('ran');
+    await expect(withLockDir(lockPath, async () => 'ran', opts(50))).rejects.toThrow('held');
+
+    const old = new Date(Date.now() - STALE_MS * 2);
+    await utimes(lockPath, old, old);
+    expect(await withLockDir(lockPath, async () => 'ran', opts(50))).toBe('ran');
+  });
+
+  it('pauses between attempts when a stale lock cannot be moved aside', async () => {
+    await staleLockAt(lockPath);
+    const realRename = fsPromises.rename.bind(fsPromises);
+    let attempts = 0;
+    vi.spyOn(fsPromises, 'rename').mockImplementation((async (...args: Parameters<typeof realRename>) => {
+      if (String(args[0]) === lockPath) {
+        attempts++;
+        throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+      }
+      return realRename(...args);
+    }) as typeof fsPromises.rename);
+
+    await expect(withLockDir(lockPath, async () => 'ran', { ...opts(200), pollMs: 20 })).rejects.toThrow('held');
+    expect(attempts).toBeGreaterThan(0);
+    expect(attempts).toBeLessThan(30);
+  });
+
+  it('treats the lock as lost once its holder has gone too long without a heartbeat', async () => {
+    vi.useFakeTimers({ toFake: ['performance'] });
+    try {
+      await expect(
+        withLockDir(
+          lockPath,
+          async held => {
+            vi.advanceTimersByTime(STALE_MS);
+            await held.assertHeld();
+          },
+          opts()
+        )
+      ).rejects.toBeInstanceOf(LockLostError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops its heartbeat when the work throws', async () => {
+    const realRead = fsPromises.readFile.bind(fsPromises);
+    const ownerReads = vi.fn();
+    vi.spyOn(fsPromises, 'readFile').mockImplementation((async (...args: Parameters<typeof realRead>) => {
+      if (String(args[0]) === path.join(lockPath, 'owner')) ownerReads();
+      return realRead(...args);
+    }) as typeof fsPromises.readFile);
+
+    await expect(
+      withLockDir(
+        lockPath,
+        async () => {
+          throw new Error('work failed');
+        },
+        opts()
+      )
+    ).rejects.toThrow('work failed');
+    const afterRelease = ownerReads.mock.calls.length;
+    await sleep(STALE_MS);
+
+    expect(ownerReads).toHaveBeenCalledTimes(afterRelease);
   });
 
   it('breaks an old-style lock file once it is past the stale limit, and waits on a fresh one', async () => {

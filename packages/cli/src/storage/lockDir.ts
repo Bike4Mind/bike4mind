@@ -23,7 +23,7 @@ export interface HeldLock {
 
 export class LockLostError extends Error {
   constructor(lockPath: string) {
-    super(`Another b4m process took over ${lockPath} while this one held it`);
+    super(`Lost the lock ${lockPath}: another b4m process may have taken it over`);
     this.name = 'LockLostError';
   }
 }
@@ -32,6 +32,9 @@ const OWNER = 'owner';
 const OWNER_READ_TRIES = 5;
 const RELEASE_TRIES = 5;
 const RETRY_PAUSE_MS = 20;
+
+/** Nonces of the locks this process holds now, so a lock it left behind is told apart from one it still holds. */
+const liveNonces = new Set<string>();
 
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const codeOf = (error: unknown) => (error as NodeJS.ErrnoException | null)?.code;
@@ -75,23 +78,30 @@ async function isStale(lockPath: string, staleMs: number): Promise<boolean> {
   } catch {
     return false;
   }
-  if (Date.now() - mtimeMs > staleMs) return true;
+  const age = Date.now() - mtimeMs;
+  // A touch far in the future (the clock was set back since) would otherwise never age out.
+  if (age > staleMs || age < -staleMs) return true;
+  // A pid on this hostname may belong to another pid namespace (flatpak, containers sharing $HOME), so an exited or
+  // finished holder is stale early only once it has also missed a heartbeat.
+  if (age <= (staleMs * 2) / 3) return false;
   const owner = await readOwner(lockPath).catch(() => null);
-  return owner?.hostname === hostname() && holderIsGone(owner.pid);
+  if (!owner || owner.hostname !== hostname()) return false;
+  if (owner.pid === process.pid) return typeof owner.nonce === 'string' && !liveNonces.has(owner.nonce);
+  return holderIsGone(owner.pid);
 }
 
 /**
  * Moves a stale lock aside, then deletes it only if it is still stale there. One found fresh once moved (a new lock
  * made since the check) stays aside: its holder finds the lock lost at its next check instead of sharing it.
- * Returns whether the lock may now be free.
+ * Returns whether the lock is gone, so the caller can retry without pausing.
  */
 async function breakIfStale(lockPath: string, staleMs: number): Promise<boolean> {
   if (!(await isStale(lockPath, staleMs))) return false;
   const aside = `${lockPath}.${uuidv4()}.stale`;
   try {
     await fs.rename(lockPath, aside);
-  } catch {
-    return true;
+  } catch (error) {
+    return codeOf(error) === 'ENOENT';
   }
   if (await isStale(aside, staleMs)) await fs.rm(aside, { recursive: true, force: true }).catch(() => undefined);
   return true;
@@ -113,18 +123,22 @@ async function sweepOrphans(lockPath: string, staleMs: number): Promise<void> {
   }
 }
 
-async function acquire(lockPath: string, nonce: string, opts: LockDirOptions): Promise<void> {
-  const deadline = Date.now() + opts.waitMs;
+/** Takes the lock, and returns a performance.now() reading from no later than its last touch. */
+async function acquire(lockPath: string, nonce: string, opts: LockDirOptions): Promise<number> {
+  const deadline = performance.now() + opts.waitMs;
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
   await sweepOrphans(lockPath, opts.staleMs);
   for (;;) {
     let retryNow = false;
+    const attemptAt = performance.now();
     try {
       await fs.mkdir(lockPath);
       try {
         const owner = JSON.stringify({ pid: process.pid, hostname: hostname(), nonce });
         await fs.writeFile(path.join(lockPath, OWNER), owner, { flag: 'wx', mode: 0o600 });
-        return;
+        const now = new Date();
+        await fs.utimes(lockPath, now, now).catch(() => undefined);
+        return attemptAt;
       } catch (error) {
         // ENOENT/EEXIST: the new directory was moved aside, or another process claimed the one now in its place.
         const code = codeOf(error);
@@ -140,7 +154,7 @@ async function acquire(lockPath: string, nonce: string, opts: LockDirOptions): P
       if (!held) throw error;
       retryNow = await breakIfStale(lockPath, opts.staleMs);
     }
-    if (Date.now() >= deadline) throw new Error(`${opts.heldMessage} (${lockPath} is held)`);
+    if (performance.now() >= deadline) throw new Error(`${opts.heldMessage} (${lockPath} is held)`);
     if (!retryNow) await pause(opts.pollMs);
   }
 }
@@ -163,7 +177,7 @@ async function release(lockPath: string, nonce: string): Promise<boolean> {
       return true;
     } catch (error) {
       const code = codeOf(error);
-      // Left in place, it goes stale within staleMs now that the heartbeat has stopped.
+      // Left in place, it is stale once a heartbeat is missed: its nonce is no longer live in this process.
       if (attempt >= RELEASE_TRIES || !(code === 'EPERM' || code === 'EBUSY' || code === 'EACCES')) return true;
       await pause(RETRY_PAUSE_MS * attempt);
     }
@@ -180,9 +194,14 @@ export async function withLockDir<T>(
   opts: LockDirOptions
 ): Promise<T> {
   const nonce = uuidv4();
-  await acquire(lockPath, nonce, opts);
+  let lastTouch = await acquire(lockPath, nonce, opts);
+  liveNonces.add(nonce);
   const lost = new AbortController();
   const assertHeld = async () => {
+    // A holder suspended or stalled past two thirds of the stale limit may already have been judged stale.
+    if (!lost.signal.aborted && performance.now() - lastTouch > (opts.staleMs * 2) / 3) {
+      lost.abort(new LockLostError(lockPath));
+    }
     if (!lost.signal.aborted && (await readOwner(lockPath))?.nonce !== nonce) lost.abort(new LockLostError(lockPath));
     if (lost.signal.aborted) throw lost.signal.reason;
   };
@@ -192,8 +211,10 @@ export async function withLockDir<T>(
   const beat = async () => {
     try {
       await assertHeld();
+      const touchedAt = performance.now();
       const now = new Date();
       await fs.utimes(lockPath, now, now);
+      lastTouch = touchedAt;
     } catch {
       // A lost lock stops the heartbeat; a failed read or touch is retried on the next beat.
     }
@@ -215,6 +236,7 @@ export async function withLockDir<T>(
     clearTimeout(timer);
     await beating;
     stillHeld = await release(lockPath, nonce);
+    liveNonces.delete(nonce);
   }
   if (!stillHeld && !lost.signal.aborted) lost.abort(new LockLostError(lockPath));
   if (lost.signal.aborted) throw lost.signal.reason;
