@@ -31,6 +31,7 @@ import {
 } from './buckets';
 import { websocketApi } from './websocket';
 import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
+import { youngAccountSpendAlarms } from './llmSpend';
 import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
@@ -176,6 +177,23 @@ const disposableDomainRefreshCron = runsScheduledJobs
   : undefined;
 
 const youngAccountSpendAlertMention = alarmSlackMentionFunctionArgs();
+// The job rewrites these two alarms' thresholds from admin settings (youngAccountSpendAlarmThresholds.ts).
+const [youngAccountSpendPageAlarm, youngAccountSpendWarnAlarm] = youngAccountSpendAlarms;
+const youngAccountSpendAlarmArgs =
+  youngAccountSpendPageAlarm && youngAccountSpendWarnAlarm
+    ? {
+        environment: {
+          YOUNG_ACCOUNT_SPEND_ALARM_NAME: youngAccountSpendPageAlarm.name,
+          YOUNG_ACCOUNT_SPEND_WARN_ALARM_NAME: youngAccountSpendWarnAlarm.name,
+        },
+        permissions: [
+          {
+            actions: ['cloudwatch:DescribeAlarms', 'cloudwatch:PutMetricAlarm'],
+            resources: youngAccountSpendAlarms.map(alarm => alarm.arn),
+          },
+        ],
+      }
+    : { environment: { YOUNG_ACCOUNT_SPEND_ALARM_NAME: '', YOUNG_ACCOUNT_SPEND_WARN_ALARM_NAME: '' }, permissions: [] };
 const youngAccountSpendAlert =
   runsScheduledJobs && youngAccountSpendAlertDeadLetter
     ? new sst.aws.Cron('youngAccountSpendAlert', {
@@ -191,9 +209,14 @@ const youngAccountSpendAlert =
             ...DEFAULT_LAMBDA_ENVIRONMENT,
             YOUNG_ACCOUNT_SPEND_ALERT_CREDITS: process.env.YOUNG_ACCOUNT_SPEND_ALERT_CREDITS || '',
             YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS: process.env.YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS || '',
+            ...youngAccountSpendAlarmArgs.environment,
             ...youngAccountSpendAlertMention.environment,
           },
-          permissions: [youngAccountSpendAlertDeadLetter.sendPermission, ...youngAccountSpendAlertMention.permissions],
+          permissions: [
+            youngAccountSpendAlertDeadLetter.sendPermission,
+            ...youngAccountSpendAlertMention.permissions,
+            ...youngAccountSpendAlarmArgs.permissions,
+          ],
           transform: youngAccountSpendAlertDeadLetter.functionTarget,
           logging: {
             retention: '1 week',

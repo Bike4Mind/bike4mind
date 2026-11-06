@@ -1572,6 +1572,20 @@ describe('spend monitor settings', () => {
   });
 });
 
+describe('young-account spend alarm override settings', () => {
+  it.each(['youngAccountSpendPageUsdPerHour', 'youngAccountSpendWarnUsdPerHour'] as const)(
+    '%s defaults to 0, accepts fractions, rejects negatives and stays admin-only',
+    key => {
+      const setting = settingsMap[key];
+      expect(setting.schema.parse(undefined)).toBe(0);
+      expect(setting.schema.parse('2.5')).toBe(2.5);
+      expect(setting.schema.safeParse(-1).success).toBe(false);
+      expect(API_SERVICE_GROUPS.CREDITS.settings.some(entry => entry.key === key)).toBe(true);
+      expect(new Set<string>(userReadableSettingKeys()).has(key)).toBe(false);
+    }
+  );
+});
+
 describe('preference arena settings exposure', () => {
   it('keeps every arena setting except the enabled flag out of the user-readable set', () => {
     const readable = new Set<string>(userReadableSettingKeys());
