@@ -28,6 +28,12 @@ describe('emailPatternSignals', () => {
     expect(emailPatternSignals('user28af6a+1@gmail.com')?.generatedLocalPart).toBe(true);
   });
 
+  it('treats every personal mail provider common knows as webmail', () => {
+    for (const domain of ['inbox.com', 'hushmail.com', 'runbox.com', 'yahoo.co.jp']) {
+      expect(emailPatternSignals(`someone@${domain}`)?.consumerMailDomain, domain).toBe(true);
+    }
+  });
+
   it('returns null for no address or an unusable one', () => {
     expect(emailPatternSignals(null)).toBeNull();
     expect(emailPatternSignals('not-an-email')).toBeNull();

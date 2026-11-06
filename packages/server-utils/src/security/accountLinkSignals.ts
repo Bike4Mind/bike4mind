@@ -1,4 +1,9 @@
-import { canonicalizeEmail, emailDomainOf } from '@bike4mind/common';
+import {
+  canonicalizeEmail,
+  emailDomainOf,
+  personalEmailProviders,
+  regionalPersonalEmailProviders,
+} from '@bike4mind/common';
 import { userService } from '@bike4mind/services';
 
 /**
@@ -14,6 +19,8 @@ import { userService } from '@bike4mind/services';
  * here links nothing (a shared mailbox still does).
  */
 export const CONSUMER_MAIL_DOMAINS: ReadonlySet<string> = new Set([
+  ...personalEmailProviders,
+  ...regionalPersonalEmailProviders,
   'gmail.com',
   'googlemail.com',
   'outlook.com',
