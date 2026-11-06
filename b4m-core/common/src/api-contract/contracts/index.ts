@@ -96,6 +96,14 @@ import {
   removeProjectSessionContract,
 } from './projectContent.contract';
 import {
+  removeProjectMemberContract,
+  listProjectInvitesContract,
+  createProjectInviteContract,
+  addProjectSystemPromptsContract,
+  updateProjectSystemPromptContract,
+  removeProjectSystemPromptContract,
+} from './projectSharing.contract';
+import {
   listAgentsContract,
   getAgentContract,
   createAgentContract,
@@ -218,6 +226,12 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listProjectSessionsContract,
   addProjectSessionsContract,
   removeProjectSessionContract,
+  removeProjectMemberContract,
+  listProjectInvitesContract,
+  createProjectInviteContract,
+  addProjectSystemPromptsContract,
+  updateProjectSystemPromptContract,
+  removeProjectSystemPromptContract,
   listAgentsContract,
   getAgentContract,
   createAgentContract,
