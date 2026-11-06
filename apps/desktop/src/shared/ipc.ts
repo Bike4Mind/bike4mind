@@ -58,6 +58,8 @@ import type {
   SendMessageResult,
   SpawnSuggestionResult,
   StartSpawnSuggestionRequest,
+  StartSideChatRequest,
+  StartSideChatResult,
   ToolAccessState,
   UpdateProjectRequest,
   UpdateProjectResult,
@@ -222,6 +224,7 @@ export const IPC_CHANNELS = {
   /** main -> renderer push; one session's queue of typed-ahead messages changed. */
   chatQueueChanged: 'chat:queue-changed',
   chatStartSpawnSuggestion: 'chat:start-spawn-suggestion',
+  chatStartSideChat: 'chat:start-side-chat',
   chatDismissSpawnSuggestion: 'chat:dismiss-spawn-suggestion',
   chatRespondToApproval: 'chat:respond-to-approval',
   chatPickAttachments: 'chat:pick-attachments',
@@ -903,6 +906,11 @@ export interface DesktopApi {
      */
     startSpawnSuggestion(request: StartSpawnSuggestionRequest): Promise<SpawnSuggestionResult>;
     dismissSpawnSuggestion(sessionId: string, suggestionId: string): Promise<SpawnSuggestionResult>;
+    /**
+     * Start a child conversation of `sessionId` about a passage the user highlighted, opening with
+     * that passage and an excerpt of the parent. Runs no turn: the user asks there.
+     */
+    startSideChat(request: StartSideChatRequest): Promise<StartSideChatResult>;
     /** Open the OS file picker and take in whatever is chosen. Resolves empty if the user cancels. */
     pickAttachments(sessionId: string): Promise<AddAttachmentsResult>;
     /** Take in dropped or pasted files. The bytes are written to disk before this resolves. */

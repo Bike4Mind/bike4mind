@@ -46,6 +46,8 @@ import type {
   SendMessageResult,
   SpawnSuggestionResult,
   StartSpawnSuggestionRequest,
+  StartSideChatRequest,
+  StartSideChatResult,
   UpdateProjectRequest,
   UpdateProjectResult,
   WorkspacePreparation,
@@ -150,6 +152,8 @@ import type { PdfPromptText } from './pdfText';
 import type { AttachmentStore } from './AttachmentStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
+import { sideChatOpening } from './sideChat';
+import { summarizeSession } from '@shared/agentOutcome';
 import { createPhaseTracker, RESPONDING, THINKING, WAITING } from './modelPhase';
 import { createRoundProbe, startRoundTimer, type RoundPhases } from './turnTiming';
 import { devLog } from '../devlog/DevLogSink';
@@ -644,6 +648,34 @@ interface RawRound {
   timing: ChatRoundTiming;
   usage?: ChatUsage;
   sent: ChatSentRound;
+}
+
+/**
+ * The project a child conversation of a Code session works in: its own worktree when `worktree`
+ * names one, else the parent's checkout. Shared by spawns and side chats.
+ *
+ * Copied field by field rather than spread, so a field added to ChatProject later has to be
+ * considered here: this object IS the child's access to the filesystem.
+ */
+function childProject(project: ChatProject, worktree: { branch: string; base: string } | null): ChatProject {
+  return {
+    directory: project.directory,
+    name: project.name,
+    // With a worktree to cut this is its BASE, as a toggle session records one, and
+    // `workspaceBranch` is the branch the card showed: ensureWorkspace cuts that from this.
+    branch: worktree?.base ?? project.branch,
+    // Local placement carries the parent's flag across unchanged: a child sharing a parent
+    // that is itself in a worktree IS in a worktree, and the chip must not say otherwise.
+    workspace: worktree !== null || project.workspace,
+    // Its own worktree branch, or the parent's when it shares the parent's checkout.
+    // Without it a re-resolution would cut a second branch rather than find this one.
+    ...(worktree ? { workspaceBranch: worktree.branch } : {}),
+    ...(!worktree && project.workspaceBranch ? { workspaceBranch: project.workspaceBranch } : {}),
+    // The repository folder until the worktree exists, which is what awaitsWorktree reads
+    // as pending - and a pending session starts no turn, so nothing runs here meanwhile.
+    workingDirectory: worktree ? project.directory : project.workingDirectory,
+    contextDirectories: [...project.contextDirectories],
+  };
 }
 
 /**
@@ -4624,6 +4656,62 @@ export class ChatService {
     }
   }
 
+  /**
+   * Branch a side chat off a conversation, about a passage the user highlighted in it.
+   *
+   * A child session like a spawn (same `origin`, so it nests under the parent and counts against
+   * the same depth cap), but started by the user and run by the user: no turn starts, nothing
+   * reports back to the parent, and the parent's transcript is untouched. It opens with one
+   * app-written message carrying the passage and an excerpt of the parent (see sideChatOpening),
+   * so the model has the context the user's first question assumes.
+   *
+   * A Code parent's child shares its checkout rather than cutting a worktree: a side chat is for
+   * talking about the work, and asking a question should never create a branch.
+   */
+  async startSideChat(request: StartSideChatRequest): Promise<StartSideChatResult> {
+    const { sessionId } = request;
+    if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
+    const selection = typeof request.selection === 'string' ? request.selection.trim() : '';
+    if (!selection) return { ok: false, error: 'Highlight some text to start a side chat about it.' };
+
+    return this.withWorkspaceBindings(async (): Promise<StartSideChatResult> => {
+      const parent = await this.deps.store.get(sessionId);
+      if (!parent) return { ok: false, error: 'That conversation no longer exists.' };
+      const depth = (parent.origin?.depth ?? 0) + 1;
+      if (depth > MAX_SPAWN_DEPTH) {
+        return {
+          ok: false,
+          error: `Conversations nest at most ${MAX_SPAWN_DEPTH} deep, and this one is at the limit.`,
+        };
+      }
+      const project = parent.mode === 'code' ? parent.project : undefined;
+      if (project) {
+        const unusable = await this.workspaceBindingReason(project.workingDirectory);
+        if (unusable) return { ok: false, error: unusable };
+      }
+
+      const opening = sideChatOpening(parent, selection);
+      const child = await this.deps.store.create(parent.model, {
+        mode: parent.mode,
+        ...(project ? { project: childProject(project, null) } : {}),
+        ...(parent.grantedDirectories?.length ? { grantedDirectories: [...parent.grantedDirectories] } : {}),
+        origin: { parentSessionId: parent.id, depth, seedPrompt: opening.selection },
+        // The same ceiling a spawn gets; see spawnSessionWithWorkspaceLease.
+        approvalMode: parent.approvalMode === 'full' ? 'auto' : parent.approvalMode,
+      });
+      const stored = await this.deps.store.appendMessage(child.id, {
+        id: randomUUID(),
+        role: 'user',
+        content: opening.content,
+        display: opening.display,
+        system: true,
+        sideChatOf: { sessionId: parent.id, title: parent.title },
+        createdAt: new Date().toISOString(),
+      });
+      return { ok: true, session: stored ? summarizeSession(stored) : child };
+    });
+  }
+
   /** Put a card whose session could not start back as it was, as the user edited it, to try again. */
   private async reopenSuggestion(sessionId: string, suggestionId: string): Promise<void> {
     const stored = await this.deps.store.changeSpawnSuggestions(sessionId, current =>
@@ -5254,26 +5342,7 @@ export class ChatService {
       const named = title?.trim();
       const child = await this.deps.store.create(parent.model, {
         ...(named ? { title: named } : {}),
-        // Copied field by field rather than spread, so a field added to ChatProject later has
-        // to be considered here: this object IS the child access to the filesystem.
-        project: {
-          directory: project.directory,
-          name: project.name,
-          // With a worktree to cut this is its BASE, as a toggle session records one, and
-          // `workspaceBranch` is the branch the card showed: ensureWorkspace cuts that from this.
-          branch: worktree?.base ?? project.branch,
-          // Local placement carries the parent's flag across unchanged: a child sharing a parent
-          // that is itself in a worktree IS in a worktree, and the chip must not say otherwise.
-          workspace: worktree !== null || project.workspace,
-          // Its own worktree branch, or the parent's when it shares the parent's checkout.
-          // Without it a re-resolution would cut a second branch rather than find this one.
-          ...(worktree ? { workspaceBranch: worktree.branch } : {}),
-          ...(!worktree && project.workspaceBranch ? { workspaceBranch: project.workspaceBranch } : {}),
-          // The repository folder until the worktree exists, which is what awaitsWorktree reads
-          // as pending - and a pending session starts no turn, so nothing runs here meanwhile.
-          workingDirectory: worktree ? project.directory : project.workingDirectory,
-          contextDirectories: [...project.contextDirectories],
-        },
+        project: childProject(project, worktree),
         // Copied with the context directories, for the same reason: a child is the parent's work
         // continued, and never holds a folder the parent did not.
         ...(parent.grantedDirectories?.length ? { grantedDirectories: [...parent.grantedDirectories] } : {}),

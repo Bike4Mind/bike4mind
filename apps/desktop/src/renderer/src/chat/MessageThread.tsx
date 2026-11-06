@@ -24,6 +24,7 @@ import { AttachmentRow } from './Attachments';
 import { ChevronIcon } from './icons';
 import { contentColumnSx, scrollingColumnHostSx } from './layout';
 import { ReplyMarkdown } from './markdown/ReplyMarkdown';
+import { SelectionActions } from './SelectionActions';
 import { automaticSummary, displayText, relaySummaryParts } from './relayRows';
 import { MentionedText, SessionLink } from './SessionLink';
 import { callsIn, roundsOf } from './replyRounds';
@@ -394,6 +395,7 @@ const AssistantTurn = memo(function AssistantTurn({
  * the model said. Both would be a lie about where the text came from.
  */
 const SystemTurn = memo(function SystemTurn({ message }: { message: ChatMessage }) {
+  if (message.sideChatOf) return <SideChatOpening message={message} from={message.sideChatOf} />;
   return (
     <Sheet
       variant="soft"
@@ -410,6 +412,30 @@ const SystemTurn = memo(function SystemTurn({ message }: { message: ChatMessage 
     </Sheet>
   );
 });
+
+/**
+ * The note a side chat opens with: which conversation it branched from, linked so the user can
+ * go back, and the passage it is about. The model's copy (`content`) also carries an excerpt of
+ * that conversation, which the user has already read there.
+ */
+function SideChatOpening({ message, from }: { message: ChatMessage; from: { sessionId: string; title: string } }) {
+  return (
+    <Sheet
+      variant="soft"
+      color="neutral"
+      sx={{ px: 2, py: 1.25, borderRadius: 'md' }}
+      data-testid="chat-message-side-chat-opening"
+    >
+      <Typography level="body-xs" textColor="text.tertiary" sx={{ fontWeight: 'lg', mb: 0.5 }}>
+        Side chat from{' '}
+        <SessionLink sessionId={from.sessionId} testId="side-chat-parent-link">
+          {from.title}
+        </SessionLink>
+      </Typography>
+      <ReplyMarkdown text={displayText(message)} />
+    </Sheet>
+  );
+}
 
 /**
  * A message another conversation sent here with session_send.
@@ -715,6 +741,8 @@ export function MessageThread({
   onContinue,
   status,
   footer,
+  onReplyToSelection,
+  onSideChatFromSelection,
 }: {
   messages: ChatMessage[];
   /** Needed to read attachment bytes back; they are stored per conversation. */
@@ -747,6 +775,10 @@ export function MessageThread({
    * what this conversation set going, so it reads as the last thing that happened in it.
    */
   footer?: ReactNode;
+  /** Quote text the user highlighted in one message into the composer. Both or neither. */
+  onReplyToSelection?: (text: string) => void;
+  /** Branch a side chat about text the user highlighted in one message. */
+  onSideChatFromSelection?: (text: string) => void;
 }) {
   const bottom = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
@@ -869,6 +901,9 @@ export function MessageThread({
             scrolled past rather than brought into view. */}
         <div ref={bottom} />
       </Stack>
+      {onReplyToSelection && onSideChatFromSelection && (
+        <SelectionActions container={host} onReply={onReplyToSelection} onSideChat={onSideChatFromSelection} />
+      )}
     </Box>
   );
 }

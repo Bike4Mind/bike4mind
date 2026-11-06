@@ -28,6 +28,7 @@ import type {
   ProjectInspection,
   SendMessageRequest,
   StartSpawnSuggestionRequest,
+  StartSideChatRequest,
   UpdateProjectRequest,
 } from '@shared/chat';
 import type { CookieImportRequest } from '@shared/browserCookies';
@@ -1124,6 +1125,9 @@ export function registerChat(
   );
   ipcMain.handle(IPC_CHANNELS.chatStartSpawnSuggestion, (_event, request: StartSpawnSuggestionRequest) =>
     service.startSpawnSuggestion(request)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatStartSideChat, (_event, request: StartSideChatRequest) =>
+    service.startSideChat(request)
   );
   ipcMain.handle(IPC_CHANNELS.chatDismissSpawnSuggestion, (_event, sessionId: string, suggestionId: string) =>
     service.dismissSpawnSuggestion(sessionId, suggestionId)
