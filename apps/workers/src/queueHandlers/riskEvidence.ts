@@ -156,6 +156,7 @@ export async function processRiskEvidenceRecord(
       ...(result.status === 'stored' ? summaryMetrics(result.summary, message.requestedAt) : [])
     );
     if (message.trigger === 'signup') {
+      // The two rules are independent, so one account can yield two detections (and two assessments).
       await checkStrongLinkSafely(message.userId, logger);
       await checkDeviceLinkSafely(message.userId, logger);
     }

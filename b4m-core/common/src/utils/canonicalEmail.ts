@@ -90,8 +90,8 @@ export function plusAddressTagOf(email: string): string | null {
 const RANDOM_TAG_MIN_LENGTH = 8;
 // Letter-digit switches a word with a year or a counter ("work2024", "shop2") stays under.
 const RANDOM_TAG_MIN_SWITCHES = 3;
-// A consonant run no English-like tag reaches ("newsletters" peaks at 3).
-const RANDOM_TAG_MIN_CONSONANT_RUN = 5;
+// A consonant run no English-like tag reaches ("strengths" peaks at 5).
+const RANDOM_TAG_MIN_CONSONANT_RUN = 6;
 
 /**
  * Whether a plus tag looks machine-generated: at least 8 letters and digits only, and either

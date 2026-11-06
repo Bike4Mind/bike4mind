@@ -1431,6 +1431,7 @@ export const UsagePatternSignalsConfigSchema = z.object({
       regularCadence: z.number().min(0).max(100).prefault(25),
       creditPolling: z.number().min(0).max(100).prefault(25),
       quickApiKey: z.number().min(0).max(100).prefault(25),
+      // Deliberately equal to the default reviewThreshold, so this signal alone flags needsReview.
       scriptedGrantDrain: z.number().min(0).max(100).prefault(50),
     })
     .prefault({}),

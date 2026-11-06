@@ -78,10 +78,19 @@ describe('isRandomLookingTag', () => {
     expect(isRandomLookingTag(tag)).toBe(true);
   });
 
-  it.each(['shopping', 'newsletters', 'work2024', 'amazon', 'netflix', 'github', 'receipts', 'job-hunt', 'a1b2c3'])(
-    'leaves a human tag alone (%s)',
-    tag => {
-      expect(isRandomLookingTag(tag)).toBe(false);
-    }
-  );
+  it.each([
+    'shopping',
+    'newsletters',
+    'work2024',
+    'amazon',
+    'netflix',
+    'github',
+    'receipts',
+    'job-hunt',
+    'a1b2c3',
+    'strengths',
+    'lengths',
+  ])('leaves a human tag alone (%s)', tag => {
+    expect(isRandomLookingTag(tag)).toBe(false);
+  });
 });
