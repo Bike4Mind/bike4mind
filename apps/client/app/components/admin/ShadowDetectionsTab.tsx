@@ -1,5 +1,18 @@
-import React, { useState } from 'react';
-import { Alert, Box, Button, FormControl, FormLabel, Radio, RadioGroup, Stack, Tooltip, Typography } from '@mui/joy';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Alert,
+  Box,
+  Button,
+  Checkbox,
+  FormControl,
+  FormLabel,
+  Radio,
+  RadioGroup,
+  Stack,
+  Switch,
+  Tooltip,
+  Typography,
+} from '@mui/joy';
 import { Link } from '@tanstack/react-router';
 import {
   SHADOW_DETECTION_LIST_LIMIT,
@@ -9,27 +22,35 @@ import {
   shadowDetectionPrecision,
   type AccountCampaignIgnoredReason,
   type AccountCampaignRelationship,
+  type ShadowDetectionAccount,
+  type ShadowDetectionAccountStatus,
   type ShadowDetectionAction,
+  type ShadowDetectionBurstPeers,
   type ShadowDetectionNetwork,
   type ShadowDetectionPayment,
   type ShadowDetectionSummaryRow,
   type ShadowDetectionVerdict,
+  type ShadowDetectionVerdictSource,
 } from '@bike4mind/common';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import {
   ADMIN_REASON_PRESETS,
   ActionDialog,
   AdminPageHeader,
+  BulkActionBar,
   DataTable,
   EmptyState,
   FilterBar,
+  Kbd,
   StatStrip,
   StatTile,
   StatusChip,
   formatUtc,
   relativeTime,
   useAdminListUrlState,
+  type AdminSelection,
   type DataColumn,
+  type DataTableGroup,
 } from './shared';
 import {
   ALL_VERDICTS_FILTER,
@@ -39,9 +60,11 @@ import {
   type VerdictFilter,
 } from './shadowDetectionSearch';
 import {
+  useShadowDetectionBulkVerdict,
   useShadowDetectionVerdict,
   useShadowDetections,
   type CampaignGroupRow,
+  type ShadowDetectionBulkVerdictResult,
   type ShadowDetectionRow,
 } from '@client/app/hooks/data/shadowDetections';
 import { ShadowDetectionAssessmentPanel } from './ShadowDetectionAssessmentPanel';
@@ -87,8 +110,75 @@ const VERDICT_FILTER_LABELS: Record<VerdictFilter, string> = {
   insufficient_evidence: VERDICT_DISPLAY.insufficient_evidence.label,
 };
 
+const ACCOUNT_STATUS_DISPLAY: Record<ShadowDetectionAccountStatus, { label: string; tone: AdminStatusTone }> = {
+  active: { label: 'Active', tone: 'good' },
+  suspended: { label: 'Suspended', tone: 'bad' },
+  deleted: { label: 'Deleted', tone: 'neutral' },
+  missing: { label: 'Not found', tone: 'neutral' },
+};
+
+const VERDICT_SOURCE_LABELS: Record<Exclude<ShadowDetectionVerdictSource, 'review'>, string> = {
+  suspension: 'Recorded when the reviewer suspended the account',
+  reinstatement: 'Recorded when the reviewer reinstated the account',
+};
+
 // Users shown per row before collapsing into "+N"; the verdict dialog links every one.
 const VISIBLE_USER_IDS = 2;
+
+/**
+ * What the list response says beside the detections: each named account as it is now, the burst peers
+ * of signupNetworkBurst rows, and for each row the other unreviewed listed detections naming one of its
+ * accounts (so one verdict can settle them together).
+ */
+export type DetectionContext = {
+  accounts: ReadonlyMap<string, ShadowDetectionAccount>;
+  burstPeers: ReadonlyMap<string, ShadowDetectionBurstPeers>;
+  related: ReadonlyMap<string, readonly ShadowDetectionRow[]>;
+};
+
+const EMPTY_RELATED: readonly ShadowDetectionRow[] = [];
+
+/** Other unreviewed rows that name one of each row's accounts, in list order. */
+export const relatedUnreviewed = (rows: readonly ShadowDetectionRow[]): Map<string, ShadowDetectionRow[]> => {
+  const byUser = new Map<string, ShadowDetectionRow[]>();
+  for (const row of rows) {
+    if (row.verdict) continue;
+    for (const userId of row.userIds) byUser.set(userId, [...(byUser.get(userId) ?? []), row]);
+  }
+  const related = new Map<string, ShadowDetectionRow[]>();
+  for (const row of rows) {
+    const others = new Map<string, ShadowDetectionRow>();
+    for (const userId of row.userIds) {
+      for (const other of byUser.get(userId) ?? []) if (other.id !== row.id) others.set(other.id, other);
+    }
+    if (others.size > 0) related.set(row.id, [...others.values()]);
+  }
+  return related;
+};
+
+/**
+ * Accounts named by two or more listed detections, each with its detections, in list order. A row
+ * joins the first such account it names, so every row is in at most one group.
+ */
+export const groupByAccount = (
+  rows: readonly ShadowDetectionRow[]
+): { userId: string; rows: ShadowDetectionRow[] }[] => {
+  const counts = new Map<string, number>();
+  for (const row of rows) for (const userId of new Set(row.userIds)) counts.set(userId, (counts.get(userId) ?? 0) + 1);
+  const groups = new Map<string, ShadowDetectionRow[]>();
+  for (const row of rows) {
+    const userId = row.userIds.find(id => (counts.get(id) ?? 0) > 1);
+    if (userId) groups.set(userId, [...(groups.get(userId) ?? []), row]);
+  }
+  return [...groups.entries()]
+    .filter(([, members]) => members.length > 1)
+    .map(([userId, members]) => ({ userId, rows: members }));
+};
+
+export const formatAccountFacts = (account: ShadowDetectionAccount): string =>
+  [account.signupMethod, account.currentCredits === null ? null : `${account.currentCredits.toLocaleString()} credits`]
+    .filter((part): part is string => !!part)
+    .join(' / ');
 
 const muted = { color: 'admin.inkMuted' } as const;
 
@@ -174,12 +264,44 @@ const UserLink: React.FC<{ userId: string; testId: string }> = ({ userId, testId
   </Link>
 );
 
-const Actor: React.FC<{ row: ShadowDetectionRow }> = ({ row }) => {
-  const hidden = row.userIds.slice(VISIBLE_USER_IDS);
+/** An account link with its status, signup method and balance as they are now. */
+const AccountLine: React.FC<{
+  userId: string;
+  account: ShadowDetectionAccount | undefined;
+  linkTestId: string;
+  testId: string;
+}> = ({ userId, account, linkTestId, testId }) => (
+  <Stack direction="row" gap={0.75} alignItems="center" flexWrap="wrap" sx={{ minWidth: 0 }} data-testid={testId}>
+    <UserLink userId={userId} testId={linkTestId} />
+    {account && (
+      <StatusChip
+        tone={ACCOUNT_STATUS_DISPLAY[account.status].tone}
+        label={ACCOUNT_STATUS_DISPLAY[account.status].label}
+        data-testid={`${testId}-status`}
+      />
+    )}
+    {account && formatAccountFacts(account) && (
+      <Typography level="body-xs" noWrap sx={muted} data-testid={`${testId}-facts`}>
+        {formatAccountFacts(account)}
+      </Typography>
+    )}
+  </Stack>
+);
+
+const peerCount = (peers: ShadowDetectionBurstPeers) =>
+  `${peers.userIds.length.toLocaleString()}${peers.truncated ? '+' : ''}`;
+
+/** The burst's other signups, collapsed after VISIBLE_USER_IDS; the dialog lists them all. */
+const BurstPeersSummary: React.FC<{ rowId: string; peers: ShadowDetectionBurstPeers }> = ({ rowId, peers }) => {
+  const hidden = peers.userIds.slice(VISIBLE_USER_IDS);
   return (
-    <Stack gap={0.25} sx={{ minWidth: 0 }}>
-      {row.userIds.slice(0, VISIBLE_USER_IDS).map(userId => (
-        <UserLink key={userId} userId={userId} testId={`shadow-detection-user-link-${row.id}-${userId}`} />
+    <Stack gap={0.25} sx={{ minWidth: 0 }} data-testid={`shadow-detection-burst-peers-${rowId}`}>
+      <Typography level="body-xs" sx={muted}>
+        Same IP, same window: {peerCount(peers)} other{' '}
+        {peers.userIds.length === 1 && !peers.truncated ? 'account' : 'accounts'}
+      </Typography>
+      {peers.userIds.slice(0, VISIBLE_USER_IDS).map(userId => (
+        <UserLink key={userId} userId={userId} testId={`shadow-detection-burst-peer-link-${rowId}-${userId}`} />
       ))}
       {hidden.length > 0 && (
         <Tooltip title={hidden.join(', ')}>
@@ -188,6 +310,42 @@ const Actor: React.FC<{ row: ShadowDetectionRow }> = ({ row }) => {
           </Typography>
         </Tooltip>
       )}
+    </Stack>
+  );
+};
+
+const Actor: React.FC<{ row: ShadowDetectionRow; context: DetectionContext }> = ({ row, context }) => {
+  const hidden = row.userIds.slice(VISIBLE_USER_IDS);
+  const related = context.related.get(row.id) ?? EMPTY_RELATED;
+  const peers = context.burstPeers.get(row.id);
+  return (
+    <Stack gap={0.25} sx={{ minWidth: 0 }}>
+      {row.userIds.slice(0, VISIBLE_USER_IDS).map(userId => (
+        <AccountLine
+          key={userId}
+          userId={userId}
+          account={context.accounts.get(userId)}
+          linkTestId={`shadow-detection-user-link-${row.id}-${userId}`}
+          testId={`shadow-detection-account-${row.id}-${userId}`}
+        />
+      ))}
+      {hidden.length > 0 && (
+        <Tooltip title={hidden.join(', ')}>
+          <Typography level="body-xs" tabIndex={0} sx={muted}>
+            +{hidden.length.toLocaleString()} more
+          </Typography>
+        </Tooltip>
+      )}
+      {related.length > 0 && (
+        <Box>
+          <StatusChip
+            tone="warn"
+            label={`${(related.length + 1).toLocaleString()} open detections`}
+            data-testid={`shadow-detection-related-${row.id}`}
+          />
+        </Box>
+      )}
+      {peers && peers.userIds.length > 0 && <BurstPeersSummary rowId={row.id} peers={peers} />}
       {row.network && (
         <Typography level="body-xs" noWrap title={formatNetwork(row.network)} sx={muted}>
           {formatNetwork(row.network)}
@@ -265,6 +423,11 @@ const VerdictHistory: React.FC<{ row: ShadowDetectionRow; now: number }> = ({ ro
             <Typography level="body-xs" fontFamily="code" sx={muted}>
               Reviewer {entry.reviewerId}
             </Typography>
+            {entry.source && entry.source !== 'review' && (
+              <Typography level="body-xs" sx={muted} data-testid="shadow-detection-history-source">
+                {VERDICT_SOURCE_LABELS[entry.source]}
+              </Typography>
+            )}
           </Stack>
         ))
       )}
@@ -328,7 +491,11 @@ const countOf = (count: number, noun: string) => `${count.toLocaleString()} ${no
  * A campaign group's accounts with how each is linked, then the shared values that linked them and the
  * ones discounted as common. Transitive members are context, linked to the group through one member.
  */
-const CampaignGroupEvidence: React.FC<{ group: CampaignGroupRow; now: number }> = ({ group, now }) => (
+const CampaignGroupEvidence: React.FC<{
+  group: CampaignGroupRow;
+  now: number;
+  accounts: DetectionContext['accounts'];
+}> = ({ group, now, accounts }) => (
   <Stack gap={1} data-testid="shadow-detection-campaign-group" sx={{ minWidth: 0 }}>
     <Typography level="body-xs" sx={muted}>
       Accounts ({group.totals.direct.toLocaleString()} direct, {group.totals.transitive.toLocaleString()} transitive,{' '}
@@ -340,7 +507,12 @@ const CampaignGroupEvidence: React.FC<{ group: CampaignGroupRow; now: number }> 
       {group.members.map(member => (
         <Box component="li" key={member.userId} data-testid={`shadow-detection-campaign-member-${member.userId}`}>
           <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
-            <UserLink userId={member.userId} testId={`shadow-detection-dialog-user-link-${member.userId}`} />
+            <AccountLine
+              userId={member.userId}
+              account={accounts.get(member.userId)}
+              linkTestId={`shadow-detection-dialog-user-link-${member.userId}`}
+              testId={`shadow-detection-dialog-account-${member.userId}`}
+            />
             <Box component="span" data-testid={`shadow-detection-campaign-membership-${member.userId}`}>
               <StatusChip
                 tone={member.membership === 'direct' ? 'warn' : 'neutral'}
@@ -411,10 +583,14 @@ const CampaignGroupEvidence: React.FC<{ group: CampaignGroupRow; now: number }> 
 );
 
 /** Every account and the network the detection names, so each profile is one click from grading. */
-const DialogActors: React.FC<{ row: ShadowDetectionRow; now: number }> = ({ row, now }) =>
-  row.group ? (
-    <CampaignGroupEvidence group={row.group} now={now} />
-  ) : (
+const DialogActors: React.FC<{ row: ShadowDetectionRow; now: number; context: DetectionContext }> = ({
+  row,
+  now,
+  context,
+}) => {
+  if (row.group) return <CampaignGroupEvidence group={row.group} now={now} accounts={context.accounts} />;
+  const peers = context.burstPeers.get(row.id);
+  return (
     <Stack gap={0.25} data-testid="shadow-detection-dialog-actors" sx={{ minWidth: 0 }}>
       <Typography level="body-xs" sx={muted}>
         {row.userIds.length === 1 ? 'Account' : `Accounts (${row.userIds.length.toLocaleString()})`}
@@ -423,7 +599,13 @@ const DialogActors: React.FC<{ row: ShadowDetectionRow; now: number }> = ({ row,
         <Dash />
       ) : (
         row.userIds.map(userId => (
-          <UserLink key={userId} userId={userId} testId={`shadow-detection-dialog-user-link-${userId}`} />
+          <AccountLine
+            key={userId}
+            userId={userId}
+            account={context.accounts.get(userId)}
+            linkTestId={`shadow-detection-dialog-user-link-${userId}`}
+            testId={`shadow-detection-dialog-account-${userId}`}
+          />
         ))
       )}
       {row.network && (
@@ -432,48 +614,190 @@ const DialogActors: React.FC<{ row: ShadowDetectionRow; now: number }> = ({ row,
         </Typography>
       )}
       {row.payment && <PaymentEvidence payment={row.payment} />}
+      {peers && peers.userIds.length > 0 && (
+        <Stack gap={0.25} data-testid="shadow-detection-dialog-burst-peers">
+          <Typography level="body-xs" sx={muted}>
+            Other signups from this IP in the window ({peerCount(peers)})
+          </Typography>
+          {peers.userIds.map(userId => (
+            <AccountLine
+              key={userId}
+              userId={userId}
+              account={context.accounts.get(userId)}
+              linkTestId={`shadow-detection-dialog-user-link-${userId}`}
+              testId={`shadow-detection-dialog-account-${userId}`}
+            />
+          ))}
+          {peers.truncated && (
+            <Typography level="body-xs" sx={muted}>
+              More accounts signed up in this window than are listed.
+            </Typography>
+          )}
+        </Stack>
+      )}
     </Stack>
   );
+};
+
+// Fields where a digit is text, not a shortcut; radios and checkboxes still take the 1-4 keys.
+const TEXT_ENTRY_SELECTOR =
+  'textarea, input:not([type="radio"]):not([type="checkbox"]), select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"]';
+
+/** Keys 1-4 pick the verdicts in SHADOW_DETECTION_VERDICTS order while a verdict dialog is open. */
+const useVerdictShortcuts = (onPick: (verdict: ShadowDetectionVerdict) => void) => {
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || event.isComposing) return;
+      if (event.altKey || event.metaKey || event.ctrlKey) return;
+      if (event.target instanceof Element && event.target.closest(TEXT_ENTRY_SELECTOR)) return;
+      const option = /^[1-9]$/.test(event.key) ? SHADOW_DETECTION_VERDICTS[Number(event.key) - 1] : undefined;
+      if (!option) return;
+      event.preventDefault();
+      onPick(option);
+    };
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
+  }, [onPick]);
+};
+
+const VerdictPicker: React.FC<{
+  value: ShadowDetectionVerdict | null;
+  onChange: (verdict: ShadowDetectionVerdict) => void;
+}> = ({ value, onChange }) => {
+  useVerdictShortcuts(onChange);
+  return (
+    <FormControl>
+      <FormLabel>Verdict</FormLabel>
+      <RadioGroup
+        name="shadow-detection-verdict"
+        value={value ?? ''}
+        onChange={event => onChange(event.target.value as ShadowDetectionVerdict)}
+      >
+        {SHADOW_DETECTION_VERDICTS.map((option, index) => (
+          <Radio
+            key={option}
+            value={option}
+            label={
+              <Stack direction="row" gap={1} alignItems="center" component="span">
+                <span>{VERDICT_DISPLAY[option].label}</span>
+                <Kbd>{index + 1}</Kbd>
+              </Stack>
+            }
+            slotProps={{ input: { 'data-testid': `shadow-detection-verdict-option-${option}` } }}
+          />
+        ))}
+      </RadioGroup>
+    </FormControl>
+  );
+};
+
+/** A bulk result's leftovers, said once on the page; null when every detection was graded. */
+export const bulkResultNotice = (result: ShadowDetectionBulkVerdictResult): string | null => {
+  const parts = [
+    result.conflicts.length > 0 &&
+      `${countOf(result.conflicts.length, 'detection')} changed since this page loaded and kept their verdict`,
+    result.notFound.length > 0 && `${countOf(result.notFound.length, 'detection')} no longer exist`,
+  ].filter((part): part is string => !!part);
+  if (parts.length === 0) return null;
+  return `Graded ${countOf(result.updated.length, 'detection')}. ${parts.join('; ')}. Review them again.`;
+};
 
 type VerdictDialogProps = {
   row: ShadowDetectionRow;
   now: number;
+  context: DetectionContext;
   onClose: () => void;
   onRowChange: (row: ShadowDetectionRow) => void;
+  /** Present while another unreviewed detection follows this one: opens it after a successful grade. */
+  onNext?: (gradedIds: readonly string[]) => void;
+  onBulkResult: (result: ShadowDetectionBulkVerdictResult) => void;
 };
 
-const VerdictDialog: React.FC<VerdictDialogProps> = ({ row, now, onClose, onRowChange }) => {
-  const mutation = useShadowDetectionVerdict();
-  const [verdict, setVerdict] = useState<ShadowDetectionVerdict | null>(null);
-  // The server's explanation of a stale verdict, or null when there is no conflict to show.
-  const [conflict, setConflict] = useState<string | null>(null);
-  const title = row.verdict ? 'Change verdict' : 'Record verdict';
+// Choices are keyed by the row they were made for, so "Save and next" starts the next row blank while
+// the reason draft (inside ActionDialog) carries over.
+type RowChoice<T> = { rowId: string; value: T } | null;
 
-  const submit = async (reason: string) => {
-    if (!verdict) return;
-    setConflict(null);
-    const result = await mutation.mutateAsync({ id: row.id, expectedRevision: row.revision, verdict, reason });
-    if (result.status === 'conflict') {
-      onRowChange(result.item);
-      setConflict(result.message ?? CONFLICT_FALLBACK_MESSAGE);
-      return;
+const VerdictDialog: React.FC<VerdictDialogProps> = ({
+  row,
+  now,
+  context,
+  onClose,
+  onRowChange,
+  onNext,
+  onBulkResult,
+}) => {
+  const single = useShadowDetectionVerdict();
+  const bulk = useShadowDetectionBulkVerdict();
+  const [verdictChoice, setVerdictChoice] = useState<RowChoice<ShadowDetectionVerdict>>(null);
+  const [skipRelatedChoice, setSkipRelatedChoice] = useState<RowChoice<boolean>>(null);
+  // The server's explanation of a stale verdict, or null when there is no conflict to show.
+  const [conflictChoice, setConflictChoice] = useState<RowChoice<string>>(null);
+  const forRow = <T,>(choice: RowChoice<T>): T | null => (choice?.rowId === row.id ? choice.value : null);
+  const verdict = forRow(verdictChoice);
+  const conflict = forRow(conflictChoice);
+  const related = context.related.get(row.id) ?? EMPTY_RELATED;
+  const applyRelated = related.length > 0 && forRow(skipRelatedChoice) !== true;
+  const pickVerdict = useCallback(
+    (value: ShadowDetectionVerdict) => setVerdictChoice({ rowId: row.id, value }),
+    [row.id]
+  );
+  const title = row.verdict ? 'Change verdict' : 'Record verdict';
+  const pending = single.isPending || bulk.isPending;
+  const error = single.error ?? bulk.error;
+
+  /** Records the verdict; the ids it graded, or null when this row conflicted and must be re-read. */
+  const record = async (reason: string): Promise<string[] | null> => {
+    if (!verdict) return null;
+    setConflictChoice(null);
+    if (!applyRelated) {
+      const result = await single.mutateAsync({ id: row.id, expectedRevision: row.revision, verdict, reason });
+      if (result.status === 'conflict') {
+        onRowChange(result.item);
+        setConflictChoice({ rowId: row.id, value: result.message ?? CONFLICT_FALLBACK_MESSAGE });
+        return null;
+      }
+      return [row.id];
     }
-    onClose();
+    const targets = [row, ...related];
+    const result = await bulk.mutateAsync({
+      items: targets.map(target => ({ id: target.id, expectedRevision: target.revision })),
+      verdict,
+      reason,
+    });
+    const ownConflict = result.conflicts.find(item => item.id === row.id);
+    if (ownConflict) {
+      onRowChange(ownConflict);
+      setConflictChoice({ rowId: row.id, value: CONFLICT_FALLBACK_MESSAGE });
+      return null;
+    }
+    onBulkResult(result);
+    return result.updated.map(item => item.id);
   };
 
   return (
     <ActionDialog
       open
       onClose={() => {
-        if (!mutation.isPending) onClose();
+        if (!pending) onClose();
       }}
       title={title}
       description="Grading measures the detector; it changes nothing on the account. There is no undo: to correct a verdict, record another one. Every verdict stays in the history."
       reasonPresets={ADMIN_REASON_PRESETS.shadowDetectionVerdict}
       confirmLabel={verdict ? `Record ${VERDICT_DISPLAY[verdict].label.toLowerCase()}` : 'Record verdict'}
-      blockedReason={verdict ? null : 'Pick a verdict.'}
-      pending={mutation.isPending}
-      onConfirm={submit}
+      blockedReason={verdict ? null : 'Pick a verdict (keys 1-4).'}
+      pending={pending}
+      onConfirm={async reason => {
+        if (await record(reason)) onClose();
+      }}
+      secondaryAction={
+        onNext && {
+          label: 'Save and next',
+          onConfirm: async reason => {
+            const graded = await record(reason);
+            if (graded) onNext(graded);
+          },
+        }
+      }
       data-testid="shadow-detection-verdict-dialog"
     >
       <Stack gap={0.5}>
@@ -487,39 +811,75 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({ row, now, onClose, onRowC
           <VerdictChip verdict={row.verdict} testId="shadow-detection-dialog-current-verdict" />
         </Stack>
       </Stack>
-      <DialogActors row={row} now={now} />
+      <DialogActors row={row} now={now} context={context} />
       {conflict && (
         <Alert color="warning" data-testid="shadow-detection-verdict-conflict">
           {conflict} Its current verdict and history are shown below.
         </Alert>
       )}
-      {mutation.error && (
+      {error && (
         <Alert color="danger" data-testid="shadow-detection-verdict-error">
-          {getErrorMessage(mutation.error)}
+          {getErrorMessage(error)}
         </Alert>
       )}
-      <FormControl>
-        <FormLabel>Verdict</FormLabel>
-        <RadioGroup
-          name="shadow-detection-verdict"
-          value={verdict ?? ''}
-          onChange={event => setVerdict(event.target.value as ShadowDetectionVerdict)}
-        >
-          {SHADOW_DETECTION_VERDICTS.map(option => (
-            <Radio
-              key={option}
-              value={option}
-              label={VERDICT_DISPLAY[option].label}
-              slotProps={{ input: { 'data-testid': `shadow-detection-verdict-option-${option}` } }}
-            />
-          ))}
-        </RadioGroup>
-      </FormControl>
+      <VerdictPicker value={verdict} onChange={pickVerdict} />
+      {related.length > 0 && (
+        <Checkbox
+          checked={applyRelated}
+          onChange={event => setSkipRelatedChoice({ rowId: row.id, value: !event.target.checked })}
+          label={`Also record it on the ${countOf(related.length, 'other unreviewed detection')} naming this account`}
+          slotProps={{ input: { 'data-testid': 'shadow-detection-apply-related-checkbox' } }}
+        />
+      )}
       <SignalList row={row} />
       {!SELF_ASSESSED_SHADOW_DETECTORS.includes(row.detector) && (
         <ShadowDetectionAssessmentPanel detectionId={row.id} enabled />
       )}
       <VerdictHistory row={row} now={now} />
+    </ActionDialog>
+  );
+};
+
+/** One verdict and one reason for the selected detections. */
+const BulkVerdictDialog: React.FC<{
+  rows: readonly ShadowDetectionRow[];
+  onClose: () => void;
+  onDone: (result: ShadowDetectionBulkVerdictResult) => void;
+}> = ({ rows, onClose, onDone }) => {
+  const bulk = useShadowDetectionBulkVerdict();
+  const [verdict, setVerdict] = useState<ShadowDetectionVerdict | null>(null);
+  const graded = rows.filter(row => row.verdict).length;
+  return (
+    <ActionDialog
+      open
+      onClose={() => {
+        if (!bulk.isPending) onClose();
+      }}
+      title={`Record verdict on ${countOf(rows.length, 'detection')}`}
+      description={`One verdict and one reason for every selected detection. It changes nothing on the accounts.${
+        graded > 0 ? ` ${countOf(graded, 'selected detection')} already graded get this as a new verdict.` : ''
+      } Detections graded by someone else since this page loaded are left alone.`}
+      reasonPresets={ADMIN_REASON_PRESETS.shadowDetectionVerdict}
+      confirmLabel={verdict ? `Record ${VERDICT_DISPLAY[verdict].label.toLowerCase()}` : 'Record verdict'}
+      blockedReason={verdict ? null : 'Pick a verdict (keys 1-4).'}
+      pending={bulk.isPending}
+      onConfirm={async reason => {
+        if (!verdict) return;
+        const result = await bulk.mutateAsync({
+          items: rows.map(row => ({ id: row.id, expectedRevision: row.revision })),
+          verdict,
+          reason,
+        });
+        onDone(result);
+      }}
+      data-testid="shadow-detection-bulk-verdict-dialog"
+    >
+      {bulk.error && (
+        <Alert color="danger" data-testid="shadow-detection-bulk-verdict-error">
+          {getErrorMessage(bulk.error)}
+        </Alert>
+      )}
+      <VerdictPicker value={verdict} onChange={setVerdict} />
     </ActionDialog>
   );
 };
@@ -533,9 +893,62 @@ export const ShadowDetectionsTab: React.FC = () => {
   const { detector, verdict } = readShadowDetectionFilters(view.filters);
   const detections = useShadowDetections(toListQuery(detector, verdict));
   const [grading, setGrading] = useState<ShadowDetectionRow | null>(null);
+  const [selection, setSelection] = useState<AdminSelection>({ mode: 'explicit', ids: [] });
+  const [bulkGrading, setBulkGrading] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [groupAccounts, setGroupAccounts] = useState(false);
   const [now] = useState(() => Date.now());
 
-  const rows = detections.data?.data ?? [];
+  const listed = detections.data?.data;
+  const accounts = detections.data?.accounts;
+  const burstPeers = detections.data?.burstPeers;
+  const context = useMemo<DetectionContext>(
+    () => ({
+      accounts: new Map((accounts ?? []).map(account => [account.userId, account])),
+      burstPeers: new Map((burstPeers ?? []).map(peers => [peers.detectionId, peers])),
+      related: relatedUnreviewed(listed ?? []),
+    }),
+    [listed, accounts, burstPeers]
+  );
+  const accountGroups = useMemo(() => (groupAccounts ? groupByAccount(listed ?? []) : []), [groupAccounts, listed]);
+  // Grouped rows sit together so a group never splits across the table's pages.
+  const rows = useMemo(() => {
+    const all = listed ?? [];
+    if (accountGroups.length === 0) return all;
+    const grouped = accountGroups.flatMap(group => group.rows);
+    const groupedIds = new Set(grouped.map(row => row.id));
+    return [...grouped, ...all.filter(row => !groupedIds.has(row.id))];
+  }, [listed, accountGroups]);
+  const tableGroups: DataTableGroup[] | undefined = groupAccounts
+    ? accountGroups.map(group => ({
+        id: group.userId,
+        rowIds: group.rows.map(row => row.id),
+        header: (
+          <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+            <AccountLine
+              userId={group.userId}
+              account={context.accounts.get(group.userId)}
+              linkTestId={`shadow-detection-group-user-link-${group.userId}`}
+              testId={`shadow-detection-group-account-${group.userId}`}
+            />
+            <Typography level="body-xs" sx={muted}>
+              {countOf(group.rows.length, 'detection')}
+            </Typography>
+          </Stack>
+        ),
+      }))
+    : undefined;
+  const selectedRows = selection.mode === 'allMatching' ? rows : rows.filter(row => selection.ids.includes(row.id));
+
+  /** The next unreviewed row after `current` in table order, skipping the ones just graded. */
+  const nextUnreviewed = (current: ShadowDetectionRow, graded: readonly string[]) => {
+    const skip = new Set([current.id, ...graded]);
+    const index = rows.findIndex(row => row.id === current.id);
+    return [...rows.slice(index + 1), ...rows.slice(0, Math.max(index, 0))].find(
+      row => !row.verdict && !skip.has(row.id)
+    );
+  };
+  const nextAfterGrading = grading ? nextUnreviewed(grading, []) : undefined;
   const summary = (detections.data?.summary ?? [])
     .filter(row => !detector || row.detector === detector)
     .sort((a, b) => a.detector.localeCompare(b.detector) || b.policyVersion - a.policyVersion);
@@ -586,7 +999,7 @@ export const ShadowDetectionsTab: React.FC = () => {
       sortValue: row => ACTION_DISPLAY[row.wouldAction].label,
       width: '7rem',
     },
-    { id: 'actor', label: 'Actor', render: row => <Actor row={row} />, width: '16rem' },
+    { id: 'actor', label: 'Actor', render: row => <Actor row={row} context={context} />, width: '20rem' },
     {
       id: 'verdict',
       label: 'Verdict',
@@ -646,6 +1059,25 @@ export const ShadowDetectionsTab: React.FC = () => {
           older ones.
         </Alert>
       )}
+      {notice && (
+        <Alert
+          color="warning"
+          data-testid="shadow-detection-bulk-notice"
+          endDecorator={
+            <Button
+              size="sm"
+              variant="plain"
+              color="neutral"
+              onClick={() => setNotice(null)}
+              data-testid="shadow-detection-bulk-notice-dismiss-btn"
+            >
+              Dismiss
+            </Button>
+          }
+        >
+          {notice}
+        </Alert>
+      )}
       <FilterBar
         search={false}
         state={{
@@ -676,12 +1108,22 @@ export const ShadowDetectionsTab: React.FC = () => {
           },
         ]}
       />
+      <Switch
+        checked={groupAccounts}
+        onChange={event => setGroupAccounts(event.target.checked)}
+        endDecorator="Group detections by account"
+        slotProps={{ input: { 'data-testid': 'shadow-detection-group-toggle' } }}
+        sx={{ alignSelf: 'flex-start', color: 'admin.ink' }}
+      />
       <DataTable
         rows={rows}
         columns={columns}
         label="Shadow detections"
         getRowId={row => row.id}
-        pageResetKey={JSON.stringify([detector, verdict])}
+        selection={selection}
+        onSelectionChange={setSelection}
+        groups={tableGroups}
+        pageResetKey={JSON.stringify([detector, verdict, groupAccounts])}
         testId="shadow-detection-table"
         rowTestId={row => `shadow-detection-row-${row.id}`}
         loading={detections.isPending}
@@ -713,7 +1155,38 @@ export const ShadowDetectionsTab: React.FC = () => {
           />
         }
       />
-      {grading && <VerdictDialog row={grading} now={now} onClose={() => setGrading(null)} onRowChange={setGrading} />}
+      <BulkActionBar
+        selection={selection}
+        totalMatching={rows.length}
+        onSelectAllMatching={() => setSelection({ mode: 'allMatching' })}
+        onClear={() => setSelection({ mode: 'explicit', ids: [] })}
+      >
+        <Button size="sm" onClick={() => setBulkGrading(true)} data-testid="shadow-detection-bulk-grade-btn">
+          Record verdict
+        </Button>
+      </BulkActionBar>
+      {grading && (
+        <VerdictDialog
+          row={grading}
+          now={now}
+          context={context}
+          onClose={() => setGrading(null)}
+          onRowChange={setGrading}
+          onNext={nextAfterGrading ? graded => setGrading(nextUnreviewed(grading, graded) ?? null) : undefined}
+          onBulkResult={result => setNotice(bulkResultNotice(result))}
+        />
+      )}
+      {bulkGrading && selectedRows.length > 0 && (
+        <BulkVerdictDialog
+          rows={selectedRows}
+          onClose={() => setBulkGrading(false)}
+          onDone={result => {
+            setBulkGrading(false);
+            setSelection({ mode: 'explicit', ids: [] });
+            setNotice(bulkResultNotice(result));
+          }}
+        />
+      )}
     </Stack>
   );
 };
