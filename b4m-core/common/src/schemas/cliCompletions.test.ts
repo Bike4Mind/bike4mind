@@ -6,6 +6,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   COMPLETION_SSE_ERROR_CODES,
+  CompletionMessageSchema,
+  KNOWN_COMPLETION_CONTENT_BLOCK_TYPES,
   CompletionRequestSchema,
   CompletionSseErrorEventSchema,
   CompletionStreamEventSchema,
@@ -607,5 +609,110 @@ describe('isToolChangeMessage', () => {
     expect(isToolChangeMessage({ role: 'user', content })).toBe(false);
     expect(isToolChangeMessage({ role: 'system', content: 'be brief' })).toBe(false);
     expect(isToolChangeMessage({ role: 'system', content: [{ type: 'text', text: 'be brief' }] })).toBe(false);
+  });
+});
+
+describe('CompletionMessageSchema content blocks', () => {
+  const parse = (content: unknown) => CompletionMessageSchema.safeParse({ role: 'user', content });
+
+  const valid: Array<[string, unknown]> = [
+    ['a plain string', 'hi'],
+    ['a bare string part', ['hi']],
+    ['text', { type: 'text', text: 'hi' }],
+    ['text with cache_control', { type: 'text', text: 'hi', cache_control: { type: 'ephemeral' } }],
+    ['input_text', { type: 'input_text', text: 'hi' }],
+    ['output_text', { type: 'output_text', text: 'hi' }],
+    ['OpenAI image_url object', { type: 'image_url', image_url: { url: 'https://x/a.png', detail: 'low' } }],
+    ['OpenAI image_url string', { type: 'image_url', image_url: 'https://x/a.png' }],
+    ['Responses input_image', { type: 'input_image', image_url: 'data:image/png;base64,AAAA' }],
+    ['Anthropic base64 image', { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }],
+    ['Anthropic url image', { type: 'image', source: { type: 'url', url: 'https://x/a.png' } }],
+    ['an Anthropic image carrying image_url', { type: 'image', image_url: 'https://x/a.png' }],
+    [
+      'an input_image carrying an Anthropic source',
+      { type: 'input_image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
+    ],
+    ['tool_use', { type: 'tool_use', id: 't1', name: 'add', input: { a: 1 } }],
+    ['tool_result string', { type: 'tool_result', tool_use_id: 't1', content: '3' }],
+    ['tool_result blocks', { type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: '3' }] }],
+    ['thinking', { type: 'thinking', thinking: 'hmm', signature: 'sig' }],
+    ['redacted_thinking', { type: 'redacted_thinking', data: 'opaque' }],
+    ['server_tool_use', { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: {} }],
+    ['tool_search_tool_result', { type: 'tool_search_tool_result', tool_use_id: 'srvtoolu_1', content: {} }],
+    ['tool_addition', { type: 'tool_addition', tool: { type: 'tool_reference', name: 'get_weather' } }],
+    ['a block type we do not model', { type: 'document', source: { type: 'text', data: 'x' } }],
+  ];
+
+  it.each(valid)('accepts %s', (_name, block) => {
+    expect(parse(typeof block === 'string' ? block : Array.isArray(block) ? block : [block]).success).toBe(true);
+  });
+
+  it('keeps extra keys on a known block', () => {
+    const block = { type: 'text', text: 'hi', cache_control: { type: 'ephemeral' } };
+    expect(CompletionMessageSchema.parse({ role: 'user', content: [block] }).content).toEqual([block]);
+  });
+
+  it('keeps every key of an unknown block', () => {
+    const block = { type: 'document', anything: { nested: true } };
+    expect(CompletionMessageSchema.parse({ role: 'user', content: [block] }).content).toEqual([block]);
+  });
+
+  const invalid: Array<[string, unknown]> = [
+    ['a block with no type', { text: 'hi' }],
+    ['a non-string type', { type: 7 }],
+    ['a null block', null],
+    ['text without text', { type: 'text' }],
+    ['a misspelled known field', { type: 'text', txt: 'hi' }],
+    ['image_url without a url', { type: 'image_url' }],
+    ['image without a source', { type: 'image' }],
+    ['an image source of an unknown kind', { type: 'image', source: { type: 'file', id: 'f' } }],
+    ['tool_use without an id', { type: 'tool_use', name: 'add', input: {} }],
+    ['tool_use with a non-object input', { type: 'tool_use', id: 't1', name: 'add', input: 'x' }],
+    ['tool_result without tool_use_id', { type: 'tool_result', content: 'x' }],
+    ['thinking without thinking', { type: 'thinking' }],
+    ['redacted_thinking without data', { type: 'redacted_thinking' }],
+    ['server_tool_use without an id', { type: 'server_tool_use', name: 'x' }],
+    ['tool_search_tool_result without tool_use_id', { type: 'tool_search_tool_result' }],
+  ];
+
+  it.each(invalid)('rejects %s', (_name, block) => {
+    expect(parse([block]).success).toBe(false);
+  });
+
+  it('rejects a known type with bad fields instead of passing it through as unknown', () => {
+    for (const type of KNOWN_COMPLETION_CONTENT_BLOCK_TYPES) {
+      if (type === 'tool_addition' || type === 'tool_removal') continue;
+      expect(parse([{ type }]).success, type).toBe(false);
+    }
+  });
+
+  it('names the missing field when a known block is malformed', () => {
+    const result = parse([{ type: 'tool_use', id: 't1', input: {} }]);
+    expect(result.success).toBe(false);
+    const paths = result.error?.issues.map(issue => issue.path.join('.'));
+    expect(paths).toContain('content.0.name');
+    expect(paths).not.toContain('content.0.type');
+  });
+
+  it('leaves tool change block detail to the service validation', () => {
+    expect(parse([{ type: 'tool_addition', tool: { type: 'mcp_tool_reference', name: 'x' } }]).success).toBe(true);
+  });
+
+  it('still accepts a full request with mixed blocks', () => {
+    const parsed = CompletionRequestSchema.safeParse({
+      model: 'claude',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'add' },
+            { type: 'image_url', image_url: { url: 'u' } },
+          ],
+        },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'add', input: { a: 1 } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: '2' }] },
+      ],
+    });
+    expect(parsed.success).toBe(true);
   });
 });
