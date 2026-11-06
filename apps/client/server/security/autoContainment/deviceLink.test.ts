@@ -98,6 +98,13 @@ describe('checkDeviceLink', () => {
     expect(deps.findBanned).not.toHaveBeenCalled();
   });
 
+  it('skips an account that is already banned', async () => {
+    const deps = makeDeps({ loadAccounts: vi.fn(async () => [{ ...newcomer, isBanned: true }]) });
+
+    expect(await checkDeviceLink('new-user', deps)).toEqual({ status: 'skipped', reason: 'no_device' });
+    expect(deps.recordDetection).not.toHaveBeenCalled();
+  });
+
   it('does not link on a mainstream device seen across many networks', async () => {
     const phone = { devices: [PHONE_DEVICE] };
     const baseline = [64510, 64511, 64512, 64513, 64514].map(asn => row(`other-${asn}`, { ...phone, asn }));

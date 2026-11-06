@@ -80,7 +80,7 @@ export async function evaluateDeviceLinks(
   config: DeviceLinkConfig,
   deps: DeviceLinkReaders
 ): Promise<Map<string, userService.BanEvasionResult>> {
-  const accounts = rows.map(toDeviceLinkAccount);
+  const accounts = rows.filter(row => !row.isBanned).map(toDeviceLinkAccount);
   const results = new Map<string, userService.BanEvasionResult>();
   const withDevice = accounts.filter(account => account.deviceKeys.length > 0);
   accounts
