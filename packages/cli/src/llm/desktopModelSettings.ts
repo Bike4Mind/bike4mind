@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import type { OllamaModelFacts, OllamaRequestSettings, OllamaRequestSettingsReader } from '@bike4mind/llm-adapters';
 import { modelBlobsOf } from '@bike4mind/local-models';
 import {
@@ -57,7 +58,11 @@ export function desktopModelSettingsFile(opts: DesktopDirsOptions = {}): Desktop
   const env = opts.env ?? process.env;
   const value = env[DESKTOP_MODEL_SETTINGS_ENV]?.trim();
   if (value && OFF_VALUES.has(value.toLowerCase())) return null;
-  if (value) return async () => ({ path: value, fromEnv: true });
+  if (value) {
+    // Resolved once, so a relative path names the same file however the cwd moves later.
+    const filePath = path.resolve(value);
+    return async () => ({ path: filePath, fromEnv: true });
+  }
   return async () => {
     const file = await desktopUserDataFile(MODEL_SETTINGS_FILE_NAME, opts);
     return file === null ? null : { path: file, fromEnv: false };

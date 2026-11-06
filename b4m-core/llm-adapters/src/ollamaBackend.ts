@@ -348,10 +348,8 @@ export class OllamaBackend implements ICompletionBackend {
       this._logger.debug(`[OllamaBackend] Settings for ${model} not read while listing:`, error);
       return undefined;
     });
-    const fallback = ollamaNumCtx(details.contextWindow);
-    // Unread settings pin nothing, so turns send what they read until a listing reads them.
-    if (!settings) return fallback;
-    const numCtx = settings.numCtx ?? fallback;
+    // Unread settings pin the advertised fallback, so a later fix still waits for a listing like any other change.
+    const numCtx = settings?.numCtx ?? ollamaNumCtx(details.contextWindow);
     this._listedNumCtx.set(model, numCtx);
     return numCtx;
   }

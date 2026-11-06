@@ -76,9 +76,12 @@ describe('desktopModelSettingsFile', () => {
 
   it('takes a file from B4M_DESKTOP_MODEL_SETTINGS, or none when it is off', async () => {
     expect(await desktopModelSettingsFile({ env: { B4M_DESKTOP_MODEL_SETTINGS: ' /tmp/mine.json ' } })?.()).toEqual({
-      path: '/tmp/mine.json',
+      path: path.resolve('/tmp/mine.json'),
       fromEnv: true,
     });
+    expect((await desktopModelSettingsFile({ env: { B4M_DESKTOP_MODEL_SETTINGS: 'mine.json' } })?.())?.path).toBe(
+      path.resolve('mine.json')
+    );
     for (const off of ['off', 'OFF', '0', 'false', 'no', 'none']) {
       expect(desktopModelSettingsFile({ env: { B4M_DESKTOP_MODEL_SETTINGS: off } })).toBeNull();
       expect(desktopRequestSettings('ollama', { env: { B4M_DESKTOP_MODEL_SETTINGS: off } })).toBeUndefined();

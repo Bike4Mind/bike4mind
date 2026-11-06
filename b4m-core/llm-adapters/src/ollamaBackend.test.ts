@@ -862,7 +862,7 @@ describe('OllamaBackend per-model request settings', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it('pins nothing for a model whose settings a listing could not read', async () => {
+  it('pins the advertised context for a model whose settings a listing could not read', async () => {
     let read: () => Promise<OllamaRequestSettings> = async () => {
       throw new Error('broken');
     };
@@ -873,8 +873,8 @@ describe('OllamaBackend per-model request settings', () => {
     expect((await backend.getModelInfo())[0].contextWindow).toBe(32768);
     read = async () => ({ numCtx: 16384 });
     await run(backend, {});
-    expect(chat.mock.calls[0][0].options?.num_ctx).toBe(16384);
-    expect(settingsWarning).not.toHaveBeenCalled();
+    expect(chat.mock.calls[0][0].options?.num_ctx).toBe(32768);
+    expect(settingsWarning).toHaveBeenCalledTimes(1);
   });
 
   it('forgets a model the next listing no longer has', async () => {
