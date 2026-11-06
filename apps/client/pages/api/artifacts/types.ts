@@ -21,6 +21,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeySco
         return res.status(401).json({ error: 'Unauthorized' });
       }
 
+      res.setHeader('Cache-Control', 'private, no-store');
       return res.json({
         types: ARTIFACT_TYPES,
         categories: ARTIFACT_CATEGORIES,
