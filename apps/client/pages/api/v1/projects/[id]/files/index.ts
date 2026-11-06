@@ -24,11 +24,6 @@ const listRoute = nextRouteForContract(listProjectFilesContract, {
   rateLimit: perUserRateLimit('GET /api/v1/projects/[id]/files'),
 }).get(async (req, res) => {
   const { limit, cursor } = req.validatedQuery;
-  const afterId = cursor === undefined ? undefined : decodeCursor(cursor, CURSOR_SCOPE);
-  // A cursor carries the last id this endpoint served, so anything else was not minted here.
-  if (afterId !== undefined && !isValidObjectId(afterId)) {
-    throw new UnprocessableEntityError('Invalid cursor');
-  }
 
   // Same reach as GET /api/v1/projects/{id}; answers 404 for anything the caller cannot read.
   const project = await projectService.get(
@@ -37,12 +32,20 @@ const listRoute = nextRouteForContract(listProjectFilesContract, {
     { db: { projects: projectRepository, users: userRepository } }
   );
 
+  // Scoped to the project, so a cursor minted while paging one project is a 422 on another.
+  const cursorScope = `${CURSOR_SCOPE}.${project.id}`;
+  const afterId = cursor === undefined ? undefined : decodeCursor(cursor, cursorScope);
+  // A cursor carries the last id this endpoint served, so anything else was not minted here.
+  if (afterId !== undefined && !isValidObjectId(afterId)) {
+    throw new UnprocessableEntityError('Invalid cursor');
+  }
+
   const page = await fabFileRepository.findPageByIds(project.fileIds, { afterId, limit });
   const lastId = page.data.at(-1)?.id;
 
   return res.json({
     data: page.data.map(toPublicFileSummary),
-    next_cursor: page.hasMore && lastId ? encodeCursor(CURSOR_SCOPE, String(lastId)) : null,
+    next_cursor: page.hasMore && lastId ? encodeCursor(cursorScope, String(lastId)) : null,
   });
 });
 

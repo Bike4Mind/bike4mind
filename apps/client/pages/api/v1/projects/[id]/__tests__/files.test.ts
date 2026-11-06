@@ -17,6 +17,7 @@ const {
   mockFindUser,
   mockFindPageByIds,
   mockFindAllAccessibleFiles,
+  mockFindExistingFiles,
   mockFileUpdate,
   mockLogEvent,
   mockRateLimitOptions,
@@ -28,6 +29,7 @@ const {
   mockFindUser: vi.fn(),
   mockFindPageByIds: vi.fn(),
   mockFindAllAccessibleFiles: vi.fn(),
+  mockFindExistingFiles: vi.fn(),
   mockFileUpdate: vi.fn(),
   mockLogEvent: vi.fn(),
   mockRateLimitOptions: vi.fn(),
@@ -70,6 +72,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {
     findPageByIds: mockFindPageByIds,
     shareable: { findAllAccessibleByIds: mockFindAllAccessibleFiles, updateUserShares: vi.fn() },
+    findExistingIdsByIds: mockFindExistingFiles,
     update: mockFileUpdate,
   },
   inviteRepository: { findAllByDocumentId: vi.fn().mockResolvedValue([]) },
@@ -143,6 +146,7 @@ beforeEach(() => {
   mockUpdateWithUpdateAccess.mockResolvedValue({ id: PROJECT_ID });
   mockProjectUpdate.mockResolvedValue(undefined);
   mockFindAllAccessibleFiles.mockResolvedValue([]);
+  mockFindExistingFiles.mockResolvedValue([]);
   mockFindPageByIds.mockResolvedValue({ data: [], hasMore: false });
 });
 
@@ -189,7 +193,7 @@ describe('GET /api/v1/projects/{id}/files', () => {
     const first = (await list({ limit: '1' }))._getJSONData();
 
     expect(first.next_cursor).toEqual(expect.any(String));
-    expect(decodeCursor(first.next_cursor, 'v1.projects.files')).toBe(FILE_A);
+    expect(decodeCursor(first.next_cursor, `v1.projects.files.${PROJECT_ID}`)).toBe(FILE_A);
 
     mockFindPageByIds.mockResolvedValue({ data: [summaryRow(FILE_B)], hasMore: false });
     const second = (await list({ limit: '1', cursor: first.next_cursor }))._getJSONData();
@@ -202,7 +206,8 @@ describe('GET /api/v1/projects/{id}/files', () => {
   it.each([
     ['a malformed cursor', 'garbage'],
     ['a cursor issued by another endpoint', encodeCursor('v1.projects', FILE_A)],
-    ['a cursor whose id is not an ObjectId', encodeCursor('v1.projects.files', 'nope')],
+    ['a cursor issued for another project', encodeCursor('v1.projects.files.65a000000000000000000009', FILE_A)],
+    ['a cursor whose id is not an ObjectId', encodeCursor(`v1.projects.files.${PROJECT_ID}`, 'nope')],
   ])('answers 422 for %s', async (_name, cursor) => {
     expect(await statusOf(listAddHandler, 'GET', { id: PROJECT_ID, cursor })).toBe(422);
     expect(mockFindPageByIds).not.toHaveBeenCalled();
@@ -304,9 +309,24 @@ describe('DELETE /api/v1/projects/{id}/files/{file_id}', () => {
     expect(mockProjectUpdate).toHaveBeenCalledWith(expect.objectContaining({ fileIds: [] }));
   });
 
-  it('answers 404 for a malformed file id without touching the project', async () => {
+  it('answers 404 for a held id whose file still exists but the owner cannot read', async () => {
+    mockFindAllAccessibleFiles.mockResolvedValue([]);
+    mockFindExistingFiles.mockResolvedValue([FILE_A]);
+
+    expect(await statusOf(removeHandler, 'DELETE', { id: PROJECT_ID, file_id: FILE_A })).toBe(404);
+    expect(mockProjectUpdate).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 for a malformed file id the project does not list', async () => {
     expect(await statusOf(removeHandler, 'DELETE', { id: PROJECT_ID, file_id: 'not-an-id' })).toBe(404);
-    expect(mockFindAccessibleById).not.toHaveBeenCalled();
+    expect(mockProjectUpdate).not.toHaveBeenCalled();
+  });
+
+  it('removes a legacy non-ObjectId entry the project lists', async () => {
+    project = makeProject({ fileIds: [FILE_A, 'legacy-entry'] });
+
+    expect((await remove('legacy-entry'))._getStatusCode()).toBe(204);
+    expect(mockProjectUpdate).toHaveBeenCalledWith(expect.objectContaining({ fileIds: [FILE_A] }));
   });
 
   it('answers 403 when the caller owns neither the project nor the file', async () => {

@@ -18639,7 +18639,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description `limit` is out of range, or `cursor` is malformed or was issued by a different endpoint. A cursor is opaque: pass back exactly the `next_cursor` you were given. */
+      /** @description `limit` is out of range, or `cursor` is malformed or was issued by a different endpoint or for a different project. A cursor is opaque: pass back exactly the `next_cursor` you were given. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -18933,7 +18933,7 @@ export interface operations {
           'application/json': components['schemas']['ScopeForbiddenResponse'];
         };
       };
-      /** @description No project with that id is visible to the caller, or no file with that id is readable by the caller. A malformed id is reported as 404 too, so ids cannot be probed through this endpoint. */
+      /** @description No project with that id is visible to the caller, or no file with that id is readable by the caller. A malformed id is reported as 404 too, so ids cannot be probed through this endpoint, unless the project lists it as a legacy entry, which this removes. */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -19124,7 +19124,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description `limit` is out of range, or `cursor` is malformed or was issued by a different endpoint. A cursor is opaque: pass back exactly the `next_cursor` you were given. */
+      /** @description `limit` is out of range, or `cursor` is malformed or was issued by a different endpoint or for a different project. A cursor is opaque: pass back exactly the `next_cursor` you were given. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -19418,7 +19418,7 @@ export interface operations {
           'application/json': components['schemas']['ScopeForbiddenResponse'];
         };
       };
-      /** @description No project with that id is visible to the caller, or no session with that id is readable by the caller. A malformed id is reported as 404 too, so ids cannot be probed through this endpoint. */
+      /** @description No project with that id is visible to the caller, or no session with that id is readable by the caller. A malformed id is reported as 404 too, so ids cannot be probed through this endpoint, unless the project lists it as a legacy entry, which this removes. */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

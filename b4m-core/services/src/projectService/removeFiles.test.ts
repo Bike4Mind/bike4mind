@@ -53,6 +53,7 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
           findAllAccessibleByIds: vi.fn(async () => [file]),
           updateUserShares: vi.fn(async (_id: string, change: never) => applyUserSharesChange(file, change)),
         },
+        findExistingIdsByIds: vi.fn(async () => []),
         update: vi.fn(),
       },
       invites: {
@@ -259,6 +260,17 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
 
     expect(removedIds).toEqual([FILE_ID_HEX]);
     expect(db.projects.update).toHaveBeenCalledWith(expect.objectContaining({ fileIds: [] }));
+  });
+
+  it('refuses the owner a held id whose file still exists but is unreadable, so no grant is left behind', async () => {
+    project.fileIds = [FILE_ID_HEX];
+    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => []);
+    db.fabFiles.findExistingIdsByIds = vi.fn(async () => [FILE_ID_HEX]);
+
+    await expect(removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [FILE_ID_HEX] }, { db })).rejects.toThrow(
+      'Some files are not accessible'
+    );
+    expect(db.projects.update).not.toHaveBeenCalled();
   });
 
   it('still rejects a held id that no longer resolves for a member who is not the owner', async () => {

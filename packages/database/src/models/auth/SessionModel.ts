@@ -21,16 +21,16 @@ import {
   SessionResponseSchema,
 } from '@bike4mind/common';
 import { softDeletePlugin, usableObjectIds } from '../../utils/mongo';
+import User from './UserModel';
+import { NotFoundError } from '@bike4mind/utils';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
+import { Quest as QuestModel } from '../content/QuestModel';
 
 // The public session fields, minus the id pair Mongo returns anyway, so findPageByIds cannot load
 // less than toPublicSession (apps/client/server/sessions) emits.
 const PUBLIC_SESSION_PROJECTION = Object.keys(SessionResponseSchema.shape)
   .filter(key => key !== 'id' && key !== '_id')
   .join(' ');
-import User from './UserModel';
-import { NotFoundError } from '@bike4mind/utils';
-import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { Quest as QuestModel } from '../content/QuestModel';
 
 // This is the canonical name of the model, used in determining the collection name in Mongo.
 // If this changes, you'll need to adjust a few parallel mentions in the code (build will fail

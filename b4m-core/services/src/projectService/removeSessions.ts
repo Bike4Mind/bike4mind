@@ -53,14 +53,16 @@ export const removeSessions = async (
   // Non-hex is NOT folded: two legacy entries differing only in case are different rows.
   const resolvedIds = new Set(sessions.map(s => canonicalId(String(s.id))));
   const addressable = new Set(usableObjectIds(sessionIds, 'projectService.removeSessions').map(canonicalId));
-  // The project owner may still clear an id the project holds but that no longer resolves (a deleted
-  // or unreadable row): the list is theirs, and nothing else can ever take the id out of it.
+  // The project owner may still clear an id the project holds whose row is gone (deleted, or never
+  // there): nothing else can take it out of the list. A live row the owner cannot read stays refused,
+  // because removing it here could not revoke the access the project granted on it.
+  const unresolved = sessionIds.filter(id => addressable.has(canonicalId(id)) && !resolvedIds.has(canonicalId(id)));
   const ownerHeld = new Set(project.userId === userId ? project.sessionIds.map(canonicalId) : []);
-  if (
-    sessionIds.some(
-      id => addressable.has(canonicalId(id)) && !resolvedIds.has(canonicalId(id)) && !ownerHeld.has(canonicalId(id))
-    )
-  ) {
+  const heldUnresolved = unresolved.filter(id => ownerHeld.has(canonicalId(id)));
+  const liveIds =
+    heldUnresolved.length > 0 ? (await db.sessions.findAllByIds(heldUnresolved)).map(s => String(s.id)) : [];
+  const live = new Set(liveIds.map(canonicalId));
+  if (unresolved.some(id => !ownerHeld.has(canonicalId(id)) || live.has(canonicalId(id)))) {
     throw new BadRequestError('Some sessions are not accessible');
   }
   if (project.userId !== userId && sessions.some(s => s.userId !== userId)) {

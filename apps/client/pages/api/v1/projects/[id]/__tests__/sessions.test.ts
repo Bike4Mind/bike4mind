@@ -17,6 +17,7 @@ const {
   mockFindUser,
   mockFindPageByIds,
   mockFindAllAccessibleSessions,
+  mockFindLiveSessions,
   mockFindAllAccessibleFiles,
   mockSessionUpdate,
   mockFileUpdate,
@@ -34,6 +35,7 @@ const {
   mockFindPageByIds: vi.fn(),
   mockFindAllAccessibleSessions: vi.fn(),
   mockFindAllAccessibleFiles: vi.fn(),
+  mockFindLiveSessions: vi.fn(),
   mockSessionUpdate: vi.fn(),
   mockFileUpdate: vi.fn(),
   mockPublishSummarize: vi.fn(),
@@ -88,6 +90,7 @@ vi.mock('@bike4mind/database', () => ({
   sessionRepository: {
     findPageByIds: mockFindPageByIds,
     shareable: { findAllAccessibleByIds: mockFindAllAccessibleSessions, updateUserShares: vi.fn() },
+    findAllByIds: mockFindLiveSessions,
     update: mockSessionUpdate,
   },
   activityRepository: { createActivity: mockCreateActivity },
@@ -162,6 +165,7 @@ beforeEach(() => {
   mockUpdateWithUpdateAccess.mockResolvedValue({ id: PROJECT_ID });
   mockProjectUpdate.mockResolvedValue(undefined);
   mockFindAllAccessibleSessions.mockResolvedValue([]);
+  mockFindLiveSessions.mockResolvedValue([]);
   mockFindAllAccessibleFiles.mockResolvedValue([]);
   mockFindPageByIds.mockResolvedValue({ data: [], hasMore: false });
   mockFilterCredits.mockImplementation(async (sessions: { id: string }[]) => new Set(sessions.map(s => s.id)));
@@ -212,7 +216,7 @@ describe('GET /api/v1/projects/{id}/sessions', () => {
     mockFindPageByIds.mockResolvedValue({ data: [sessionDoc(SESSION_A)], hasMore: true });
     const first = (await list({ limit: '1' }))._getJSONData();
 
-    expect(decodeCursor(first.next_cursor, 'v1.projects.sessions')).toBe(SESSION_A);
+    expect(decodeCursor(first.next_cursor, `v1.projects.sessions.${PROJECT_ID}`)).toBe(SESSION_A);
 
     mockFindPageByIds.mockResolvedValue({ data: [sessionDoc(SESSION_B)], hasMore: false });
     const second = (await list({ limit: '1', cursor: first.next_cursor }))._getJSONData();
@@ -225,7 +229,8 @@ describe('GET /api/v1/projects/{id}/sessions', () => {
   it.each([
     ['a malformed cursor', 'garbage'],
     ['a cursor issued by another endpoint', encodeCursor('v1.projects.files', SESSION_A)],
-    ['a cursor whose id is not an ObjectId', encodeCursor('v1.projects.sessions', 'nope')],
+    ['a cursor issued for another project', encodeCursor('v1.projects.sessions.65a000000000000000000009', SESSION_A)],
+    ['a cursor whose id is not an ObjectId', encodeCursor(`v1.projects.sessions.${PROJECT_ID}`, 'nope')],
   ])('answers 422 for %s', async (_name, cursor) => {
     expect(await statusOf(listAddHandler, 'GET', { id: PROJECT_ID, cursor })).toBe(422);
     expect(mockFindPageByIds).not.toHaveBeenCalled();
@@ -368,9 +373,25 @@ describe('DELETE /api/v1/projects/{id}/sessions/{session_id}', () => {
     expect(mockCreateActivity).toHaveBeenCalledTimes(1);
   });
 
-  it('answers 404 for a malformed session id without touching the project', async () => {
+  it('answers 404 for a held id whose session still exists but the owner cannot read', async () => {
+    mockFindAllAccessibleSessions.mockResolvedValue([]);
+    mockFindLiveSessions.mockResolvedValue([sessionDoc(SESSION_A)]);
+
+    expect(await statusOf(removeHandler, 'DELETE', { id: PROJECT_ID, session_id: SESSION_A })).toBe(404);
+    expect(mockProjectUpdate).not.toHaveBeenCalled();
+    expect(mockCreateActivity).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 for a malformed session id the project does not list', async () => {
     expect(await statusOf(removeHandler, 'DELETE', { id: PROJECT_ID, session_id: 'not-an-id' })).toBe(404);
-    expect(mockFindAccessibleById).not.toHaveBeenCalled();
+    expect(mockProjectUpdate).not.toHaveBeenCalled();
+  });
+
+  it('removes a legacy non-ObjectId entry the project lists', async () => {
+    project = makeProject({ sessionIds: [SESSION_A, 'legacy-entry'] });
+
+    expect((await remove('legacy-entry'))._getStatusCode()).toBe(204);
+    expect(mockProjectUpdate).toHaveBeenCalledWith(expect.objectContaining({ sessionIds: [SESSION_A] }));
   });
 
   it('answers 403 when the caller owns neither the project nor the session', async () => {
