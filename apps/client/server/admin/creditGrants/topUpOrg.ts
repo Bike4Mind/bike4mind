@@ -13,7 +13,7 @@ import { z } from 'zod';
 import { Resource } from 'sst';
 
 import type { Request } from 'express';
-import { approvalDetails } from './approval';
+import { approvalDetails, notifyAfterCommit } from './approval';
 
 // Cap protects against admin typo (e.g. an extra zero). 10M credits = ~6 years
 // of an MIN-seat subscription. Anything beyond is almost certainly a slip.
@@ -126,10 +126,12 @@ export async function topUpOrg(req: Request, params: TopUpParams, approval?: Adm
   }
 
   // Notify the org owner so their credit balance refreshes
-  await sendToClient(organization.userId, Resource.websocket.managementEndpoint, {
-    action: 'invalidate_query',
-    queryKey: ['organizations'],
-  });
+  await notifyAfterCommit(req, () =>
+    sendToClient(organization.userId, Resource.websocket.managementEndpoint, {
+      action: 'invalidate_query',
+      queryKey: ['organizations'],
+    })
+  );
 
   return { organizationId: organization.id, creditsAdded: credits };
 }

@@ -32,6 +32,8 @@ export async function deleteUserAsAdmin(req: Request, userId: string, reason: st
       deletedBy: String(admin.id),
       initiatedBy: 'admin',
       logger: req.logger,
+      // An approved delete re-reads the target in the delete's transaction, so a demotion racing it aborts it.
+      ...(approval && { assertInTransaction: () => assertStillAdmin(userId) }),
       // The delete and its audit entry commit together; cascades and notifications run after.
       recordInTransaction: async (target, cancellation) => {
         const canceledEntry = subscriptionCancellationAudit(cancellation, 'account_deleted');
@@ -101,10 +103,21 @@ export async function executeApprovedAdminDelete(req: Request, params: DeleteAdm
   if (isSelfOrImpersonator(req.user!, params.userId)) {
     throw new ForbiddenError('Admins cannot delete their own account.');
   }
-  // Approval was only required because the target was an admin; one demoted since then is no longer what was approved.
-  if (!canAccessAdmin(await userRepository.findById(params.userId))) {
+  // Checked here too so a demoted target fails before the subscription cancel, which cannot roll back.
+  await assertStillAdmin(params.userId);
+  try {
+    await deleteUserAsAdmin(req, params.userId, params.reason, approval);
+  } catch (error) {
+    // Notifications and cleanup run after the delete commits; once the row is gone the approved action ran.
+    if (await userRepository.findById(params.userId)) throw error;
+    req.logger.error('[ADMIN_APPROVAL_DELETE_AFTER_COMMIT_FAILED]', { approvalId: approval.id, error });
+  }
+  return { deletedUserId: params.userId };
+}
+
+// Approval was only required because the target was an admin; one demoted since then is no longer what was approved.
+async function assertStillAdmin(userId: string) {
+  if (!canAccessAdmin(await userRepository.findById(userId))) {
     throw new ConflictError('This user is no longer an admin; request the deletion again.');
   }
-  await deleteUserAsAdmin(req, params.userId, params.reason, approval);
-  return { deletedUserId: params.userId };
 }

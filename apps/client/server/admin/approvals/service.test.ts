@@ -182,6 +182,18 @@ describe('approveApproval', () => {
     expect(auditActions()).toEqual(['admin.approval.approved', 'admin.approval.failed']);
   });
 
+  it('still succeeds, and records no failure, when marking the record executed throws', async () => {
+    mocks.repo.finish.mockRejectedValueOnce(new Error('db down'));
+    const error = vi.fn();
+    const req = { user: { id: APPROVER, name: APPROVER, isAdmin: true }, logger: { error } } as unknown as Request;
+    const outcome = await approveApproval(req, ID);
+    expect(outcome.result).toEqual({ updated: 2 });
+    expect(mocks.repo.finish).not.toHaveBeenCalledWith(ID, 'executing', 'failed', expect.anything());
+    expect(auditActions()).not.toContain('admin.approval.failed');
+    expect(auditActions()).toContain('admin.approval.executed');
+    expect(error).toHaveBeenCalledWith('[ADMIN_APPROVAL_FINISH_FAILED]', expect.anything());
+  });
+
   it('still succeeds, and records no failure, when the executed audit write throws', async () => {
     mocks.record.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('audit down'));
     const error = vi.fn();
@@ -293,6 +305,19 @@ describe('listApprovals', () => {
     expect(requester.map(row => row.params)).toEqual([PARAMS, PARAMS, PARAMS]);
     const reader = await listApprovals(reqAs({ id: APPROVER, adminPermissions: ['support:read'] }), {});
     expect(reader.map(row => row.params)).toEqual([null, null, PARAMS]);
+  });
+
+  it('leaves out the decision reason, result and error on rows it withholds params from', async () => {
+    const decided = { decisionReason: 'looks fine', result: { updated: 2 }, error: 'boom' };
+    mocks.repo.list.mockResolvedValue([
+      approvalOf({ id: '1', ...decided }),
+      approvalOf({ id: '3', requiredPermission: 'support:read', ...decided }),
+    ]);
+    const reader = await listApprovals(reqAs({ id: APPROVER, adminPermissions: ['support:read'] }), {});
+    expect(reader[0]).not.toHaveProperty('decisionReason');
+    expect(reader[0]).not.toHaveProperty('result');
+    expect(reader[0]).not.toHaveProperty('error');
+    expect(reader[1]).toMatchObject(decided);
   });
 
   it('withholds summary and reason exactly where it withholds params', async () => {

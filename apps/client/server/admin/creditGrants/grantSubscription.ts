@@ -23,7 +23,7 @@ import { randomUUID } from 'crypto';
 
 import type { Request } from 'express';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
-import { approvalDetails } from './approval';
+import { approvalDetails, notifyAfterCommit } from './approval';
 
 export const GrantSubscriptionSchema = z.object({
   subscriptionType: z.enum(['individual', 'team']),
@@ -140,19 +140,20 @@ export async function grantSubscription(req: Request, params: GrantSubscriptionP
     });
 
     // Notify user
-    await sendToClient(userId, Resource.websocket.managementEndpoint, {
-      action: 'invalidate_query',
-      queryKey: ['subscriptions'],
-    });
-
-    // Admin grants never produce a Stripe webhook, so the entitlement gate
-    // must be woken here when the granted price maps to entitlement keys.
-    if (priceAffectsEntitlements(priceId)) {
+    await notifyAfterCommit(req, async () => {
       await sendToClient(userId, Resource.websocket.managementEndpoint, {
         action: 'invalidate_query',
-        queryKey: ['entitlements'],
+        queryKey: ['subscriptions'],
       });
-    }
+      // Admin grants never produce a Stripe webhook, so the entitlement gate
+      // must be woken here when the granted price maps to entitlement keys.
+      if (priceAffectsEntitlements(priceId)) {
+        await sendToClient(userId, Resource.websocket.managementEndpoint, {
+          action: 'invalidate_query',
+          queryKey: ['entitlements'],
+        });
+      }
+    });
 
     return {
       success: true,
@@ -327,7 +328,7 @@ export async function grantSubscription(req: Request, params: GrantSubscriptionP
       })
     );
 
-    await Promise.all(promises);
+    await notifyAfterCommit(req, () => Promise.all(promises));
 
     return {
       success: true,

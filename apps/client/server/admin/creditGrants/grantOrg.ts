@@ -20,7 +20,7 @@ import { Resource } from 'sst';
 import { randomUUID } from 'crypto';
 
 import type { Request } from 'express';
-import { approvalDetails } from './approval';
+import { approvalDetails, notifyAfterCommit } from './approval';
 
 // Admin grants carry a `periodEndsAt` 12 months out for accounting / UI
 // labelling. It is informational - there is NO cron that flips status to
@@ -153,17 +153,18 @@ export async function grantOrg(req: Request, params: GrantOrgParams, approval?: 
     throw new BadRequestError('Failed to create organization');
   }
 
-  await sendToClient(owner.id, Resource.websocket.managementEndpoint, {
-    action: 'invalidate_query',
-    queryKey: ['organizations'],
-  });
-
-  if (priceAffectsEntitlements(ORGANIZATION_SUBSCRIPTION_PRICE_ID)) {
+  await notifyAfterCommit(req, async () => {
     await sendToClient(owner.id, Resource.websocket.managementEndpoint, {
       action: 'invalidate_query',
-      queryKey: ['entitlements'],
+      queryKey: ['organizations'],
     });
-  }
+    if (priceAffectsEntitlements(ORGANIZATION_SUBSCRIPTION_PRICE_ID)) {
+      await sendToClient(owner.id, Resource.websocket.managementEndpoint, {
+        action: 'invalidate_query',
+        queryKey: ['entitlements'],
+      });
+    }
+  });
 
   return {
     organizationId: organization.id,

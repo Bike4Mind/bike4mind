@@ -33,10 +33,13 @@ vi.mock('@server/admin/creditGrants/approval', () => ({
 
 import { deleteUserAsAdmin, executeApprovedAdminDelete } from './deleteUserAsAdmin';
 
-type DeleteContext = { onDeleteFailed: (target: unknown, cancellation: unknown) => Promise<void> };
+type DeleteContext = {
+  onDeleteFailed: (target: unknown, cancellation: unknown) => Promise<void>;
+  assertInTransaction?: () => Promise<void>;
+};
 
 const APPROVAL = { id: 'approval-1' } as AdminApproval;
-const req = { user: { id: 'approver' }, logger: {} } as unknown as Request;
+const req = { user: { id: 'approver' }, logger: { error: vi.fn() } } as unknown as Request;
 const PARAMS = { userId: 'target', reason: 'offboarding' };
 
 beforeEach(() => {
@@ -57,6 +60,35 @@ describe('executeApprovedAdminDelete', () => {
     mocks.findById.mockResolvedValue(null);
     await expect(executeApprovedAdminDelete(req, PARAMS, APPROVAL)).rejects.toMatchObject({ statusCode: 409 });
     expect(mocks.hardDeleteUser).not.toHaveBeenCalled();
+  });
+
+  it('re-checks admin access inside the delete transaction', async () => {
+    mocks.findById.mockResolvedValue({ id: 'target', isAdmin: true });
+    await executeApprovedAdminDelete(req, PARAMS, APPROVAL);
+    const [, context] = mocks.hardDeleteUser.mock.calls[0] as [string, DeleteContext];
+    mocks.findById.mockResolvedValue({ id: 'target', isAdmin: false, adminPermissions: [] });
+    await expect(context.assertInTransaction?.()).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('reports success when a step after the committed delete throws', async () => {
+    mocks.findById.mockResolvedValueOnce({ id: 'target', isAdmin: true }).mockResolvedValueOnce(null);
+    mocks.hardDeleteUser.mockRejectedValue(new Error('slack down'));
+    await expect(executeApprovedAdminDelete(req, PARAMS, APPROVAL)).resolves.toEqual({ deletedUserId: 'target' });
+    expect(req.logger.error).toHaveBeenCalledWith('[ADMIN_APPROVAL_DELETE_AFTER_COMMIT_FAILED]', expect.anything());
+  });
+
+  it('fails when the delete throws and the target is still there', async () => {
+    mocks.findById.mockResolvedValue({ id: 'target', isAdmin: true });
+    mocks.hardDeleteUser.mockRejectedValue(new Error('txn aborted'));
+    await expect(executeApprovedAdminDelete(req, PARAMS, APPROVAL)).rejects.toThrow('txn aborted');
+  });
+});
+
+describe('deleteUserAsAdmin direct route', () => {
+  it('adds no in-transaction admin re-check without an approval', async () => {
+    await deleteUserAsAdmin(req, 'target', 'offboarding');
+    const [, context] = mocks.hardDeleteUser.mock.calls[0] as [string, DeleteContext];
+    expect(context.assertInTransaction).toBeUndefined();
   });
 });
 

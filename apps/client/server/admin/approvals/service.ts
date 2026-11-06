@@ -218,17 +218,12 @@ export async function approveApproval(req: Request, id: string): Promise<Approve
   if (redeemedByRequester) return { approval: claimed };
 
   let result: unknown;
-  let executed: AdminApproval | null;
   try {
     // Loaded here so a gated route importing requestApproval does not pull in every executor's dependencies.
     const { approvalExecutors } = await import('./executors');
     result = await approvalExecutors[claimed.action](JSON.parse(claimed.paramsJson), {
       req,
       approval: claimed,
-    });
-    executed = await adminApprovalRepository.finish(claimed.id, 'executing', 'executed', {
-      executedAt: new Date(),
-      result,
     });
   } catch (error) {
     await adminApprovalRepository.finish(claimed.id, 'executing', 'failed', { error: errorMessage(error) });
@@ -240,7 +235,16 @@ export async function approveApproval(req: Request, id: string): Promise<Approve
     });
     throw error;
   }
-  // The action already ran and the record says executed, so a missing audit row must not report failure.
+  // The action already ran: a failed bookkeeping write is logged, never reported as a failed action.
+  let executed: AdminApproval | null = null;
+  try {
+    executed = await adminApprovalRepository.finish(claimed.id, 'executing', 'executed', {
+      executedAt: new Date(),
+      result,
+    });
+  } catch (error) {
+    req.logger.error('[ADMIN_APPROVAL_FINISH_FAILED]', { approvalId: claimed.id, error });
+  }
   try {
     await recordAdminActionFromRequest(req, {
       action: 'admin.approval.executed',
@@ -342,7 +346,8 @@ export const APPROVAL_LIST_MAX = 100;
 
 /**
  * Pending rows past their expiry are reported as expired; the record itself is closed on its next decision.
- * `params`, `summary` and `reason` are null unless the caller requested the row or holds what deciding it needs.
+ * `params`, `summary` and `reason` are null, and the decision reason, result and error left out, unless the caller
+ * requested the row or holds what deciding it needs.
  */
 export async function listApprovals(
   req: Request,
@@ -356,7 +361,7 @@ export async function listApprovals(
     limit: Math.min(query.limit ?? 50, APPROVAL_LIST_MAX),
   });
   return approvals.map(record => {
-    const { paramsJson, ...approval } = record;
+    const { paramsJson, decisionReason, result, error, ...approval } = record;
     const status: AdminApprovalStatus =
       approval.status === 'pending' && isExpired(record, now) ? 'expired' : approval.status;
     const own = isOwnRequest(user, record);
@@ -368,6 +373,7 @@ export async function listApprovals(
       summary: visible ? approval.summary : null,
       reason: visible ? approval.reason : null,
       params: visible ? JSON.parse(paramsJson) : null,
+      ...(visible && { decisionReason, result, error }),
       stalled:
         status === 'executing' &&
         now.getTime() - (approval.decidedAt ?? approval.createdAt).getTime() > APPROVAL_STALLED_AFTER_MS,
