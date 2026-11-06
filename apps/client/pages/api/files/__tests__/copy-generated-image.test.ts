@@ -177,6 +177,19 @@ describe('POST /api/files/copy-generated-image object-level authz', () => {
     }
   );
 
+  it('substitutes PNG for a stored image type with no known extension', async () => {
+    h.findSessionIdsByImage.mockResolvedValue(['s1']);
+    h.findAllAccessibleByIds.mockResolvedValue([{ id: 's1' }]);
+    h.getMetadata.mockResolvedValue({ contentType: 'image/avif' });
+
+    await handler(req('me'), makeRes().res);
+
+    expect(h.saveGeneratedAsset).toHaveBeenCalledWith(
+      expect.objectContaining({ contentType: 'image/png' }),
+      expect.anything()
+    );
+  });
+
   it('keeps a genuine stored contentType like image/webp', async () => {
     h.findSessionIdsByImage.mockResolvedValue(['s1']);
     h.findAllAccessibleByIds.mockResolvedValue([{ id: 's1' }]);
@@ -306,8 +319,11 @@ describe('copied file provenance', () => {
 
     await handler(req('me'), makeRes().res);
 
+    expect(h.findSessionIdsByImage).toHaveBeenLastCalledWith(KEY);
     expect(h.findOne).toHaveBeenCalledWith(
       expect.objectContaining({
+        // Keeps the lookup on the partial (TOOL_GENERATED-only) sessionId index.
+        sourceType: 'tool_generated',
         'sourceMetadata.sessionId': { $in: ['s1'] },
         'sourceMetadata.generatedOutputKey': KEY,
         deletedAt: null,
@@ -341,6 +357,15 @@ describe('copied file provenance', () => {
     const [params] = h.saveGeneratedAsset.mock.calls[0];
     expect(params.generation).toEqual({ generator: 'image', provider: 'unknown', prompt: '' });
     expect(params).not.toHaveProperty('derivedFrom');
+  });
+
+  it('saves the image unrecorded when the original lookup fails', async () => {
+    h.findOne.mockRejectedValue(new Error('db down'));
+
+    await handler(req('me'), makeRes().res);
+
+    const [params] = h.saveGeneratedAsset.mock.calls[0];
+    expect(params.generation).toEqual({ generator: 'image', provider: 'unknown', prompt: '' });
   });
 
   it('fails the request with the refusal itself when the save is refused', async () => {

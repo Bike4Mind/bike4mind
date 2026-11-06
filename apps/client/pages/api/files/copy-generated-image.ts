@@ -5,6 +5,7 @@ import {
   GeneratedAssetMetadataSchema,
   Permission,
   SupportedFabFileMimeTypes,
+  extensionFromMimeType,
   isImageServeable,
   fabFileResponseSchema,
   type GeneratedAssetLineageEntry,
@@ -71,14 +72,20 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
       // single substring match is deliberately broader than the two-spelling check in
       // b4m-core/fab-pipeline/src/ingest.ts, so it also catches cased and parameterised variants
       // (e.g. "; charset=binary").
+      // A type with no known extension (e.g. image/avif) is likewise stored as PNG: the generated-asset seam
+      // refuses a type it cannot name a file for.
       const contentType =
-        !storedType || storedType.trim().toLowerCase().includes('octet-stream')
+        !storedType || storedType.trim().toLowerCase().includes('octet-stream') || !extensionFromMimeType(storedType)
           ? SupportedFabFileMimeTypes.PNG
           : storedType;
 
       await consumeFileUploadBudget(req, 1);
 
-      const original = await findOriginalGeneration(imageS3Key, user.id);
+      // Provenance is secondary to keeping the image: a failed lookup saves it unrecorded rather than failing.
+      const original = await findOriginalGeneration(imageS3Key, user.id).catch((error: unknown) => {
+        logger.warn('[copy-generated-image] original generation lookup failed', { error });
+        return undefined;
+      });
       const fileId = await withTransaction(async () => {
         const saved = await saveGeneratedAsset(
           {

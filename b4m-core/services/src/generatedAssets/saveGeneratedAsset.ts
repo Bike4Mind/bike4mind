@@ -184,7 +184,8 @@ function storedGeneration(
   return {
     ...rest,
     prompt,
-    promptTruncated: prompt.length < generation.prompt.length,
+    // A re-save of a stored generation (copy-generated-image) passes an already-cut prompt: keep its flag.
+    promptTruncated: generation.promptTruncated === true || prompt.length < generation.prompt.length,
     ...(generation.lyrics !== undefined && {
       lyrics: generation.lyrics.slice(0, GENERATED_ASSET_MAX_STORED_TEXT_CHARS),
     }),

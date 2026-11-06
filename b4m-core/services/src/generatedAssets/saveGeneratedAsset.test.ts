@@ -170,6 +170,13 @@ describe('saveGeneratedAsset', () => {
     expect(generation.promptTruncated).toBe(false);
   });
 
+  it('keeps the flag of a re-saved prompt that was already cut', async () => {
+    const generation = { ...music, prompt: 'x'.repeat(CAP), promptTruncated: true };
+    await saveGeneratedAsset(params({ generation }), deps);
+
+    expect(createFabFile.mock.calls[0][2].provenance.sourceMetadata.generation.promptTruncated).toBe(true);
+  });
+
   it('treats a prompt of exactly the cap as kept whole', async () => {
     await saveGeneratedAsset(params({ generation: { ...music, prompt: 'x'.repeat(CAP) } }), deps);
 
