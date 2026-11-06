@@ -96,7 +96,6 @@ const componentsByFile = {
   'Users/Views/RecentActivityView.tsx': ['Card'],
   'VoiceSettingsTab.tsx': ['Card', 'Modal'],
   'WebhookAuditLogs/index.tsx': ['Card', 'Table'],
-  'WorldTime.tsx': ['Card', 'Modal'],
   'email/EmailActivityHistory.tsx': ['Table'],
   'email/EmailJobDetail.tsx': ['Table', 'Modal'],
   'email/EmailJobsPanel.tsx': ['Table'],
