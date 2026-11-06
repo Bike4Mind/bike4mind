@@ -11,7 +11,7 @@ import { useSignupGrantCredits } from './useSignupGrantCredits';
 
 describe('signup grant copy configuration', () => {
   beforeEach(() => {
-    h.values = { defaultFreeCredits: 37, signupGrantInitialCredits: 12 };
+    h.values = { signupGrantInitialCredits: 12 };
   });
   it('reads the initial credits', () => {
     h.values.signupGrantInitialCredits = '500';
@@ -21,7 +21,7 @@ describe('signup grant copy configuration', () => {
     h.values.signupGrantInitialCredits = 0;
     expect(renderHook(useSignupGrantCredits).result.current).toBe(0);
   });
-  it.each([undefined, null])('ignores the retired defaultFreeCredits when the signup setting is %j', signup => {
+  it.each([undefined, null])('advertises nothing when the signup setting is %j', signup => {
     h.values.signupGrantInitialCredits = signup;
     expect(renderHook(useSignupGrantCredits).result.current).toBe(0);
   });

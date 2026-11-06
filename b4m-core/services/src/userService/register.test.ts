@@ -1138,7 +1138,7 @@ describe('registerViaOTC', () => {
   });
 
   // --- invite-resolved pending grant is released immediately (OTC proved the email) ---
-  it('grants the invite-resolved pending amount (not defaultFreeCredits) and clears the field', async () => {
+  it('grants the invite-resolved pending amount and clears the field', async () => {
     mockAdapters.db.registrationInvites.findByCode = vi.fn().mockResolvedValue({
       code: 'INVITE500',
       email: 'otc@example.com',
@@ -1149,7 +1149,6 @@ describe('registerViaOTC', () => {
 
     const result = await registerViaOTC({ ...otcParams, inviteCode: 'INVITE500' }, mockAdapters);
 
-    // The invite amount (500) wins over the defaultFreeCredits setting (100).
     expect(mockAddCredits).toHaveBeenCalledWith(
       expect.objectContaining({
         ownerId: 'newUserId',
