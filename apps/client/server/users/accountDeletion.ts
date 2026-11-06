@@ -101,6 +101,51 @@ export async function scheduleAccountDeletion(
     source,
   };
 
+  const { email, subscriptions } = await lockDownAccount(req, userId, deletion, { actorUserId, recordInTransaction });
+  if (email) {
+    try {
+      await sendAccountDeletionScheduledEmail(email, deletion.scheduledFor, { source });
+    } catch (err) {
+      req.logger.error(`Failed to send the deletion-scheduled email for user ${userId}: ${String(err)}`);
+    }
+  }
+  return { deletion, subscriptions };
+}
+
+/**
+ * An admin's data subject erasure of `userId`: the same lockdown as a self-serve request, stamped
+ * `source: 'admin'` and due at once, so the purge (completeAccountDeletion.ts) can run immediately.
+ * No email goes to the person. Refused while the user owns an organization, or has a deletion pending
+ * already (self-serve or admin), which this never overrides.
+ */
+export async function requestAdminErasure(
+  req: DeletionRequest,
+  userId: string,
+  now = new Date()
+): Promise<AccountDeletionLockdown> {
+  const ownedOrganizations = await findOwnedOrganizations(userId);
+  if (ownedOrganizations.length > 0) {
+    throw new ConflictError('Transfer or delete the organizations this user owns before erasing their data.', {
+      code: ACCOUNT_DELETION_ORG_OWNER_CODE,
+      organizations: ownedOrganizations,
+    });
+  }
+  const deletion: IUserDeletion = { requestedAt: now, scheduledFor: now, source: 'admin', requestedBy: req.user.id };
+  const { subscriptions } = await lockDownAccount(req, userId, deletion, { actorUserId: req.user.id });
+  return { deletion, subscriptions };
+}
+
+/**
+ * Stamps `deletion` on a user with none pending and locks the account down. The stamp, the sign-out
+ * of every device and the credential revokes commit in one transaction; the remote and best-effort
+ * steps run after commit and never fail the request. Throws ConflictError when nothing matched.
+ */
+async function lockDownAccount(
+  req: DeletionRequest,
+  userId: string,
+  deletion: IUserDeletion,
+  { actorUserId, recordInTransaction }: Pick<ScheduleAccountDeletionInput, 'actorUserId' | 'recordInTransaction'>
+): Promise<{ email: string | null; subscriptions: AccountSubscriptionCancellation }> {
   let integrationGrants: UserIntegrationGrants | null = null;
   const stamped = await commitWithSessionEnd(
     req,
@@ -145,7 +190,7 @@ export async function scheduleAccountDeletion(
     userId,
     event: 'account_deletion_requested',
     actorUserId,
-    metadata: { scheduledFor: deletion.scheduledFor.toISOString(), source },
+    metadata: { scheduledFor: deletion.scheduledFor.toISOString(), source: deletion.source },
   });
 
   const logger = req.logger;
@@ -155,7 +200,7 @@ export async function scheduleAccountDeletion(
   const subscriptions = await cancelAccountSubscriptions({ userId, reason: 'deletion_requested' }, logger);
 
   try {
-    await purgeUserPublishedArtifacts(userId, { deletedBy: userId, logger });
+    await purgeUserPublishedArtifacts(userId, { deletedBy: actorUserId ?? userId, logger });
   } catch (err) {
     logger.error(`Failed to take down published artifacts for deletion-pending user ${userId}: ${String(err)}`);
   }
@@ -164,16 +209,7 @@ export async function scheduleAccountDeletion(
   } catch (err) {
     logger.error(`Failed to withdraw Skill Market listings for deletion-pending user ${userId}: ${String(err)}`);
   }
-
-  if (stamped.email) {
-    try {
-      await sendAccountDeletionScheduledEmail(stamped.email, deletion.scheduledFor, { source });
-    } catch (err) {
-      logger.error(`Failed to send the deletion-scheduled email for user ${userId}: ${String(err)}`);
-    }
-  }
-
-  return { deletion, subscriptions };
+  return { email: stamped.email ?? null, subscriptions };
 }
 
 /**
@@ -202,7 +238,8 @@ export async function clearAccountDeletion(
   const cancelled = await withTransaction(async () => {
     // Reads the address and the cleared stamp in the same query that clears the deletion.
     const cleared = await User.findOneAndUpdate(
-      { _id: userId, deletion: { $ne: null }, 'deletion.purgeStartedAt': null },
+      // An admin's erasure is not the person's request, so neither they nor support can call it off.
+      { _id: userId, deletion: { $ne: null }, 'deletion.purgeStartedAt': null, 'deletion.source': { $ne: 'admin' } },
       { $unset: { deletion: 1 } },
       { projection: { email: 1, deletion: 1 } }
     ).lean<{ email?: string | null; deletion?: IUserDeletion }>();
@@ -212,6 +249,9 @@ export async function clearAccountDeletion(
   if (!cancelled) {
     if (await User.exists({ _id: userId, 'deletion.purgeStartedAt': { $type: 'date' } })) {
       throw new ConflictError('Account deletion has started and can no longer be cancelled.');
+    }
+    if (await User.exists({ _id: userId, 'deletion.source': 'admin' })) {
+      throw new ConflictError("This account is being erased at an administrator's request and cannot be cancelled.");
     }
     throw new NotFoundError('This account is not scheduled for deletion.');
   }

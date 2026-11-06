@@ -300,6 +300,8 @@ const UserDeletionSchema = new Schema(
     requestedAt: { type: Date, required: true },
     scheduledFor: { type: Date, required: true },
     source: { type: String, enum: [...ACCOUNT_DELETION_SOURCES], required: true },
+    requestedBy: { type: String, required: false },
+    erasureScope: { type: Schema.Types.Mixed, required: false },
     purgeStartedAt: { type: Date, required: false },
     purgeLeaseId: { type: String, required: false },
     purgeLeaseExpiresAt: { type: Date, required: false },

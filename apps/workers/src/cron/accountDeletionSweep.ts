@@ -31,7 +31,7 @@ export async function runAccountDeletionSweep(
   const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
   const now = options.now ?? new Date();
 
-  const counts: AccountDeletionSweepResult = { deleted: 0, not_due: 0, not_found: 0, failed: 0 };
+  const counts: AccountDeletionSweepResult = { deleted: 0, not_due: 0, not_found: 0, busy: 0, failed: 0 };
   for (const userId of await userRepository.findDeletionDueUserIds(now, batchSize)) {
     try {
       const outcome = await completeAccountDeletion(userId, { logger, now });
@@ -42,7 +42,7 @@ export async function runAccountDeletionSweep(
     }
   }
 
-  if (counts.deleted + counts.not_due + counts.not_found + counts.failed > 0) {
+  if (counts.deleted + counts.not_due + counts.not_found + counts.busy + counts.failed > 0) {
     logger.info('[AccountDeletionSweep] done', counts);
   }
   return counts;

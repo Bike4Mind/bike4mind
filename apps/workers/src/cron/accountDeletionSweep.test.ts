@@ -33,7 +33,7 @@ describe('runAccountDeletionSweep', () => {
     expect(h.findDeletionDueUserIds).toHaveBeenCalledWith(NOW, 200);
     expect(h.completeAccountDeletion.mock.calls.map(([id]) => id)).toEqual(['u1', 'u2', 'u3']);
     expect(h.completeAccountDeletion).toHaveBeenCalledWith('u1', { logger, now: NOW });
-    expect(result).toEqual({ deleted: 3, not_due: 0, not_found: 0, failed: 0 });
+    expect(result).toEqual({ deleted: 3, not_due: 0, not_found: 0, busy: 0, failed: 0 });
   });
 
   it('honours a custom batch size', async () => {
@@ -46,7 +46,13 @@ describe('runAccountDeletionSweep', () => {
       .mockResolvedValueOnce({ deleted: false, reason: 'not_due' })
       .mockResolvedValueOnce({ deleted: false, reason: 'not_found' });
 
-    await expect(sweep()).resolves.toEqual({ deleted: 1, not_due: 1, not_found: 1, failed: 0 });
+    await expect(sweep()).resolves.toEqual({ deleted: 1, not_due: 1, not_found: 1, busy: 0, failed: 0 });
+  });
+
+  it('counts an account held by a live purge or export as busy', async () => {
+    h.completeAccountDeletion.mockResolvedValueOnce({ deleted: false, reason: 'busy' });
+
+    await expect(sweep()).resolves.toEqual({ deleted: 2, not_due: 0, not_found: 0, busy: 1, failed: 0 });
   });
 
   it('keeps going past a failed account and reports it', async () => {
@@ -55,7 +61,7 @@ describe('runAccountDeletionSweep', () => {
     const result = await sweep();
 
     expect(h.completeAccountDeletion).toHaveBeenCalledTimes(3);
-    expect(result).toEqual({ deleted: 2, not_due: 0, not_found: 0, failed: 1 });
+    expect(result).toEqual({ deleted: 2, not_due: 0, not_found: 0, busy: 0, failed: 1 });
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('u1'), expect.any(Error));
   });
 });

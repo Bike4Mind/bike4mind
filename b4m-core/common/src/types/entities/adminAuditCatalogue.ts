@@ -81,6 +81,11 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // the action when they cannot be recorded (the request before it is queued, the download before it is signed).
   'user.data_export.requested': { category: 'account', severity: 'critical', write: 'strict' },
   'user.data_export.downloaded': { category: 'account', severity: 'critical', write: 'strict' },
+  // A data subject erasure: the dry run, the request (written before the account is locked) and the
+  // check after the user delete of what still names them (counts per collection, no personal data).
+  'user.erasure.previewed': { category: 'account', severity: 'notice', write: 'strict' },
+  'user.erasure.requested': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.erasure.completed': { category: 'account', severity: 'critical', write: 'strict' },
   'user.deletion.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
   // notice, not critical like user.deleted: the sweep carrying out a user's own scheduled deletion.
   'user.deletion.completed': { category: 'account', severity: 'notice', write: 'strict' },

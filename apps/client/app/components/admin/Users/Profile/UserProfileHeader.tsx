@@ -31,12 +31,17 @@ const menuEntries = (user: AdminUserProfile): MenuEntry[] => [
   user.deletion
     ? {
         action: 'cancelDeletion',
-        label: user.deletion.purgeStartedAt
-          ? 'Cancel scheduled deletion (purge in progress)'
-          : 'Cancel scheduled deletion',
-        disabled: !!user.deletion.purgeStartedAt,
+        // An admin erasure cannot be called off (accountDeletion.ts clearAccountDeletion).
+        label:
+          user.deletion.source === 'admin'
+            ? 'Cancel scheduled deletion (erasure in progress)'
+            : user.deletion.purgeStartedAt
+              ? 'Cancel scheduled deletion (purge in progress)'
+              : 'Cancel scheduled deletion',
+        disabled: !!user.deletion.purgeStartedAt || user.deletion.source === 'admin',
       }
     : { action: 'scheduleDeletion', label: 'Schedule deletion (user request)', danger: true },
+  { action: 'erase', label: 'Erase user data', danger: true },
   { action: 'delete', label: 'Delete user', danger: true },
 ];
 

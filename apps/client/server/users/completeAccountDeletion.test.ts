@@ -12,6 +12,9 @@ const h = vi.hoisted(() => ({
   endRealtimeConnections: vi.fn(),
   sendComplete: vi.fn(),
   recordAdminAction: vi.fn(),
+  collections: vi.fn(),
+  assertClassified: vi.fn(),
+  findUnclassified: vi.fn(),
   order: [] as string[],
 }));
 vi.mock('@bike4mind/database', () => ({
@@ -22,6 +25,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   Organization: { exists: h.organizationExists, deleteMany: h.deletePersonalOrganizations },
   realtimeConnectionRepository: {},
+  mongoose: { modelNames: () => ['Alpha', 'Beta'] },
   adminAuditLogRepository: { append: vi.fn() },
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -32,6 +36,15 @@ vi.mock('@server/services/hardDeleteUser', () => ({ hardDeleteUser: h.hardDelete
 vi.mock('./purgeAccountFiles', () => ({ purgeAccountFiles: h.purgeFiles }));
 vi.mock('./purgeAccountContent', () => ({ purgeAccountContent: h.purgeContent }));
 vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: h.sendComplete }));
+vi.mock('@server/dataSubject/subjectErasurePlan', () => ({
+  SubjectErasurePlan: class {
+    collections = (...args: unknown[]) => h.collections(...args);
+  },
+  unerased: (collections: { deleted: number; anonymized: number }[]) =>
+    collections.filter(collection => collection.deleted + collection.anonymized > 0),
+}));
+vi.mock('@server/dataSubject/subjectMatcher', () => ({ assertEveryModelClassified: h.assertClassified }));
+vi.mock('@server/dataSubject/registry', () => ({ findUnclassifiedModels: h.findUnclassified }));
 vi.mock('@server/utils/adminAudit', () => ({
   systemAuditActor: (name: string) => ({ kind: 'system', scope: 'platform', name, wasAdmin: false }),
 }));
@@ -65,6 +78,9 @@ beforeEach(() => {
   h.purgeContent.mockImplementation(async () => {
     h.order.push('content');
   });
+  h.collections.mockResolvedValue([]);
+  h.updateOne.mockResolvedValue({ matchedCount: 1 });
+  h.findUnclassified.mockReturnValue([]);
   h.endRealtimeConnections.mockImplementation(async () => {
     h.order.push('realtime');
   });
@@ -120,7 +136,15 @@ describe('completeAccountDeletion', () => {
           'deletion.purgeLeaseExpiresAt': expect.any(Date),
         },
       },
-      { new: true, projection: { email: 1 } }
+      {
+        new: true,
+        projection: {
+          email: 1,
+          'deletion.source': 1,
+          'deletion.requestedBy': 1,
+          'deletion.erasureScope': 1,
+        },
+      }
     );
     expect(h.order).toEqual(['files', 'content', 'realtime', 'delete', 'audit', 'email']);
     expect(h.deletePersonalOrganizations).toHaveBeenCalledWith(
@@ -129,9 +153,9 @@ describe('completeAccountDeletion', () => {
     );
   });
 
-  it('does no purge when cancellation or another worker wins the atomic claim', async () => {
+  it('reports busy, not not_due, and does no purge when the atomic claim is lost to a lease or export', async () => {
     h.claimUser.mockResolvedValue(null);
-    await expect(complete()).resolves.toEqual({ deleted: false, reason: 'not_due' });
+    await expect(complete()).resolves.toEqual({ deleted: false, reason: 'busy' });
     expect(h.purgeFiles).not.toHaveBeenCalled();
     expect(h.purgeContent).not.toHaveBeenCalled();
     expect(h.hardDeleteUser).not.toHaveBeenCalled();
@@ -273,5 +297,175 @@ describe('completeAccountDeletion', () => {
     h.purgeContent.mockRejectedValue(new Error('purge unavailable'));
     await expect(complete()).rejects.toThrow('purge unavailable');
     expect(h.recordAdminAction).not.toHaveBeenCalled();
+  });
+});
+
+describe('completeAccountDeletion for an admin data subject erasure', () => {
+  const SCOPE = [{ name: 'quests', deleted: 3, anonymized: 0 }];
+  const REMAINING = [
+    { name: 'quests', deleted: 1, anonymized: 0 },
+    { name: 'logs', deleted: 0, anonymized: 2 },
+  ];
+  const NOT_REMAINING = { name: 'notes', deleted: 0, anonymized: 0 };
+  const adminUser = (extra: Record<string, unknown> = {}) => ({
+    email: 'leaving@example.com',
+    deletion: { source: 'admin', requestedBy: 'admin-1', ...extra },
+  });
+
+  beforeEach(() => {
+    h.claimUser.mockResolvedValue(adminUser());
+    h.collections.mockImplementation(async () => {
+      h.order.push('plan');
+      return SCOPE;
+    });
+  });
+
+  it('snapshots the scope before the purge and stores it under the lease', async () => {
+    await expect(complete()).resolves.toEqual({ deleted: true });
+
+    expect(h.order.slice(0, 3)).toEqual(['plan', 'files', 'content']);
+    expect(h.collections.mock.calls[0]).toEqual([expect.any(Function)]);
+    expect(h.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ _id: USER_ID, 'deletion.purgeLeaseId': expect.any(String) }),
+      { $set: { 'deletion.erasureScope': SCOPE } }
+    );
+  });
+
+  it('does not plan again before the purge when the scope is already stored', async () => {
+    const stored = [{ name: 'quests', deleted: 9, anonymized: 0 }];
+    h.claimUser.mockResolvedValue(adminUser({ erasureScope: stored }));
+    h.collections.mockResolvedValue([]);
+
+    await complete();
+
+    expect(h.order[0]).toBe('files');
+    expect(h.collections).toHaveBeenCalledTimes(1);
+    expect(h.collections.mock.calls[0]).toEqual([]);
+    expect(h.updateOne).not.toHaveBeenCalled();
+    const details = h.recordAdminAction.mock.calls[0][0].details;
+    expect(details.scope).toEqual(stored);
+  });
+
+  it('deletes as the admin and records the scope in the in-transaction completion entry', async () => {
+    await complete();
+
+    expect(h.hardDeleteUser).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ deletedBy: 'admin-1', initiatedBy: 'admin' }),
+      expect.any(Function)
+    );
+    expect(h.recordAdminAction.mock.calls[0][0]).toMatchObject({
+      action: 'user.deletion.completed',
+      details: { initiatedBy: 'admin', requestedBy: 'admin-1', scope: SCOPE },
+    });
+  });
+
+  it('checks what still names the person after the delete and records only the leftovers', async () => {
+    h.collections.mockImplementation(async (...args: unknown[]) => {
+      h.order.push('plan');
+      return args.length > 0 ? SCOPE : [...REMAINING, NOT_REMAINING];
+    });
+
+    await expect(complete()).resolves.toEqual({ deleted: true });
+
+    expect(h.order.indexOf('plan', h.order.indexOf('delete'))).toBeGreaterThan(h.order.indexOf('delete'));
+    const completed = h.recordAdminAction.mock.calls.find(([entry]) => entry.action === 'user.erasure.completed');
+    expect(completed?.[0]).toMatchObject({
+      target: { kind: 'user', id: USER_ID, displayName: USER_ID },
+      details: { requestedBy: 'admin-1', remaining: REMAINING },
+    });
+  });
+
+  it.each([
+    [
+      'the post-delete plan',
+      () => h.collections.mockImplementationOnce(async () => SCOPE).mockRejectedValueOnce(new Error('plan down')),
+    ],
+    [
+      'the post-delete audit',
+      () => h.recordAdminAction.mockImplementationOnce(async () => {}).mockRejectedValueOnce(new Error('audit down')),
+    ],
+  ])('logs a failure of %s at error and still reports the deletion', async (_name, arrange) => {
+    arrange();
+
+    await expect(complete()).resolves.toEqual({ deleted: true });
+
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining(USER_ID));
+  });
+
+  const nothingRemainsAfterDelete = () =>
+    h.collections.mockImplementation(async (...args: unknown[]) => (args.length > 0 ? SCOPE : []));
+
+  it('lists unclassified models in the completion record and says so in its summary', async () => {
+    nothingRemainsAfterDelete();
+    h.findUnclassified.mockReturnValue(['Mystery']);
+
+    await complete();
+
+    const completed = h.recordAdminAction.mock.calls.find(([entry]) => entry.action === 'user.erasure.completed');
+    expect(completed?.[0].details).toMatchObject({ remaining: [], unclassified: ['Mystery'] });
+    expect(completed?.[0].summary).toContain('1 unclassified model(s) were not checked');
+  });
+
+  it('records a clean completion with no unclassified models', async () => {
+    nothingRemainsAfterDelete();
+    await complete();
+
+    const completed = h.recordAdminAction.mock.calls.find(([entry]) => entry.action === 'user.erasure.completed');
+    expect(completed?.[0].details).toMatchObject({ unclassified: [] });
+    expect(completed?.[0].summary).toContain('nothing outside the stated retentions');
+  });
+
+  it('names the erased person by id only in the in-transaction completion entry', async () => {
+    await complete();
+
+    const entry = h.recordAdminAction.mock.calls.find(([call]) => call.action === 'user.deletion.completed');
+    expect(entry?.[0].target).toEqual({ kind: 'user', id: USER_ID, displayName: USER_ID });
+  });
+
+  it('asserts every model is classified before snapshotting the scope', async () => {
+    await complete();
+
+    expect(h.assertClassified).toHaveBeenCalledWith(['Alpha', 'Beta']);
+    expect(h.assertClassified.mock.invocationCallOrder[0]).toBeLessThan(h.collections.mock.invocationCallOrder[0]);
+  });
+
+  it('purges nothing when a model is unclassified', async () => {
+    h.assertClassified.mockImplementation(() => {
+      throw new Error('unclassified model');
+    });
+
+    await expect(complete()).rejects.toThrow('unclassified model');
+    expect(h.collections).not.toHaveBeenCalled();
+    expect(h.purgeFiles).not.toHaveBeenCalled();
+    expect(h.hardDeleteUser).not.toHaveBeenCalled();
+  });
+
+  it('throws before purging when the lease was lost while storing the scope snapshot', async () => {
+    h.updateOne.mockResolvedValue({ matchedCount: 0 });
+
+    await expect(complete()).rejects.toThrow('purge lease lost');
+    expect(h.purgeFiles).not.toHaveBeenCalled();
+    expect(h.hardDeleteUser).not.toHaveBeenCalled();
+  });
+
+  it('sends no completion email', async () => {
+    await complete();
+
+    expect(h.sendComplete).not.toHaveBeenCalled();
+  });
+
+  it('keeps the self path emailing and planning nothing', async () => {
+    h.claimUser.mockResolvedValue({ email: 'leaving@example.com', deletion: { source: 'self' } });
+
+    await complete();
+
+    expect(h.collections).not.toHaveBeenCalled();
+    expect(h.sendComplete).toHaveBeenCalledWith('leaving@example.com');
+    expect(h.hardDeleteUser).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ deletedBy: USER_ID, initiatedBy: 'self' }),
+      expect.any(Function)
+    );
   });
 });

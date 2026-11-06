@@ -40,6 +40,7 @@ import {
   slackExportQueueDLQ,
   questExportQueueDLQ,
   accountDataExportQueueDLQ,
+  accountErasureQueueDLQ,
   publishThumbnailQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
@@ -360,6 +361,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'AccountDataExport',
     sourceQueue: 'accountDataExportQueue',
     queue: accountDataExportQueueDLQ,
+  },
+  {
+    label: 'account-erasure',
+    displayName: 'Account Erasure',
+    application: 'AccountErasure',
+    sourceQueue: 'accountErasureQueue',
+    queue: accountErasureQueueDLQ,
   },
   {
     label: 'data-lake-cleanup',

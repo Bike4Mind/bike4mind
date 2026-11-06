@@ -121,6 +121,12 @@ const DLQ_REGISTRY = [
     sourceQueue: 'accountDataExportQueue',
   },
   {
+    label: 'account-erasure',
+    displayName: 'Account Erasure',
+    application: 'AccountErasure',
+    sourceQueue: 'accountErasureQueue',
+  },
+  {
     label: 'generation-job',
     displayName: 'Generation Job',
     application: 'GenerationJob',

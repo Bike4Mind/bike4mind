@@ -1,3 +1,4 @@
+import type { AdminErasureCollection } from './adminDataErasure';
 import { IBaseRepository, IMongoDocument } from '.';
 import { ISessionDocument } from './SessionTypes';
 import { IRegInviteDocument } from './RegistrationInviteType';
@@ -329,6 +330,10 @@ export interface IUserRiskSignal {
   at: Date;
 }
 
+/**
+ * `self`: the person's own request. `support`: an admin scheduling it on the person's request. Both wait out
+ * the grace period. `admin`: a data subject erasure an admin started, due at once.
+ */
 export const ACCOUNT_DELETION_SOURCES = ['self', 'support', 'admin'] as const;
 export type AccountDeletionSource = (typeof ACCOUNT_DELETION_SOURCES)[number];
 
@@ -384,6 +389,13 @@ export interface IUserDeletion {
   requestedAt: Date;
   scheduledFor: Date;
   source: AccountDeletionSource;
+  /** The admin who requested an `admin` erasure. */
+  requestedBy?: string;
+  /**
+   * What the data holder registry counted before the first purge attempt of an `admin` erasure, kept
+   * so the deletion record describes the whole erasure even when a retry finds less left. Counts only.
+   */
+  erasureScope?: AdminErasureCollection[];
   /** Set once irreversible cleanup starts; cancellation is no longer allowed. */
   purgeStartedAt?: Date;
   purgeLeaseId?: string;
