@@ -31,7 +31,7 @@ export const infraHolders = {
       },
     ],
     secretPaths: ['related.impersonationSessionId'],
-    unrelatedPaths: ['actor.email'],
+    unmatchedPaths: { 'actor.email': 'The acting admin, kept in the audit trail; not resolved to their account.' },
   },
   // A reviewer's sign-off on an audit entry: the sign-off stays, the link to the reviewer goes.
   AdminAuditReview: {
@@ -345,7 +345,6 @@ export const infraHolders = {
   SlackAuditLog: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['slackUserId', 'ipAddress'] }],
-    unrelatedPaths: ['slackUserId'],
   },
   SlackChannelConfig: {
     kind: 'holder',
@@ -397,7 +396,6 @@ export const infraHolders = {
     references: [
       { path: 'userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['userEmail', 'sourceIp', 'userAgent'] },
     ],
-    unrelatedPaths: ['userEmail'],
   },
   TelemetryDryRunResult: { kind: 'noUserData', note: 'Telemetry triage dry-run output; no user reference.' },
   // `sender` is the GitHub login that triggered the event, which cannot be resolved to a Bike4Mind user.
