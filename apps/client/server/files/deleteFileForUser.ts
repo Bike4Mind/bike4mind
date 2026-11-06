@@ -19,6 +19,7 @@ import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMem
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
+import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
 import type { Request } from 'express';
 
 /**
@@ -116,6 +117,12 @@ export async function deleteFileForUser(req: Request, fabFileId: string) {
         sizeToDeduct: bytes,
       });
     }
+  }
+
+  // A published file snapshot outlives its source, so take the caller's own pages down with it, as the
+  // bulk delete does. Only on 'deleted': an unshare leaves the owner's file, and their pages, in place.
+  if (deleteAction === 'deleted') {
+    await unpublishUserArtifactsBySource(userId, { kind: 'fabfile', fabFileIds: [fabFileId] }, { logger: req.logger });
   }
 
   // After the transaction, so the aggregation sees the committed `deletedAt`. The shared helper

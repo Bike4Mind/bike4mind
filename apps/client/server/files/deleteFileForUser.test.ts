@@ -10,9 +10,11 @@ const {
   mockRecompute,
   mockIncrementCurrentStorage,
   mockCleanUp,
+  mockUnpublish,
   txn,
 } = vi.hoisted(() => ({
   mockCleanUp: vi.fn(),
+  mockUnpublish: vi.fn(),
   // Whether the fake transaction's callback is running, so a test can tell in-txn from after-commit.
   txn: { open: false, cleanupRanInside: [] as boolean[] },
   mockFindById: vi.fn(),
@@ -66,6 +68,10 @@ vi.mock('@bike4mind/server-utils/dataLakes/recomputeStatsForLakeTags', () => ({
 }));
 vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPrincipal: () => undefined }));
 vi.mock('@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb', () => ({ lakeMembershipAuditDb: {} }));
+
+vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+  unpublishUserArtifactsBySource: mockUnpublish,
+}));
 
 import { deleteFileForUser } from './deleteFileForUser';
 
@@ -172,5 +178,22 @@ describe('deleteFileForUser', () => {
       { userId: 'u1', type: FileEvents.UNSHARE_FILE, metadata: { fileId: FILE_ID, ownerId: 'owner' } },
       { ability: 'ability', session: 'session' }
     );
+  });
+
+  it("takes down the caller's pages published from a file they deleted", async () => {
+    deleteResolves('deleted');
+
+    await deleteFileForUser(req, FILE_ID);
+
+    expect(mockUnpublish).toHaveBeenCalledWith('u1', { kind: 'fabfile', fabFileIds: [FILE_ID] }, { logger });
+  });
+
+  it("leaves the owner's pages up when a sharee only unshares the file", async () => {
+    mockFindById.mockResolvedValue({ userId: 'owner', tags: [] });
+    deleteResolves('unshared', 0, { userId: 'owner' });
+
+    await deleteFileForUser(req, FILE_ID);
+
+    expect(mockUnpublish).not.toHaveBeenCalled();
   });
 });
