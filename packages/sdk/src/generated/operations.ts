@@ -5,6 +5,14 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/data-lakes/{id}/files/{file_id}',
   },
+  addProjectFiles: {
+    method: 'POST',
+    path: '/api/v1/projects/{id}/files',
+  },
+  addProjectSessions: {
+    method: 'POST',
+    path: '/api/v1/projects/{id}/sessions',
+  },
   bulkDeleteFiles: {
     method: 'POST',
     path: '/api/v1/files/bulk-delete',
@@ -269,6 +277,14 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/skills/market/listings/mine',
   },
+  listProjectFiles: {
+    method: 'GET',
+    path: '/api/v1/projects/{id}/files',
+  },
+  listProjectSessions: {
+    method: 'GET',
+    path: '/api/v1/projects/{id}/sessions',
+  },
   listProjects: {
     method: 'GET',
     path: '/api/v1/projects',
@@ -324,6 +340,14 @@ export const operations = {
   removeDataLakeFile: {
     method: 'DELETE',
     path: '/api/v1/data-lakes/{id}/files/{file_id}',
+  },
+  removeProjectFile: {
+    method: 'DELETE',
+    path: '/api/v1/projects/{id}/files/{file_id}',
+  },
+  removeProjectSession: {
+    method: 'DELETE',
+    path: '/api/v1/projects/{id}/sessions/{session_id}',
   },
   rescanSkillMarketVersion: {
     method: 'POST',
