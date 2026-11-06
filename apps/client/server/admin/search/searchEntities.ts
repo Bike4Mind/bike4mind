@@ -4,6 +4,8 @@ import { classifyAdminQuery } from './classifyQuery';
 
 const GROUP_LIMIT = 5;
 const QUERY_TIMEOUT_MS = 350;
+// Bounds the rows scanned for a busy IP; the sort is backed by the (ipAddress, timestamp) index.
+const IP_USAGE_SCAN_LIMIT = 2000;
 const CI_COLLATION = { locale: 'en', strength: 2 };
 const maskEmail = (email: string | null | undefined) => {
   if (!email) return 'No email';
@@ -42,6 +44,7 @@ export async function searchAdminEntities(query: string): Promise<AdminSearchRes
             [
               { $match: { ipAddress: ip } },
               { $sort: { timestamp: -1 } },
+              { $limit: IP_USAGE_SCAN_LIMIT },
               { $group: { _id: '$userId', last: { $first: '$timestamp' } } },
               { $sort: { last: -1 } },
               { $limit: 100 },
@@ -90,16 +93,16 @@ export async function searchAdminEntities(query: string): Promise<AdminSearchRes
           .maxTimeMS(QUERY_TIMEOUT_MS)
           .lean()
       : [],
-    kind === 'keyPrefix'
-      ? []
-      : Organization.find({ name: query })
+    kind === 'name'
+      ? Organization.find({ name: query })
           .hint('organization_name_ci')
           .collation(CI_COLLATION)
           .select('_id name')
           .sort({ _id: 1 })
           .limit(GROUP_LIMIT)
           .maxTimeMS(QUERY_TIMEOUT_MS)
-          .lean(),
+          .lean()
+      : [],
     kind === 'id' || kind === 'stripe'
       ? Organization.find(kind === 'id' ? { _id: query } : { stripeCustomerId: query })
           .hint(kind === 'id' ? '_id_' : 'organization_stripeCustomerId')
