@@ -26967,7 +26967,7 @@
       "get": {
         "operationId": "listEmbeddingModels",
         "summary": "List embedding models",
-        "description": "Returns models whose provider is registered for this deployment and your resolved credentials, with output dimensions, per-input token limits, task-hint support and USD token prices. A null price means the model has no published rate and cannot be used on the embeddings endpoint.",
+        "description": "Returns models whose provider is registered for this deployment and your resolved credentials, with output dimensions, per-input token limits, task-hint support and USD token prices. Models with no published rate are omitted, since the embeddings endpoint cannot bill them.",
         "tags": [
           "AI"
         ],

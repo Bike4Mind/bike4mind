@@ -19,8 +19,8 @@ curl https://app.bike4mind.com/api/v1/embedding-models \
 
 The `models` array lists the models registered for your resolved provider credentials. Each entry
 contains `id`, `display_name`, `provider`, `dimensions`, `max_input_tokens`, `supports_input_type`,
-and `pricing.usd_per_million_input_tokens`. A null `pricing` means no published credit rate is
-configured: the embeddings endpoint refuses that model. The list is returned whole, without pagination.
+and `pricing.usd_per_million_input_tokens`. A model with no published credit rate is left out, since
+the embeddings endpoint refuses it. The list is returned whole, without pagination.
 
 Dimensions have one of three forms:
 
