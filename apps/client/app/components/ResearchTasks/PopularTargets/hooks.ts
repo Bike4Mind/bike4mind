@@ -5,6 +5,7 @@ import { IResearchLinkCategoriesQuery, IResearchLinkWithCategory, IResearchLinks
 import { create } from 'zustand';
 import { toast } from 'sonner';
 import { downloadData } from '@client/app/utils/download';
+import { toCsvCell } from '@client/app/utils/csv';
 import { downloadTemplateData, PAGE_SIZE } from './utils';
 
 interface IPagination {
@@ -164,16 +165,6 @@ export function useDeleteBusinessLink() {
   });
 }
 
-function csvEscape(value: string) {
-  if (value == null) return '';
-  const needsQuotes = /[",\n]/.test(value);
-  let escaped = value.replace(/"/g, '""');
-  if (needsQuotes) {
-    escaped = `"${escaped}"`;
-  }
-  return escaped;
-}
-
 export function useExportCSV() {
   const {
     state: { categoryId, searchTerm },
@@ -209,7 +200,7 @@ export function useExportCSV() {
           link.type,
           link.category?.name ?? '',
           link.category?.description ?? '',
-        ].map(v => csvEscape(String(v ?? '')));
+        ].map(v => toCsvCell(String(v ?? '')));
         return values.join(',');
       });
       const csv = [header, ...rows].join('\n');

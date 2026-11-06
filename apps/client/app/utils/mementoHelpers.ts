@@ -1,4 +1,5 @@
 import { IMemento, MementoTier } from '@bike4mind/common';
+import { toCsvCell } from './csv';
 
 /**
  * Returns the total number of characters across summary, fullContent and tags array.
@@ -33,12 +34,14 @@ export const buildMementosCSV = (mementos: IMemento[]): string => {
       m.type,
       m.tier,
       m.weight,
-      `"${m.summary.replace(/"/g, '""')}"`,
-      `"${m.fullContent.replace(/"/g, '""')}"`,
+      m.summary,
+      m.fullContent,
       new Date(m.lastAccessedAt).toISOString(),
-      `"${(m.tags ?? []).join(';')}"`,
-      `"${(m.embedding ?? []).join(';')}"`,
-    ].join(',')
+      (m.tags ?? []).join(';'),
+      (m.embedding ?? []).join(';'),
+    ]
+      .map(value => toCsvCell(value))
+      .join(',')
   );
 
   return [headers.join(','), ...lines].join('\n');
