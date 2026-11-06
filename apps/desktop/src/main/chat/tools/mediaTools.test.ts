@@ -6,8 +6,14 @@ import type { ChatMedia, ChatToolNotice } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MediaApiClient } from '../media/MediaApiClient';
 import { MediaStore } from '../media/MediaStore';
+import { locateGeneratedImage } from '../media/imageInput';
 import { generateImageTool, generateSpeechTool, saveGeneratedImageTool } from './mediaTools';
 import type { MediaContext, ToolContext } from './types';
+
+vi.mock('../media/imageInput', async importOriginal => {
+  const actual = await importOriginal<typeof import('../media/imageInput')>();
+  return { ...actual, locateGeneratedImage: vi.fn(actual.locateGeneratedImage) };
+});
 
 const SESSION = 'f1a2b3c4-0000-4000-8000-000000000001';
 
@@ -275,6 +281,17 @@ describe('save_generated_image', () => {
     const id = await generate(h);
     await saveGeneratedImageTool.run({ id, path: 'lantern' }, h.context);
     expect(await readFile(join(h.root, 'lantern.png'))).toEqual(PNG_BYTES);
+  });
+
+  it('refuses to save an image whose type has no known extension', async () => {
+    const h = await harness();
+    const id = await generate(h);
+    const gif = join(h.root, 'source.gif');
+    await writeFile(gif, 'GIF89a');
+    vi.mocked(locateGeneratedImage).mockResolvedValueOnce({ id, path: gif, mimeType: 'image/gif', size: 6 });
+    await expect(saveGeneratedImageTool.run({ id, path: 'lantern.gif' }, h.context)).rejects.toThrow(
+      /not PNG, JPEG or WebP/
+    );
   });
 
   it('never replaces an existing file, and says so before the user is asked', async () => {

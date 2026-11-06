@@ -276,11 +276,12 @@ async function planSave(input: Record<string, unknown>, context: ToolContext): P
   // The bytes decide the type: the stored content type is whatever the server labelled it.
   const type = sniffImageType(await readFile(generated.path)) ?? generated.mimeType;
   const allowed = EXTENSIONS_BY_TYPE[type] ?? [];
+  if (allowed.length === 0) throw new Error('This image is not PNG, JPEG or WebP, so it cannot be saved.');
   const extension = extname(requested);
   const matches = allowed.includes(extension.toLowerCase());
   const corrected = matches
     ? requested
-    : `${extension ? requested.slice(0, -extension.length) : requested}${allowed[0] ?? ''}`;
+    : `${extension ? requested.slice(0, -extension.length) : requested}${allowed[0]}`;
 
   const target = await resolveWritablePath(corrected, context);
   if (await exists(target)) {
