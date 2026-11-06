@@ -410,7 +410,8 @@ function Innkeeper({
     follow();
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [point, rest]);
+    // Keyed on the coordinates: a re-render with an equal point must not cancel a walk in progress.
+  }, [point.x, point.y, rest]);
 
   return (
     <Box
