@@ -1,8 +1,12 @@
 import { useState, type ReactNode } from 'react';
 import { Alert, Box, Button, Input, Skeleton, Stack, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
+import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import { ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
+import type { ActivationFunnel } from '@client/app/utils/activationFunnel';
+import { getErrorMessage } from '@client/app/utils/error';
+import type { UserFunnelStep } from '@client/app/utils/adminUsersFilter';
 import type {
   AnalyticsAccounts,
   AnalyticsOverview,
@@ -24,6 +28,7 @@ import { adminTabToSlug } from '../adminTabSlugs';
 import { AdminTab } from '../adminSidebarConfig';
 import { ORGS_ORG_ID_PARAM } from '../organizationsTabSearch';
 import { ActiveUsersSection } from './ActiveUsersSection';
+import { ActivationFunnelSection } from './ActivationFunnelSection';
 import { CohortsSection } from './CohortsSection';
 import { SignupsSection, type SignupWindowSelection } from './SignupsSection';
 import { CreditsSection, FeatureUsageSection, ModelUsageSection } from './UsageSections';
@@ -32,6 +37,7 @@ import { downloadAnalyticsExport } from './analyticsExport';
 import { useAnalyticsTopAccounts } from './useAnalyticsTopAccounts';
 import { ANALYTICS_SEARCH_KEYS, readAnalyticsFilters, writeAnalyticsFilters } from './analyticsTabSearch';
 import { comparisonLine, formatCount, formatPercent, formatUpdatedAt, sparklineValues } from './analyticsFormat';
+import { useActivationFunnel } from './useActivationFunnel';
 import { useAnalyticsOverview } from './useAnalyticsOverview';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 
@@ -78,7 +84,7 @@ function ToolbarGroup({ label, children }: { label: string; children: ReactNode 
   );
 }
 
-function StatTiles({ data }: { data: AnalyticsOverview }) {
+function StatTiles({ data, funnel }: { data: AnalyticsOverview; funnel: ActivationFunnel | undefined }) {
   const { stats, window } = data;
   const compare = window.previous !== null;
   const days = data.activeUsers.days.filter(day => !day.partial);
@@ -132,7 +138,24 @@ function StatTiles({ data }: { data: AnalyticsOverview }) {
         }
         sparkline={<StatSparkline values={sparklineValues(signupSeries)} label="Signups per bucket" />}
       />
-      <StatTile label="Activation rate" value="-" comparison="Coming soon" />
+      <StatTile
+        label="Activation rate"
+        value={funnel?.status === 'ok' ? formatPercent(funnel.activationRate.value) : '-'}
+        comparison={
+          funnel?.status === 'rangeTooLong'
+            ? `Pick ${funnel.maxDays} days or fewer`
+            : funnel?.status === 'ok' && funnel.steps[0].reached === 0 && funnel.tooNew > 0
+              ? 'Signups too new to judge'
+              : funnel?.status === 'ok' && compare
+                ? comparisonLine(
+                    funnel.activationRate.value,
+                    funnel.activationRate.previous,
+                    window.completeDays,
+                    'points'
+                  )
+                : undefined
+        }
+      />
     </>
   );
 }
@@ -163,6 +186,12 @@ const AnalyticsTab = () => {
   const { data, isPending, isError, isPlaceholderData, refetch } = useAnalyticsOverview(query, queryReady);
   const topAccounts = useAnalyticsTopAccounts(query, queryReady);
   const [exporting, setExporting] = useState(false);
+
+  const funnelQuery = useActivationFunnel(query, queryReady);
+  const funnelRefused =
+    isAxiosError(funnelQuery.error) && funnelQuery.error.response?.status === 422
+      ? getErrorMessage(funnelQuery.error)
+      : undefined;
 
   const setQuery = (patch: Partial<AnalyticsOverviewQuery>) =>
     updateUrl({ filters: writeAnalyticsFilters({ ...query, ...patch }) });
@@ -206,6 +235,19 @@ const AnalyticsTab = () => {
     } finally {
       setExporting(false);
     }
+  };
+  const openFunnelStep = (step: UserFunnelStep) => {
+    const funnel = funnelQuery.data;
+    if (funnel?.status !== 'ok') return;
+    void navigate({
+      to: '/admin',
+      search: (previous: AdminSearch) => ({
+        ...adminSearchForTab(previous, ADMIN_USERS_TAB_SLUG),
+        ...funnel.window,
+        funnelStep: step,
+        verdict: funnel.signups === 'legit' ? ('legit' as const) : undefined,
+      }),
+    });
   };
 
   // Pending also covers a custom range still waiting for its dates.
@@ -373,7 +415,13 @@ const AnalyticsTab = () => {
         </Alert>
       )}
 
-      <StatStrip aria-label="Key numbers">{data && !isError ? <StatTiles data={data} /> : <StatSkeletons />}</StatStrip>
+      <StatStrip aria-label="Key numbers">
+        {data && !isError ? (
+          <StatTiles data={data} funnel={funnelQuery.isPlaceholderData ? undefined : funnelQuery.data} />
+        ) : (
+          <StatSkeletons />
+        )}
+      </StatStrip>
       {data?.window.partialDay && (
         <Typography level="body-xs" sx={{ color: 'admin.inkMuted', mt: -1.5 }}>
           {`Tiles cover the ${data.window.completeDays} complete UTC days; today is still counting and is left out.`}
@@ -389,6 +437,17 @@ const AnalyticsTab = () => {
       >
         <ActiveUsersSection {...sectionProps} />
         <SignupsSection {...sectionProps} onSelectWindow={openSignupWindow} />
+        <ActivationFunnelSection
+          data={funnelQuery.data}
+          loading={funnelQuery.isPending && !funnelQuery.isError}
+          error={funnelQuery.isError && !funnelRefused}
+          refused={funnelRefused}
+          updating={funnelQuery.isPlaceholderData}
+          fetching={funnelQuery.isFetching}
+          onRetry={() => void funnelQuery.refetch()}
+          onShowDefaultRange={showDefaultRange}
+          onSelectStep={openFunnelStep}
+        />
         <FeatureUsageSection {...sectionProps} />
         <ModelUsageSection {...sectionProps} onOpenModels={() => openTab(AdminTab.ModelMetrics)} />
         <CreditsSection {...sectionProps} onOpenCredits={() => openTab(AdminTab.CreditAnalytics)} />

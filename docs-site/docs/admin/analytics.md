@@ -30,13 +30,13 @@ The toolbar is kept in the page URL (`range`, `start`, `end`, `compare`, `signup
 
 ## Key numbers
 
-| Tile                   | What it shows                                                                                                     |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **Active users (MAU)** | Users active in the 28 days ending on the last complete day of the range                                          |
-| **Daily active (avg)** | The average number of users active per day                                                                        |
-| **Stickiness**         | Average daily active users as a share of MAU                                                                      |
-| **New signups**        | Signups in the range (real only, or all, per the Signups toggle), with the number of suspected signups underneath |
-| **Activation rate**    | Not available yet                                                                                                 |
+| Tile                   | What it shows                                                                                                                                                                                                                                   |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Active users (MAU)** | Users active in the 28 days ending on the last complete day of the range                                                                                                                                                                        |
+| **Daily active (avg)** | The average number of users active per day                                                                                                                                                                                                      |
+| **Stickiness**         | Average daily active users as a share of MAU                                                                                                                                                                                                    |
+| **New signups**        | Signups in the range (real only, or all, per the Signups toggle), with the number of suspected signups underneath                                                                                                                               |
+| **Activation rate**    | The share of judged signups that came back, per the [activation funnel](#activation-funnel), with a points comparison against the previous period. Shows a dash when the range is longer than 93 days or every signup in it is too new to judge |
 
 A user is active on a day when they make at least one successful AI request that UTC day, from the web app, the CLI, Desktop or an agent run. Requests made through the public API and internal system traffic do not make a user active, so a user active only through the API is not counted in daily, weekly or monthly active users.
 
@@ -55,6 +55,23 @@ Switch to **By surface** to see AI requests per day stacked by surface as bars. 
 Stacked bars of real and suspected signups. A signup is real when the account has a verified email, is not banned or held, and made a successful AI request within 7 days of signing up (system traffic does not count). Every other signup is suspected, so there is no unclassified bucket; a signup moves from suspected to real when its first request lands inside the 7 days, which the nightly job re-checks for 14 days. Bars are days for 7d and 28d, ISO weeks (starting Monday) for 90d, and months for 12m.
 
 Click a Real or Suspected bar to open the Users list filtered to that verdict and the accounts created in that bar's window. In the table, click a date to list all accounts created in its window. Below the chart, the signals that marked accounts in the range are listed with their counts.
+
+## Activation funnel
+
+Four steps, each needing the one before it:
+
+1. **Signed up**: the account was created in the range.
+2. **First AI action**: a successful AI request on the signup day or in the 7 days after it.
+3. **Came back**: AI activity on a later day within those 7 days.
+4. **Paid**: a completed credit purchase, or a Stripe-billed subscription (on the user's own account or an organization they own), on the signup day or within the 30 UTC days after it. Subscriptions granted by an admin do not count.
+
+Each bar shows how many signups reached that step and what percent that is of the step before. Under each bar, **N stopped here** is the number of signups whose furthest step is that one. Click it to open the Users list with exactly those accounts. The list is judged when you open it, so a signup that turned 7 days old after the funnel loaded can also appear in it.
+
+Signups less than 7 days old are too new to judge, so they are left out of every step and counted separately in the caption. When every signup in the range is that new, as on 7d, the section says so instead of showing bars, and the Activation rate tile shows a dash. While some signups in the range are within the paid window, the **Paid** step shows a **Pending** chip because it can still grow.
+
+The funnel follows the **Signups** toggle: with **Real only**, suspected signups are left out of every step, and the drill-down is filtered the same way.
+
+The funnel covers ranges of up to 93 days. For a longer range, such as 12m, it explains the limit and offers **Show last 90 days**. A range with more than 20,000 signups is not charted either; the section says so, and a shorter range will load.
 
 ## Retention cohorts
 

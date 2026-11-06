@@ -11,16 +11,20 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
+import type { ActivationFunnel } from '@client/app/utils/activationFunnel';
 import type { AnalyticsOverview, AnalyticsTopAccounts } from '@client/app/utils/analyticsOverview';
 import { parseAdminSearch } from '../adminTabParams';
 
 const mocks = vi.hoisted(() => {
   const overview = vi.fn();
   const topAccounts = vi.fn();
-  const get = vi.fn((url: string, config?: unknown) =>
-    url.endsWith('/top-accounts') ? topAccounts(url, config) : overview(url, config)
-  );
-  return { get, overview, topAccounts, download: vi.fn(), toastError: vi.fn() };
+  const funnel = vi.fn();
+  const get = vi.fn((url: string, config?: unknown) => {
+    if (url.endsWith('/top-accounts')) return topAccounts(url, config);
+    if (url.endsWith('/activation')) return funnel(url, config);
+    return overview(url, config);
+  });
+  return { get, overview, topAccounts, funnel, download: vi.fn(), toastError: vi.fn() };
 });
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get } }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
@@ -167,6 +171,28 @@ const topAccounts = (patch: Partial<AnalyticsTopAccounts> = {}): AnalyticsTopAcc
   ...patch,
 });
 
+const funnel = (patch: Partial<Extract<ActivationFunnel, { status: 'ok' }>> = {}): ActivationFunnel => ({
+  status: 'ok',
+  signups: 'legit',
+  window: { createdFrom: '2026-05-19T00:00:00.000Z', createdTo: '2026-06-16T00:00:00.000Z' },
+  steps: [
+    { step: 'signedUp', reached: 40, stoppedHere: 10 },
+    { step: 'firstAction', reached: 30, stoppedHere: 12 },
+    { step: 'cameBack', reached: 18, stoppedHere: 14 },
+    { step: 'paid', reached: 4, stoppedHere: 4 },
+  ],
+  tooNew: 5,
+  paidPending: false,
+  activationRate: { value: 45, previous: 50 },
+  ...patch,
+});
+
+const respondFunnel = (funnelData: ActivationFunnel | Error) =>
+  mocks.funnel.mockImplementation(async () => {
+    if (funnelData instanceof Error) throw funnelData;
+    return { data: funnelData };
+  });
+
 async function renderPage(url: string) {
   const root = createRootRoute();
   const admin = createRoute({
@@ -201,6 +227,8 @@ beforeEach(() => {
   mocks.download.mockReset();
   mocks.download.mockResolvedValue(undefined);
   mocks.toastError.mockClear();
+  mocks.funnel.mockReset();
+  respondFunnel(funnel());
 });
 
 describe('analytics URL state', () => {
@@ -325,7 +353,7 @@ describe('AnalyticsTab', () => {
     expect(mocks.get).not.toHaveBeenCalled();
   });
 
-  it('shows the tiles, comparisons, suspected meta and the activation placeholder', async () => {
+  it('shows the tiles, comparisons and suspected meta', async () => {
     await renderPage('/admin?tab=analytics');
     await screen.findByText('Active users (MAU)');
     const strip = screen.getByTestId('admin-stat-strip');
@@ -333,7 +361,8 @@ describe('AnalyticsTab', () => {
     expect(within(strip).getByText('+12% vs previous 27 days')).toBeInTheDocument();
     expect(within(strip).getByText('-7.1 pts vs previous 27 days')).toBeInTheDocument();
     expect(within(strip).getByText(/7 suspected/)).toBeInTheDocument();
-    expect(within(strip).getByText('Coming soon')).toBeInTheDocument();
+    expect(await within(strip).findByText('45.0%')).toBeInTheDocument();
+    expect(within(strip).getByText('-5.0 pts vs previous 27 days')).toBeInTheDocument();
     expect(screen.getByTestId('analytics-last-updated')).toHaveTextContent('Last updated');
     expect(screen.getByTestId('analytics-footer')).toHaveTextContent(
       /web app, CLI, Desktop or an agent run.*A signup is real when the email is verified.*banned or held ones included, is suspected.*External API users are shown separately regardless of Accounts and not counted/
@@ -474,6 +503,95 @@ describe('AnalyticsTab', () => {
     expect(await screen.findByTestId('analytics-active-users-table')).toHaveTextContent(
       'External API users (not counted)'
     );
+  });
+
+  describe('activation funnel', () => {
+    it('drills into the users who stopped at a step, for the funnel window and the legit verdict', async () => {
+      const router = await renderPage('/admin?tab=analytics');
+      fireEvent.click(await screen.findByTestId('analytics-funnel-step-cameBack-btn'));
+      await waitFor(() =>
+        expect(router.state.location.search).toMatchObject({
+          tab: 'users',
+          createdFrom: '2026-05-19T00:00:00.000Z',
+          createdTo: '2026-06-16T00:00:00.000Z',
+          funnelStep: 'cameBack',
+          verdict: 'legit',
+        })
+      );
+    });
+
+    it('disables the step buttons while a stale funnel is shown, so a click never mixes modes', async () => {
+      await renderPage('/admin?tab=analytics');
+      await screen.findByTestId('analytics-funnel-step-paid-btn');
+      let release: (value: unknown) => void = () => {};
+      const pending = new Promise(resolve => {
+        release = resolve;
+      });
+      mocks.funnel.mockImplementation(async () => {
+        await pending;
+        return { data: funnel({ signups: 'all' }) };
+      });
+      fireEvent.click(screen.getByTestId('analytics-signups-mode-all'));
+      expect(await screen.findByTestId('analytics-funnel-updating')).toBeInTheDocument();
+      expect(screen.getByTestId('analytics-funnel-step-paid-btn')).toBeDisabled();
+      expect(within(screen.getByTestId('admin-stat-strip')).queryByText('45.0%')).not.toBeInTheDocument();
+      release(undefined);
+      await waitFor(() => expect(screen.getByTestId('analytics-funnel-step-paid-btn')).toBeEnabled());
+    });
+
+    it('stops saying updating once the custom range becomes inverted, and keeps the buttons disabled', async () => {
+      await renderPage('/admin?tab=analytics&range=custom&start=2026-06-01&end=2026-06-10');
+      await screen.findByTestId('analytics-funnel-step-paid-btn');
+      fireEvent.change(screen.getByLabelText('End date (UTC)'), { target: { value: '2026-05-01' } });
+      await screen.findByTestId('analytics-custom-hint');
+      expect(screen.queryByTestId('analytics-funnel-updating')).not.toBeInTheDocument();
+      expect(screen.getByTestId('analytics-funnel-step-paid-btn')).toBeDisabled();
+    });
+
+    it('says signups are too new to judge, on the section and the tile, when none are judged yet', async () => {
+      const steps = (['signedUp', 'firstAction', 'cameBack', 'paid'] as const).map(step => ({
+        step,
+        reached: 0,
+        stoppedHere: 0,
+      }));
+      respondFunnel(funnel({ steps, tooNew: 50, activationRate: { value: null, previous: null } }));
+      await renderPage('/admin?tab=analytics&range=7d');
+      expect(await screen.findByText('50 signups are too new to judge')).toBeInTheDocument();
+      expect(within(screen.getByTestId('admin-stat-strip')).getByText('Signups too new to judge')).toBeInTheDocument();
+      expect(screen.queryByText('No activity in this range')).not.toBeInTheDocument();
+    });
+
+    it('leaves the verdict off when all signups are counted', async () => {
+      respondFunnel(funnel({ signups: 'all' }));
+      const router = await renderPage('/admin?tab=analytics&signups=all');
+      fireEvent.click(await screen.findByTestId('analytics-funnel-step-paid-btn'));
+      await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: 'users', funnelStep: 'paid' }));
+      expect(router.state.location.search.verdict).toBeUndefined();
+    });
+
+    it('requests the funnel for the same view as the overview', async () => {
+      await renderPage('/admin?tab=analytics&range=90d&compare=off');
+      await screen.findByTestId('analytics-funnel-chart');
+      const call = mocks.get.mock.calls.find(([url]) => url === '/api/admin/analytics/activation');
+      expect(call?.[1]).toEqual({ params: { range: '90d', compare: 'off', signups: 'legit' } });
+    });
+
+    it('explains a range over the limit in the section and on the tile, and offers 90 days', async () => {
+      respondFunnel({ status: 'rangeTooLong', maxDays: 93 });
+      const router = await renderPage('/admin?tab=analytics&range=12m');
+      expect(await screen.findByText('The funnel covers up to 93 days of signups')).toBeInTheDocument();
+      expect(within(screen.getByTestId('admin-stat-strip')).getByText('Pick 93 days or fewer')).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('analytics-funnel-show-90d-btn'));
+      await waitFor(() => expect(router.state.location.search.range).toBe('90d'));
+    });
+
+    it('fails on its own: the overview stays up and the tile falls back to a dash', async () => {
+      respondFunnel(new Error('boom'));
+      await renderPage('/admin?tab=analytics');
+      expect(await screen.findByText('Could not load activation funnel.')).toBeInTheDocument();
+      expect(screen.getByText('Active users (MAU)')).toBeInTheDocument();
+      expect(screen.queryByText('45.0%')).not.toBeInTheDocument();
+    });
   });
 
   it('lists the signup signals as inline bars', async () => {
