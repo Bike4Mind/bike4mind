@@ -502,9 +502,28 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
             { $sort: { cogsUsd: -1, provider: 1, model: 1 } },
             { $limit: SPEND_MODEL_LIMIT },
           ],
+          // failures and p95 feed the Spend tab's per-account threshold flags.
           byAccount: [
-            { $group: { _id: { ownerId: '$ownerId', ownerType: '$ownerType' }, ...spendSums } },
-            { $project: { _id: 0, ownerId: '$_id.ownerId', ownerType: '$_id.ownerType', ...spendFields } },
+            {
+              $group: {
+                _id: { ownerId: '$ownerId', ownerType: '$ownerType' },
+                ...spendSums,
+                failures: { $sum: { $cond: [{ $in: ['$status', ['error', 'timeout']] }, 1, 0] } },
+                // $percentile skips non-numeric values, so rows without latencyMs drop out on their own.
+                // any: the operator postdates mongoose's typed AccumulatorOperator.
+                p95: { $percentile: { input: '$latencyMs', p: [0.95], method: 'approximate' } } as any,
+              },
+            },
+            {
+              $project: {
+                _id: 0,
+                ownerId: '$_id.ownerId',
+                ownerType: '$_id.ownerType',
+                ...spendFields,
+                failures: 1,
+                p95LatencyMs: { $round: [{ $ifNull: [{ $first: '$p95' }, 0] }, 0] },
+              },
+            },
             { $sort: { cogsUsd: -1, ownerId: 1 } },
             { $limit: SPEND_ACCOUNT_LIMIT },
           ],
