@@ -5,9 +5,9 @@ import type { IMessage, MessageContent, MessageContentObject } from '../types/en
  * MessageContentObject union, so every backend translator only has to read one
  * shape.
  *
- * `/api/ai/v1/completions` accepts an unvalidated content array
- * (CompletionMessageSchema's `z.array(z.any())`) and callers write it in
- * whichever dialect their SDK speaks: OpenAI Chat (`image_url`), OpenAI
+ * `/api/ai/v1/completions` accepts a content array whose known blocks are
+ * typed (CompletionContentBlockSchema, which must stay in step with the
+ * dialects below) and callers write it in whichever dialect their SDK speaks: OpenAI Chat (`image_url`), OpenAI
  * Responses (`input_text`/`input_image`), or Anthropic (`image` + `source`).
  * Images always canonicalize to `image_url`, folding an Anthropic base64
  * source into a `data:` URL so every OpenAI-family translator (which reads
