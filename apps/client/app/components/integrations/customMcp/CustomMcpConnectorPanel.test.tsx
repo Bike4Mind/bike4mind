@@ -1,6 +1,6 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -8,7 +8,7 @@ import type { IMcpConnectionPublic } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { api } from '@client/app/contexts/ApiContext';
 
-const h = vi.hoisted(() => ({ confirm: vi.fn(), impersonating: false }));
+const h = vi.hoisted(() => ({ confirm: vi.fn(), impersonating: false, enabled: true }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
@@ -18,6 +18,9 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({
     selector({ impersonating: h.impersonating }),
 }));
 vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => h.confirm }));
+vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
+  useAdminSettingsCache: () => ({ isFeatureEnabled: () => h.enabled }),
+}));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
 import CustomMcpConnectorPanel from './CustomMcpConnectorPanel';
@@ -26,13 +29,16 @@ const appTheme = extendTheme({ ...getThemeConfig() });
 
 const renderPanel = (props: React.ComponentProps<typeof CustomMcpConnectorPanel> = {}) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <CssVarsProvider theme={appTheme}>
-        <CustomMcpConnectorPanel {...props} />
-      </CssVarsProvider>
-    </QueryClientProvider>
-  );
+  return {
+    queryClient,
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <CssVarsProvider theme={appTheme}>
+          <CustomMcpConnectorPanel {...props} />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    ),
+  };
 };
 
 const tool = (name: string, overrides: Record<string, unknown> = {}) => ({
@@ -73,9 +79,18 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.confirm.mockImplementation(({ onOk }: { onOk: () => void }) => onOk());
   h.impersonating = false;
+  h.enabled = true;
 });
 
 describe('CustomMcpConnectorPanel', () => {
+  it('shows the feature setting instead of a form and sends no request while disabled', () => {
+    h.enabled = false;
+    renderPanel();
+    expect(screen.getByTestId('custom-mcp-panel-disabled')).toHaveTextContent('EnableCustomMcpConnectors');
+    expect(screen.queryByTestId('custom-mcp-add-form')).not.toBeInTheDocument();
+    expect(api.get).not.toHaveBeenCalled();
+  });
+
   it('shows a note instead of a loading state while impersonating, and asks for nothing', () => {
     h.impersonating = true;
     renderPanel();
@@ -236,32 +251,47 @@ describe('CustomMcpConnectorPanel', () => {
       await waitFor(() => expect(screen.queryByTestId('custom-mcp-review-c1')).not.toBeInTheDocument());
     });
 
-    it('keeps reviewing the versions it opened with when a refresh brings new or changed tools', async () => {
+    it('keeps the reviewed versions on a background update and disables explicit refresh until closed', async () => {
       const opened = connection({ tools: [tool('search')] });
       listReturns([opened]);
-      vi.mocked(api.post).mockResolvedValueOnce({
-        data: {
-          connection: { ...opened, tools: [tool('search', { versionHash: 'v-search-2' }), tool('added')] },
-          discovery: { added: ['added'], changed: ['search'], removed: [], dropped: 0 },
-        },
-      });
       vi.mocked(api.patch).mockResolvedValueOnce({ data: opened });
-      renderPanel();
+      const { queryClient } = renderPanel();
 
       await userEvent.click(await screen.findByTestId('custom-mcp-connection-c1-review-btn'));
-      await userEvent.click(screen.getByTestId('custom-mcp-connection-c1-refresh-btn'));
-
-      expect(api.post).toHaveBeenCalledWith('/api/mcp-connections/c1/refresh-tools');
+      expect(screen.getByTestId('custom-mcp-connection-c1-refresh-btn')).toBeDisabled();
+      expect(api.post).not.toHaveBeenCalled();
+      act(() => {
+        queryClient.setQueryData(
+          ['mcpConnections', 'list'],
+          [{ ...opened, tools: [tool('search', { versionHash: 'v-search-2' }), tool('added')] }]
+        );
+      });
       await waitFor(() =>
         expect(screen.getByTestId('custom-mcp-connection-c1-summary')).toHaveTextContent('of 2 tools')
       );
-      expect(screen.getByTestId('custom-mcp-review-c1')).toBeInTheDocument();
       expect(screen.queryByTestId('custom-mcp-review-c1-tool-added')).not.toBeInTheDocument();
-
       await userEvent.click(screen.getByTestId('custom-mcp-review-c1-save-btn'));
       expect(api.patch).toHaveBeenCalledWith('/api/mcp-connections/c1', {
         tools: [{ name: 'search', versionHash: 'v-search', enabled: false, approval: 'default', state: 'active' }],
       });
+      await waitFor(() => expect(screen.getByTestId('custom-mcp-connection-c1-refresh-btn')).toBeEnabled());
+    });
+
+    it('opens the newly discovered tool list after an explicit refresh outside review', async () => {
+      const opened = connection({ tools: [tool('search')] });
+      listReturns([opened]);
+      vi.mocked(api.post).mockResolvedValueOnce({
+        data: {
+          connection: { ...opened, tools: [tool('search', { versionHash: 'v2' }), tool('added')] },
+          discovery: { added: ['added'], changed: ['search'], removed: [], dropped: 0 },
+        },
+      });
+      renderPanel();
+      await userEvent.click(await screen.findByTestId('custom-mcp-connection-c1-review-btn'));
+      await userEvent.click(screen.getByTestId('custom-mcp-review-c1-cancel-btn'));
+      await userEvent.click(screen.getByTestId('custom-mcp-connection-c1-refresh-btn'));
+      expect(await screen.findByTestId('custom-mcp-review-c1-tool-added')).toBeInTheDocument();
+      expect(api.post).toHaveBeenCalledWith('/api/mcp-connections/c1/refresh-tools');
     });
 
     it('closes the review and re-reads the connection when a tool changed meanwhile', async () => {

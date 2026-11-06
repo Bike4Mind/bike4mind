@@ -4,6 +4,7 @@ import AddIcon from '@mui/icons-material/Add';
 import type { IMcpConnectionPublic, McpPresetId } from '@bike4mind/common';
 import { useMcpConnections } from '@client/app/hooks/data/mcpConnections';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
+import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import AddMcpConnectorForm from './AddMcpConnectorForm';
 import McpConnectionItem from './McpConnectionItem';
 import { connectionsFor } from './customMcpModel';
@@ -15,7 +16,9 @@ import { connectionsFor } from './customMcpModel';
  */
 const CustomMcpConnectorPanel = ({ presetId, presetName }: { presetId?: McpPresetId; presetName?: string }) => {
   const impersonating = useAccessToken(s => s.impersonating);
-  const { data, isPending, isError, refetch } = useMcpConnections();
+  const { isFeatureEnabled } = useAdminSettingsCache();
+  const enabled = isFeatureEnabled('EnableCustomMcpConnectors');
+  const { data, isPending, isError, refetch } = useMcpConnections({ enabled });
   const connections = connectionsFor(data ?? [], presetId);
   const [adding, setAdding] = useState(false);
   // The connection just added: it opens on its tool review.
@@ -26,6 +29,13 @@ const CustomMcpConnectorPanel = ({ presetId, presetName }: { presetId?: McpPrese
     return (
       <Typography level="body-sm" sx={{ color: 'text.secondary' }} data-testid="custom-mcp-panel-impersonating">
         Custom connectors are not shown while impersonating a user.
+      </Typography>
+    );
+  }
+  if (!enabled) {
+    return (
+      <Typography level="body-sm" data-testid="custom-mcp-panel-disabled">
+        Turn on EnableCustomMcpConnectors in Admin settings to use custom connectors.
       </Typography>
     );
   }

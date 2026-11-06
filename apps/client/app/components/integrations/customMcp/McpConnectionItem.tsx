@@ -39,6 +39,7 @@ const McpConnectionItem = ({
   const [panel, setPanel] = useState<Panel>(
     reviewOnMount && connection.status === 'connected' && connection.tools.length > 0 ? 'review' : 'none'
   );
+  const [reviewConnection, setReviewConnection] = useState<IMcpConnectionPublic | null>(null);
   const [apiKey, setApiKey] = useState('');
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
@@ -70,7 +71,10 @@ const McpConnectionItem = ({
       onSuccess: ({ discovery, connection: refreshed }) => {
         const changes = discovery.added.length + discovery.changed.length;
         toast.success(changes > 0 ? `${plural(changes, 'tool', 'tools')} to review.` : 'Tools are up to date.');
-        if (pendingReviewCount(refreshed) > 0) setPanel('review');
+        if (pendingReviewCount(refreshed) > 0) {
+          setReviewConnection(refreshed);
+          setPanel('review');
+        }
       },
       onError: error => toast.error(mcpConnectionErrorMessage(error, 'Could not refresh the tools.')),
     });
@@ -81,6 +85,7 @@ const McpConnectionItem = ({
       {
         onSuccess: rotated => {
           setApiKey('');
+          setReviewConnection(rotated);
           setPanel(rotated.status === 'connected' && pendingReviewCount(rotated) > 0 ? 'review' : 'none');
           if (rotated.status === 'connected') toast.success('API key replaced.');
           else toast.error(rotated.lastError?.message ?? 'The server did not accept the key.');
@@ -176,7 +181,10 @@ const McpConnectionItem = ({
             variant={pending > 0 ? 'solid' : 'outlined'}
             color={pending > 0 ? 'primary' : 'neutral'}
             disabled={busy}
-            onClick={() => setPanel(panel === 'review' ? 'none' : 'review')}
+            onClick={() => {
+              setReviewConnection(null);
+              setPanel(panel === 'review' ? 'none' : 'review');
+            }}
             data-testid={`${testId}-review-btn`}
           >
             Review tools
@@ -188,7 +196,7 @@ const McpConnectionItem = ({
             variant="outlined"
             color="neutral"
             loading={refresh.isPending}
-            disabled={busy}
+            disabled={busy || panel === 'review'}
             onClick={refreshTools}
             data-testid={`${testId}-refresh-btn`}
           >
@@ -222,7 +230,7 @@ const McpConnectionItem = ({
 
       {panel === 'review' && (
         <Box sx={{ mt: '12px' }}>
-          <McpToolReview connection={connection} onDone={() => setPanel('none')} />
+          <McpToolReview connection={reviewConnection ?? connection} onDone={() => setPanel('none')} />
         </Box>
       )}
 
