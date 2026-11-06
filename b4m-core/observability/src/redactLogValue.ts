@@ -7,10 +7,34 @@ const MAX_NODES = 2000;
 const sensitiveSuffix =
   /(?:secret|token|password|apikey|body|bodypreview|prompt|promptpreview|parameterspreview|toolresult|preview|snippet)$/i;
 const sensitiveField =
-  /^(authorization|proxyAuthorization|cookie|setCookie|headers|config|request|response|body|requestBody|responseBody|data|message|messages|conversation|conversationHistory|prompt|systemPrompt|content|text|toolResult|toolResults|arguments|parameters|parametersPreview|fullChunk|result|password|securityQuestions|userNotes|apiKey|xiApiKey|xKey|token|accessToken|refreshToken|clientSecret|signingSecret|secret|previousKey)$/i;
+  /^(authorization|proxyAuthorization|cookie|setCookie|headers|config|request|response|body|requestBody|responseBody|data|message|messages|conversation|conversationHistory|prompt|systemPrompt|content|text|toolResult|toolResults|arguments|parameters|parametersPreview|fullChunk|result|password|securityQuestions|userNotes|apiKey|xiApiKey|xKey|token|accessToken|refreshToken|clientSecret|signingSecret|secret|previousKey|otc|otp|oneTimeCode|verificationCode|magicLink|samlResponse|userToken|tokenPrefix|username|firstName|lastName|fullName|displayName|subject|query|searchQuery|params|commandText)$/i;
+
+/**
+ * Value patterns scrubbed from every string, including message text and stack traces, so a value
+ * interpolated into a template literal is caught even though no field name points at it. Every
+ * quantifier is bounded or runs over a class that excludes the following delimiter, so each pass
+ * stays linear in the input.
+ */
+const stringScrubbers: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\bBearer\s+[^\s"',;]+/gi, `Bearer ${REDACTED}`],
+  // Credentials in a URL query string (OAuth callbacks, presigned URLs, magic links).
+  [
+    /([?&](?:code|token|access_token|refresh_token|id_token|otc|otp|key|api_key|apikey|password|signature|sig|x-amz-signature|x-amz-credential|x-amz-security-token)=)[^&\s"'#]+/gi,
+    `$1${REDACTED}`,
+  ],
+  [/\beyJ[\w-]{5,}\.[\w-]{5,}\.[\w-]*/g, '[REDACTED_JWT]'],
+  [
+    /\b(?:sk-[\w-]{20,}|(?:b4m_live|whsec|github_pat|gh[pousr])_\w{12,}|xox[abposr]-[\w-]{12,}|xapp-[\w-]{12,}|(?:sk|rk)_(?:live|test)_\w{12,}|AIza[\w-]{30,}|(?:AKIA|ASIA)[0-9A-Z]{16})/g,
+    REDACTED,
+  ],
+  // The domain is kept: it is what an operator needs ("every gmail.com signup fails"), not who.
+  [/\b[\w.%+-]{1,64}@((?:[A-Za-z0-9-]{1,63}\.){1,8}[A-Za-z]{2,24})\b/g, '***@$1'],
+];
 
 function redactString(value: string): string {
-  return value.replace(/\bBearer\s+[^\s"',;]+/gi, `Bearer ${REDACTED}`);
+  let result = value;
+  for (const [pattern, replacement] of stringScrubbers) result = result.replace(pattern, replacement);
+  return result;
 }
 
 interface WalkState {
@@ -146,4 +170,12 @@ function walk(value: unknown, state: WalkState, depth: number): unknown {
 /** Sanitize before formatting so JSON, pretty and plain output share the same boundary. */
 export function redactLogValue(value: unknown, seen = new WeakSet<object>()): unknown {
   return walk(value, { seen, nodes: 0 }, 0);
+}
+
+/**
+ * Scrub a log line that never went through the Logger (raw `console.*` output read back from
+ * CloudWatch) before it is forwarded anywhere. Only value patterns apply: there are no field names.
+ */
+export function redactLogText(value: string): string {
+  return redactString(value);
 }
