@@ -2284,8 +2284,108 @@ export interface components {
       messages: {
         /** @enum {string} */
         role: 'user' | 'assistant' | 'system';
-        /** @description A string, or an array of content blocks. A `system` message may instead hold only `tool_addition` / `tool_removal` blocks (`{ type, tool: { type: "tool_reference", name } }`) to load or unload a tool named in `tools` mid-conversation without invalidating the prompt cache. It must follow a user turn or an assistant turn ending in a tool search result, and be the last message or precede an assistant turn. Only on models whose `supports_tool_changes` is true and that are served by the direct Anthropic API; otherwise refused with `errorCode: "tool_changes_unsupported"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed). A final non-blank assistant turn is an assistant prefill, except a server-tool continuation ending in `server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. It is accepted only when the selected model has `supports_assistant_prefill: true`; otherwise the request returns `400` with `errorCode: "assistant_prefill_unsupported"` without changing the message. */
-        content: string | unknown[];
+        /** @description A string, or an array of content blocks. Known block types (text, image, `tool_use`, `tool_result`, thinking and the provider blocks echoed back) are validated; a block of any other `type` is forwarded to the provider unchanged. A `system` message may instead hold only `tool_addition` / `tool_removal` blocks (`{ type, tool: { type: "tool_reference", name } }`) to load or unload a tool named in `tools` mid-conversation without invalidating the prompt cache. It must follow a user turn or an assistant turn ending in a tool search result, and be the last message or precede an assistant turn. Only on models whose `supports_tool_changes` is true and that are served by the direct Anthropic API; otherwise refused with `errorCode: "tool_changes_unsupported"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed). A final non-blank assistant turn is an assistant prefill, except a server-tool continuation ending in `server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. It is accepted only when the selected model has `supports_assistant_prefill: true`; otherwise the request returns `400` with `errorCode: "assistant_prefill_unsupported"` without changing the message. */
+        content:
+          | string
+          | (
+              | string
+              | ({
+                  /** @enum {string} */
+                  type: 'text' | 'input_text' | 'output_text';
+                  text: string;
+                } & {
+                  [key: string]: unknown;
+                })
+              | ({
+                  /** @enum {string} */
+                  type: 'image' | 'image_url' | 'input_image';
+                  image_url?:
+                    | string
+                    | ({
+                        url: string;
+                        detail?: string;
+                      } & {
+                        [key: string]: unknown;
+                      });
+                  source?:
+                    | ({
+                        /** @enum {string} */
+                        type: 'base64';
+                        media_type: string;
+                        data: string;
+                      } & {
+                        [key: string]: unknown;
+                      })
+                    | ({
+                        /** @enum {string} */
+                        type: 'url';
+                        url: string;
+                      } & {
+                        [key: string]: unknown;
+                      });
+                } & {
+                  [key: string]: unknown;
+                })
+              | ({
+                  /** @enum {string} */
+                  type: 'tool_use';
+                  id: string;
+                  name: string;
+                  input: {
+                    [key: string]: unknown;
+                  };
+                } & {
+                  [key: string]: unknown;
+                })
+              | ({
+                  /** @enum {string} */
+                  type: 'tool_result';
+                  tool_use_id: string;
+                  content?: string | unknown[];
+                } & {
+                  [key: string]: unknown;
+                })
+              | ({
+                  /** @enum {string} */
+                  type: 'thinking';
+                  thinking: string;
+                } & {
+                  [key: string]: unknown;
+                })
+              | ({
+                  /** @enum {string} */
+                  type: 'redacted_thinking';
+                  data: string;
+                } & {
+                  [key: string]: unknown;
+                })
+              | ({
+                  /** @enum {string} */
+                  type: 'server_tool_use';
+                  id: string;
+                  name: string;
+                } & {
+                  [key: string]: unknown;
+                })
+              | ({
+                  /** @enum {string} */
+                  type: 'tool_search_tool_result';
+                  tool_use_id: string;
+                } & {
+                  [key: string]: unknown;
+                })
+              | ({
+                  /** @enum {string} */
+                  type: 'tool_addition' | 'tool_removal';
+                } & {
+                  [key: string]: unknown;
+                })
+              | ({
+                  type: string;
+                } & {
+                  [key: string]: unknown;
+                })
+            )[];
         cache?: boolean;
       }[];
       response_format?:
