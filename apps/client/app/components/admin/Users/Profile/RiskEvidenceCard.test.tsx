@@ -79,6 +79,11 @@ describe('RiskEvidenceCard', () => {
     expect(within(fingerprint).getByText('Unknown')).toBeInTheDocument();
     expect(within(fingerprint).getByText('Not captured')).toBeInTheDocument();
 
+    const sensitive = screen.getByTestId('risk-evidence-fact-sensitiveActions');
+    expect(within(sensitive).getByText('None')).toBeInTheDocument();
+    expect(within(sensitive).getByText('No activity')).toBeInTheDocument();
+    expect(within(sensitive).queryByText('Unknown')).not.toBeInTheDocument();
+
     const keys = screen.getByTestId('risk-evidence-fact-apiKeys');
     expect(within(keys).getByText('Failed')).toBeInTheDocument();
     expect(within(keys).getByText('read timed out')).toBeInTheDocument();
