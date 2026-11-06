@@ -184,6 +184,9 @@ export const CONTRACTS: readonly EndpointContract[] = [
   deleteArtifactContract,
   listArtifactVersionsContract,
   getArtifactVersionContract,
+  createArtifactVersionContract,
+  searchArtifactsContract,
+  listArtifactTypesContract,
   createTranscriptionUploadContract,
   createTranscriptionContract,
   updateProjectContract,
@@ -211,7 +214,4 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listSkillMarketReviewQueueContract,
   reviewSkillMarketVersionContract,
   postSlackMessageContract,
-  createArtifactVersionContract,
-  searchArtifactsContract,
-  listArtifactTypesContract,
 ];
