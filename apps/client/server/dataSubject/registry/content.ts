@@ -112,10 +112,11 @@ export const contentHolders = {
   Prompt: { kind: 'noUserData', note: 'Shared prompt catalogue with no owner field.' },
   PublishedArtifact: {
     kind: 'holder',
+    // These hand an organization page a colleague published to that colleague and remove thumbnails and
+    // CDN copies, which deleting the rows would not.
+    beforeErasure: ['purgeOwnerPublishedArtifacts', 'purgeUserPublishedArtifacts'],
     references: [
-      // Only personal pages go. Account deletion hands an organization page a colleague published to that
-      // colleague (`purgeOwnerPublishedArtifacts`), and removes thumbnails and CDN copies
-      // (`purgeUserPublishedArtifacts`), so erasure must call those rather than delete the rows.
+      // Only personal pages go.
       { path: 'ownerId', matchBy: 'userId', action: 'deleteDocument', where: { tier: 'user' } },
       { path: 'deletedBy', matchBy: 'userId', action: 'anonymize' },
       { path: 'lastPublishedBy', matchBy: 'userId', action: 'anonymize' },
