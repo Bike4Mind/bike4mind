@@ -1286,6 +1286,7 @@ export const AgentStepSchema = z.object({
         .optional(),
       confidence: z.number().optional(),
       confidenceSource: z.enum(['deterministic', 'llm_self_report', 'heuristic', 'default']).optional(),
+      confidenceReason: z.string().optional(),
     })
     .optional(),
 });
