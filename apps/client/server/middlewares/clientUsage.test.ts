@@ -10,7 +10,12 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', () => ({ User: { updateOne: mocks.updateOne } }));
 vi.mock('@server/middlewares/apiKeyAuth', () => ({ isApiKeyAuth: mocks.isApiKeyAuth }));
 
-import { CLIENT_USAGE_STAMP_INTERVAL_MS, clientUsageMiddleware, needsClientUsageStamp } from './clientUsage';
+import {
+  CLIENT_USAGE_STAMP_INTERVAL_MS,
+  clientUsageMiddleware,
+  isNewerClientVersion,
+  needsClientUsageStamp,
+} from './clientUsage';
 
 const NOW = new Date('2026-11-06T12:00:00Z');
 
@@ -118,8 +123,32 @@ describe('needsClientUsageStamp', () => {
     ).toBe(true);
   });
 
+  it('waits for the daily stamp when a different but older version calls inside the day', () => {
+    expect(
+      needsClientUsageStamp(
+        { firstSeenAt: lastSeenAt, lastSeenAt, version: '1.4.2' },
+        { surface: 'desktop', version: '1.4.1' },
+        NOW
+      )
+    ).toBe(false);
+  });
+
   it('stamps once the last sighting is a day old', () => {
     const dayOld = new Date(NOW.getTime() - CLIENT_USAGE_STAMP_INTERVAL_MS);
     expect(needsClientUsageStamp({ firstSeenAt: dayOld, lastSeenAt: dayOld }, { surface: 'web' }, NOW)).toBe(true);
+  });
+});
+
+describe('isNewerClientVersion', () => {
+  it.each([
+    ['1.4.2', '1.4.1', true],
+    ['1.10.0', '1.9.9', true],
+    ['1.4.2', undefined, true],
+    ['1.4', '1.4.0', false],
+    ['1.4.1', '1.4.2', false],
+    ['1.4.2-beta', '1.4.2', false],
+    ['dev', '1.4.2', false],
+  ])('%s over %s is %s', (incoming, stored, expected) => {
+    expect(isNewerClientVersion(incoming, stored)).toBe(expected);
   });
 });
