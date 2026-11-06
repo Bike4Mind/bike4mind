@@ -298,7 +298,7 @@ describe('slackQuestProcessor failure notice', () => {
       expect(mockUpdateMessage).toHaveBeenCalledTimes(1);
       expect(mockUpdateMessage.mock.calls[0][0].text).toContain(bannedError.message);
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('refused by billing'),
+        expect.stringContaining('refused before'),
         expect.objectContaining({ questId: QUEST_ID })
       );
       expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('Chat processing failed'), expect.anything());
@@ -328,7 +328,7 @@ describe('slackQuestProcessor failure notice', () => {
       expect(mockUpdateMessage).toHaveBeenCalledTimes(1);
       expect(mockUpdateMessage.mock.calls[0][0].text).toContain(capError.message);
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('refused by billing'),
+        expect.stringContaining('refused before'),
         expect.objectContaining({ questId: QUEST_ID })
       );
       expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('Chat processing failed'), expect.anything());

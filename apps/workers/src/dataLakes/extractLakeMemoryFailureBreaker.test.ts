@@ -229,7 +229,7 @@ describe('extractLakeMemoryForBatch consecutive-failure breaker', () => {
     expect(evaluateMock.mock.calls[0][0]).toMatchObject({ meter: expect.any(Function) });
     expect(setLakeMemoryCursorIfFenceUnmovedMock.mock.calls[0][1]).toBe(docId(0));
     expect(result.hasMore).toBe(false);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('cannot be billed'));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('owner is refused'));
   });
 
   it('stops at the first free-tier daily cap refusal without counting it as a failed document', async () => {
@@ -249,7 +249,7 @@ describe('extractLakeMemoryForBatch consecutive-failure breaker', () => {
     expect(evaluateMock).toHaveBeenCalledTimes(2);
     expect(setLakeMemoryCursorIfFenceUnmovedMock.mock.calls[0][1]).toBe(docId(0));
     expect(result.hasMore).toBe(false);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('cannot be billed'));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('owner is refused'));
   });
 
   it('stops at the first AI-access refusal without counting it as a failed document', async () => {
@@ -270,7 +270,7 @@ describe('extractLakeMemoryForBatch consecutive-failure breaker', () => {
     expect(evaluateMock).toHaveBeenCalledTimes(2);
     expect(setLakeMemoryCursorIfFenceUnmovedMock.mock.calls[0][1]).toBe(docId(0));
     expect(result.hasMore).toBe(false);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('cannot be billed'));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('owner is refused'));
   });
 
   it('keeps counting an unrelated 403 as a failed document', async () => {
@@ -287,7 +287,7 @@ describe('extractLakeMemoryForBatch consecutive-failure breaker', () => {
     );
 
     expect(evaluateMock.mock.calls.length).toBeGreaterThan(2);
-    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('cannot be billed'));
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('owner is refused'));
   });
 
   it('records a successful extraction without facts before a later credit refusal', async () => {

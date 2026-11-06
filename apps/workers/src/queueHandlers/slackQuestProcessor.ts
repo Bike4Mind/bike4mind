@@ -477,10 +477,10 @@ export const handler = withEventContext(async (event, logger) => {
     });
   } catch (processError) {
     // A credit or AI-access refusal fails identically on every retry, so it is an expected outcome, not a fault.
-    const isCreditRefusal = isTerminalCreditRefusal(processError) || isAiAccessRefusal(processError);
+    const isExpectedRefusal = isTerminalCreditRefusal(processError) || isAiAccessRefusal(processError);
     const failureLog = { questId: params.questId, error: processError };
-    if (isCreditRefusal) {
-      logger.warn('[SLACK-NOTIFY] Chat processing refused by billing before a reply was delivered', failureLog);
+    if (isExpectedRefusal) {
+      logger.warn('[SLACK-NOTIFY] Chat processing refused before a reply was delivered', failureLog);
     } else {
       logger.error('[SLACK-NOTIFY] Chat processing failed before a reply was delivered', failureLog);
     }
@@ -493,7 +493,7 @@ export const handler = withEventContext(async (event, logger) => {
       });
     }
     // The notice already tells the user; consume the event rather than retrying into the DLQ.
-    if (isCreditRefusal) return;
+    if (isExpectedRefusal) return;
     throw processError;
   }
 
