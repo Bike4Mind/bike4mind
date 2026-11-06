@@ -8,6 +8,7 @@ import { playChime } from './chime';
 import { ExampleQuestButtons } from './exampleQuests';
 import { questAgents, useFinale, type ParentReport } from './finale';
 import { FinaleBanner } from './FinaleBanner';
+import { NeedsYouCard } from './NeedsYouCard';
 import type { OrchestratorViewId } from './orchestratorPrefs';
 import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
@@ -33,6 +34,32 @@ export interface OrchestratorViewProps {
   celebrating?: boolean;
   /** Drawn over the top of the scene by a view that has one (the Tavern); other views leave it to the stage. */
   sceneOverlay?: ReactNode;
+  /** Talking to the orchestrating conversation from the scene; the Tavern draws it as the Innkeeper's order slip. */
+  desk?: InnkeeperDesk;
+}
+
+/** The parent conversation's front door in the scene: one thread, reached from the bar as well as the composer. */
+export interface InnkeeperDesk {
+  /** Sends to the parent conversation, as the composer does but without the composer's attachments. */
+  send(text: string): void;
+  /** The parent's latest finished reply, for the Innkeeper's speech bubble. */
+  reply?: { id: string; snippet: string };
+  /** "Read all" on that bubble: show the reply in the conversation. */
+  onReadReply(id: string): void;
+  /** Bring the whole conversation forward instead of the slip. */
+  onOpenConversation(): void;
+  /** The conversation is out of sight, so a reply has nowhere else to show. */
+  conversationHidden: boolean;
+  /** Bumped to open the slip; `seed` is a character typed while the Tavern was quiet. */
+  openRequest?: { seq: number; seed: string };
+}
+
+/** The Tavern's chrome settling out when idle (ambient.ts); owned by the shell, which hides the dock and composer. */
+export interface StageAmbient {
+  settled: boolean;
+  wake(): void;
+  on: boolean;
+  onToggle(on: boolean): void;
 }
 
 export interface OrchestratorStageProps {
@@ -61,6 +88,8 @@ export interface OrchestratorStageProps {
   dockControl?: ReactNode;
   /** Set while the session's Orchestrate behaviour is off: the empty stage offers to turn it on. */
   onTurnOn?(): void;
+  desk?: InnkeeperDesk;
+  ambient?: StageAmbient;
 }
 
 const NO_PARENT: ParentView = {};
@@ -87,6 +116,8 @@ export function OrchestratorStage({
   renderView,
   dockControl,
   onTurnOn,
+  desk,
+  ambient,
 }: OrchestratorStageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Keyed on ids, creation times and titles so status churn does not recompute names; the seed prompt
@@ -168,55 +199,88 @@ export function OrchestratorStage({
     onInnkeeperSelect: onParentFocus,
     celebrating: finale.shown,
     sceneOverlay: bannerInScene ? banner : undefined,
+    desk,
   };
+
+  const settled = ambient?.settled === true;
+  // The parent first: it is the one whose answer everything else is waiting behind.
+  const askingAgent = parentNeedsYou ? undefined : firstNeedsYou;
+  const needsYouCard = settled && (parentNeedsYou || askingAgent) && (
+    <NeedsYouCard
+      key={askingAgent?.id ?? 'parent'}
+      agent={askingAgent}
+      name={askingAgent ? (personas.get(askingAgent.id)?.label ?? askingAgent.title) : 'The Innkeeper'}
+      onOpen={() => {
+        ambient?.wake();
+        if (askingAgent) setSelectedId(askingAgent.id);
+        else onParentFocus?.();
+      }}
+    />
+  );
 
   return (
     <Box
       data-testid="orchestrator-stage"
       sx={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1 }}>
-        <ViewSwitcher view={view} onViewChange={onViewChange} />
+      {settled ? (
         <Typography
-          level="body-sm"
+          level="body-xs"
+          textColor="text.tertiary"
           noWrap
-          title={summary}
-          data-testid="orchestrator-summary-strip"
-          sx={{ flex: '0 1 auto', minWidth: 0 }}
+          data-testid="orchestrator-ambient-status"
+          sx={{ px: 1.5, py: 0.5 }}
         >
-          {summary}
+          {summary || 'The tavern is quiet'}
         </Typography>
-        {firstFailed && (
-          <Button
-            size="sm"
-            color="danger"
-            variant="soft"
-            data-testid="orchestrator-failed-pill"
-            onClick={() => setSelectedId(firstFailed.id)}
-            sx={{ flexShrink: 0 }}
+      ) : (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1 }}>
+          <ViewSwitcher
+            view={view}
+            onViewChange={onViewChange}
+            ambient={ambient && { on: ambient.on, onToggle: ambient.onToggle }}
+          />
+          <Typography
+            level="body-sm"
+            noWrap
+            title={summary}
+            data-testid="orchestrator-summary-strip"
+            sx={{ flex: '0 1 auto', minWidth: 0 }}
           >
-            {counts.failed} failed
-          </Button>
-        )}
-        {needsYouPill && (
-          <Button
-            size="sm"
-            color="warning"
-            variant="solid"
-            data-testid="orchestrator-needs-you-pill"
-            onClick={() => (firstNeedsYou ? setSelectedId(firstNeedsYou.id) : onParentFocus?.())}
-            sx={{
-              flexShrink: 0,
-              animation: `${pulse} 1.6s ease-in-out infinite`,
-              '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
-            }}
-          >
-            {needsYou} need you
-          </Button>
-        )}
-        <Box sx={{ flex: 1 }} />
-        {dockControl}
-      </Box>
+            {summary}
+          </Typography>
+          {firstFailed && (
+            <Button
+              size="sm"
+              color="danger"
+              variant="soft"
+              data-testid="orchestrator-failed-pill"
+              onClick={() => setSelectedId(firstFailed.id)}
+              sx={{ flexShrink: 0 }}
+            >
+              {counts.failed} failed
+            </Button>
+          )}
+          {needsYouPill && (
+            <Button
+              size="sm"
+              color="warning"
+              variant="solid"
+              data-testid="orchestrator-needs-you-pill"
+              onClick={() => (firstNeedsYou ? setSelectedId(firstNeedsYou.id) : onParentFocus?.())}
+              sx={{
+                flexShrink: 0,
+                animation: `${pulse} 1.6s ease-in-out infinite`,
+                '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
+              }}
+            >
+              {needsYou} need you
+            </Button>
+          )}
+          <Box sx={{ flex: 1 }} />
+          {dockControl}
+        </Box>
+      )}
       <Box sx={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <Box
           sx={{
@@ -241,6 +305,7 @@ export function OrchestratorStage({
           ) : (
             <TableView {...viewProps} />
           )}
+          {needsYouCard}
         </Box>
         {selected && (
           <AgentPeekDrawer

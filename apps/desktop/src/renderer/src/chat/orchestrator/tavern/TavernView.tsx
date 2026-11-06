@@ -7,6 +7,7 @@ import { prefersReducedMotion } from '../motion';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
 import { AGENT_STATE_LABEL, spawnerName, type AgentView, type ParentView } from '../roster';
 import type { AgentPersona } from '@shared/agentPersona';
+import { INNKEEPER_GREETING, OrderSlip, ReplyBubble } from './InnkeeperDesk';
 import { innkeeperAct, innkeeperBubble } from './innkeeper';
 import {
   DOOR_POINT,
@@ -123,10 +124,22 @@ function useAfterFirstPaint(already: boolean) {
 /** During the intro everyone starts at the door and walks to their seats. Only the first mount plays it. */
 const useArrived = (introPlaying: boolean) => useAfterFirstPaint(!introPlaying || prefersReducedMotion());
 
-function Bubble({ testId, text, urgent }: { testId: string; text: string; urgent: boolean }) {
+function Bubble({
+  testId,
+  text,
+  urgent,
+  onHover = false,
+}: {
+  testId: string;
+  text: string;
+  urgent: boolean;
+  /** Shown only while its sprite is hovered or focused. */
+  onHover?: boolean;
+}) {
   return (
     <Box
       data-testid={testId}
+      data-hover-bubble={onHover || undefined}
       sx={{
         position: 'absolute',
         bottom: '88%',
@@ -143,6 +156,7 @@ function Bubble({ testId, text, urgent }: { testId: string; text: string; urgent
         fontWeight: urgent ? 700 : 500,
         lineHeight: 1.2,
         pointerEvents: 'none',
+        ...(onHover && { opacity: 0, transition: 'opacity 120ms ease-out' }),
       }}
     >
       {text}
@@ -362,6 +376,7 @@ function Innkeeper({
   bubble,
   urgent,
   label,
+  greeting,
   onSelect,
 }: {
   point: SlotPoint;
@@ -369,6 +384,8 @@ function Innkeeper({
   bubble: string | undefined;
   urgent: boolean;
   label: NameLabel;
+  /** What he says when nothing else is on his mind: always, or only on hover. */
+  greeting?: 'always' | 'hover';
   onSelect?(): void;
 }) {
   const hidden = hiddenByCounter(point, SPRITE_HEIGHT_PERCENT);
@@ -399,6 +416,7 @@ function Innkeeper({
         [NO_MOTION]: { transition: 'none' },
         '&:focus-visible': { outline: '2px solid #f5c542', outlineOffset: 2, borderRadius: '4px' },
         [LIFTED]: { zIndex: LIFTED_Z, '& [data-name-label]': { display: 'block', maxWidth: 'none' } },
+        '&:hover [data-hover-bubble], &:focus-visible [data-hover-bubble]': { opacity: 1 },
       }}
     >
       <ContactShadow hidden={hidden > 0} />
@@ -420,8 +438,17 @@ function Innkeeper({
           [NO_MOTION]: { transition: 'none' },
         }}
       />
-      {bubble && (
+      {bubble ? (
         <Bubble testId="orchestrator-tavern-innkeeper-bubble" text={truncate(bubble, BUBBLE_MAX)} urgent={urgent} />
+      ) : (
+        greeting && (
+          <Bubble
+            testId="orchestrator-tavern-innkeeper-greeting"
+            text={INNKEEPER_GREETING}
+            urgent={false}
+            onHover={greeting === 'hover'}
+          />
+        )
       )}
       <NameLabelPlate testId="orchestrator-tavern-innkeeper-name" label={label} text={INNKEEPER_NAME} />
     </Box>
@@ -438,6 +465,7 @@ export function TavernView({
   onInnkeeperSelect,
   celebrating = false,
   sceneOverlay,
+  desk,
 }: OrchestratorViewProps) {
   const placements = usePlacements(agents);
   const arrived = useArrived(introPlaying);
@@ -480,6 +508,26 @@ export function TavernView({
       [INNKEEPER_KEY, INNKEEPER_POINT] as const,
     ])
   );
+  const [slip, setSlip] = useState<{ key: number; seed: string } | null>(null);
+  const [dismissedReply, setDismissedReply] = useState<string | undefined>(undefined);
+  // Starts at the request already pending, so a remount (a view switch) never reopens an old slip.
+  const lastOpenRequest = useRef(desk?.openRequest?.seq);
+  const openRequest = desk?.openRequest;
+  useEffect(() => {
+    if (!openRequest || openRequest.seq === lastOpenRequest.current) return;
+    lastOpenRequest.current = openRequest.seq;
+    setSlip({ key: openRequest.seq, seed: openRequest.seed });
+  }, [openRequest]);
+  const statusBubble = innkeeperBubble(parent);
+  // Only while the conversation is hidden: with the dock open the reply is already in plain sight.
+  const reply =
+    desk?.reply && desk.conversationHidden && !slip && !statusBubble && desk.reply.id !== dismissedReply
+      ? desk.reply
+      : undefined;
+  const selectInnkeeper = desk
+    ? () => setSlip(open => (open ? null : { key: Date.now(), seed: '' }))
+    : onInnkeeperSelect;
+
   const visitedPoint = visit === undefined ? undefined : placements.get(visit)?.point;
   const innkeeperPoint = visitedPoint && !reducedMotion && arrived ? standBeside(visitedPoint) : INNKEEPER_POINT;
 
@@ -548,11 +596,35 @@ export function TavernView({
         <Innkeeper
           point={innkeeperPoint}
           pose={celebrating ? 'cheering' : visit ? 'walking' : act.pose}
-          bubble={innkeeperBubble(parent)}
+          bubble={statusBubble}
           urgent={parent.status === 'needs-action'}
           label={labels.get(INNKEEPER_KEY) ?? HIDDEN_LABEL}
-          onSelect={onInnkeeperSelect}
+          // A first-timer is told outright that he takes orders; after that it is a hover hint.
+          greeting={!desk || slip || reply ? undefined : agents.length === 0 ? 'always' : 'hover'}
+          onSelect={selectInnkeeper}
         />
+        {desk && slip && (
+          <OrderSlip
+            key={slip.key}
+            seed={slip.seed}
+            onSend={desk.send}
+            onClose={() => setSlip(null)}
+            onOpenConversation={() => {
+              setSlip(null);
+              desk.onOpenConversation();
+            }}
+          />
+        )}
+        {desk && reply && (
+          <ReplyBubble
+            snippet={reply.snippet}
+            onReadAll={() => {
+              setDismissedReply(reply.id);
+              desk.onReadReply(reply.id);
+            }}
+            onDismiss={() => setDismissedReply(reply.id)}
+          />
+        )}
         {waiting > 0 && (
           <Box
             component="button"
