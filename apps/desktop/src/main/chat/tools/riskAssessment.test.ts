@@ -32,6 +32,8 @@ describe('the untrusted-content and outbound axes', () => {
       'browser_snapshot',
       'screen_capture',
       'simulator_screenshot',
+      'model_view',
+      'model_screenshot',
       'mcp__notion_search',
     ]) {
       expect(readsUntrusted(name), name).toBe(true);
@@ -82,6 +84,8 @@ describe('the untrusted-content and outbound axes', () => {
     'grep_search',
     'file_write',
     'file_edit',
+    // Copies an image this conversation already generated (and paid for) into the project.
+    'save_generated_image',
     // Inspecting or stopping a process the user already approved.
     'bash_output',
     'bash_list',

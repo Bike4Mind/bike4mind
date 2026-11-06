@@ -7,6 +7,7 @@ import Input from '@mui/joy/Input';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
+import { useTheme } from '@mui/joy/styles';
 import type { AttentionOpenEvent } from '@shared/attention';
 import type { AuthState } from '@shared/auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
@@ -32,16 +33,19 @@ import { BackgroundTaskChip, BackgroundTaskPanel } from './BackgroundTaskPanel';
 import { readPanelFlag, spawnedSessions, writePanelFlag } from './backgroundTasks';
 import { BrowserPane } from './BrowserPane';
 import { SimulatorPane } from './SimulatorPane';
+import { ModelPane } from './ModelPane';
+import { useModelEngine } from './model3d/useModelEngine';
 import { useSimulatorView } from './useSimulatorView';
 import { readBrowserPaneOpen, writeBrowserPaneOpen } from './agentBrowser';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
 import type { ModelsInUse } from '../models/InstalledTab';
+import type { ComposerFill } from './composerInput';
 import { ModelsScreen } from '../models/ModelsScreen';
 import { ComposerOllamaNotice } from '../models/OllamaNotRunning';
 import { useModelServers } from '../models/useModelHub';
-import { GlobeIcon, PanelRightIcon, PhoneIcon, SearchIcon, TerminalIcon } from './icons';
+import { CubeIcon, GlobeIcon, PanelRightIcon, PhoneIcon, SearchIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
 import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
@@ -350,6 +354,10 @@ export function ChatShell({
   const [browserOpen, setBrowserOpen] = useState(() => readBrowserPaneOpen());
   const simulatorView = useSimulatorView();
   const [simulatorOpen, setSimulatorOpen] = useState(false);
+  const darkMode = useTheme().palette.mode === 'dark';
+  // Mounted here rather than in the pane so builds, GLB writes and screenshots keep working while it is closed.
+  const modelEngine = useModelEngine(darkMode);
+  const [modelOpen, setModelOpen] = useState(false);
   // Per conversation rather than one flag: see terminalPanelState.ts.
   const [terminalSessions, setTerminalSessions] = useState(readTerminalOpenSessions);
   // Which conversation last asked for the keyboard to go to its terminal; see TerminalPanel.
@@ -370,9 +378,13 @@ export function ChatShell({
     conversation.session?.model
   );
   // Cleared once the composer takes it, or a composer remounted by another screen would take it again.
-  const [composerFill, setComposerFill] = useState<{ id: number; text: string } | null>(null);
+  const [composerFill, setComposerFill] = useState<ComposerFill | null>(null);
   const fillSeq = useRef(0);
   const fillComposer = useCallback((text: string) => setComposerFill({ id: ++fillSeq.current, text }), []);
+  const appendToComposer = useCallback(
+    (text: string) => setComposerFill({ id: ++fillSeq.current, text, append: true }),
+    []
+  );
   const clearComposerFill = useCallback(() => setComposerFill(null), []);
   const [composerFocus, setComposerFocus] = useState(0);
   // Only the conversation screen counts as showing one: main polls what is on screen faster.
@@ -414,6 +426,12 @@ export function ChatShell({
       return !current;
     });
   }, []);
+  // The agent opening a model (model_view) is the user asking to see it, so a new path opens the pane.
+  const modelPath = modelEngine.state.path;
+  useEffect(() => {
+    if (modelPath) setModelOpen(true);
+  }, [modelPath]);
+  const toggleModel = useCallback(() => setModelOpen(current => !current), []);
   const toggleBrowser = useCallback(() => {
     setBrowserOpen(current => {
       writeBrowserPaneOpen(!current);
@@ -614,6 +632,10 @@ export function ChatShell({
   // centered workspace form is the thing to act on, and the composer names the state in one word
   // where the reader already looks for "can I send?". Main's refusal stays as the guard.
   const unbound = conversation.session?.mode === 'code' && !conversation.session.project;
+  // Model tools exist only in Code sessions bound to a folder; an already-open model stays reachable anywhere.
+  const modelAvailable =
+    screen === 'conversation' &&
+    ((conversation.session?.mode === 'code' && !unbound) || modelEngine.state.path !== null);
 
   /**
    * Whether this conversation HAS an agent browser to show.
@@ -1569,6 +1591,26 @@ export function ChatShell({
                   </IconButton>
                 </Tooltip>
               )}
+              {modelAvailable && (
+                <Tooltip
+                  size="sm"
+                  variant="soft"
+                  placement="bottom-end"
+                  title={modelOpen ? 'Hide the 3D model' : 'Show the 3D model'}
+                >
+                  <IconButton
+                    size="sm"
+                    variant={modelOpen ? 'soft' : 'plain'}
+                    color="neutral"
+                    aria-pressed={modelOpen}
+                    aria-label={modelOpen ? 'Hide the 3D model' : 'Show the 3D model'}
+                    onClick={toggleModel}
+                    data-testid="chat-toggle-model-btn"
+                  >
+                    <CubeIcon />
+                  </IconButton>
+                </Tooltip>
+              )}
             </Box>
           </Box>
 
@@ -1949,6 +1991,17 @@ export function ChatShell({
       {/* macOS only: `available` is false elsewhere, so the pane and its button never draw. */}
       {simulatorOpen && simulatorView.available && screen === 'conversation' && (
         <SimulatorPane state={simulatorView} onClose={toggleSimulator} />
+      )}
+
+      {modelOpen && modelAvailable && (
+        <ModelPane
+          engine={modelEngine}
+          dark={darkMode}
+          onClose={toggleModel}
+          onExamplePrompt={fillComposer}
+          onPickPart={appendToComposer}
+          conversation={conversationColumn}
+        />
       )}
 
       {/* Last in the row, so the web page is at the window's own right edge.

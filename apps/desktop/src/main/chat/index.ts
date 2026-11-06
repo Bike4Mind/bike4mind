@@ -82,6 +82,9 @@ import { SkillMarket } from './skills/SkillMarket';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
+import { registerModelProtocol } from './model3d/engineProtocol';
+import { ModelLiveView } from './model3d/ModelLiveView';
+import { modelIpcHandlers } from './model3d/modelIpc';
 import { ChatService, sessionForRenderer, type ChatServiceDeps } from './ChatService';
 import { DeferredToolsSetting, parseDeferredToolsOverride } from './DeferredToolsSetting';
 import { CHAT_STREAM_TAG } from './devLogTag';
@@ -154,7 +157,7 @@ import { XcodeSimulatorDriver } from './simulator/XcodeSimulatorDriver';
 import { devLog } from '../devlog/DevLogSink';
 import { registerPullRequests } from '../pr';
 import type { PrMonitor } from '../pr/PrMonitor';
-import { appWindows } from '../windows';
+import { appWindows, focusedAppWindow } from '../windows';
 import { registerClaudeImport } from '../claudeImport';
 import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
 
@@ -297,6 +300,8 @@ export interface RegisteredChat {
   browser: BrowserManager;
   /** The live iOS Simulator view, whose stream is stopped on quit. */
   simulatorView: SimulatorLiveView;
+  /** The 3D model pane's open file, whose watcher is stopped on quit. */
+  modelView: ModelLiveView;
   /** Each conversation's pull request, and the timers that watch it. */
   pullRequests: PrMonitor;
   /** Import from Claude; started once the window is up so it never delays launch. */
@@ -486,6 +491,7 @@ export function registerChat(
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
   registerArtifactProtocol();
+  registerModelProtocol();
   const artifacts = new ArtifactPublisher(() => auth.getApiClient(), logger);
   const artifactLibrary = new ArtifactLibrary(() => auth.getApiClient(), logger);
   const skillMarket = new SkillMarket({
@@ -678,6 +684,21 @@ export function registerChat(
       })
   );
 
+  const modelView = new ModelLiveView({
+    state: state => send(IPC_CHANNELS.modelState, state),
+    // One rendering is enough: the focused app window, else the first.
+    captureTarget: () => {
+      const target = focusedAppWindow();
+      return target && !target.isDestroyed() ? target.webContents.id : null;
+    },
+    captureRequest: (target, request) => {
+      const window = appWindows().find(entry => !entry.isDestroyed() && entry.webContents.id === target);
+      if (!window) return false;
+      window.webContents.send(IPC_CHANNELS.modelCaptureRequest, request);
+      return true;
+    },
+  });
+
   const simulatorDriver = new XcodeSimulatorDriver();
   const simulatorView = new SimulatorLiveView(
     simulatorDriver,
@@ -727,6 +748,7 @@ export function registerChat(
     pullRequests,
     screen: desktopScreenCapturer(app.getName()),
     ...(process.platform === 'darwin' ? { simulator: { driver: simulatorDriver, view: simulatorView } } : {}),
+    model: modelView,
     prepareImage: prepareToolImage,
     history,
     local,
@@ -1250,6 +1272,7 @@ export function registerChat(
     return mcp.state();
   });
 
+  modelIpcHandlers(modelView);
   ipcMain.handle(IPC_CHANNELS.simulatorGetState, () => simulatorView.current());
   ipcMain.handle(IPC_CHANNELS.simulatorListDevices, async () =>
     process.platform === 'darwin' ? (await simulatorDriver.devices()).devices : []
@@ -1456,6 +1479,7 @@ export function registerChat(
     mcp,
     browser,
     simulatorView,
+    modelView,
     pullRequests,
     claudeImport,
     spareWorktrees,

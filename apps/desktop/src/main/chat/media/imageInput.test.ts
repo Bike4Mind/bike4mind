@@ -5,15 +5,15 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { PathAccessDenied } from '../tools/paths';
 import type { ToolContext } from '../tools/types';
 import { MediaStore } from './MediaStore';
-import { resolveInputImage } from './videoInput';
+import { resolveInputImage } from './imageInput';
 
-describe('video input secret protection', () => {
+describe('input image secret protection', () => {
   let root: string;
   let context: ToolContext;
   let store: MediaStore;
 
   beforeEach(async () => {
-    root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-video-input-')));
+    root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-image-input-')));
     const home = await realpath(homedir());
     context = { roots: [root, home], signal: new AbortController().signal };
     store = new MediaStore(join(root, 'media'));

@@ -123,6 +123,7 @@ import type {
 } from './models';
 import type { AccountUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
+import type { ModelBuildReport, ModelPose, ModelView, ModelViewState } from './model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
 import type { LocalHistoryResult, LocalHistoryState } from './history';
 
@@ -421,6 +422,25 @@ export const IPC_CHANNELS = {
   simulatorState: 'simulator:state',
   /** main -> renderer push: one JPEG frame of the attached screen, at up to 10 a second. */
   simulatorFrame: 'simulator:frame',
+  /**
+   * The 3D model pane. Main owns the open file and every write (main/chat/model3d/ModelLiveView.ts);
+   * the renderer builds in the sandboxed b4m-model: engine and reports back. See @shared/model3d.
+   */
+  modelGetState: 'model:get-state',
+  /** Renderer -> main: the user picked a file to view (open dialog in main). */
+  modelOpenDialog: 'model:open-dialog',
+  modelClose: 'model:close',
+  modelReadAsset: 'model:read-asset',
+  modelBuildReport: 'model:build-report',
+  modelWriteGlb: 'model:write-glb',
+  modelSetParam: 'model:set-param',
+  /** Renderer -> main: save an export the user asked for (save dialog in main). */
+  modelSaveExport: 'model:save-export',
+  modelCaptureResult: 'model:capture-result',
+  /** main -> renderer push: the open model changed (opened, edited on disk, closed). */
+  modelState: 'model:state',
+  /** main -> renderer push: render these views of the current model and answer on modelCaptureResult. */
+  modelCaptureRequest: 'model:capture-request',
   /**
    * Importing the user's own Chrome cookies, per site. Renderer -> main, every one of them.
    *
@@ -1059,6 +1079,23 @@ export interface DesktopApi {
    * through its tools in main. What is here is the url bar: the one part of driving the page
    * that the user cannot do by clicking on it, because the page has no chrome of its own.
    */
+  /** The 3D model pane's bridge to main. */
+  model: {
+    getState(): Promise<ModelViewState>;
+    /** Opens a picked .glb/.stl/.model.js; resolves to the new state, or null when cancelled. */
+    openDialog(): Promise<ModelViewState | null>;
+    close(): Promise<void>;
+    readAsset(): Promise<Uint8Array | null>;
+    reportBuild(report: ModelBuildReport): Promise<void>;
+    writeGlb(request: { generation: number; bytes: Uint8Array }): Promise<string | null>;
+    /** False when the value could not be written back to the file. */
+    setParam(request: { key: string; value: number }): Promise<boolean>;
+    /** Resolves to the saved path, or null when cancelled. */
+    saveExport(request: { format: 'glb' | 'stl'; bytes: Uint8Array }): Promise<string | null>;
+    captureResult(result: { id: string; bytes?: Uint8Array; error?: string }): void;
+    onState(listener: (state: ModelViewState) => void): () => void;
+    onCaptureRequest(listener: (request: { id: string; views: ModelView[]; pose: ModelPose }) => void): () => void;
+  };
   /** The live iOS Simulator view; `available` is false off macOS. */
   simulator: {
     getState(): Promise<SimulatorViewState>;
