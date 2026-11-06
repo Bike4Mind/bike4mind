@@ -31,6 +31,9 @@ const ticket = (id: string, overrides: Partial<ILoopTicket> = {}): ILoopTicket =
   dependencies: [],
   runCount: 0,
   priority: 'p2',
+  demoted: false,
+  epic: false,
+  stale: false,
   ready: false,
   createdAt: '2026-10-29T10:00:00.000Z',
   updatedAt: '2026-10-29T10:00:00.000Z',
@@ -219,10 +222,57 @@ describe('LoopTicketBoard', () => {
     expect(createTicket.mutate).not.toHaveBeenCalled();
     fireEvent.change(screen.getByTestId('loop-ticket-title-input'), { target: { value: ' Write docs ' } });
     fireEvent.click(screen.getByTestId('loop-ticket-submit-btn'));
+    // Triage by default: no priority, so the loop's triage run sets one.
     expect(createTicket.mutate).toHaveBeenCalledWith(
-      { loopId: 'l1', title: 'Write docs', stage: 'todo', priority: 'p2' },
+      { loopId: 'l1', title: 'Write docs', stage: 'todo' },
       expect.anything()
     );
+  });
+
+  it('marks untriaged, demoted, overdue and epic tickets, and sorts untriaged ones last', () => {
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <LoopTicketBoard
+          loop={{ ...(loop as object), serviceLevelHours: { p0: 2 } } as never}
+          data={{
+            stages: [
+              {
+                stage: 'todo',
+                tickets: [
+                  ticket('fresh', { priority: undefined, createdAt: '2026-10-29T08:00:00.000Z' }),
+                  ticket('lowered', { priority: 'p3', demoted: true }),
+                  ticket('late', { priority: 'p0', stale: true }),
+                  ticket('big', {
+                    priority: undefined,
+                    status: 'blocked',
+                    blockedOn: 'dependencies',
+                    epic: true,
+                    dependencies: ['a', 'b', 'c'],
+                    childrenDone: 1,
+                  }),
+                ],
+              },
+            ],
+            runLimit: 6,
+          }}
+          onViewRun={onViewRun}
+        />
+      </CssVarsProvider>
+    );
+    const card = (id: string) => within(screen.getByTestId(`loop-ticket-${id}`));
+    expect(card('fresh').getByTestId('loop-ticket-untriaged')).toBeInTheDocument();
+    expect(card('fresh').queryByTestId('loop-ticket-priority-chip')).toBeNull();
+    expect(card('fresh').getByTestId('loop-ticket-priority-select')).toHaveTextContent('Triage');
+    expect(card('lowered').getByTestId('loop-ticket-demoted')).toBeInTheDocument();
+    expect(card('late').queryByTestId('loop-ticket-demoted')).toBeNull();
+    expect(card('late').getByTestId('loop-ticket-stale')).toHaveAttribute('title', 'Waiting past its 2h service level');
+    expect(card('big').getByTestId('loop-ticket-epic')).toHaveTextContent('Epic: 1/3 children done');
+    expect(card('big').queryByTestId('loop-ticket-untriaged')).toBeNull();
+    expect(card('big').queryByTestId('loop-ticket-waiting-deps')).toBeNull();
+    const order = within(screen.getByTestId('loop-stage-column-todo'))
+      .getAllByTestId(/^loop-ticket-(fresh|lowered|late|big)$/)
+      .map(el => el.getAttribute('data-testid'));
+    expect(order.indexOf('loop-ticket-fresh')).toBeGreaterThan(order.indexOf('loop-ticket-lowered'));
   });
 
   const renderTickets = (stages: ILoopTicketsResponse['stages']) =>

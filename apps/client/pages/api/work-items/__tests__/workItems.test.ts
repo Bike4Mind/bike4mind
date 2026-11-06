@@ -43,6 +43,7 @@ const repo = vi.hoisted(() => ({
   detectDependencyCycle: vi.fn(),
   create: vi.fn(),
   findNextReadyForLoop: vi.fn(),
+  listUntriagedForLoop: vi.fn(async () => []),
 }));
 const loopRepo = vi.hoisted(() => ({ findByIdAndUserId: vi.fn(), makeDueNow: vi.fn() }));
 const settings = vi.hoisted(() => ({ EnableLoops: true as unknown }));
@@ -610,11 +611,13 @@ describe('loop tickets through the work-items routes', () => {
     );
   });
 
-  it('POST stores p2 by default and the given priority otherwise; priority and blockedOn need a loop', async () => {
+  it('POST stores no priority by default (untriaged) and an owner one otherwise; priority and blockedOn need a loop', async () => {
     await call('collection', 'post', { body: { title: 'T', loopId: LOOP } }).result;
-    expect(repo.create).toHaveBeenLastCalledWith(expect.objectContaining({ priority: 'p2' }));
+    expect(repo.create.mock.lastCall![0]).not.toHaveProperty('priority');
     await call('collection', 'post', { body: { title: 'T', loopId: LOOP, priority: 'p0' } }).result;
-    expect(repo.create).toHaveBeenLastCalledWith(expect.objectContaining({ priority: 'p0' }));
+    expect(repo.create).toHaveBeenLastCalledWith(
+      expect.objectContaining({ priority: 'p0', prioritySetBy: 'owner', prioritySetAt: expect.any(Date) })
+    );
 
     for (const body of [
       { title: 'T', priority: 'p0' },
@@ -633,7 +636,12 @@ describe('loop tickets through the work-items routes', () => {
   it('a priority-only PATCH keeps the run allowance and makes the loop due', async () => {
     repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'todo', runCount: 2 }));
     await call('item', 'patch', { query: { id: OID_A }, body: { priority: 'p0' } }).result;
-    expect(repo.updateForUser).toHaveBeenLastCalledWith(OID_A, 'u1', { priority: 'p0' }, 'open');
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(
+      OID_A,
+      'u1',
+      { priority: 'p0', prioritySetBy: 'owner', prioritySetAt: expect.any(Date) },
+      'open'
+    );
     expect(loopRepo.makeDueNow).toHaveBeenCalledWith(LOOP, expect.any(Date));
   });
 

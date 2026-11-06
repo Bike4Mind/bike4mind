@@ -36,6 +36,8 @@ const tagMocks = vi.hoisted(() => ({
   findAllByUserId: vi.fn(),
   findOrCreateByNameAndUserId: vi.fn(),
 }));
+const payOrgInviteBonus = vi.hoisted(() => vi.fn().mockResolvedValue(0));
+vi.mock('@server/credits/orgInviteBonus', () => ({ payOrgInviteBonus }));
 vi.mock('@bike4mind/services', () => ({ sharingService: { acceptInvite } }));
 vi.mock('@bike4mind/database', () => ({
   // accept.ts adapters + inviteManager's module-load imports
@@ -159,5 +161,70 @@ describe('POST /api/invites/[id]/accept - file tag transfer', () => {
     await acceptFileInvite();
 
     expect(tagMocks.findOrCreateByNameAndUserId).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Accepting an Organization invite pays the invite bonus. A credits failure must leave the
+ * membership intact, and no other invite type may trigger the payout.
+ */
+describe('POST /api/invites/[id]/accept - organization invite bonus', () => {
+  const accept = (type: string, apiKeyInfo?: object) => {
+    acceptInvite.mockResolvedValueOnce({
+      id: 'inv1',
+      type,
+      documentId: 'doc1',
+      recipients: { pending: [], accepted: ['me@x.com'], refused: [] },
+    });
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'inv1' } });
+    (req as any).user = { id: 'u1', email: 'me@x.com' };
+    (req as any).ability = {};
+    (req as any).logger = { error: vi.fn() };
+    if (apiKeyInfo) (req as any).apiKeyInfo = apiKeyInfo;
+    return { req, res, done: mockRefs.postHandler!(req, res) };
+  };
+
+  beforeEach(() => {
+    payOrgInviteBonus.mockClear();
+  });
+
+  it('pays the invite bonus for an Organization invite', async () => {
+    await accept('Organization').done;
+    expect(payOrgInviteBonus).toHaveBeenCalledWith('u1', 'inv1');
+  });
+
+  it('does not pay the bonus when an API key accepts the invite', async () => {
+    const { res, done } = accept('Organization', { keyId: 'key1' });
+    await done;
+    expect(res._getStatusCode()).toBe(200);
+    expect(payOrgInviteBonus).not.toHaveBeenCalled();
+  });
+
+  it('does not pay the bonus for a Session invite', async () => {
+    await accept('Session').done;
+    expect(payOrgInviteBonus).not.toHaveBeenCalled();
+  });
+
+  it('does not pay a bonus when invite acceptance fails', async () => {
+    const acceptanceError = new Error('invite acceptance failed');
+    acceptInvite.mockRejectedValueOnce(acceptanceError);
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'inv1' } });
+    Object.assign(req, { user: { id: 'u1', email: 'me@x.com' }, ability: {}, logger: { error: vi.fn() } });
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toBe(acceptanceError);
+
+    expect(payOrgInviteBonus).not.toHaveBeenCalled();
+    expect(res._isEndCalled()).toBe(false);
+  });
+
+  it('still accepts the invite and logs when the bonus fails', async () => {
+    payOrgInviteBonus.mockRejectedValueOnce(new Error('ledger down'));
+    const { req, res, done } = accept('Organization');
+    await done;
+    expect(res._getStatusCode()).toBe(200);
+    expect((req as any).logger.error).toHaveBeenCalledWith(
+      'Organization invite bonus remains unpaid',
+      expect.any(Error)
+    );
   });
 });

@@ -8,11 +8,14 @@ import {
   LOOP_ALARM_KINDS,
   LOOP_AUTO_RESUME_KINDS,
   LOOP_HOLD_KINDS,
+  LOOP_P2_RUNS_PER_DAY_MAX,
+  LOOP_SERVICE_LEVEL_HOURS_MAX,
   LOOP_MERGE_POLICIES,
   LOOP_STAGE_RUNNERS,
   LOOP_STATUSES,
   LoopAlarmKind,
   LoopAutoResume,
+  LoopHoldKind,
   LoopStatus,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
@@ -110,10 +113,15 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
   }
 
   /** Pushes a claimed live loop's next run out without pausing it, and releases the claim. */
-  async deferUntil(id: string, nextRunAt: Date, now: Date): Promise<void> {
+  async deferUntil(
+    id: string,
+    nextRunAt: Date,
+    now: Date,
+    kind: Exclude<LoopHoldKind, 'capacity'> = 'pacing'
+  ): Promise<void> {
     const result = await this.loopModel.updateOne(
       { _id: id, status: 'live' },
-      { $set: { nextRunAt, hold: { kind: 'pacing', until: nextRunAt, at: now } }, $unset: { leaseUntil: '' } }
+      { $set: { nextRunAt, hold: { kind, until: nextRunAt, at: now } }, $unset: { leaseUntil: '' } }
     );
     if (result.matchedCount === 0) await this.releaseLease(id);
   }
@@ -310,6 +318,7 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
             stage: { type: String, required: true },
             instructions: { type: String },
             model: { type: String },
+            escalationModel: { type: String },
             tools: { type: [String], default: undefined },
             runner: { type: String, enum: LOOP_STAGE_RUNNERS },
             repoHint: { type: String },
@@ -328,6 +337,24 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
       type: Number,
       validate: { validator: (value: number) => value > 0, message: 'budgetCreditsPerDay must be positive' },
     },
+    // Kept in sync with validateLoopPriorityPolicy (apps/client/server/utils/loopValidation.ts).
+    serviceLevelHours: {
+      type: new Schema(
+        {
+          p0: { type: Number, min: 0, max: LOOP_SERVICE_LEVEL_HOURS_MAX },
+          p1: { type: Number, min: 0, max: LOOP_SERVICE_LEVEL_HOURS_MAX },
+        },
+        { _id: false }
+      ),
+    },
+    p2RunsPerDay: {
+      type: Number,
+      min: 0,
+      max: LOOP_P2_RUNS_PER_DAY_MAX,
+      validate: { validator: Number.isInteger, message: 'p2RunsPerDay must be an integer' },
+    },
+    triageModel: { type: String },
+    escalationModel: { type: String },
     status: { type: String, enum: LOOP_STATUSES, required: true, default: 'draft' },
     statusReason: { type: String },
     autoResume: { type: String, enum: LOOP_AUTO_RESUME_KINDS },

@@ -15,7 +15,9 @@ const {
   resolveUnsure,
   config,
   toast,
+  runInfo,
 } = vi.hoisted(() => ({
+  runInfo: { data: undefined as unknown },
   toast: { info: vi.fn() },
   resolveUnsure: { mutate: vi.fn(), isPending: false, variables: undefined },
   config: { toolAvailability: undefined as Record<string, boolean> | undefined },
@@ -60,6 +62,7 @@ vi.mock('@client/app/hooks/data/loops', async importOriginal => ({
   useLoops: () => loopsState,
   useOverrideDirective: () => overrideDirective,
   useResolveUnsure: () => resolveUnsure,
+  useLoopRunInfo: () => runInfo,
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({ useConfig: () => ({ data: config }) }));
 
@@ -205,6 +208,25 @@ describe('LoopDetailPage run drawer', () => {
     expect(screen.getByTestId('agent-run-viewer')).toHaveTextContent('ticket-run');
     fireEvent.click(screen.getByTestId('loop-run-drawer-close-btn'));
     expect(navigate).toHaveBeenCalledWith({ to: '/loops/$id', params: { id: 'l1' }, search: {} });
+  });
+
+  it("shows the run's model, and marks an escalated or a triage run", () => {
+    search.run = 'ticket-run';
+    try {
+      runInfo.data = { model: 'strong', escalated: true };
+      const { unmount } = renderPage();
+      expect(screen.getByTestId('loop-run-model')).toHaveTextContent('strong');
+      expect(screen.getByTestId('loop-run-escalated')).toBeInTheDocument();
+      expect(screen.queryByTestId('loop-run-triage')).toBeNull();
+      unmount();
+
+      runInfo.data = { model: 'cheap', loopRunKind: 'triage' };
+      renderPage();
+      expect(screen.getByTestId('loop-run-triage')).toBeInTheDocument();
+      expect(screen.queryByTestId('loop-run-escalated')).toBeNull();
+    } finally {
+      runInfo.data = undefined;
+    }
   });
 });
 

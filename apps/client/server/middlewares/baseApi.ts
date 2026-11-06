@@ -276,7 +276,8 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
 
   router.use(async (req, res, next) => {
     if (!isDevelopment()) {
-      req.logger.info(`API Request: ${req.method} ${req.url}`);
+      const path = (req.url ?? '').split('?')[0];
+      req.logger.info(`API Request: ${req.method} ${path}`);
     }
     next();
   });

@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { withTransaction } from '@bike4mind/db-core';
-import { CURRENT_POLICY_VERSION, RegInviteStatusType } from '@bike4mind/common';
+import { CURRENT_POLICY_VERSION, RegInviteSource, RegInviteStatusType } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import {
   User,
@@ -15,6 +15,7 @@ import {
   creditLotRepository,
 } from '@bike4mind/database';
 import { registerViaOTC } from '../../../../b4m-core/services/src/userService/register';
+import { claimRegistrationInvite } from '../../../../b4m-core/services/src/userService/registrationInvite';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -137,5 +138,41 @@ describe('OTC invite registration in a real transaction', () => {
     expect(invite?.used).toBeUndefined();
     expect(invite?.usageHistory).toHaveLength(0);
     await expect(register('first')).resolves.toMatchObject({ emailVerified: true });
+  });
+
+  it('lets one of two concurrent claims outside a transaction take a single-use code, and reopens it', async () => {
+    const invite = await RegistrationInvite.findOne({ code: 'ONE-INVITE' });
+    const resolved = { invite: invite!, isUnlimited: false };
+    const claims = await Promise.all([
+      claimRegistrationInvite(resolved, registrationInviteRepository),
+      claimRegistrationInvite(resolved, registrationInviteRepository),
+    ]);
+    const taken = claims.filter(Boolean);
+    expect(taken).toHaveLength(1);
+    expect(await RegistrationInvite.findOne({ code: 'ONE-INVITE' })).toMatchObject({
+      status: RegInviteStatusType.used,
+    });
+    await taken[0]!.release();
+    const reopened = await RegistrationInvite.findOne({ code: 'ONE-INVITE' });
+    expect(reopened?.used).toBeUndefined();
+    expect(reopened?.status).toBe(RegInviteStatusType.open);
+  });
+
+  it('persists the referral signup invite on the real schema when the referral pays no credits', async () => {
+    const invite = await RegistrationInvite.findOneAndUpdate(
+      { code: 'ONE-INVITE' },
+      { $set: { source: RegInviteSource.referral, email: 'first@example.com', startingCredits: 0 } },
+      { new: true }
+    );
+    await register('first');
+    const user = await User.findOne({ email: 'first@example.com' }).lean();
+    expect(user?.signupInvite).toEqual({ source: 'referral', inviteId: invite?.id, at: expect.any(Date) });
+    expect(await CreditTransaction.countDocuments({})).toBe(0);
+  });
+
+  it('leaves signupInvite absent for an admin code', async () => {
+    await register('first');
+    const user = await User.findOne({ email: 'first@example.com' }).lean();
+    expect(user).not.toHaveProperty('signupInvite');
   });
 });

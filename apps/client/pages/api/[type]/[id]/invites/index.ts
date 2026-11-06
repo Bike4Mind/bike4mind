@@ -122,15 +122,16 @@ const handler = baseApi()
       if (!inviteType) throw new BadRequestError('Invalid type');
       // Project invites have their own route (pages/api/projects/[id]/invites.ts), which shadows the
       // `projects` alias here. Only the raw `Project` value reaches this handler, and creating one
-      // here would skip that route's API-key scope checks and its budget for addresses with no
-      // account, which only project invites can name.
+      // here would skip that route's API-key scope checks and its typed-address budget.
       if (inviteType === InviteType.Project) {
         throw new BadRequestError('Create project invites at /api/projects/:id/invites');
       }
       if (!isValidObjectId(id)) throw new NotFoundError('Document not found');
 
       const { expiresAt, ...restBody } = createInviteBodySchema.parse(req.body);
-      const budget = await reserveInviteSendBudget(req.user.id, restBody.recipients, { chargeTypedAddresses: false });
+      const budget = await reserveInviteSendBudget(req.user.id, restBody.recipients, {
+        chargeTypedAddresses: inviteType === InviteType.Organization,
+      });
       const created = await withTransaction(() => {
         return sharingService.createInvite(
           req.user,

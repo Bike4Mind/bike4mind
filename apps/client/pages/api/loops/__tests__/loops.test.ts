@@ -224,10 +224,41 @@ describe('POST /api/loops', () => {
     [{ ...validBody, tools: Array.from({ length: 51 }, (_, i) => `t${i}`) }, /tools/],
     [{ ...validBody, budgetCreditsPerDay: 0 }, /budgetCreditsPerDay/],
     [{ ...validBody, budgetCreditsPerDay: -5 }, /budgetCreditsPerDay/],
+    [{ ...validBody, serviceLevelHours: { p0: 0 } }, /serviceLevelHours.p0/],
+    [{ ...validBody, serviceLevelHours: { p1: 721 } }, /serviceLevelHours.p1/],
+    [{ ...validBody, serviceLevelHours: 4 }, /serviceLevelHours/],
+    [{ ...validBody, p2RunsPerDay: -1 }, /p2RunsPerDay/],
+    [{ ...validBody, p2RunsPerDay: 1.5 }, /p2RunsPerDay/],
+    [{ ...validBody, p2RunsPerDay: 1001 }, /p2RunsPerDay/],
+    [{ ...validBody, triageModel: '' }, /triageModel/],
+    [{ ...validBody, escalationModel: 'x'.repeat(201) }, /escalationModel/],
+    [{ ...validBody, stageConfig: [{ stage: 'todo', escalationModel: 5 }] }, /escalationModel/],
   ])('rejects an invalid body (%#)', async (body, message) => {
     await expect(call('collection', 'post', { body }).result).rejects.toThrow(message);
     expect(repo.create).not.toHaveBeenCalled();
     expect(getOrCreateSession).not.toHaveBeenCalled();
+  });
+
+  it('stores the priority settings and a stage escalation model', async () => {
+    await call('collection', 'post', {
+      body: {
+        ...validBody,
+        serviceLevelHours: { p0: 0.05, p1: 12 },
+        p2RunsPerDay: 0,
+        triageModel: 'cheap',
+        escalationModel: 'strong',
+        stageConfig: [{ stage: 'todo', escalationModel: 'stage-strong' }],
+      },
+    }).result;
+    expect(repo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serviceLevelHours: { p0: 0.05, p1: 12 },
+        p2RunsPerDay: 0,
+        triageModel: 'cheap',
+        escalationModel: 'strong',
+        stageConfig: [{ stage: 'todo', escalationModel: 'stage-strong' }],
+      })
+    );
   });
 
   it('stores an organizationId the caller may bill to', async () => {
@@ -444,6 +475,19 @@ describe('PATCH /api/loops/:id status transitions', () => {
     expect(repo.updateForUser.mock.calls[0][2]).toEqual({ agentId: null, budgetCreditsPerDay: null });
   });
 
+  it('sets and clears the priority settings', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    await call('item', 'patch', { query: { id: OID }, body: { p2RunsPerDay: 2, serviceLevelHours: { p1: 6 } } }).result;
+    expect(repo.updateForUser.mock.calls[0][2]).toEqual({ p2RunsPerDay: 2, serviceLevelHours: { p1: 6 } });
+
+    const nulls = { serviceLevelHours: null, p2RunsPerDay: null, triageModel: null, escalationModel: null };
+    await call('item', 'patch', { query: { id: OID }, body: nulls }).result;
+    expect(repo.updateForUser.mock.calls[1][2]).toEqual(nulls);
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { p2RunsPerDay: -1 } }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
   it('refuses fewer than two stages, which could not hold a ticket', async () => {
     repo.findByIdAndUserId.mockResolvedValue(loop());
     await expect(
@@ -645,6 +689,8 @@ describe('GET /api/loops/:id/tickets', () => {
     title: 'T',
     status: 'open',
     dependencies: [],
+    priority: 'p2',
+    createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
   });
@@ -677,11 +723,15 @@ describe('GET /api/loops/:id/tickets', () => {
     expect(tickets.listForLoop).toHaveBeenCalledWith('u1', OID, 50);
   });
 
-  it('returns each ticket priority (p2 when unset) and blockedOn', async () => {
+  it('returns each ticket priority (absent: untriaged, never ready), blockedOn, demoted, epic and stale', async () => {
     repo.findByIdAndUserId.mockResolvedValue(loop({ stages: ['todo', 'done'] }));
+    const hoursAgo = (hours: number) => new Date(Date.now() - hours * 60 * 60 * 1000);
     tickets.listForLoop.mockResolvedValue([
-      ticket({ id: 'a', stage: 'todo', priority: 'p0' }),
-      ticket({ id: 'b', stage: 'todo', status: 'blocked', blockedOn: 'dependencies' }),
+      ticket({ id: 'a', stage: 'todo', priority: 'p0', prioritySetAt: hoursAgo(1) }),
+      ticket({ id: 'b', stage: 'todo', status: 'blocked', blockedOn: 'dependencies', epic: true, priority: undefined }),
+      ticket({ id: 'c', stage: 'todo', priority: undefined }),
+      ticket({ id: 'd', stage: 'todo', priority: 'p3', prioritySetBy: 'demote' }),
+      ticket({ id: 'e', stage: 'todo', priority: 'p0', prioritySetAt: hoursAgo(5) }),
     ]);
     tickets.findManyByIdsForUser.mockResolvedValue([]);
 
@@ -689,9 +739,14 @@ describe('GET /api/loops/:id/tickets', () => {
     await result;
 
     const [todo] = res._getJSONData().stages;
-    expect(todo.tickets[0]).toMatchObject({ id: 'a', priority: 'p0' });
+    expect(todo.tickets[0]).toMatchObject({ id: 'a', priority: 'p0', stale: false, demoted: false, epic: false });
     expect(todo.tickets[0]).not.toHaveProperty('blockedOn');
-    expect(todo.tickets[1]).toMatchObject({ id: 'b', priority: 'p2', blockedOn: 'dependencies' });
+    expect(todo.tickets[1]).toMatchObject({ id: 'b', blockedOn: 'dependencies', epic: true });
+    expect(todo.tickets[1]).not.toHaveProperty('priority');
+    expect(todo.tickets[2]).toMatchObject({ id: 'c', ready: false });
+    expect(todo.tickets[2]).not.toHaveProperty('priority');
+    expect(todo.tickets[3]).toMatchObject({ id: 'd', demoted: true });
+    expect(todo.tickets[4]).toMatchObject({ id: 'e', stale: true, ready: true });
   });
 
   it('does not mark an open ticket in a desktop stage as ready', async () => {

@@ -5014,7 +5014,8 @@ export const settingsMap = {
     min: 0,
     int: true,
     userReadable: true,
-    description: 'Reserved for an invite bonus; not read yet.',
+    description:
+      'Credits paid once, from the signup pool and outside the drip cap, to an account that signed up through a refer-a-friend invite or a paying organization invite, after its initial tranche is paid in full. 0 pays no bonus, and an account that becomes due its bonus while it is 0 is not paid if it is raised later.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),

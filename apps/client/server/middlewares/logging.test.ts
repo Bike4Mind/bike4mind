@@ -142,6 +142,11 @@ describe('logging middleware - per-request log context', () => {
     expect(lines).toHaveLength(2);
   });
 
+  it('keeps the query string out of the path field', async () => {
+    await runRequest('q', '/api/auth/google?inviteCode=REF-123', 1);
+    expect(lastLines().find(l => l.requestId === 'q')).toMatchObject({ path: '/api/auth/google' });
+  });
+
   it('keeps userId inside the request that set it', async () => {
     await Promise.all([
       runRequest('a', '/api/a', 10, req => req.logger.updateMetadata({ userId: 'u1' })),

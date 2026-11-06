@@ -10,6 +10,8 @@ const items = vi.hoisted(() => ({
   create: vi.fn(),
   updateForUser: vi.fn(),
   findNextReadyForLoop: vi.fn(),
+  listUntriagedForLoop: vi.fn(),
+  softDeleteForUser: vi.fn(),
 }));
 const events = vi.hoisted(() => ({ recordUnsure: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
@@ -46,6 +48,7 @@ beforeEach(() => {
     ...patch,
   }));
   items.findNextReadyForLoop.mockResolvedValue(null);
+  items.listUntriagedForLoop.mockResolvedValue([]);
 });
 
 describe('resolveLoopTicketTools', () => {
@@ -125,11 +128,14 @@ describe('priority and blockedOn', () => {
   const DEP = '507f1f77bcf86cd799439021';
   const tools = () => buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
 
-  it('loop_ticket_create stores a priority (p2 by default) and parks on an open dependency', async () => {
+  it('loop_ticket_create stores a priority as agent-set (none: untriaged) and parks on an open dependency', async () => {
     items.findManyByIdsForUser.mockResolvedValue([{ id: DEP, status: 'open', dependencies: [] }]);
-    expect(JSON.parse(await run(tools(), 'loop_ticket_create', { title: 'A' }))).toMatchObject({ priority: 'p2' });
+    expect(JSON.parse(await run(tools(), 'loop_ticket_create', { title: 'A' }))).not.toHaveProperty('priority');
+    expect(items.create.mock.lastCall![0]).not.toHaveProperty('priority');
     await run(tools(), 'loop_ticket_create', { title: 'B', priority: 'p0' });
-    expect(items.create).toHaveBeenLastCalledWith(expect.objectContaining({ priority: 'p0' }));
+    expect(items.create).toHaveBeenLastCalledWith(
+      expect.objectContaining({ priority: 'p0', prioritySetBy: 'agent', prioritySetAt: expect.any(Date) })
+    );
 
     const parked = JSON.parse(
       await run(tools(), 'loop_ticket_create', {
@@ -166,7 +172,12 @@ describe('priority and blockedOn', () => {
     items.findManyByIdsForUser.mockResolvedValue([{ id: DEP, status: 'open', dependencies: [] }]);
 
     await run(tools(), 'loop_ticket_update', { id: 't1', priority: 'p1' });
-    expect(items.updateForUser).toHaveBeenLastCalledWith('t1', 'u1', { priority: 'p1' }, 'open');
+    expect(items.updateForUser).toHaveBeenLastCalledWith(
+      't1',
+      'u1',
+      { priority: 'p1', prioritySetBy: 'agent', prioritySetAt: expect.any(Date) },
+      'open'
+    );
 
     items.detectDependencyCycle.mockResolvedValueOnce(true);
     expect(await run(tools(), 'loop_ticket_update', { id: 't1', dependencies: [DEP] })).toMatch(/cycle/);
@@ -371,6 +382,21 @@ describe('desktop-stage tickets', () => {
     expect(events.recordUnsure).not.toHaveBeenCalled();
   });
 
+  it('sets only the priority of a desktop-stage ticket, so triage can reach it', async () => {
+    items.updateForUser.mockResolvedValue({ ...ticket, priority: 'p1' });
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
+    expect(await run(tools, 'loop_ticket_update', { id: 't1', priority: 'p1' })).not.toMatch(/^Error/);
+    expect(items.updateForUser).toHaveBeenCalledWith(
+      't1',
+      'u1',
+      expect.objectContaining({ priority: 'p1', prioritySetBy: 'agent' }),
+      'open'
+    );
+    expect(await run(tools, 'loop_ticket_update', { id: 't1', priority: 'p1', title: 'x' })).toMatch(
+      /^Error: .*desktop/
+    );
+  });
+
   it('still moves a cloud-stage ticket into a desktop stage, and marks desktop tickets in the list', async () => {
     items.findByIdForUser.mockResolvedValue({ ...ticket, stage: 'todo' });
     items.listForUser.mockResolvedValue({ data: [ticket, { ...ticket, id: 't2', stage: 'todo' }], hasMore: false });
@@ -384,6 +410,133 @@ describe('desktop-stage tickets', () => {
     expect(listed.tickets.map((t: { id: string; desktopRunner?: boolean }) => [t.id, t.desktopRunner])).toEqual([
       ['t1', true],
       ['t2', undefined],
+    ]);
+  });
+});
+
+describe('loop_ticket_split', () => {
+  const DEP = '507f1f77bcf86cd799439021';
+  const tools = () => buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
+  const big = { id: 't-big', loopId: OWN, stage: 'todo', status: 'open', dependencies: [DEP], priority: 'p1' };
+
+  beforeEach(() => {
+    let n = 0;
+    items.create.mockImplementation(async (doc: Record<string, unknown>) => ({ id: `child-${n++}`, ...doc }));
+    items.findByIdForUser.mockResolvedValue(big);
+    items.findManyByIdsForUser.mockResolvedValue([{ id: DEP, status: 'open', dependencies: [] }]);
+  });
+
+  it('creates the children with their priorities and resolved sibling deps, then parks the ticket as an epic', async () => {
+    const result = JSON.parse(
+      await run(tools(), 'loop_ticket_split', {
+        id: 't-big',
+        children: [
+          { title: 'Schema', priority: 'p0' },
+          { title: 'API', priority: 'p1', dependencies: ['$0'] },
+          { title: 'UI', priority: 'p2', dependencies: ['$0', '$1'], stage: 'doing' },
+        ],
+      })
+    );
+    expect(items.create).toHaveBeenCalledTimes(3);
+    expect(
+      items.create.mock.calls.map(([doc]) => [doc.title, doc.priority, doc.prioritySetBy, doc.dependencies])
+    ).toEqual([
+      ['Schema', 'p0', 'agent', [DEP]],
+      ['API', 'p1', 'agent', [DEP, 'child-0']],
+      ['UI', 'p2', 'agent', [DEP, 'child-0', 'child-1']],
+    ]);
+    expect(items.create.mock.calls[2][0]).toMatchObject({ stage: 'doing', status: 'open', loopId: OWN });
+    expect(items.updateForUser).toHaveBeenCalledWith(
+      't-big',
+      'u1',
+      expect.objectContaining({
+        status: 'blocked',
+        blockedOn: 'dependencies',
+        dependencies: ['child-0', 'child-1', 'child-2'],
+        epic: true,
+        statusReason: 'Epic: waiting on 3 child tickets',
+        priority: null,
+      }),
+      'open'
+    );
+    expect(result).toMatchObject({ children: ['child-0', 'child-1', 'child-2'], epic: { epic: true } });
+  });
+
+  it('writes nothing for invalid input', async () => {
+    const attempt = (children: unknown) => run(tools(), 'loop_ticket_split', { id: 't-big', children });
+    expect(await attempt([{ title: 'Only one', priority: 'p1' }])).toMatch(/2 to 20/);
+    expect(await attempt([{ title: 'A', priority: 'p1' }, { title: 'B' }])).toMatch(
+      /children\[1\].priority is required/
+    );
+    expect(
+      await attempt([
+        { title: 'A', priority: 'p1', dependencies: ['$1'] },
+        { title: 'B', priority: 'p1' },
+      ])
+    ).toMatch(/earlier children/);
+    expect(
+      await attempt([
+        { title: 'A', priority: 'p1' },
+        { title: '', priority: 'p1' },
+      ])
+    ).toMatch(/^Error/);
+    items.findByIdForUser.mockResolvedValue({ ...big, status: 'blocked', epic: true });
+    expect(
+      await attempt([
+        { title: 'A', priority: 'p1' },
+        { title: 'B', priority: 'p1' },
+      ])
+    ).toMatch(/only an open/);
+    items.findByIdForUser.mockResolvedValue(big);
+    expect(
+      await attempt([
+        { title: 'A', priority: 'p1', stage: 'done' },
+        { title: 'B', priority: 'p1' },
+      ])
+    ).toMatch(/children\[0\] cannot start in the last stage/);
+    // A child waiting on the epic it unblocks would never be ready.
+    const EPIC = '507f1f77bcf86cd799439022';
+    items.findByIdForUser.mockResolvedValue({ ...big, id: EPIC });
+    expect(
+      await attempt([
+        { title: 'A', priority: 'p1', dependencies: [EPIC] },
+        { title: 'B', priority: 'p1' },
+      ])
+    ).toMatch(/cannot depend on itself/);
+    expect(items.create).not.toHaveBeenCalled();
+    expect(items.updateForUser).not.toHaveBeenCalled();
+  });
+
+  it('soft-deletes the children when the ticket changed before it could be parked', async () => {
+    items.updateForUser.mockResolvedValue(null);
+    const result = await run(tools(), 'loop_ticket_split', {
+      id: 't-big',
+      children: [
+        { title: 'A', priority: 'p1' },
+        { title: 'B', priority: 'p2' },
+      ],
+    });
+    expect(result).toMatch(/changed while splitting/);
+    expect(items.softDeleteForUser.mock.calls).toEqual([
+      ['child-0', 'u1'],
+      ['child-1', 'u1'],
+    ]);
+  });
+
+  it('reports the original error when the cleanup fails too', async () => {
+    items.updateForUser.mockResolvedValue(null);
+    items.softDeleteForUser.mockRejectedValue(new Error('db down'));
+    const result = await run(tools(), 'loop_ticket_split', {
+      id: 't-big',
+      children: [
+        { title: 'A', priority: 'p1' },
+        { title: 'B', priority: 'p2' },
+      ],
+    });
+    expect(result).toMatch(/changed while splitting/);
+    expect(items.softDeleteForUser.mock.calls).toEqual([
+      ['child-0', 'u1'],
+      ['child-1', 'u1'],
     ]);
   });
 });

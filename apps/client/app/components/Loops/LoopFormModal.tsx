@@ -20,7 +20,15 @@ import {
   Textarea,
   Typography,
 } from '@mui/joy';
-import { DEFAULT_LOOP_STAGES, type ILoop, type ILoopStageConfig, type LoopMergePolicy } from '@bike4mind/common';
+import {
+  DEFAULT_LOOP_STAGES,
+  LOOP_P2_RUNS_PER_DAY_MAX,
+  LOOP_SERVICE_LEVEL_HOURS,
+  LOOP_SERVICE_LEVEL_HOURS_MAX,
+  type ILoop,
+  type ILoopStageConfig,
+  type LoopMergePolicy,
+} from '@bike4mind/common';
 import { PICKABLE_TOOLS } from '@client/app/components/Agent/OrchestrationSection';
 import { getToolDisplayName } from '@client/app/utils/toolMapping';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
@@ -61,6 +69,15 @@ export interface LoopFormValues {
   budget: string;
   /** Keyed by stage name, so removing a stage (or it becoming the last) drops its config from the payload. */
   stageConfig: Record<string, StageSettings>;
+  /** '' means the default service level (LOOP_SERVICE_LEVEL_HOURS). */
+  slaP0: string;
+  slaP1: string;
+  /** '' means no p2 cap. */
+  p2Cap: string;
+  /** '' means the loop's model. */
+  triageModel: string;
+  /** '' means no escalation. */
+  escalationModel: string;
 }
 
 /** A stage's settings as the form edits them: the smoke check and hold labels as the text typed. */
@@ -85,7 +102,10 @@ function desktopGuards(settings: StageSettings): Partial<ILoopStageConfig> {
 }
 
 export type LoopFormErrors = Partial<
-  Record<'name' | 'goal' | 'interval' | 'tools' | 'stages' | 'oversees' | 'budget' | 'stageConfig', string>
+  Record<
+    'name' | 'goal' | 'interval' | 'tools' | 'stages' | 'oversees' | 'budget' | 'stageConfig' | 'sla' | 'p2Cap',
+    string
+  >
 >;
 
 /** Checks the form against the API's limits; `payload` is set only when there are no errors. */
@@ -126,6 +146,21 @@ export function validateLoopForm(
     errors.budget = 'Budget must be a positive number of credits';
   }
 
+  // Mirrors validateLoopPriorityPolicy (apps/client/server/utils/loopValidation.ts).
+  const sla = { p0: values.slaP0.trim(), p1: values.slaP1.trim() };
+  const serviceLevelHours = Object.fromEntries(
+    Object.entries(sla)
+      .filter(([, value]) => value)
+      .map(([key, value]) => [key, Number(value)])
+  ) as NonNullable<ILoop['serviceLevelHours']>;
+  if (Object.values(serviceLevelHours).some(hours => !(hours > 0 && hours <= LOOP_SERVICE_LEVEL_HOURS_MAX))) {
+    errors.sla = `Hours must be above 0 and up to ${LOOP_SERVICE_LEVEL_HOURS_MAX}`;
+  }
+  const p2Cap = Number(values.p2Cap);
+  if (values.p2Cap.trim() && !(Number.isInteger(p2Cap) && p2Cap >= 0 && p2Cap <= LOOP_P2_RUNS_PER_DAY_MAX)) {
+    errors.p2Cap = `Must be a whole number from 0 to ${LOOP_P2_RUNS_PER_DAY_MAX}`;
+  }
+
   // Mirrors validateLoopStageConfig (apps/client/server/utils/loopValidation.ts): blank fields are unset,
   // and the last stage has no settings.
   const stageConfig: ILoopStageConfig[] = [];
@@ -136,6 +171,7 @@ export function validateLoopForm(
       stage,
       ...(instructions && { instructions }),
       ...(settings.model && { model: settings.model }),
+      ...(settings.escalationModel && { escalationModel: settings.escalationModel }),
       ...(settings.tools?.length && { tools: settings.tools }),
       ...(settings.runner && { runner: settings.runner }),
       ...(settings.runner === 'desktop' && desktopGuards(settings)),
@@ -154,6 +190,14 @@ export function validateLoopForm(
   const oversees = values.oversees.length > 0 ? values.oversees : mode === 'edit' ? null : undefined;
   const budgetCreditsPerDay = values.budget.trim() ? budget : mode === 'edit' ? null : undefined;
   const stageConfigPayload = stageConfig.length > 0 ? stageConfig : mode === 'edit' ? null : undefined;
+  // Blank clears a setting on edit and leaves it out on create.
+  const orClear = <T,>(value: T | undefined) => (value !== undefined ? value : mode === 'edit' ? null : undefined);
+  const policy = {
+    serviceLevelHours: orClear(Object.keys(serviceLevelHours).length > 0 ? serviceLevelHours : undefined),
+    p2RunsPerDay: orClear(values.p2Cap.trim() ? p2Cap : undefined),
+    triageModel: orClear(values.triageModel || undefined),
+    escalationModel: orClear(values.escalationModel || undefined),
+  };
   return {
     errors,
     payload: {
@@ -166,6 +210,7 @@ export function validateLoopForm(
       ...(oversees !== undefined && { oversees }),
       ...(budgetCreditsPerDay !== undefined && { budgetCreditsPerDay }),
       ...(stageConfigPayload !== undefined && { stageConfig: stageConfigPayload }),
+      ...Object.fromEntries(Object.entries(policy).filter(([, value]) => value !== undefined)),
     },
   };
 }
@@ -183,6 +228,11 @@ function initialValues(loop?: ILoop): LoopFormValues {
       oversees: [],
       budget: '',
       stageConfig: {},
+      slaP0: '',
+      slaP1: '',
+      p2Cap: '',
+      triageModel: '',
+      escalationModel: '',
     };
   }
   const unit: IntervalUnit =
@@ -197,6 +247,11 @@ function initialValues(loop?: ILoop): LoopFormValues {
     agentId: loop.agentId ?? '',
     oversees: loop.oversees ?? [],
     budget: String(loop.budgetCreditsPerDay ?? ''),
+    slaP0: String(loop.serviceLevelHours?.p0 ?? ''),
+    slaP1: String(loop.serviceLevelHours?.p1 ?? ''),
+    p2Cap: String(loop.p2RunsPerDay ?? ''),
+    triageModel: loop.triageModel ?? '',
+    escalationModel: loop.escalationModel ?? '',
     stageConfig: Object.fromEntries(
       (loop.stageConfig ?? []).map(({ stage, smoke, holdLabels, ...settings }) => [
         stage,
@@ -264,6 +319,24 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
     ...mcpTools.map(tool => (
       <Option key={tool.value} value={tool.value}>
         {tool.label}
+      </Option>
+    )),
+  ];
+  // Shared by every model picker. A saved model the picker no longer lists stays selectable, so an edit never drops it.
+  const modelOptions = (selected: string | undefined, emptyLabel: string) => [
+    <Option key="" value="">
+      {emptyLabel}
+    </Option>,
+    ...(selected && !accessibleTextModels.some(model => model.id === selected)
+      ? [
+          <Option key={selected} value={selected}>
+            {selected}
+          </Option>,
+        ]
+      : []),
+    ...accessibleTextModels.map(model => (
+      <Option key={model.id} value={model.id}>
+        {model.name}
       </Option>
     )),
   ];
@@ -506,16 +579,17 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
                           onChange={(_, model) => setStage(stage, { model: model || undefined })}
                           data-testid={`loop-form-stage-model-${i}`}
                         >
-                          <Option value="">Loop default</Option>
-                          {/* Keeps a saved model the picker no longer lists selectable, so an edit never drops it. */}
-                          {settings.model && !accessibleTextModels.some(model => model.id === settings.model) && (
-                            <Option value={settings.model}>{settings.model}</Option>
-                          )}
-                          {accessibleTextModels.map(model => (
-                            <Option key={model.id} value={model.id}>
-                              {model.name}
-                            </Option>
-                          ))}
+                          {modelOptions(settings.model, 'Loop default')}
+                        </Select>
+                      </FormControl>
+                      <FormControl>
+                        <FormLabel>Escalation model</FormLabel>
+                        <Select
+                          value={settings.escalationModel ?? ''}
+                          onChange={(_, model) => setStage(stage, { escalationModel: model || undefined })}
+                          data-testid={`loop-form-stage-escalation-model-${i}`}
+                        >
+                          {modelOptions(settings.escalationModel, 'Loop default')}
                         </Select>
                       </FormControl>
                       <FormControl>
@@ -601,6 +675,69 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
             <FormHelperText>
               {errors.budget ?? 'Optional. The loop pauses for the rest of the UTC day once it is spent.'}
             </FormHelperText>
+          </FormControl>
+          <FormControl error={!!errors.sla}>
+            <FormLabel>Service level (hours)</FormLabel>
+            <Stack direction="row" gap={1}>
+              <Input
+                type="number"
+                startDecorator="p0"
+                placeholder={String(LOOP_SERVICE_LEVEL_HOURS.p0)}
+                value={values.slaP0}
+                onChange={e => set('slaP0', e.target.value)}
+                sx={{ width: 140 }}
+                slotProps={{ input: { min: 0, step: 'any', 'data-testid': 'loop-form-sla-p0' } }}
+              />
+              <Input
+                type="number"
+                startDecorator="p1"
+                placeholder={String(LOOP_SERVICE_LEVEL_HOURS.p1)}
+                value={values.slaP1}
+                onChange={e => set('slaP1', e.target.value)}
+                sx={{ width: 140 }}
+                slotProps={{ input: { min: 0, step: 'any', 'data-testid': 'loop-form-sla-p1' } }}
+              />
+            </Stack>
+            <FormHelperText>
+              {errors.sla ?? 'A p0 or p1 ticket waiting longer than this shows as Overdue and notifies you.'}
+            </FormHelperText>
+          </FormControl>
+          <FormControl error={!!errors.p2Cap}>
+            <FormLabel>p2 runs per day</FormLabel>
+            <Input
+              type="number"
+              placeholder="No cap"
+              value={values.p2Cap}
+              onChange={e => set('p2Cap', e.target.value)}
+              sx={{ width: 160 }}
+              slotProps={{ input: { min: 0, 'data-testid': 'loop-form-p2-cap' } }}
+            />
+            <FormHelperText>
+              {errors.p2Cap ??
+                'Optional. Keeps room for p0/p1: past it, p2 and p3 wait for 00:00 UTC and extra agent-set p2s move to p3.'}
+            </FormHelperText>
+          </FormControl>
+          <FormControl>
+            <FormLabel>Triage model</FormLabel>
+            <Select
+              value={values.triageModel}
+              onChange={(_, model) => set('triageModel', model ?? '')}
+              data-testid="loop-form-triage-model"
+            >
+              {modelOptions(values.triageModel, 'Loop model')}
+            </Select>
+            <FormHelperText>Sets the priority of tickets added without one.</FormHelperText>
+          </FormControl>
+          <FormControl>
+            <FormLabel>Escalation model</FormLabel>
+            <Select
+              value={values.escalationModel}
+              onChange={(_, model) => set('escalationModel', model ?? '')}
+              data-testid="loop-form-escalation-model"
+            >
+              {modelOptions(values.escalationModel, 'None')}
+            </Select>
+            <FormHelperText>Optional. Runs a ticket&apos;s last try before it is blocked.</FormHelperText>
           </FormControl>
           <Stack direction="row" gap={1} justifyContent="flex-end">
             <Button variant="plain" color="neutral" onClick={onClose} data-testid="loop-form-cancel-btn">

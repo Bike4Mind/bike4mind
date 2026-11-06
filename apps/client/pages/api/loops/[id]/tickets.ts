@@ -1,4 +1,4 @@
-import { DEFAULT_WORK_ITEM_PRIORITY, desktopStagesOf, RUNNER_PRESENCE_FRESH_MS } from '@bike4mind/common';
+import { desktopStagesOf, RUNNER_PRESENCE_FRESH_MS, serviceLevelBreach } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { loopRepository, loopRunnerPresenceRepository, workItemRepository } from '@bike4mind/database';
@@ -24,6 +24,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
     // A desktop-stage ticket is never picked by a cloud run, so it is not queued here.
     const desktopStages = new Set(desktopStagesOf(loop));
+    const now = new Date();
     const groups = new Map(loop.stages.map(stage => [stage, [] as unknown[]]));
     for (const ticket of tickets) {
       const group = groups.get(ticket.stage ?? '') ?? groups.get(loop.stages[0]);
@@ -37,10 +38,17 @@ const handler = baseApi({ auth: 'jwtOnly' })
         dependencies: ticket.dependencies,
         executionId: ticket.executionId,
         runCount: ticket.runCount ?? 0,
-        priority: ticket.priority ?? DEFAULT_WORK_ITEM_PRIORITY,
+        // Absent: untriaged.
+        priority: ticket.priority,
+        demoted: ticket.prioritySetBy === 'demote',
+        epic: !!ticket.epic,
+        // An epic's children are its dependencies; a gone one counts as done, as for readiness.
+        ...(ticket.epic && { childrenDone: ticket.dependencies.filter(depId => !openDeps.has(depId)).length }),
+        stale: !!serviceLevelBreach(ticket, loop, now),
         blockedOn: ticket.blockedOn,
         ready:
           ticket.status === 'open' &&
+          !!ticket.priority &&
           !desktopStages.has(ticket.stage ?? '') &&
           ticket.dependencies.every(depId => !openDeps.has(depId)),
         createdAt: ticket.createdAt,

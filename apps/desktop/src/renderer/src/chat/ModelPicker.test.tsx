@@ -395,6 +395,22 @@ describe('ModelPicker twin rows', () => {
     ).toEqual({ 'local:srv-v:qwen-small': 'gpu vllm', 'local:srv-v:sql-lora': 'gpu vllm - LoRA on qwen-small' });
   });
 
+  it('says No tools on the row of a local model without tool support, and only there', () => {
+    expect(
+      Object.fromEntries(
+        rowDetails([
+          { id: 'local:ollama:gemma3:270m', name: 'gemma3:270m', backend: 'local-ollama', supportsTools: false },
+          { id: 'local:ollama:qwen3:8b', name: 'qwen3:8b', backend: 'local-ollama', supportsTools: true },
+          { id: 'local:ollama:fresh', name: 'fresh', backend: 'local-ollama' },
+        ])
+      )
+    ).toEqual({
+      'local:ollama:gemma3:270m': 'This computer - No tools',
+      'local:ollama:qwen3:8b': 'This computer',
+      'local:ollama:fresh': 'This computer',
+    });
+  });
+
   it('selects the primary row for a conversation saved on one of its served-name aliases', () => {
     const server = { id: 'v', name: 'gpu vllm' };
     mount(

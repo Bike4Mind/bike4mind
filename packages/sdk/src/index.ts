@@ -17,6 +17,7 @@ export {
   type Schemas,
   type TtsResult,
 } from './client';
+export { exchangeIdToken, type ExchangeIdTokenOptions, type ExchangedKey } from './exchange';
 export { B4mApiError, B4mQuestError, B4mStreamEndedError, parseRetryAfterSeconds } from './errors';
 export type { components, operations as Operations, paths } from './generated/openapi';
 export { operations } from './generated/operations';

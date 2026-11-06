@@ -16,7 +16,7 @@ import type {
   ModelServerKind,
   ModelServerSpecs,
 } from '@shared/modelServers';
-import { LOCAL_SERVER_NAME, specsProblem } from '@shared/modelServers';
+import { LOCAL_SERVER_NAME, specsBlank, specsProblem } from '@shared/modelServers';
 import type { SecretCipher, StoreFile, StoreLogger } from '../chat/mcp/McpServerStore';
 
 export { credentialHeaders, MAX_HEADER_NAME_CHARS, MAX_SECRET_CHARS };
@@ -157,6 +157,10 @@ export class ModelServerStore {
       if (specs === null) delete stored.specs;
       else if (specs) stored.specs = specs;
       if (patch.kind !== undefined) stored.kind = patch.kind;
+      if (stored.kind !== 'ollama' && stored.specs?.kvCacheType) {
+        const { kvCacheType: _dropped, ...rest } = stored.specs;
+        stored.specs = rest;
+      }
       if (patch.access !== undefined) stored.access = patch.access;
       let applied: (() => void) | undefined;
       if (patch.credential) {
@@ -387,11 +391,11 @@ function hasId(value: unknown): value is StoredServer {
   return typeof value === 'object' && value !== null && typeof (value as { id?: unknown }).id === 'string';
 }
 
-/** Specs to store: null when every figure is blank; throws when Settings should not have sent them. */
+/** Specs to store: null when every field is blank; throws when Settings should not have sent them. */
 function checkedSpecs(specs: ModelServerSpecs | null, local: boolean): ModelServerSpecs | null {
-  if (!specs || (specs.ramGiB === null && specs.gpuMemoryGiB === null && specs.bandwidthGBps === null)) return null;
+  if (!specs || specsBlank(specs)) return null;
   const problem = specsProblem(specs, local);
   if (problem) throw new Error(problem);
-  const { ramGiB, gpuMemoryGiB, bandwidthGBps, unified } = specs;
-  return { ramGiB, gpuMemoryGiB, bandwidthGBps, unified: !local && unified };
+  const { ramGiB, gpuMemoryGiB, bandwidthGBps, unified, kvCacheType } = specs;
+  return { ramGiB, gpuMemoryGiB, bandwidthGBps, unified: !local && unified, ...(kvCacheType ? { kvCacheType } : {}) };
 }

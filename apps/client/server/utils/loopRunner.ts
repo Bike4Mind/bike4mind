@@ -11,6 +11,7 @@ import {
   effectiveMergePolicy,
   MAX_DESKTOP_RUNS_PER_USER,
   HTTPError,
+  loopRunModel,
   RUNNER_LEASE_MS,
   stageConfigOf,
   type ILoop,
@@ -36,7 +37,7 @@ import {
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
-import { loopAdmission } from './loopBudget';
+import { loopAdmission, p2RunsLeft, PRIORITIES_OVER_P2_CAP } from './loopBudget';
 import { buildLoopQuery, LOOP_PROMPT_ANSWERS, LOOP_PROMPT_DIRECTIVES, parseLoopMemory } from './loopMemory';
 import { advancePatch, makeDueIfReady, ticketRunLimit } from './loopTickets';
 import { pushLoopChanged, requestLoopDispatch } from './loopDispatch';
@@ -77,7 +78,13 @@ export async function listRunnerTickets(userId: string, now: Date): Promise<Runn
     // ponytail: priced on the loop's model; the claim re-checks on the stage's model.
     if (!(await loopAdmission(loop, loop.model, now)).ok) continue;
     const tickets = await workItemRepository.listReadyInStages(userId, loop.id, loop.stages, desktopStagesOf(loop));
-    ready.push(...tickets.map(ticket => ({ loop, ticket })));
+    // Over the loop's p2 cap, p2 and p3 wait for tomorrow (the claim re-checks).
+    const capped = tickets.some(ticket => !PRIORITIES_OVER_P2_CAP.includes(ticket.priority!))
+      ? (await p2RunsLeft(loop, now)) === 0
+      : false;
+    for (const ticket of tickets) {
+      if (!capped || PRIORITIES_OVER_P2_CAP.includes(ticket.priority!)) ready.push({ loop, ticket });
+    }
   }
   // Array.prototype.sort is stable, so equal priorities keep each loop's order.
   return ready
@@ -99,18 +106,20 @@ const runnerTicket = (loop: ILoop, ticket: IWorkItem): RunnerTicket => {
 };
 
 /**
- * What a desktop run of a ticket in `stage` runs on, and whether the loop's budgets admit it. The one place
- * the desktop claim chooses its model and admits, so a later model or cap rule changes only this.
+ * What a desktop run of a ticket in `stage` runs on (`loopRunModel`; `runsAfterClaim` counts this run), and whether
+ * the loop's budgets admit it. The one place the desktop claim chooses its model and admits, so a later model or cap
+ * rule changes only this.
  */
 export async function admitDesktopRun(
   loop: ILoop,
   stage: Omit<ILoopStageConfig, 'stage'>,
+  runsAfterClaim: number,
   now: Date
-): Promise<{ model: string; tools: string[]; creditCap?: number } | RunnerRefusal> {
-  const model = stage.model ?? loop.model;
+): Promise<{ model: string; escalated: boolean; tools: string[]; creditCap?: number } | RunnerRefusal> {
+  const { model, escalated } = loopRunModel(loop, stage, runsAfterClaim, ticketRunLimit(loop.stages));
   const admission = await loopAdmission(loop, model, now);
   if (!admission.ok) return refuse(409, admission.kind, ADMISSION_ERRORS[admission.kind]);
-  return { model, tools: stage.tools?.length ? stage.tools : loop.tools, creditCap: admission.creditCap };
+  return { model, escalated, tools: stage.tools?.length ? stage.tools : loop.tools, creditCap: admission.creditCap };
 }
 
 const ADMISSION_ERRORS: Record<'credits' | 'loop_budget' | 'user_budget' | 'paced', string> = {
@@ -152,9 +161,13 @@ export async function claimRunnerTicket(
     );
     return refuse(409, 'run_limit', `The ticket ran ${runs} times without finishing`);
   }
+  if (!ticket.priority) return refuse(409, 'untriaged', 'The ticket waits for a triage run to set its priority');
+  if (!PRIORITIES_OVER_P2_CAP.includes(ticket.priority) && (await p2RunsLeft(loop, now)) === 0) {
+    return refuse(409, 'p2_budget', "The loop's p2 runs for today are used up; p2 and p3 tickets wait until 00:00 UTC");
+  }
 
   const stage = stageConfigOf(loop, ticket.stage);
-  const admitted = await admitDesktopRun(loop, stage, now);
+  const admitted = await admitDesktopRun(loop, stage, runs + 1, now);
   if (isRefusal(admitted)) return admitted;
   if ((await agentExecutionRepository.countActiveDesktopByUserId(userId)) >= MAX_DESKTOP_RUNS_PER_USER) {
     return refuse(409, 'lanes_full', `You have ${MAX_DESKTOP_RUNS_PER_USER} desktop runs active`);
@@ -184,6 +197,9 @@ export async function claimRunnerTicket(
       lambdaInvocationCount: 0,
       childExecutionIds: [],
       loopId: loop.id,
+      workItemId: ticket.id,
+      ticketPriority: ticket.priority,
+      ...(admitted.escalated && { escalated: true }),
       ...(admitted.creditCap !== undefined && { creditCap: admitted.creditCap }),
       checkpoint: { steps: [], iteration: 0, pendingText: '', seq: 0 },
       runnerLeaseUntil: leaseUntil,

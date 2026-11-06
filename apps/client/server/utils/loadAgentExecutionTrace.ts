@@ -29,6 +29,10 @@ export type AgentExecutionTrace = {
   error: string | null;
   steps: IAgentStep[];
   totalIterations: number | null;
+  model: string;
+  /** Loop runs only: a ticket's escalated last run, or a triage run. */
+  escalated?: boolean;
+  loopRunKind?: IAgentExecution['loopRunKind'];
   createdAt: Date;
   updatedAt: Date;
 };
@@ -100,6 +104,9 @@ export async function loadAgentExecutionTrace(id: string, userId: string): Promi
     error: toCallerSafeError(execution.error),
     steps: result?.steps ?? checkpoint?.steps ?? [],
     totalIterations: result?.totalIterations ?? checkpoint?.iteration ?? null,
+    model: execution.model,
+    ...(execution.escalated && { escalated: true }),
+    ...(execution.loopRunKind && { loopRunKind: execution.loopRunKind }),
     createdAt: execution.createdAt,
     updatedAt: execution.updatedAt,
   };

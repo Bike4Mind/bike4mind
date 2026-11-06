@@ -63,6 +63,20 @@ describe('signup grant status', () => {
     expect(paths).toHaveTextContent('when you verify a card');
     expect(screen.getByTestId('signup-grant-status')).not.toHaveTextContent('eligibility');
   });
+  it('states the invite bonus when one was paid', () => {
+    h.grant = { ...h.grant!, inviteBonusPaid: 2000 };
+    show();
+    expect(screen.getByTestId('signup-grant-released')).toHaveTextContent(
+      '1,000 signup credits released. Plus a 2,000 invite bonus. 9,000 more credits are still locked.'
+    );
+  });
+  it('states no bonus when none was paid', () => {
+    show();
+    expect(screen.getByTestId('signup-grant-released')).not.toHaveTextContent('invite bonus');
+    h.grant = { ...h.grant!, inviteBonusPaid: 0 };
+    show();
+    expect(screen.getAllByTestId('signup-grant-released')[1]).not.toHaveTextContent('invite bonus');
+  });
   it('derives the minutes from the setting', () => {
     h.minSeconds = 1800;
     show();

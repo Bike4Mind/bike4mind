@@ -1324,6 +1324,11 @@
                                 }
                               ]
                             },
+                            "draftNumPredict": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 16
+                            },
                             "installedTemplate": {
                               "type": "string",
                               "pattern": "^[0-9a-f]{64}$"
@@ -1381,7 +1386,7 @@
                             },
                             "draftNumPredict": {
                               "type": "integer",
-                              "minimum": 1,
+                              "minimum": 0,
                               "maximum": 16
                             }
                           }
@@ -1463,6 +1468,11 @@
                                 }
                               ]
                             },
+                            "draftNumPredict": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 16
+                            },
                             "installedTemplate": {
                               "type": "string",
                               "pattern": "^[0-9a-f]{64}$"
@@ -1518,7 +1528,7 @@
                             },
                             "draftNumPredict": {
                               "type": "integer",
-                              "minimum": 1,
+                              "minimum": 0,
                               "maximum": 16
                             }
                           }

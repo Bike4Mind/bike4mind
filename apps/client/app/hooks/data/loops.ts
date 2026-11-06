@@ -22,6 +22,7 @@ import type {
   WorkItemStatus,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import type { AgentExecutionTrace } from '@client/app/hooks/data/agentExecutions';
 import { getErrorMessage } from '@client/app/utils/error';
 
 /** One ticket as served by GET /api/loops/:id/tickets (apps/client/pages/api/loops/[id]/tickets.ts). */
@@ -36,7 +37,16 @@ export interface ILoopTicket {
   executionId?: string;
   /** Runs that claimed it since its owner last moved it; the loop blocks it at `runLimit`. */
   runCount: number;
-  priority: WorkItemPriority;
+  /** Absent: untriaged, waiting for the loop's triage run. */
+  priority?: WorkItemPriority;
+  /** The p2 cap set it to p3; any owner priority edit clears it. */
+  demoted: boolean;
+  /** Split into child tickets (its dependencies); closes once they all close. */
+  epic: boolean;
+  /** Epics only: children closed or gone. */
+  childrenDone?: number;
+  /** A p0/p1 waiting past its loop's service level (`serviceLevelBreach`). */
+  stale: boolean;
   /** Parked on a condition the scheduler reopens it from, not on its owner. */
   blockedOn?: WorkItemBlocker;
   /** Open with every dependency closed: the scheduler works the highest priority, furthest-along, then oldest, next. */
@@ -95,6 +105,10 @@ export type LoopFormPayload = Pick<ILoop, 'name' | 'goal' | 'intervalMinutes' | 
   oversees?: string[] | null;
   budgetCreditsPerDay?: number | null;
   stageConfig?: ILoop['stageConfig'];
+  serviceLevelHours?: ILoop['serviceLevelHours'] | null;
+  p2RunsPerDay?: number | null;
+  triageModel?: string | null;
+  escalationModel?: string | null;
 };
 
 const LIST_POLL_MS = 30_000;
@@ -162,6 +176,24 @@ export const useLoopEvents = (id: string) =>
     refetchInterval: DETAIL_POLL_MS,
   });
 
+/**
+ * The run drawer's header: the model a loop run used and whether it was escalated or a triage run, read from the
+ * run trace route (pages/api/agent-executions/[id]). Own query key, so a live run's steps are not cached for the
+ * chat's "Show reasoning" disclosure, which shares that route.
+ */
+export const useLoopRunInfo = (executionId?: string) =>
+  useQuery({
+    queryKey: ['loops', 'run', executionId],
+    queryFn: async () => {
+      const { data } = await api.get<Pick<AgentExecutionTrace, 'model' | 'escalated' | 'loopRunKind'>>(
+        `/api/agent-executions/${executionId}`
+      );
+      return { model: data.model, escalated: data.escalated, loopRunKind: data.loopRunKind };
+    },
+    enabled: !!executionId,
+    staleTime: Infinity,
+  });
+
 export const useLoopsBudget = () =>
   useQuery({
     queryKey: loopKeys.budget,
@@ -215,7 +247,7 @@ export const useRunLoop = () =>
 
 export const useCreateLoopTicket = () =>
   useLoopMutation(
-    (body: { loopId: string; title: string; description?: string; stage: string; priority: WorkItemPriority }) =>
+    (body: { loopId: string; title: string; description?: string; stage: string; priority?: WorkItemPriority }) =>
       api.post('/api/work-items', body),
     ({ loopId }) => [{ queryKey: loopKeys.detail(loopId) }]
   );

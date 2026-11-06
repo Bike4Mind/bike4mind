@@ -23,6 +23,7 @@ import {
   validateLoopName,
   validateLoopOrganizationId,
   validateLoopOversees,
+  validateLoopPriorityPolicy,
   validateLoopStageConfig,
   validateLoopStages,
   validateLoopTools,
@@ -67,6 +68,9 @@ const handler = baseApi({ auth: 'jwtOnly' })
       body.budgetCreditsPerDay === undefined ? undefined : validateLoopBudget(body.budgetCreditsPerDay);
     const oversees =
       body.oversees === undefined ? null : await validateLoopOversees(body.oversees, undefined, req.user!.id);
+    const policy = Object.fromEntries(
+      Object.entries(validateLoopPriorityPolicy(body as Record<string, unknown>)).filter(([, value]) => value !== null)
+    );
 
     const organizationId =
       body.organizationId === undefined ? undefined : validateLoopOrganizationId(body.organizationId);
@@ -102,6 +106,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       ...(agentId && { agentId }),
       ...(budgetCreditsPerDay !== undefined && { budgetCreditsPerDay }),
       ...(oversees && { oversees }),
+      ...policy,
       status: 'draft',
     } as Omit<ILoop, 'id' | 'createdAt' | 'updatedAt'>);
 
