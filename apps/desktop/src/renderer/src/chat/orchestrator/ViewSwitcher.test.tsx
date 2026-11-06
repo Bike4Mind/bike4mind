@@ -71,6 +71,21 @@ describe('ViewSwitcher', () => {
     expect(el('orchestrator-view-option-table').querySelectorAll('svg')).toHaveLength(1);
   });
 
+  it('offers the quiet-when-idle switch in the Tavern only, checked while on', async () => {
+    const onToggle = vi.fn();
+    await themed.render(<ViewSwitcher view="board" onViewChange={onViewChange} ambient={{ on: true, onToggle }} />);
+    act(() => el('orchestrator-view-menu-btn').click());
+    expect(query('orchestrator-ambient-toggle')).toBeNull();
+
+    themed.unmount();
+    await themed.render(<ViewSwitcher view="tavern" onViewChange={onViewChange} ambient={{ on: true, onToggle }} />);
+    act(() => el('orchestrator-view-menu-btn').click());
+    const toggle = el('orchestrator-ambient-toggle');
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    act(() => toggle.click());
+    expect(onToggle).toHaveBeenCalledWith(false);
+  });
+
   it('reports the picked view', async () => {
     await themed.render(<ViewSwitcher view="table" onViewChange={onViewChange} />);
     act(() => el('orchestrator-view-menu-btn').click());

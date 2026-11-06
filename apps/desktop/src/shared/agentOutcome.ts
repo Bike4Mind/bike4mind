@@ -72,7 +72,7 @@ export function summarizeSession(session: ChatSession): ChatSessionSummary {
  * The prose a reply ended on. A tool-using reply's `content` opens with its first round's narration
  * ("Let me look at..."), so the last round that said anything is where its result is.
  */
-function closingText(message: ChatMessage): string {
+export function closingText(message: ChatMessage): string {
   const spoken = message.rounds?.filter(round => round.text.trim() !== '');
   return spoken?.length ? spoken[spoken.length - 1].text : message.content;
 }
