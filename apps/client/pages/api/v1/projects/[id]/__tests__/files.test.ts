@@ -18,6 +18,7 @@ const {
   mockFindPageByIds,
   mockFindAllAccessibleFiles,
   mockFindExistingFiles,
+  mockFindExistingFilesIncludingDeleted,
   mockFileUpdate,
   mockLogEvent,
   mockRateLimitOptions,
@@ -30,6 +31,7 @@ const {
   mockFindPageByIds: vi.fn(),
   mockFindAllAccessibleFiles: vi.fn(),
   mockFindExistingFiles: vi.fn(),
+  mockFindExistingFilesIncludingDeleted: vi.fn(),
   mockFileUpdate: vi.fn(),
   mockLogEvent: vi.fn(),
   mockRateLimitOptions: vi.fn(),
@@ -73,6 +75,7 @@ vi.mock('@bike4mind/database', () => ({
     findPageByIds: mockFindPageByIds,
     shareable: { findAllAccessibleByIds: mockFindAllAccessibleFiles, updateUserShares: vi.fn() },
     findExistingIdsByIds: mockFindExistingFiles,
+    findExistingIdsIncludingDeletedByIds: mockFindExistingFilesIncludingDeleted,
     update: mockFileUpdate,
   },
   inviteRepository: { findAllByDocumentId: vi.fn().mockResolvedValue([]) },
@@ -147,6 +150,7 @@ beforeEach(() => {
   mockProjectUpdate.mockResolvedValue(undefined);
   mockFindAllAccessibleFiles.mockResolvedValue([]);
   mockFindExistingFiles.mockResolvedValue([]);
+  mockFindExistingFilesIncludingDeleted.mockResolvedValue([]);
   mockFindPageByIds.mockResolvedValue({ data: [], hasMore: false });
 });
 
@@ -287,7 +291,7 @@ describe('DELETE /api/v1/projects/{id}/files/{file_id}', () => {
     const res = await remove(FILE_B);
 
     expect(res._getStatusCode()).toBe(204);
-    expect(mockProjectUpdate).toHaveBeenCalledWith(expect.objectContaining({ fileIds: [FILE_A] }));
+    expect(mockProjectUpdate).not.toHaveBeenCalled();
     expect(mockLogEvent).not.toHaveBeenCalled();
   });
 
@@ -312,6 +316,7 @@ describe('DELETE /api/v1/projects/{id}/files/{file_id}', () => {
   it('answers 404 for a held id whose file still exists but the owner cannot read', async () => {
     mockFindAllAccessibleFiles.mockResolvedValue([]);
     mockFindExistingFiles.mockResolvedValue([FILE_A]);
+    mockFindExistingFilesIncludingDeleted.mockResolvedValue([FILE_A]);
 
     expect(await statusOf(removeHandler, 'DELETE', { id: PROJECT_ID, file_id: FILE_A })).toBe(404);
     expect(mockProjectUpdate).not.toHaveBeenCalled();

@@ -59,26 +59,38 @@ export const removeSessions = async (
   const unresolved = sessionIds.filter(id => addressable.has(canonicalId(id)) && !resolvedIds.has(canonicalId(id)));
   const ownerHeld = new Set(project.userId === userId ? project.sessionIds.map(canonicalId) : []);
   const heldUnresolved = unresolved.filter(id => ownerHeld.has(canonicalId(id)));
-  const liveIds =
-    heldUnresolved.length > 0 ? (await db.sessions.findAllByIds(heldUnresolved)).map(s => String(s.id)) : [];
-  const live = new Set(liveIds.map(canonicalId));
+  const found =
+    heldUnresolved.length > 0 ? await db.sessions.findAllByIds(heldUnresolved, { includeDeleted: true }) : [];
+  const live = new Set(found.filter(s => !s.deletedAt).map(s => canonicalId(String(s.id))));
   if (unresolved.some(id => !ownerHeld.has(canonicalId(id)) || live.has(canonicalId(id)))) {
     throw new BadRequestError('Some sessions are not accessible');
   }
-  if (project.userId !== userId && sessions.some(s => s.userId !== userId)) {
-    throw new ForbiddenError('You are not authorized to remove sessions from this project');
+  // A soft-deleted row is hidden from the reads above but keeps its project-tagged grants, which a
+  // restore would bring back; only an id with no row at all needs no revoke.
+  const softDeletedIds = found.filter(s => s.deletedAt).map(s => String(s.id));
+
+  if (project.userId !== userId) {
+    const ownedIds = new Set(sessions.filter(s => s.userId === userId).map(s => canonicalId(String(s.id))));
+    if (sessionIds.some(id => !ownedIds.has(canonicalId(id)))) {
+      throw new ForbiddenError('You are not authorized to remove sessions from this project');
+    }
   }
 
   // Canonical on both sides here too: a stored id is lowercase, so an uppercase request id
   // would match nothing and the call would answer 200 having removed nothing at all.
   const removing = new Set(sessionIds.map(canonicalId));
   const removedIds = project.sessionIds.filter(id => removing.has(canonicalId(id)));
+  if (removedIds.length === 0) return { project, removedIds };
   project.sessionIds = project.sessionIds.filter(id => !removing.has(canonicalId(id)));
   project.updatedAt = new Date();
 
   // Revoke all project users access to the session
   for (const session of sessions) {
     await db.sessions.shareable.updateUserShares(session.id, { remove: { projectId: project.id } });
+  }
+
+  for (const id of softDeletedIds) {
+    await db.sessions.shareable.updateUserShares(id, { remove: { projectId: project.id }, includeDeleted: true });
   }
 
   await db.projects.update({ id: project.id, sessionIds: project.sessionIds, updatedAt: project.updatedAt });

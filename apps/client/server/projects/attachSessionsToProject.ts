@@ -68,7 +68,7 @@ export async function attachSessionsToProject(
   // Attaching a notebook to a project is free; only the summary it triggers costs credits, and
   // this fan-out is already best-effort (Promise.allSettled). So a refusal skips the queueing
   // rather than failing the attach, and neither caller's response has room to report it, leaving
-  // the warning log as where a skipped summary surfaces (#1852).
+  // the warning log as where a skipped summary surfaces.
   const summarizableSessionIds = aiAccessDeniedMessage(ctx.user)
     ? new Set<string>()
     : await filterSessionIdsByOperationalCredits(sessions, {

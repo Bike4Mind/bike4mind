@@ -349,7 +349,7 @@ describe('DELETE /api/v1/projects/{id}/sessions/{session_id}', () => {
     mockFindAllAccessibleSessions.mockResolvedValue([sessionDoc(SESSION_B)]);
 
     expect((await remove(SESSION_B))._getStatusCode()).toBe(204);
-    expect(mockProjectUpdate).toHaveBeenCalledWith(expect.objectContaining({ sessionIds: [SESSION_A] }));
+    expect(mockProjectUpdate).not.toHaveBeenCalled();
     expect(mockCreateActivity).not.toHaveBeenCalled();
     expect(mockLogEvent).not.toHaveBeenCalled();
   });

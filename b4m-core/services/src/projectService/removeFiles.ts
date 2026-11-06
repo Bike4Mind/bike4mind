@@ -64,20 +64,33 @@ export const removeFiles = async (
   const unresolved = fileIds.filter(id => addressable.has(canonicalId(id)) && !resolvedIds.has(canonicalId(id)));
   const ownerHeld = new Set(project.userId === userId ? project.fileIds.map(canonicalId) : []);
   const heldUnresolved = unresolved.filter(id => ownerHeld.has(canonicalId(id)));
-  const liveIds = heldUnresolved.length > 0 ? await db.fabFiles.findExistingIdsByIds(heldUnresolved) : [];
+  const [liveIds, existingIds] =
+    heldUnresolved.length > 0
+      ? await Promise.all([
+          db.fabFiles.findExistingIdsByIds(heldUnresolved),
+          db.fabFiles.findExistingIdsIncludingDeletedByIds(heldUnresolved),
+        ])
+      : [[], []];
   const live = new Set(liveIds.map(canonicalId));
   if (unresolved.some(id => !ownerHeld.has(canonicalId(id)) || live.has(canonicalId(id)))) {
     throw new BadRequestError('Some files are not accessible');
   }
+  // A soft-deleted row is hidden from the reads above but keeps its project-tagged grants, which a
+  // restore would bring back; only an id with no row at all needs no revoke.
+  const softDeletedIds = existingIds.filter(id => !live.has(canonicalId(id)));
 
-  if (project.userId !== userId && files.some(f => f.userId !== userId)) {
-    throw new ForbiddenError('You are not authorized to remove files from this project');
+  if (project.userId !== userId) {
+    const ownedIds = new Set(files.filter(f => f.userId === userId).map(f => canonicalId(String(f.id))));
+    if (fileIds.some(id => !ownedIds.has(canonicalId(id)))) {
+      throw new ForbiddenError('You are not authorized to remove files from this project');
+    }
   }
 
   // Canonical on both sides here too: a stored id is lowercase, so an uppercase request id
   // would match nothing and the call would answer 200 having removed nothing at all.
   const removing = new Set(fileIds.map(canonicalId));
   const removedIds = project.fileIds.filter(id => removing.has(canonicalId(id)));
+  if (removedIds.length === 0) return { project, removedIds };
   project.fileIds = project.fileIds.filter(id => !removing.has(canonicalId(id)));
   project.updatedAt = new Date();
 
@@ -123,6 +136,14 @@ export const removeFiles = async (
       // else: access came solely from this project - drop the entry entirely.
     }
     await db.fabFiles.shareable.updateUserShares(file.id, { remove: { projectId: project.id }, add: directGrants });
+  }
+
+  for (const id of softDeletedIds) {
+    await db.fabFiles.shareable.updateUserShares(id, {
+      remove: { projectId: project.id },
+      add: [],
+      includeDeleted: true,
+    });
   }
 
   await db.projects.update({ id: project.id, fileIds: project.fileIds, updatedAt: project.updatedAt });

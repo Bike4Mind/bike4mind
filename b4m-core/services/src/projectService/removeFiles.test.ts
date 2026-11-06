@@ -54,6 +54,7 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
           updateUserShares: vi.fn(async (_id: string, change: never) => applyUserSharesChange(file, change)),
         },
         findExistingIdsByIds: vi.fn(async () => []),
+        findExistingIdsIncludingDeletedByIds: vi.fn(async () => []),
         update: vi.fn(),
       },
       invites: {
@@ -289,5 +290,59 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
     const { removedIds } = await call();
 
     expect(removedIds).toEqual([]);
+  });
+
+  it('revokes the project grants on a soft-deleted held file as well as clearing its id', async () => {
+    project.fileIds = [FILE_ID_HEX];
+    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => []);
+    db.fabFiles.findExistingIdsIncludingDeletedByIds = vi.fn(async () => [FILE_ID_HEX]);
+
+    const { removedIds } = await removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [FILE_ID_HEX] }, { db });
+
+    expect(removedIds).toEqual([FILE_ID_HEX]);
+    expect(db.fabFiles.shareable.updateUserShares).toHaveBeenCalledWith(FILE_ID_HEX, {
+      remove: { projectId: PROJECT_ID },
+      add: [],
+      includeDeleted: true,
+    });
+    expect(db.projects.update).toHaveBeenCalledWith(expect.objectContaining({ fileIds: [] }));
+  });
+
+  it('clears a hard-deleted held file id without any revoke', async () => {
+    project.fileIds = [FILE_ID_HEX];
+    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => []);
+
+    await removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [FILE_ID_HEX] }, { db });
+
+    expect(db.fabFiles.shareable.updateUserShares).not.toHaveBeenCalled();
+    expect(db.projects.update).toHaveBeenCalledWith(expect.objectContaining({ fileIds: [] }));
+  });
+
+  it('refuses a non-owner a legacy non-ObjectId entry listed in the project', async () => {
+    project.fileIds = ['legacy-entry'];
+    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => []);
+
+    await expect(
+      removeFiles('member-1', { projectId: PROJECT_ID, fileIds: ['legacy-entry'] }, { db })
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(db.projects.update).not.toHaveBeenCalled();
+  });
+
+  it('still lets a non-owner remove a readable file they own', async () => {
+    file.userId = 'member-1';
+
+    const { removedIds } = await removeFiles('member-1', { projectId: PROJECT_ID, fileIds: [FILE_ID] }, { db });
+
+    expect(removedIds).toEqual([FILE_ID]);
+    expect(db.projects.update).toHaveBeenCalledWith(expect.objectContaining({ fileIds: [] }));
+  });
+
+  it('does not write the project or revoke anything when nothing is removed', async () => {
+    project.fileIds = [];
+
+    await call();
+
+    expect(db.projects.update).not.toHaveBeenCalled();
+    expect(db.fabFiles.shareable.updateUserShares).not.toHaveBeenCalled();
   });
 });
