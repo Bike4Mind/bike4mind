@@ -172,6 +172,16 @@ export function poseJoints(root: THREE.Object3D, angles: Record<string, number>)
 }
 
 /** Each joint at the far end of its range: what `model_screenshot` shows as the open pose. */
+/** The joints the model's nodes carry, as the pane's sliders list them. */
+export function sceneJoints(root: THREE.Object3D): ModelJoint[] {
+  return jointNodes(root).map(({ node, joint }) => ({
+    name: node.name,
+    motion: joint.motion,
+    axis: joint.axis,
+    range: joint.range,
+  }));
+}
+
 export function openPose(root: THREE.Object3D): Record<string, number> {
   return Object.fromEntries(jointNodes(root).map(({ node, joint }) => [node.name, joint.range[1]]));
 }
@@ -392,7 +402,7 @@ export function summarizeObject(root: THREE.Object3D): ModelSummary {
 }
 
 /** Camera directions in scene (Y-up) space; "front" looks at the model's -Y face, which faces +Z here. */
-const VIEW_DIRECTIONS: Record<ModelView, [number, number, number]> = {
+export const VIEW_DIRECTIONS: Record<ModelView, [number, number, number]> = {
   front: [0, 0, 1],
   back: [0, 0, -1],
   left: [-1, 0, 0],

@@ -1,5 +1,7 @@
 import * as THREE from 'three';
-import type { ModelJoint } from '@shared/model3d';
+import type { ModelJoint, ModelLighting } from '@shared/model3d';
+import { frameCamera, openPose, poseJoints, sceneJoints, VIEW_DIRECTIONS } from './modelScene';
+import { addGlowLights, enableShadows, ModelComposer, ModelStage } from './modelStage';
 
 /**
  * A turntable clip of the model pane: one full orbit while every joint swings through its range and
@@ -94,4 +96,51 @@ export async function recordCanvas(
   await stopped;
   track.stop();
   return new Uint8Array(await new Blob(chunks, { type: mimeType }).arrayBuffer());
+}
+
+/**
+ * A turntable of `root` for the agent's model_record, rendered off screen like the contact sheet:
+ * a renderer of its own at TURNTABLE_SIZE, framed from the iso view so the clip does not depend
+ * on where the user left the pane's camera. Joints swing from the modelled pose. Resolves with WebM.
+ */
+export async function renderTurntable(
+  root: THREE.Object3D,
+  lighting: ModelLighting,
+  dark: boolean
+): Promise<Uint8Array> {
+  const { width, height } = TURNTABLE_SIZE;
+  const renderer = new THREE.WebGLRenderer({ antialias: false });
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(35, width / height, 0.01, 1000);
+  const stage = new ModelStage(scene, renderer);
+  const composer = new ModelComposer(renderer, scene, camera);
+  try {
+    renderer.setPixelRatio(1);
+    renderer.setSize(width, height, false);
+    composer.setSize(width, height, 1);
+    const subject = root.clone(true);
+    enableShadows(subject);
+    scene.add(subject);
+    // Fitted and framed with every joint open, the widest the clip gets, so nothing swings out of shot.
+    poseJoints(subject, openPose(subject));
+    stage.fit(subject, { dark, grid: false, lighting });
+    composer.fit(stage.bounds);
+    composer.setLighting(lighting);
+    const target = frameCamera(camera, subject, VIEW_DIRECTIONS.iso);
+    const orbitStart = camera.position.clone();
+    poseJoints(subject, {});
+    if (lighting === 'night') addGlowLights(subject, stage.radius);
+    const joints = sceneJoints(subject);
+    return await recordCanvas(renderer.domElement, progress => {
+      camera.position.copy(orbitPosition(orbitStart, target, progress));
+      camera.lookAt(target);
+      poseJoints(subject, turntablePose(joints, {}, progress));
+      composer.render(true);
+    });
+  } finally {
+    composer.dispose();
+    stage.dispose();
+    renderer.dispose();
+    renderer.forceContextLoss();
+  }
 }
