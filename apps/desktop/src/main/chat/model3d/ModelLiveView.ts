@@ -50,6 +50,26 @@ function foreignGlbError(target: string): Error {
   );
 }
 
+/**
+ * Puts `bytes` at `target` only if nothing is there yet. A hard link of the finished temp file is
+ * atomic; disks that cannot hard-link (exFAT, SMB shares, File Provider folders) get an exclusive
+ * create instead, which still never replaces a file that appeared meanwhile.
+ */
+async function createExclusive(temporary: string, target: string, bytes: Uint8Array): Promise<void> {
+  try {
+    await link(temporary, target);
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw foreignGlbError(target);
+  }
+  await writeFile(target, bytes, { flag: 'wx' }).catch(async (error: NodeJS.ErrnoException) => {
+    if (error.code === 'EEXIST') throw foreignGlbError(target);
+    // The exclusive create succeeded and the write did not: drop the partial file it made.
+    await rm(target, { force: true }).catch(() => undefined);
+    throw error;
+  });
+}
+
 export class ModelLiveView {
   private state: ModelViewState = EMPTY_MODEL_STATE;
   private watcher: FSWatcher | null = null;
@@ -196,9 +216,7 @@ export class ModelLiveView {
       if ((await this.replaceable(target)) === 'ours') {
         await rename(temporary, target);
       } else {
-        await link(temporary, target).catch((error: NodeJS.ErrnoException) => {
-          throw error.code === 'EEXIST' ? foreignGlbError(target) : error;
-        });
+        await createExclusive(temporary, target, stamped);
         await rm(temporary, { force: true });
       }
     } catch (error) {
@@ -219,7 +237,14 @@ export class ModelLiveView {
       throw error;
     });
     if (!info) return 'absent';
-    if (!info.isFile() || !(await isModelPaneGlbFile(target))) throw foreignGlbError(target);
+    if (!info.isFile()) throw foreignGlbError(target);
+    const ours = await isModelPaneGlbFile(target).catch((error: NodeJS.ErrnoException) => {
+      // Deleted between the lstat and the read.
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (ours === null) return 'absent';
+    if (!ours) throw foreignGlbError(target);
     return 'ours';
   }
 

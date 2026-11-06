@@ -173,6 +173,16 @@ function plainNumberAt(block: string, at: number): { at: number; length: number 
 }
 
 /**
+ * Whether the word at `at` begins a property of the object one level in: the code before it, past
+ * whitespace and comments, is that object's `{` or a `,`. Rules out the else branch of a ternary.
+ */
+function startsProperty(block: string, depths: Int32Array, at: number): boolean {
+  let before = at - 1;
+  while (before >= 0 && (depths[before] === 0 || /\s/.test(block[before]))) before -= 1;
+  return before >= 0 && depths[before] === 2 && (block[before] === '{' || block[before] === ',');
+}
+
+/**
  * The number of the first `value:` that is code one level inside the object opening at `open`,
  * skipping a `value:` in a label string, a comment or a nested object. Null when that value is not
  * a plain number, or the object has none.
@@ -182,7 +192,7 @@ function valueFieldIn(block: string, depths: Int32Array, open: number): { at: nu
   while (close < block.length && !(block[close] === '}' && depths[close] === 2)) close += 1;
   VALUE_FIELD.lastIndex = open + 1;
   for (let field = VALUE_FIELD.exec(block); field && field.index < close; field = VALUE_FIELD.exec(block)) {
-    if (depths[field.index + field[0].lastIndexOf(':')] === 2)
+    if (depths[field.index + field[0].lastIndexOf(':')] === 2 && startsProperty(block, depths, field.index))
       return plainNumberAt(block, field.index + field[0].length);
   }
   return null;

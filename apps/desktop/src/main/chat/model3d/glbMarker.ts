@@ -12,8 +12,8 @@ const CHUNK_JSON = 0x4e4f534a; // 'JSON'
 const HEADER_BYTES = 12;
 const CHUNK_HEADER_BYTES = 8;
 const MARKER_KEY = 'bike4mindModel';
-// The pane's own JSON chunk is a few KB; a bigger one is not ours, and is never read whole.
-const MAX_MARKER_JSON_BYTES = 1024 * 1024;
+// The pane's JSON chunk is a few KB, tens of KB for thousands of parts; a bigger one is not ours.
+const MAX_MARKER_JSON_BYTES = 16 * 1024 * 1024;
 
 type GlbParts = { json: Record<string, unknown>; rest: Uint8Array };
 

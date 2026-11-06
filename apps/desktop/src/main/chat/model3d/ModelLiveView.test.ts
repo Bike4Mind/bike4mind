@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { rm, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,17 +6,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelViewState } from '@shared/model3d';
 import { isModelPaneGlb } from './glbMarker';
 
-const fsControl = vi.hoisted(() => ({ failMove: false, beforeLink: null as ((to: string) => void) | null }));
+const fsControl = vi.hoisted(() => ({
+  failMove: false,
+  linkError: null as string | null,
+  beforeLink: null as ((to: string) => void) | null,
+  afterLstat: null as ((path: string) => void) | null,
+}));
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
-  const fail = () => Promise.reject(new Error('EXDEV: cross-device link'));
+  const fail = (code: string) => Promise.reject(Object.assign(new Error(`${code}: mocked`), { code }));
   return {
     ...actual,
-    rename: (from: string, to: string) => (fsControl.failMove ? fail() : actual.rename(from, to)),
+    rename: (from: string, to: string) => (fsControl.failMove ? fail('EXDEV') : actual.rename(from, to)),
+    lstat: async (path: string) => {
+      const info = await actual.lstat(path);
+      fsControl.afterLstat?.(path);
+      return info;
+    },
     link: (from: string, to: string) => {
-      if (fsControl.failMove) return fail();
       fsControl.beforeLink?.(to);
-      return actual.link(from, to);
+      return fsControl.linkError ? fail(fsControl.linkError) : actual.link(from, to);
     },
   };
 });
@@ -57,7 +66,9 @@ describe('ModelLiveView', () => {
 
   beforeEach(() => {
     fsControl.failMove = false;
+    fsControl.linkError = null;
     fsControl.beforeLink = null;
+    fsControl.afterLstat = null;
     dir = mkdtempSync(join(tmpdir(), 'model-view-'));
     file = join(dir, 'chest.model.js');
     writeFileSync(file, SOURCE);
@@ -239,12 +250,44 @@ describe('ModelLiveView', () => {
     await expect(view.writeGlb(view.current().generation, glb('model'))).rejects.toThrow(/already exists/);
   });
 
+  it('treats a sibling deleted during the ownership check as absent', async () => {
+    const sibling = join(dir, 'chest.glb');
+    writeFileSync(sibling, glb('earlier', { bike4mindModel: true }));
+    await view.open(file);
+    fsControl.afterLstat = path => {
+      fsControl.afterLstat = null;
+      unlinkSync(path);
+    };
+    expect(await view.writeGlb(1, glb('model'))).toBe(sibling);
+    expect(generatorOf(sibling)).toBe('model');
+  });
+
   it('removes its temporary file when the GLB cannot be moved into place', async () => {
+    writeFileSync(join(dir, 'chest.glb'), glb('earlier', { bike4mindModel: true }));
     await view.open(file);
     fsControl.failMove = true;
     await expect(view.writeGlb(1, glb('model'))).rejects.toThrow(/EXDEV/);
+    expect(generatorOf(join(dir, 'chest.glb'))).toBe('earlier');
     expect(readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
     expect(view.glbPath()).toBeNull();
+  });
+
+  it('still writes a new GLB on a disk that cannot hard-link', async () => {
+    await view.open(file);
+    fsControl.linkError = 'EPERM';
+    expect(await view.writeGlb(1, glb('model'))).toBe(join(dir, 'chest.glb'));
+    expect(generatorOf(join(dir, 'chest.glb'))).toBe('model');
+    expect(isModelPaneGlb(readFileSync(join(dir, 'chest.glb')))).toBe(true);
+    expect(readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('does not replace a GLB saved meanwhile on a disk that cannot hard-link', async () => {
+    await view.open(file);
+    fsControl.linkError = 'ENOTSUP';
+    fsControl.beforeLink = to => writeFileSync(to, glb('saved meanwhile'));
+    await expect(view.writeGlb(1, glb('model'))).rejects.toThrow(/already exists and was not made/);
+    expect(generatorOf(join(dir, 'chest.glb'))).toBe('saved meanwhile');
+    expect(readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
   });
 
   it('never writes over an opened .glb', async () => {

@@ -1,4 +1,4 @@
-import { writeFile } from 'node:fs/promises';
+import { stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
@@ -10,21 +10,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+async function isSameFile(a: string, b: string): Promise<boolean> {
+  const [first, second] = await Promise.all([stat(a).catch(() => null), stat(b).catch(() => null)]);
+  return first !== null && second !== null && first.dev === second.dev && first.ino === second.ino;
+}
+
 /**
- * The bytes an export writes to `target`. A GLB exported onto the open model's own sibling path
- * carries the pane's marker, so the next build may replace it (ModelLiveView refuses unmarked
- * siblings); exported anywhere else it stays an ordinary user asset.
+ * Writes an export to `target`. A GLB exported onto the open model's own sibling carries the pane's
+ * marker, so the next build may replace it (ModelLiveView refuses unmarked siblings); exported
+ * anywhere else it stays an ordinary user asset. The sibling is matched by file identity, so another
+ * spelling of it (case on a case-insensitive disk, a symlinked folder) is still the sibling.
  */
-export function exportBytes(
+export async function writeExport(
   format: 'glb' | 'stl',
   bytes: Uint8Array,
   target: string,
   modelPath: string | null
-): Uint8Array {
-  const sibling = modelPath ? siblingGlbPath(modelPath) : null;
-  return format === 'glb' && sibling !== null && resolve(target) === resolve(sibling)
-    ? stampModelPaneGlb(bytes)
-    : bytes;
+): Promise<void> {
+  const sibling = format === 'glb' && modelPath ? siblingGlbPath(modelPath) : null;
+  const isSibling = async () =>
+    sibling !== null && (resolve(target) === resolve(sibling) || (await isSameFile(target, sibling)));
+  if (await isSibling()) {
+    await writeFile(target, stampModelPaneGlb(bytes));
+    return;
+  }
+  await writeFile(target, bytes);
+  // A target that did not exist yet has no identity to compare until it is written.
+  if (await isSibling()) await writeFile(target, stampModelPaneGlb(bytes));
 }
 
 /** Only the fields main acts on; anything else the renderer sends is dropped. */
@@ -121,7 +133,7 @@ export function modelIpcHandlers(view: ModelLiveView): void {
     };
     const picked = await (window ? dialog.showSaveDialog(window, options) : dialog.showSaveDialog(options));
     if (picked.canceled || !picked.filePath) return null;
-    await writeFile(picked.filePath, exportBytes(format, value.bytes, picked.filePath, current));
+    await writeExport(format, value.bytes, picked.filePath, current);
     return picked.filePath;
   });
 

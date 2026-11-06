@@ -117,6 +117,10 @@ describe('writeParamValue', () => {
     expect(writeParamValue(commentFirst, 'width', 70)).toContain('width: { /* value: 3 */ value: 70,');
     const nested = SOURCE.replace('width: { value: 60,', 'width: { meta: { value: 1 }, value: 60,');
     expect(writeParamValue(nested, 'width', 70)).toContain('meta: { value: 1 }, value: 70,');
+    const ternary = SOURCE.replace('width: { value: 60,', 'width: { min: fine ? value : 3, value: 60,');
+    expect(writeParamValue(ternary, 'width', 70)).toContain('width: { min: fine ? value : 3, value: 70,');
+    const commented = SOURCE.replace('width: { value: 60,', 'width: { min: 1, // note\n value: 60,');
+    expect(writeParamValue(commented, 'width', 70)).toContain('// note\n value: 70,');
   });
 
   it('refuses an object param with no value field of its own', () => {

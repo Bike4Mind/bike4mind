@@ -1,8 +1,11 @@
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({ BrowserWindow: {}, dialog: {}, ipcMain: {} }));
 
-const { exportBytes, parseBuildReport } = await import('./modelIpc');
+const { writeExport, parseBuildReport } = await import('./modelIpc');
 const { isModelPaneGlb } = await import('./glbMarker');
 
 function glb(): Uint8Array {
@@ -18,16 +21,39 @@ function glb(): Uint8Array {
   return out;
 }
 
-describe('exportBytes', () => {
-  it('marks a GLB exported onto the sibling path, so the next build may replace it', () => {
-    expect(isModelPaneGlb(exportBytes('glb', glb(), '/proj/chest.glb', '/proj/chest.model.js'))).toBe(true);
+describe('writeExport', () => {
+  function project() {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'model-export-')));
+    return { root, model: join(root, 'chest.model.js') };
+  }
+  const marked = (path: string) => isModelPaneGlb(new Uint8Array(readFileSync(path)));
+
+  it('marks a GLB exported onto the sibling path, so the next build may replace it', async () => {
+    const { root, model } = project();
+    await writeExport('glb', glb(), join(root, 'chest.glb'), model);
+    expect(marked(join(root, 'chest.glb'))).toBe(true);
   });
 
-  it('leaves a GLB exported anywhere else, and every STL, as the user asset it is', () => {
-    const bytes = glb();
-    expect(exportBytes('glb', bytes, '/proj/export/chest.glb', '/proj/chest.model.js')).toBe(bytes);
-    expect(exportBytes('glb', bytes, '/proj/chest.glb', null)).toBe(bytes);
-    expect(exportBytes('stl', bytes, '/proj/chest.glb', '/proj/chest.model.js')).toBe(bytes);
+  it('marks the sibling reached through another spelling of its folder', async () => {
+    const { root, model } = project();
+    const alias = join(realpathSync(mkdtempSync(join(tmpdir(), 'model-alias-'))), 'proj');
+    symlinkSync(root, alias);
+    await writeExport('glb', glb(), join(alias, 'chest.glb'), model);
+    expect(marked(join(root, 'chest.glb'))).toBe(true);
+    writeFileSync(join(root, 'chest.glb'), glb());
+    await writeExport('glb', glb(), join(alias, 'chest.glb'), model);
+    expect(marked(join(root, 'chest.glb'))).toBe(true);
+  });
+
+  it('leaves a GLB exported anywhere else, and every STL, as the user asset it is', async () => {
+    const { root, model } = project();
+    mkdirSync(join(root, 'export'));
+    await writeExport('glb', glb(), join(root, 'export', 'chest.glb'), model);
+    expect(marked(join(root, 'export', 'chest.glb'))).toBe(false);
+    await writeExport('glb', glb(), join(root, 'chest.glb'), null);
+    expect(marked(join(root, 'chest.glb'))).toBe(false);
+    await writeExport('stl', glb(), join(root, 'chest.glb'), model);
+    expect(marked(join(root, 'chest.glb'))).toBe(false);
   });
 });
 
