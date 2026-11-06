@@ -3127,6 +3127,7 @@ export class ChatService {
         wire = await toCompletionMessages(session, readAttachment);
       }
       if (!resume && images?.vision) {
+        // Replayed images exist only on this turn's wire, so next turn the cached prefix changes at this user message and the rest is re-written to the cache once (accepted).
         prependToPrompt(wire, await this.previousReplyImages(session, images));
       }
       const systemMessage = () =>
