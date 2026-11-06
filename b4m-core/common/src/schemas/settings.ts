@@ -506,6 +506,7 @@ export const SettingKeySchema = z.enum([
   'signupNetworkAlertsEnabled',
   'signupNetworkAlertWindowMinutes',
   'signupNetworkAlertMaxPerIp',
+  'signupNetworkAlertMinUncorroboratedPerIp',
   'signupNetworkAlertMaxPerHostingAsn',
   'signupNetworkAlertMaxPerAsn',
   'shadowDetectionRecordingEnabled',
@@ -2500,6 +2501,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'signupNetworkAlertsEnabled', order: 40 },
       { key: 'signupNetworkAlertWindowMinutes', order: 41 },
       { key: 'signupNetworkAlertMaxPerIp', order: 42 },
+      { key: 'signupNetworkAlertMinUncorroboratedPerIp', order: 42.5 },
       { key: 'signupNetworkAlertMaxPerHostingAsn', order: 43 },
       { key: 'signupNetworkAlertMaxPerAsn', order: 44 },
       { key: 'shadowDetectionRecordingEnabled', order: 44.5 },
@@ -5866,7 +5868,19 @@ export const settingsMap = {
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
-      'Alert when more self-serve accounts than this signed up from one IP within the window. 0 turns the check off.',
+      'Alert when more self-serve accounts than this signed up from one IP within the window and a corroborating signal ties them (see the uncorroborated threshold below). 0 turns the check off.',
+  }),
+  signupNetworkAlertMinUncorroboratedPerIp: makeNumberSetting({
+    key: 'signupNetworkAlertMinUncorroboratedPerIp',
+    name: 'Signup Network Alert: Min Signups per IP Without Corroboration',
+    defaultValue: 3,
+    int: true,
+    min: 1,
+    max: 1000,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Households and mobile carriers put a few unrelated people behind one IP. Below this many self-serve signups from one IP within the window, an IP alert also needs a corroborating signal: a hosting or anonymous-IP network, or an earlier signup on the IP sharing the JA4, mailbox or company mail domain, or already spending credits. Set it to one more than the max per IP to alert on the count alone.',
   }),
   signupNetworkAlertMaxPerHostingAsn: makeNumberSetting({
     key: 'signupNetworkAlertMaxPerHostingAsn',

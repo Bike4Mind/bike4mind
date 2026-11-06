@@ -2,8 +2,11 @@ import { isIP } from 'node:net';
 import { AuthStrategy, escapeSlackText, toAbsoluteUrl, type INetworkMeta } from '@bike4mind/common';
 import {
   adminSettingsRepository,
+  authEventRepository,
   cacheRepository,
   shadowDetectionRepository,
+  usageEventRepository,
+  userRepository,
   type RecordShadowDetectionInput,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
@@ -14,6 +17,7 @@ import {
   MAX_COUNTED_ROWS,
 } from '@bike4mind/server-utils/auth/signupNetworkSignals';
 import { postMessageToSlackWithOutcome } from '@bike4mind/server-utils/integrations/slack/slack';
+import { sharedLinkKinds } from '@bike4mind/server-utils/security/accountLinkSignals';
 import { hostingNetworkOf } from './datacenterAsns';
 
 /**
@@ -24,8 +28,13 @@ import { hostingNetworkOf } from './datacenterAsns';
  * tripped it; a Cache claim keyed by IP or ASN keeps it to one alert per network per window across
  * Lambdas. The refusal caps for the same networks live in signupNetworkLimits.ts.
  *
- * A signup that trips any burst is also recorded as one shadow detection (what policy v1 would have
+ * A signup that trips any burst is also recorded as one shadow detection (what the policy would have
  * done; it never acts) for admin grading, behind the shadowDetectionRecordingEnabled kill switch.
+ *
+ * Households and carrier NAT put a few unrelated people behind one residential IP, so an IP burst
+ * below signupNetworkAlertMinUncorroboratedPerIp fires only with a corroborating signal: a hosting
+ * or anonymous-IP network, or an earlier signup on the IP that shares this one's JA4, mailbox or
+ * (non-consumer) mail domain, or has already spent credits.
  */
 
 const MINUTE_MS = 60_000;
@@ -44,11 +53,37 @@ const DEDUPE_KEY_PREFIX = 'signup-network-alert';
 const SHADOW_DEDUPE_KEY_PREFIX = 'shadow-detection:signup-network';
 
 /**
- * The shadow-detection policy for a burst (shadowDetection.ts in @bike4mind/common). v1: every burst
- * would contain the latest account. Bump when the burst-to-action mapping changes, so precision is
- * measured per policy.
+ * The shadow-detection policy for a burst (shadowDetection.ts in @bike4mind/common). Every burst
+ * would contain the latest account. v1 fired on the IP count alone; v2 needs a corroborating signal
+ * below the uncorroborated IP threshold. Bump when the burst-to-action mapping changes, so precision
+ * is measured per policy.
  */
-export const SIGNUP_NETWORK_BURST_POLICY_VERSION = 1;
+export const SIGNUP_NETWORK_BURST_POLICY_VERSION = 2;
+
+/** Earlier signups on the IP read for corroboration; the count is small by the time this runs. */
+const CORROBORATION_SIBLING_LIMIT = 20;
+
+/** What ties an IP burst's signups to one operator beyond sharing the address. */
+export const SIGNUP_NETWORK_CORROBORATIONS = [
+  /** The signup came from a hosting/datacenter ASN or carried the WAF anonymous-IP label. */
+  'anonymousNetwork',
+  'sharedJa4',
+  /** Same delivering inbox (plus tags and Gmail dots folded). */
+  'sharedMailbox',
+  /** Same non-consumer mail domain. */
+  'sharedMailDomain',
+  /** An earlier signup on the IP already spent credits in the window. */
+  'siblingSpent',
+] as const;
+export type SignupNetworkCorroboration = (typeof SIGNUP_NETWORK_CORROBORATIONS)[number];
+
+const CORROBORATION_LABELS: Record<SignupNetworkCorroboration, string> = {
+  anonymousNetwork: 'Hosting or anonymous-IP network',
+  sharedJa4: 'Shares a JA4 with an earlier signup on this IP',
+  sharedMailbox: 'Shares a mailbox with an earlier signup on this IP',
+  sharedMailDomain: 'Shares a mail domain with an earlier signup on this IP',
+  siblingSpent: 'An earlier signup on this IP already spent credits',
+};
 
 // Enterprise SSO (Okta, SAML) onboards whole teams from one office network by design.
 const SELF_SERVE_SIGNUP_METHODS: ReadonlySet<string> = new Set([
@@ -62,6 +97,8 @@ export type SignupNetworkAlertThresholds = {
   enabled: boolean;
   windowMinutes: number;
   maxPerIp: number;
+  /** An IP burst with no corroborating signal fires only from this many signups. */
+  minUncorroboratedPerIp: number;
   maxPerHostingAsn: number;
   maxPerAsn: number;
 };
@@ -70,13 +107,15 @@ export type SignupNetworkAlertThresholds = {
 export type SignupNetworkCounts = { ipSignups: number | null; asnSignups: number | null };
 
 export type SignupNetworkBurst =
-  { scope: 'ip'; signups: number; max: number } | { scope: 'asn'; signups: number; max: number; hosting: boolean };
+  | { scope: 'ip'; signups: number; max: number; corroboratedBy: SignupNetworkCorroboration[] }
+  | { scope: 'asn'; signups: number; max: number; hosting: boolean };
 
 export function readSignupNetworkAlertThresholds(settings: Record<string, string>): SignupNetworkAlertThresholds {
   return {
     enabled: getSettingsValue('signupNetworkAlertsEnabled', settings, true),
     windowMinutes: getSettingsValue('signupNetworkAlertWindowMinutes', settings, 180),
     maxPerIp: getSettingsValue('signupNetworkAlertMaxPerIp', settings, 1),
+    minUncorroboratedPerIp: getSettingsValue('signupNetworkAlertMinUncorroboratedPerIp', settings, 3),
     maxPerHostingAsn: getSettingsValue('signupNetworkAlertMaxPerHostingAsn', settings, 2),
     maxPerAsn: getSettingsValue('signupNetworkAlertMaxPerAsn', settings, 0),
   };
@@ -88,16 +127,36 @@ export function asnThresholdFor(thresholds: SignupNetworkAlertThresholds, hostin
   return applicable.length > 0 ? Math.min(...applicable) : 0;
 }
 
-/** The bursts one signup's network counts trip. A 0 threshold or an unchecked (null) count never trips. */
+/** Whether the IP count is over maxPerIp; corroboration is only worth reading then. */
+export function ipOverThreshold(counts: SignupNetworkCounts, thresholds: SignupNetworkAlertThresholds): boolean {
+  return thresholds.maxPerIp > 0 && counts.ipSignups !== null && counts.ipSignups > thresholds.maxPerIp;
+}
+
+/** Whether an IP count over maxPerIp fires without corroboration. */
+export function ipFiresUncorroborated(signups: number, thresholds: SignupNetworkAlertThresholds): boolean {
+  return signups >= thresholds.minUncorroboratedPerIp;
+}
+
+/**
+ * The bursts one signup's network counts trip. A 0 threshold or an unchecked (null) count never
+ * trips. An IP count over maxPerIp trips when it reaches minUncorroboratedPerIp or when
+ * `corroboration` names at least one signal; a hosting network corroborates by itself.
+ */
 export function evaluateSignupNetworkBursts(input: {
   counts: SignupNetworkCounts;
   hosting: boolean | null;
   thresholds: SignupNetworkAlertThresholds;
+  corroboration?: readonly SignupNetworkCorroboration[];
 }): SignupNetworkBurst[] {
   const { counts, hosting, thresholds } = input;
   const bursts: SignupNetworkBurst[] = [];
-  if (thresholds.maxPerIp > 0 && counts.ipSignups !== null && counts.ipSignups > thresholds.maxPerIp) {
-    bursts.push({ scope: 'ip', signups: counts.ipSignups, max: thresholds.maxPerIp });
+  if (counts.ipSignups !== null && ipOverThreshold(counts, thresholds)) {
+    const corroboratedBy = SIGNUP_NETWORK_CORROBORATIONS.filter(
+      signal => (signal === 'anonymousNetwork' && hosting === true) || input.corroboration?.includes(signal)
+    );
+    if (corroboratedBy.length > 0 || ipFiresUncorroborated(counts.ipSignups, thresholds)) {
+      bursts.push({ scope: 'ip', signups: counts.ipSignups, max: thresholds.maxPerIp, corroboratedBy });
+    }
   }
   const asnMax = asnThresholdFor(thresholds, hosting);
   if (asnMax > 0 && counts.asnSignups !== null && counts.asnSignups > asnMax) {
@@ -129,6 +188,9 @@ export function formatSignupNetworkAlert(input: {
     `:rotating_light: *${title}*`,
     `*Signups:* ${signups} in the last ${windowMinutes} minutes (alerts above ${burst.max})`,
     ...(burst.scope === 'ip' && network.ip ? [`*IP:* \`${escapeSlackText(network.ip)}\``] : []),
+    ...(burst.scope === 'ip' && burst.corroboratedBy.length > 0
+      ? [`*Corroborated by:* ${burst.corroboratedBy.map(signal => CORROBORATION_LABELS[signal]).join('; ')}`]
+      : []),
     `*Network:* ${asn}, hosting/VPN: ${hosting === null ? 'unknown' : hosting ? 'yes' : 'no'}`,
     ...(network.country ? [`*Country:* ${escapeSlackText(network.country)}`] : []),
     `*Latest account:* ${adminUserRef(userId)}`,
@@ -210,18 +272,88 @@ export function buildSignupNetworkShadowDetection(input: {
       country: network.country,
       hosting: hostingNetworkOf(network),
     },
-    signals: bursts.map(burst => ({
-      key: burst.scope === 'ip' ? 'ipSignups' : 'asnSignups',
-      label: burst.scope === 'ip' ? 'Self-serve signups from this IP' : 'Self-serve signups from this network',
-      // JSON and Mongo cannot hold Infinity; a truncated count is unknown beyond the scan cap.
-      observed: Number.isFinite(burst.signups) ? burst.signups : null,
-      threshold: burst.max,
-    })),
+    signals: bursts.flatMap(burst => [
+      {
+        key: burst.scope === 'ip' ? 'ipSignups' : 'asnSignups',
+        label: burst.scope === 'ip' ? 'Self-serve signups from this IP' : 'Self-serve signups from this network',
+        // JSON and Mongo cannot hold Infinity; a truncated count is unknown beyond the scan cap.
+        observed: Number.isFinite(burst.signups) ? burst.signups : null,
+        threshold: burst.max,
+      },
+      ...(burst.scope === 'ip'
+        ? burst.corroboratedBy.map(signal => ({
+            key: signal,
+            label: `${CORROBORATION_LABELS[signal]} (1 yes)`,
+            observed: 1,
+            threshold: null,
+          }))
+        : []),
+    ]),
     windowMinutes,
     group: null,
     payment: null,
     detectedAt,
   };
+}
+
+export type SignupCorroborationDeps = {
+  findRecentSignupsOnIp: (input: {
+    ip: string;
+    excludeUserId: string;
+    since: Date;
+    until: Date;
+    limit: number;
+  }) => Promise<{ userId: string; ja4: string | null }[]>;
+  findEmails: (ids: string[]) => Promise<{ id: string; email: string | null }[]>;
+  spendSince: (ids: string[], since: Date) => Promise<Record<string, { totalCredits: number }>>;
+};
+
+const liveCorroborationDeps: SignupCorroborationDeps = {
+  findRecentSignupsOnIp: input => authEventRepository.findRecentSignupsOnIp(input),
+  findEmails: ids => userRepository.findLinkStatesByIds(ids),
+  spendSince: (ids, since) => usageEventRepository.spendProfileByUsers(ids, since, 1),
+};
+
+/**
+ * The signals beyond the shared address that tie this signup to the earlier ones on its IP in the
+ * window. The hosting network signal is not read here: evaluateSignupNetworkBursts derives it.
+ */
+export async function readIpCorroboration(input: {
+  network: Pick<INetworkMeta, 'ip' | 'ja4'>;
+  userId: string;
+  since: Date;
+  until: Date;
+  deps?: SignupCorroborationDeps;
+}): Promise<SignupNetworkCorroboration[]> {
+  const { network, userId, since, until, deps = liveCorroborationDeps } = input;
+  if (!network.ip) return [];
+  const siblings = await deps.findRecentSignupsOnIp({
+    ip: network.ip,
+    excludeUserId: userId,
+    since,
+    until,
+    limit: CORROBORATION_SIBLING_LIMIT,
+  });
+  if (siblings.length === 0) return [];
+  const siblingIds = [...new Set(siblings.map(sibling => sibling.userId))];
+  const [accounts, spend] = await Promise.all([
+    deps.findEmails([userId, ...siblingIds]),
+    deps.spendSince(siblingIds, since),
+  ]);
+  const emailOf = (id: string) => accounts.find(account => account.id === id)?.email ?? null;
+  // Only the mail traits: every sibling shares the IP by construction, and JA4 is read per signup.
+  const mailKinds = siblingIds.flatMap(id =>
+    sharedLinkKinds(
+      { email: emailOf(userId), signupIp: null, signupJa4: null },
+      { email: emailOf(id), signupIp: null, signupJa4: null }
+    )
+  );
+  const found = new Set<SignupNetworkCorroboration>();
+  if (network.ja4 && siblings.some(sibling => sibling.ja4 === network.ja4)) found.add('sharedJa4');
+  if (mailKinds.includes('mailbox')) found.add('sharedMailbox');
+  if (mailKinds.includes('mailDomain')) found.add('sharedMailDomain');
+  if (siblingIds.some(id => (spend[id]?.totalCredits ?? 0) > 0)) found.add('siblingSpent');
+  return SIGNUP_NETWORK_CORROBORATIONS.filter(signal => found.has(signal));
 }
 
 function burstSource(burst: SignupNetworkBurst): string {
@@ -291,22 +423,40 @@ export async function alertSignupNetworkBurst(input: {
     if (!checkIp && !checkAsn) return;
 
     const windowMs = thresholds.windowMinutes * MINUTE_MS;
+    const now = new Date();
     const { ipSignups, asnSignups } = await countRecentSignups({
       network,
-      at: new Date(),
+      at: now,
       windows: { ip: checkIp, prefix: false, asn: checkAsn },
       windowMs: { ip: windowMs, asn: windowMs },
       traceFallback: logger,
     });
     // A checked key with a null count means the scan was truncated, i.e. far over any threshold.
-    const bursts = evaluateSignupNetworkBursts({
-      counts: {
-        ipSignups: checkIp ? (ipSignups ?? Infinity) : null,
-        asnSignups: checkAsn ? (asnSignups ?? Infinity) : null,
-      },
-      hosting,
-      thresholds,
-    });
+    const counts: SignupNetworkCounts = {
+      ipSignups: checkIp ? (ipSignups ?? Infinity) : null,
+      asnSignups: checkAsn ? (asnSignups ?? Infinity) : null,
+    };
+    // Read only when it decides the outcome: over the IP threshold, short of the uncorroborated
+    // one, on a network that does not corroborate by itself.
+    const needsCorroboration =
+      counts.ipSignups !== null &&
+      ipOverThreshold(counts, thresholds) &&
+      !ipFiresUncorroborated(counts.ipSignups, thresholds) &&
+      hosting !== true;
+    const corroboration = needsCorroboration
+      ? await readIpCorroboration({
+          network,
+          userId,
+          since: new Date(now.getTime() - windowMs),
+          until: now,
+        }).catch((error: unknown) => {
+          logger.warn('[signup-network-alerts] Corroboration read failed; treating the burst as uncorroborated', {
+            error,
+          });
+          return [];
+        })
+      : [];
+    const bursts = evaluateSignupNetworkBursts({ counts, hosting, thresholds, corroboration });
     const recordShadow = getSettingsValue('shadowDetectionRecordingEnabled', settings, true);
     const burstInput = { network, userId, windowMinutes: thresholds.windowMinutes, logger };
     const [firstBurst, ...otherBursts] = bursts;

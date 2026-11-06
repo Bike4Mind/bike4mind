@@ -9,6 +9,7 @@
 
 import { createHash } from 'node:crypto';
 import {
+  ABUSE_ASSESSMENT_EVIDENCE_VERSION,
   ABUSE_ASSESSMENT_MAX_ACCOUNTS,
   ABUSE_ASSESSMENT_MAX_SIGNALS,
   ABUSE_ASSESSMENT_MAX_SUMMARY_CHARS,
@@ -18,6 +19,7 @@ import {
   abuseAssessmentFeatureSummarySchema,
   riskEvidenceFactValueSchemas,
   type AbuseAssessmentAccount,
+  type AbuseAssessmentAccountProfile,
   type AbuseAssessmentAccountEvidence,
   type AbuseAssessmentFeatureSummary,
   type AbuseAssessmentGroupEvidence,
@@ -27,7 +29,13 @@ import {
   type ShadowDetectionItem,
 } from '@bike4mind/common';
 
-export type AssessedAccountSource = { id: string; createdAt: Date | null; summary: RiskEvidenceSummary | null };
+export type AssessedAccountSource = {
+  id: string;
+  createdAt: Date | null;
+  summary: RiskEvidenceSummary | null;
+  /** From accountProfile.ts; null when the account could not be read. */
+  profile: AbuseAssessmentAccountProfile | null;
+};
 
 const HOUR_MS = 60 * 60 * 1000;
 const SIGNAL_KEY = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
@@ -83,6 +91,7 @@ const projectAccount = (
     accountAgeHours: source?.createdAt ? Math.max(0, hoursBetween(source.createdAt, detectedAt)) : null,
     evidenceAgeHours: summary ? hoursBetween(detectedAt, summary.computedAt) : null,
     evidence: summary ? projectEvidence(summary.facts) : null,
+    profile: source?.profile ?? null,
   };
 };
 
@@ -109,7 +118,7 @@ export function buildFeatureSummary({
 
   const build = (kept: AbuseAssessmentAccount[]): AbuseAssessmentFeatureSummary =>
     abuseAssessmentFeatureSummarySchema.parse({
-      evidenceVersion: RISK_EVIDENCE_VERSION,
+      evidenceVersion: ABUSE_ASSESSMENT_EVIDENCE_VERSION,
       detection: {
         detector: detection.detector,
         detectorPolicyVersion: detection.policyVersion,

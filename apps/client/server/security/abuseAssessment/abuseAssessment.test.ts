@@ -52,6 +52,8 @@ vi.mock('@bike4mind/database', async importActual => ({
     releaseLease: vi.fn(async () => undefined),
   },
 }));
+// Account profiles have their own suite (accountProfile.test.ts).
+vi.mock('./accountProfile', () => ({ loadAccountProfiles: async () => new Map() }));
 vi.mock('@server/billing/reserveRequestCredits', () => ({ reserveRequestCredits: mocks.reserveRequestCredits }));
 vi.mock('@bike4mind/server-utils/decisions/providers', () => ({
   getDecisionProviderRegistry: () => ({
@@ -127,7 +129,7 @@ describe('assessShadowDetection', () => {
       result: 'abuse',
       failure: null,
       policyVersion: 1,
-      evidenceVersion: 1,
+      evidenceVersion: 2,
       modelVersion: 'gpt-6-luna',
       trigger: 'admin',
       requestedBy: 'admin-1',

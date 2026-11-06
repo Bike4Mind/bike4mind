@@ -330,6 +330,29 @@ export type UserSignupLinkFacts = {
   landingNotebookOwnerId: string | null;
 };
 
+/**
+ * The signup and two-factor facts an advisory abuse assessment reads per account
+ * (UserRepository.findAccountRiskProfiles). The caller reduces them to flags before anything leaves.
+ */
+export type UserAccountRiskProfile = {
+  id: string;
+  createdAt: Date | null;
+  email: string | null;
+  /** As findSignupLinkFacts reads it. */
+  signupMethod: string;
+  signupIp: string | null;
+  signupJa4: string | null;
+  signupAsnKnown: boolean;
+  signupDatacenter: boolean | null;
+  signupWafAnonIp: boolean | null;
+  totpEnabled: boolean;
+  /** When TOTP setup began; enabling follows within the same setup flow. */
+  mfaSetupAt: Date | null;
+};
+
+/** An account that may share a signup trait with another (UserRepository.findSignupLinkCandidates). */
+export type UserSignupLinkCandidate = UserLinkState & { signupIp: string | null; signupJa4: string | null };
+
 /** An account as the payment-risk linked-account checks read it; the blocked fields match accountBlockReasons. */
 export type UserLinkState = {
   id: string;
@@ -816,6 +839,77 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .maxTimeMS(2000)
       .lean();
     return docs.map(d => String(d._id));
+  }
+
+  /** Signup and two-factor facts per id; ids that are not users are absent. */
+  async findAccountRiskProfiles(ids: string[]): Promise<UserAccountRiskProfile[]> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } })
+      .select(
+        'createdAt email signupMeta.ip signupMeta.ja4 signupMeta.asn signupMeta.isDatacenter signupMeta.wafAnonIp ' +
+          'acquisition.signupMethod authProviders.strategy mfa.totpEnabled mfa.setupAt'
+      )
+      .lean();
+    return docs.map(doc => ({
+      id: String(doc._id),
+      createdAt: doc.createdAt ?? null,
+      email: doc.email ?? null,
+      signupMethod: doc.acquisition?.signupMethod ?? doc.authProviders?.[0]?.strategy ?? 'email',
+      signupIp: doc.signupMeta?.ip ?? null,
+      signupJa4: doc.signupMeta?.ja4 ?? null,
+      signupAsnKnown: typeof doc.signupMeta?.asn === 'number' && doc.signupMeta.asn > 0,
+      signupDatacenter: doc.signupMeta?.isDatacenter ?? null,
+      signupWafAnonIp: doc.signupMeta?.wafAnonIp ?? null,
+      totpEnabled: doc.mfa?.totpEnabled === true,
+      mfaSetupAt: doc.mfa?.setupAt ?? null,
+    }));
+  }
+
+  /**
+   * Accounts created in [from, to] that share the signup IP, the signup JA4, a mailbox (any
+   * `+tag` of `mailbox.local@mailbox.domain`) or a mail domain with the caller's account. Each
+   * criterion is optional; with none, nothing is read. Bounded by `limit` and the createdAt range.
+   */
+  async findSignupLinkCandidates(input: {
+    excludeIds: string[];
+    from: Date;
+    to: Date;
+    ip: string | null;
+    ja4: string | null;
+    mailbox: { local: string; domain: string } | null;
+    mailDomain: string | null;
+    limit: number;
+  }): Promise<UserSignupLinkCandidate[]> {
+    const criteria: Record<string, unknown>[] = [];
+    if (input.ip) criteria.push({ 'signupMeta.ip': input.ip });
+    if (input.ja4) criteria.push({ 'signupMeta.ja4': input.ja4 });
+    if (input.mailbox) {
+      const local = escapeRegExp(input.mailbox.local);
+      const domain = escapeRegExp(input.mailbox.domain);
+      criteria.push({ email: { $regex: `^${local}(\\+[^@]*)?@${domain}$`, $options: 'i' } });
+    }
+    if (input.mailDomain) criteria.push({ email: { $regex: `@${escapeRegExp(input.mailDomain)}$`, $options: 'i' } });
+    if (criteria.length === 0) return [];
+    const excluded = convertIds(input.excludeIds.filter(id => mongoose.Types.ObjectId.isValid(id)));
+    const docs = await this.model
+      .find({ createdAt: { $gte: input.from, $lte: input.to }, _id: { $nin: excluded }, $or: criteria })
+      .select('name email createdAt isBanned disputePending moderation.status signupMeta.ip signupMeta.ja4')
+      .limit(input.limit)
+      .maxTimeMS(2000)
+      .lean();
+    return docs.map(d => ({
+      id: String(d._id),
+      name: d.name ?? null,
+      email: d.email ?? null,
+      createdAt: d.createdAt ?? null,
+      isBanned: d.isBanned ?? false,
+      disputePending: d.disputePending ?? false,
+      moderation: d.moderation?.status ? { status: d.moderation.status } : null,
+      signupIp: d.signupMeta?.ip ?? null,
+      signupJa4: d.signupMeta?.ja4 ?? null,
+    }));
   }
 
   /** Who `ids` are and whether each is blocked, for the payment-risk linked-account checks. */

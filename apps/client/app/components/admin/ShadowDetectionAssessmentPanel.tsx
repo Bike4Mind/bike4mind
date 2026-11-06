@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { Alert, Box, Button, Stack, Typography } from '@mui/joy';
 import {
+  abuseAssessmentAccountProfileSchema,
   hasAdminPermission,
+  type AbuseAssessmentAccountProfile,
   type AbuseAssessmentFailureCode,
   type AbuseAssessmentResult,
   type AbuseAssessmentSkipReason,
@@ -54,6 +56,78 @@ const percent = (value: number): string => `${Math.round(value * 100)}%`;
 
 const formatDate = (iso: string): string => formatUtc(new Date(iso));
 
+const yesNo = (value: boolean | null): string => (value === null ? 'unknown' : value ? 'yes' : 'no');
+const count = (value: number): string => value.toLocaleString('en-US');
+
+/** One line per fact of a v2 account profile, in the words the admin user page uses. */
+export function describeAccountProfile(profile: AbuseAssessmentAccountProfile): string[] {
+  const { signupNetwork: network, email, spend, linkedAccounts: linked } = profile;
+  const lines = [
+    `Signup: ${profile.signupMethod === 'otc' ? 'email code' : profile.signupMethod}; hosting/VPN network ` +
+      `${yesNo(network.hosting)}, anonymous IP ${yesNo(network.anonymousIp)}, JA4 ${network.ja4Present ? 'present' : 'absent'}`,
+  ];
+  if (email) {
+    const traits = [
+      email.plusAddressed && (email.randomLookingPlusTag ? 'plus-addressed, random-looking tag' : 'plus-addressed'),
+      email.generatedLocalPart && 'generated-looking name',
+      email.consumerMailDomain ? 'webmail domain' : 'own domain',
+    ].filter((trait): trait is string => typeof trait === 'string');
+    lines.push(`Email: ${traits.join(', ')}`);
+  }
+  if (profile.minutesToTwoFactor !== null)
+    lines.push(`Two-factor: ${count(profile.minutesToTwoFactor)} min after signup`);
+  if (profile.minutesToFirstSpend !== null)
+    lines.push(`First spend: ${count(profile.minutesToFirstSpend)} min after signup`);
+  if (spend) {
+    const models = spend.byModel
+      .map(entry => `${entry.model ?? 'no model'} ${percent(entry.creditShare)} (${count(entry.creditsPerEvent)}/call)`)
+      .join(', ');
+    lines.push(`Spend: ${count(spend.totalCredits)} credits${models ? ` - ${models}` : ''}`);
+  }
+  if (linked) {
+    lines.push(
+      `Linked within ${linked.windowHours}h: ${count(linked.total)}${linked.truncated ? '+' : ''} ` +
+        `(${count(linked.blocked)} blocked; signup IP ${linked.sharedSignupIp}, JA4 ${linked.sharedJa4}, ` +
+        `mailbox ${linked.sharedMailbox}, mail domain ${linked.sharedMailDomain})`
+    );
+  }
+  return lines;
+}
+
+/** Stored summaries are returned as recorded, so v1 rows (no profile) simply render nothing here. */
+function profilesOf(featureSummary: Record<string, unknown>): { ref: string; lines: string[] }[] {
+  const accounts = Array.isArray(featureSummary.accounts) ? featureSummary.accounts : [];
+  return accounts.flatMap((account: unknown) => {
+    if (!account || typeof account !== 'object') return [];
+    const { ref, profile } = account as { ref?: unknown; profile?: unknown };
+    const parsed = abuseAssessmentAccountProfileSchema.safeParse(profile);
+    return typeof ref === 'string' && parsed.success ? [{ ref, lines: describeAccountProfile(parsed.data) }] : [];
+  });
+}
+
+const AccountProfiles: React.FC<{ featureSummary: Record<string, unknown> }> = ({ featureSummary }) => {
+  const profiles = profilesOf(featureSummary);
+  if (profiles.length === 0) return null;
+  return (
+    <Stack gap={0.5} sx={{ mt: 0.5 }} data-testid="shadow-detection-assessment-profiles">
+      {profiles.map(({ ref, lines }) => (
+        <Box key={ref}>
+          <Typography level="body-xs" fontWeight="lg">
+            {ref}
+          </Typography>
+          <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+            {lines.map(line => (
+              <Typography key={line} component="li" level="body-xs">
+                {line}
+              </Typography>
+            ))}
+          </Box>
+        </Box>
+      ))}
+    </Stack>
+  );
+};
+
 const ResultChip: React.FC<{ item: AbuseAssessmentRow; testId?: string }> = ({ item, testId }) => (
   <StatusChip tone={RESULT_DISPLAY[item.result].tone} label={RESULT_DISPLAY[item.result].label} data-testid={testId} />
 );
@@ -92,6 +166,7 @@ const LatestAssessment: React.FC<{ item: AbuseAssessmentRow }> = ({ item }) => (
       <Box component="summary" sx={{ cursor: 'pointer', typography: 'body-sm' }}>
         What the model saw
       </Box>
+      <AccountProfiles featureSummary={item.featureSummary} />
       <Box
         component="pre"
         sx={{ m: 0, mt: 0.5, p: 1, fontSize: 'xs', overflow: 'auto', maxHeight: '20rem', bgcolor: 'admin.canvas' }}

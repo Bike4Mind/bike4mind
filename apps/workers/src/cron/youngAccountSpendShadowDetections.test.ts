@@ -21,7 +21,12 @@ const mocks = vi.hoisted(() => {
     claimed.delete(key);
   });
   const record = vi.fn(async () => 'detection-id');
+  const findAccountRiskProfiles = vi.fn(
+    async (): Promise<{ id: string; email: string | null; signupIp: string | null; signupJa4: string | null }[]> => []
+  );
   return {
+    findAccountRiskProfiles,
+    userRepository: spy('userRepository', { findAccountRiskProfiles }),
     claimed,
     touched,
     claimDedup,
@@ -32,15 +37,18 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-// Only these two exports exist: reaching for a user, credit or key repository would throw on import.
+// Only these exports exist, and the user repository only offers a read: reaching for a credit or key
+// repository, or a user write, would throw.
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: mocks.cacheRepository,
   shadowDetectionRepository: mocks.shadowDetectionRepository,
+  userRepository: mocks.userRepository,
 }));
 
 import {
   buildYoungAccountSpendShadowDetection,
   recordYoungAccountSpendShadowDetections,
+  spenderCohorts,
   youngAccountSpendDedupeKey,
   YOUNG_ACCOUNT_SPEND_POLICY_VERSION,
 } from './youngAccountSpendShadowDetections';
@@ -72,14 +80,18 @@ beforeEach(() => {
   mocks.touched.length = 0;
 });
 
+const linkedCohort = { linkedUserIds: ['user-b'], kinds: ['mailbox' as const], linkedCredits: 9000 };
+const unlinkedCohort = { linkedUserIds: [], kinds: [], linkedCredits: 6000 };
+
 describe('young-account spend shadow detection evidence', () => {
-  it('records a valid contain detection for one account with its own and the fleet signals', () => {
+  it('records a valid contain detection for a linked account with its own, cohort and fleet signals', () => {
     const detection = buildYoungAccountSpendShadowDetection({
       spender: spenderA,
       rank: 1,
       summary,
       thresholds,
       window,
+      cohort: linkedCohort,
     });
 
     expect(detection).toEqual({
@@ -87,7 +99,8 @@ describe('young-account spend shadow detection evidence', () => {
       policyVersion: YOUNG_ACCOUNT_SPEND_POLICY_VERSION,
       wouldAction: 'contain',
       summary:
-        '6,000 credits in 60 minutes from a 30-hour-old account (#1 of 2 young accounts, 9,000 credits in total)',
+        '6,000 credits in 60 minutes from a 30-hour-old account (#1 by spend of 2 young accounts; ' +
+        'linked to 1 other listed spender by mailbox, 9,000 credits together)',
       userIds: ['user-a'],
       network: null,
       signals: [
@@ -95,6 +108,9 @@ describe('young-account spend shadow detection evidence', () => {
         { key: 'spendRank', label: expect.any(String), observed: 1, threshold: null },
         { key: 'accountAgeHours', label: expect.any(String), observed: 30, threshold: null },
         { key: 'hasStripeCustomer', label: expect.any(String), observed: 0, threshold: null },
+        { key: 'linkedSpenders', label: expect.any(String), observed: 1, threshold: null },
+        { key: 'linkedSpenderCredits', label: expect.any(String), observed: 9000, threshold: null },
+        { key: 'linkedBy_mailbox', label: expect.any(String), observed: 1, threshold: null },
         { key: 'youngAccountCredits', label: expect.any(String), observed: 9000, threshold: 5000 },
         { key: 'youngAccountCount', label: expect.any(String), observed: 2, threshold: 25 },
       ],
@@ -109,6 +125,44 @@ describe('young-account spend shadow detection evidence', () => {
     ).not.toThrow();
   });
 
+  it('drops the fleet totals from an account unrelated to the other spenders', () => {
+    const detection = buildYoungAccountSpendShadowDetection({
+      spender: spenderA,
+      rank: 1,
+      summary,
+      thresholds,
+      window,
+      cohort: unlinkedCohort,
+    });
+    expect(detection.summary).toBe(
+      '6,000 credits in 60 minutes from a 30-hour-old account (#1 by spend of 2 young accounts; ' +
+        'not linked to the other listed spenders)'
+    );
+    expect(detection.summary).not.toContain('in total');
+    expect(detection.signals.map(signal => signal.key)).toEqual([
+      'accountCredits',
+      'spendRank',
+      'accountAgeHours',
+      'hasStripeCustomer',
+      'linkedSpenders',
+    ]);
+    expect(detection.signals.find(signal => signal.key === 'linkedSpenders')?.observed).toBe(0);
+  });
+
+  it('says the links are unknown, without fleet totals, when the link facts could not be read', () => {
+    const detection = buildYoungAccountSpendShadowDetection({
+      spender: spenderA,
+      rank: 1,
+      summary,
+      thresholds,
+      window,
+      cohort: null,
+    });
+    expect(detection.summary).toContain('links to the other listed spenders unknown');
+    expect(detection.signals.find(signal => signal.key === 'linkedSpenders')?.observed).toBeNull();
+    expect(detection.signals.some(signal => signal.key === 'youngAccountCredits')).toBe(false);
+  });
+
   it('marks an account that reached Stripe checkout', () => {
     const detection = buildYoungAccountSpendShadowDetection({
       spender: spenderB,
@@ -116,13 +170,63 @@ describe('young-account spend shadow detection evidence', () => {
       summary,
       thresholds,
       window,
+      cohort: unlinkedCohort,
     });
     expect(detection.signals.find(signal => signal.key === 'hasStripeCustomer')?.observed).toBe(1);
     expect(detection.signals.find(signal => signal.key === 'spendRank')?.observed).toBe(2);
   });
 });
 
+describe('spenderCohorts', () => {
+  it('links spenders by signup facts and leaves unrelated spenders in a cohort of one', () => {
+    const spenderC = { ...spenderB, userId: 'user-c', creditsSpent: 1000, email: 'c@gmail.com' };
+    const cohorts = spenderCohorts(
+      [spenderA, spenderB, spenderC],
+      [
+        { id: 'user-a', email: 'farm+x7k2q9@outlook.com', signupIp: null, signupJa4: null },
+        { id: 'user-b', email: 'farm+p3m8z1@outlook.com', signupIp: null, signupJa4: null },
+        { id: 'user-c', email: 'c@gmail.com', signupIp: '198.51.100.4', signupJa4: null },
+      ]
+    );
+    expect(cohorts.get('user-a')).toEqual({ linkedUserIds: ['user-b'], kinds: ['mailbox'], linkedCredits: 9000 });
+    expect(cohorts.get('user-c')).toEqual({ linkedUserIds: [], kinds: [], linkedCredits: 1000 });
+  });
+});
+
 describe('young-account spend shadow detection recording', () => {
+  it('records linked spenders with the cohort and unlinked ones without the fleet totals', async () => {
+    mocks.findAccountRiskProfiles.mockResolvedValueOnce([
+      { id: 'user-a', email: 'a@example.com', signupIp: '198.51.100.4', signupJa4: null },
+      { id: 'user-b', email: null, signupIp: '198.51.100.4', signupJa4: null },
+    ]);
+    await record();
+    expect(mocks.findAccountRiskProfiles).toHaveBeenCalledWith(['user-a', 'user-b']);
+    expect(mocks.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userIds: ['user-a'],
+        signals: expect.arrayContaining([expect.objectContaining({ key: 'linkedBy_signupIp' })]),
+      })
+    );
+
+    vi.clearAllMocks();
+    mocks.claimed.clear();
+    await record();
+    expect(mocks.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userIds: ['user-a'],
+        signals: expect.not.arrayContaining([expect.objectContaining({ key: 'youngAccountCredits' })]),
+      })
+    );
+  });
+
+  it('still records, with links unknown, when the link facts read fails', async () => {
+    mocks.findAccountRiskProfiles.mockRejectedValueOnce(new Error('db down'));
+    expect(await record()).toBe(2);
+    expect(mocks.record).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: expect.stringContaining('links to the other listed spenders unknown') })
+    );
+  });
+
   it('records one detection per listed account, claimed per account and window', async () => {
     expect(await record()).toBe(2);
     expect(mocks.record).toHaveBeenCalledTimes(2);
@@ -184,7 +288,12 @@ describe('young-account spend shadow detection recording', () => {
     mocks.record.mockRejectedValueOnce(new Error('write failed'));
     await record();
     expect(new Set(mocks.touched)).toEqual(
-      new Set(['cacheRepository.claimDedup', 'cacheRepository.deleteByKey', 'shadowDetectionRepository.record'])
+      new Set([
+        'userRepository.findAccountRiskProfiles',
+        'cacheRepository.claimDedup',
+        'cacheRepository.deleteByKey',
+        'shadowDetectionRepository.record',
+      ])
     );
   });
 });

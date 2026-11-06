@@ -177,6 +177,14 @@ UsageEventSchema.index(
 
 export type IUsageEventModel = Model<IUsageEventDocument>;
 
+/** An account's spend from spendProfileByUsers. */
+export type IUserSpendProfile = {
+  firstSpendAt: Date;
+  totalCredits: number;
+  /** Largest first; `model` is null for spend recorded without one. */
+  byModel: { model: string | null; credits: number; events: number }[];
+};
+
 export class UsageEventRepository extends BaseRepository<IUsageEventDocument> implements IUsageEventRepository {
   /** `loadFundingSnapshot` is omitted only by tests that do not exercise the funding stamp. */
   constructor(
@@ -302,6 +310,44 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       },
     ]);
     return Object.fromEntries(rows.map(row => [String(row._id), row.credits]));
+  }
+
+  /**
+   * Per account since `since`: when it first spent credits and its spend by model (largest first,
+   * at most `maxModels`). Served by {userId, createdAt}; ids with no spend are absent.
+   */
+  async spendProfileByUsers(userIds: string[], since: Date, maxModels = 5): Promise<Record<string, IUserSpendProfile>> {
+    if (userIds.length === 0) return {};
+    const credits = { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] };
+    const rows = await this.model.aggregate<{
+      _id: { userId: string; model: string | null };
+      credits: number;
+      events: number;
+      firstAt: Date;
+    }>([
+      { $match: { userId: { $in: userIds }, createdAt: { $gte: since } } },
+      { $match: { $expr: { $gt: [credits, 0] } } },
+      {
+        $group: {
+          _id: { userId: '$userId', model: '$model' },
+          credits: { $sum: credits },
+          events: { $sum: 1 },
+          firstAt: { $min: '$createdAt' },
+        },
+      },
+    ]);
+    const profiles: Record<string, IUserSpendProfile> = {};
+    for (const row of rows) {
+      const id = String(row._id.userId);
+      const profile = (profiles[id] ??= { firstSpendAt: row.firstAt, totalCredits: 0, byModel: [] });
+      if (row.firstAt < profile.firstSpendAt) profile.firstSpendAt = row.firstAt;
+      profile.totalCredits += row.credits;
+      profile.byModel.push({ model: row._id.model ?? null, credits: row.credits, events: row.events });
+    }
+    for (const profile of Object.values(profiles)) {
+      profile.byModel = profile.byModel.sort((a, b) => b.credits - a.credits).slice(0, maxModels);
+    }
+    return profiles;
   }
 
   async largestSettlementOverHold(userIds: string[], since: Date): Promise<Record<string, ISettlementOverHold>> {
