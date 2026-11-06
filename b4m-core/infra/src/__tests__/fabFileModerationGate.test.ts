@@ -157,6 +157,8 @@ const ALLOWLIST: Record<string, string> = {
     'signs a server-rendered admin audit-log CSV it just staged under exports/ for a platform admin - not user-uploaded FabFile bytes, so there is no moderationStatus to gate on',
   'apps/client/pages/api/users/me/data-export/[jobId].ts':
     "signs the caller's own account data export zip under exports/ - not a FabFile row; the worker that built it already left out files that are not isImageServeable",
+  'apps/client/pages/api/admin/users/[userId]/data-export/[jobId].ts':
+    'signs a data subject export zip under exports/ for an admin - not a FabFile row; the same worker as the self-serve export built it and left out files that are not isImageServeable',
 
   // --- DI passthroughs: the file only wires a storage closure; the actual gate lives
   // in the shared service function the closure is handed to. ---
