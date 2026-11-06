@@ -108,9 +108,11 @@ export async function buildLinkedAccountEvidence(
   );
 
   // Members banned since the detection are the detection, not a separate banned account.
-  const deviceLinks = [...(await deps.bannedDeviceLinks(ids)).values()]
-    .flat()
-    .filter(match => !members.has(match.blockedUserId));
+  // A failed device read leaves only the device signals unknown; the rest of the evidence stands.
+  const deviceLinks = await deps
+    .bannedDeviceLinks(ids)
+    .then(links => [...links.values()].flat().filter(match => !members.has(match.blockedUserId)))
+    .catch(() => null);
 
   const signals: Signal[] = [
     { key: 'maxSameSignupIpAccounts', value: Math.max(0, ...signupIpLinks.map(links => links.length)) },
@@ -126,9 +128,9 @@ export async function buildLinkedAccountEvidence(
     },
     { key: 'landedOnOtherAccountNotebook', value: landingOwners.length > 0 },
     { key: 'landedOnBlockedAccountNotebook', value: landingOwners.some(owner => ownerBlocked.get(owner) === true) },
-    { key: 'sameDeviceBannedAccounts', value: new Set(deviceLinks.map(match => match.blockedUserId)).size },
+    { key: 'sameDeviceBannedAccounts', value: deviceLinks && new Set(deviceLinks.map(match => match.blockedUserId)).size },
     // Hours between a member's signup and the closest banned account on the same device.
-    { key: 'hoursToBannedSameDeviceAccount', value: minOf(deviceLinks.map(match => match.hoursApart)) },
+    { key: 'hoursToBannedSameDeviceAccount', value: deviceLinks && minOf(deviceLinks.map(match => match.hoursApart)) },
     {
       key: 'maxSettlementOverHoldRatio',
       value: settlements.length > 0 ? Math.round(Math.max(...settlements.map(s => s.ratio)) * 100) / 100 : null,
