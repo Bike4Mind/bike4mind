@@ -1,5 +1,6 @@
 import { transformSync } from 'esbuild';
 
+// The minified router request function is close to this limit; see docs/ja4-forwarding.md.
 const CLOUDFRONT_FUNCTION_MAX_BYTES = 10_240;
 
 export function pinUrlOriginHost(code: string): string {

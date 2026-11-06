@@ -15,6 +15,20 @@ CloudFront does not generate viewer city, region or coordinates on the
 authentication behaviors, so code under these paths must not rely on geo headers.
 Shared development routers must receive this change through their owning stage.
 
+Real ASN values also switch on signup checks that were dormant while
+`network.asn` was always null on deployed stages. On these routes, email-code
+and self-serve OAuth signups enforce the admin `maxSignupsPerAsnPerHour` cap
+(`apps/client/server/auth/signupNetworkLimits.ts`), which refuses signups with a
+429 once a non-zero cap is exceeded. Datacenter networks add `datacenterNetwork`
+risk points (`b4m-core/services/src/userService/signupRiskScore.ts`), and signup
+clustering gains `asn` keys. Check that setting in each environment before
+deploying.
+
+The router request function must stay under CloudFront's 10,240-byte limit
+(`CLOUDFRONT_FUNCTION_MAX_BYTES` in `infra/routerFunctionCode.ts`). With the JA4
+injection it is about 9.4 KB, so measure the minified size before adding more
+injected code.
+
 ## Sharing the origin request policy
 
 CloudFront allows 20 custom origin request policies per account by default, and
