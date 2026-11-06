@@ -31,7 +31,30 @@ const m = vi.hoisted(() => ({
   realExpansion: false,
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (h: unknown) => h }) }));
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: () => {
+    type Mw = (req: unknown, res: unknown, next: () => void) => unknown;
+    const used: Mw[] = [];
+    const chain: Record<string, unknown> = {};
+    chain.use = (mw: Mw) => {
+      used.push(mw);
+      return chain;
+    };
+    chain.post =
+      (...handlers: Mw[]) =>
+      async (req: unknown, res: unknown) => {
+        for (const handler of [...used, ...handlers]) {
+          let advanced = false;
+          await handler(req, res, () => {
+            advanced = true;
+          });
+          if (!advanced) return;
+        }
+      };
+    return chain;
+  },
+  methodNotAllowedHandler: () => () => undefined,
+}));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: async () => 'text-embedding-3-small' },
