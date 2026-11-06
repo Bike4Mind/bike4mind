@@ -192,6 +192,24 @@ describe('Bike4Mind web sync', () => {
     expect((await service.state()).web.counts.found).toBe(0);
   });
 
+  it('drops an untouched copy when every quest is removed on the web', async () => {
+    const web = fakeWeb(oneNotebook());
+    const { service, store } = await setup(new Map([['account-a', web.api]]));
+    await service.setWebSettings({ enabled: true });
+    await service.syncWeb();
+    web.notebooks.nb1 = { ...web.notebooks.nb1, updatedAt: '2026-01-02T00:00:00.000Z', quests: [] };
+    await service.syncWeb();
+    expect(await store.get(idFor(ACCOUNT_A, 'nb1'))).toBeNull();
+
+    web.notebooks.nb1 = {
+      ...web.notebooks.nb1,
+      updatedAt: '2026-01-03T00:00:00.000Z',
+      quests: [{ id: 'q2', prompt: 'Again?', reply: 'Yes' }],
+    };
+    await service.syncWeb();
+    expect((await store.get(idFor(ACCOUNT_A, 'nb1')))?.messages).toHaveLength(2);
+  });
+
   it('does nothing while signed out', async () => {
     const web = fakeWeb(oneNotebook());
     const { service, store } = await setup(new Map([['account-a', web.api]]), null);

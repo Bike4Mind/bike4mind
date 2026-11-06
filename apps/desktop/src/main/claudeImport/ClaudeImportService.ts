@@ -373,11 +373,14 @@ export class ClaudeImportService {
         const cursor = await importNotebook(notebook, sessionId, previous, {
           api,
           store: this.deps.store,
+          deleteImported: this.deps.deleteImported,
           scopeKey,
           pickModel,
         });
         scope.webNotebooks[notebook.id] = cursor;
-        if (cursor.status === 'imported') this.sessionsChanged();
+        if (cursor.status === 'imported' || (previous?.status === 'imported' && cursor.status === 'skipped')) {
+          this.sessionsChanged();
+        }
       } catch (error) {
         if (error instanceof ImportScopeChangedError) return;
         scope.webNotebooks[notebook.id] = {

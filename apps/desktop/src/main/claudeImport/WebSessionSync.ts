@@ -19,6 +19,7 @@ export interface WebApi {
 export interface WebSyncDeps {
   api: WebApi;
   store: Pick<SessionStore, 'getImported' | 'putImported'>;
+  deleteImported: (id: string, scopeKey: string) => Promise<'removed' | 'forked' | 'missing'>;
   /** The account the run started under; a switch mid-run makes the store refuse the write. */
   scopeKey: string;
   pickModel: () => Promise<string | undefined>;
@@ -100,7 +101,11 @@ export async function importNotebook(
 
   const { messages, settled } = mapQuests(await fetchQuests(deps.api, notebook.id), notebook.updatedAt);
   const version = settled ? notebook.version : '';
-  if (messages.length === 0) return { sessionId, version, status: 'skipped' };
+  if (messages.length === 0) {
+    // Emptied on the web: drop the untouched copy so it does not keep stale messages.
+    if (existing) await deps.deleteImported(sessionId, deps.scopeKey);
+    return { sessionId, version, status: 'skipped' };
+  }
 
   const session: ChatSession = {
     id: sessionId,
