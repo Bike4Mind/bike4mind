@@ -72,6 +72,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.restriction_lifted': { category: 'access', severity: 'notice', write: 'strict' },
 
   'user.deleted': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.deletion.scheduled': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.deletion.cancelled': { category: 'account', severity: 'notice', write: 'strict' },
   'user.deletion.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
   // notice, not info: the same entry carries an admin's change to another user's email, password and tags.
   'user.profile.updated': { category: 'account', severity: 'notice', write: 'bestEffort' },

@@ -34,6 +34,23 @@ describe('deletion-scheduled email', () => {
     expect(message.body).toContain('href="https://app.example.test/login"');
   });
 
+  it('tells a support-scheduled user to contact support, not to sign in', async () => {
+    await sendAccountDeletionScheduledEmail('dev@example.test', new Date('2026-11-18T12:00:00Z'), { source: 'support' });
+
+    const [message] = publish.mock.calls[0];
+    expect(message.body).toContain('<strong>November 18, 2026 (UTC)</strong>');
+    expect(message.body).toContain('As you asked by email');
+    expect(message.body).toContain('Reply to this email or contact support');
+    expect(message.body).not.toContain('href=');
+  });
+
+  it('keeps the self-serve body when the source is self', () => {
+    const date = new Date('2026-11-18T12:00:00Z');
+    expect(accountDeletionScheduledEmailBody(date, 'https://x.test/login', { source: 'self' })).toBe(
+      accountDeletionScheduledEmailBody(date, 'https://x.test/login')
+    );
+  });
+
   it('escapes the sign-in link', () => {
     expect(accountDeletionScheduledEmailBody(new Date(), 'https://x.test/"><script>')).not.toContain('<script>');
   });

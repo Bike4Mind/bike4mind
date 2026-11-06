@@ -323,7 +323,7 @@ export interface IUserRiskSignal {
   at: Date;
 }
 
-export const ACCOUNT_DELETION_SOURCES = ['self'] as const;
+export const ACCOUNT_DELETION_SOURCES = ['self', 'support', 'admin'] as const;
 export type AccountDeletionSource = (typeof ACCOUNT_DELETION_SOURCES)[number];
 
 /** Days between a deletion request and the purge; the user can cancel until then. */

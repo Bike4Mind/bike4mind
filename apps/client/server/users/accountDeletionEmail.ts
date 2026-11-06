@@ -1,4 +1,9 @@
-import { ACCOUNT_DELETION_RETAINED_RECORDS, requireEnv, type AccountDeletionRetainedRecord } from '@bike4mind/common';
+import {
+  ACCOUNT_DELETION_RETAINED_RECORDS,
+  requireEnv,
+  type AccountDeletionRetainedRecord,
+  type AccountDeletionSource,
+} from '@bike4mind/common';
 import { buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { PURGED_USER_DATA } from '@server/services/purgeDeletedUserData';
 import { EmailEvents } from '@server/utils/eventBus';
@@ -33,8 +38,28 @@ const layout = (heading: string, content: string): string => {
 </html>`;
 };
 
-export function accountDeletionScheduledEmailBody(scheduledFor: Date, signInUrl: string): string {
+export function accountDeletionScheduledEmailBody(
+  scheduledFor: Date,
+  signInUrl: string,
+  { source }: { source?: AccountDeletionSource } = {}
+): string {
   const date = escapeHtml(formatDeletionDate(scheduledFor));
+  // Support schedules for users who may be unable to sign in, so the cancel route cannot be the sign-in page.
+  if (source === 'support') {
+    return layout(
+      'Your account is scheduled for deletion',
+      `
+      <p>As you asked by email, your account is scheduled for deletion. Your cancellation period ends on
+      <strong>${date}</strong>. Permanent deletion begins after that date. You have been
+      signed out everywhere, your API keys and connected apps have been revoked, and your subscriptions have been
+      canceled.</p>
+      <p>Changed your mind? Reply to this email or contact support before cleanup starts and we will cancel the
+      deletion.</p>
+      <div class="warning">
+        <strong>If you did not ask for this</strong>, contact support right away.
+      </div>`
+    );
+  }
   return layout(
     'Your account is scheduled for deletion',
     `
@@ -49,12 +74,16 @@ export function accountDeletionScheduledEmailBody(scheduledFor: Date, signInUrl:
   );
 }
 
-export async function sendAccountDeletionScheduledEmail(to: string, scheduledFor: Date): Promise<void> {
+export async function sendAccountDeletionScheduledEmail(
+  to: string,
+  scheduledFor: Date,
+  opts: { source?: AccountDeletionSource } = {}
+): Promise<void> {
   const signInUrl = `${requireEnv('APP_URL', process.env.APP_URL)}/login`;
   await EmailEvents.Send.publish({
     to,
     subject: `Your account deletion cancellation period ends on ${formatDeletionDate(scheduledFor)}`,
-    body: accountDeletionScheduledEmailBody(scheduledFor, signInUrl),
+    body: accountDeletionScheduledEmailBody(scheduledFor, signInUrl, opts),
   });
 }
 
