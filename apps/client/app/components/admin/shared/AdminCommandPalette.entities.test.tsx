@@ -72,5 +72,28 @@ describe('entity search palette', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('never a full key');
     await new Promise(resolve => setTimeout(resolve, 350));
     expect(get).not.toHaveBeenCalled();
+    expect(screen.queryByText(/No matches/)).not.toBeInTheDocument();
+  });
+  it('reports a failed search without claiming there were no matches', async () => {
+    get.mockRejectedValue(new Error('Unavailable'));
+    const input = setup();
+    fireEvent.change(input, { target: { value: 'someone@example.com' } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('Search failed');
+    expect(screen.queryByText(/No matches/)).not.toBeInTheDocument();
+  });
+  it('tells the admin to wait when the search rate limit is hit', async () => {
+    get.mockRejectedValue({ isAxiosError: true, response: { status: 429 } });
+    const input = setup();
+    fireEvent.change(input, { target: { value: 'someone@example.com' } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('Wait one minute');
+    expect(screen.queryByText(/Search failed/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No matches/)).not.toBeInTheDocument();
+  });
+  it('says no matches once a search completes empty', async () => {
+    get.mockResolvedValue({ data: { results: [] } });
+    const input = setup();
+    fireEvent.change(input, { target: { value: 'nobody@example.com' } });
+    expect(await screen.findByText(/No matches/)).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

@@ -1,7 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/apiClient';
 import { AdminSearchQuerySchema, AdminSearchResponseSchema } from '@client/app/utils/adminEntitySearch';
+
+export type AdminEntitySearchError = 'rateLimited' | 'failed';
+
+function toSearchError(error: unknown): AdminEntitySearchError {
+  return isAxiosError(error) && error.response?.status === 429 ? 'rateLimited' : 'failed';
+}
 
 export function useAdminEntitySearch(query: string) {
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -26,7 +33,7 @@ export function useAdminEntitySearch(query: string) {
   return {
     results: ready ? (search.data?.results ?? []) : [],
     loading: valid.success && (!ready || search.isFetching),
-    error: ready && search.isError,
+    error: ready && search.isError ? toSearchError(search.error) : undefined,
     validationError: query.trim().length >= 2 && !valid.success ? valid.error.issues[0]?.message : undefined,
   };
 }

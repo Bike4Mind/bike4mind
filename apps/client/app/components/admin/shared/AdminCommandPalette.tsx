@@ -267,9 +267,15 @@ function CommandPalette({
             ))}
           </Box>
           {entitySearch?.loading && <Typography role="status">Searching identifiers...</Typography>}
-          {entitySearch?.error && <Typography role="alert">Search failed. Edit the query to try again.</Typography>}
+          {entitySearch?.error === 'rateLimited' && (
+            <Typography role="alert">Too many searches. Wait one minute, then edit the query to try again.</Typography>
+          )}
+          {entitySearch?.error === 'failed' && (
+            <Typography role="alert">Search failed. Edit the query to try again.</Typography>
+          )}
           {entitySearch?.validationError && <Typography role="alert">{entitySearch.validationError}</Typography>}
-          {!results.length && !entitySearch?.loading && (
+          {/* An empty list only means "no matches" when a search actually completed. */}
+          {!results.length && !entitySearch?.loading && !entitySearch?.error && !entitySearch?.validationError && (
             <Typography role="status">No matches. Check the identifier or use an exact organization name.</Typography>
           )}
         </ModalDialog>
