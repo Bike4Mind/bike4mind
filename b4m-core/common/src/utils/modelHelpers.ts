@@ -109,7 +109,9 @@ export function usesDiscreteImageDimensions(model?: string | null): boolean {
  * Image models offering a prompt-enhancement toggle in the UI, where the provider is meant to
  * rewrite and expand the prompt before generating. BFL takes `prompt_upsampling` or its inverse
  * `disable_pup`; FLUX.2 Klein and FLUX 3 define neither (BFL runs FLUX 3 Image Klein's upsampler on
- * every request). Gemini is included for historical/UI-grouping reasons, but GeminiImageService.buildGenerationConfig() deliberately never forwards this to Google's API -
+ * every request).
+ * Gemini is included for historical/UI-grouping reasons, but
+ * GeminiImageService.buildGenerationConfig() deliberately never forwards this to Google's API -
  * `generateImages` rejects the mere presence of `enhancePrompt`, so the toggle is a no-op for
  * Gemini today. Do not reintroduce a Gemini enhancePrompt mapping without confirming Google's API
  * accepts it. OpenAI discards the parameter, so GPT-Image and DALL-E are excluded.
