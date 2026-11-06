@@ -458,6 +458,7 @@ describe('UserProfileView', () => {
       fireEvent.click(screen.getByTestId('user-profile-more-btn'));
       const item = await screen.findByTestId('user-profile-menu-cancelDeletion-item');
       expect(item).toHaveAttribute('aria-disabled', 'true');
+      expect(item).toHaveTextContent('purge in progress');
       fireEvent.click(item);
       expect(screen.queryByTestId('cancel-deletion-dialog')).not.toBeInTheDocument();
     });
