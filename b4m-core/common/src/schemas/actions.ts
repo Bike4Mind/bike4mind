@@ -10,6 +10,7 @@ import {
 } from '@bike4mind/hearth';
 import { FallbackInfoSchema } from './llm';
 import { TurnTimingSchema } from './turnTiming';
+import { LOW_CONFIDENCE_COMPLETION_MODES } from './settings';
 import { supportedChatModels } from '../models';
 import { shareableDocumentSchema, QUEST_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
 import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constants/agentExecutionStatus';
@@ -1513,7 +1514,7 @@ export const LowConfidenceCompletionAction = z.object({
   confidence: z.number(),
   /** Pre-formatted server copy, e.g. "Answered after an iteration below the 60% confidence threshold (latest 42%)". */
   reason: z.string(),
-  mode: z.enum(['block', 'annotate']),
+  mode: z.enum(LOW_CONFIDENCE_COMPLETION_MODES).exclude(['off']),
 });
 
 /**

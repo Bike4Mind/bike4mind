@@ -11,10 +11,11 @@
  */
 
 import { z } from 'zod';
+import { LOW_CONFIDENCE_COMPLETION_MODES, type LowConfidenceCompletionMode } from '@bike4mind/common';
+
 import type { ToolbeltProfile } from './toolbelts';
 
-export const LOW_CONFIDENCE_COMPLETION_MODES = ['block', 'annotate', 'off'] as const;
-export type LowConfidenceCompletionMode = (typeof LOW_CONFIDENCE_COMPLETION_MODES)[number];
+export { LOW_CONFIDENCE_COMPLETION_MODES, type LowConfidenceCompletionMode };
 
 /**
  * Subset of the orchestration fields the executor consumes when deciding the top-level tool
