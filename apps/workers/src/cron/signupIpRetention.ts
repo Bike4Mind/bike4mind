@@ -26,8 +26,15 @@ export async function handler(event: never, context: Context) {
 
   try {
     await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage), logger);
-    const result = await runSignupIpRetention({ logger });
-    const subscribers = await runSubscriberNetworkRetention({ logger });
+    // Independent steps: one failing must not skip the other, but the run still fails.
+    const [ipStep, networkStep] = await Promise.allSettled([
+      runSignupIpRetention({ logger }),
+      runSubscriberNetworkRetention({ logger }),
+    ]);
+    if (ipStep.status === 'rejected') throw ipStep.reason;
+    if (networkStep.status === 'rejected') throw networkStep.reason;
+    const result = ipStep.value;
+    const subscribers = networkStep.value;
     return {
       statusCode: 200,
       body: JSON.stringify({ ...result, subscriberNetworkCleared: subscribers.clearedCount }),
