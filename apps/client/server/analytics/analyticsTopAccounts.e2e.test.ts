@@ -27,6 +27,9 @@ const seedUser = (id: mongoose.Types.ObjectId, extra: Record<string, unknown> = 
     ...extra,
   });
 
+const seedRollups = (days = ['2026-06-09', '2026-06-10', '2026-06-11', '2026-06-12', '2026-06-13', '2026-06-14']) =>
+  AnalyticsDaily.collection.insertMany(days.map(day => ({ day })));
+
 const seedDay = (userId: mongoose.Types.ObjectId | string, day: string, extra: Record<string, unknown> = {}) =>
   AnalyticsUserDay.collection.insertOne({
     day,
@@ -82,6 +85,7 @@ describe('getTopAccounts', () => {
   });
 
   it('leaves out suspected and suspended users, from the org sums too, and counts them', async () => {
+    await seedRollups();
     await seedUser(ids.heavy);
     await seedUser(ids.bot);
     await seedUser(ids.banned, { isBanned: true });
@@ -99,6 +103,7 @@ describe('getTopAccounts', () => {
   });
 
   it('counts an org day once however many members were active, and names its plan', async () => {
+    await seedRollups();
     await seedUser(ids.heavy);
     await seedUser(ids.busy);
     await Organization.collection.insertMany([
@@ -124,6 +129,7 @@ describe('getTopAccounts', () => {
   });
 
   it('credits each org with only the usage billed to it', async () => {
+    await seedRollups();
     await seedUser(ids.heavy);
     await seedUser(ids.busy);
     await Organization.collection.insertMany([
@@ -152,19 +158,53 @@ describe('getTopAccounts', () => {
   });
 
   it('credits a row rolled up before the per-org split to its top org, whole', async () => {
+    await seedRollups();
     await Organization.collection.insertOne({ _id: ids.org, name: 'Acme', personal: false });
     await seedDay(ids.heavy, '2026-06-10', { ownerType: 'Organization', orgId: String(ids.org) });
     const result = await getTopAccounts(QUERY, NOW);
     expect(result.orgs.map(row => [row.name, row.requests, row.credits])).toEqual([['Acme', 10, 5]]);
   });
 
+  it('leaves out usage on a covered day the daily rollup has not reached', async () => {
+    await seedUser(ids.heavy);
+    await Organization.collection.insertOne({ _id: ids.org, name: 'Acme', personal: false });
+    await seedRollups(['2026-06-09', '2026-06-10', '2026-06-11', '2026-06-12', '2026-06-13']);
+    await seedDay(ids.heavy, '2026-06-10', { orgId: String(ids.org) });
+    await seedDay(ids.heavy, '2026-06-14', { orgId: String(ids.org), requests: 900 });
+
+    const result = await getTopAccounts(QUERY, NOW);
+    expect(result.missingDays).toEqual(['2026-06-14']);
+    expect(result.users.map(row => [row.activeDays, row.requests])).toEqual([[1, 10]]);
+    expect(result.orgs.map(row => [row.activeDays, row.requests])).toEqual([[1, 10]]);
+  });
+
+  it('reports every covered day as missing and ranks nothing when no daily row exists', async () => {
+    await seedDay(ids.heavy, '2026-06-10');
+    const result = await getTopAccounts(QUERY, NOW);
+    expect(result.missingDays).toHaveLength(6);
+    expect(result.users).toEqual([]);
+    expect(result.orgs).toEqual([]);
+  });
+
+  it('gives an org that no longer exists no plan', async () => {
+    await seedRollups();
+    await seedDay(ids.heavy, '2026-06-10', { orgId: String(ids.org) });
+    expect((await getTopAccounts(QUERY, NOW)).orgs[0]).toMatchObject({
+      name: String(ids.org),
+      plan: null,
+      known: false,
+    });
+  });
+
   it('labels a user without a name by username before email', async () => {
+    await seedRollups();
     await seedUser(ids.heavy, { name: '', username: 'heavy-handle' });
     await seedDay(ids.heavy, '2026-06-10');
     expect((await getTopAccounts(QUERY, NOW)).users[0]).toMatchObject({ name: 'heavy-handle', known: true });
   });
 
   it('keeps a user-day whose user is gone, labelled by its id, and returns at most the limit', async () => {
+    await seedRollups();
     for (let i = 0; i < TOP_ACCOUNTS_LIMIT + 2; i++) await seedDay(`orphan-${i}`, '2026-06-10', { requests: i });
     const result = await getTopAccounts(QUERY, NOW);
     expect(result.users).toHaveLength(TOP_ACCOUNTS_LIMIT);

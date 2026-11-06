@@ -79,7 +79,7 @@ Two tables list the 10 heaviest users and the 10 heaviest organizations over the
 
 Suspected signups and suspended users are left out of both tables, and their usage is not added to any organization. The line under each table says how many accounts were left out.
 
-An organization's numbers add up only the usage its members billed to it. A member's personal usage, or usage in another organization on the same day, is not counted toward it.
+An organization's numbers add up only the usage its members billed to it. A member's personal usage, or usage in another organization on the same day, is not counted toward it. Days rolled up before per-organization usage was recorded still credit a member's whole day to their most-used organization until you re-run the day with `--force`.
 
 Both tables cover the complete days that have a nightly rollup. A day still waiting for its rollup is left out, and the line under each table says how many. The **Usage** cards say the same in their captions.
 

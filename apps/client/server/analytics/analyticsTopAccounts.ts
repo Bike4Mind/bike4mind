@@ -64,7 +64,15 @@ export async function getTopAccounts(query: AnalyticsOverviewQuery, now = new Da
   if (window.completeDays === 0)
     return { covered: null, missingDays: [], users: [], orgs: [], excluded: { suspected: 0, suspended: 0 } };
   const covered = { from: window.from, to: shiftDay(window.from, window.completeDays - 1) };
-  const day = { $gte: covered.from, $lte: covered.to };
+  const coveredDays = { $gte: covered.from, $lte: covered.to };
+  const rolledUp = (await AnalyticsDaily.distinct('day', { day: coveredDays }).maxTimeMS(
+    QUERY_DEADLINE_MS
+  )) as string[];
+  const missingDays = daysBetween(covered.from, covered.to).filter(d => !rolledUp.includes(d));
+  if (rolledUp.length === 0)
+    return { covered, missingDays, users: [], orgs: [], excluded: { suspected: 0, suspended: 0 } };
+  // A user-day on a day the daily rollup has not covered is left out, matching the reported missing days.
+  const day = { $in: rolledUp };
 
   const bannedIds = (
     await User.find({ isBanned: true }).select('_id').maxTimeMS(QUERY_DEADLINE_MS).lean<{ _id: unknown }[]>()
@@ -75,7 +83,7 @@ export async function getTopAccounts(query: AnalyticsOverviewQuery, now = new Da
   const notSuspended = suspended.length ? { userId: { $nin: suspended } } : {};
   const included = { day, suspected: false, ...notSuspended };
 
-  const [userFacet, orgTotals, suspectedCount, rolledUp] = await Promise.all([
+  const [userFacet, orgTotals, suspectedCount] = await Promise.all([
     AnalyticsUserDay.aggregate<{ top: Totals[]; all: { requests: number }[] }>([
       { $match: included },
       {
@@ -98,7 +106,7 @@ export async function getTopAccounts(query: AnalyticsOverviewQuery, now = new Da
         },
       },
       // A row rolled up before `orgs` existed credits its whole day to `orgId`; re-running the backfill
-      // over those days replaces it with the per-org split.
+      // with --force over those days replaces it with the per-org split.
       {
         $project: {
           day: 1,
@@ -132,9 +140,7 @@ export async function getTopAccounts(query: AnalyticsOverviewQuery, now = new Da
       { $group: { _id: '$userId' } },
       { $count: 'count' },
     ]).option({ maxTimeMS: QUERY_DEADLINE_MS }),
-    AnalyticsDaily.distinct('day', { day }).maxTimeMS(QUERY_DEADLINE_MS) as Promise<string[]>,
   ]);
-  const rolledUpDays = new Set(rolledUp);
 
   const topUsers = userFacet[0]?.top ?? [];
   const allRequests = userFacet[0]?.all[0]?.requests ?? 0;
@@ -155,7 +161,7 @@ export async function getTopAccounts(query: AnalyticsOverviewQuery, now = new Da
 
   return {
     covered,
-    missingDays: daysBetween(covered.from, covered.to).filter(d => !rolledUpDays.has(d)),
+    missingDays,
     users: toRows(topUsers, allRequests, id => {
       const user = userById.get(id);
       // A user-day can outlive its user (deleted, or a non-ObjectId id); the id is still a usable label.
@@ -163,7 +169,7 @@ export async function getTopAccounts(query: AnalyticsOverviewQuery, now = new Da
     }),
     orgs: toRows(orgTotals, allRequests, id => {
       const org = orgById.get(id);
-      return { name: org?.name || id, plan: plans.get(id) ?? 'Free', known: !!org };
+      return { name: org?.name || id, plan: org ? (plans.get(id) ?? 'Free') : null, known: !!org };
     }),
     excluded: { suspected: suspectedCount[0]?.count ?? 0, suspended: suspended.length },
   };
