@@ -38,6 +38,11 @@ export const ADMIN_REASON_PRESETS = {
     'Portability request from the user (GDPR Art. 20)',
     'Request from a legal authority',
   ],
+  dataSubjectErasure: [
+    'Erasure request from the user (GDPR Art. 17)',
+    'Request from a legal authority',
+    'Consent withdrawn by the user',
+  ],
   mfaReset: ['Lost authenticator, identity verified', 'New device, identity verified'],
   sessionRevoke: ['Compromised account', 'Lost or stolen device', 'Suspicious sign-in', 'User request'],
   impersonation: ['Reproduce a reported bug', 'Investigate a support ticket', 'Check account configuration'],

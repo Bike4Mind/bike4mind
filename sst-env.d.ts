@@ -385,6 +385,14 @@ declare module "sst" {
       "type": "sst.aws.Queue"
       "url": string
     }
+    "accountErasureQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "accountErasureQueueDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
     "agentContinuationQueue": {
       "type": "sst.aws.Queue"
       "url": string
@@ -455,6 +463,7 @@ declare module "sst" {
     }
     "dlqUrls": {
       "account-data-export": string
+      "account-erasure": string
       "agent-continuation": string
       "agent-proactive-message": string
       "deep-agent-wake": string
@@ -700,6 +709,7 @@ declare module "sst" {
     }
     "sourceQueueUrls": {
       "accountDataExportQueue": string
+      "accountErasureQueue": string
       "agentContinuationQueue": string
       "agentProactiveMessageQueue": string
       "deepAgentWakeQueue": string

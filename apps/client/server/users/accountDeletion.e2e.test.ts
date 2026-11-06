@@ -53,6 +53,7 @@ import {
   cancelAccountDeletion,
   clearAccountDeletion,
   requestAccountDeletion,
+  requestAdminErasure,
   scheduleAccountDeletion,
 } from './accountDeletion';
 import { withAccountNotPurging } from '@server/auth/withAccountNotPurging';
@@ -262,6 +263,95 @@ describe('requestAccountDeletion', () => {
     await expect(requestAccountDeletion(requestFor(userId, { impersonatedBy: 'admin' }))).rejects.toMatchObject({
       statusCode: 403,
     });
+  });
+});
+
+describe('requestAdminErasure', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.cancelSubscriptions.mockResolvedValue({ canceled: [], failed: [] });
+  });
+
+  it('stamps an immediately due admin deletion on the target and locks it down without an email', async () => {
+    const targetId = await seedAccount();
+    const adminId = await seedAccount();
+    const now = new Date('2026-11-03T12:00:00.000Z');
+
+    const result = await requestAdminErasure(requestFor(adminId), targetId, now);
+
+    const target = await User.findById(targetId).lean<{
+      deletion: { requestedAt: Date; scheduledFor: Date; source: string; requestedBy: string };
+      tokenVersion: number;
+    }>();
+    expect(target!.deletion.source).toBe('admin');
+    expect(target!.deletion.requestedBy).toBe(adminId);
+    expect(target!.deletion.requestedAt.getTime()).toBe(now.getTime());
+    expect(target!.deletion.scheduledFor.getTime()).toBe(target!.deletion.requestedAt.getTime());
+    expect(target!.tokenVersion).toBe(4);
+    expect(result.deletion.source).toBe('admin');
+    expect(await AuthSessionModel.countDocuments({ userId: targetId, revokedAt: null })).toBe(0);
+    expect(await UserApiKey.countDocuments({ userId: targetId, status: { $ne: ApiKeyStatus.DISABLED } })).toBe(0);
+    expect(await OAuthGrantModel.countDocuments({ userId: targetId, revokedAt: null })).toBe(0);
+    expect(await OAuthRefreshTokenModel.countDocuments({ userId: targetId, revokedAt: null })).toBe(0);
+    expect(await McpServer.countDocuments({ userId: targetId })).toBe(0);
+    expect(await TrustedDeviceModel.countDocuments({ userId: targetId })).toBe(0);
+    expect(h.cancelSubscriptions).toHaveBeenCalledWith({ userId: targetId, reason: 'deletion_requested' }, logger);
+    expect(h.sendEmail).not.toHaveBeenCalled();
+
+    const admin = await User.findById(adminId).lean<{ deletion?: unknown; tokenVersion: number }>();
+    expect(admin!.deletion).toBeUndefined();
+    expect(admin!.tokenVersion).toBe(3);
+    expect(await AuthSessionModel.countDocuments({ userId: adminId, revokedAt: null })).toBe(2);
+  });
+
+  it('audits the request as the admin acting on the target', async () => {
+    const targetId = await seedAccount();
+    const adminId = await seedAccount();
+
+    await requestAdminErasure(requestFor(adminId), targetId);
+
+    expect(h.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        userId: targetId,
+        event: 'account_deletion_requested',
+        actorUserId: adminId,
+        metadata: expect.objectContaining({ source: 'admin' }),
+      })
+    );
+  });
+
+  it('refuses when a deletion is already pending and changes nothing', async () => {
+    const targetId = await seedAccount();
+    const adminId = await seedAccount();
+    await requestAccountDeletion(requestFor(targetId));
+    const before = await User.findById(targetId).lean<{ deletion: { source: string } }>();
+    vi.clearAllMocks();
+
+    await expect(requestAdminErasure(requestFor(adminId), targetId)).rejects.toMatchObject({ statusCode: 409 });
+
+    const after = await User.findById(targetId).lean<{ deletion: { source: string } }>();
+    expect(after!.deletion).toEqual(before!.deletion);
+    expect(after!.deletion.source).toBe('self');
+    expect(h.cancelSubscriptions).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('refuses an organization owner with the transfer code and changes nothing', async () => {
+    const targetId = await seedAccount();
+    const adminId = await seedAccount();
+    const org = await Organization.create({ name: 'Acme', userId: targetId, personal: false });
+
+    await expect(requestAdminErasure(requestFor(adminId), targetId)).rejects.toMatchObject({
+      statusCode: 409,
+      additionalInfo: {
+        code: ACCOUNT_DELETION_ORG_OWNER_CODE,
+        organizations: [{ id: org.id, name: 'Acme' }],
+      },
+    });
+    expect((await User.findById(targetId).lean<{ deletion?: unknown }>())!.deletion).toBeUndefined();
+    expect(await AuthSessionModel.countDocuments({ userId: targetId, revokedAt: null })).toBe(2);
+    expect(h.cancelSubscriptions).not.toHaveBeenCalled();
   });
 });
 

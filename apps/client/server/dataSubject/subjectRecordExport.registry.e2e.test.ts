@@ -5,6 +5,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import '@bike4mind/server-utils/models/Subscription';
 import '@server/models/UserSubscription';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
+import { SubjectErasurePlan } from './subjectErasurePlan';
 import { SubjectRecordExport, assertEveryModelClassified } from './subjectRecordExport';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -40,5 +41,12 @@ describe('SubjectRecordExport over the real registry', () => {
 
     expect(exporter.models.length).toBeGreaterThan(50);
     expect(failures).toEqual([]);
+  });
+});
+
+describe('SubjectErasurePlan over the real registry', () => {
+  it('walks every classified model without error', async () => {
+    const userId = new mongoose.Types.ObjectId().toString();
+    await expect(new SubjectErasurePlan({ userId, email: 'subject@example.com' }).collections()).resolves.toEqual([]);
   });
 });

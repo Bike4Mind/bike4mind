@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { ADMIN_ERASURE_COMPLETED_ACTION, type AdminErasureCollection, type IUserDeletion } from '@bike4mind/common';
 import { Organization, User, adminAuditLogRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { adminAuditService, authSessionService } from '@bike4mind/services';
 import { hardDeleteUser } from '@server/services/hardDeleteUser';
 import { systemAuditActor } from '@server/utils/adminAudit';
+import { SubjectErasurePlan, unerased } from '@server/dataSubject/subjectErasurePlan';
 import { sendAccountDeletionCompleteEmail } from './accountDeletionEmail';
 import { purgeAccountContent } from './purgeAccountContent';
 import { purgeAccountFiles } from './purgeAccountFiles';
@@ -15,6 +17,11 @@ export type AccountDeletionCompletion = { deleted: true } | { deleted: false; re
 // Longer than the hosted sweep's ten-minute timeout. An abandoned invocation becomes resumable,
 // while the permanent purgeStartedAt marker keeps cancellation closed after any data was removed.
 const PURGE_LEASE_MS = 15 * 60 * 1000;
+type ClaimedUser = {
+  email?: string | null;
+  deletion?: Pick<IUserDeletion, 'source' | 'requestedBy' | 'erasureScope'>;
+};
+
 const dueFilter = (userId: string, now: Date) => ({ _id: userId, 'deletion.scheduledFor': { $lte: now } });
 
 const assertNoOwnedOrganizations = async (userId: string): Promise<void> => {
@@ -28,7 +35,12 @@ async function claimPurge(userId: string, now: Date, leaseId: string) {
     'deletion.purgeLeaseId': leaseId,
     'deletion.purgeLeaseExpiresAt': new Date(Date.now() + PURGE_LEASE_MS),
   };
-  const projection = { email: 1 };
+  const projection = {
+    email: 1,
+    'deletion.source': 1,
+    'deletion.requestedBy': 1,
+    'deletion.erasureScope': 1,
+  };
   const noLiveExport = {
     $or: [{ 'accountDataExportLease.expiresAt': null }, { 'accountDataExportLease.expiresAt': { $lte: new Date() } }],
   };
@@ -36,7 +48,7 @@ async function claimPurge(userId: string, now: Date, leaseId: string) {
     { ...dueFilter(userId, now), 'deletion.purgeStartedAt': null, ...noLiveExport },
     { $set: { ...lease, 'deletion.purgeStartedAt': new Date() } },
     { new: true, projection }
-  ).lean<{ email?: string | null }>();
+  ).lean<ClaimedUser>();
   if (firstClaim) return firstClaim;
 
   // A retry updates only the lease: the first irreversible attempt remains recorded permanently.
@@ -51,7 +63,7 @@ async function claimPurge(userId: string, now: Date, leaseId: string) {
     },
     { $set: lease },
     { new: true, projection }
-  ).lean<{ email?: string | null }>();
+  ).lean<ClaimedUser>();
 }
 
 /**
@@ -79,7 +91,16 @@ export async function completeAccountDeletion(
     }
   };
 
+  const erasure = user.deletion?.source === 'admin' ? { requestedBy: user.deletion.requestedBy ?? null } : null;
+  const subject = { userId, email: user.email ?? null };
+
   try {
+    // Snapshot once: a retry after a partial purge would count less, and the record must describe it all.
+    let scope = user.deletion?.erasureScope;
+    if (erasure && !scope) {
+      scope = await new SubjectErasurePlan(subject).collections(assertLease);
+      await User.updateOne(leaseFilter, { $set: { 'deletion.erasureScope': scope } });
+    }
     await purgeAccountFiles(userId, { logger, assertLease });
     await purgeAccountContent(userId, { logger, assertLease });
     await assertLease();
@@ -90,8 +111,8 @@ export async function completeAccountDeletion(
     await hardDeleteUser(
       userId,
       {
-        deletedBy: userId,
-        initiatedBy: 'self',
+        deletedBy: erasure?.requestedBy ?? userId,
+        initiatedBy: erasure ? 'admin' : 'self',
         logger,
         assertInTransaction: async () => {
           await assertLease();
@@ -107,8 +128,12 @@ export async function completeAccountDeletion(
               action: 'user.deletion.completed',
               actor: systemAuditActor('account-deletion-sweep'),
               target: { kind: 'user', id: userId, displayName: target?.name || target?.username || userId },
-              summary: 'deleted the user at their own request once the deletion grace period ended',
-              details: { initiatedBy: 'self' },
+              summary: erasure
+                ? 'deleted the user for a data subject erasure an admin requested'
+                : 'deleted the user at their own request once the deletion grace period ended',
+              details: erasure
+                ? { initiatedBy: 'admin', requestedBy: erasure.requestedBy, scope }
+                : { initiatedBy: 'self' },
               context: { source: 'worker' },
             },
             { db: { adminAuditLog: adminAuditLogRepository }, logger }
@@ -128,6 +153,13 @@ export async function completeAccountDeletion(
     }
     throw error;
   }
+
+  if (erasure) {
+    logger.info(`[AccountDeletion] Deleted user ${userId} for an admin data subject erasure`);
+    await recordErasureCompleted(subject, erasure.requestedBy, logger);
+    // No email: the person did not ask for this, and the admin who did tells them through their own channel.
+    return { deleted: true };
+  }
   logger.info(`[AccountDeletion] Deleted user ${userId} whose deletion grace period ended`);
   if (user.email) {
     try {
@@ -137,4 +169,36 @@ export async function completeAccountDeletion(
     }
   }
   return { deleted: true };
+}
+
+/**
+ * After the user row is gone, what the data holder registry still finds naming the person and does not
+ * keep for a stated reason. Counts only. The user is already deleted, so a failure here is logged at
+ * error and never thrown: a retry could not find the user, and `user.deletion.completed` already holds
+ * the scope.
+ */
+async function recordErasureCompleted(
+  subject: { userId: string; email: string | null },
+  requestedBy: string | null,
+  logger: DeletionLogger
+): Promise<void> {
+  try {
+    const remaining: AdminErasureCollection[] = unerased(await new SubjectErasurePlan(subject).collections());
+    await adminAuditService.recordAdminAction(
+      {
+        action: ADMIN_ERASURE_COMPLETED_ACTION,
+        actor: systemAuditActor('account-deletion-sweep'),
+        target: { kind: 'user', id: subject.userId, displayName: subject.userId },
+        summary:
+          remaining.length === 0
+            ? 'completed a data subject erasure; nothing outside the stated retentions still names the user'
+            : `completed a data subject erasure; ${remaining.length} collection(s) still name the user`,
+        details: { requestedBy, remaining },
+        context: { source: 'worker' },
+      },
+      { db: { adminAuditLog: adminAuditLogRepository }, logger }
+    );
+  } catch (error) {
+    logger.error(`Failed to record the erasure check for deleted user ${subject.userId}: ${String(error)}`);
+  }
 }

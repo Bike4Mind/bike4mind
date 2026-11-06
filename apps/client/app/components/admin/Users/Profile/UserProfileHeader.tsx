@@ -37,6 +37,7 @@ const menuEntries = (user: AdminUserProfile): MenuEntry[] => [
         disabled: !!user.deletion.purgeStartedAt,
       }
     : { action: 'scheduleDeletion', label: 'Schedule deletion (user request)', danger: true },
+  { action: 'erase', label: 'Erase user data', danger: true },
   { action: 'delete', label: 'Delete user', danger: true },
 ];
 
