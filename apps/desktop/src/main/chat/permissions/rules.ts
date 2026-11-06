@@ -2,7 +2,14 @@ import { basename, dirname, isAbsolute } from 'node:path';
 import type { PermissionList } from '@shared/permissions';
 import { MCP_TOOL_PREFIX, serverSlug } from '../mcp/names';
 import { own } from '@shared/ownKeys';
-import { caseFolded, guardForm, guardFormWithin, realpathSyncNearest, withDriveSpellings } from '../tools/paths';
+import {
+  caseFolded,
+  guardForm,
+  guardFormWithin,
+  ownLocation,
+  realpathSyncNearest,
+  withDriveSpellings,
+} from '../tools/paths';
 
 type RuleKind = 'shell' | 'path' | 'domain' | 'plain';
 
@@ -288,14 +295,28 @@ function wslMountSpelling(guardRoot: string): string | null {
   return match ? `/mnt/${match[1]}/${match[2] ?? ''}` : null;
 }
 
-function scriptNamesRoot(script: string, roots: readonly string[]): boolean {
+/** The protected roots, or a provider that is read on each decision. */
+export type ProtectedRoots = readonly string[] | (() => readonly string[]);
+
+/** A protected root in each spelling the checks compare against. */
+interface GuardRoot {
+  folded: string;
+  form: string;
+  mount: string | null;
+}
+
+function guardRoot(root: string): GuardRoot {
+  const form = guardForm(root);
+  return { folded: caseFolded(root), form, mount: process.platform === 'win32' ? wslMountSpelling(form) : null };
+}
+
+function scriptNamesRoot(script: string, roots: readonly GuardRoot[]): boolean {
   const folded = caseFolded(script);
   const text = guardForm(script);
-  return roots.some(root => {
-    const form = guardForm(root);
-    const mount = process.platform === 'win32' ? wslMountSpelling(form) : null;
-    return folded.includes(root) || text.includes(form) || (mount !== null && text.includes(mount));
-  });
+  return roots.some(
+    root =>
+      folded.includes(root.folded) || text.includes(root.form) || (root.mount !== null && text.includes(root.mount))
+  );
 }
 
 function isSettingsFile(path: string): boolean {
@@ -323,11 +344,15 @@ export class PermissionRuleSet {
   private readonly byTool = new Map<string, CompiledRule[]>();
   private readonly mcp: CompiledRule[] = [];
   private readonly folderAllows: CompiledRule[] = [];
+  private readonly protectedRoots: () => readonly string[];
+  private guards: { roots: readonly string[]; compiled: readonly GuardRoot[] } | null = null;
 
   constructor(
     readonly rules: readonly CompiledRule[],
-    private readonly protectedRoots: readonly string[] = []
+    protectedRoots: ProtectedRoots = [],
+    private readonly unresolvedProtected: () => readonly string[] = () => []
   ) {
+    this.protectedRoots = typeof protectedRoots === 'function' ? protectedRoots : () => protectedRoots;
     for (const rule of rules) {
       if (rule.matcher.kind === 'mcp') this.mcp.push(rule);
       for (const tool of rule.tools) {
@@ -347,6 +372,13 @@ export class PermissionRuleSet {
 
   get size(): number {
     return this.rules.length;
+  }
+
+  /** Read per decision: a protected root that could not be resolved yet is retried by its provider. */
+  private get guardRoots(): readonly GuardRoot[] {
+    const roots = this.protectedRoots();
+    if (this.guards?.roots !== roots) this.guards = { roots, compiled: roots.map(guardRoot) };
+    return this.guards.compiled;
   }
 
   evaluate(subject: PermissionSubject): PermissionVerdict {
@@ -404,12 +436,13 @@ export class PermissionRuleSet {
   /** allow: EVERY part of the call is covered, and no floor applies. The first covering rule, for the report. */
   private allowing(rules: readonly CompiledRule[], subject: PermissionSubject): CompiledRule | null {
     if (rules.length === 0) return null;
+    if (this.unresolvedProtected().length > 0) return null;
     if (subject.shell) {
       const { script, commands, directories } = subject.shell;
       const folded = caseFolded(script);
       if (commands.length === 0 || NAMES_RULE_FILE.test(folded)) return null;
       if (subject.shell.ungranted?.length) return null;
-      if (scriptNamesRoot(script, this.foldedRoots())) return null;
+      if (scriptNamesRoot(script, this.guardRoots)) return null;
       if (subject.shell.paths?.some(path => this.isProtectedPath(path) || NAMES_RULE_FILE.test(caseFolded(path)))) {
         return null;
       }
@@ -457,23 +490,38 @@ export class PermissionRuleSet {
   }
 
   private isProtectedPath(path: string): boolean {
-    const roots = this.foldedRoots();
-    return spellings(path).some(spelling => isSettingsFile(spelling) || roots.some(root => within(root, spelling)));
+    const all = spellings(path);
+    const roots = this.guardRoots;
+    return (
+      all === null ||
+      all.some(spelling => {
+        const form = guardForm(spelling);
+        return isSettingsFile(spelling) || roots.some(root => guardFormWithin(root.form, form));
+      })
+    );
   }
 
   /** Inside a protected folder, or above one: `cd ~ && cp x .claude/settings.json` reaches it from home. */
   private isProtectedFolder(directory: string): boolean {
-    const roots = this.foldedRoots();
-    return spellings(directory).some(spelling => roots.some(root => within(root, spelling) || within(spelling, root)));
-  }
-
-  private foldedRoots(): string[] {
-    return this.protectedRoots.map(root => caseFolded(root));
+    const all = spellings(directory);
+    const roots = this.guardRoots;
+    return (
+      all === null ||
+      all.some(spelling => {
+        const form = guardForm(spelling);
+        return roots.some(root => guardFormWithin(root.form, form) || guardFormWithin(form, root.form));
+      })
+    );
   }
 }
 
-/** The lexical and real spellings of `path`, plus any WSL drive spelling, case folded where volumes ignore case. */
-function spellings(path: string): string[] {
+/**
+ * The lexical and real spellings of `path`, plus any WSL drive spelling, case folded where volumes ignore case.
+ * Also its own location, a final link unfollowed. Null when either cannot be resolved; the callers then treat it as protected.
+ */
+function spellings(path: string): string[] | null {
   const real = isAbsolute(path) ? realpathSyncNearest(path) : path;
-  return withDriveSpellings([path, real]).map(spelling => caseFolded(spelling));
+  const own = ownLocation(path);
+  if (real === null || own === null) return null;
+  return withDriveSpellings([path, real, own]).map(spelling => caseFolded(spelling));
 }

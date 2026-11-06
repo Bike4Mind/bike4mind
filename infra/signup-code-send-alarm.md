@@ -28,7 +28,7 @@ fail deployment (or, for the scheduled worker, fail the run).
 | `LLM_SPEND_ALARM_USD_PER_5MIN`           | 25                     | Estimated LLM USD per provider, 5-minute `Sum`                      |
 | `LLM_SPEND_ALARM_USD_PER_HOUR`           | 20                     | Estimated LLM USD per provider except Anthropic, hourly `Sum`       |
 | `LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC` | 75                     | Estimated LLM USD for Anthropic, hourly `Sum`                       |
-| `YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR` | 2                      | Estimated LLM USD per hour by accounts under 7 days old             |
+| `YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR` | 5                      | Estimated LLM USD per hour by accounts under 7 days old             |
 | `SIGNUP_ALARM_PER_HOUR`                  | 8                      | Accounts created per hour (hourly census)                           |
 | `NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR`     | 5                      | User API keys created within 24h of signup per hour (hourly census) |
 
@@ -55,6 +55,12 @@ inside Lambda-prefixed log lines. The metrics are `SignupCodeSends` and
 the same account do not combine their counts. Each alarm compares its `Sum` with
 the configured threshold using `GreaterThanOrEqualToThreshold`; missing data is
 not breaching.
+
+`otc-code-suppressed` is logged when a sign-in code is issued but not mailed
+because the address was refused (blocked domain or no mail host) and has no
+account. It carries `reason` and the address's `domain`, never the full address.
+It is counted as `SignupCodeSuppressed` in the same namespace, with no alarm, so
+a run of wrongly refused domains shows up on the metric.
 
 ALARM and OK transitions go to the DLQ alarm topic (Slack; its handler drops OK).
 The out-of-band email topic (`OPS_ALERT_EMAIL`) is reserved for the alarms that
@@ -175,8 +181,10 @@ When it (or the 5-minute `llm-spend-young-accounts` alarm) fires, the Slack rela
 over the same log groups for the breaching window and adds a "Top
 accounts in the window" section: up to five accounts with id, estimated USD,
 call count, age at the end of the window, top models, and an admin-page link.
-The sum matches the alarm's measured value because both read the same lines
-(unless the query hits its 500-row cap, which the post then says).
+The sum matches the alarm's measured value because both read the same lines,
+unless the query hits its 500-row cap (the post then says so) or a line settled
+just before the alarm fired and had not reached Logs Insights yet (that account
+then shows less than it spent).
 Lines logged before `userId` was added are skipped. The relay has `logs:StartQuery`
 on those log groups only and a 60-second timeout; a query that fails or runs past
 its 25-second budget leaves a one-line note in the post instead of blocking it.

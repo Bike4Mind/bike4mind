@@ -362,6 +362,8 @@ export interface ToolContext {
    * the access token. A granted home folder would otherwise expose the vault to a shell command.
    */
   protectedPaths?: readonly string[];
+  /** Protected folders not yet resolved: where a write lands relative to them is unknown, so every write is refused. */
+  unresolvedProtectedPaths?: readonly string[];
   /**
    * The conversation this call belongs to. Background processes are scoped by it, so one
    * conversation cannot read or stop another's just by naming a handle.

@@ -9,7 +9,12 @@ import {
   creditTransactionRepository,
   userRepository,
 } from '@bike4mind/database';
-import { CreditHolderType, IUserDocument, PENDING_FREE_CREDITS_TAG, settingsMap } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  IUserDocument,
+  PENDING_FREE_CREDITS_TAG,
+  resolveSignupGrantSchedule,
+} from '@bike4mind/common';
 import { creditService } from '@bike4mind/services';
 import { Resource } from 'sst';
 import { createSignupGrantRiskCollector } from '@bike4mind/server-utils/auth/signupGrantRisk';
@@ -32,8 +37,8 @@ type BackfillOptions = {
  *
  * What this does:
  *   Finds every user with `emailVerified=true` AND `pending-free-credits` in tags,
- *   grants them their invite-resolved `pendingCreditGrant` when set - else
- *   `defaultFreeCredits` (read from admin settings at script run time) - clears both
+ *   grants them their invite-resolved `pendingCreditGrant` when set - else the signup
+ *   schedule's initial credits (read from admin settings at script run time) - clears both
  *   the tag and the pending amount. Idempotent - re-runs are safe because `addCredits` is keyed
  *   on a stable `transactionId='verify-grant:${user.id}'` (matches the runtime grant
  *   path in apps/client/pages/api/email/verify.ts).
@@ -74,15 +79,12 @@ class BackfillPendingFreeCredits {
     console.log('✅ Database connected');
     console.log('');
 
-    // Resolve defaultFreeCredits through the canonical Zod-parsed read so we accept
-    // both the boolean/numeric-stored form and any legacy string-stored value.
-    const setting = await adminSettingsRepository.findBySettingName('defaultFreeCredits');
-    const parsed = settingsMap.defaultFreeCredits.schema.safeParse(setting?.settingValue);
-    const amount = parsed.success ? parsed.data : 0;
-    console.log(`📐 defaultFreeCredits (admin setting): ${amount}`);
+    // Same fallback as userService.releasePendingFreeCredits for an account with no invite amount.
+    const amount = (await resolveSignupGrantSchedule(adminSettingsRepository)).initialCredits;
+    console.log(`signupGrantInitialCredits (signup schedule): ${amount}`);
     if (amount <= 0) {
       console.warn(
-        '⚠️  defaultFreeCredits is 0 — no credits will be granted. The tag will still be cleared on --execute.'
+        'signupGrantInitialCredits is 0: no credits will be granted. The tag will still be cleared on --execute.'
       );
     }
     console.log('');

@@ -164,8 +164,14 @@ export function toNonWebpOutputFormat(format?: ImageOutputFormat | null): 'png' 
  * persisted client state (`grok-2-image-1212` was the one actually observed). All are
  * xAI text-to-image models, so remapping to the current id is a faithful
  * same-provider, same-modality replacement.
+ *
+ * `gpt-image-1` stays in the enum (cost tables and size constraints still key off it) but
+ * OpenAI has retired it and its catalog row is past its `deprecationDate`, so it is no longer
+ * an available model: a stale selection reaching the image worker failed there with "is not
+ * available". It maps to gpt-image-2, the same successor the chat image tool already used.
  */
 export const LEGACY_IMAGE_MODEL_MAP: Record<string, (typeof ALL_IMAGE_MODELS)[number]> = {
+  [ImageModels.GPT_IMAGE_1]: ImageModels.GPT_IMAGE_2, // retired by OpenAI -> current GPT-Image
   'dall-e-3': ImageModels.GPT_IMAGE_2,
   'dall-e-2': ImageModels.GPT_IMAGE_2,
   'flux-dev': ImageModels.FLUX_PRO_1_1, // removed model -> live BFL standard
@@ -174,16 +180,20 @@ export const LEGACY_IMAGE_MODEL_MAP: Record<string, (typeof ALL_IMAGE_MODELS)[nu
   'grok-2-image-gen': ImageModels.GROK_IMAGINE_IMAGE_QUALITY, // intermediate xAI image id -> current id
 };
 
+/** The current id for a legacy/retired image model id; any other value is returned unchanged. */
+export function resolveLegacyImageModel<T>(model: T): T | (typeof ALL_IMAGE_MODELS)[number] {
+  return typeof model === 'string' && Object.prototype.hasOwnProperty.call(LEGACY_IMAGE_MODEL_MAP, model)
+    ? LEGACY_IMAGE_MODEL_MAP[model]
+    : model;
+}
+
 /** Upper bound on `n` for one image generation request, whichever provider renders it. */
 export const MAX_IMAGES_PER_REQUEST = 10;
 
 export const OpenAIImageGenerationInput = z.object({
   prompt: z.string(),
   model: z.preprocess(
-    val =>
-      typeof val === 'string' && Object.prototype.hasOwnProperty.call(LEGACY_IMAGE_MODEL_MAP, val)
-        ? LEGACY_IMAGE_MODEL_MAP[val]
-        : val,
+    resolveLegacyImageModel,
     // Self-hosted image models are namespaced `local-image/<checkpoint>` and are
     // not part of the static enum (the checkpoint set is discovered at runtime
     // from the local backend), so accept them via a pattern - same approach as

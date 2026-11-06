@@ -17,6 +17,7 @@ import { ActivityType } from '@bike4mind/server-utils/config/activityType';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { generateInviteLink } from '@server/managers/createDocumentInvite';
 import { toSharerInviteViews } from '@server/managers/inviteManager';
 import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from '@server/sharing/revokedFileReferences';
 import { getInviteTypeName } from '@server/utils/mailer/inviteNotificationEmail';
@@ -214,8 +215,7 @@ export async function createProjectInvite(ctx: Ctx, projectId: string, input: Cr
     );
   }
 
-  // Token, not `_id` - see generateInviteLink in pages/api/[type]/[id]/invites/index.ts for why.
-  const link = `${process.env.APP_URL}/share/${created.token ?? created.id}`;
+  const link = generateInviteLink(created);
 
   // Same notification the generic invite route sends; without it an invitee only learns of the
   // invite from the in-app inbox. Not awaited, so a mail failure never fails the invite.

@@ -42,7 +42,7 @@ describe('useSignupGrantSchedule parity with the server resolver', () => {
         signupGrantActivityDailyCredits: 25,
       },
     ],
-    ['legacy flat grant', { stagedSignupGrantEnabled: false, defaultFreeCredits: 300 }],
+    ['retired flat grant keys', { stagedSignupGrantEnabled: false, defaultFreeCredits: 300 }],
     [
       'schedule keys set',
       {

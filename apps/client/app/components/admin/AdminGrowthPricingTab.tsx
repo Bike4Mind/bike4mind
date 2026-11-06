@@ -45,7 +45,7 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
   {
     id: 'signup',
     title: 'Signup and starter credits',
-    description: 'Who can sign up on their own, and what a new user starts with.',
+    description: 'Who can sign up on their own, and what a referred user starts with.',
     keys: ['allowOpenRegistration', 'defaultFreeCredits', 'ReferralCreditsAmount'],
   },
   {
@@ -148,7 +148,6 @@ export const describeDerivedValue = (key: SettingKey, value: unknown): string | 
   const amount = value === undefined || value === null || value === '' ? Number.NaN : Number(value);
   const floor = `floor ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)} per credit`;
   switch (key) {
-    case 'defaultFreeCredits':
     case 'ReferralCreditsAmount':
     case 'ReferralFirstAnswerCredits':
     case 'ReferralFirstPaymentCredits':
@@ -221,13 +220,10 @@ const AdminGrowthPricingTab = () => {
         `Team Plan Minimum Seats (${requestedMin}) is above the maximum (${resolved.maxSeats}); the maximum is used as the minimum until this is fixed.`
       );
     }
-    const openRegistration = settingsMap.allowOpenRegistration.schema.safeParse(
-      storedByKey.get('allowOpenRegistration')
-    );
     const freeCredits = settingsMap.defaultFreeCredits.schema.safeParse(storedByKey.get('defaultFreeCredits'));
-    if (openRegistration.success && !openRegistration.data && freeCredits.success && freeCredits.data > 0) {
+    if (freeCredits.success && freeCredits.data > 0) {
       out.push(
-        'Default Free Credits only applies to self-serve signups, so it has no effect while Allow Open Registration is off.'
+        'Default Free Credits is retired and no longer pays any signup; set Signup Grant Initial Credits instead.'
       );
     }
     return out;

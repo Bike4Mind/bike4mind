@@ -943,6 +943,7 @@ export class OpenAIBackend implements ICompletionBackend {
           'OpenAI GPT-Image-1 - Advanced multimodal image generation with text integration, supporting up to 2048x2048 resolution and image editing capabilities.',
         rank: 10,
         deprecationDate: '2026-10-23', // Deprecated as per https://platform.openai.com/docs/deprecations
+        replacedBy: ImageModels.GPT_IMAGE_2,
       },
       {
         id: ImageModels.GPT_IMAGE_1_5,

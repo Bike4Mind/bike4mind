@@ -1,6 +1,6 @@
 import { FIELD_FOCUS_PARTS } from '@client/app/utils/themes/customizations/adminSkin';
 
-export { adminScrollGutter } from '@client/app/utils/themes/customizations/adminScrollbar';
+export { adminScrollGutter, adminScrollbarVisible } from '@client/app/utils/themes/customizations/adminScrollbar';
 
 const focusRing = {
   // The app theme removes Joy button outlines with !important; admin controls must restore them.

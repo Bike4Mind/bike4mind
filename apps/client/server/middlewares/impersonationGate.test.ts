@@ -104,6 +104,11 @@ describe('impersonation route policy', () => {
     expect(impersonationDecision('POST', path, false)).toBe('readonly');
     expect(impersonationDecision('POST', path, true)).toBe('allow');
   });
+  it('admits bulk session POST only after escalation and never bulk DELETE', () => {
+    expect(impersonationDecision('POST', '/api/sessions/bulk', false)).toBe('readonly');
+    expect(impersonationDecision('POST', '/api/sessions/bulk', true)).toBe('allow');
+    expect(impersonationDecision('DELETE', '/api/sessions/bulk', true)).toBe('readonly');
+  });
   it('classifies operations by effects rather than the HTTP verb', () => {
     expect(impersonationDecision('POST', '/api/agents', true)).toBe('sensitive');
     expect(impersonationDecision('PATCH', '/api/agents/012345678901234567890123', true)).toBe('sensitive');

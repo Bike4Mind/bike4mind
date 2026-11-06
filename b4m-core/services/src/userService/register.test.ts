@@ -116,6 +116,7 @@ describe('registerUser', () => {
   });
 
   it('registers a new user with valid data and invite, deferring credits until email is proven', async () => {
+    mockInvite.startingCredits = 10;
     const result = await registerUser(baseParams, mockAdapters);
     expect(result).toMatchObject({ username: baseParams.username, email: baseParams.email, name: baseParams.name });
     expect(mockAdapters.db.users.create).toHaveBeenCalledWith(
@@ -204,6 +205,16 @@ describe('registerUser', () => {
       expect(grantPackages.reserveRedemption).toHaveBeenCalledWith('pkg-1', 'newUserId');
     });
 
+    it('enrolls the staged signup grant for a 0-credit legacy package', async () => {
+      grantPackages.findById.mockResolvedValue({ ...pkg, credits: 0, legacy: true });
+      await registerUser(baseParams, mockAdapters);
+      const created = mockAdapters.db.users.create.mock.calls[0][0];
+      expect(created.signupGrant).toMatchObject({ signupCredits: expect.any(Number) });
+      expect(created.pendingCreditGrant).toBeNull();
+      expect(created.tags).toContain(PENDING_FREE_CREDITS_TAG);
+      expect(grantPackages.isInboxClaimed).not.toHaveBeenCalled();
+    });
+
     it.each([
       ['total_cap', 'This invite code has reached its signup limit'],
       ['daily_cap', 'This invite code has reached its signup limit for today, please try again tomorrow'],
@@ -257,6 +268,7 @@ describe('registerUser', () => {
   describe('invite-only OTC registration', () => {
     it('redeems an email-bound invite and verifies the account', async () => {
       mockInvite.email = baseParams.email;
+      mockInvite.startingCredits = 10;
       mockAdapters.db.users.update = vi.fn().mockResolvedValue(undefined);
       mockAdapters.db.creditTransactions = undefined;
       const result = await registerViaOTC({ ...baseParams, password: '' }, mockAdapters);
@@ -504,16 +516,24 @@ describe('registerUser', () => {
     });
   });
 
-  it('does not tag pending-free-credits when resolved invite credits are 0', async () => {
-    mockAdapters.db.adminSettings.findBySettingName = vi.fn().mockImplementation((name: string) => {
-      if (name === 'defaultTags') return Promise.resolve(mockSettings);
-      if (name === 'ReferralCreditsAmount') return Promise.resolve(null);
-      return Promise.resolve(null);
-    });
+  it.each([
+    ['unset', undefined],
+    ['0', 0],
+  ])('enrolls the staged grant when an admin code sizes no credits (startingCredits %s)', async (_label, starting) => {
+    mockInvite.startingCredits = starting;
     await registerUser(baseParams, mockAdapters);
     const createdUser = mockAdapters.db.users.create.mock.calls[0][0];
-    expect(createdUser.tags).not.toContain(PENDING_FREE_CREDITS_TAG);
+    expect(createdUser.tags).toContain(PENDING_FREE_CREDITS_TAG);
     expect(createdUser.pendingCreditGrant).toBeNull();
+    expect(createdUser.signupGrant).toMatchObject({ stage: 'pending_email', creditsReleased: 0 });
+  });
+
+  it('pays an invite-sized amount flat rather than enrolling it', async () => {
+    mockInvite.startingCredits = 25;
+    await registerUser(baseParams, mockAdapters);
+    const createdUser = mockAdapters.db.users.create.mock.calls[0][0];
+    expect(createdUser.pendingCreditGrant).toBe(25);
+    expect(createdUser.signupGrant).toBeUndefined();
   });
 
   it('throws if username or email already exists', async () => {
@@ -710,6 +730,7 @@ describe('registerUser', () => {
         creditsReleased: 0,
         nextCondition: 'email_verification',
       });
+      mockInvite.startingCredits = 10;
       const invited = await registerUser(baseParams, mockAdapters);
       expect(invited.signupGrant).toBeUndefined();
     });
@@ -778,29 +799,53 @@ describe('registerUser', () => {
         expect(created().tags).toContain(PENDING_FREE_CREDITS_TAG);
       });
 
-      it('keeps the flat grant for an admin code', async () => {
+      it('keeps the flat grant for an admin code that sizes its credits', async () => {
         enableStaging();
+        mockInvite.startingCredits = 10;
         await registerUser(baseParams, mockAdapters);
         expect(created().signupGrant).toBeUndefined();
         expect(created().pendingCreditGrant).toBe(10);
       });
 
-      it('keeps the flat grant for an unlimited referral-sourced code', async () => {
+      it('enrolls the default grant, not a flat ReferralCreditsAmount, for an admin code with no amount', async () => {
+        enableStaging();
+        await registerUser(baseParams, mockAdapters);
+        expect(created().signupGrant).toMatchObject({ signupCredits: 4, creditsReleased: 0 });
+        expect(created().pendingCreditGrant).toBeNull();
+        expect(created().tags).toContain(PENDING_FREE_CREDITS_TAG);
+      });
+
+      it('keeps the flat grant for an unlimited code that sizes its credits', async () => {
+        enableStaging();
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(
+          referralInvite({ unlimitedUse: true, startingCredits: 10 })
+        );
+        await registerUser(baseParams, mockAdapters);
+        expect(created().signupGrant).toBeUndefined();
+        expect(created().pendingCreditGrant).toBe(10);
+      });
+
+      it('enrolls the default grant for an unlimited code with no amount', async () => {
         enableStaging();
         mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite({ unlimitedUse: true }));
         await registerUser(baseParams, mockAdapters);
-        expect(created().signupGrant).toBeUndefined();
-        expect(created().pendingCreditGrant).toBe(10);
+        expect(created().signupGrant).toMatchObject({ signupCredits: 4 });
+        expect(created().pendingCreditGrant).toBeNull();
       });
 
-      it('records a referral signup invite even when the referral resolves no credits', async () => {
+      it('enrolls the default grant for a no-credit referral with open registration off, like a no-amount admin code', async () => {
+        enableStaging();
         const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
-        mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) =>
-          name === 'ReferralCreditsAmount' ? { settingValue: '0' } : readSetting(name)
-        );
+        mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
+          if (name === 'ReferralCreditsAmount') return { settingValue: '0' };
+          if (name === 'allowOpenRegistration') return { settingValue: false };
+          return readSetting(name);
+        });
         mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite({ startingCredits: 0 }));
         await registerUser(baseParams, mockAdapters);
-        expect(created().signupGrant).toBeUndefined();
+        expect(created().signupGrant).toMatchObject({ signupCredits: 4 });
+        expect(created().pendingCreditGrant).toBeNull();
+        expect(created().tags).toContain(PENDING_FREE_CREDITS_TAG);
         expect(created().referredByUserId).toBe('inviterId');
         expect(created().signupInvite).toEqual({ source: 'referral', inviteId: 'invite-1', at: expect.any(Date) });
       });
@@ -951,7 +996,7 @@ describe('registerViaOTC', () => {
           findBySettingName: vi.fn().mockImplementation((name: string) => {
             if (name === 'defaultTags') return Promise.resolve({ settingValue: '' });
             if (name === 'allowOpenRegistration') return Promise.resolve({ settingValue: 'true' });
-            if (name === 'defaultFreeCredits') return Promise.resolve({ settingValue: '100' });
+            if (name === 'signupGrantInitialCredits') return Promise.resolve({ settingValue: '100' });
             return Promise.resolve(null);
           }),
         },
@@ -1040,7 +1085,7 @@ describe('registerViaOTC', () => {
   it('grants the default credits for an admitted no-invite signup while open registration is off', async () => {
     mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
       if (name === 'allowOpenRegistration') return { settingValue: false };
-      if (name === 'defaultFreeCredits') return { settingValue: '100' };
+      if (name === 'signupGrantInitialCredits') return { settingValue: '100' };
       return null;
     });
 
