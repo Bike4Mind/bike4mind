@@ -780,6 +780,11 @@ export interface ChatMessage {
    */
   display?: string;
   /**
+   * Set with `system` on the message a side chat opens with, naming the conversation it was
+   * branched from, so the thread can say so and link back. See ChatService.startSideChat.
+   */
+  sideChatOf?: { sessionId: string; title: string };
+  /**
    * Artifacts parsed out of this reply. Their markup is NOT in `content`, which holds the prose
    * around them; the wire rebuilds it from here (restoreArtifactMarkup) so the model still sees
    * its own artifact on a follow-up while the body is stored exactly once.
@@ -1939,6 +1944,14 @@ export interface StartSpawnSuggestionRequest {
   /** Required for a worktree start; ignored by the others. */
   branch?: string;
 }
+
+/** Branch a side chat off `sessionId` about text the user highlighted in its thread. */
+export interface StartSideChatRequest {
+  sessionId: string;
+  selection: string;
+}
+
+export type StartSideChatResult = { ok: true; session: ChatSessionSummary } | { ok: false; error: string };
 
 export type SpawnSuggestionResult = { ok: true; suggestion: ChatSpawnSuggestion } | { ok: false; error: string };
 

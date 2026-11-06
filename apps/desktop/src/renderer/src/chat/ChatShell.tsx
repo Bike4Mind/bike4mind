@@ -77,6 +77,7 @@ import {
 import { TodoPanel } from './TodoPanel';
 import { HeldRelayCard } from './HeldRelayCard';
 import { SessionOpenerContext } from './SessionLink';
+import { clampQuote, quotedMessage } from './quotedReply';
 import { SpawnSuggestionTray } from './SpawnSuggestionTray';
 import { useHeldRelays } from './useHeldRelays';
 import { useSpawnSuggestions } from './useSpawnSuggestions';
@@ -402,6 +403,11 @@ export function ChatShell({
   );
   const clearComposerFill = useCallback(() => setComposerFill(null), []);
   const [composerFocus, setComposerFocus] = useState(0);
+  // Per conversation, like the composer's own drafts: a quote waits in the one it was taken in.
+  // One quote at a time - a second Reply replaces the first, so "Regarding:" always names exactly
+  // one passage; to discuss a longer stretch, highlight the longer stretch.
+  const [quotes, setQuotes] = useState<Readonly<Record<string, string>>>({});
+  const [sideChatError, setSideChatError] = useState<string | null>(null);
   // Only the conversation screen counts as showing one: main polls what is on screen faster.
   const pullRequest = usePullRequest(screen === 'conversation' ? activeId : null);
   // What the browser pane trades width with; see BrowserPane.
@@ -957,8 +963,46 @@ export function ChatShell({
         ? 'Start a Code session to type here'
         : 'Start a conversation to type here';
 
-  const onSend = useCallback(
+  const setQuote = useCallback((sessionId: string, quote: string | null) => {
+    setQuotes(current => {
+      const { [sessionId]: _dropped, ...rest } = current;
+      return quote ? { ...rest, [sessionId]: quote } : rest;
+    });
+  }, []);
+
+  const onReplyToSelection = useCallback(
+    (text: string) => {
+      if (!activeId) return;
+      setQuote(activeId, clampQuote(text));
+      setComposerFocus(request => request + 1);
+    },
+    [activeId, setQuote]
+  );
+
+  const onSideChatFromSelection = useCallback(
     async (text: string) => {
+      if (!activeId) return;
+      setSideChatError(null);
+      const result = await window.b4m.chat.startSideChat({ sessionId: activeId, selection: text });
+      if (!result.ok) {
+        setSideChatError(result.error);
+        return;
+      }
+      // Reread before opening it: the shell reselects away from an open session the list lacks.
+      await reload();
+      setMode(result.session.mode);
+      setScreen('conversation');
+      setActiveId(result.session.id);
+      setComposerFocus(request => request + 1);
+    },
+    [activeId, reload]
+  );
+
+  const onSend = useCallback(
+    async (typed: string) => {
+      const quote = activeId ? quotes[activeId] : undefined;
+      const text = quote ? quotedMessage(quote, typed) : typed;
+      if (activeId && quote) setQuote(activeId, null);
       const attached = draft.attachments;
       // Cleared before the await so the row does not sit under the composer while the turn is
       // accepted; a rejected turn restores its text (see useConversation.send) but not its
@@ -968,7 +1012,7 @@ export function ChatShell({
       // Main knows something this window did not: reread so the banner and Send gate catch up.
       if (!accepted && localMode) void catalog.reload();
     },
-    [conversation, draft, localMode, catalog]
+    [activeId, quotes, setQuote, conversation, draft, localMode, catalog]
   );
 
   /**
@@ -1413,6 +1457,8 @@ export function ChatShell({
                 onRespond={conversation.respondToApproval}
                 onMove={background.moveToBackground}
                 onContinue={() => void conversation.continueReply()}
+                onReplyToSelection={onReplyToSelection}
+                onSideChatFromSelection={text => void onSideChatFromSelection(text)}
                 status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
                 // At the foot of the thread rather than above the composer: a background command is
                 // something this conversation started, so it reads as the last thing that happened
@@ -1927,6 +1973,21 @@ export function ChatShell({
               </Box>
             )}
 
+            {sideChatError && (
+              <Box sx={contentColumnSx}>
+                <Alert
+                  size="sm"
+                  color="danger"
+                  variant="soft"
+                  sx={{ cursor: 'pointer' }}
+                  onClick={() => setSideChatError(null)}
+                  data-testid="chat-side-chat-error"
+                >
+                  {sideChatError}
+                </Alert>
+              </Box>
+            )}
+
             <HeldRelayCard held={heldRelays.held} onResolve={heldRelays.resolve} onOpenSession={selectSession} />
 
             <SpawnSuggestionTray
@@ -2020,6 +2081,8 @@ export function ChatShell({
               fill={composerFill}
               onFillConsumed={clearComposerFill}
               focusRequest={composerFocus}
+              quote={activeId ? (quotes[activeId] ?? null) : null}
+              onRemoveQuote={() => activeId && setQuote(activeId, null)}
               skills={skills}
               mentionSessions={sessions}
               leading={
