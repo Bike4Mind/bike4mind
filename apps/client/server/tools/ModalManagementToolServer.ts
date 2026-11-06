@@ -11,6 +11,8 @@ import { ModalModel } from '@bike4mind/database/social';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { createModal, updateModal, deleteModal, listModals } from './modalOperations';
 import { parseNaturalLanguageQueryDirect } from '@client/pages/api/admin/modal-tool';
+import { Logger } from '@bike4mind/observability';
+import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import {
   showHelp,
   buildModalFromParams,
@@ -20,6 +22,8 @@ import {
   suggestTags,
   findModalByPartialId,
 } from '@client/app/services/adminTools/modalToolHelpers';
+
+const modalToolLogger = new Logger({ metadata: { service: 'admin-modal-tool' } });
 
 /**
  * Server-side implementation of ModalManagementTool
@@ -531,10 +535,14 @@ export class ModalManagementToolServer implements AdminTool {
       }
 
       // Call the parsing function directly
-      const toolParams = await parseNaturalLanguageQueryDirect(params.query, {
-        chatHistory: context.chatHistory,
-        sessionId: context.sessionId,
-      });
+      const toolParams = await parseNaturalLanguageQueryDirect(
+        params.query,
+        {
+          chatHistory: context.chatHistory,
+          sessionId: context.sessionId,
+        },
+        createCompletionMeter(context.user, modalToolLogger, 'admin modal tool', { systemModel: true })
+      );
 
       // Execute the action using server operations directly
       let result;

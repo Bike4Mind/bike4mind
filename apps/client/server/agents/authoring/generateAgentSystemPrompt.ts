@@ -8,7 +8,7 @@ import type { Logger } from '@bike4mind/observability';
 import { IAgent, IMessage } from '@bike4mind/common';
 import { BadRequestError, getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
-import { apiKeyService } from '@bike4mind/services';
+import { apiKeyService, meterCompletionBackend, type CompletionMeter } from '@bike4mind/services';
 import { assertSystemPromptGenerationAllowed } from '@server/agents/systemPromptRateLimit';
 import { AuthoringResultError } from '@server/agents/authoring/authoringErrors';
 
@@ -82,7 +82,12 @@ const createAgentMetadataForPrompt = (agent: IAgent): string => {
   return JSON.stringify(agentData, null, 2);
 };
 
-export async function generateAgentSystemPrompt(agent: IAgent, userId: string, logger: Logger): Promise<string> {
+export async function generateAgentSystemPrompt(
+  agent: IAgent,
+  userId: string,
+  logger: Logger,
+  meter: CompletionMeter
+): Promise<string> {
   // Get agent operations settings
   const settings = await agentOpsSettingsRepository.getSettings();
 
@@ -149,8 +154,8 @@ Please create a detailed system prompt that captures this agent's personality, c
     throw new BadRequestError('No available LLM model found for system prompt generation');
   }
 
-  const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: logger, endUserId: userId });
-  if (!llm) {
+  const rawLlm = getLlmByModel(apiKeyTable, { modelInfo, logger: logger, endUserId: userId });
+  if (!rawLlm) {
     throw new BadRequestError('Failed to initialize LLM backend for system prompt generation');
   }
 
@@ -159,6 +164,7 @@ Please create a detailed system prompt that captures this agent's personality, c
   // Generate the system prompt
   logger.info(`Generating system prompt for agent ${agent.name} using model ${modelInfo.id}`);
 
+  const llm = meterCompletionBackend(rawLlm, meter, modelInfo);
   await llm.complete(
     modelInfo.id,
     messages,
