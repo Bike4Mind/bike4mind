@@ -45,6 +45,8 @@ export interface WebNotebookCursor {
   /** The notebook's timestamps when last read; '' while a reply was still running, so it is read again. */
   version: string;
   status: Exclude<FileStatus, 'pending'>;
+  /** Retained after a failed refresh so a local deletion still wins over a retry. */
+  wasImported?: boolean;
   error?: string;
 }
 

@@ -1,4 +1,4 @@
-import { questRepository, sessionRepository } from '@bike4mind/database';
+import { questRepository, sessionRepository, withTransaction } from '@bike4mind/database';
 import { sessionService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -63,16 +63,19 @@ const handler = baseApi()
       const { id: sessionId, messageId } = req.query;
 
       const userId = req.user?.id;
-      await sessionService.deleteSessionMessage(
-        userId,
-        { sessionId: sessionId!, messageId: messageId! },
-        {
-          db: {
-            sessions: sessionRepository,
-            chatHistories: questRepository,
-          },
-        }
-      );
+      await withTransaction(async () => {
+        await sessionService.deleteSessionMessage(
+          userId,
+          { sessionId: sessionId!, messageId: messageId! },
+          {
+            db: {
+              sessions: sessionRepository,
+              chatHistories: questRepository,
+            },
+          }
+        );
+        await sessionRepository.update({ id: sessionId!, updatedAt: new Date() });
+      });
       return res.json({ msg: 'Session deleted' });
     })
   )
@@ -149,9 +152,15 @@ const handler = baseApi()
         return res.status(403).json({ error: 'Not authorized to update this session' });
       }
 
-      const updatedMessage = await questRepository.updateInSession(sessionId!, {
-        id: message.id,
-        ...allowedUpdates,
+      const updatedMessage = await withTransaction(async () => {
+        const updated = await questRepository.updateInSession(sessionId!, {
+          id: message.id,
+          ...allowedUpdates,
+        });
+        if (updated && (typeof allowedUpdates.reply === 'string' || allowedUpdates.replies !== undefined)) {
+          await sessionRepository.update({ id: sessionId!, updatedAt: new Date() });
+        }
+        return updated;
       });
 
       // Only reachable if the quest was deleted between the findBySessionIdAndId check above and

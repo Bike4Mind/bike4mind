@@ -41,7 +41,9 @@ function iso(value: unknown): string | undefined {
   return text && !Number.isNaN(Date.parse(text)) ? new Date(text).toISOString() : undefined;
 }
 
-function idOf(raw: Json): string | undefined {
+export function sourceIdOf(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as Json;
   const id = str(raw.id) ?? str(raw._id);
   return id && SOURCE_ID.test(id) ? id : undefined;
 }
@@ -50,7 +52,7 @@ function idOf(raw: Json): string | undefined {
 export function readNotebook(raw: unknown): WebNotebook | null {
   if (!raw || typeof raw !== 'object') return null;
   const row = raw as Json;
-  const id = idOf(row);
+  const id = sourceIdOf(row);
   if (!id) return null;
   const updated = iso(row.updatedAt);
   const lastUpdated = iso(row.lastUpdated);
@@ -84,7 +86,7 @@ export function mapQuests(quests: readonly unknown[], fallbackAt: string): Mappe
   for (const entry of quests) {
     if (!entry || typeof entry !== 'object') continue;
     const quest = entry as Json;
-    const id = idOf(quest);
+    const id = sourceIdOf(quest);
     if (!id || seen.has(id)) continue;
     seen.add(id);
     if (quest.status === 'running') settled = false;

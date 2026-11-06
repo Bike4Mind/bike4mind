@@ -1,8 +1,10 @@
+import { isAxiosError } from 'axios';
+import { z } from 'zod';
 import type { ChatSession } from '@shared/chat';
 import type { ClaudeImportCounts } from '@shared/claudeImport';
 import { deriveTitle, isForkedImport, type SessionStore } from '../chat/SessionStore';
 import type { WebNotebookCursor } from './ImportStateStore';
-import { mapQuests, readNotebook, type WebNotebook } from './webSessionMapper';
+import { mapQuests, readNotebook, sourceIdOf, type WebNotebook } from './webSessionMapper';
 
 const LIST_PATH = '/api/sessions';
 const LIST_PAGE_SIZE = 100;
@@ -26,15 +28,24 @@ export interface WebSyncDeps {
   now?: () => Date;
 }
 
-interface Page {
-  data: unknown[];
-  hasMore: boolean;
+const pageSchema = z.union([
+  z.array(z.unknown()).transform(data => ({ data, hasMore: false })),
+  z.object({ data: z.array(z.unknown()), hasMore: z.boolean() }),
+]);
+
+function pageOf(result: unknown): z.infer<typeof pageSchema> {
+  return pageSchema.parse(result);
 }
 
-function pageOf(result: unknown): Page {
-  if (Array.isArray(result)) return { data: result, hasMore: false };
-  const envelope = (result && typeof result === 'object' ? result : {}) as { data?: unknown; hasMore?: unknown };
-  return { data: Array.isArray(envelope.data) ? envelope.data : [], hasMore: envelope.hasMore === true };
+/** Offset pages can omit a live notebook when rows move between requests. */
+export async function webNotebookWasDeleted(api: WebApi, notebookId: string): Promise<boolean> {
+  try {
+    await api.get(`${LIST_PATH}/${encodeURIComponent(notebookId)}`);
+    return false;
+  } catch (error) {
+    if (isAxiosError(error) && error.response?.status === 404) return true;
+    throw error;
+  }
 }
 
 function pagedUrl(path: string, page: number, limit: number, extra: Record<string, string> = {}): string {
@@ -55,13 +66,12 @@ export async function listWebNotebooks(api: WebApi): Promise<{ notebooks: WebNot
   const notebooks = new Map<string, WebNotebook>();
   for (let page = 1; page <= MAX_LIST_PAGES; page++) {
     const result = pageOf(
-      await api.get(
-        pagedUrl(LIST_PATH, page, LIST_PAGE_SIZE, { 'orderBy[field]': 'lastUpdated', 'orderBy[direction]': 'desc' })
-      )
+      await api.get(pagedUrl(LIST_PATH, page, LIST_PAGE_SIZE, { 'orderBy[field]': '_id', 'orderBy[direction]': 'asc' }))
     );
     for (const row of result.data) {
       const notebook = readNotebook(row);
-      if (notebook && !notebooks.has(notebook.id)) notebooks.set(notebook.id, notebook);
+      if (!notebook) throw new Error('Invalid notebook in web sync response');
+      if (!notebooks.has(notebook.id)) notebooks.set(notebook.id, notebook);
     }
     if (!result.hasMore) return { notebooks: [...notebooks.values()], complete: true };
   }
@@ -75,6 +85,7 @@ export async function fetchQuests(api: WebApi, notebookId: string): Promise<{ qu
   const path = `${LIST_PATH}/${encodeURIComponent(notebookId)}/chat`;
   for (let page = 1; page <= MAX_CHAT_PAGES; page++) {
     const result = pageOf(await api.get(pagedUrl(path, page, CHAT_PAGE_SIZE, { sort: 'asc' })));
+    if (result.data.some(row => !sourceIdOf(row))) throw new Error('Invalid quest in web sync response');
     quests.push(...result.data);
     if (!result.hasMore) break;
     if (page === MAX_CHAT_PAGES) truncated = true;
@@ -100,14 +111,18 @@ export async function importNotebook(
   const existing = await deps.store.getImported(sessionId, deps.scopeKey);
   if (existing && isForkedImport(existing)) return { sessionId, version: notebook.version, status: 'forked' };
   // Imported once and since deleted by the user: do not bring it back.
-  if (previous?.status === 'imported' && !existing) return { ...previous, status: 'removed' };
+  if ((previous?.status === 'imported' || previous?.wasImported) && !existing)
+    return { ...previous, status: 'removed' };
 
   const { quests, truncated } = await fetchQuests(deps.api, notebook.id);
   const { messages, settled } = mapQuests(quests, notebook.updatedAt);
   const version = settled && !truncated ? notebook.version : '';
   if (messages.length === 0) {
     // Emptied on the web: drop the untouched copy so it does not keep stale messages.
-    if (existing) await deps.deleteImported(sessionId, deps.scopeKey);
+    if (existing) {
+      const outcome = await deps.deleteImported(sessionId, deps.scopeKey);
+      if (outcome === 'forked') return { sessionId, version, status: 'forked' };
+    }
     return { sessionId, version, status: 'skipped' };
   }
 

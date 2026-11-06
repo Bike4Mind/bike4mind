@@ -42,6 +42,7 @@ import {
   needsWebImport,
   webCounts,
   webSessionId,
+  webNotebookWasDeleted,
   type WebApi,
 } from './WebSessionSync';
 
@@ -358,8 +359,9 @@ export class ClaudeImportService {
       this.deps.logger.warn(`WEB IMPORT: could not list notebooks: ${String(error)}`);
       return;
     }
-    if (this.deps.scopeKey() !== scopeKey) return;
-    if (listed.complete) await this.pruneWebNotebooks(scope, scopeKey, new Set(listed.notebooks.map(n => n.id)));
+    if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) return;
+    if (!(await this.states.readSettings()).web.enabled) return;
+    if (listed.complete) await this.pruneWebNotebooks(scope, scopeKey, new Set(listed.notebooks.map(n => n.id)), api);
 
     const tag = importScopeTag(scopeKey);
     const queue = listed.notebooks.filter(notebook => needsWebImport(notebook, scope.webNotebooks[notebook.id]));
@@ -388,6 +390,7 @@ export class ClaudeImportService {
           sessionId,
           version: previous?.version ?? '',
           status: 'failed',
+          wasImported: previous?.status === 'imported' || previous?.wasImported === true,
           error: error instanceof Error ? error.message : String(error),
         };
         this.deps.logger.warn(`WEB IMPORT: could not import a notebook: ${String(error)}`);
@@ -404,18 +407,25 @@ export class ClaudeImportService {
   }
 
   /** A notebook deleted on the web takes its untouched copy with it; a continued one stays. */
-  private async pruneWebNotebooks(scope: ScopeImportState, scopeKey: string, listed: Set<string>): Promise<void> {
+  private async pruneWebNotebooks(
+    scope: ScopeImportState,
+    scopeKey: string,
+    listed: Set<string>,
+    api: WebApi
+  ): Promise<void> {
     for (const [id, cursor] of Object.entries(scope.webNotebooks)) {
       if (listed.has(id) || cursor.status === 'forked') continue;
       if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) return;
-      if (cursor.status === 'imported') {
-        const outcome = await this.deps.deleteImported(cursor.sessionId, scopeKey);
-        if (outcome === 'forked') {
-          scope.webNotebooks[id] = { ...cursor, status: 'forked' };
-          continue;
-        }
-        this.sessionsChanged();
+      if (!(await this.states.readSettings()).web.enabled) return;
+      if (!(await webNotebookWasDeleted(api, id))) continue;
+      if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) return;
+      if (!(await this.states.readSettings()).web.enabled) return;
+      const outcome = await this.deps.deleteImported(cursor.sessionId, scopeKey);
+      if (outcome === 'forked') {
+        scope.webNotebooks[id] = { ...cursor, status: 'forked' };
+        continue;
       }
+      if (outcome === 'removed') this.sessionsChanged();
       delete scope.webNotebooks[id];
     }
   }
