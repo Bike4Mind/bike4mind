@@ -63,12 +63,10 @@ const FlagBanner: React.FC<{ flaggedCount: number }> = ({ flaggedCount }) => (
     startDecorator={<WarningAmberIcon />}
     sx={{ mb: 2 }}
     data-testid="spend-account-flag-banner"
-    role="status"
   >
     <Box>
       <Typography level="title-sm">
-        {flaggedCount.toLocaleString('en-US')} {flaggedCount === 1 ? 'account is' : 'accounts are'} over a spend
-        threshold
+        {flaggedCount.toLocaleString('en-US')} {flaggedCount === 1 ? 'account is' : 'accounts are'} over a limit
       </Typography>
       <Typography level="body-xs">{FLAG_RULES}</Typography>
     </Box>

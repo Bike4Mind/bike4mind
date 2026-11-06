@@ -60,7 +60,9 @@ describe('SpendTabView', () => {
     };
     render(<SpendTabView data={data} />, { wrapper: TestWrapper });
 
-    expect(screen.getByTestId('spend-account-flag-banner')).toHaveTextContent('1 account is over a spend threshold');
+    const banner = screen.getByTestId('spend-account-flag-banner');
+    expect(banner).toHaveTextContent('1 account is over a limit');
+    expect(banner).toHaveAttribute('role', 'alert');
     const hotRow = screen.getByTestId(`spend-account-row-${hot.accountId}`);
     expect(within(hotRow).getByTestId('spend-account-flag-dailyCost')).toHaveTextContent('Cost/day');
     expect(within(hotRow).getByTestId('spend-account-flag-errorRate')).toHaveTextContent('Errors');
