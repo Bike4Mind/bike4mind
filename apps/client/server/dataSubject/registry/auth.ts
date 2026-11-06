@@ -1,21 +1,25 @@
 import type { DataHolderRegistry } from '../types';
 
+// `userId` and `author` are immutable and every identity field is required, and revisions refuse any
+// update or delete, so neither anonymize nor delete can run on these records.
+const ADMIN_NOTE_REASON =
+  'Administrative case note kept as a tamper-proof accountability record (legitimate interest, GDPR Art. 6(1)(f))';
+
 export const authHolders = {
-  // Notes about a person are the platform's accountability record, so they outlive the person with the link cut.
   AdminUserNote: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
-      { path: 'author.id', matchBy: 'userId', action: 'anonymize', alsoRedact: ['author.name'] },
-      { path: 'editor.id', matchBy: 'userId', action: 'anonymize', alsoRedact: ['editor.name'] },
+      { path: 'userId', matchBy: 'userId', action: 'retain', reason: ADMIN_NOTE_REASON },
+      { path: 'author.id', matchBy: 'userId', action: 'retain', reason: ADMIN_NOTE_REASON },
+      { path: 'editor.id', matchBy: 'userId', action: 'retain', reason: ADMIN_NOTE_REASON },
     ],
   },
   AdminUserNoteRevision: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
-      { path: 'author.id', matchBy: 'userId', action: 'anonymize', alsoRedact: ['author.name'] },
-      { path: 'editor.id', matchBy: 'userId', action: 'anonymize', alsoRedact: ['editor.name'] },
+      { path: 'userId', matchBy: 'userId', action: 'retain', reason: ADMIN_NOTE_REASON },
+      { path: 'author.id', matchBy: 'userId', action: 'retain', reason: ADMIN_NOTE_REASON },
+      { path: 'editor.id', matchBy: 'userId', action: 'retain', reason: ADMIN_NOTE_REASON },
     ],
   },
   ApiKey: {
@@ -221,6 +225,8 @@ export const authHolders = {
       { path: 'email', matchBy: 'email', action: 'deleteDocument' },
       { path: 'inviteGeneratedBy', matchBy: 'userId', action: 'anonymize' },
     ],
+    // A usable invite code admits whoever holds it.
+    secretPaths: ['inviteCode'],
   },
   // Who accessed whose account is an accountability record, so both sides are anonymized, not deleted.
   SupportAccess: {
