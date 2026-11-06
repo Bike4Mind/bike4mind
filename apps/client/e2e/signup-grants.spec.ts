@@ -1,5 +1,5 @@
 import type { APIRequestContext, Browser } from '@playwright/test';
-import { isStoredToggleOn, settingsMap, signupGrantScheduleFromValues, storedGrantCredits } from '@bike4mind/common';
+import { isStoredToggleOn, runtimeSignupGrantSchedule, settingsMap, storedGrantCredits } from '@bike4mind/common';
 import { test, expect, openPageAs } from './fixtures';
 import { TIMEOUTS } from './constants';
 import { getTestRunId, getTestUsers } from './helpers/test-users';
@@ -35,7 +35,7 @@ const ROOMY_POOL = 1_000_000;
 const MIN_ACTIVE_SECONDS = 60;
 const HEARTBEAT_GAP_MS = (MIN_ACTIVE_SECONDS + 2) * 1000;
 
-// The schedule keys are what resolveSignupGrantSchedule (b4m-core/common/src/signupGrant.ts) reads; the older
+// The schedule keys are what runtimeSignupGrantSchedule (b4m-core/common/src/signupGrant.ts) reads; the older
 // signupGrantCredits / verifiedUnlockCredits / signupGrantActivity*Credits keys are only its fallback while unset.
 const GRANT_SETTINGS = {
   signupGrantInitialCredits: SIGNUP_CREDITS,
@@ -108,10 +108,10 @@ test.describe('Staged signup grants', () => {
     test.skip(!openRegistration, 'Open registration is off on this env (core.setup enables it on previews).');
 
     const current = await readSettings(request);
-    const schedule = signupGrantScheduleFromValues(key => storedGrantCredits(key, current.get(key)), {
-      staged: isStoredToggleOn(current.get('stagedSignupGrantEnabled')),
-      activity: isStoredToggleOn(current.get('signupGrantActivityEnabled')),
-    });
+    const schedule = runtimeSignupGrantSchedule(
+      key => storedGrantCredits(key, current.get(key)),
+      isStoredToggleOn(current.get('signupGrantActivityEnabled'))
+    );
     // The schedule keys cannot be cleared once written, so one that had no row goes back to what the env paid.
     const unsetSchedule: Partial<Record<GrantSettingKey, number>> = {
       signupGrantInitialCredits: schedule.initialCredits,
