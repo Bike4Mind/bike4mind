@@ -332,6 +332,40 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
     return { data: result.slice(0, limit), hasMore };
   }
 
+  /**
+   * One newest-first page of the live artifacts a user owns that match a text search, for the public
+   * search. Keyset on `_id` like listOwnedBeforeId, so paging never re-reads earlier pages.
+   */
+  async searchOwnedBeforeId(
+    userId: string,
+    searchTerm: string,
+    { type, beforeId, limit }: { type?: string; beforeId?: string; limit: number }
+  ) {
+    const conditions: Record<string, unknown> = {
+      userId,
+      deletedAt: null,
+      $text: { $search: searchTerm },
+      ...(type !== undefined && { type }),
+    };
+    if (beforeId !== undefined) {
+      if (!mongoose.isObjectIdOrHexString(beforeId)) throw new Error(`Invalid artifact cursor id: ${beforeId}`);
+      conditions._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
+    }
+
+    const result = await this.model
+      .find(conditions)
+      .select(
+        'id type title description version versionTag status tags sessionId projectId visibility createdAt updatedAt'
+      )
+      .sort({ _id: -1 })
+      .limit(limit + 1)
+      .lean()
+      .exec();
+
+    const hasMore = result.length > limit;
+    return { data: result.slice(0, limit), hasMore };
+  }
+
   // Implement artifact-specific methods
   async findByType(type: string, filter: Record<string, unknown> = {}) {
     return this.find({ ...filter, type, deletedAt: null });
