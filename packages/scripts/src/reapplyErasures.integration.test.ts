@@ -6,6 +6,7 @@ import path from 'node:path';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import {
   AdminAuditLogModel,
+  AuthEventModel,
   ErasureRecordModel,
   Organization,
   Session,
@@ -15,12 +16,19 @@ import {
 } from '@bike4mind/database';
 import {
   createMongoReplSet,
+  createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
   settleAutoIndexBuilds,
 } from '../../database/src/__test__/createMongoServer';
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret' } }));
-const effects = vi.hoisted(() => ({ storage: vi.fn(), cancel: vi.fn(), billingEvent: vi.fn(), email: vi.fn() }));
+const effects = vi.hoisted(() => ({
+  storage: vi.fn(),
+  cancel: vi.fn(),
+  billingEvent: vi.fn(),
+  email: vi.fn(),
+  artifacts: vi.fn(),
+}));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ delete: effects.storage, deletePermanently: effects.storage }),
   getPublishedArtifactsStorage: () => ({ deletePrefix: effects.storage, deletePrefixPermanently: effects.storage }),
@@ -32,7 +40,9 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   }),
   getAppFilesStorage: () => ({ delete: effects.storage, deletePermanently: effects.storage }),
 }));
-vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({ purgeUserPublishedArtifacts: vi.fn() }));
+vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+  purgeUserPublishedArtifacts: effects.artifacts,
+}));
 vi.mock('@bike4mind/server-utils/skillMarket/market', () => ({ withdrawAuthorListings: vi.fn() }));
 vi.mock('@server/auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: vi.fn() }));
 vi.mock('@server/analytics/signupEvents', () => ({ emitBillingEvent: effects.billingEvent }));
@@ -46,7 +56,17 @@ vi.mock('@server/billing/cancelAccountSubscriptions', () => ({
 
 import { hardDeleteUser } from '@server/services/hardDeleteUser';
 import { erasureIdHash } from '@bike4mind/server-utils/privacy/erasureHash';
-import { backfillErasureRecords, exportErasureRecords, parseErasureExport, reapplyErasures } from './reapplyErasures';
+import {
+  backfillErasureRecords,
+  dbNameFromUri,
+  describeMongoTarget,
+  exportErasureRecords,
+  parseErasureExport,
+  parseRecordsSource,
+  reapplyErasures,
+  reapplyExitCode,
+  recordsFromCluster,
+} from './reapplyErasures';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -81,14 +101,16 @@ async function seedAccount() {
       name: 'chat',
       organizationId: String(orgId),
     });
+    await raw(AuthEventModel).insertOne({ userId: String(userId), createdAt: new Date() });
   };
   await insertRows();
-  return { id: String(userId), insertRows };
+  return { id: String(userId), orgId: String(orgId), insertRows };
 }
 const counts = async () => ({
   users: await raw(User).countDocuments(),
   orgs: await raw(Organization).countDocuments(),
   sessions: await raw(Session).countDocuments(),
+  authEvents: await raw(AuthEventModel).countDocuments(),
 });
 // The self-serve path removes content and the personal org around the shared delete (completeAccountDeletion).
 const erase = async (id: string) => {
@@ -96,6 +118,12 @@ const erase = async (id: string) => {
   await raw(Organization).deleteMany({ userId: id });
   await raw(Session).deleteMany({ userId: id });
 };
+const keep = async (bystander: { id: string; orgId: string }) => ({
+  user: await raw(User).countDocuments({ _id: new mongoose.Types.ObjectId(bystander.id) }),
+  org: await raw(Organization).countDocuments({ _id: new mongoose.Types.ObjectId(bystander.orgId) }),
+  session: await raw(Session).countDocuments({ userId: bystander.id }),
+  authEvents: await raw(AuthEventModel).countDocuments({ userId: bystander.id }),
+});
 const allRecords = async (): Promise<IErasureRecord[]> => {
   const out: IErasureRecord[] = [];
   for await (const r of erasureRecordRepository.cursor()) out.push(r);
@@ -115,19 +143,19 @@ describe('reapplyErasures', () => {
     const records = await allRecords();
     expect(records).toHaveLength(1);
     await restore(erased.insertRows);
-    expect(await counts()).toEqual({ users: 2, orgs: 2, sessions: 2 });
+    expect(await counts()).toEqual({ users: 2, orgs: 2, sessions: 2, authEvents: 2 });
 
     const first = await reapplyErasures({ records, dryRun: false });
     expect(first).toMatchObject({ scanned: 2, matched: 1, reapplied: 1, failed: 0, unmatchableKey: 0 });
-    expect(await counts()).toEqual({ users: 1, orgs: 1, sessions: 1 });
-    expect(await raw(User).countDocuments({ _id: new mongoose.Types.ObjectId(bystander.id) })).toBe(1);
+    expect(await counts()).toEqual({ users: 1, orgs: 1, sessions: 1, authEvents: 1 });
+    expect(await keep(bystander)).toEqual({ user: 1, org: 1, session: 1, authEvents: 1 });
     expect(effects.cancel).not.toHaveBeenCalled();
     expect(effects.billingEvent).not.toHaveBeenCalled();
     expect(effects.email).not.toHaveBeenCalled();
 
     const second = await reapplyErasures({ records, dryRun: false });
     expect(second).toMatchObject({ scanned: 1, matched: 0, reapplied: 0 });
-    expect(await counts()).toEqual({ users: 1, orgs: 1, sessions: 1 });
+    expect(await counts()).toEqual({ users: 1, orgs: 1, sessions: 1, authEvents: 1 });
   });
 
   it('changes nothing in a dry run and prints no raw id', async () => {
@@ -138,7 +166,7 @@ describe('reapplyErasures', () => {
     const lines: string[] = [];
     const result = await reapplyErasures({ records, dryRun: true, log: m => lines.push(m) });
     expect(result).toMatchObject({ matched: 1, reapplied: 0 });
-    expect(await counts()).toEqual({ users: 1, orgs: 1, sessions: 1 });
+    expect(await counts()).toEqual({ users: 1, orgs: 1, sessions: 1, authEvents: 1 });
     expect(lines.join('\n')).toContain('would re-erase');
     expect(lines.join('\n')).not.toContain(erased.id);
   });
@@ -150,7 +178,7 @@ describe('reapplyErasures', () => {
     await restore(erased.insertRows);
     const result = await reapplyErasures({ records: [{ ...record, keyId: 'other-key' }], dryRun: false });
     expect(result).toMatchObject({ matched: 0, unmatchableKey: 1 });
-    expect(await counts()).toEqual({ users: 1, orgs: 1, sessions: 1 });
+    expect(await counts()).toEqual({ users: 1, orgs: 1, sessions: 1, authEvents: 1 });
   });
 
   it('works from records exported before the restore, after the record collection was lost', async () => {
@@ -164,11 +192,151 @@ describe('reapplyErasures', () => {
     await restore(erased.insertRows);
     const result = await reapplyErasures({ records: parseErasureExport(await readFile(file, 'utf8')), dryRun: false });
     expect(result).toMatchObject({ matched: 1, reapplied: 1 });
-    expect(await counts()).toEqual({ users: 0, orgs: 0, sessions: 0 });
+    expect(await counts()).toEqual({ users: 0, orgs: 0, sessions: 0, authEvents: 0 });
+    expect(await ErasureRecordModel.countDocuments({ idHash: erasureIdHash(erased.id) })).toBe(1);
+    const again = path.join(path.dirname(file), 'again.json');
+    expect(await exportErasureRecords(erasureRecordRepository.cursor(), again)).toBe(1);
+  });
+
+  it('copies the external records into the target on execute (not on a dry run), so a later export has them', async () => {
+    const erased = await seedAccount();
+    const other = await seedAccount();
+    await erase(erased.id);
+    await erase(other.id);
+    const records = await allRecords();
+    expect(records).toHaveLength(2);
+    await ErasureRecordModel.deleteMany({});
+    await restore(erased.insertRows); // only one of the two accounts is back; the other's record must still be kept
+
+    await reapplyErasures({ records, dryRun: true });
+    expect(await ErasureRecordModel.countDocuments()).toBe(0);
+
+    const result = await reapplyErasures({ records, dryRun: false });
+    expect(result).toMatchObject({ matched: 1, reapplied: 1, recordsLoaded: 2, imported: 2 });
+    const file = path.join(await mkdtemp(path.join(tmpdir(), 'erasure-')), 'next.json');
+    await exportErasureRecords(erasureRecordRepository.cursor(), file);
+    const hashes = parseErasureExport(await readFile(file, 'utf8')).map(r => r.idHash);
+    expect(hashes.sort()).toEqual(records.map(r => r.idHash).sort());
+  });
+
+  it('reads records over a second connection to another cluster and re-erases the right account', async () => {
+    const erased = await seedAccount();
+    const bystander = await seedAccount();
+    await erase(erased.id);
+    const records = await allRecords();
+    await ErasureRecordModel.deleteMany({});
+    await restore(erased.insertRows);
+
+    const oldCluster = await createMongoServer();
+    try {
+      const uri = oldCluster.getUri();
+      const conn = await mongoose.createConnection(uri, { dbName: 'oldstage' }).asPromise();
+      await conn.collection(ErasureRecordModel.collection.name).insertMany(records.map(r => ({ ...r })));
+      await conn.close();
+
+      const result = await reapplyErasures({ records: recordsFromCluster(uri, 'oldstage'), dryRun: false });
+      expect(result).toMatchObject({ recordsLoaded: 1, matched: 1, reapplied: 1, failed: 0 });
+      expect(await raw(User).countDocuments({ _id: new mongoose.Types.ObjectId(erased.id) })).toBe(0);
+      expect(await keep(bystander)).toEqual({ user: 1, org: 1, session: 1, authEvents: 1 });
+      expect(await ErasureRecordModel.countDocuments({ idHash: erasureIdHash(erased.id) })).toBe(1);
+      // Wrong database: nothing is read, and the exit code says so.
+      const empty = await reapplyErasures({ records: recordsFromCluster(uri, 'test'), dryRun: true });
+      expect(empty.recordsLoaded).toBe(0);
+      expect(reapplyExitCode(empty)).toBe(1);
+      expect(reapplyExitCode(empty, { allowEmpty: true })).toBe(0);
+    } finally {
+      await oldCluster.stop();
+    }
+  });
+
+  it('matches an account erased through an upper-case id', async () => {
+    const erased = await seedAccount();
+    await hardDeleteUser(erased.id.toUpperCase(), { deletedBy: 'admin', initiatedBy: 'admin', logger }, users =>
+      users.delete(erased.id.toUpperCase())
+    );
+    const records = await allRecords();
+    expect(records).toHaveLength(1);
+    await raw(Organization).deleteMany({ userId: erased.id }); // the admin path leaves content behind
+    await raw(Session).deleteMany({ userId: erased.id });
+    await restore(erased.insertRows);
+    const result = await reapplyErasures({ records, dryRun: false });
+    expect(result).toMatchObject({ matched: 1, reapplied: 1 });
+  });
+
+  it('counts a failed purge step as failed, and prints no raw id for it', async () => {
+    const erased = await seedAccount();
+    await erase(erased.id);
+    const records = await allRecords();
+    await restore(erased.insertRows);
+    effects.artifacts.mockRejectedValueOnce(new Error(`cdn down for ${erased.id}`));
+    const lines: string[] = [];
+    const result = await reapplyErasures({ records, dryRun: false, log: m => lines.push(m) });
+    expect(result).toMatchObject({ matched: 1, reapplied: 0, failed: 1 });
+    expect(reapplyExitCode(result)).toBe(1);
+    const out = lines.join('\n');
+    expect(out).toContain('FAILED');
+    expect(out).toContain('cdn down');
+    expect(out).not.toContain(erased.id);
+  });
+
+  it('reports a failure thrown by the re-erasure itself with the id redacted', async () => {
+    const erased = await seedAccount();
+    await erase(erased.id);
+    const records = await allRecords();
+    await restore(erased.insertRows);
+    const spy = vi.spyOn(Organization, 'deleteMany').mockRejectedValueOnce(new Error(`boom ${erased.id}`));
+    const lines: string[] = [];
+    try {
+      const result = await reapplyErasures({ records, dryRun: false, log: m => lines.push(m) });
+      expect(result).toMatchObject({ matched: 1, reapplied: 0, failed: 1 });
+      expect(lines.join('\n')).toContain('FAILED');
+      expect(lines.join('\n')).not.toContain(erased.id);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('lists a non-personal organisation left ownerless, by org id', async () => {
+    const erased = await seedAccount();
+    await erase(erased.id);
+    const records = await allRecords();
+    await restore(erased.insertRows);
+    const team = new mongoose.Types.ObjectId();
+    await raw(Organization).insertOne({ _id: team, name: 'Team', userId: erased.id, personal: false, deletedAt: null });
+    const result = await reapplyErasures({ records, dryRun: false });
+    expect(result.ownerlessOrganizationIds).toEqual([String(team)]);
   });
 
   it('rejects a malformed export', () => {
     expect(() => parseErasureExport(JSON.stringify([{ idHash: 'x' }]))).toThrow();
+  });
+});
+
+describe('records source flags', () => {
+  it('requires exactly one source and rejects empty, flag-shaped and conflicting values', () => {
+    expect(() => parseRecordsSource([])).toThrow(/exactly one/);
+    expect(() => parseRecordsSource(['--records-uri', ''])).toThrow(/needs a value/);
+    expect(() => parseRecordsSource(['--records-uri'])).toThrow(/needs a value/);
+    expect(() => parseRecordsSource(['--records-file', '--execute'])).toThrow(/needs a value/);
+    expect(() => parseRecordsSource(['--records-uri', 'mongodb://h/db', '--records-file', 'f.json'])).toThrow(
+      /exactly one/
+    );
+    expect(() => parseRecordsSource(['--from-target', '--records-file', 'f.json'])).toThrow(/exactly one/);
+  });
+
+  it('needs a database name on the records uri, from the path or --records-db', () => {
+    const atlas = 'mongodb+srv://u:p@cluster0.example.mongodb.net/?retryWrites=true';
+    expect(() => parseRecordsSource(['--records-uri', atlas])).toThrow(/no database/);
+    expect(parseRecordsSource(['--records-uri', atlas, '--records-db', 'prod'])).toMatchObject({ dbName: 'prod' });
+    expect(parseRecordsSource(['--records-uri', 'mongodb://h1,h2/stage?x=1'])).toMatchObject({ dbName: 'stage' });
+    expect(parseRecordsSource(['--records-file', 'f.json'])).toEqual({ kind: 'file', file: 'f.json' });
+    expect(parseRecordsSource(['--from-target'])).toEqual({ kind: 'target' });
+    expect(dbNameFromUri('mongodb://h/')).toBeUndefined();
+  });
+
+  it('prints the target without credentials', () => {
+    expect(describeMongoTarget('mongodb+srv://user:secret@c0.example.net/prod?x=1')).toBe('c0.example.net/prod');
+    expect(describeMongoTarget('mongodb://127.0.0.1:27017')).toBe('127.0.0.1:27017/(no database)');
   });
 });
 

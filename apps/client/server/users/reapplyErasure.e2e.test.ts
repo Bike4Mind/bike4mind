@@ -15,7 +15,7 @@ const effects = vi.hoisted(() => ({
   cancel: vi.fn(),
   billingEvent: vi.fn(),
   email: vi.fn(),
-  revoke: vi.fn(),
+  purge: vi.fn(),
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ delete: effects.storage, deletePermanently: effects.storage }),
@@ -33,10 +33,12 @@ vi.mock('@bike4mind/server-utils/skillMarket/market', () => ({ withdrawAuthorLis
 vi.mock('@server/auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: vi.fn() }));
 vi.mock('@server/analytics/signupEvents', () => ({ emitBillingEvent: effects.billingEvent }));
 vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: effects.email }));
-vi.mock('@server/services/purgeDeletedUserData', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/services/purgeDeletedUserData')>()),
-  revokeIntegrationGrants: effects.revoke,
-}));
+// Spy, not replace: the revokes are called from inside this module, so only the arguments can show them skipped.
+vi.mock('@server/services/purgeDeletedUserData', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/services/purgeDeletedUserData')>();
+  effects.purge.mockImplementation(actual.purgeDeletedUserData);
+  return { ...actual, purgeDeletedUserData: effects.purge };
+});
 vi.mock('@server/billing/cancelAccountSubscriptions', () => ({
   cancelAccountSubscriptions: effects.cancel,
   readAccountSubscriptionCustomerIds: vi.fn(async () => []),
@@ -85,6 +87,13 @@ async function seedAccount() {
   await insertRows();
   return { id: String(userId), insertRows };
 }
+/** The restore overwrites the erased account's rows with their pre-erasure state. */
+const restoreAccount = async (id: string, insertRows: () => Promise<void>) => {
+  await raw(User).deleteMany({ _id: new mongoose.Types.ObjectId(id) });
+  await raw(Organization).deleteMany({ userId: id });
+  await raw(Session).deleteMany({ userId: id });
+  await insertRows();
+};
 const rowCounts = async () => ({
   users: await raw(User).countDocuments(),
   orgs: await raw(Organization).countDocuments(),
@@ -94,28 +103,48 @@ const rowCounts = async () => ({
 describe('reapplyErasure after a simulated restore', () => {
   it.each(['self', 'admin'] as const)('re-erases a %s-erased account and sends nothing', async initiatedBy => {
     const { id, insertRows } = await seedAccount();
+    const bystander = await seedAccount();
     await hardDeleteUser(id, { deletedBy: id, initiatedBy, logger }, users => users.delete(id));
     const record = await ErasureRecordModel.findOne({ idHash: erasureIdHash(id) }).lean();
     expect(record?.initiatedBy).toBe(initiatedBy);
     expect(JSON.stringify(record)).not.toContain(id);
 
     // The restore: the user row (and, for a self erasure that removed them, its content) come back.
-    await raw(User).deleteMany({});
-    await raw(Organization).deleteMany({});
-    await raw(Session).deleteMany({});
-    await insertRows();
+    await ErasureRecordModel.deleteMany({}); // the restored database has no record of the erasure
+    await restoreAccount(id, insertRows);
     vi.clearAllMocks();
 
-    await reapplyErasure(id, { initiatedBy: record!.initiatedBy, logger });
+    const result = await reapplyErasure(id, { record: record!, logger });
 
+    expect(result.ownedOrganizationIds).toEqual([]);
+    // The repeat leaves the restored database holding the record again.
+    expect(await ErasureRecordModel.countDocuments({ idHash: record!.idHash })).toBe(1);
     const counts = await rowCounts();
-    expect(counts.users).toBe(0);
-    // A self erasure removed content and the personal org; an admin one never did, so neither does the repeat.
-    expect(counts.orgs).toBe(initiatedBy === 'self' ? 0 : 1);
-    expect(counts.sessions).toBe(initiatedBy === 'self' ? 0 : 1);
+    // The bystander keeps every row. A self erasure removed content and the personal org; an admin one
+    // never did, so neither does the repeat.
+    const mine = initiatedBy === 'self' ? 0 : 1;
+    expect(counts).toEqual({ users: 1, orgs: 1 + mine, sessions: 1 + mine });
+    expect(await raw(User).countDocuments({ _id: new mongoose.Types.ObjectId(id) })).toBe(0);
+    expect(await raw(User).countDocuments({ _id: new mongoose.Types.ObjectId(bystander.id) })).toBe(1);
+    expect(await raw(Organization).countDocuments({ userId: id })).toBe(mine);
+    expect(await raw(Organization).countDocuments({ userId: bystander.id })).toBe(1);
+    expect(await raw(Session).countDocuments({ userId: bystander.id })).toBe(1);
     expect(effects.cancel).not.toHaveBeenCalled();
     expect(effects.billingEvent).not.toHaveBeenCalled();
     expect(effects.email).not.toHaveBeenCalled();
-    expect(effects.revoke).not.toHaveBeenCalled();
+    expect(effects.purge).toHaveBeenCalledTimes(1);
+    expect(effects.purge).toHaveBeenCalledWith(id, expect.objectContaining({ integrationGrants: null }));
+  });
+
+  it('reports a non-personal organisation the restored account still owned, by org id', async () => {
+    const { id, insertRows } = await seedAccount();
+    await hardDeleteUser(id, { deletedBy: id, initiatedBy: 'admin', logger }, users => users.delete(id));
+    const record = (await ErasureRecordModel.findOne({ idHash: erasureIdHash(id) }).lean())!;
+    await restoreAccount(id, insertRows);
+    const teamOrg = new mongoose.Types.ObjectId();
+    await raw(Organization).insertOne({ _id: teamOrg, name: 'Team', userId: id, personal: false, deletedAt: null });
+
+    const result = await reapplyErasure(id, { record, logger });
+    expect(result.ownedOrganizationIds).toEqual([String(teamOrg)]);
   });
 });

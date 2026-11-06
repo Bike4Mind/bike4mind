@@ -9,13 +9,15 @@ import { pseudonymizeUserId } from '../analytics/pseudonymize';
 export const deriveErasureKey = (secret: string): Buffer =>
   createHmac('sha256', secret).update('erasure-record/v1').digest();
 
+// Lower-cased: ObjectId hex is case-insensitive (an admin route may pass upper case), so the record and
+// the script must hash one canonical form.
 export const erasureIdHashWith = (key: Buffer, userId: string): string =>
-  createHmac('sha256', key).update(`user:${userId}`).digest('hex');
+  createHmac('sha256', key).update(`user:${userId.toLowerCase()}`).digest('hex');
 
 export const erasureKeyIdWith = (key: Buffer): string =>
   createHmac('sha256', key).update('key-id').digest('hex').slice(0, 16);
 
-// Memoized lazily: Config is not read at import.
+// Config is built eagerly at import (utils/config); only the key derivation is deferred and memoized.
 let cachedKey: Buffer | undefined;
 const erasureKey = () => (cachedKey ??= deriveErasureKey(Config.JWT_SECRET));
 

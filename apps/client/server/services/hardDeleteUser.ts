@@ -72,10 +72,11 @@ async function emitAccountDeleted(account: IUserDocument | null, initiatedBy: Ha
  * `commitDelete` runs the caller's own delete (its authorization and notifications) with a users
  * repository whose `delete` captures integration grants and billing references, then deletes the row
  * in a transaction with the context hooks, writing the hash-only ErasureRecord in that same
- * transaction (server/users/reapplyErasure.ts repeats the erasure from it after a restore). Admin subscription cancellation precedes the delete; a
- * cancellable self-serve purge defers cancellation until its guarded delete commits. The purge and the
- * account_deleted event run in a `finally`: a throw after the commit (a failed notification) must not
- * skip them, because a retry would find no row and nothing would run them again.
+ * transaction (server/users/reapplyErasure.ts repeats the erasure from it after a restore). Admin
+ * subscription cancellation precedes the delete; a cancellable self-serve purge defers cancellation
+ * until its guarded delete commits. The purge and the account_deleted event run in a `finally`: a
+ * throw after the commit (a failed notification) must not skip them, because a retry would find no
+ * row and nothing would run them again.
  */
 export async function hardDeleteUser<T>(
   userId: string,

@@ -1,7 +1,13 @@
 import { writeFile } from 'node:fs/promises';
 import mongoose from 'mongoose';
 import { z } from 'zod';
-import { AdminAuditLogModel, User, erasureRecordRepository, type IErasureRecord } from '@bike4mind/database';
+import {
+  AdminAuditLogModel,
+  ErasureRecordModel,
+  User,
+  erasureRecordRepository,
+  type IErasureRecord,
+} from '@bike4mind/database';
 import { erasureIdHash, erasureKeyId, erasurePseudonym } from '@bike4mind/server-utils/privacy/erasureHash';
 import { reapplyErasure } from '@server/users/reapplyErasure';
 
@@ -19,6 +25,57 @@ export const erasureRecordSchema = z.object({
 /** An export is the trust boundary: validate it rather than trusting the file. */
 export const parseErasureExport = (json: string): IErasureRecord[] =>
   z.array(erasureRecordSchema).parse(JSON.parse(json));
+
+/** Where the erasure records come from; target-database records are never the default. */
+export type RecordsSource =
+  { kind: 'uri'; uri: string; dbName?: string } | { kind: 'file'; file: string } | { kind: 'target' };
+
+const flagValue = (argv: string[], name: string): string | undefined => {
+  const i = argv.indexOf(name);
+  if (i === -1) return undefined;
+  const value = argv[i + 1];
+  if (!value || value.startsWith('--')) throw new Error(`${name} needs a value`);
+  return value;
+};
+
+/** Database named in a mongo uri path (`mongodb://host/db?x=1`), if any. */
+export const dbNameFromUri = (uri: string): string | undefined =>
+  /^mongodb(?:\+srv)?:\/\/[^/?]+\/([^?]+)/.exec(uri)?.[1];
+
+/**
+ * Pick exactly one records source from the command line. A typo or an empty `$OLD_URI` must fail
+ * loudly: a source that quietly yields nothing reads as "the restore is clean".
+ */
+export function parseRecordsSource(argv: string[]): RecordsSource {
+  const uri = flagValue(argv, '--records-uri');
+  const file = flagValue(argv, '--records-file');
+  const target = argv.includes('--from-target');
+  if ([uri, file, target || undefined].filter(Boolean).length !== 1) {
+    throw new Error('pass exactly one of --records-uri, --records-file or --from-target');
+  }
+  if (file) return { kind: 'file', file };
+  if (target) return { kind: 'target' };
+  const dbName = flagValue(argv, '--records-db') ?? dbNameFromUri(uri as string);
+  if (!dbName) throw new Error('the records uri names no database: add it to the uri path or pass --records-db');
+  return { kind: 'uri', uri: uri as string, dbName };
+}
+
+/** `host/database` of a mongo uri, credentials dropped: safe to print. */
+export const describeMongoTarget = (uri: string): string => {
+  const m = /^mongodb(?:\+srv)?:\/\/(?:[^@/]*@)?([^/?]+)(?:\/([^?]*))?/.exec(uri);
+  return m ? `${m[1]}/${m[2] || '(no database)'}` : '(unparseable uri)';
+};
+
+/** Streams the records collection of another cluster (the pre-restore one), validating each row. */
+export async function* recordsFromCluster(uri: string, dbName: string): AsyncGenerator<IErasureRecord> {
+  const conn = await mongoose.createConnection(uri, { dbName }).asPromise();
+  try {
+    const cursor = conn.collection(ErasureRecordModel.collection.name).find({}, { projection: { _id: 0 } });
+    for await (const doc of cursor) yield erasureRecordSchema.parse(doc);
+  } finally {
+    await conn.close();
+  }
+}
 
 export async function exportErasureRecords(records: AsyncIterable<IErasureRecord>, file: string): Promise<number> {
   const all: IErasureRecord[] = [];
@@ -45,15 +102,27 @@ export interface ReapplyErasuresResult {
   failed: number;
   /** Records hashed under a different key than the current one (a rotated JWT_SECRET): cannot be matched. */
   unmatchableKey: number;
+  /** Records read from the source; 0 almost always means a wrong source, not a clean restore. */
+  recordsLoaded: number;
+  /** Records newly written into the target database so a later export or restore still has them. */
+  imported: number;
+  /** Non-personal organisations (by org id) whose owner was re-erased: they need a new owner. */
+  ownerlessOrganizationIds: string[];
 }
+
+/** Non-zero when the run needs a human: a failed or partial re-erasure, an unmatchable key, or an empty source. */
+export const reapplyExitCode = (r: ReapplyErasuresResult, { allowEmpty = false } = {}): number =>
+  r.failed > 0 || r.unmatchableKey > 0 || (r.recordsLoaded === 0 && !allowEmpty) ? 1 : 0;
 
 /** Label for output: the pseudonym when one was recorded, else a hash prefix. Never a raw id. */
 const label = (r: IErasureRecord) => r.pseudonym?.slice(0, 12) ?? `hash:${r.idHash.slice(0, 12)}`;
 
 /**
  * Re-erase every account in the target database that an erasure record says was erased. Pages users
- * by _id, hashes each id and looks it up among the records. Idempotent: once an account is gone it no
- * longer matches, so a re-run does nothing. A dry run only counts and labels.
+ * by _id, hashes each id and looks it up among the records. Once an account is gone it no longer
+ * matches, so a re-run does nothing (it does not retry a partial purge: those users are reported as
+ * `failed` and need a manual follow-up). A dry run only counts and labels. A real run first copies
+ * every usable record into the target database, so the erasures stay repeatable after the next restore.
  */
 export async function reapplyErasures({
   records,
@@ -63,11 +132,22 @@ export async function reapplyErasures({
 }: ReapplyErasuresOptions): Promise<ReapplyErasuresResult> {
   const currentKeyId = erasureKeyId();
   const byHash = new Map<string, IErasureRecord>();
-  const result: ReapplyErasuresResult = { scanned: 0, matched: 0, reapplied: 0, failed: 0, unmatchableKey: 0 };
+  const result: ReapplyErasuresResult = {
+    scanned: 0,
+    matched: 0,
+    reapplied: 0,
+    failed: 0,
+    unmatchableKey: 0,
+    recordsLoaded: 0,
+    imported: 0,
+    ownerlessOrganizationIds: [],
+  };
   for await (const record of records) {
+    result.recordsLoaded += 1;
     if (record.keyId === currentKeyId) byHash.set(record.idHash, record);
     else result.unmatchableKey += 1;
   }
+  if (!dryRun) result.imported = await erasureRecordRepository.importMany([...byHash.values()]);
   if (result.unmatchableKey) {
     log(`WARNING: ${result.unmatchableKey} record(s) were hashed under another key and cannot be matched`);
   }
@@ -91,16 +171,33 @@ export async function reapplyErasures({
         log(`would re-erase ${label(record)} (erased ${record.erasedAt.toISOString()}, ${record.initiatedBy})`);
         continue;
       }
+      // Helper messages name the raw id; print the label instead.
+      const redact = (message: string) => message.split(userId).join(label(record));
+      let loggedErrors = 0;
       try {
-        await reapplyErasure(userId, {
-          initiatedBy: record.initiatedBy,
-          logger: { info: noop, warn: log, error: log },
+        const { ownedOrganizationIds } = await reapplyErasure(userId, {
+          record,
+          logger: {
+            info: noop,
+            warn: (message: string) => log(redact(message)),
+            error: (message: string) => {
+              loggedErrors += 1;
+              log(redact(message));
+            },
+          },
         });
-        result.reapplied += 1;
-        log(`re-erased ${label(record)}`);
+        result.ownerlessOrganizationIds.push(...ownedOrganizationIds);
+        if (loggedErrors > 0) {
+          // The row is gone, so a re-run cannot finish the purge: it needs a manual follow-up.
+          result.failed += 1;
+          log(`FAILED ${label(record)}: account row deleted, ${loggedErrors} purge step(s) failed (see above)`);
+        } else {
+          result.reapplied += 1;
+          log(`re-erased ${label(record)}`);
+        }
       } catch (error) {
         result.failed += 1;
-        log(`FAILED ${label(record)}: ${error instanceof Error ? error.name : 'error'}`);
+        log(`FAILED ${label(record)}: ${redact(error instanceof Error ? error.message : String(error))}`);
       }
     }
   }
