@@ -1,4 +1,4 @@
-import { lstat, readdir, readlink, stat } from 'node:fs/promises';
+import { lstat, readdir, readFile, readlink, realpath, stat } from 'node:fs/promises';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { basename, dirname, isAbsolute, join, parse, posix, sep, win32 } from 'node:path';
 import type { Node } from 'web-tree-sitter';
@@ -17,6 +17,7 @@ import {
   PathAccessDenied,
   guardForm,
   guardFormWithin,
+  isWithin,
   onAnotherComputer,
   operandPlaces,
   operandTargets,
@@ -25,7 +26,15 @@ import {
   resolveWithinRootsPhysically,
   type OperandReader,
 } from './paths';
-import { findLinks, gitToplevel, indexHoldsLink, inPlaceWrites, type GitScript } from './shellWrites';
+import {
+  diffListed,
+  findLinks,
+  findSettings,
+  gitToplevel,
+  indexListed,
+  inPlaceWrites,
+  type GitScript,
+} from './shellWrites';
 import { wslLocation, wslUncPath, wslUserEnvironment } from '../../wsl/wslPath';
 
 export interface ShellCommand {
@@ -1127,13 +1136,19 @@ const mayNameSettings = (pattern: string): boolean =>
 /**
  * What a find expression does to the tree it walks: `write` for `-delete`, `rm {}` or an `-fprint` file, unless
  * the delete follows only ANDed `-name`/`-type` tests none of which can match a settings name. A program it runs
- * (`-exec`, `-ok`, and the `dir` forms) is `untrackable` unless it only reads and its other operands are static,
- * which are returned in `reads`.
+ * (`-exec`, `-ok`, and the `dir` forms) is `untrackable` unless its other operands are static, which are returned
+ * in `reads`, and it only reads or is an `-exec` that is no shell; such a `writer` writes what find prints.
  */
-function findActions(args: readonly string[]): { reach: Reach; untrackable: boolean; reads: string[] } {
+function findActions(args: readonly string[]): {
+  reach: Reach;
+  untrackable: boolean;
+  writer: boolean;
+  reads: string[];
+} {
   const words = args.map(wordValue);
   let write = false;
   let untrackable = false;
+  let writer = false;
   const reads: string[] = [];
   let narrowed = true;
   let named = false;
@@ -1144,17 +1159,16 @@ function findActions(args: readonly string[]): { reach: Reach; untrackable: bool
     const word = words[at] as string;
     if (/^-(exec|execdir|ok|okdir)$/.test(word)) {
       const end = words.findIndex((value, index) => index > at && (value === ';' || value === '+'));
-      if (end === -1) return { reach: 'write', untrackable: true, reads };
+      if (end === -1) return { reach: 'write', untrackable: true, writer, reads };
       const inner = args.slice(at + 1, end);
       const values = words.slice(at + 1, end);
       const operands = values.slice(1).filter(value => !value.startsWith('-'));
+      const plain = !inner.some(isDynamic) && values.every(value => value === '{}' || !value.includes('{}'));
+      const reading = onlyReads(inner) && (word.endsWith('dir') ? operands.every(value => value === '{}') : true);
+      const writing = word === '-exec' && !XARGS_SHELLS.has(programName(values[0] ?? ''));
       if (programName(values[0] ?? '') === 'rm' && operands.every(value => value === '{}')) deletes();
-      else if (
-        onlyReads(inner) &&
-        !inner.some(isDynamic) &&
-        values.every(value => value === '{}' || !value.includes('{}')) &&
-        (word.endsWith('dir') ? operands.every(value => value === '{}') : true)
-      ) {
+      else if (plain && (reading || writing)) {
+        writer ||= !reading;
         reads.push(
           ...inner
             .slice(1)
@@ -1179,7 +1193,22 @@ function findActions(args: readonly string[]): { reach: Reach; untrackable: bool
       narrowed = false;
     }
   }
-  return { reach: write ? 'write' : 'read', untrackable, reads };
+  return { reach: write ? 'write' : 'read', untrackable, writer, reads };
+}
+
+/** A find command's words without the programs it runs (`-exec ... ;` and its kin), as written. */
+function withoutFindRuns(args: readonly string[]): string[] {
+  const words = args.map(wordValue);
+  const kept: string[] = [];
+  for (let at = 0; at < args.length; at++) {
+    if (!/^-(exec|execdir|ok|okdir)$/.test(words[at] as string)) {
+      kept.push(args[at] as string);
+      continue;
+    }
+    const end = words.findIndex((value, index) => index > at && (value === ';' || value === '+'));
+    at = end === -1 ? args.length : end;
+  }
+  return kept;
 }
 
 /** Whether a command that walks a tree follows the links it finds there, not only those it is given. */
@@ -1245,6 +1274,17 @@ async function globLinkMatches(
   dotGlob: boolean,
   stopped: () => boolean
 ): Promise<string[] | null> {
+  const found = await globExpansion(word, cwd, dotGlob, stopped);
+  return found?.filter(match => match.linked).map(match => match.path) ?? null;
+}
+
+/** Each absolute path a glob word expands to, as globLinkMatches reads it, with whether it passes through a link. */
+async function globExpansion(
+  word: OperandWord,
+  cwd: string,
+  dotGlob: boolean,
+  stopped: () => boolean
+): Promise<{ path: string; linked: boolean }[] | null> {
   const components: GlobChar[][] = [[]];
   for (let at = 0; at < word.text.length; at++) {
     const char = word.text[at] as string;
@@ -1283,7 +1323,7 @@ async function globLinkMatches(
     }
     found = next;
   }
-  return found.filter(match => match.linked).map(match => match.path);
+  return found;
 }
 
 /** Links resolved for one path before it counts as unread, as the kernel gives up at 40. */
@@ -2203,11 +2243,65 @@ function stdinRedirected(node: Node): boolean {
  * output is all xargs reads; null otherwise.
  */
 function listerFeeds(node: Node): Listing | null {
+  const producer = pipedFrom(node);
+  return producer ? listsNames(words(producer)) : null;
+}
+
+/** The plain command before `node` in its pipeline, if any. */
+function pipedFrom(node: Node): Node | null {
   const pipeline = node.parent;
   if (pipeline?.type !== 'pipeline') return null;
   const members = pipeline.namedChildren.filter((child): child is Node => child !== null);
   const producer = members[members.findIndex(child => child.id === node.id) - 1];
-  return producer?.type === 'command' ? listsNames(words(producer)) : null;
+  return producer?.type === 'command' ? producer : null;
+}
+
+/** Words a command before xargs prints from its own operands; `ls` when each must name a file to be printed as is. */
+interface StaticFeed {
+  words: string[];
+  ls: boolean;
+}
+
+/**
+ * What the command before `node` prints when it prints only its own words: `echo`, `printf '%s\n'` or a format of
+ * plain words alone, or `ls` of operands (`*` without any). Null for any other producer.
+ */
+function staticFeed(node: Node): StaticFeed | null {
+  const producer = pipedFrom(node);
+  const raw = producer ? words(producer) : [];
+  if (raw.length === 0 || isWrapper(raw[0] as string)) return null;
+  const [program, ...args] = [programName(unquote(raw[0] as string)), ...raw.slice(1)];
+  if (program === 'echo') {
+    const at = args.findIndex(arg => !/^-[neE]+$/.test(unquote(arg)));
+    return { words: at === -1 ? [] : args.slice(at), ls: false };
+  }
+  if (program === 'printf') {
+    const format = unquote(args[0] ?? '');
+    if (/^%s(\\n| )$/.test(format)) return { words: args.slice(1), ls: false };
+    if (args.length !== 1 || !/^([^\\%']|\\n)*$/.test(format)) return null;
+    return {
+      words: format
+        .split(/\\n|\s+/)
+        .filter(word => word !== '')
+        .map(word => `'${word}'`),
+      ls: false,
+    };
+  }
+  if (program === 'ls') {
+    if (args.some(arg => unquote(arg).startsWith('-') && !/^-[1d]+$/.test(unquote(arg)))) return null;
+    const operands = args.filter(arg => !unquote(arg).startsWith('-'));
+    return { words: operands.length > 0 ? operands : ['*'], ls: true };
+  }
+  return null;
+}
+
+/** Whether a leading xargs splits its input at blanks and newlines, as it does without `-0` or `-d`. */
+function xargsSplitsAtBlanks(tokens: readonly string[]): boolean {
+  for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
+    if (programName(unquote(tokens[at])) !== 'xargs') continue;
+    return !givenOptions(tokens, at).some(({ option }) => ['0', 'd', 'null', 'delimiter'].includes(option));
+  }
+  return false;
 }
 
 /**
@@ -2274,10 +2368,11 @@ const LS_FILES_LISTS = /^(-[zcomd]+|--(cached|others|modified|deleted|exclude-st
 function listsNames(raw: readonly string[]): Listing | null {
   if (raw.some(isDynamic) || isWrapper(raw[0] ?? '')) return null;
   const [program, ...args] = raw.map(unquote);
-  const orHere = (folders: string[], links: Listing['links'] = 'walk'): Listing => ({
+  const orHere = (folders: string[], links: Listing['links'], settings: ListedSettings): Listing => ({
     folders: folders.length > 0 ? folders : ['.'],
     tracked: false,
     links,
+    settings,
   });
   if (program === 'find') {
     if (args[0]?.startsWith('-') && !/^-(name|iname|path|ipath|type|maxdepth|mindepth)$/.test(args[0])) return null;
@@ -2289,82 +2384,326 @@ function listsNames(raw: readonly string[]): Listing | null {
     const typed =
       !tests.some(test => ['-o', '-or', ',', '(', ')', '!', '-not'].includes(test)) &&
       tests.some((test, index) => test === '-type' && ['f', 'd'].includes(tests[index + 1] ?? ''));
-    return { ...orHere(end === -1 ? args : args.slice(0, end), typed ? 'none' : 'find'), tests };
+    const listing = orHere(end === -1 ? args : args.slice(0, end), typed ? 'none' : 'find', { kind: 'find' });
+    return { ...listing, tests };
   }
   if (program === 'grep' || program === 'egrep' || program === 'fgrep') return grepLists(args);
-  if (program === 'rg') {
-    const lists = args.some(arg => arg === '-l' || arg === '--files-with-matches' || arg === '--files');
+  if (program === 'rg') return rgLists(args, containedCommand(raw));
+  if (program === 'git' && args[0] === 'diff') return diffLists(args.slice(1));
+  if (program === 'git' && args[0] === 'grep') return gitGrepLists(args.slice(1));
+  if (program === 'git' && args[0] === 'ls-files') {
     const operands: string[] = [];
-    for (let index = 0; index < args.length; index++) {
-      const arg = args[index] as string;
-      if (RG_LIST_VALUES.test(arg)) index++;
-      else if (arg.startsWith('-') && !RG_LISTS.test(arg) && !/^--(regexp|glob|type|type-not)=/.test(arg)) return null;
-      else if (!arg.startsWith('-')) operands.push(arg);
-    }
-    if (!lists || !containedCommand(raw)) return null;
-    const patterned = !args.includes('--files') && !args.some(arg => /^(-[A-Za-z]*e|--regexp)(=|$)/.test(arg));
-    // Without -L rg neither follows nor prints a link it meets while walking.
-    return orHere(patterned ? operands.slice(1) : operands, 'none');
-  }
-  if (program === 'git') {
-    if (args[0] !== 'ls-files') return null;
-    const operands: string[] = [];
+    const pathspecs: string[] = [];
+    let globbed = false;
     // `--others` prints untracked links too, which only a walk finds; otherwise git lists its index.
     const others = args.some(arg => arg === '--others' || /^-[a-z]*o/.test(arg));
+    const flags = args.filter(arg => /^-[a-z]+$/.test(arg)).join('');
+    const changedOnly =
+      (/[md]/.test(flags) || args.includes('--modified') || args.includes('--deleted')) &&
+      !flags.includes('c') &&
+      !args.includes('--cached');
     for (const arg of args.slice(1)) {
       if (arg.startsWith('-')) {
         if (!LS_FILES_LISTS.test(arg)) return null;
-      } else if (/[*?[]/.test(arg)) {
-        // A pathspec glob matches anywhere below the folder it starts from, and magic (`:/`) leaves it.
-        if (arg.startsWith(':') || arg.startsWith('/') || arg.split('/').includes('..')) return null;
-        operands.push('.');
-      } else {
-        if (arg.startsWith(':')) return null;
-        operands.push(arg);
+        continue;
       }
+      if (arg.startsWith(':')) return null;
+      pathspecs.push(arg);
+      if (/[*?[]/.test(arg)) {
+        // A pathspec glob matches anywhere below the folder it starts from.
+        if (arg.startsWith('/') || arg.split('/').includes('..')) return null;
+        globbed = true;
+        operands.push('.');
+      } else operands.push(arg);
     }
-    return others ? orHere(operands) : { ...orHere(operands, 'index'), tracked: true };
+    if (others) return orHere(operands, 'walk', { kind: 'tree' });
+    const listing = orHere(operands, 'index', { kind: 'index', changedOnly, patterns: null });
+    return { ...listing, tracked: true, ...(globbed ? { pathspecs } : {}) };
   }
   return null;
+}
+
+/** Whether a grep pattern is plain text, which a file holds only if it holds that text. */
+const PLAIN_PATTERN = /^[^\\.[\]*^$+?(){}|]*$/;
+
+/** Literal patterns a file must hold one of to be printed; null when any file may be. */
+function patternsOf(texts: readonly (string | undefined)[], fixed: boolean, ignoreCase: boolean): Patterns | null {
+  if (texts.length === 0 || texts.some(text => text === undefined)) return null;
+  const lines = texts.flatMap(text => (text as string).split('\n'));
+  if (!fixed && lines.some(line => !PLAIN_PATTERN.test(line))) return null;
+  return { texts: ignoreCase ? lines.map(line => line.toLowerCase()) : lines, ignoreCase };
+}
+
+/** `rg -l` or `rg --files`, which neither follow nor print a link they meet while walking, as without -L. */
+function rgLists(args: readonly string[], contained: boolean): Listing | null {
+  const lists = args.some(arg => arg === '-l' || arg === '--files-with-matches' || arg === '--files');
+  const operands: string[] = [];
+  const patterns: string[] = [];
+  let clusters = '';
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] as string;
+    if (arg === '-e' || arg === '--regexp') patterns.push(args[index + 1] ?? '');
+    if (arg.startsWith('--regexp=')) patterns.push(arg.slice('--regexp='.length));
+    if (RG_LIST_VALUES.test(arg)) index++;
+    else if (arg.startsWith('-') && !RG_LISTS.test(arg) && !/^--(regexp|glob|type|type-not)=/.test(arg)) return null;
+    else if (!arg.startsWith('-')) operands.push(arg);
+    else if (!arg.startsWith('--')) clusters += arg.slice(1);
+  }
+  if (!lists || !contained) return null;
+  const files = args.includes('--files');
+  const explicit = patterns.length > 0;
+  if (!files && !explicit) patterns.push(operands.shift() ?? '');
+  const hidden = args.includes('--hidden') || (clusters.match(/u/g) ?? []).length >= 2;
+  const fixed = clusters.includes('F') || args.includes('--fixed-strings');
+  const ignoreCase = /[i]/.test(clusters) || args.includes('--ignore-case') || args.includes('--smart-case');
+  return {
+    folders: operands.length > 0 ? operands : ['.'],
+    tracked: false,
+    links: 'none',
+    settings: {
+      kind: 'walked',
+      hidden,
+      patterns: files ? null : patternsOf(patterns, fixed, ignoreCase),
+      include: [],
+      exclude: [],
+      excludeDir: [],
+    },
+  };
 }
 
 /** `grep -r` with `-l` or `-L`, which prints file names and skips the links it meets below its operands. */
 function grepLists(args: readonly string[]): Listing | null {
   let recursive = false;
   let lists = false;
-  let patterned = true;
+  let without = false;
+  let fixed = false;
+  let ignoreCase = false;
+  const patterns: string[] = [];
+  const include: string[] = [];
+  const exclude: string[] = [];
+  const excludeDir: string[] = [];
   const operands: string[] = [];
   for (let index = 0; index < args.length; index++) {
     const arg = args[index] as string;
+    const [, name, value] = /^--(regexp|include|exclude|exclude-dir)=(.*)$/s.exec(arg) ?? [];
     if (arg === '-e' || arg === '--regexp') {
-      patterned = false;
-      index++;
-    } else if (/^--(regexp|include|exclude|exclude-dir)=/.test(arg)) {
-      if (arg.startsWith('--regexp=')) patterned = false;
+      patterns.push(args[++index] ?? '');
+    } else if (name !== undefined && value !== undefined) {
+      if (name === 'regexp') patterns.push(value);
+      else (name === 'include' ? include : name === 'exclude' ? exclude : excludeDir).push(value);
     } else if (/^--(recursive|files-with-matches|files-without-match)$/.test(arg)) {
       recursive ||= arg === '--recursive';
       lists ||= arg !== '--recursive';
-    } else if (/^--(ignore-case|word-regexp|fixed-strings|extended-regexp|null|no-messages)$/.test(arg)) continue;
-    else if (/^-[rilLwFEsIZ]+$/.test(arg)) {
+      without ||= arg === '--files-without-match';
+    } else if (/^--(ignore-case|word-regexp|fixed-strings|extended-regexp|null|no-messages)$/.test(arg)) {
+      ignoreCase ||= arg === '--ignore-case';
+      fixed ||= arg === '--fixed-strings';
+    } else if (/^-[rilLwFEsIZ]+$/.test(arg)) {
       recursive ||= arg.includes('r');
       lists ||= /[lL]/.test(arg);
+      without ||= arg.includes('L');
+      ignoreCase ||= arg.includes('i');
+      fixed ||= arg.includes('F');
     } else if (arg.startsWith('-')) return null;
     else operands.push(arg);
   }
   if (!recursive || !lists) return null;
-  const folders = patterned ? operands.slice(1) : operands;
-  return { folders: folders.length > 0 ? folders : ['.'], tracked: false, links: 'none' };
+  if (patterns.length === 0) patterns.push(operands.shift() ?? '');
+  return {
+    folders: operands.length > 0 ? operands : ['.'],
+    tracked: false,
+    links: 'none',
+    settings: {
+      kind: 'walked',
+      hidden: true,
+      patterns: without ? null : patternsOf(patterns, fixed, ignoreCase),
+      include,
+      exclude,
+      excludeDir,
+    },
+  };
 }
 
 /**
+ * `git diff --name-only [--cached|--staged] [rev [rev]] [-- pathspec...]`, which prints the paths that differ from
+ * the top of the work tree; each `A..B` reads as its two ends.
+ */
+function diffLists(args: readonly string[]): Listing | null {
+  let names = false;
+  let cached = false;
+  let paths = false;
+  const revisions: string[] = [];
+  const pathspecs: string[] = [];
+  for (const arg of args) {
+    if (paths) {
+      if (arg.startsWith(':')) return null;
+      pathspecs.push(arg);
+    } else if (arg === '--') paths = true;
+    else if (arg === '--name-only') names = true;
+    else if (arg === '--cached' || arg === '--staged') cached = true;
+    else if (/^(-z|--no-renames|--diff-filter=[A-Za-z]*)$/.test(arg)) continue;
+    else if (arg.startsWith('-') || arg.includes('...')) return null;
+    else revisions.push(arg);
+  }
+  const targets = revisions.flatMap(revision => revision.split('..').map(end => end || 'HEAD'));
+  if (!names || targets.length > 2) return null;
+  return {
+    folders: ['.'],
+    tracked: true,
+    links: 'diff',
+    pathspecs,
+    settings: {
+      kind: 'diff',
+      targets: targets.length > 0 ? targets : cached ? ['HEAD'] : [],
+      worktree: !cached && targets.length < 2,
+    },
+  };
+}
+
+/** `git grep -l` or `-L` over the index, which prints tracked paths from the folder it runs in. */
+function gitGrepLists(args: readonly string[]): Listing | null {
+  let lists = false;
+  let without = false;
+  let cached = false;
+  let untracked = false;
+  let fixed = false;
+  let ignoreCase = false;
+  let paths = false;
+  const patterns: string[] = [];
+  const operands: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] as string;
+    if (paths) operands.push(arg);
+    else if (arg === '--') paths = true;
+    else if (arg === '-e') patterns.push(args[++index] ?? '');
+    else if (/^(-l|--files-with-matches|--name-only)$/.test(arg)) lists = true;
+    else if (/^(-L|--files-without-match)$/.test(arg)) lists = without = true;
+    else if (arg === '--cached') cached = true;
+    else if (arg === '--untracked' || arg === '--no-index') untracked = true;
+    else if (/^--(ignore-case|word-regexp|fixed-strings|extended-regexp|basic-regexp)$/.test(arg)) {
+      ignoreCase ||= arg === '--ignore-case';
+      fixed ||= arg === '--fixed-strings';
+    } else if (/^-[ilLwFEG]+$/.test(arg)) {
+      lists ||= /[lL]/.test(arg);
+      without ||= arg.includes('L');
+      ignoreCase ||= arg.includes('i');
+      fixed ||= arg.includes('F');
+    } else if (arg.startsWith('-')) return null;
+    else operands.push(arg);
+  }
+  if (patterns.length === 0) patterns.push(operands.shift() ?? '');
+  if (!lists || operands.some(operand => operand.startsWith(':'))) return null;
+  const folders = operands.length > 0 ? operands : ['.'];
+  if (untracked) return { folders, tracked: false, links: 'walk', settings: { kind: 'tree' } };
+  const globbed = operands.some(operand => /[*?[]/.test(operand));
+  if (globbed && operands.some(operand => operand.startsWith('/') || operand.split('/').includes('..'))) return null;
+  return {
+    folders: globbed ? ['.'] : folders,
+    tracked: true,
+    links: 'index',
+    ...(globbed ? { pathspecs: operands } : {}),
+    settings: {
+      kind: 'index',
+      changedOnly: false,
+      patterns: cached || without ? null : patternsOf(patterns, fixed, ignoreCase),
+    },
+  };
+}
+
+/** The settings files in one `.claude` folder; null when it cannot be read. */
+async function settingsIn(folder: string): Promise<string[] | null> {
+  const names = await readdir(folder).catch((error: NodeJS.ErrnoException) =>
+    missing(error) || error.code === 'ENOTDIR' ? [] : null
+  );
+  return names?.filter(name => /^settings/i.test(name)).map(name => under(folder, name)) ?? null;
+}
+
+/**
+ * The settings files a walk from `place` meets that a session reads: in the `.claude` folder at the top of `place`
+ * or of a settings base inside it, or in the `.claude` folder `place` lies in. Null when one cannot be read.
+ */
+async function settingsUnder(place: string, bases: readonly string[]): Promise<string[] | null> {
+  const found: string[] = [];
+  for (const base of [place, ...bases.filter(base => isWithin(place, base))]) {
+    const files = await settingsIn(under(base, '.claude'));
+    if (files === null) return null;
+    found.push(...files);
+  }
+  const parts = place.split('/');
+  const settings = parts.findIndex(part => part.toLowerCase() === '.claude');
+  if (settings !== -1) {
+    const files = await settingsIn(parts.slice(0, settings + 1).join('/') || '/');
+    if (files === null) return null;
+    found.push(...files.filter(file => isWithin(place, file)));
+  }
+  return [...new Set(found)];
+}
+
+/** Whether grep's `--include`, `--exclude` and `--exclude-dir` skip a file at `below` (its path from the walk's start). */
+function grepSkips(settings: Extract<ListedSettings, { kind: 'walked' }>, below: readonly string[]): boolean {
+  const pattern = (glob: string): GlobChar[] =>
+    [...glob].map(char => ({ char, glob: '*?['.includes(char), active: true }));
+  const name = below[below.length - 1] ?? '';
+  const folders = below.slice(0, -1);
+  // An include matches more and an exclude less than grep may, so a file is only skipped when grep surely skips it.
+  if (settings.include.length > 0 && !settings.include.some(glob => globMatches(pattern(glob), name, true)))
+    return true;
+  if (settings.exclude.some(glob => globMatches(pattern(glob), name, false))) return true;
+  return settings.excludeDir.some(glob => folders.some(folder => globMatches(pattern(glob), folder, false)));
+}
+
+/** Bytes of a settings file read for `mayHold`; a larger one may hold anything. */
+const PATTERN_READ_BYTES = 1024 * 1024;
+
+/** Whether the file at `path` may hold one of `patterns`; any file may when there are none to read. */
+async function mayHold(path: string, patterns: Patterns | null): Promise<boolean> {
+  if (patterns === null) return true;
+  const info = await stat(path).catch(() => null);
+  if (!info?.isFile() || info.size > PATTERN_READ_BYTES) return true;
+  const content = await readFile(path, 'utf8').catch(() => null);
+  if (content === null) return true;
+  const text = patterns.ignoreCase ? content.toLowerCase() : content;
+  return patterns.texts.some(pattern => text.includes(pattern));
+}
+
+/** Literal texts a printed file holds at least one of, folded when `ignoreCase`. */
+interface Patterns {
+  texts: string[];
+  ignoreCase: boolean;
+}
+
+/**
+ * Which settings files (`.claude/settings*`) a lister may print, which a program writing what it lists rewrites.
+ * `walked`: those in a `.claude` folder at the top of a folder it walks, or that it starts in, less those under a
+ * dot folder unless `hidden`, those grep's file filters skip, and those holding none of `patterns`. `find` asks the
+ * system find, `index` and `diff` read git, and `tree` rewrites each folder whole.
+ */
+type ListedSettings =
+  | {
+      kind: 'walked';
+      hidden: boolean;
+      patterns: Patterns | null;
+      include: string[];
+      exclude: string[];
+      excludeDir: string[];
+    }
+  | { kind: 'find' }
+  | { kind: 'index'; changedOnly: boolean; patterns: Patterns | null }
+  | { kind: 'diff'; targets: string[]; worktree: boolean }
+  | { kind: 'tree' };
+
+/**
  * The folders a lister walks; `tracked` when what it lists is git's index, links included. `links` says how links
- * it may print are found: a walk here, the system find with the lister's own `tests`, git's index, or none at all.
+ * it may print are found: a walk here, the system find with the lister's own `tests`, git's index, git's diff, or
+ * none at all. `pathspecs` are git's own, when a glob among them makes the folders only where they start.
  */
 interface Listing {
   folders: string[];
   tracked: boolean;
-  links: 'walk' | 'find' | 'index' | 'none';
+  links: 'walk' | 'find' | 'index' | 'diff' | 'none';
   tests?: string[];
+  pathspecs?: string[];
+  settings: ListedSettings;
 }
 
 /** A wrapper can change the executable, and these clients can start sending data just by changing flags. */
@@ -3835,14 +4174,18 @@ export async function scanShell(
      * Whether what a lister prints can be followed: each folder is checked, with every link it may print, as a read,
      * or for a `writing` consumer as a tree it rewrites, the check `sed -i src/*` gets.
      */
-    const listingChecked = async (
-      { folders, tracked, links: found, tests }: Listing,
-      writing: boolean
-    ): Promise<boolean> => {
+    /**
+     * Checks what a lister may print as operands of a program that reads it, or writes it when `writing`: each
+     * folder it lists from, each link it may print, and, for a writer, each settings file it may print.
+     */
+    const listingChecked = async (listing: Listing, writing: boolean): Promise<boolean> => {
+      const { folders, tracked, links: found, tests, settings } = listing;
       if (state.lost || sep !== '/' || wslLocation(state.cwd) !== null) return false;
       const budget = { entries: WALK_ENTRIES };
       const reach: Reach = writing ? 'write' : 'read';
+      const whole = writing && settings.kind === 'tree';
       const starts: string[] = [];
+      const places: string[] = [];
       for (const folder of folders) {
         const words = operandWords(folder, scope());
         if (words === null) return false;
@@ -3858,17 +4201,91 @@ export async function scanShell(
           if (self === null || (self && tracked)) return false;
           const links = self ? [root] : found === 'walk' ? await linksUnder(root, budget, stopped) : [];
           if (links === null || (tracked && links.length > 0)) return false;
-          if (writing) noteWrite(folder, writtenTrees);
-          await checkArgument(word, reach, true);
+          if (whole) noteWrite(folder, writtenTrees);
+          await checkArgument(word, whole ? 'write' : 'read', true);
           for (const link of links) await checkArgument(exactWord(link), reach, true);
           starts.push(word.text);
+          places.push(root);
         }
       }
-      if (found === 'index' && (await indexHoldsLink(state.cwd, starts)) !== false) return false;
+      const printed: string[] = [];
+      if (found === 'index') {
+        const listed = await indexListed(state.cwd, listing.pathspecs ?? starts);
+        if (listed === null) return false;
+        printed.push(...listed.links);
+        if (writing && settings.kind === 'index') {
+          for (const file of listed.settings) {
+            if ((!settings.changedOnly || file.changed) && (await mayHold(file.path, settings.patterns))) {
+              writes.add(file.path);
+            }
+          }
+        }
+      }
+      if (found === 'diff') {
+        const top = await gitToplevel(state.cwd);
+        if (settings.kind !== 'diff' || top === null || top !== (await realpath(state.cwd).catch(() => null))) {
+          return false;
+        }
+        const listed = await diffListed(top, settings.targets, settings.worktree, listing.pathspecs ?? []);
+        if (listed === null) return false;
+        printed.push(...listed.links);
+        if (writing) for (const file of listed.settings) writes.add(file);
+      }
       if (found === 'find') {
-        const links = await findLinks(state.cwd, starts, tests ?? []);
+        const links = await findLinks(state.cwd, starts, tests ?? [], roots);
         if (links === null) return false;
-        for (const link of links) await checkArgument(exactWord(link), reach, true);
+        printed.push(...links);
+      }
+      for (const link of printed) await checkArgument(exactWord(link), reach, true);
+      if (!writing) return true;
+      if (settings.kind === 'find') {
+        const files = await findSettings(state.cwd, starts, tests ?? [], roots);
+        if (files === null) return false;
+        for (const file of files) writes.add(file);
+      }
+      if (settings.kind === 'walked') {
+        for (const place of places) {
+          const files = await settingsUnder(place, settingsBases);
+          if (files === null) return false;
+          for (const file of files) {
+            const below = posix.relative(place, file).split('/');
+            if (!settings.hidden && below.some(part => part.startsWith('.'))) continue;
+            if (grepSkips(settings, below)) continue;
+            if (await mayHold(file, settings.patterns)) writes.add(file);
+          }
+        }
+      }
+      return true;
+    };
+
+    /**
+     * Checks the words a static producer prints as operands of the program xargs hands them to. Each must reach
+     * xargs as one plain word naming a file (no blank, quote, backslash, glob character or leading `-`), so the
+     * program gets exactly the paths checked here.
+     */
+    const fedChecked = async ({ words: fed, ls }: StaticFeed, writing: boolean): Promise<boolean> => {
+      if (state.lost || sep !== '/' || wslLocation(state.cwd) !== null) return false;
+      for (const raw of fed) {
+        const words = operandWords(raw, scope());
+        if (words === null) return false;
+        for (const word of words) {
+          if (word.expandAt !== null) return false;
+          const globbed = readOperand(word, posix.dirname).start !== null;
+          const expanded = globbed ? await globExpansion(word, state.cwd, dotGlob, stopped) : null;
+          if (globbed && (expanded === null || (expanded.length === 0 && !ls))) return false;
+          const printed = expanded
+            ? expanded.map(({ path }) => (word.text.startsWith('/') ? path : posix.relative(state.cwd, path)))
+            : [word.text];
+          for (const text of printed) {
+            if (text === '' || text.startsWith('-') || /[\s'"\\*?[]/.test(text)) return false;
+            const path = posix.isAbsolute(text) ? text : under(state.cwd, text);
+            const info = await stat(path).catch((error: unknown) => (missing(error) ? undefined : null));
+            if (info === null || info?.isDirectory()) return false;
+            if (info === undefined && ls) continue;
+            if (writing) noteWrite(text);
+            await checkArgument(exactWord(text), writing ? 'write' : 'read', true);
+          }
+        }
       }
       return true;
     };
@@ -4074,13 +4491,14 @@ export async function scanShell(
         const consumer = withoutWrappers(tokens);
         const writing = !onlyReads(consumer);
         const listing = listerFeeds(node);
+        const fed = listing === null && xargsSplitsAtBlanks(tokens) ? staticFeed(node) : null;
         if (
           (writing && XARGS_SHELLS.has(programName(unquote(consumer[0] ?? '')))) ||
           feeds.file ||
-          listing === null ||
+          (listing === null && fed === null) ||
           effects.folders.length > 0 ||
           stdinRedirected(node) ||
-          !(await listingChecked(listing, writing))
+          !(listing ? await listingChecked(listing, writing) : fed ? await fedChecked(fed, writing) : false)
         ) {
           unreadOperands++;
         }
@@ -4089,6 +4507,7 @@ export async function scanShell(
       const inPlace = await inPlaceWrites(withoutWrappers(tokens.map(unquote)), node, state.cwd, {
         script: gitScript,
         env: gitEnvironment,
+        roots,
       });
       if (inPlace.unread) unreadOperands++;
       // In-place writes come back resolved against a folder that may not be where bash is.
@@ -4215,6 +4634,9 @@ export async function scanShell(
         const actions = findActions(wrappedRest);
         if (actions.untrackable) unreadOperands++;
         for (const read of actions.reads) await check(read, state.cwd);
+        // `-exec` hands the program what find prints, as xargs does after `find -print`.
+        const listing = actions.writer ? listsNames([wrapped ?? 'find', ...withoutFindRuns(wrappedRest)]) : null;
+        if (actions.writer && (listing === null || !(await listingChecked(listing, true)))) unreadOperands++;
       }
       if (runsOpaqueScript(name, wrappedRest)) unreadOperands++;
       const files = optionFiles(name, wrappedRest);

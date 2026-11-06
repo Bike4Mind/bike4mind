@@ -5,8 +5,8 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import { gitArgumentPath, gitCommand, gitCommandEnv, hostGitArgs, quickGitTimeout } from '../../git/hostGitArgs';
 import { wslLocation, wslUncPath } from '../../wsl/wslPath';
-import { resolveOperand } from './paths';
-import { findOnPath } from './userPath';
+import { isWithin, resolveOperand } from './paths';
+import { findOnPath, WINDOWS_ROOTED } from './userPath';
 import { own } from '@shared/ownKeys';
 
 /**
@@ -294,9 +294,32 @@ function tarExtraction(
 /** Archive members an extraction lists before the scan reads them as paths instead of a whole tree. */
 const LISTED_MEMBERS = 10_000;
 
-function runListing(cwd: string, file: string, args: readonly string[]): Promise<string | null> {
+/**
+ * PATH with only its absolute entries outside every granted root, physically as well as by name, so neither a
+ * program the scan starts nor a filter that program starts (tar's `gzip -d`) is one a granted folder holds.
+ */
+async function pathOutside(roots: readonly string[]): Promise<string> {
+  const windows = process.platform === 'win32';
+  const separator = windows ? ';' : ':';
+  const realRoots = await Promise.all(roots.map(root => realpath(root).catch(() => root)));
+  const granted = [...roots, ...realRoots];
+  const kept: string[] = [];
+  for (const raw of (process.env.PATH ?? '').split(separator)) {
+    const entry = raw.trim().replace(/^"(.*)"$/, '$1');
+    if (windows ? !WINDOWS_ROOTED.test(entry) : !isAbsolute(entry)) continue;
+    const places = [entry, await realpath(entry).catch(() => entry)];
+    if (!places.some(place => granted.some(root => isWithin(root, place)))) kept.push(entry);
+  }
+  return kept.join(separator);
+}
+
+/** Runs a listing program from its own folder with `path` as its only PATH, so it starts nothing from the project. */
+function runListing(file: string, args: readonly string[], path: string, cwd = dirname(file)): Promise<string | null> {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of Object.keys(process.env)) if (key.toUpperCase() !== 'PATH') env[key] = process.env[key];
+  env.PATH = path;
   return new Promise(done => {
-    execFile(file, args, { cwd, timeout: 2000, maxBuffer: GIT_OUTPUT_BYTES, windowsHide: true }, (error, stdout) =>
+    execFile(file, args, { cwd, env, timeout: 2000, maxBuffer: GIT_OUTPUT_BYTES, windowsHide: true }, (error, stdout) =>
       done(error ? null : stdout)
     );
   });
@@ -306,43 +329,55 @@ function runListing(cwd: string, file: string, args: readonly string[]): Promise
 const gnuTar = new Map<string, Promise<boolean>>();
 
 /**
- * One archive listing, from the program found in an absolute PATH folder (never the project's own copy): a member
- * name per line, or a long listing whose lines open with each member's type. Null for stdin, a name tar would
- * fetch from another host, or a name read as an option.
+ * One archive listing, from the program found on PATH outside every granted root: a member name per line, or a long
+ * listing whose lines open with each member's type. Null for stdin, a name read as an option, or an archive on
+ * another host, which the scan never opens (`host:file` for tar, a `\\host\share` or `//host/` path).
  */
 async function listArchive(
   cwd: string,
   program: string,
   archive: string,
-  args: readonly string[]
+  args: readonly string[],
+  roots: readonly string[]
 ): Promise<string | null> {
-  if (archive.startsWith('-') || /^[^/\\]*:/.test(archive.replace(/^[A-Za-z]:[\\/]/, ''))) return null;
-  const file = await findOnPath(program, process.env.PATH ?? '');
+  if (archive.startsWith('-') || /^[\\/]{2}/.test(archive)) return null;
+  if (/^[^/\\]*:/.test(archive.replace(/^[A-Za-z]:[\\/]/, ''))) return null;
+  const path = await pathOutside(roots);
+  const file = await findOnPath(program, path);
   if (file === null) return null;
-  if (program === 'unzip') return runListing(cwd, file, [...args, '--', archive]);
+  const absolute = resolve(cwd, archive);
+  if (program === 'unzip') return runListing(file, [...args, '--', absolute], path);
   let gnu = gnuTar.get(file);
   if (gnu === undefined) {
-    gnu = runListing(cwd, file, ['--version']).then(version => /GNU tar/.test(version ?? ''));
+    gnu = runListing(file, ['--version'], path).then(version => /GNU tar/.test(version ?? ''));
     gnuTar.set(file, gnu);
   }
-  return runListing(cwd, file, [...args, ...((await gnu) ? ['--force-local'] : []), `--file=${archive}`]);
+  return runListing(file, [...args, ...((await gnu) ? ['--force-local'] : []), `--file=${absolute}`], path);
 }
 
 /** find tests that only select by name, path or type, with the value each takes; `-print` is dropped. */
 const FIND_TESTS = /^-(name|iname|path|ipath|wholename|iwholename|type)$/;
-const FIND_LINKS_LISTED = 1000;
+/** Tests that only narrow what find prints, so without `-o`, `!` or a group dropping one prints more, never other. */
+const FIND_NARROWS = /^-(empty|readable|writable|executable|nouser|nogroup|xdev|mount|depth)$/;
+const FIND_NARROWS_VALUED =
+  /^-(mtime|mmin|atime|amin|ctime|cmin|used|size|newer|anewer|cnewer|newer[aBcmt]{2}|perm|user|group|uid|gid|links|inum|samefile|regex|iregex|fstype)$/;
+const FIND_LISTED = 1000;
 
 /**
- * The links a POSIX `find` over `folders` (from `cwd`) selects with the same tests, which the system find lists
- * so a large tree costs no walk here; null when a test is not one it reads, find fails, or it lists too many.
+ * What a POSIX `find` over `folders` (from `cwd`) prints with the same tests and `select` ANDed on, which the
+ * system find lists so a large tree costs no walk here; null when a test is not one it reads, find fails, or it
+ * lists too many.
  */
-export async function findLinks(
+async function findSelected(
   cwd: string,
   folders: readonly string[],
-  tests: readonly string[]
+  tests: readonly string[],
+  roots: readonly string[],
+  select: readonly string[]
 ): Promise<string[] | null> {
   const globals: string[] = [];
   const kept: string[] = [];
+  const anded = !tests.some(test => ['!', '-not', '(', ')', '-o', '-or', ','].includes(test));
   for (let index = 0; index < tests.length; index++) {
     const test = tests[index] as string;
     const value = tests[index + 1];
@@ -352,25 +387,58 @@ export async function findLinks(
     } else if (FIND_TESTS.test(test) && value !== undefined) {
       kept.push(test, value);
       index++;
-    } else if (['!', '-not', '(', ')', '-o', '-or', '-a', '-and', '-prune'].includes(test)) kept.push(test);
+    } else if (anded && FIND_NARROWS.test(test)) continue;
+    else if (anded && FIND_NARROWS_VALUED.test(test) && value !== undefined) index++;
+    else if (['!', '-not', '(', ')', '-o', '-or', '-a', '-and', '-prune'].includes(test)) kept.push(test);
     else if (test !== '-print' && test !== '-print0') return null;
   }
-  const file = await findOnPath('find', process.env.PATH ?? '');
-  if (file === null || process.platform === 'win32') return null;
+  if (process.platform === 'win32') return null;
+  const path = await pathOutside(roots);
+  const file = await findOnPath('find', path);
+  if (file === null) return null;
   const starts = folders.map(folder =>
     folder.startsWith('-') || folder.startsWith('(') || folder === '!' ? `./${folder}` : folder
   );
   const expression = kept.length > 0 ? ['(', ...kept, ')'] : [];
-  const listed = await runListing(cwd, file, ['-P', ...starts, ...globals, ...expression, '-type', 'l', '-print0']);
-  const links = listed?.split('\0').filter(path => path !== '') ?? null;
-  return links === null || links.length > FIND_LINKS_LISTED ? null : links.map(path => resolve(cwd, path));
+  const listed = await runListing(file, ['-P', ...starts, ...globals, ...expression, ...select, '-print0'], path, cwd);
+  const found = listed?.split('\0').filter(entry => entry !== '') ?? null;
+  return found === null || found.length > FIND_LISTED ? null : found.map(entry => resolve(cwd, entry));
 }
+
+/** The links `find` over `folders` prints with `tests` (see findSelected). */
+export function findLinks(
+  cwd: string,
+  folders: readonly string[],
+  tests: readonly string[],
+  roots: readonly string[]
+): Promise<string[] | null> {
+  return findSelected(cwd, folders, tests, roots, ['-type', 'l']);
+}
+
+/** The settings files (`.claude/settings*`) `find` over `folders` prints with `tests` (see findSelected). */
+export async function findSettings(
+  cwd: string,
+  folders: readonly string[],
+  tests: readonly string[],
+  roots: readonly string[]
+): Promise<string[] | null> {
+  const named = await findSelected(cwd, folders, tests, roots, ['-iname', 'settings*']);
+  return named?.filter(isSettingsPath) ?? null;
+}
+
+/** Whether `path` names a settings file directly in a `.claude` folder, in any case. */
+export const isSettingsPath = (path: string): boolean => /(^|[\\/])\.claude[\\/]settings[^\\/]*$/i.test(path);
 
 /**
  * The files an extraction into a folder holding `.claude` writes, from a listing of the archive: null when it
  * cannot be listed or a member is a link, is absolute, climbs with `..` or names a `.claude` folder.
  */
-async function extractedMembers(program: string, args: readonly string[], cwd: string): Promise<string[] | null> {
+async function extractedMembers(
+  program: string,
+  args: readonly string[],
+  cwd: string,
+  roots: readonly string[]
+): Promise<string[] | null> {
   if (wslLocation(cwd) !== null) return null;
   let names: string[];
   let types: string[];
@@ -379,7 +447,7 @@ async function extractedMembers(program: string, args: readonly string[], cwd: s
   if (program === 'unzip') {
     const archive = args.find(arg => !arg.startsWith('-') && arg !== optionValue(args, '-d', null));
     directory = optionValue(args, '-d', null) ?? '.';
-    const listed = archive === undefined ? null : await listArchive(cwd, 'unzip', archive, ['-Z']);
+    const listed = archive === undefined ? null : await listArchive(cwd, 'unzip', archive, ['-Z'], roots);
     if (listed === null) return null;
     const lines = listed.split('\n').filter(line => /^[-dlbcps][-rwxsStT]{9}\s/.test(line));
     const parsed = lines.map(line => /^\S{10}\s+\S+\s+\S+\s+\d+\s+\S+\s+\S+\s+\S+\s+\S+\s(.*)$/.exec(line)?.[1]);
@@ -391,8 +459,8 @@ async function extractedMembers(program: string, args: readonly string[], cwd: s
     if (!read?.whole || read.archive === undefined || !Number.isInteger(read.strip) || read.strip < 0) return null;
     ({ directory, strip } = read);
     const [plain, long] = await Promise.all([
-      listArchive(cwd, program, read.archive, ['-t']),
-      listArchive(cwd, program, read.archive, ['-tv']),
+      listArchive(cwd, program, read.archive, ['-t'], roots),
+      listArchive(cwd, program, read.archive, ['-tv'], roots),
     ]);
     if (plain === null || long === null) return null;
     names = plain.split('\n').filter(line => line !== '');
@@ -584,12 +652,6 @@ async function upstreamTracked(cwd: string): Promise<boolean | null> {
 async function gitQuery(directory: string, args: readonly string[]): Promise<string | null> {
   const result = await gitRun(directory, args);
   return result?.code === 0 ? result.stdout : null;
-}
-
-/** Whether git's index lists a link under `paths`, given from `directory`; null when git fails. */
-export async function indexHoldsLink(directory: string, paths: readonly string[]): Promise<boolean | null> {
-  const listed = await gitQuery(directory, ['ls-files', '-s', '-z', '--', ...paths]);
-  return listed === null ? null : listed.split('\0').some(entry => entry.startsWith('120000 '));
 }
 
 /** What `git rev-parse --show-toplevel` prints in `directory` (a Linux path in a WSL folder), or null when git fails. */
@@ -956,14 +1018,20 @@ const NO_TREE: TreeWrite = { files: [], links: false, unread: false };
 /** Whether a path git prints from the top of a work tree is under a `.claude` folder, in any case. */
 const inSettings = (path: string): boolean => path.toLowerCase().split('/').includes('.claude');
 
+/** Whether git in `directory` checks text out with CRLF and compares it as LF (`core.autocrlf` true or input). */
+async function convertsCrlf(directory: string): Promise<boolean> {
+  const value = await gitQuery(directory, ['config', '--get', 'core.autocrlf']);
+  return value !== null && ['true', 'yes', 'on', '1', 'input'].includes(value.trim().toLowerCase());
+}
+
 /** Index entries the scan compares with the work tree itself before it reads the change as unknown. */
 const COMPARED_ENTRIES = 256;
 
 /**
- * Whether the file at `path` holds what the index records for it, by git's own blob hash of its raw bytes, or of
- * them with CRLF read as LF, as `core.autocrlf` checks a file out.
+ * Whether the file at `path` holds what the index records for it, by git's own blob hash of its raw bytes, or, when
+ * `crlf` (`core.autocrlf` is true or input), of them with CRLF read as LF, as git itself compares them.
  */
-async function sameAsIndex(path: string, mode: string, id: string): Promise<boolean> {
+async function sameAsIndex(path: string, mode: string, id: string, crlf: boolean): Promise<boolean> {
   const info = await lstat(path).catch(() => null);
   let content: Buffer | null = null;
   if (mode === '120000' && info?.isSymbolicLink()) {
@@ -978,7 +1046,7 @@ async function sameAsIndex(path: string, mode: string, id: string): Promise<bool
       .update(bytes)
       .digest('hex');
   if (blobId(content) === id) return true;
-  if (mode === '120000' || !content.includes('\r\n')) return false;
+  if (!crlf || mode === '120000' || !content.includes('\r\n')) return false;
   return blobId(Buffer.from(content.toString('latin1').replace(/\r\n/g, '\n'), 'latin1')) === id;
 }
 
@@ -993,6 +1061,7 @@ async function locallyChanged(
 ): Promise<{ mode: string; path: string }[] | null> {
   const listed = await gitQuery(from, ['ls-files', '-s', '-z', '--full-name', '--', ...within]);
   if (listed === null) return null;
+  const crlf = await convertsCrlf(from);
   const location = wslLocation(from);
   const changed: { mode: string; path: string }[] = [];
   let compared = 0;
@@ -1003,7 +1072,7 @@ async function locallyChanged(
     if (mode !== '120000' && !inSettings(path)) continue;
     if (++compared > COMPARED_ENTRIES) return null;
     const file = location ? wslUncPath(location, `${top}/${path}`) : `${top}/${path}`;
-    if (!(await sameAsIndex(file, mode, id))) changed.push({ mode, path });
+    if (!(await sameAsIndex(file, mode, id, crlf))) changed.push({ mode, path });
   }
   return changed;
 }
@@ -1082,6 +1151,145 @@ async function treeListing(repository: string, target: string, destination: stri
     files.push(`${destination}/${path}`);
   }
   return { files, links, unread: false };
+}
+
+/** Work-tree places, folders included, the scan lstats for a listing before it counts as one it cannot follow. */
+const WORK_TREE_LOOKS = 50_000;
+
+/**
+ * The links in the work tree at `top` at or on the way to each of `paths` (given from the top), by an lstat of each
+ * folder and entry, so a tracked path a link has replaced is seen; null past WORK_TREE_LOOKS or when one cannot be
+ * looked at.
+ */
+async function workTreeLinks(top: string, paths: readonly string[]): Promise<string[] | null> {
+  const places = new Set<string>();
+  for (const path of paths) {
+    const parts = path.split('/');
+    for (let end = 1; end <= parts.length; end++) places.add(parts.slice(0, end).join('/'));
+    if (places.size > WORK_TREE_LOOKS) return null;
+  }
+  const ordered = [...places];
+  const links: string[] = [];
+  for (let at = 0; at < ordered.length; at += 256) {
+    const batch = ordered.slice(at, at + 256);
+    const linked = await Promise.all(
+      batch.map(place =>
+        lstat(`${top}/${place}`).then(
+          info => info.isSymbolicLink(),
+          (error: NodeJS.ErrnoException) => (error.code === 'ENOENT' || error.code === 'ENOTDIR' ? false : null)
+        )
+      )
+    );
+    for (const [index, link] of linked.entries()) {
+      if (link === null) return null;
+      if (link) links.push(`${top}/${batch[index]}`);
+    }
+  }
+  return links;
+}
+
+/** One `ls-files -s -z` entry: its mode, blob id and path from the top. */
+function indexEntries(listed: string): { mode: string; id: string; path: string }[] | null {
+  const entries: { mode: string; id: string; path: string }[] = [];
+  for (const entry of listed.split('\0')) {
+    if (entry === '') continue;
+    const [, mode, id, path] = /^(\d+) ([0-9a-f]+) \d\t(.*)$/s.exec(entry) ?? [];
+    if (mode === undefined || id === undefined || path === undefined) return null;
+    entries.push({ mode, id, path });
+  }
+  return entries;
+}
+
+export interface IndexListed {
+  /** The settings files among the listed paths, absolute, each with whether its work-tree copy differs. */
+  settings: { path: string; changed: boolean }[];
+  /** Links at or on the way to a listed path in the work tree. */
+  links: string[];
+}
+
+/**
+ * What a listing of git's index under `pathspecs` from `from` (`git ls-files`, `git grep`) may print, read with no
+ * git command that looks at the work tree; null when git fails, the index records a link there, or there is too
+ * much to look at.
+ */
+export async function indexListed(from: string, pathspecs: readonly string[]): Promise<IndexListed | null> {
+  const top = await gitToplevel(from);
+  const listed =
+    top === null ? null : await gitQuery(from, ['ls-files', '-s', '-z', '--full-name', '--', ...pathspecs]);
+  const entries = listed === null ? null : indexEntries(listed);
+  if (top === null || entries === null || entries.some(({ mode }) => mode === '120000')) return null;
+  const crlf = await convertsCrlf(from);
+  const settings: IndexListed['settings'] = [];
+  for (const { mode, id, path } of entries) {
+    if (!isSettingsPath(path)) continue;
+    if (settings.length >= COMPARED_ENTRIES) return null;
+    settings.push({ path: `${top}/${path}`, changed: !(await sameAsIndex(`${top}/${path}`, mode, id, crlf)) });
+  }
+  const links = await workTreeLinks(
+    top,
+    entries.map(({ path }) => path)
+  );
+  return links === null ? null : { settings, links };
+}
+
+/**
+ * What `git diff --name-only` run at the top `top` may print when it compares each of `targets` and, when
+ * `worktree`, the work tree: the settings files among those paths, and the links at or on the way to them. Read
+ * with diff-index against the index and hashed here, so git runs no filter on the work tree; null when git fails or
+ * there is too much to look at.
+ */
+export async function diffListed(
+  top: string,
+  targets: readonly string[],
+  worktree: boolean,
+  pathspecs: readonly string[]
+): Promise<{ settings: string[]; links: string[] } | null> {
+  const listed = await gitQuery(top, ['ls-files', '-s', '-z', '--full-name', '--', ...pathspecs]);
+  const entries = listed === null ? null : indexEntries(listed);
+  if (entries === null) return null;
+  const printed = new Set<string>();
+  const links = new Set<string>();
+  for (const target of targets) {
+    if (!REVISION.test(target) || target.startsWith('-')) return null;
+    const raw = await gitQuery(top, [
+      'diff-index',
+      '--cached',
+      '--raw',
+      '-z',
+      '--no-renames',
+      '--no-ext-diff',
+      '--no-textconv',
+      '--ignore-submodules=none',
+      target,
+      '--',
+      ...pathspecs,
+    ]);
+    if (raw === null) return null;
+    const fields = raw.split('\0');
+    for (let at = 0; at + 1 < fields.length; at += 2) {
+      const [, from, to] = /^:(\d+) (\d+) /.exec(fields[at] as string) ?? [];
+      if (from === undefined || to === undefined) return null;
+      const path = fields[at + 1] as string;
+      printed.add(path);
+      if (from === '120000' || to === '120000') links.add(`${top}/${path}`);
+      if (printed.size > WORK_TREE_LOOKS) return null;
+    }
+  }
+  if (worktree) {
+    const changed = await locallyChanged(top, pathspecs, top);
+    if (changed === null) return null;
+    for (const { mode, path } of changed) {
+      printed.add(path);
+      if (mode === '120000') links.add(`${top}/${path}`);
+    }
+  }
+  const found = await workTreeLinks(top, [...entries.map(({ path }) => path), ...printed]);
+  if (found === null) return null;
+  for (const link of found) links.add(link);
+  return {
+    settings: [...printed].filter(isSettingsPath).map(path => `${top}/${path}`),
+    links: [...links],
+  };
 }
 
 const WORKTREE_ADD: GitGrammar = {
@@ -1384,6 +1592,8 @@ function gitSubcommand(
 export interface GitContext {
   script: GitScript;
   env: boolean;
+  /** Granted folders, from which no program the scan runs is taken. */
+  roots?: readonly string[];
 }
 
 /**
@@ -1424,7 +1634,7 @@ async function writesOf(
     const into = trees?.length === 1 ? (trees[0] as string) : null;
     // A clean listing is read member by member, so unpacking beside a session's settings is not a whole-tree write.
     if (into !== null && into !== '/' && (await lstat(resolveOperand(cwd, into, '.claude')).catch(() => null))) {
-      const files = await extractedMembers(program, args, cwd);
+      const files = await extractedMembers(program, args, cwd, context.roots ?? []);
       if (files !== null) return { files, trees: [] };
     }
     return extracted(trees);
