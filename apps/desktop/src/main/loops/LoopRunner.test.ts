@@ -441,6 +441,19 @@ describe('LoopRunner runs', () => {
     expect(h.chat.deleteSession).not.toHaveBeenCalled();
   });
 
+  it('does not report the runner online again when a poll in flight finishes after quit', async () => {
+    let list!: () => void;
+    vi.mocked(h.client.listTickets).mockImplementationOnce(
+      () => new Promise(resolve => (list = () => resolve({ tickets: [], held: [] })))
+    );
+    const tick = h.runner.tick();
+    await vi.waitFor(() => expect(list).toBeDefined());
+    await h.runner.releaseAll();
+    list();
+    await tick;
+    expect(h.client.presence).toHaveBeenLastCalledWith({ lanesBusy: 0, lanesFree: 0, offline: true });
+  });
+
   it('on quit, blocks rather than releases a run that opened a PR, so a rerun cannot open a second', async () => {
     await h.runner.tick();
     const call: ChatToolCall = {

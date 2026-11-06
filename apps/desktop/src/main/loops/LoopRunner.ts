@@ -290,6 +290,8 @@ export class LoopRunner {
         this.waitingReason = `${heldApproved.loopName}: ${heldApproved.reason}`;
     }
 
+    // A poll still in flight at quit must not post after releaseAll's offline presence.
+    if (this.quitting) return RUNNER_MS.claimPoll;
     await this.deps.client
       .presence({
         lanesBusy: this.lanes.size,
