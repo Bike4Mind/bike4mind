@@ -8,12 +8,14 @@ const {
   mockPurge,
   mockReadGrants,
   mockRecord,
+  mockRecordErasure,
   mockDeny,
   mockWithTransaction,
   mockCancelSubscriptions,
 } = vi.hoisted(() => ({
   mockCancelSubscriptions: vi.fn(),
   mockRecord: vi.fn(),
+  mockRecordErasure: vi.fn(),
   mockDeny: vi.fn(),
   mockWithTransaction: vi.fn(),
   mockAdminDeleteUser: vi.fn(),
@@ -46,6 +48,7 @@ vi.mock('@bike4mind/services', () => ({
   userService: { adminDeleteUser: (...a: unknown[]) => mockAdminDeleteUser(...a) },
 }));
 vi.mock('@bike4mind/database', () => ({
+  erasureRecordRepository: { record: mockRecordErasure },
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   userRepository: {
     delete: (...a: unknown[]) => mockRepoDelete(...a),
@@ -75,6 +78,7 @@ vi.mock('@server/billing/cancelAccountSubscriptions', async importOriginal => ({
 }));
 
 import { USER_SECRET_FIELDS, ForbiddenError } from '@bike4mind/common';
+import { erasureIdHash, erasureKeyId } from '@bike4mind/server-utils/privacy/erasureHash';
 import handler from '../delete';
 import { executeApprovedAdminDelete } from '@server/admin/deleteUserAsAdmin';
 
@@ -101,6 +105,7 @@ beforeEach(() => {
   mockPurge.mockReset().mockResolvedValue(undefined);
   mockReadGrants.mockReset().mockResolvedValue(null);
   mockRecord.mockReset().mockResolvedValue(null);
+  mockRecordErasure.mockReset().mockResolvedValue(undefined);
   mockEmitBillingEvent.mockReset().mockResolvedValue([]);
   mockWithTransaction.mockReset().mockImplementation((fn: () => unknown) => fn());
   mockCancelSubscriptions.mockReset().mockResolvedValue({ canceled: [], failed: [] });
@@ -311,7 +316,7 @@ describe('DELETE /api/users/[id]/delete', () => {
       expect(mockRecord).not.toHaveBeenCalled();
     });
 
-    it('runs the delete inside withTransaction and records user.deleted with the reason', async () => {
+    it('records the erasure and user.deleted inside the delete transaction', async () => {
       const order: string[] = [];
       mockWithTransaction.mockImplementation(async (fn: () => unknown) => {
         order.push('tx:start');
@@ -327,6 +332,9 @@ describe('DELETE /api/users/[id]/delete', () => {
         order.push('record');
         return null;
       });
+      mockRecordErasure.mockImplementation(async () => {
+        order.push('erasure');
+      });
       mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
         await db.users.delete('u1');
         return { id: 'u1' };
@@ -335,7 +343,14 @@ describe('DELETE /api/users/[id]/delete', () => {
       const { call } = await run({ body: { reason: '  Confirmed duplicate account  ' } });
       await call;
 
-      expect(order).toEqual(['tx:start', 'delete', 'record', 'tx:end']);
+      expect(order).toEqual(['tx:start', 'delete', 'erasure', 'record', 'tx:end']);
+      expect(mockRecordErasure).toHaveBeenCalledExactlyOnceWith({
+        idHash: erasureIdHash('u1'),
+        keyId: erasureKeyId(),
+        pseudonym: expect.toBeOneOf([null, expect.any(String)]),
+        erasedAt: expect.any(Date),
+        initiatedBy: 'admin',
+      });
       expect(mockRecord).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
@@ -449,6 +464,21 @@ describe('DELETE /api/users/[id]/delete', () => {
 
       await expect(call).rejects.toThrow('tx failed');
       expect(logger.error).toHaveBeenCalled();
+    });
+
+    it('does not purge or report completion when the erasure record write fails', async () => {
+      mockRecordErasure.mockRejectedValue(new Error('erasure record down'));
+      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+        await db.users.delete('u1');
+        return { id: 'u1' };
+      });
+
+      const { call } = await run();
+
+      await expect(call).rejects.toThrow('erasure record down');
+      expect(mockPurge).not.toHaveBeenCalled();
+      expect(mockEmitBillingEvent).not.toHaveBeenCalled();
+      expect(mockRecord).not.toHaveBeenCalled();
     });
 
     it('does not purge when the audit write aborts the delete transaction', async () => {
