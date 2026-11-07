@@ -302,6 +302,13 @@ describe('signup protection persistence', () => {
       await SignupDomainReviewModel.create([
         { ...hold, domain: 'aged.test', reason: young, domainRegisteredAt: new Date('2026-01-01') },
         { ...hold, domain: 'still-young.test', reason: young, domainRegisteredAt: new Date('2026-02-20') },
+        {
+          ...hold,
+          domain: 'stale-hint.test',
+          reason: young,
+          domainRegisteredAt: new Date('2026-02-20'),
+          domainAgedAt: new Date('2026-02-25'),
+        },
         { ...hold, domain: 'unknown.test', reason: young },
         {
           ...hold,
@@ -318,6 +325,8 @@ describe('signup protection persistence', () => {
       const byDomain = Object.fromEntries(rows.map(row => [row.domain, row]));
       expect(byDomain['aged.test'].domainAgedAt).toEqual(now);
       expect(byDomain['aged.test'].status).toBe('held_pending_review');
+      expect(byDomain['stale-hint.test'].domainAgedAt).toBeUndefined();
+      expect(byDomain['stale-hint.test'].status).toBe('held_pending_review');
       for (const domain of ['still-young.test', 'unknown.test', 'blocked.test', 'other.test'])
         expect(byDomain[domain].domainAgedAt).toBeUndefined();
       expect(byDomain['blocked.test'].status).toBe('blocked');

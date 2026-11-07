@@ -100,6 +100,9 @@ export default function SignupDomainHoldsTab() {
       ).data,
     placeholderData: keepPreviousData,
   });
+  const total = query.data?.total;
+  if (!query.isPlaceholderData && total !== undefined && page > 1 && (page - 1) * PAGE_SIZE >= total)
+    setPage(Math.max(1, Math.ceil(total / PAGE_SIZE)));
   const decision = useMutation({
     mutationFn: async (input: { domain: string; action: 'confirm' | 'release'; afterUserId?: string }) =>
       (
@@ -196,8 +199,8 @@ export default function SignupDomainHoldsTab() {
       )}
       {decision.data?.status === 'released' && (
         <Alert color="success">
-          Released {decision.data.creditsReleased} credits. {decision.data.remaining} pending grants remain; use Retry
-          pending grants to continue or retry failures.
+          Released {decision.data.creditsReleased} credits. {decision.data.remaining} pending grants remain; switch the
+          status filter to Released and use Retry pending grants to continue or retry failures.
         </Alert>
       )}
       <Stack direction="row" spacing={1}>

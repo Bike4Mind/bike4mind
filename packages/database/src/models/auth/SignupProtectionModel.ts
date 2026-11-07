@@ -284,9 +284,19 @@ export const signupDomainReviewRepository = {
   },
   /**
    * Marks pending young-domain holds whose domain was registered at or before `registeredBefore` as
-   * aged. Only a hint for the admin: the status is left alone. Returns how many were marked.
+   * aged. Clears the hint on holds no longer past the cutoff. The status is left alone.
+   * Returns how many were marked.
    */
   async markAgedDomains(registeredBefore: Date, agedAt: Date): Promise<number> {
+    await SignupDomainReviewModel.updateMany(
+      {
+        status: 'held_pending_review',
+        reason: prefixRegex(YOUNG_DOMAIN_HOLD_REASON_PREFIX),
+        domainAgedAt: { $exists: true },
+        domainRegisteredAt: { $gt: registeredBefore },
+      },
+      { $unset: { domainAgedAt: '' } }
+    );
     const result = await SignupDomainReviewModel.updateMany(
       {
         status: 'held_pending_review',

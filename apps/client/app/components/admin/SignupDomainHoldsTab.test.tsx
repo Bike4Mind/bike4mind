@@ -194,6 +194,23 @@ describe('SignupDomainHoldsTab', () => {
     await waitFor(() => expect(getMock).toHaveBeenLastCalledWith(endpoint, listParams()));
   });
 
+  it('requests page 1 when a decision drains page 2', async () => {
+    getMock
+      .mockResolvedValueOnce({ data: { data: [reviews[0]], total: 26 } })
+      .mockResolvedValueOnce({ data: { data: [reviews[0]], total: 26 } })
+      .mockResolvedValueOnce({ data: { data: [], total: 25 } })
+      .mockResolvedValue({ data: { data: [reviews[1]], total: 25 } });
+    postMock.mockResolvedValue({ data: { status: 'blocked', creditsReleased: 0, remaining: 0, nextCursor: null } });
+    renderTab();
+    await waitFor(() => expect(screen.getByTestId('signup-domain-holds-next')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('signup-domain-holds-next'));
+    await waitFor(() => expect(getMock).toHaveBeenNthCalledWith(2, endpoint, listParams({ page: 2 })));
+    fireEvent.click(await screen.findByTestId('signup-domain-confirm-alpha.test'));
+    await waitFor(() => expect(getMock).toHaveBeenNthCalledWith(3, endpoint, listParams({ page: 2 })));
+    await waitFor(() => expect(getMock).toHaveBeenNthCalledWith(4, endpoint, listParams()));
+    await waitFor(() => expect(screen.getByTestId('signup-domain-holds-previous')).toBeDisabled());
+  });
+
   it('sends one decision for a double-click', async () => {
     postMock.mockResolvedValue({ data: { status: 'blocked', creditsReleased: 0, remaining: 0, nextCursor: null } });
     renderTab();
