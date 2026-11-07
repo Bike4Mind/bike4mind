@@ -1,7 +1,13 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-import { Session, adminAuditLogRepository, fabFileRepository, sessionRepository } from '@bike4mind/database';
+import {
+  CampaignWatchModel,
+  Session,
+  adminAuditLogRepository,
+  fabFileRepository,
+  sessionRepository,
+} from '@bike4mind/database';
 import { ConcurrencyConflictError } from '@bike4mind/common';
 import {
   createMongoReplSet,
@@ -75,6 +81,20 @@ beforeEach(async () => {
 });
 
 describe('permanent personal-content purge', () => {
+  it('removes a deleted account from shared watches and clears its ownership', async () => {
+    const watch = await CampaignWatchModel.create({
+      name: 'Shared watch',
+      userIds: [ownerId, otherOwnerId],
+      ownerId,
+      cohortKey: 'purge-test',
+      status: 'open',
+    });
+    await purgeAccountContent(ownerId, { assertLease, logger });
+    const retained = await CampaignWatchModel.findById(watch._id).lean();
+    expect(retained?.userIds).toEqual([otherOwnerId]);
+    expect(retained?.ownerId).toBeNull();
+    expect(retained?.status).toBe('open');
+  });
   it('retains the real account and purge marker after object failure, then removes content and User before emailing completion', async () => {
     const notebookId = new mongoose.Types.ObjectId();
     const fileId = new mongoose.Types.ObjectId();

@@ -333,6 +333,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'security.blocked_ip.auto_added': { category: 'access', severity: 'notice', write: 'strict' },
   // bestEffort: the verdict history on the ShadowDetection record is the source of truth; grading never acts.
   'security.detection.reviewed': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'security.watch.created': { category: 'support', severity: 'info', write: 'strict' },
+  'security.watch.updated': { category: 'support', severity: 'info', write: 'strict' },
   // bestEffort: the AbuseAssessment record is the source of truth; an advisory assessment never acts.
   'security.detection.assessed': { category: 'access', severity: 'info', write: 'bestEffort' },
   'security.detection.replayed': { category: 'access', severity: 'info', write: 'bestEffort' },

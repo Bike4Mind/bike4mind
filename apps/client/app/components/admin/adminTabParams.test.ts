@@ -9,7 +9,7 @@ import { ADMIN_GLOBAL_PARAMS, ADMIN_TAB_PARAMS, adminSearchForTab, parseAdminSea
 import { adminTabFromSlug } from './adminTabSlugs';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { SHADOW_DETECTION_SEARCH_KEYS } from './shadowDetectionSearch';
+import { CAMPAIGN_WATCH_SEARCH_PARAM, SHADOW_DETECTION_SEARCH_KEYS } from './shadowDetectionSearch';
 import { SIGNUP_RISK_REVIEW_SEARCH_KEYS } from './signupRiskReviewSearch';
 import { SIGNUP_DOMAIN_HOLDS_SEARCH_KEYS } from './signupDomainHoldsSearch';
 import { EVENTS_SEARCH_KEYS } from './EventMetrics/eventsTabSearch';
@@ -194,7 +194,12 @@ describe('Feedback tab params', () => {
 
 describe('record id params', () => {
   const objectId = 'aBcDeF0123456789aBcDeF01';
-  const idParams = [FEEDBACK_ID_PARAM, AUDIT_ENTRY_ID_PARAM, MODERATION_INCIDENT_ID_PARAM] as const;
+  const idParams = [
+    FEEDBACK_ID_PARAM,
+    AUDIT_ENTRY_ID_PARAM,
+    MODERATION_INCIDENT_ID_PARAM,
+    CAMPAIGN_WATCH_SEARCH_PARAM,
+  ] as const;
 
   it.each(idParams)('accepts a %s that is an ObjectId, normalized to lower case', key => {
     expect(parseAdminSearch({ [key]: objectId })[key]).toBe(objectId.toLowerCase());
