@@ -137,7 +137,7 @@ const OPTION_FILES: Readonly<
  * glued value starts inside quoting the scan cannot split.
  */
 function optionFiles(program: string, args: readonly string[]): { raw: string; write: boolean }[] | null {
-  const [sub] = args;
+  const sub = bashOption(args[0] ?? '');
   const key = program === 'bsdtar' ? 'tar' : program === 'git' && sub === 'format-patch' ? 'git format-patch' : program;
   const grammar = own(OPTION_FILES, key);
   if (!grammar) return [];
@@ -146,8 +146,20 @@ function optionFiles(program: string, args: readonly string[]): { raw: string; w
   let creates = false;
   for (let index = 0; index < words.length; index++) {
     const raw = words[index] as string;
-    if (raw === '--') break;
-    const value = wordValue(raw);
+    const value = bashOption(raw);
+    if (value === null) {
+      // tree takes each value from the next word, so a brace copying `-I{o,o}` to `-Io -Io` makes `-o` options.
+      if (key === 'tree' && wordPieces(raw).some(piece => isActive(piece, '{'))) return null;
+      const fixed = fixedOption(raw, grammar.valued);
+      if (fixed === null) return null;
+      if (key === 'tar' && /[cruA]/.test(fixed.flags)) creates = true;
+      const kind = fixed.long ? own(grammar.long ?? {}, fixed.name) : own(grammar.files, fixed.name);
+      if (kind === undefined) continue;
+      if (fixed.value === null) return null;
+      found.push({ raw: fixed.value, write: kind === 'w', letter: fixed.name });
+      continue;
+    }
+    if (value === '--') break;
     const oldStyle = key === 'tar' && index === 0 && /^[A-Za-z]+$/.test(value);
     if (value.startsWith('--')) {
       const [name = '', glued] = value.slice(2).split(/=(.*)/s);
@@ -2305,6 +2317,111 @@ function fixedWords(raw: readonly string[]): string[] | null {
   return values;
 }
 
+/**
+ * A word as bash passes it (`\--output` and `"--output"` are `--output`), or null when it is an option an expansion,
+ * glob, brace or tilde changes or makes: `--o{utput,x}=f`, `-o*`, `-o"$F"`, `{-o,f}`.
+ */
+function bashOption(word: string): string | null {
+  const pieces = wordPieces(word);
+  if (!pieces.some(piece => !('char' in piece) || (piece.active && '*?[{~'.includes(piece.char)))) {
+    return pieces.map(piece => ('char' in piece ? piece.char : '')).join('');
+  }
+  const expanded = expandBraces(pieces);
+  if (expanded === null) return null;
+  const option = expanded.some(([first]) => first !== undefined && 'char' in first && first.char === '-');
+  return option ? null : wordValue(word);
+}
+
+/** The text bash passes before a word's first expansion, unquoted glob, brace or tilde, and whether an expansion ends it. */
+function literalHead(word: string): { head: string; expansion: boolean } {
+  let head = '';
+  for (const piece of wordPieces(word)) {
+    if (!('char' in piece)) return { head, expansion: true };
+    if (piece.active && '*?[{~'.includes(piece.char)) break;
+    head += piece.char;
+  }
+  return { head, expansion: false };
+}
+
+/**
+ * Whether bash may pass `word` as an option `matches` accepts: tested on its value, or on its fixed option as
+ * `optionStandIn` reads it. While its name is open, whether its literal text can still begin one of `names` (each
+ * `--long`), or any option at all when `short` and it is no long name (`-x$Y`, `-$Y`, `{-x,y}`).
+ */
+function mayPassOption(
+  word: string,
+  valued: string,
+  matches: (option: string) => boolean,
+  names: readonly string[],
+  short: boolean
+): boolean {
+  const standIn = optionStandIn(word, valued);
+  if (standIn !== null) return matches(standIn);
+  const { head } = literalHead(word);
+  if (short && !head.startsWith('--')) return true;
+  return names.some(name => name.startsWith(head)) || matches(head);
+}
+
+/**
+ * The option a word `bashOption` cannot read is, decided by the literal text before its first expansion, glob, brace
+ * or tilde: a long `--name=`, or a short cluster up to its first letter in `valued`. `value` is the word's text after
+ * the option, or null when quoting precedes it or a glob or brace may rewrite the word. Null while the name is still
+ * open (`-x*`, `--o{utput,x}=`, `{-o,f}`).
+ */
+function fixedOption(
+  word: string,
+  valued: string
+): { name: string; long: boolean; flags: string; value: string | null } | null {
+  const { head } = literalHead(word);
+  const pattern = wordPieces(word).some(piece => 'char' in piece && piece.active && '*?[{'.includes(piece.char));
+  const glued = (prefix: string): string | null =>
+    !pattern && word.startsWith(prefix) && !/['"\\$`]/.test(prefix) ? word.slice(prefix.length) : null;
+  if (head.startsWith('--')) {
+    const equals = head.indexOf('=');
+    if (equals === -1) return null;
+    return { name: head.slice(2, equals), long: true, flags: '', value: glued(head.slice(0, equals + 1)) };
+  }
+  if (!head.startsWith('-')) return null;
+  for (let at = 1; at < head.length; at++) {
+    const letter = head[at] as string;
+    if (valued.includes(letter)) {
+      return { name: letter, long: false, flags: head.slice(1, at), value: glued(head.slice(0, at + 1)) };
+    }
+  }
+  return null;
+}
+
+/** A word as bash passes it, or the fixed option of one `bashOption` cannot read with `_` for its value; null while open. */
+function optionStandIn(word: string, valued: string): string | null {
+  const value = bashOption(word);
+  if (value !== null) return value;
+  const fixed = fixedOption(word, valued);
+  if (fixed === null) return null;
+  return fixed.long ? `--${fixed.name}=_` : `-${fixed.flags}${fixed.name}_`;
+}
+
+/** Each word as `optionStandIn` reads it, or null when any is an open option. */
+function optionStandIns(raw: readonly string[], valued: string): string[] | null {
+  const values: string[] = [];
+  for (const word of raw) {
+    const value = optionStandIn(word, valued);
+    if (value === null) return null;
+    values.push(value);
+  }
+  return values;
+}
+
+/** Each word as `bashOption` reads it, or null when any may make or change an option. */
+function bashOptions(raw: readonly string[]): string[] | null {
+  const values: string[] = [];
+  for (const word of raw) {
+    const value = bashOption(word);
+    if (value === null) return null;
+    values.push(value);
+  }
+  return values;
+}
+
 /** Values a line filter's options are read with: whole-line flags, and options that take a value. */
 const LINE_FILTERS: Record<string, { flags: string; values: string; long: RegExp }> = {
   grep: {
@@ -3609,11 +3726,12 @@ const LOCAL_PROGRAMS = new Set([
   'which',
 ]);
 
-/** The file `uniq INPUT OUTPUT` writes: its second operand, past `-f`, `-s` and `-w` values. */
-function uniqOutput(args: readonly string[]): string | undefined {
+/** The file `uniq INPUT OUTPUT` writes: its second operand, past `-f`, `-s` and `-w` values; null when unread. */
+function uniqOutput(args: readonly string[]): string | undefined | null {
   const operands: string[] = [];
   for (let index = 0; index < args.length; index++) {
-    const arg = unquote(args[index] as string);
+    const arg = optionStandIn(args[index] as string, 'fsw');
+    if (arg === null) return null;
     if (arg === '--') {
       operands.push(...args.slice(index + 1));
       break;
@@ -3631,6 +3749,13 @@ const RUNS_A_PROGRAM: Readonly<Record<string, RegExp>> = {
   iconv: /^(-[A-Za-z]*o|--o(u(t(p(ut?)?)?)?)?(=|$))/,
   rg: /^--pre(-glob)?(=|$)/,
   tree: /^-[A-Za-z]*[oR]/,
+};
+
+/** The whole option words `RUNS_A_PROGRAM` names, which an option word bash may still extend can become. */
+const RUNS_A_PROGRAM_NAMES: Readonly<Record<string, readonly string[]>> = {
+  find: ['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprint0', '-fprintf', '-fls'],
+  iconv: ['--output'],
+  rg: ['--pre', '--pre-glob'],
 };
 
 /**
@@ -3913,26 +4038,79 @@ function untrackableCommand(raw: readonly string[]): boolean {
   if (word === undefined) return false;
   if (word !== '[' && SPELLED_PROGRAM.test(word)) return true;
   const name = basename(word);
-  const args = raw.slice(at + 1).map(unquote);
-  if (args.some(arg => /^--files0?-from(=|$)/.test(arg))) return true;
-  // tar's first word may be an old-style cluster without a dash (`xvfT list`).
-  const tarList = /^[A-Za-z]*T/.test(args[0] ?? '') || args.some(arg => /^-[A-Za-z]*T/.test(arg));
-  if ((name === 'tar' || name === 'bsdtar') && tarList) return true;
-  if (name === 'git' && gitConfigRunsProgram(args)) return true;
+  const words = raw.slice(at + 1);
+  const args = words.map(arg => bashOption(arg) ?? wordValue(arg));
+  const filesFrom = (arg: string): boolean => /^--files0?-from(=|$)/.test(arg);
+  // An open name counts only where the program has such an option, so `echo "--- $f"` stays readable.
+  const listNames = FILES_FROM_PROGRAMS.has(name) ? ['--files-from', '--files0-from'] : [];
+  if (words.some(arg => mayPassOption(arg, '', filesFrom, listNames, false))) return true;
+  if (name === 'tar' || name === 'bsdtar') {
+    const tarNames = [...listNames, ...TAR_PROGRAM_OPTIONS.map(option => `--${option}`)];
+    const valued = OPTION_FILES.tar?.valued ?? '';
+    // tar's first word may be an old-style cluster without a dash (`xvfT list`), which bash may extend (`c$X`).
+    const first = words[0] ?? '';
+    const extended = fixedWords([first]) === null && /^[A-Za-z]+$/.test(literalHead(first).head);
+    if (extended || /^[A-Za-z]*[TIF]/.test(bashOption(first) ?? '')) return true;
+    if (words.some(arg => mayPassOption(arg, valued, tarListsOrRuns, tarNames, true))) return true;
+  }
+  if (name === 'git' && gitConfigRunsProgram(words)) return true;
   // Each of these runs a program the option names.
-  if (name === 'rg' && args.some(arg => /^--pre(-glob)?(=|$)/.test(arg))) return true;
-  if (name === 'rsync' && args.some(arg => /^--rs/.test(arg) || /^-[A-Za-z]*e/.test(arg))) return true;
+  const pre = (arg: string): boolean => /^--pre(-glob)?(=|$)/.test(arg);
+  if (name === 'rg' && words.some(arg => mayPassOption(arg, '', pre, ['--pre', '--pre-glob'], false))) return true;
+  const rsh = (arg: string): boolean => /^--rs/.test(arg) || /^-[A-Za-z]*e/.test(arg);
+  if (name === 'rsync' && words.some(arg => mayPassOption(arg, '', rsh, ['--rsh', '--rsync-path'], true))) {
+    return true;
+  }
   return name === 'curl' && !curlModeled(args);
 }
 
-/** Whether `git -c key=value` or `--config-env key=VAR` before the subcommand sets a key that runs a program. */
-function gitConfigRunsProgram(args: readonly string[]): boolean {
-  for (let at = 0; at < args.length; at++) {
-    const arg = args[at] as string;
+/** Programs with a `--files-from` or `--files0-from` option, which reads their operands from a file. */
+const FILES_FROM_PROGRAMS = new Set(['tar', 'bsdtar', 'rsync', 'du', 'wc', 'sort']);
+
+/** tar's long options that run a program; getopt_long also takes any unique prefix of one. */
+const TAR_PROGRAM_OPTIONS = [
+  'use-compress-program',
+  'to-command',
+  'info-script',
+  'new-volume-script',
+  'rsh-command',
+  'rmt-command',
+  'checkpoint-action',
+];
+
+/** Whether a tar option word reads its operands from a file (`-T`) or runs a program (`-I`, `-F`, `--to-command`). */
+function tarListsOrRuns(arg: string): boolean {
+  const long = /^--([^=]+)/.exec(arg)?.[1];
+  // `--checkpoint` is an option of its own, not a prefix of `--checkpoint-action`.
+  if (long !== undefined) return long !== 'checkpoint' && TAR_PROGRAM_OPTIONS.some(name => name.startsWith(long));
+  return /^-[A-Za-z]*[TIF]/.test(arg);
+}
+
+/** git's global options other than `-c` and `--config-env` whose value is the next word. */
+const GIT_GLOBAL_VALUED = new Set(['-C', '--git-dir', '--work-tree', '--namespace', '--attr-source']);
+
+/**
+ * Whether `git -c key=value` or `--config-env key=VAR` before the subcommand sets a key that runs a program, or
+ * may: an option word or setting an expansion makes or changes. `raw` are shell words.
+ */
+function gitConfigRunsProgram(raw: readonly string[]): boolean {
+  for (let at = 0; at < raw.length; at++) {
+    const word = raw[at] as string;
+    const arg = optionStandIn(word, 'Cc');
+    if (arg === null) return true;
     if (!arg.startsWith('-')) return false;
-    const setting = arg === '-c' || arg === '--config-env' ? args[++at] : /^--config-env=(.*)$/s.exec(arg)?.[1];
-    if (setting !== undefined && GIT_PROGRAM_CONFIG.test(setting.split('=')[0] ?? '')) return true;
-    if (['-C', '--git-dir', '--work-tree', '--namespace'].includes(arg)) at++;
+    const valued = arg === '-c' || arg === '--config-env';
+    const glued = /^--config-env=(.*)$/s.exec(arg)?.[1];
+    const setting = valued
+      ? fixedWords(raw.slice(at + 1, at + 2))
+      : glued !== undefined && bashOption(word) === null
+        ? null
+        : [glued];
+    if (valued) at++;
+    if (setting === null) return true;
+    const [key] = setting;
+    if (key !== undefined && GIT_PROGRAM_CONFIG.test(key.split('=')[0] ?? '')) return true;
+    if (GIT_GLOBAL_VALUED.has(arg)) at++;
   }
   return false;
 }
@@ -3982,7 +4160,8 @@ function readOnlySed(raw: readonly string[]): boolean {
   let script: string | null = null;
   let at = 0;
   for (; at < raw.length; at++) {
-    const arg = unquote(raw[at]);
+    const arg = bashOption(raw[at]);
+    if (arg === null) return false;
     if (arg === '-e' || arg === '--expression') {
       if (script !== null) return false;
       script = raw[++at] ?? null;
@@ -3998,7 +4177,7 @@ function readOnlySed(raw: readonly string[]): boolean {
   // `"1,$p"` is expanded by the shell before sed sees it; only a single-quoted or plain script is literal.
   if (isDynamic(script) && !script.startsWith("'")) return false;
   if (!READ_ONLY_SED_SCRIPT.test(unquote(script))) return false;
-  return raw.slice(at).every(arg => !isDynamic(arg) && !unquote(arg).startsWith('-'));
+  return raw.slice(at).every(arg => !isDynamic(arg) && !(bashOption(arg) ?? '-').startsWith('-'));
 }
 
 /** Contained programs that still create or write files on their own. */
@@ -4028,8 +4207,8 @@ const GIT_REPORTS = new Set([
  */
 export function readOnlyGit(raw: readonly string[]): boolean {
   if (raw.length === 0 || raw.some(isDynamic)) return false;
-  const tokens = raw.map(unquote);
-  if (tokens[0] !== 'git') return false;
+  const tokens = bashOptions(raw);
+  if (tokens === null || tokens[0] !== 'git') return false;
   let at = 1;
   while (at < tokens.length && tokens[at].startsWith('-')) {
     if (tokens[at] === '-C') at += 2;
@@ -4246,10 +4425,22 @@ export function containedCommand(raw: readonly string[]): boolean {
   if (program === 'set') return setOnlyChangesOptions(args);
   if (program === 'sed') return readOnlySed(raw.slice(1));
   if (LOCAL_PROGRAMS.has(program)) {
-    if (program === 'sort') return !sortRunsOrWrites(args);
-    if (program === 'uniq') return uniqOutput(args) === undefined;
+    if (program === 'sort') {
+      const options = optionStandIns(raw.slice(1), own(OPTION_FILES, program)?.valued ?? '');
+      return options !== null && !sortRunsOrWrites(options);
+    }
+    if (program === 'uniq') return uniqOutput(raw.slice(1)) === undefined;
     const runs = own(RUNS_A_PROGRAM, program);
-    return !runs || !args.some(arg => runs.test(arg));
+    // A word bash may change is judged by its literal text, as tree reads `-Lo$X` as `-L` and `-o`, and while
+    // that text can still begin such an option (`-fpr$X` may be `-fprint`).
+    const runsAt = (word: string): boolean => {
+      const value = bashOption(word);
+      if (value !== null) return runs?.test(value) === true;
+      const { head } = literalHead(word);
+      const names = own(RUNS_A_PROGRAM_NAMES, program) ?? [];
+      return head.length <= 1 || runs?.test(head) === true || names.some(name => name.startsWith(head));
+    };
+    return !runs || !raw.slice(1).some(runsAt);
   }
   // A computed argument can carry what it read into the request path itself.
   if (program === 'gh') return !raw.slice(1).some(isDynamic) && readOnlyGh(args);
@@ -5498,7 +5689,8 @@ export async function scanShell(
       const operands = rest.filter(arg => !arg.startsWith('-'));
       if (program === 'tee') for (const operand of operands) noteWrite(operand);
       const uniqWrites = program === 'uniq' ? uniqOutput(rest) : undefined;
-      if (uniqWrites !== undefined) noteWrite(uniqWrites);
+      if (uniqWrites === null) unreadOperands++;
+      else if (uniqWrites !== undefined) noteWrite(uniqWrites);
       for (const [index, arg] of rest.entries()) {
         const output = DOWNLOAD_OUTPUT.get(program);
         const value = !output

@@ -151,6 +151,10 @@ describe('commands main ran unasked', () => {
     // arepo gives settings an attribute, which the scan's git, reading attributes from the empty tree, never sees.
     const arepo = await repository('arepo', { '.gitattributes': '.claude/** foo\n', '.claude/settings.json': '{}' });
     await writeFile(join(arepo, '.claude', 'settings.json'), '{"x": 1}');
+    // grepo has two commits, so `HEAD~1` names one.
+    const grepo = await repository('grepo', { '.claude/settings.json': '{}', 'src/b.ts': 'b' });
+    await writeFile(join(grepo, 'src', 'b.ts'), 'b2');
+    git(grepo, 'commit', '-qam', 'second');
     // prepo is a treeless partial clone whose missing trees would come from a host through core.sshCommand.
     git(proj, 'config', 'uploadpack.allowFilter', 'true');
     execFileSync('git', ['clone', '-q', '--filter=tree:0', '--no-checkout', `file://${proj}`, join(proj, 'prepo')]);
@@ -355,6 +359,134 @@ describe('commands main ran unasked', () => {
     'pgrep --list-full node | xargs docker stop',
   ])('asks for %s, which main ran unasked', async command => {
     expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each([
+    'git diff --name-only \\--output=.claude/settings.json',
+    'git diff --outp\\ut=.claude/settings.json HEAD~1',
+    'git diff "--output"=.claude/settings.json HEAD~1',
+    'git log \\--output=.claude/settings.json -1',
+    'git log -\\-output=.claude/settings.json -1',
+    'git diff --o\\utput .claude/settings.json HEAD~1',
+    'git diff --output\\=.claude/settings.json HEAD~1',
+    'git diff --out""put=.claude/settings.json HEAD~1',
+    "git diff --out''put=.claude/settings.json HEAD~1",
+    'git show \\--output=.claude/settings.json HEAD',
+    'git -C . diff \\--output=.claude/settings.json',
+    'git --no-pager diff \\--output=.claude/settings.json',
+    'git diff --{output,x}=.claude/settings.json HEAD~1',
+    'git diff {--output=.claude/settings.json,HEAD~1}',
+    'git diff \\--output=~/proj/grepo/.claude/settings.json HEAD~1',
+    'git diff \\--output=.claude/settings.js? HEAD~1',
+    'git \\-c core.fsmonitor=x status',
+    'git -c core.fsm\\onitor=x status',
+    'git -c "$X" status',
+    'sort \\-o .claude/settings.json src/b.ts',
+    'sort --outp\\ut=.claude/settings.json src/b.ts',
+    'iconv -f utf8 -t utf8 \\-o .claude/settings.json src/b.ts',
+    'tree \\-o .claude/settings.json',
+    'sed -n 1p \\-i .claude/settings.json',
+    'rg --pr\\e=./x foo',
+    'rg \\--pre ./x foo',
+    'rsync \\-e ./x src/ dst/',
+    'tar \\-T list -cf out.tgz',
+    'tar --files-fr\\om=list -cf out.tgz',
+    'git --attr-source HEAD -c core.fsmonitor=x status',
+    'git --attr-source HEAD \\-c core.fsmonitor=x status',
+    'tree -Lo$X 2 .claude/settings.json',
+    'tree -Io$X x .claude/settings.json',
+    'tar -cf out.tar \\-I{./x,./x} src',
+    'tar -cf out.tar \\-I ./x src',
+    'tar -cf out.tar \\-F ./x src',
+    'tar -xf x.tar "--to-command"=./x',
+    'tar -xf x.tar \\--to-command=./x',
+    'tar -xf x.tar \\--to-com=./x',
+    'tar -cf out.tar \\--use-compress=./x src',
+    'tar -cf out.tar --checkpoint-act\\ion=exec=./x src',
+    'tar c\\If ./x out.tar src',
+    'tree \\-I{o,o} .claude/settings.json',
+    'tree \\-P{o,o} .claude/settings.json',
+    'tree \\-H{o,o} .claude/settings.json',
+    'tree \\-T{o,o} .claude/settings.json',
+    'tree "-I"{o,o} .claude/settings.json',
+    "tree '-I'{o,o} .claude/settings.json",
+    'tree -\\I{o,o} .claude/settings.json',
+    'tree "-P"{o,o} .claude/settings.json',
+    'tree -I{o,o} .claude/settings.json',
+    'find src -fpr$X .claude/settings.json',
+    'find src -fpr$(echo int) .claude/settings.json',
+    'find src -f{print,} .claude/settings.json',
+    'find src -fl$X .claude/settings.json',
+    'find src -fprin? .claude/settings.json',
+  ])('asks for %s, an option word read as bash passes it', async command => {
+    expect(await judge(command, 'grepo')).toMatchObject(asks);
+  });
+
+  it.each([
+    'sort -o* src/b.ts',
+    'sort --o{utput,x}=.claude/settings.json src/b.ts',
+    'sort {-o,.claude/settings.json} src/b.ts',
+    'iconv -t utf8 -o$OUT src/b.ts',
+    'git format-patch -o* -1',
+    'git format-patch --output-directory={.claude,x} -1',
+    'git --config-env=core.fsmonitor=$V status',
+    'rg --pre{,-glob}=./x foo',
+    'tar -czf out.tgz -{-files-from=list,x}',
+    'tar c$X out.tgz src',
+    'tar -cf out.tar --$X src',
+    'tar --fi* -cf out.tar',
+    'rg --$X ./x foo',
+    'rsync --$X ./x src/ dst/',
+  ])('asks for %s, an option whose name bash may still change', async command => {
+    expect(await judge(command, 'grepo')).toMatchObject(asks);
+  });
+
+  it.each([
+    'tar --exclude=*.log -czf out.tgz src',
+    'tar -czf out.tgz --exclude=node_modules/* src',
+    'tar czf out.tgz --exclude=*.log src',
+    'tar -czf out.tgz src --exclude=*.test.ts',
+    'tar -czf out.tgz --exclude={a,b} src',
+    'sort -k$N src/b.ts',
+    'sort -t"$sep" -k2 src/b.ts',
+    'iconv -f$ENC -t utf8 src/b.ts',
+    'shuf -n$N src/b.ts',
+    'git format-patch --output-directory=~/proj/patches -1',
+    'git --git-dir="$PWD/.git" log -1',
+    'tree -L 2',
+    'tree -L$N .',
+    'tree -I node_modules',
+    'tar -tzf x.tgz',
+    'tar -xzf x.tgz -C dir',
+    'for f in src/*.ts; do echo "--- $f ---"; head -5 "$f"; done',
+    'echo "--- $f"',
+    'echo "-- $(date) --"',
+    'printf \'%s\\n\' "--- $f ---"',
+    'echo "--- $(basename $PWD) ---"; git status',
+    'cargo build --${PROFILE}',
+    'npm test --$X',
+    'make --$X',
+    'git log --$X',
+    'ls --c*',
+    'npx prettier --{check,write} src',
+  ])('runs %s unasked, an option bash cannot change to another', async command => {
+    expect(await judge(command, 'grepo')).toMatchObject({ auto: true, full: true });
+  });
+
+  it.each([
+    ['git diff HEAD~1', unasked],
+    ['git log --oneline -5', unasked],
+    ['git diff --stat', unasked],
+    ['git show HEAD:src/b.ts', unasked],
+    ["git diff -- 'src/*.ts'", unasked],
+    ["git log --format='%h %s'", unasked],
+    ['git diff "HEAD~1" -- src', unasked],
+    ['sort -u src/b.ts', { auto: true, full: true }],
+    ['sort -t, -k2 src/b.ts', { auto: true, full: true }],
+    ['uniq -c src/b.ts', { auto: true, full: true }],
+    ["sed -n '1,5p' src/b.ts", unasked],
+  ])('runs %s unasked', async (command, expected) => {
+    expect(await judge(command, 'grepo')).toMatchObject(expected);
   });
 
   it.each([
