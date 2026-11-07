@@ -466,6 +466,13 @@ async function executeRun(
   const added = [...new Set(summary.added)];
   const promoted = [...new Set(summary.promoted)];
   const deprecated = [...new Set(merged.transitions.map(transition => transition.modelId))];
+  // A 'discovered' row is written with autoDisabled, so no picker ever showed it:
+  // its sunset belongs in the run report, not in the alarm an operator is paged on.
+  const userVisibleDeprecated = [
+    ...new Set(
+      merged.transitions.filter(transition => transition.from !== 'discovered').map(transition => transition.modelId)
+    ),
+  ];
   const sourceReports = [...results.values()].map(entry => entry.report);
   const finishedAt = ctx.now();
   const plannedPrices = describePriceRows(merged.priceRows);
@@ -566,7 +573,7 @@ async function executeRun(
       ModelsDiscovered: added.length,
       ModelsPromoted: promoted.length,
       ModelsBlockedByDispatch: [...new Set(summary.blockedByDispatch)].length,
-      ModelsDeprecated: deprecated.length,
+      ModelsDeprecated: userVisibleDeprecated.length,
       PriceRowsAppended: merged.pricesAppended,
       PriceFlagged: merged.priceFlags.length,
       CatalogRowsRejected: merged.rejected,

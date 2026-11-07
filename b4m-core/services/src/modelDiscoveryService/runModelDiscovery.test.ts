@@ -672,6 +672,36 @@ describe('runModelDiscovery', () => {
         });
       });
 
+      it('reports a never-promoted model it deprecates without counting it toward the alarm', async () => {
+        bench.catalog.append({
+          modelId: 'gpt-6',
+          source: 'discovery',
+          patch: testRecord({
+            id: 'gpt-6',
+            name: 'GPT-6',
+            contextWindow: 400_000,
+            lifecycle: { status: 'discovered' },
+            autoDisabled: true,
+          }),
+          ownedGroups: ['identity', 'limits', 'dispatch', 'lifecycle', 'availability'],
+          effectiveFrom: new Date(START.getTime() - DAY),
+        });
+
+        // Missing from the first run on, so no run ever sees it and promotes it.
+        bench.adapters.sources = [openaiSource([])];
+        let result = await runModelDiscovery(bench.adapters, bench.options);
+        for (let miss = 1; miss < 3; miss += 1) {
+          bench.advance(DAY);
+          result = await runModelDiscovery(bench.adapters, bench.options);
+        }
+
+        expect(result.lifecycle.transitions).toMatchObject([
+          { modelId: 'gpt-6', from: 'discovered', to: 'deprecated', signal: 'absence' },
+        ]);
+        expect(bench.runs.docs[2].changes?.deprecated).toEqual(['gpt-6']);
+        expect(result.metrics.ModelsDeprecated).toBe(0);
+      });
+
       it('waits while only two misses have accrued', async () => {
         const result = await missFor(bench, 2);
 
@@ -1671,7 +1701,8 @@ describe('runModelDiscovery', () => {
           autoApplied: false,
         },
       ]);
-      expect(result.metrics.ModelsDeprecated).toBe(1);
+      // Never promoted, so never in a picker: reported, but not counted toward the alarm.
+      expect(result.metrics.ModelsDeprecated).toBe(0);
       expect(result.diff.some(entry => entry.promoted)).toBe(false);
       expect(bench.catalog.rows[bench.catalog.rows.length - 1].patch).toMatchObject({
         lifecycle: { status: 'deprecated', deprecationDate: '2026-01-15' },

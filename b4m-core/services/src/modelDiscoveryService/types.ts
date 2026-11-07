@@ -468,6 +468,10 @@ export interface ModelDiscoveryMetrics {
   ModelsDiscovered: number;
   ModelsPromoted: number;
   ModelsBlockedByDispatch: number;
+  /**
+   * Sunsets of models a user could have picked. A model that never left 'discovered' still
+   * appears in the run's `changes.deprecated`, but not here: this count drives an alarm.
+   */
   ModelsDeprecated: number;
   /** Rows actually appended, so report mode reports a plan and counts zero. */
   PriceRowsAppended: number;
