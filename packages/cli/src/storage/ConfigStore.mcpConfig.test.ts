@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { ConfigStore } from './ConfigStore';
@@ -90,6 +90,20 @@ describe('ConfigStore --mcp-config', () => {
     expect(host?.type).toBe('http');
     expect(host?.url).toBe('https://example.test/mcp');
     expect(host?.headers?.Authorization).toBe('Bearer minted-token');
+  });
+
+  it('refuses to toggle an injected server and leaves the user config alone', async () => {
+    writeGlobalConfig();
+    writeMcpConfig();
+    process.env.B4M_MCP_CONFIG_FILE = mcpConfigPath;
+    delete process.env.B4M_STRICT_MCP_CONFIG;
+    const store = new ConfigStore(globalConfigPath);
+    await store.load();
+    const before = readFileSync(globalConfigPath, 'utf-8');
+
+    await expect(store.toggleMcpServer('host', false)).rejects.toThrow('MCP server "host" is not saved in');
+
+    expect(readFileSync(globalConfigPath, 'utf-8')).toBe(before);
   });
 
   it('--strict-mcp-config uses ONLY the injected servers (drops file-config servers)', async () => {

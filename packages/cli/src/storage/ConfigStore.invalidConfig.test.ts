@@ -204,6 +204,39 @@ describe('saving over a config this build cannot validate', () => {
     ]);
   });
 
+  it('toggles a server only the file defines and keeps every other key', async () => {
+    const listed = { name: 'local', command: 'local-mcp', enabled: true, futureField: 'x' };
+    await writeFile(configPath, JSON.stringify({ toolApiKeys: 'bad', newerSetting: 1, mcpServers: [listed] }), {
+      mode: 0o600,
+    });
+    const store = new ConfigStore(configPath);
+
+    await store.toggleMcpServer('local', false);
+    expect(await readJson()).toEqual({
+      toolApiKeys: 'bad',
+      newerSetting: 1,
+      mcpServers: [{ ...listed, enabled: false }],
+    });
+
+    await writeFile(configPath, JSON.stringify({ toolApiKeys: 'bad', mcpServers: { remote: { url: 'u' } } }), {
+      mode: 0o600,
+    });
+    await new ConfigStore(configPath).toggleMcpServer('remote', false);
+    expect(await readJson()).toEqual({ toolApiKeys: 'bad', mcpServers: { remote: { url: 'u', enabled: false } } });
+
+    await writeFile(configPath, JSON.stringify({ toolApiKeys: 'bad', mcpServers: [{ name: 'local', command: 'c' }] }), {
+      mode: 0o600,
+    });
+    await new ConfigStore(configPath).toggleMcpServer('local', true);
+    expect((await readJson()).mcpServers).toEqual([{ name: 'local', command: 'c', enabled: true }]);
+
+    const contents = await readFile(configPath, 'utf-8');
+    await expect(new ConfigStore(configPath).toggleMcpServer('toString', true)).rejects.toThrow(
+      'MCP server "toString" is not saved in'
+    );
+    expect(await readFile(configPath, 'utf-8')).toBe(contents);
+  });
+
   it('clears a model server secret from the file', async () => {
     const credentials = { a: { secret: 'secret-a' }, b: { secret: 'secret-b' } };
     const contents = JSON.stringify({ preferences: { theme: 'sepia' }, modelServerCredentials: credentials });
@@ -557,11 +590,20 @@ describe('after a refused save in a config this build cannot validate', () => {
     const contents = await readFile(configPath, 'utf-8');
     const store = new ConfigStore(configPath);
     await store.load();
+    const internals = store as unknown as { mergeModelFields: (...args: unknown[]) => Promise<unknown> };
+    const mergeModelFields = internals.mergeModelFields.bind(store);
+    let readingModelFields = false;
+    internals.mergeModelFields = async (...args: unknown[]) => {
+      readingModelFields = true;
+      try {
+        return await mergeModelFields(...args);
+      } finally {
+        readingModelFields = false;
+      }
+    };
     const realRead = fsPromises.readFile.bind(fsPromises);
-    let reads = 0;
-    // Over a file that failed validation a save reads the feature map, then the model fields.
     vi.spyOn(fsPromises, 'readFile').mockImplementation((async (...args: Parameters<typeof realRead>) => {
-      if (String(args[0]) === configPath && ++reads === 2) {
+      if (String(args[0]) === configPath && readingModelFields) {
         throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
       }
       return realRead(...args);
@@ -659,5 +701,80 @@ describe('a backend switch or sign-in that does not reach the file', () => {
 
     expect(await store.getAuthTokens()).toBeNull();
     expect((await readJson()).auth).toBeUndefined();
+  });
+});
+
+describe('a write that reaches the file', () => {
+  const signedInStore = async () => {
+    await new ConfigStore(configPath).setAuthTokens(signIn);
+    const store = new ConfigStore(configPath);
+    await store.load();
+    return store;
+  };
+
+  it('keeps the sign-in and backend when it marks a backend chosen after the file was removed', async () => {
+    await new ConfigStore(configPath).setAuthTokens(signIn);
+    const saved = await readJson();
+    await writeFile(configPath, JSON.stringify({ ...saved, apiConfig: { customUrl: 'https://self.example.com' } }), {
+      mode: 0o600,
+    });
+    const store = new ConfigStore(configPath);
+    await store.load();
+    await rm(configPath);
+
+    await store.markEndpointChosen();
+
+    const file = await readJson();
+    expect(file.auth).toEqual(signIn);
+    expect(file.apiConfig).toEqual({ customUrl: 'https://self.example.com', endpointChosen: true });
+    expect(await store.getAuthTokens()).toEqual(signIn);
+  });
+
+  it('moves the session to the new backend when setting permissions fails after the write', async () => {
+    const store = await signedInStore();
+    vi.spyOn(fsPromises, 'chmod').mockImplementationOnce(async () => {
+      throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+    });
+
+    await expect(store.switchApiEnvironment({ customUrl: 'https://self.example.com' })).rejects.toThrow(
+      'operation not permitted'
+    );
+
+    expect((await readJson()).apiConfig).toEqual({ customUrl: 'https://self.example.com', endpointChosen: true });
+    expect((await store.load()).apiConfig?.customUrl).toBe('https://self.example.com');
+    expect(await store.getAuthTokens()).toBeNull();
+  });
+
+  it('serves the saved settings when rebuilding the merged config fails after the write', async () => {
+    const store = await signedInStore();
+    const internals = store as unknown as { computeMerged: () => Promise<unknown> };
+    const computeMerged = internals.computeMerged.bind(store);
+    let calls = 0;
+    internals.computeMerged = async () => {
+      if (++calls === 1) throw new Error('merge failed');
+      return computeMerged();
+    };
+
+    await expect(store.save({ preferences: { exportFormat: 'json' } })).rejects.toThrow('merge failed');
+
+    expect((await readJson()).preferences).toMatchObject({ exportFormat: 'json' });
+    expect((await store.load()).preferences.exportFormat).toBe('json');
+  });
+});
+
+describe('loading from a working directory that was removed', () => {
+  it('leaves a valid config file as it is', async () => {
+    await new ConfigStore(configPath).setAuthTokens(signIn);
+    const contents = await readFile(configPath, 'utf-8');
+    vi.stubEnv('B4M_NO_PROJECT_CONFIG', '');
+    vi.spyOn(process, 'cwd').mockImplementation(() => {
+      throw Object.assign(new Error('uv_cwd: no such file or directory'), { code: 'ENOENT' });
+    });
+
+    const config = await new ConfigStore(configPath).load();
+    vi.mocked(process.cwd).mockRestore();
+
+    expect(config.auth).toEqual(signIn);
+    expect(await readFile(configPath, 'utf-8')).toBe(contents);
   });
 });
