@@ -544,15 +544,21 @@ function removeRawMcpServer(raw: Record<string, unknown>, name: string): boolean
   return false;
 }
 
-/** Sets `enabled` on the server named `name` in the file's mcpServers, array or name-keyed map; false when none. */
-function setRawMcpServerEnabled(raw: Record<string, unknown>, name: string, enabled: boolean): boolean {
+/** The file's own entry for the server named `name` in mcpServers, array or name-keyed map. */
+function rawMcpServerEntry(raw: Record<string, unknown>, name: string): Record<string, unknown> | undefined {
   const servers = raw.mcpServers;
   const entry = Array.isArray(servers)
     ? servers.find(item => isJsonObject(item) && item.name === name)
     : isJsonObject(servers)
       ? ownValue(servers, name)
       : undefined;
-  if (!isJsonObject(entry)) return false;
+  return isJsonObject(entry) ? entry : undefined;
+}
+
+/** Sets `enabled` on the server named `name` in the file's mcpServers; false when the file has no such server. */
+function setRawMcpServerEnabled(raw: Record<string, unknown>, name: string, enabled: boolean): boolean {
+  const entry = rawMcpServerEntry(raw, name);
+  if (!entry) return false;
   entry.enabled = enabled;
   return true;
 }
@@ -1075,6 +1081,9 @@ export class ConfigStore {
   // out of config.mcpServers so no spawn path can start them.
   private pendingMcpApprovals: NormalizedMcpServer[] = [];
   private pendingMcpWarned = false;
+  // Names of the MCP servers the last merge took from --mcp-config and from the trusted project's layers.
+  private injectedMcpNames = new Set<string>();
+  private projectMcpNames = new Set<string>();
 
   constructor(configPath?: string) {
     this.configPath = configPath || path.join(homedir(), '.bike4mind', 'config.json');
@@ -1283,6 +1292,8 @@ export class ConfigStore {
     const repoServers = mergeMcpServersGlobalWins(undefined, mcpJson, project?.mcpServers, local?.mcpServers).filter(
       s => !globalNames.has(s.name)
     );
+    this.projectMcpNames = new Set(repoServers.map(s => s.name));
+    this.injectedMcpNames = new Set();
     const approved = new Set((this.projectRealPath && global.trustedMcpDefinitions?.[this.projectRealPath]) || []);
     const approvedRepo: NormalizedMcpServer[] = [];
     this.pendingMcpApprovals = [];
@@ -1299,6 +1310,7 @@ export class ConfigStore {
     const mcpConfigFile = process.env.B4M_MCP_CONFIG_FILE;
     if (mcpConfigFile) {
       const injected = await loadMcpConfigFile(mcpConfigFile);
+      this.injectedMcpNames = new Set((injected ?? []).map(s => s.name));
       if (process.env.B4M_STRICT_MCP_CONFIG === '1') {
         // Strict means strict: the injected set is the ONLY allowed scope. A
         // malformed/missing file (injected === null) yields an empty set, never
@@ -1891,11 +1903,8 @@ export class ConfigStore {
       failures.push(error);
     }
     try {
-      // Refresh the merged effective config from the freshly-persisted global.
-      this.config = await this.computeMerged();
+      await this.refreshMerged();
     } catch (error) {
-      // The next load() rebuilds it from the file.
-      this.config = null;
       failures.push(error);
     }
     if (failures.length > 0) {
@@ -1951,6 +1960,16 @@ export class ConfigStore {
     return merged;
   }
 
+  /** Rebuilds the merged view; on failure drops it, so the next load() rebuilds it from the file. */
+  private async refreshMerged(): Promise<void> {
+    try {
+      this.config = await this.computeMerged();
+    } catch (error) {
+      this.config = null;
+      throw error;
+    }
+  }
+
   private invalidConfigError(key?: string): Error {
     return new RefusedSaveError(
       `Could not save settings: ${this.configPath} failed validation, so it was left unchanged. Fix the file, or remove it to start over.`,
@@ -1977,13 +1996,7 @@ export class ConfigStore {
         // Only this change goes into the base, so other changes still pending in memory are saved by their own writes.
         if (this.fallbackBase) change(this.fallbackBase);
         if (this.globalConfig) change(this.globalConfig);
-        try {
-          this.config = await this.computeMerged();
-        } catch (error) {
-          // The next load() rebuilds it from the file.
-          this.config = null;
-          throw error;
-        }
+        await this.refreshMerged();
         return true;
       });
     } catch (error) {
@@ -2071,14 +2084,25 @@ export class ConfigStore {
   }
 
   /**
-   * Enable/disable MCP server
+   * Enable/disable an MCP server saved in the user config. Rejects naming the server's source when the user config
+   * does not save it; `injectedStillApplies` says --mcp-config also defines it, so its definition stays in effect.
    */
-  async toggleMcpServer(name: string, enabled: boolean): Promise<void> {
+  async toggleMcpServer(name: string, enabled: boolean): Promise<{ injectedStillApplies: boolean }> {
     await this.load();
-    const notSaved = () =>
-      new Error(
-        `MCP server "${name}" is not saved in ${this.configPath}. A server from --mcp-config or a project's config is enabled or disabled in that file.`
-      );
+    const notSaved = () => {
+      if (this.injectedMcpNames.has(name)) {
+        return new Error(
+          `MCP server "${name}" comes from --mcp-config, not ${this.configPath}; enable or disable it in that file.`
+        );
+      }
+      if (this.projectMcpNames.has(name)) {
+        return new Error(
+          `MCP server "${name}" comes from this project's config, not ${this.configPath}; enable or disable it there.`
+        );
+      }
+      return new Error(`MCP server "${name}" was not found in ${this.configPath}.`);
+    };
+    const result = { injectedStillApplies: this.injectedMcpNames.has(name) };
     const toggle = (config: CliConfig) => {
       const server = config.mcpServers.find(s => s.name === name);
       if (server) server.enabled = enabled;
@@ -2087,11 +2111,30 @@ export class ConfigStore {
       if (!setRawMcpServerEnabled(raw, name, enabled)) throw notSaved();
       return true;
     };
-    if (await this.patchInFallback(toggle, toggleInFile)) return;
+    if (await this.patchInFallback(toggle, toggleInFile)) return result;
     const server = this.globalConfig!.mcpServers.find(s => s.name === name);
     if (!server) throw notSaved();
     server.enabled = enabled;
     await this.save();
+    return result;
+  }
+
+  /**
+   * The MCP server `name` as enable/disable sees it: the user config's own entry when it saves one, read from the
+   * file itself when that fails validation, otherwise the server in effect. Null when there is none.
+   */
+  async findMcpServer(name: string): Promise<{ enabled: boolean } | null> {
+    const config = await this.load();
+    const saved = this.globalConfig!.mcpServers.find(s => s.name === name);
+    if (saved) return { enabled: saved.enabled };
+    if (this.fallbackBase) {
+      const text = await this.readConfigText();
+      const raw = text === null ? null : this.parseConfigText(text);
+      const entry = raw ? rawMcpServerEntry(raw, name) : undefined;
+      if (entry) return { enabled: entry.enabled !== false };
+    }
+    const effective = config.mcpServers.find(s => s.name === name);
+    return effective ? { enabled: effective.enabled } : null;
   }
 
   /**
@@ -2515,7 +2558,7 @@ export class ConfigStore {
         });
       } else {
         follow();
-        this.config = await this.computeMerged();
+        await this.refreshMerged();
       }
       return { url: newUrl, envName, changed: !wasHere, authenticated: isAuthTokenValid(swap.auth) };
     });

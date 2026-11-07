@@ -86,7 +86,7 @@ export async function handleMcpCommand(subcommand: string, argv: McpCommandArgs)
         console.error('❌ Usage: b4m mcp enable <name>');
         process.exit(1);
       }
-      await handleEnable(config, argv.name, configStore);
+      await handleEnable(argv.name, configStore);
       break;
 
     case 'disable':
@@ -94,7 +94,7 @@ export async function handleMcpCommand(subcommand: string, argv: McpCommandArgs)
         console.error('❌ Usage: b4m mcp disable <name>');
         process.exit(1);
       }
-      await handleDisable(config, argv.name, configStore);
+      await handleDisable(argv.name, configStore);
       break;
 
     case 'serve': {
@@ -235,11 +235,14 @@ async function handleRemove(config: CliConfig, name: string, configStore: Config
   }
 }
 
+const INJECTED_STILL_APPLIES =
+  'Saved in your config, but --mcp-config also defines this server and its definition still applies while that file is passed.';
+
 /**
  * Enable an MCP server
  */
-async function handleEnable(config: CliConfig, name: string, configStore: ConfigStore): Promise<void> {
-  const server = config.mcpServers.find(s => s.name === name);
+async function handleEnable(name: string, configStore: ConfigStore): Promise<void> {
+  const server = await configStore.findMcpServer(name);
 
   if (!server) {
     console.error(`❌ MCP server "${name}" not found.`);
@@ -252,10 +255,10 @@ async function handleEnable(config: CliConfig, name: string, configStore: Config
   }
 
   try {
-    await configStore.toggleMcpServer(name, true);
+    const { injectedStillApplies } = await configStore.toggleMcpServer(name, true);
     console.log(`✅ Enabled MCP server "${name}"`);
     console.log('');
-    console.log('The server will connect next time you start the CLI.');
+    console.log(injectedStillApplies ? INJECTED_STILL_APPLIES : 'The server will connect next time you start the CLI.');
   } catch (error) {
     console.error(`❌ Failed to save configuration:`, error instanceof Error ? error.message : String(error));
     process.exit(1);
@@ -265,8 +268,8 @@ async function handleEnable(config: CliConfig, name: string, configStore: Config
 /**
  * Disable an MCP server
  */
-async function handleDisable(config: CliConfig, name: string, configStore: ConfigStore): Promise<void> {
-  const server = config.mcpServers.find(s => s.name === name);
+async function handleDisable(name: string, configStore: ConfigStore): Promise<void> {
+  const server = await configStore.findMcpServer(name);
 
   if (!server) {
     console.error(`❌ MCP server "${name}" not found.`);
@@ -279,10 +282,12 @@ async function handleDisable(config: CliConfig, name: string, configStore: Confi
   }
 
   try {
-    await configStore.toggleMcpServer(name, false);
+    const { injectedStillApplies } = await configStore.toggleMcpServer(name, false);
     console.log(`✅ Disabled MCP server "${name}"`);
     console.log('');
-    console.log('The server will not connect next time you start the CLI.');
+    console.log(
+      injectedStillApplies ? INJECTED_STILL_APPLIES : 'The server will not connect next time you start the CLI.'
+    );
   } catch (error) {
     console.error(`❌ Failed to save configuration:`, error instanceof Error ? error.message : String(error));
     process.exit(1);

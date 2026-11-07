@@ -101,9 +101,29 @@ describe('ConfigStore --mcp-config', () => {
     await store.load();
     const before = readFileSync(globalConfigPath, 'utf-8');
 
-    await expect(store.toggleMcpServer('host', false)).rejects.toThrow('MCP server "host" is not saved in');
+    await expect(store.toggleMcpServer('host', false)).rejects.toThrow('MCP server "host" comes from --mcp-config');
+    await expect(store.toggleMcpServer('hots', false)).rejects.toThrow(
+      `MCP server "hots" was not found in ${globalConfigPath}.`
+    );
 
     expect(readFileSync(globalConfigPath, 'utf-8')).toBe(before);
+  });
+
+  it('reports that the injected definition still applies to a server the user config also saves', async () => {
+    writeGlobalConfig();
+    writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: { 'existing-stdio': { command: 'other' } } }));
+    process.env.B4M_MCP_CONFIG_FILE = mcpConfigPath;
+    delete process.env.B4M_STRICT_MCP_CONFIG;
+    const store = new ConfigStore(globalConfigPath);
+
+    expect(await store.toggleMcpServer('existing-stdio', false)).toEqual({ injectedStillApplies: true });
+    expect(JSON.parse(readFileSync(globalConfigPath, 'utf-8')).mcpServers[0].enabled).toBe(false);
+    expect(await store.toggleMcpServer('existing-stdio', true)).toEqual({ injectedStillApplies: true });
+
+    delete process.env.B4M_MCP_CONFIG_FILE;
+    expect(await new ConfigStore(globalConfigPath).toggleMcpServer('existing-stdio', false)).toEqual({
+      injectedStillApplies: false,
+    });
   });
 
   it('--strict-mcp-config uses ONLY the injected servers (drops file-config servers)', async () => {

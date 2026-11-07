@@ -232,7 +232,7 @@ describe('saving over a config this build cannot validate', () => {
 
     const contents = await readFile(configPath, 'utf-8');
     await expect(new ConfigStore(configPath).toggleMcpServer('toString', true)).rejects.toThrow(
-      'MCP server "toString" is not saved in'
+      'MCP server "toString" was not found in'
     );
     expect(await readFile(configPath, 'utf-8')).toBe(contents);
   });
@@ -759,6 +759,26 @@ describe('a write that reaches the file', () => {
 
     expect((await readJson()).preferences).toMatchObject({ exportFormat: 'json' });
     expect((await store.load()).preferences.exportFormat).toBe('json');
+  });
+
+  it('serves the file when rebuilding the merged config fails on a switch that writes nothing', async () => {
+    await new ConfigStore(configPath).setCustomApiUrl('https://self.example.com');
+    const store = new ConfigStore(configPath);
+    await store.load();
+    await new ConfigStore(configPath).setAuthTokens(signIn);
+    const contents = await readFile(configPath, 'utf-8');
+    const internals = store as unknown as { computeMerged: () => Promise<unknown> };
+    const computeMerged = internals.computeMerged.bind(store);
+    let calls = 0;
+    internals.computeMerged = async () => {
+      if (++calls === 1) throw new Error('merge failed');
+      return computeMerged();
+    };
+
+    await expect(store.switchApiEnvironment({ customUrl: 'https://self.example.com' })).rejects.toThrow('merge failed');
+
+    expect(await readFile(configPath, 'utf-8')).toBe(contents);
+    expect(await store.getAuthTokens()).toEqual(signIn);
   });
 });
 
