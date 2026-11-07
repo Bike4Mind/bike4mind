@@ -5,6 +5,7 @@ import BlockIcon from '@mui/icons-material/Block';
 import { useComplianceModal } from '../ComplianceModal';
 import GrantSubscriptionModal from '../Details/GrantSubscriptionModal';
 import BulkAbuseResponseModal from '../BulkAbuseResponseModal';
+import { useUser } from '@client/app/contexts/UserContext';
 import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
 import { AdminCommandPalette, type AdminCommand } from '../../shared/AdminCommandPalette';
 import { Kbd } from '../../shared';
@@ -230,6 +231,7 @@ const StatusBanner: React.FC<{ user: AdminUserProfile; onReinstate: () => void; 
 
 /** The profile of one user: every write is a named action that opens its own dialog. */
 export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onTabChange, onBack }) => {
+  const { currentUser } = useUser();
   const [action, setAction] = useState<ProfileAction | null>(null);
   // Revoking keys has no profile dialog of its own; it reuses the audited bulk flow for this one user.
   const [revokeKeysOpen, setRevokeKeysOpen] = useState(false);
@@ -283,7 +285,11 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
   return (
     <Stack gap={2.5} data-testid="user-profile-view">
       <Breadcrumb name={displayName(user)} onBack={onBack} />
-      <AdminCommandPalette commands={profileCommands} onOpenHelp={openHelpPanel} />
+      <AdminCommandPalette
+        enableEntitySearch={!!currentUser?.isAdmin}
+        commands={profileCommands}
+        onOpenHelp={openHelpPanel}
+      />
       <DeletionBanner user={user} onCancel={() => setAction('cancelDeletion')} />
       <StatusBanner
         user={user}
