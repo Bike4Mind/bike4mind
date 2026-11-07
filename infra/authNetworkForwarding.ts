@@ -1,6 +1,18 @@
 import { CLOUDFRONT_VIEWER_JA4_HEADER } from '../packages/server-utils/src/utils/trustedClientIpHeaders';
 
-export const AUTH_NETWORK_PATHS = ['/api/auth/*', '/api/otc/*', '/api/oauth/*'] as const;
+// Every route that reads the request network (readNetworkMeta in apps/client/server/auth/networkMeta.ts):
+// sign-in and signup capture under /api/auth, /api/otc and /api/oauth, and checkout routes, where credit
+// payment attempts derive hosting-network status from viewer ASN. Each pattern must end in `*`: the request
+// function derives its path prefixes by dropping that character. authNetworkPathCoverage.test.ts fails
+// when a route starts reading network meta outside these patterns.
+export const AUTH_NETWORK_PATHS = [
+  '/api/auth/*',
+  '/api/otc/*',
+  '/api/oauth/*',
+  '/api/subscriptions/*',
+  '/api/organizations/subscriptions/*',
+  '/api/stripe/*',
+] as const;
 
 export const AUTH_NETWORK_HEADERS = [
   'CloudFront-Viewer-Address',
