@@ -7,6 +7,28 @@ export const DISPOSABLE_AGGREGATE_HOLD_REASON = 'disposable-aggregate';
 /** Prefix of the hold reason for a freshly registered domain; the full reason names the configured age. */
 export const YOUNG_DOMAIN_HOLD_REASON_PREFIX = 'young-domain';
 
+/** Queue views of the Signup Domain Holds admin list; `pending` is `held_pending_review`. */
+export const SIGNUP_DOMAIN_HOLD_STATUS_FILTERS = ['pending', 'blocked', 'released', 'all'] as const;
+export type SignupDomainHoldStatusFilter = (typeof SIGNUP_DOMAIN_HOLD_STATUS_FILTERS)[number];
+
+/**
+ * Reason families of a hold, each matched as a prefix of `reason`. Must stay in sync with the reasons
+ * domainHoldReason (b4m-core/services/src/userService/domainIntelligence.ts) and detectSignupBurst
+ * (signupBurstDetector.ts) produce.
+ */
+export const SIGNUP_DOMAIN_HOLD_REASON_FILTERS = {
+  'young-domain': YOUNG_DOMAIN_HOLD_REASON_PREFIX,
+  'disposable-aggregate': DISPOSABLE_AGGREGATE_HOLD_REASON,
+  'disposable-list': 'disposable-list',
+  'burner-mx': 'burner-mx',
+  'signup-burst': 'Verified signup burst',
+} as const;
+export type SignupDomainHoldReasonFilter = keyof typeof SIGNUP_DOMAIN_HOLD_REASON_FILTERS;
+export const SIGNUP_DOMAIN_HOLD_REASON_FILTER_KEYS = Object.keys(SIGNUP_DOMAIN_HOLD_REASON_FILTERS) as [
+  SignupDomainHoldReasonFilter,
+  ...SignupDomainHoldReasonFilter[],
+];
+
 /**
  * The automated policies that may decide a hold. They only ever confirm (keep credits held); a
  * release always comes from an admin. See apps/workers/src/cron/signupDomainHoldTriage.ts and
@@ -78,6 +100,12 @@ export const signupDomainReviewSchema = z.object({
     })
     .optional(),
   assessment: signupDomainHoldAssessmentSchema.optional(),
+  /** Young-domain recheck (signupDomainHoldTriage): the registration date it last read for the domain. */
+  domainRegisteredAt: z.date().optional(),
+  /** When the recheck last looked the domain up, so a failed lookup is retried on a backoff. */
+  domainAgeCheckedAt: z.date().optional(),
+  /** When the recheck found the domain past the young-domain age; a hint for the admin, never a decision. */
+  domainAgedAt: z.date().optional(),
 });
 export type SignupDomainReview = z.infer<typeof signupDomainReviewSchema>;
 
