@@ -43,6 +43,7 @@ overrides:
   undici@>=6.0.0 <7.0.0: ^6.29.1
   undici@>=7.0.0 <8.0.0: ^7.30.1
   smol-toml@<1.9.0: ^1.9.0
+  zod@<4.0.0: ^4.6.6
   zod@>=4.0.0 <4.6.6: ^4.6.6
   follow-redirects@<1.16.2: ^1.16.2
   markdown-it@<14.3.3: ^14.3.3
@@ -14013,7 +14014,7 @@ packages:
   zod-to-json-schema@3.24.6:
     resolution: {integrity: sha512-h/z3PKvcTcTetyjl1fkj79MHNEjm+HpD6NXheWjzOekY7kV+lwDYnHw+ivHkijnCSMz1yJaWBD9vu/Fcmk+vEg==}
     peerDependencies:
-      zod: ^3.24.1
+      zod: ^4.6.6
 
   zod-to-json-schema@3.25.1:
     resolution: {integrity: sha512-pM/SU9d3YAggzi6MtR4h7ruuQlqKtad8e9S0fmxcMi+ueAK5Korys/aWcV9LIIHTVbj01NdzxcnXSN+O74ZIVA==}
@@ -14031,9 +14032,6 @@ packages:
     engines: {node: '>=18.0.0'}
     peerDependencies:
       zod: ^4.6.6
-
-  zod@3.25.76:
-    resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
   zod@4.6.6:
     resolution: {integrity: sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA==}
@@ -16148,7 +16146,7 @@ snapshots:
     dependencies:
       '@jimp/types': 1.6.1
       '@jimp/utils': 1.6.1
-      zod: 3.25.76
+      zod: 4.6.6
 
   '@jimp/plugin-blur@1.6.1':
     dependencies:
@@ -16160,7 +16158,7 @@ snapshots:
   '@jimp/plugin-circle@1.6.1':
     dependencies:
       '@jimp/types': 1.6.1
-      zod: 3.25.76
+      zod: 4.6.6
 
   '@jimp/plugin-color@1.6.1':
     dependencies:
@@ -16168,7 +16166,7 @@ snapshots:
       '@jimp/types': 1.6.1
       '@jimp/utils': 1.6.1
       tinycolor2: 1.6.0
-      zod: 3.25.76
+      zod: 4.6.6
     transitivePeerDependencies:
       - supports-color
 
@@ -16179,7 +16177,7 @@ snapshots:
       '@jimp/plugin-resize': 1.6.1
       '@jimp/types': 1.6.1
       '@jimp/utils': 1.6.1
-      zod: 3.25.76
+      zod: 4.6.6
     transitivePeerDependencies:
       - supports-color
 
@@ -16189,7 +16187,7 @@ snapshots:
       '@jimp/plugin-crop': 1.6.1
       '@jimp/plugin-resize': 1.6.1
       '@jimp/types': 1.6.1
-      zod: 3.25.76
+      zod: 4.6.6
     transitivePeerDependencies:
       - supports-color
 
@@ -16198,7 +16196,7 @@ snapshots:
       '@jimp/core': 1.6.1
       '@jimp/types': 1.6.1
       '@jimp/utils': 1.6.1
-      zod: 3.25.76
+      zod: 4.6.6
     transitivePeerDependencies:
       - supports-color
 
@@ -16206,7 +16204,7 @@ snapshots:
     dependencies:
       '@jimp/types': 1.6.1
       '@jimp/utils': 1.6.1
-      zod: 3.25.76
+      zod: 4.6.6
 
   '@jimp/plugin-dither@1.6.1':
     dependencies:
@@ -16216,12 +16214,12 @@ snapshots:
     dependencies:
       '@jimp/types': 1.6.1
       '@jimp/utils': 1.6.1
-      zod: 3.25.76
+      zod: 4.6.6
 
   '@jimp/plugin-flip@1.6.1':
     dependencies:
       '@jimp/types': 1.6.1
-      zod: 3.25.76
+      zod: 4.6.6
 
   '@jimp/plugin-hash@1.6.1':
     dependencies:
@@ -16241,7 +16239,7 @@ snapshots:
   '@jimp/plugin-mask@1.6.1':
     dependencies:
       '@jimp/types': 1.6.1
-      zod: 3.25.76
+      zod: 4.6.6
 
   '@jimp/plugin-print@1.6.1':
     dependencies:
@@ -16254,20 +16252,20 @@ snapshots:
       parse-bmfont-binary: 1.0.6
       parse-bmfont-xml: 1.1.6
       simple-xml-to-json: 1.2.7
-      zod: 3.25.76
+      zod: 4.6.6
     transitivePeerDependencies:
       - supports-color
 
   '@jimp/plugin-quantize@1.6.1':
     dependencies:
       image-q: 4.0.0
-      zod: 3.25.76
+      zod: 4.6.6
 
   '@jimp/plugin-resize@1.6.1':
     dependencies:
       '@jimp/core': 1.6.1
       '@jimp/types': 1.6.1
-      zod: 3.25.76
+      zod: 4.6.6
     transitivePeerDependencies:
       - supports-color
 
@@ -16278,7 +16276,7 @@ snapshots:
       '@jimp/plugin-resize': 1.6.1
       '@jimp/types': 1.6.1
       '@jimp/utils': 1.6.1
-      zod: 3.25.76
+      zod: 4.6.6
     transitivePeerDependencies:
       - supports-color
 
@@ -16289,13 +16287,13 @@ snapshots:
       '@jimp/plugin-hash': 1.6.1
       '@jimp/types': 1.6.1
       '@jimp/utils': 1.6.1
-      zod: 3.25.76
+      zod: 4.6.6
     transitivePeerDependencies:
       - supports-color
 
   '@jimp/types@1.6.1':
     dependencies:
-      zod: 3.25.76
+      zod: 4.6.6
 
   '@jimp/utils@1.6.1':
     dependencies:
@@ -16638,8 +16636,8 @@ snapshots:
     dependencies:
       axios: 1.20.0
       typescript-event-target: 1.1.1
-      zod: 3.25.76
-      zod-to-json-schema: 3.24.6(zod@3.25.76)
+      zod: 4.6.6
+      zod-to-json-schema: 3.24.6(zod@4.6.6)
     transitivePeerDependencies:
       - debug
       - supports-color
@@ -27386,9 +27384,9 @@ snapshots:
       compress-commons: 6.0.2
       readable-stream: 4.7.0
 
-  zod-to-json-schema@3.24.6(zod@3.25.76):
+  zod-to-json-schema@3.24.6(zod@4.6.6):
     dependencies:
-      zod: 3.25.76
+      zod: 4.6.6
 
   zod-to-json-schema@3.25.1(zod@4.6.6):
     dependencies:
@@ -27401,8 +27399,6 @@ snapshots:
   zod-validation-error@5.0.0(zod@4.6.6):
     dependencies:
       zod: 4.6.6
-
-  zod@3.25.76: {}
 
   zod@4.6.6: {}
 
