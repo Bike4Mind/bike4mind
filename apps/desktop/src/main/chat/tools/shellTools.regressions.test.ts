@@ -148,6 +148,9 @@ describe('commands main ran unasked', () => {
     await writeFile(join(mrepo, '.claude', 'settings.json'), '{"x": 1}');
     git(mrepo, 'commit', '-qam', 'side');
     git(mrepo, 'checkout', '-q', 'main');
+    // arepo gives settings an attribute, which the scan's git, reading attributes from the empty tree, never sees.
+    const arepo = await repository('arepo', { '.gitattributes': '.claude/** foo\n', '.claude/settings.json': '{}' });
+    await writeFile(join(arepo, '.claude', 'settings.json'), '{"x": 1}');
     // prepo is a treeless partial clone whose missing trees would come from a host through core.sshCommand.
     git(proj, 'config', 'uploadpack.allowFilter', 'true');
     execFileSync('git', ['clone', '-q', '--filter=tree:0', '--no-checkout', `file://${proj}`, join(proj, 'prepo')]);
@@ -328,6 +331,7 @@ describe('commands main ran unasked', () => {
     ['rg -l hooks | grep json | xargs sed -i s/a/b/', ''],
     ['git diff --name-only main...side | xargs sed -i s/a/b/', 'mrepo'],
     ['find . -maxdepth 1 -type d | xargs -I{} time -o {}/settings.json du -sh {}', ''],
+    ["git diff --name-only . ':(exclude,attr:!foo)' | xargs sed -i s/a/b/", 'arepo'],
   ])('asks before %s (in proj/%s) rewrites settings', async (command, folder) => {
     expect(await judge(command, folder)).toMatchObject(asks);
   });
@@ -343,6 +347,10 @@ describe('commands main ran unasked', () => {
     'rg -l foo |& xargs sed -i s/a/b/',
     'rg -l foo 2>&1 | xargs sed -i s/a/b/',
     '2>&1 rg -l foo | xargs sed -i s/a/b/',
+    // rg and grep echo a pattern they cannot parse on stderr.
+    "rg -l '( docs/secret x' 2>/dev/stdout | xargs sed -i s/a/b/",
+    "grep -rlE '( docs/secret x' . 2>/dev/stdout | xargs sed -i s/a/b/",
+    'rg -l foo 2>>/dev/stdout | xargs sed -i s/a/b/',
     'echo "main --force" | xargs git branch -d',
     'pgrep --list-full node | xargs docker stop',
   ])('asks for %s, which main ran unasked', async command => {
