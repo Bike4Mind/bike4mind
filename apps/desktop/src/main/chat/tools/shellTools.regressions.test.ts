@@ -157,16 +157,22 @@ describe('commands main ran unasked', () => {
       await writeFile(join(hrepo, name), '');
     }
     // Files named as some words are written, which bash passes to git as other values.
-    for (const name of ["HEAD''~1", 'HEAD\\~1', 'HEAD~1:']) await writeFile(join(hrepo, name), '');
+    for (const name of ["HEAD''~1", 'HEAD\\~1', 'HEAD~1:.', 'HEAD~1:src']) await writeFile(join(hrepo, name), '');
     await mkdir(join(srepo, '\\--output=.claude'));
-    for (const name of ['\\*', ':\\!src', ':\\(exclude\\)src', '\\--output=.claude/settings.json']) {
+    for (const name of ['\\*', ':\\!src', ':\\(exclude\\)src', '\\--output=.claude/settings.json', '*', ':.claude']) {
       await writeFile(join(srepo, name), '');
     }
-    // urepo is a clone two commits deep whose main tracks origin/main.
+    await writeFile(join(srepo, 'src', 'q]x'), '');
+    // vrepo has settings changed below `w`, and a file named as `\--relative=w` is written.
+    const vrepo = await repository('vrepo', { 'w/.claude/settings.json': '{}' });
+    await writeFile(join(vrepo, 'w', '.claude', 'settings.json'), '{"x": 1}');
+    await writeFile(join(vrepo, '\\--relative=w'), '');
+    // urepo is a clone two commits deep whose main tracks origin/main, with an untracked `u.ts` at its top.
     const orepo = await repository('orepo', { '.claude/settings.json': '{}', 'src/b.ts': 'b' });
     await writeFile(join(orepo, 'src', 'b.ts'), 'b2');
     git(orepo, 'commit', '-qam', 'second');
     git(proj, 'clone', '-q', orepo, join(proj, 'urepo'));
+    await writeFile(join(proj, 'urepo', 'u.ts'), 'u');
     // wrepo has the same history, with `HEAD^!` its only top-level name a bare `*` expands to.
     const wrepo = await repository('wrepo', { '.claude/settings.json': '{}' });
     await writeFile(join(wrepo, '.claude', 'settings.json'), '{"x": 1}');
@@ -323,6 +329,11 @@ describe('commands main ran unasked', () => {
     ['git diff --name-only origin/main...HEAD | xargs sed -i s/a/b/', 'urepo', unasked],
     ['git diff --name-only @{u} -- src | xargs sed -i s/a/b/', 'urepo', unasked],
     ['git diff --name-only origin/main...HEAD -- src | xargs sed -i s/a/b/', 'urepo', unasked],
+    ['git diff --name-only -- src/*.ts | xargs npx prettier --check', '', unasked],
+    ['git diff --name-only -- src/*.ts | xargs wc -l', '', unasked],
+    ['git diff --name-only HEAD~1 -- src/*.ts | xargs sed -i s/a/b/', 'urepo', unasked],
+    ['git diff --name-only -- *.ts | xargs sed -i s/a/b/', 'urepo', unasked],
+    ['git diff --name-only -- src/{b,c}.ts | xargs sed -i s/a/b/', 'urepo', unasked],
     ['cat .claude/agents/x.md', '', unaskedNamingClaude],
     ['ls -la .claude/', '', unaskedNamingClaude],
     ['grep -r hooks .claude', '', unaskedNamingClaude],
@@ -425,8 +436,19 @@ describe('commands main ran unasked', () => {
     ['git diff --name-only \\--output=.claude/settings.json | xargs sed -i s/a/b/', 'srepo'],
     ["git diff --name-only HEAD''~1 | xargs sed -i s/a/b/", 'hrepo'],
     ['git diff --name-only HEAD\\~1 | xargs sed -i s/a/b/', 'hrepo'],
-    // git reads `HEAD~1:./` as the top tree of HEAD~1, though a file `HEAD~1:` exists.
+    // git reads each as a tree of HEAD~1, though a file `HEAD~1:.` and a file `HEAD~1:src` exist.
     ['git diff --name-only HEAD~1:./ | xargs sed -i s/a/b/', 'hrepo'],
+    ['git diff --name-only HEAD~1:src/ | xargs sed -i s/a/b/', 'hrepo'],
+    // git reads `--relative=w`, printing `w/.claude/settings.json` as `.claude/settings.json`.
+    ['git diff --name-only \\--relative=w | xargs sed -i s/a/b/', 'vrepo'],
+    // bash expands `*w` to the folder `w`, which git lists the settings below.
+    ['git diff --name-only -- *w | xargs sed -i s/a/b/', 'vrepo'],
+    // Globs after `--` the scan does not read: bash may make names git reads more widely (`*`, `:.claude`) or none.
+    ['git diff --name-only -- ? | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- :* | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- nomatch* | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- src/*\\]x | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- src/[ab].ts | xargs sed -i s/a/b/', 'srepo'],
     ['rg -l hooks 2>"/dev/null" | xargs sed -i s/a/b/', ''],
     ['rg -l hooks | grep -v zz 2>/dev/null | xargs sed -i s/a/b/', ''],
   ])('asks before %s (in proj/%s) rewrites settings', async (command, folder) => {

@@ -2959,13 +2959,82 @@ function grepLists(args: readonly string[]): Listing | null {
  */
 function shellExpands(raw: string): boolean {
   const pieces = wordPieces(raw);
-  const live = pieces.some(
-    (piece, at) =>
-      !('char' in piece) ||
-      (piece.active && '*?['.includes(piece.char)) ||
-      (isActive(piece, '~') && (at === 0 || isActive(pieces[at - 1], '=') || isActive(pieces[at - 1], ':')))
+  const live = pieces.some(piece => !('char' in piece) || (piece.active && '*?['.includes(piece.char)));
+  return live || expandsTilde(pieces) || expandBraces(pieces)?.length !== 1;
+}
+
+const expandsTilde = (pieces: readonly WordPiece[]): boolean =>
+  pieces.some(
+    (piece, at) => isActive(piece, '~') && (at === 0 || isActive(pieces[at - 1], '=') || isActive(pieces[at - 1], ':'))
   );
-  return live || expandBraces(pieces)?.length !== 1;
+
+const textOf = (pieces: readonly WordPiece[]): string =>
+  pieces.map(piece => ('char' in piece ? piece.char : '')).join('');
+
+/**
+ * The values bash passes git for one word after `git diff --`, braces expanded: fixed text, or with `glob` a
+ * pattern of literals and unquoted `*`s that does not start with `:`. Null when the scan cannot tell.
+ */
+function pathspecValues(raw: string): { text: string; glob: boolean }[] | null {
+  const pieces = wordPieces(raw);
+  if (pieces.some(piece => !('char' in piece))) return null;
+  const words = expandBraces(pieces);
+  if (words === null) return null;
+  const values: { text: string; glob: boolean }[] = [];
+  for (const word of words) {
+    // `?`, `[` and extglob's `(` match by rules git's pathspecs do not share.
+    if (expandsTilde(word) || word.some(piece => ['?', '[', '('].some(char => isActive(piece, char)))) return null;
+    const text = textOf(word);
+    const stars = word.filter(piece => isActive(piece, '*')).length;
+    if (stars === 0) {
+      values.push({ text, glob: false });
+      continue;
+    }
+    // A leading `:` would be read as magic, `**` may be globstar's, and an empty component is not walked here.
+    const plain = !/[?[\]\\]|\*\*/.test(text) && !text.startsWith(':') && !text.split('/').includes('');
+    if (!plain || stars !== [...text].filter(char => char === '*').length) return null;
+    values.push({ text, glob: true });
+  }
+  return values;
+}
+
+/**
+ * Whether a pattern of literals and `*`s (each a glob) matches a name under `cwd`, read as bash with no shell
+ * options: case kept, and a leading dot matched only by a literal one. Bounded by WALK_ENTRIES and GLOB_MATCHES.
+ */
+async function globFinds(cwd: string, pattern: string, stopped: () => boolean): Promise<boolean> {
+  let found = [cwd];
+  let entries = 0;
+  for (const component of pattern.split('/')) {
+    if (!component.includes('*')) {
+      found = found.map(path => `${path}/${component}`);
+      continue;
+    }
+    const parts = component.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const matcher = new RegExp(`^${parts.join('.*')}$`, 's');
+    const next: string[] = [];
+    for (const path of found) {
+      if (stopped()) return false;
+      // Joined as written, so `..` after a link leads where bash's does; an unreadable folder matches nothing.
+      const names = await readdir(path).catch(() => []);
+      entries += names.length;
+      if (entries > WALK_ENTRIES) return false;
+      for (const name of names) {
+        if (matcher.test(name) && (component.startsWith('.') || !name.startsWith('.'))) next.push(`${path}/${name}`);
+      }
+      if (next.length > GLOB_MATCHES) return false;
+    }
+    found = next;
+  }
+  for (const path of found) {
+    if (stopped()) return false;
+    const exists = await lstat(path).then(
+      () => true,
+      () => false
+    );
+    if (exists) return true;
+  }
+  return false;
 }
 
 /**
@@ -2974,22 +3043,37 @@ function shellExpands(raw: string): boolean {
  * values bash passes to git.
  */
 function diffLists(raw: readonly string[]): Listing | null {
-  // The words bash expands one into may be options, revisions or pathspec magic.
-  if (raw.some(word => shellExpands(word))) return null;
-  const args = raw.map(word =>
-    wordPieces(word)
-      .map(piece => ('char' in piece ? piece.char : ''))
-      .join('')
-  );
+  const args: string[] = [];
+  const pathspecs: string[] = [];
+  const globs: string[] = [];
+  let paths = false;
+  for (const word of raw) {
+    if (!paths) {
+      // The words bash expands one into may be options, revisions or pathspec magic.
+      if (shellExpands(word)) return null;
+      const arg = textOf(wordPieces(word));
+      if (arg === '--') paths = true;
+      else args.push(arg);
+      continue;
+    }
+    const values = pathspecValues(word);
+    if (values === null) return null;
+    for (const { text, glob } of values) {
+      if (!glob) {
+        pathspecs.push(text);
+        continue;
+      }
+      // Each name bash's `*` makes from it, dotglob or not, is matched by git's `*`, which crosses `/`; `/*` takes in
+      // what a matched folder holds, and icase what nocaseglob adds. Bash passes it as written only with no match.
+      globs.push(text);
+      pathspecs.push(`:(icase)${text}`, `:(icase)${text}/*`);
+    }
+  }
   let names = false;
   let cached = false;
-  let paths = false;
   const revisions: string[] = [];
-  const pathspecs: string[] = [];
   for (const arg of args) {
-    if (paths) pathspecs.push(arg);
-    else if (arg === '--') paths = true;
-    else if (arg === '--name-only') names = true;
+    if (arg === '--name-only') names = true;
     else if (arg === '--cached' || arg === '--staged') cached = true;
     // A bare `--relative` prints names from the folder git runs in, which the listing check requires be the top.
     else if (/^(-z|--no-renames|--relative|--diff-filter=[A-Za-z]*)$/.test(arg)) continue;
@@ -3001,8 +3085,9 @@ function diffLists(raw: readonly string[]): Listing | null {
     folders: ['.'],
     tracked: true,
     links: 'diff',
-    nul: args.slice(0, paths ? args.indexOf('--') : args.length).includes('-z'),
+    nul: args.includes('-z'),
     pathspecs,
+    globs,
     // diffTargets reads the words as revisions or paths, as git does.
     settings: { kind: 'diff', words: revisions, cached },
   };
@@ -3169,6 +3254,8 @@ interface Listing {
   nul: boolean;
   tests?: string[];
   pathspecs?: string[];
+  /** Patterns bash expands from where the lister runs, each of which must match a name for the listing to count. */
+  globs?: string[];
   settings: ListedSettings;
 }
 
@@ -4794,6 +4881,8 @@ export async function scanShell(
         if (settings.kind !== 'diff' || top === null || top !== (await realpath(state.cwd).catch(() => null))) {
           return false;
         }
+        // A pattern with no match may be dropped (nullglob), leaving no pathspec to narrow the listing.
+        for (const glob of listing.globs ?? []) if (!(await globFinds(state.cwd, glob, stopped))) return false;
         const diff = await diffTargets(top, settings.words, settings.cached, stopped);
         if (diff === null) return false;
         const pathspecs = [...diff.pathspecs, ...(listing.pathspecs ?? [])];

@@ -1330,7 +1330,7 @@ async function readsAsPath(top: string, word: string): Promise<boolean> {
   // git reads a `^` anywhere but a leading `:^` as revision syntax, and the parent shorthands (`^!`, `^@`, `^-N`)
   // as revisions even when a file has the same name.
   if (word.startsWith('-') || word.replace(/^:\^/, '').includes('^')) return false;
-  // As git's check_filename, joined as written: a normalized `HEAD:./` would be the file `HEAD:`.
+  // As git's check_filename, joined as written: a normalized `HEAD:./` would be the file `HEAD:.`.
   const exists = (path: string): Promise<boolean> =>
     lstat(isAbsolute(path) ? path : `${top}/${path}`).then(
       () => true,
