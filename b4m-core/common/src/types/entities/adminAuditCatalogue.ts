@@ -355,6 +355,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'settings.agent_ops.version_activated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.agent_ops.repaired': { category: 'settings', severity: 'info', write: 'bestEffort' },
 
+  'admin.search.performed': { category: 'support', severity: 'info', write: 'strict' },
+
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
   // info, not critical: a sign-off row must never itself enter the review queue. The review document is the source of truth.
   'audit.reviewed': { category: 'support', severity: 'info', write: 'bestEffort' },

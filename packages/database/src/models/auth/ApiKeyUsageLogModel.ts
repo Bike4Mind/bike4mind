@@ -52,6 +52,7 @@ const ApiKeyUsageLogSchema = new mongoose.Schema<IApiKeyUsageLogDocument>(
 ApiKeyUsageLogSchema.index({ userId: 1, keyId: 1, timestamp: -1 });
 ApiKeyUsageLogSchema.index({ userId: 1, timestamp: -1 });
 ApiKeyUsageLogSchema.index({ keyId: 1, timestamp: -1 });
+ApiKeyUsageLogSchema.index({ ipAddress: 1, timestamp: -1 }, { name: 'api_usage_ip_search' });
 // Platform endpoint rollup filtered by source and/or ownerType (platformEndpointUsage).
 // An ownerType-only filter has no source prefix, so it range-scans the timestamp TTL index instead.
 ApiKeyUsageLogSchema.index({ source: 1, ownerType: 1, timestamp: -1 });

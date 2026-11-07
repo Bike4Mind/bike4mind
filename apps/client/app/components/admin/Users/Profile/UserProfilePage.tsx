@@ -3,6 +3,8 @@ import { Box, Button, LinearProgress, Sheet, Stack, Typography } from '@mui/joy'
 import { useNavigate } from '@tanstack/react-router';
 import { isAxiosError } from 'axios';
 import { ADMIN_TAB_PARAM, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
+import { AdminCommandPalette } from '../../shared/AdminCommandPalette';
 import { useGetUser } from '@client/app/hooks/data/user';
 import { parseUserId } from '../usersTabSearch';
 import ComplianceModal from '../ComplianceModal';
@@ -30,6 +32,7 @@ const Message: React.FC<{ testId: string; title: string; children?: React.ReactN
 /** The admin profile of one user at /admin/users/$userId; the route guards it to admins. */
 export const UserProfilePage: React.FC<UserProfilePageProps> = ({ userId, tab, onTabChange }) => {
   const navigate = useNavigate();
+  const { currentUser } = useUser();
   // A malformed id never reaches `/api/users/<id>`: it is a not-found, like an unknown one.
   const validUserId = parseUserId(userId) ?? null;
   const user = useGetUser(validUserId);
@@ -72,6 +75,9 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({ userId, tab, o
   return (
     <Sheet data-testid="user-profile-page" sx={{ minHeight: '100vh', overflowY: 'auto', bgcolor: 'admin.canvas' }}>
       <UndoToastProvider>
+        {(isNotFound || user.isLoading || !user.data) && (
+          <AdminCommandPalette enableEntitySearch={!!currentUser?.isAdmin} />
+        )}
         <Box sx={{ maxWidth: 1280, mx: 'auto', px: { xs: 2, sm: 4 }, pt: 2.5, pb: 12 }}>{renderBody()}</Box>
         {/* Opened from the header's More menu; on /admin the Users tab mounts it instead. */}
         <ComplianceModal />
