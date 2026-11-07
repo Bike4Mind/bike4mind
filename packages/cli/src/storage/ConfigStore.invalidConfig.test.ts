@@ -732,17 +732,30 @@ describe('a write that reaches the file', () => {
 
   it('moves the session to the new backend when setting permissions fails after the write', async () => {
     const store = await signedInStore();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(fsPromises, 'chmod').mockImplementationOnce(async () => {
       throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
     });
 
-    await expect(store.switchApiEnvironment({ customUrl: 'https://self.example.com' })).rejects.toThrow(
-      'operation not permitted'
-    );
+    await store.switchApiEnvironment({ customUrl: 'https://self.example.com' });
 
     expect((await readJson()).apiConfig).toEqual({ customUrl: 'https://self.example.com', endpointChosen: true });
     expect((await store.load()).apiConfig?.customUrl).toBe('https://self.example.com');
     expect(await store.getAuthTokens()).toBeNull();
+  });
+
+  it('reports a save as committed and warns when setting permissions fails after the write', async () => {
+    const store = await signedInStore();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(fsPromises, 'chmod').mockImplementationOnce(async () => {
+      throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+    });
+
+    await store.save({ preferences: { exportFormat: 'json' } });
+
+    expect((await readJson()).preferences).toMatchObject({ exportFormat: 'json' });
+    expect((await store.load()).preferences.exportFormat).toBe('json');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not set its permissions to 0600'));
   });
 
   it('serves the saved settings when rebuilding the merged config fails after the write', async () => {
