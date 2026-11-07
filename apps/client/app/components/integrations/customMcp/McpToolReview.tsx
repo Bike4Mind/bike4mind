@@ -23,8 +23,8 @@ const APPROVAL_LABELS: Record<McpToolApprovalMode, string> = {
  * a new or changed tool is not offered to the model.
  */
 const McpToolReview = ({ connection, onDone }: { connection: IMcpConnectionPublic; onDone: () => void }) => {
-  // The tools as they were when the review opened. A refetch while it is open (Refresh tools, window
-  // focus) must not swap in versions the user never saw: saving names these versions, so a change made
+  // The tools as they were when the review opened. A refetch while it is open (Refresh tools, a background
+  // update) must not swap in versions the user never saw: saving names these versions, so a change made
   // since fails with tool_version_conflict instead of being approved unseen.
   const [tools] = useState(() => connection.tools);
   const [drafts, setDrafts] = useState<Record<string, ToolDraft>>(() => initialToolDrafts(tools));
@@ -48,7 +48,8 @@ const McpToolReview = ({ connection, onDone }: { connection: IMcpConnectionPubli
           onDone();
         },
         onError: error => {
-          if (mcpConnectionErrorCode(error) === 'tool_version_conflict') {
+          const code = mcpConnectionErrorCode(error);
+          if (code === 'tool_version_conflict' || code === 'unknown_tool') {
             toast.error('The server changed its tools while you were reviewing. Review them again.');
             void queryClient.invalidateQueries({ queryKey: mcpConnectionKeys.list() });
             onDone();

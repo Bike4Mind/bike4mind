@@ -2,6 +2,7 @@ import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { IMcpConnectionPublic } from '@bike4mind/common';
@@ -309,6 +310,40 @@ describe('CustomMcpConnectorPanel', () => {
 
       await waitFor(() => expect(screen.queryByTestId('custom-mcp-review-c1')).not.toBeInTheDocument());
       expect(api.get).toHaveBeenCalledTimes(2);
+    });
+
+    it('closes the review and re-reads the connection when a tool was removed meanwhile', async () => {
+      listReturns([connection({ tools: [tool('search')] })]);
+      vi.mocked(api.patch).mockRejectedValueOnce(
+        Object.assign(new Error('400'), {
+          isAxiosError: true,
+          response: { status: 400, data: { error: 'removed', code: 'unknown_tool' } },
+        })
+      );
+      renderPanel();
+
+      await userEvent.click(await screen.findByTestId('custom-mcp-connection-c1-review-btn'));
+      await userEvent.click(screen.getByTestId('custom-mcp-review-c1-save-btn'));
+
+      await waitFor(() => expect(screen.queryByTestId('custom-mcp-review-c1')).not.toBeInTheDocument());
+      expect(api.get).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps the review open and shows an error when saving fails without a tool conflict', async () => {
+      listReturns([connection({ tools: [tool('search')] })]);
+      vi.mocked(api.patch).mockRejectedValueOnce(
+        Object.assign(new Error('500'), {
+          isAxiosError: true,
+          response: { status: 500, data: { error: 'Could not save the review.' } },
+        })
+      );
+      renderPanel();
+
+      await userEvent.click(await screen.findByTestId('custom-mcp-connection-c1-review-btn'));
+      await userEvent.click(screen.getByTestId('custom-mcp-review-c1-save-btn'));
+
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not save the review.'));
+      expect(screen.getByTestId('custom-mcp-review-c1')).toBeInTheDocument();
     });
   });
 

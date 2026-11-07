@@ -98,10 +98,13 @@ function useStoreConnection() {
 
 export const useCreateMcpConnection = () => {
   const store = useStoreConnection();
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (input: CreateMcpConnectionInput) =>
       (await api.post<IMcpConnectionPublic>('/api/mcp-connections', input)).data,
     onSuccess: store,
+    // A create can persist before it fails, so re-read the list.
+    onError: () => queryClient.invalidateQueries({ queryKey: mcpConnectionKeys.list() }),
   });
 };
 
