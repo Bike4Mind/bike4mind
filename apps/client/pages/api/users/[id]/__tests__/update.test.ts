@@ -15,8 +15,10 @@ const {
   mockRecord,
   mockDeny,
   mockSetThrottleTier,
+  mockGradeDetections,
   txnState,
 } = vi.hoisted(() => ({
+  mockGradeDetections: vi.fn(),
   mockSetThrottleTier: vi.fn(),
   mockRecord: vi.fn(),
   mockDeny: vi.fn(),
@@ -173,6 +175,10 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
 // The gate's own behaviour is covered in server/auth/stepUp.test.ts; here only where it applies.
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mockRequireStepUp }));
 vi.mock('@server/billing/linkedAccounts', () => ({ propagateAccountRisk: mockPropagateAccountRisk }));
+// Grading rules are covered in server/admin/shadowDetectionStatusVerdicts.test.ts; here only the call.
+vi.mock('@server/admin/shadowDetectionStatusVerdicts', () => ({
+  gradeDetectionsForStatusChange: mockGradeDetections,
+}));
 // The audit-entry builder stays real so the test pins what the admin log records.
 vi.mock('@server/billing/cancelAccountSubscriptions', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/billing/cancelAccountSubscriptions')>()),
@@ -216,6 +222,7 @@ beforeEach(() => {
   mockSetThrottleTier.mockReset().mockResolvedValue({ changed: true, before: 'none', after: 'shadow' });
   mockCount.mockReset().mockResolvedValue(2);
   mockSessionEnded.mockReset().mockResolvedValue(undefined);
+  mockGradeDetections.mockReset().mockResolvedValue([]);
   txnState.changeRunning = false;
   txnState.snapshotReadInsideChange = undefined;
   mockRequireStepUp.mockReset().mockResolvedValue(undefined);
@@ -1292,6 +1299,25 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
           reason: STATUS_REASON,
           changes: [{ field, before, after }],
         })
+      );
+    });
+
+    it.each([
+      ['suspension', false, true],
+      ['reinstatement', true, false],
+    ])('hands the committed %s to the shadow detection grading', async (_label, before, after) => {
+      mockUserFindById.mockReturnValue(target({ isBanned: before }));
+      mockAdminUpdateUser.mockResolvedValue({ user: target({ isBanned: after }), creditAdjustment: undefined });
+      const { promise } = run({
+        user: ADMIN,
+        userId: 'other-user',
+        body: { isBanned: after, statusChangeReason: STATUS_REASON },
+      });
+      await promise;
+
+      expect(mockGradeDetections).toHaveBeenCalledExactlyOnceWith(
+        { userId: 'other-user', adminId: ADMIN.id, wasSuspended: before, isSuspended: after, reason: STATUS_REASON },
+        expect.objectContaining({ writeAudit: expect.any(Function) })
       );
     });
 

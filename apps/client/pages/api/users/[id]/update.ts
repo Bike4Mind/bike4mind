@@ -45,7 +45,9 @@ import {
   parseAdminActionReason,
   readAdminActionReason,
   recordAdminActionFromRequest,
+  requestAuditWriter,
 } from '@server/utils/adminAudit';
+import { gradeDetectionsForStatusChange } from '@server/admin/shadowDetectionStatusVerdicts';
 
 const idParamSchema = z.object({ id: z.string() });
 
@@ -413,6 +415,21 @@ const handler = baseApi().put(
         await propagateAccountRisk(
           { sourceUserId: userId, trigger: 'blocked by an admin', key: `admin-block:${userId}:${Date.now()}` },
           req.logger
+        );
+      }
+
+      // A suspension for abuse, or a reinstatement, settles the account's open shadow detections.
+      // After commit and never throws.
+      if (blockSnapshot && blockUpdated) {
+        await gradeDetectionsForStatusChange(
+          {
+            userId,
+            adminId: currentUser.id,
+            wasSuspended: !!blockSnapshot.isBanned,
+            isSuspended: !!blockUpdated.isBanned,
+            reason: statusChangeReason,
+          },
+          { writeAudit: requestAuditWriter(req), logger: req.logger }
         );
       }
 
