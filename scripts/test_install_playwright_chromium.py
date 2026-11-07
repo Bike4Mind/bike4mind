@@ -15,6 +15,16 @@ import unittest
 
 
 ACTION = Path(__file__).resolve().parents[1] / '.github/actions/install-playwright-chromium/action.yml'
+TIMEOUT = ACTION.with_name('timeout.sh')
+
+
+def resolve_timeout_script(script, metadata):
+    if '$PLAYWRIGHT_TIMEOUT_SCRIPT' not in script:
+        return script
+    declaration = '        PLAYWRIGHT_TIMEOUT_SCRIPT: ${{ github.action_path }}/timeout.sh'
+    if declaration not in metadata:
+        raise AssertionError('The step must declare its timeout script environment variable')
+    return script.replace('$PLAYWRIGHT_TIMEOUT_SCRIPT', str(TIMEOUT))
 
 
 def step_script(name):
@@ -30,13 +40,13 @@ def step_script(name):
             continue
         value = line.removeprefix('      run: ')
         if value != '|':
-            return value + '\n'
+            return resolve_timeout_script(value, lines[start:index]) + '\n'
         body = []
         for body_line in lines[index + 1:]:
             if body_line.strip() and not body_line.startswith('        '):
                 break
             body.append(body_line[8:] if body_line.strip() else '')
-        return '\n'.join(body) + '\n'
+        return resolve_timeout_script('\n'.join(body), lines[start:index]) + '\n'
     raise AssertionError(f'No run script in step {name!r}')
 
 
@@ -48,6 +58,10 @@ cat > "$APT_CONFIG"
 cat "$APT_CONFIG"
 ''',
     'timeout': '''
+if [ "$*" = --version ]; then
+  echo 'timeout (GNU coreutils) 9.7'
+  exit 0
+fi
 printf 'timeout %s\\n' "$*" >> "$CALL_LOG"
 [ "$1" = --signal=KILL ] || exit 91
 shift
@@ -84,6 +98,9 @@ case "$2" in
 esac
 ''',
 }
+
+
+STUBS['gnutimeout'] = STUBS['timeout']
 
 
 class ChromiumActionTests(unittest.TestCase):
@@ -216,14 +233,14 @@ def live_state_after(pid, grace=5.0):
         time.sleep(0.01)
 
 
-@unittest.skipUnless(sys.platform.startswith('linux') and shutil.which('timeout'), 'GNU timeout requires Linux')
+@unittest.skipUnless(sys.platform.startswith('linux') and (shutil.which('gnutimeout') or shutil.which('timeout')), 'GNU timeout requires Linux')
 class TimeoutProcessGroupTests(unittest.TestCase):
     def test_action_deadlines_kill_term_resistant_child(self):
         # Keep the action's actual option order, shortening only its durations.
         commands = (
-            ('Download Chromium', r'timeout (.+?) npx playwright install chromium'),
-            ('Install Chromium system dependencies', r'timeout (.+?) npx playwright install-deps chromium'),
-            ('Install Chromium system dependencies', r'timeout (.+?) dpkg --configure -a'),
+            ('Download Chromium', r'bash (.+?) npx playwright install chromium'),
+            ('Install Chromium system dependencies', r'bash (.+?) npx playwright install-deps chromium'),
+            ('Install Chromium system dependencies', r'bash (.+?) dpkg --configure -a'),
         )
         for step, pattern in commands:
             with self.subTest(step=step, pattern=pattern):
@@ -238,7 +255,7 @@ class TimeoutProcessGroupTests(unittest.TestCase):
                         pid_tmp = shlex.quote(f'{pid_file}.tmp')
                         child = f'trap "" TERM; echo $$ > {pid_tmp}; mv {pid_tmp} {shlex.quote(str(pid_file))}; exec sleep 20'
                         process = subprocess.Popen(
-                            ['timeout', *options, 'bash', '-c', parent_script, 'bash', 'sh', '-c', child],
+                            ['bash', *options, 'bash', '-c', parent_script, 'bash', 'sh', '-c', child],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
                         )
                         try:
@@ -253,6 +270,46 @@ class TimeoutProcessGroupTests(unittest.TestCase):
                             except ProcessLookupError:
                                 pass
                             process.communicate()
+
+
+class TimeoutSelectionTests(unittest.TestCase):
+    def run_selector(self, candidates):
+        with tempfile.TemporaryDirectory() as directory:
+            for name, (version, status) in candidates.items():
+                executable = Path(directory) / name
+                executable.write_text(
+                    '#!/bin/sh\nif [ "$1" = --version ]; then\n'
+                    + f"  printf '%s\\n' {shlex.quote(version)}\n  exit 0\nfi\n"
+                    + f"printf '%s\\n' {shlex.quote(name)} \"$@\"\nexit {status}\n"
+                )
+                executable.chmod(0o755)
+            return subprocess.run(
+                [shutil.which('bash'), str(TIMEOUT), '--signal=KILL', '5m', 'command', 'literal argument'],
+                env={**os.environ, 'PATH': directory}, capture_output=True, text=True, timeout=5,
+            )
+
+    def test_prefers_gnutimeout_and_preserves_arguments_and_exit_status(self):
+        result = self.run_selector({
+            'gnutimeout': ('timeout (GNU coreutils) 9.7', 42),
+            'timeout': ('timeout (uutils coreutils) 0.10.0', 0),
+        })
+        self.assertEqual(result.returncode, 42, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), [
+            'gnutimeout', '--signal=KILL', '5m', 'command', 'literal argument',
+        ])
+
+    def test_falls_back_to_verified_gnu_timeout(self):
+        result = self.run_selector({'timeout': ('timeout (GNU coreutils) 9.5', 0)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), [
+            'timeout', '--signal=KILL', '5m', 'command', 'literal argument',
+        ])
+
+    def test_refuses_an_unverified_timeout_implementation(self):
+        result = self.run_selector({'timeout': ('timeout (uutils coreutils) 0.10.0', 0)})
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, '')
+        self.assertIn('GNU coreutils timeout is required', result.stderr)
 
 
 if __name__ == '__main__':

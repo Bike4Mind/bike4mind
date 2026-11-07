@@ -37,13 +37,17 @@ runs:
         key: ${{ runner.os }}-${{ runner.arch }}-ms-playwright-chromium-${{ steps.version.outputs.version }}
 
     - name: Download Chromium
+      env:
+        PLAYWRIGHT_TIMEOUT_SCRIPT: ${{ github.action_path }}/timeout.sh
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       # Kill the whole group at the deadline; TERM can orphan resistant children.
       # A no-op on a cache hit.
-      run: timeout --signal=KILL 5m npx playwright install chromium
+      run: bash "$PLAYWRIGHT_TIMEOUT_SCRIPT" --signal=KILL 5m npx playwright install chromium
 
     - name: Install Chromium system dependencies
+      env:
+        PLAYWRIGHT_TIMEOUT_SCRIPT: ${{ github.action_path }}/timeout.sh
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
@@ -57,7 +61,7 @@ runs:
         # sudo starts apt in its own pty session and the kill never reaches it:
         # apt kept downloading and upgrading libs under the running tests.
         rc=0
-        sudo env "PATH=$PATH" timeout --signal=KILL 5m npx playwright install-deps chromium || rc=$?
+        sudo env "PATH=$PATH" bash "$PLAYWRIGHT_TIMEOUT_SCRIPT" --signal=KILL 5m npx playwright install-deps chromium || rc=$?
         if [ "$rc" -eq 0 ]; then
           exit 0
         fi
@@ -65,5 +69,5 @@ runs:
         echo "::warning::Playwright system dependency install failed (exit $rc); recovering package state before checking whether Chromium launches"
         # Finish interrupted package configuration before starting tests.
         # A failed or hung repair leaves the runner unsafe to reuse.
-        sudo timeout --signal=KILL 1m dpkg --configure -a
+        sudo bash "$PLAYWRIGHT_TIMEOUT_SCRIPT" --signal=KILL 1m dpkg --configure -a
         node -e "require('@playwright/test').chromium.launch().then((b) => b.close())"
