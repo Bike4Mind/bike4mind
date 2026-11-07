@@ -671,16 +671,19 @@ describe('UserApiKeysTab - API key trust gate', () => {
       fireEvent.click(await screen.findByRole('option', { name }));
     };
 
-    it('blocks submit with the gate alert when the selected organization is refused', async () => {
+    it('disables a refused organization option so billing stays personal', async () => {
       h.eligibility = switchRefusal;
       h.billingOrgs = [
         { id: 'org-free', name: 'FreeCo' },
         { id: 'org-paid', name: 'PaidCo' },
       ];
       openModalAndName();
-      await pickOrg(/FreeCo/);
+      fireEvent.click(within(screen.getByTestId('api-key-billing-select')).getByRole('combobox'));
+      const freeCo = await screen.findByRole('option', { name: /FreeCo/ });
+      expect(freeCo).toHaveAttribute('aria-disabled', 'true');
+      fireEvent.click(freeCo);
 
-      expect(screen.getByTestId('api-key-gate-alert')).toHaveTextContent(switchRefusal.message);
+      expect(screen.getByText('This key bills your personal credit balance.')).toBeInTheDocument();
       expect(screen.getByTestId('api-key-create-btn')).toBeDisabled();
     });
 
