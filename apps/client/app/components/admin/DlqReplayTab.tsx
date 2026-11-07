@@ -294,7 +294,7 @@ const DlqReplayTab: React.FC = () => {
   };
 
   return (
-    <Box sx={{ p: 2 }}>
+    <Box>
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
         <Typography level="h4" startDecorator={<QueueIcon />}>
           DLQ Management

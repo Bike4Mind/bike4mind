@@ -215,7 +215,7 @@ const AgentOpsTab: React.FC = () => {
 
   if (loading) {
     return (
-      <Box sx={{ p: 3 }}>
+      <Box>
         <LinearProgress />
         <Typography level="body-sm" sx={{ mt: 1 }}>
           Loading AgentOps settings...
@@ -225,7 +225,7 @@ const AgentOpsTab: React.FC = () => {
   }
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box>
       <Stack spacing={3}>
         {/* Header */}
         <Box>

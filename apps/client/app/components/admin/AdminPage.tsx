@@ -48,6 +48,7 @@ import { canRenderAdminTab } from './adminTabRenderability';
 import { useAdminTabUrlSync } from './useAdminTabUrlSync';
 import { useAdminModal } from './useAdminModal';
 import { UndoToastProvider } from './shared/UndoToast';
+import { adminPageFrame } from './shared/adminStyles';
 
 export { AdminTab } from './adminSidebarConfig';
 
@@ -59,6 +60,12 @@ const AdminLiveOpsTriageMultiConfigTab = dynamic(() => import('./AdminLiveOpsTri
 const WebhookAuditLogsTab = dynamic(() => import('./WebhookAuditLogs'), { ssr: false });
 const AuditLogTab = dynamic(() => import('./AuditLog'), { ssr: false });
 const ApprovalsTab = dynamic(() => import('./Approvals'), { ssr: false });
+
+// The shell gives every tab panel the page frame. These tabs still pad themselves while open work on
+// their pages lands; each leaves this list in the change that drops its own outer padding, and no new
+// tab joins it (DESIGN_GUIDE section 3, "Page frame").
+const SELF_FRAMED_ATTR = 'data-admin-self-framed';
+const selfFramed = { [SELF_FRAMED_ATTR]: '' };
 
 const MigrateUsersTab = dynamic(() => import('./MigrateUsersTab'), { ssr: false });
 const AgentOpsTab = dynamic(() => import('./AgentOpsTab'), { ssr: false });
@@ -151,42 +158,51 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           value={activeTab}
           onChange={(_, tab) => setActiveTab(tab)}
           orientation="vertical"
-          sx={{ flex: 1, minHeight: 0, '& [role="tabpanel"]': { height: '100%', overflow: 'auto' } }}
+          sx={{
+            flex: 1,
+            minHeight: 0,
+            '& [role="tabpanel"]': { height: '100%', overflow: 'auto' },
+            [`& [role="tabpanel"]:not([${SELF_FRAMED_ATTR}])`]: adminPageFrame,
+          }}
         >
           <TabPanel value={AdminTab.Dashboard}>
             {activeTab === AdminTab.Dashboard && <AdminDashboardTab onNavigate={setActiveTab} />}
           </TabPanel>
-          <TabPanel value={AdminTab.Users}>{activeTab === AdminTab.Users && <UsersTab />}</TabPanel>
+          <TabPanel value={AdminTab.Users} {...selfFramed}>
+            {activeTab === AdminTab.Users && <UsersTab />}
+          </TabPanel>
           <TabPanel value={AdminTab.EmailVerification}>
             {activeTab === AdminTab.EmailVerification && <EmailVerificationTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.GrowthPricing} sx={{ padding: 0 }}>
+          <TabPanel value={AdminTab.GrowthPricing}>
             {activeTab === AdminTab.GrowthPricing && <AdminGrowthPricingTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.PreferenceArena} sx={{ padding: 0 }}>
+          <TabPanel value={AdminTab.PreferenceArena}>
             {activeTab === AdminTab.PreferenceArena && <PreferenceArenaTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.AdminSettings} sx={{ padding: 0 }}>
+          <TabPanel value={AdminTab.AdminSettings} {...selfFramed}>
             {activeTab === AdminTab.AdminSettings && <AdminSettingsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.WorldTime}>{activeTab === AdminTab.WorldTime && <WorldTimeTab />}</TabPanel>
           <TabPanel value={AdminTab.Feedback}>{activeTab === AdminTab.Feedback && <FeedbackTab />}</TabPanel>
-          <TabPanel value={AdminTab.Analytics}>{activeTab === AdminTab.Analytics && <AnalyticsTab />}</TabPanel>
-          <TabPanel value={AdminTab.RegistrationInvites} sx={{ padding: 0 }}>
+          <TabPanel value={AdminTab.Analytics} {...selfFramed}>
+            {activeTab === AdminTab.Analytics && <AnalyticsTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.RegistrationInvites} {...selfFramed}>
             {activeTab === AdminTab.RegistrationInvites && <InviteCenter />}
           </TabPanel>
           {enableUserMigration && (
             <TabPanel value={AdminTab.Migrate}>{activeTab === AdminTab.Migrate && <MigrateUsersTab />}</TabPanel>
           )}
           <TabPanel value={AdminTab.Modals}>{activeTab === AdminTab.Modals && <ModalsAdminTab />}</TabPanel>
-          <TabPanel value={AdminTab.WhatsNewModals} sx={{ padding: { xs: 0, sm: 2 } }}>
+          <TabPanel value={AdminTab.WhatsNewModals}>
             {activeTab === AdminTab.WhatsNewModals && <AdminWhatsNewModalsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.ReleaseNotes}>
             {activeTab === AdminTab.ReleaseNotes && <AdminReleaseNotesTab />}
           </TabPanel>
           <TabPanel value={AdminTab.Files}>{activeTab === AdminTab.Files && <AdminFilesTab />}</TabPanel>
-          <TabPanel value={AdminTab.Documentation} sx={{ padding: 0 }}>
+          <TabPanel value={AdminTab.Documentation}>
             {activeTab === AdminTab.Documentation && <DocumentationTab />}
           </TabPanel>
           <TabPanel value={AdminTab.ApiReference}>
@@ -199,36 +215,40 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
             {activeTab === AdminTab.Dependencies && <DependenciesTab />}
           </TabPanel>
           <TabPanel value={AdminTab.ApiCookbook}>{activeTab === AdminTab.ApiCookbook && <ApiCookbookTab />}</TabPanel>
-          <TabPanel value={AdminTab.Waitlist}>{activeTab === AdminTab.Waitlist && <WaitlistTab />}</TabPanel>
-          <TabPanel value={AdminTab.SignupDomainHolds} sx={{ padding: 0 }}>
+          <TabPanel value={AdminTab.Waitlist} {...selfFramed}>
+            {activeTab === AdminTab.Waitlist && <WaitlistTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.SignupDomainHolds}>
             {activeTab === AdminTab.SignupDomainHolds && <SignupDomainHoldsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.SignupRiskReview} sx={{ padding: 0 }}>
+          <TabPanel value={AdminTab.SignupRiskReview} {...selfFramed}>
             {activeTab === AdminTab.SignupRiskReview && <SignupRiskReviewTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.ModerationIncidents} sx={{ padding: 0 }}>
+          <TabPanel value={AdminTab.ModerationIncidents}>
             {activeTab === AdminTab.ModerationIncidents && <ModerationIncidentsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.ShadowDetections} sx={{ padding: 0 }}>
+          <TabPanel value={AdminTab.ShadowDetections} {...selfFramed}>
             {activeTab === AdminTab.ShadowDetections && <ShadowDetectionsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.StripeDisputes} sx={{ padding: 0 }}>
+          <TabPanel value={AdminTab.StripeDisputes}>
             {activeTab === AdminTab.StripeDisputes && <StripeDisputesTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.HeldSignupGrants} sx={{ padding: 0 }}>
+          <TabPanel value={AdminTab.HeldSignupGrants}>
             {activeTab === AdminTab.HeldSignupGrants && <HeldSignupGrantsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.PartnerSignupRules} sx={{ padding: 0 }}>
+          <TabPanel value={AdminTab.PartnerSignupRules}>
             {activeTab === AdminTab.PartnerSignupRules && <PartnerSignupRulesTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.Revenue}>{activeTab === AdminTab.Revenue && <AdminRevenue />}</TabPanel>
-          <TabPanel value={AdminTab.Subscriptions}>
+          <TabPanel value={AdminTab.Revenue} {...selfFramed}>
+            {activeTab === AdminTab.Revenue && <AdminRevenue />}
+          </TabPanel>
+          <TabPanel value={AdminTab.Subscriptions} {...selfFramed}>
             {activeTab === AdminTab.Subscriptions && <AdminSubscriptions />}
           </TabPanel>
-          <TabPanel value={AdminTab.Organizations}>
+          <TabPanel value={AdminTab.Organizations} {...selfFramed}>
             {activeTab === AdminTab.Organizations && <OrganizationsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.CreditAnalytics}>
+          <TabPanel value={AdminTab.CreditAnalytics} {...selfFramed}>
             {activeTab === AdminTab.CreditAnalytics && <CreditAnalyticsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.SecretsRotation}>
@@ -243,7 +263,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
             </TabPanel>
           )}
           <TabPanel value={AdminTab.ModelLogs}>{activeTab === AdminTab.ModelLogs && <ModelLogsTab />}</TabPanel>
-          <TabPanel value={AdminTab.ModelMetrics}>
+          <TabPanel value={AdminTab.ModelMetrics} {...selfFramed}>
             {activeTab === AdminTab.ModelMetrics && <ModelMetricsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.ModelLifecycle}>
@@ -268,7 +288,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.IdentityProviders}>
             {activeTab === AdminTab.IdentityProviders && <IdentityProvidersTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.OAuthClients} sx={{ padding: 0 }}>
+          <TabPanel value={AdminTab.OAuthClients}>
             {activeTab === AdminTab.OAuthClients && <OAuthClientsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.AgentOps}>{activeTab === AdminTab.AgentOps && <AgentOpsTab />}</TabPanel>
@@ -282,11 +302,11 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.VoiceSettings}>
             {activeTab === AdminTab.VoiceSettings && <VoiceSettingsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.SecurityDashboard}>
+          <TabPanel value={AdminTab.SecurityDashboard} {...selfFramed}>
             {activeTab === AdminTab.SecurityDashboard && <SecurityDashboard />}
           </TabPanel>
           <TabPanel value={AdminTab.Team}>{activeTab === AdminTab.Team && <Team />}</TabPanel>
-          <TabPanel value={AdminTab.SystemHealth}>
+          <TabPanel value={AdminTab.SystemHealth} {...selfFramed}>
             {activeTab === AdminTab.SystemHealth && <AdminSystemHealthTab />}
           </TabPanel>
           <TabPanel value={AdminTab.SlackWorkspaces}>
@@ -296,13 +316,15 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.ToolDefinitions}>
             {activeTab === AdminTab.ToolDefinitions && <ToolDefinitionsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.EmailMarketing} sx={{ padding: 0 }}>
+          <TabPanel value={AdminTab.EmailMarketing}>
             {activeTab === AdminTab.EmailMarketing && <EmailMarketingTab />}
           </TabPanel>
           <TabPanel value={AdminTab.WebhookAuditLogs}>
             {activeTab === AdminTab.WebhookAuditLogs && <WebhookAuditLogsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.AuditLog}>{activeTab === AdminTab.AuditLog && <AuditLogTab />}</TabPanel>
+          <TabPanel value={AdminTab.AuditLog} {...selfFramed}>
+            {activeTab === AdminTab.AuditLog && <AuditLogTab />}
+          </TabPanel>
           <TabPanel value={AdminTab.Approvals}>{activeTab === AdminTab.Approvals && <ApprovalsTab />}</TabPanel>
           <TabPanel value={AdminTab.GitHubConnection}>
             {activeTab === AdminTab.GitHubConnection && <GitHubConnectionTab />}

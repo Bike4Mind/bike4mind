@@ -7,6 +7,7 @@ import { useGetUser } from '@client/app/hooks/data/user';
 import { parseUserId } from '../usersTabSearch';
 import ComplianceModal from '../ComplianceModal';
 import { UndoToastProvider } from '../../shared';
+import { ADMIN_DETAIL_MAX_WIDTH } from '../../shared/adminStyles';
 import { UserProfileView } from './UserProfileView';
 import type { UserProfileTab } from './userProfileSearch';
 
@@ -72,7 +73,9 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({ userId, tab, o
   return (
     <Sheet data-testid="user-profile-page" sx={{ minHeight: '100vh', overflowY: 'auto', bgcolor: 'admin.canvas' }}>
       <UndoToastProvider>
-        <Box sx={{ maxWidth: 1280, mx: 'auto', px: { xs: 2, sm: 4 }, pt: 2.5, pb: 12 }}>{renderBody()}</Box>
+        <Box sx={{ maxWidth: ADMIN_DETAIL_MAX_WIDTH, mx: 'auto', px: { xs: 2, sm: 4 }, pt: 2.5, pb: 12 }}>
+          {renderBody()}
+        </Box>
         {/* Opened from the header's More menu; on /admin the Users tab mounts it instead. */}
         <ComplianceModal />
       </UndoToastProvider>

@@ -43,7 +43,7 @@ const RateLimitsTab: React.FC = () => {
   const chartData = processChartData(filteredSnapshots);
 
   return (
-    <Box sx={{ p: 6 }}>
+    <Box>
       {isLoading && (
         <Box sx={{ mb: 2 }}>
           <LinearProgress />
