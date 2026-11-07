@@ -44,7 +44,25 @@ type GrantAdapters = FreeCreditAdapters & {
 
 type AssessedGrantResult = GrantFreeCreditsResult & { assessedBand?: SignupRiskBand };
 
+/** Bounds shadow collection under a disabled policy; it must never stall a grant it cannot change. */
+const SHADOW_COLLECTION_TIMEOUT_MS = 2_000;
+
+async function withShadowTimeout<T>(work: Promise<T>): Promise<T> {
+  // A collector that rejects after the timeout won must not surface as an unhandled rejection.
+  work.catch(() => undefined);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('Shadow collection timed out')), SHADOW_COLLECTION_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** `unlockedOrgId` releases the full remainder and records the org that vouched for the account. */
+
 export type SignupGrantValidator = (
   user: IUserDocument
 ) => Promise<boolean | { cumulativeCredits: number } | { unlockedOrgId: string }>;
@@ -137,6 +155,18 @@ async function scoreNeedsReview(score: number, adminSettings: GrantAdapters['db'
   return !parsed.success || score >= parsed.data.reviewThreshold;
 }
 
+async function readRiskPolicy(adminSettings: GrantAdapters['db']['adminSettings']) {
+  const setting = await adminSettings.findBySettingName('signupGrantRiskPolicy');
+  let policy: unknown = { enabled: false };
+  try {
+    if (setting)
+      policy = typeof setting.settingValue === 'string' ? JSON.parse(setting.settingValue) : setting.settingValue;
+  } catch {
+    policy = undefined;
+  }
+  return { policy, parsedPolicy: signupRiskPolicySchema.safeParse(policy) };
+}
+
 async function releaseStage(
   userId: string,
   expected: SignupGrant['stage'],
@@ -163,6 +193,23 @@ async function releaseStage(
   // A re-run of the payout transaction re-reserves as a no-op, so every attempt's hold is kept for the refund.
   const reservations: SignupGrantBudgetReservation[] = [];
   const releaseReservations = () => Promise.all(reservations.map(held => held.release()));
+  // Shadow collection under a disabled policy only feeds offline replay (replaySignupRisk). It runs outside the
+  // transaction: a failed query inside a session aborts the payout and fails every retry. A failure or a slow
+  // lookup records nothing rather than delaying the grant.
+  let shadowSignals: SignupRiskSignals | undefined;
+  if (expected === 'pending_email' && adapters.collectRiskSignals) {
+    const user = await db.users.findById(userId);
+    if (user && isReleaseEligible(user, expected) && !user.signupGrantAssessment) {
+      const { parsedPolicy } = await readRiskPolicy(db.adminSettings);
+      if (parsedPolicy.success && !parsedPolicy.data.enabled) {
+        try {
+          shadowSignals = await withShadowTimeout(adapters.collectRiskSignals(user));
+        } catch {
+          console.warn('[signup-risk] Shadow observation collection failed; signals not recorded');
+        }
+      }
+    }
+  }
   try {
     const result = await inCallerTransaction<AssessedGrantResult>(async () => {
       const user = assertTrancheAccountVisible(await db.users.findById(userId), expected);
@@ -187,28 +234,33 @@ async function releaseStage(
       let dripRemainingAfter = 0;
       if (expected === 'pending_email') {
         if (!assessment) {
-          const setting = await db.adminSettings.findBySettingName('signupGrantRiskPolicy');
-          let policy: unknown = { enabled: false };
+          const { policy, parsedPolicy } = await readRiskPolicy(db.adminSettings);
           let signals: SignupRiskSignals = { datacenter: user.signupMeta?.isDatacenter };
-          try {
-            if (setting)
-              policy =
-                typeof setting.settingValue === 'string' ? JSON.parse(setting.settingValue) : setting.settingValue;
-          } catch {
-            policy = undefined;
-          }
-          const parsedPolicy = signupRiskPolicySchema.safeParse(policy);
+          let collected = false;
           if (adapters.collectRiskSignals && parsedPolicy.success && parsedPolicy.data.enabled) {
             try {
               signals = await adapters.collectRiskSignals(user);
+              collected = true;
             } catch {
               // Infrastructure failures are retryable, unlike a completed review decision.
               // Do not log collector contents: they can contain private signup observations.
               console.warn('[signup-risk] Observation collection failed; signup grant remains pending for retry');
               throw new Error('Signup risk observation collection unavailable; retry the signup grant');
             }
+          } else if (adapters.collectRiskSignals && parsedPolicy.success) {
+            // Shadow signals were gathered before the transaction (see above); a failed lookup there
+            // leaves them undefined and records nothing.
+            if (shadowSignals) {
+              signals = shadowSignals;
+              collected = true;
+            }
           }
-          assessment = evaluateSignupRisk(policy, signals, grant.signupCredits);
+          // Only collector output is recorded: the signupMeta fallback alone would read as an observed
+          // sample with every other signal missing.
+          assessment = {
+            ...evaluateSignupRisk(policy, signals, grant.signupCredits),
+            ...(collected ? { signals } : {}),
+          };
           assessedBand = assessment.band;
           if (assessment.status === 'unavailable') {
             console.warn('[signup-risk] Assessment unavailable; holding signup grant');
