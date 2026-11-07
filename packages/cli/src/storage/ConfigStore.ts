@@ -457,6 +457,15 @@ class RefusedSaveError extends Error {
   }
 }
 
+/** An MCP toggle refused before any write because the user config does not save the server. */
+export class McpToggleRefusedError extends Error {}
+
+/**
+ * What decides whether a server saved in the user config connects instead of its own entry: --strict-mcp-config
+ * ignores the user config, and --mcp-config replaces a server it also defines.
+ */
+export type McpToggleOverride = 'strict-mcp-config' | 'mcp-config' | null;
+
 const shapeOf = (value: unknown) => (Array.isArray(value) ? 'array' : isJsonObject(value) ? 'object' : 'scalar');
 const hasOwnKey = (value: object, key: string) => Object.prototype.hasOwnProperty.call(value, key);
 const ownValue = (value: Record<string, unknown>, key: string) => (hasOwnKey(value, key) ? value[key] : undefined);
@@ -1084,6 +1093,7 @@ export class ConfigStore {
   // Names of the MCP servers the last merge took from --mcp-config and from the trusted project's layers.
   private injectedMcpNames = new Set<string>();
   private projectMcpNames = new Set<string>();
+  private strictMcpConfig = false;
 
   constructor(configPath?: string) {
     this.configPath = configPath || path.join(homedir(), '.bike4mind', 'config.json');
@@ -1294,6 +1304,7 @@ export class ConfigStore {
     );
     this.projectMcpNames = new Set(repoServers.map(s => s.name));
     this.injectedMcpNames = new Set();
+    this.strictMcpConfig = false;
     const approved = new Set((this.projectRealPath && global.trustedMcpDefinitions?.[this.projectRealPath]) || []);
     const approvedRepo: NormalizedMcpServer[] = [];
     this.pendingMcpApprovals = [];
@@ -1315,6 +1326,7 @@ export class ConfigStore {
         // Strict means strict: the injected set is the ONLY allowed scope. A
         // malformed/missing file (injected === null) yields an empty set, never
         // a silent fall-back to the broader merged config.
+        this.strictMcpConfig = true;
         merged.mcpServers = injected ?? [];
         this.pendingMcpApprovals = [];
       } else if (injected) {
@@ -1894,22 +1906,21 @@ export class ConfigStore {
     // The file holds the write from here on, so memory follows it even when a step below fails.
     if (this.fallbackBase) this.fallbackBase = staged;
     opts?.onCommit?.();
-    const failures: unknown[] = [];
     try {
       // Set secure permissions (0600 - only owner can read/write)
       // This protects auth tokens and API keys from other users
       await fs.chmod(this.configPath, 0o600);
     } catch (error) {
-      failures.push(error);
+      // The file already holds the write, so the save stands.
+      console.warn(
+        `Saved ${this.configPath}, but could not set its permissions to 0600: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
     try {
       await this.refreshMerged();
     } catch (error) {
-      failures.push(error);
-    }
-    if (failures.length > 0) {
-      console.error('Failed to save config:', failures[0]);
-      throw failures[0];
+      console.error('Failed to save config:', error);
+      throw error;
     }
   }
 
@@ -2084,12 +2095,12 @@ export class ConfigStore {
   }
 
   /**
-   * Enable/disable an MCP server saved in the user config. Rejects naming the server's source when the user config
-   * does not save it; `injectedStillApplies` says --mcp-config also defines it, so its definition stays in effect.
+   * Enable/disable an MCP server saved in the user config. Rejects with McpToggleRefusedError naming the server's
+   * source when the user config does not save it; `overriddenBy` names what decides whether it connects instead.
    */
-  async toggleMcpServer(name: string, enabled: boolean): Promise<{ injectedStillApplies: boolean }> {
+  async toggleMcpServer(name: string, enabled: boolean): Promise<{ overriddenBy: McpToggleOverride }> {
     await this.load();
-    const result = { injectedStillApplies: this.injectedMcpNames.has(name) };
+    const result = { overriddenBy: this.mcpToggleOverride(name) };
     const toggle = (config: CliConfig) => {
       const server = config.mcpServers.find(s => s.name === name);
       if (server) server.enabled = enabled;
@@ -2106,38 +2117,49 @@ export class ConfigStore {
     return result;
   }
 
+  private mcpToggleOverride(name: string): McpToggleOverride {
+    if (this.strictMcpConfig) return 'strict-mcp-config';
+    return this.injectedMcpNames.has(name) ? 'mcp-config' : null;
+  }
+
   /**
    * The MCP server `name` as enable/disable sees it: the user config's own entry when it saves one, read from the
-   * file itself when that fails validation. Rejects a server from another source, including a project definition
-   * awaiting approval, before the command decides whether a saved entry already has the requested state.
+   * file itself when that fails validation. A non-boolean `enabled` is undefined so a toggle repairs it.
+   * Rejects servers from another source before the command decides whether the saved state already matches.
    */
-  async findMcpServer(name: string): Promise<{ enabled: boolean; injectedStillApplies: boolean } | null> {
+  async findMcpServer(name: string): Promise<{ enabled: boolean | undefined; overriddenBy: McpToggleOverride } | null> {
     await this.load();
-    const injectedStillApplies = this.injectedMcpNames.has(name);
     const saved = this.globalConfig!.mcpServers.find(s => s.name === name);
-    if (saved) return { enabled: saved.enabled, injectedStillApplies };
+    if (saved) return { enabled: saved.enabled, overriddenBy: this.mcpToggleOverride(name) };
     if (this.fallbackBase) {
       const text = await this.readConfigText();
       const raw = text === null ? null : this.parseConfigText(text);
       const entry = raw ? rawMcpServerEntry(raw, name) : undefined;
-      if (entry) return { enabled: entry.enabled !== false, injectedStillApplies };
+      if (entry) {
+        // Validation rejects a non-boolean `enabled` and defaults a missing one to true.
+        const value = ownValue(entry, 'enabled');
+        const enabled = value === undefined ? true : typeof value === 'boolean' ? value : undefined;
+        return { enabled, overriddenBy: this.mcpToggleOverride(name) };
+      }
     }
-    if (injectedStillApplies || this.projectMcpNames.has(name)) throw this.mcpServerNotSavedError(name);
+    if (this.injectedMcpNames.has(name) || this.projectMcpNames.has(name)) {
+      throw this.mcpServerNotSavedError(name);
+    }
     return null;
   }
 
-  private mcpServerNotSavedError(name: string): Error {
+  private mcpServerNotSavedError(name: string): McpToggleRefusedError {
     if (this.injectedMcpNames.has(name)) {
-      return new Error(
+      return new McpToggleRefusedError(
         `MCP server "${name}" comes from --mcp-config, not ${this.configPath}; enable or disable it in that file.`
       );
     }
     if (this.projectMcpNames.has(name)) {
-      return new Error(
+      return new McpToggleRefusedError(
         `MCP server "${name}" comes from this project's config, not ${this.configPath}; enable or disable it there.`
       );
     }
-    return new Error(`MCP server "${name}" was not found in ${this.configPath}.`);
+    return new McpToggleRefusedError(`MCP server "${name}" was not found in ${this.configPath}.`);
   }
 
   /**
