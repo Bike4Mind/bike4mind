@@ -6,6 +6,7 @@ import Menu from '@mui/joy/Menu';
 import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import Stack from '@mui/joy/Stack';
+import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatApprovalMode } from '@shared/chat';
 import { APPROVAL_MODE_FOOTNOTES, APPROVAL_MODE_OPTIONS, approvalModeOption } from './approvalModes';
@@ -22,7 +23,9 @@ const ICONS: Record<ChatApprovalMode, () => ReactElement> = {
  *
  * Sits in the composer, beside the attach button, because the choice belongs to the next turn
  * the way the model does - and because a mode that only lived behind a popover would be a
- * standing permission the user had no way to notice. The pill always names the current mode.
+ * standing permission the user had no way to notice. The two asking modes show only their icon
+ * (named in the tooltip and aria-label) so the row stays quiet; "Full access" keeps its words
+ * and its warning colour, because that is the one mode the user must never miss.
  *
  * This is the ONLY writer of the mode in the whole app. Nothing the model, a tool or an MCP
  * server produces reaches `onSelect`; see ChatService.setApprovalMode for the other half.
@@ -39,22 +42,35 @@ export function ApprovalModePill({
   const [explained, setExplained] = useState(false);
   const current = approvalModeOption(mode);
   const CurrentIcon = ICONS[current.mode];
+  const labelled = current.tone === 'warning';
 
   return (
     <Dropdown onOpenChange={(_event, open) => open && setExplained(false)}>
-      <MenuButton
-        size="sm"
-        variant={current.tone === 'warning' ? 'soft' : 'plain'}
-        color={current.tone === 'warning' ? 'warning' : 'neutral'}
-        disabled={disabled}
-        sx={{ fontWeight: 'normal', minWidth: 0, borderRadius: 'xl', gap: 0.75 }}
-        slotProps={{ root: { 'data-testid': 'approval-mode-btn' } }}
-      >
-        <CurrentIcon />
-        <Typography level="body-xs" noWrap textColor="inherit">
-          {current.label}
-        </Typography>
-      </MenuButton>
+      <Tooltip title={`Approvals: ${current.label}`} size="sm" variant="soft" placement="top">
+        <MenuButton
+          size="sm"
+          variant={current.mode === 'ask' ? 'plain' : 'soft'}
+          color={current.tone === 'warning' ? 'warning' : current.mode === 'auto' ? 'primary' : 'neutral'}
+          disabled={disabled}
+          aria-label={`Approvals: ${current.label}`}
+          sx={{
+            fontWeight: 'normal',
+            minWidth: 0,
+            flexShrink: 0,
+            borderRadius: 'xl',
+            gap: 0.75,
+            ...(labelled ? {} : { px: 0.75 }),
+          }}
+          slotProps={{ root: { 'data-testid': 'approval-mode-btn', 'data-mode': current.mode } }}
+        >
+          <CurrentIcon />
+          {labelled && (
+            <Typography level="body-xs" noWrap textColor="inherit">
+              {current.label}
+            </Typography>
+          )}
+        </MenuButton>
+      </Tooltip>
 
       <Menu size="sm" placement="top-start" sx={{ maxWidth: 380, p: 1 }}>
         <Stack spacing={0.25} sx={{ px: 1, pb: 0.75 }}>
