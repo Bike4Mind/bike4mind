@@ -1,3 +1,4 @@
+import { shadowIdentityOptions } from '@bike4mind/services/llm/shadowTier';
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 /**
  * Lattice Chat API - Local Development Mode
@@ -22,6 +23,7 @@ import {
   hasReportedUsage,
   latchUsage,
   reserveCompletionCredits,
+  resolveShadowSubstitute,
   settleCompletion,
   type CompletionUsage,
 } from '@server/billing/meterPlatformCompletion';
@@ -356,7 +358,10 @@ const handler = baseApi({ auth: true }).post(
 
       logger.info(`[Lattice Chat] Using model: ${modelInfo.id}`);
 
-      const llm = getLlmByModel(apiKeyTable, { modelInfo, logger, endUserId: user.id });
+      const runModelInfo =
+        (await resolveShadowSubstitute(req, modelInfo, availableModels, { requireTools: true })) ?? modelInfo;
+
+      const llm = getLlmByModel(apiKeyTable, { modelInfo: runModelInfo, logger, endUserId: user.id });
       if (!llm) {
         throw new BadRequestError(`Failed to initialize LLM backend for model: ${modelInfo.id}`);
       }
@@ -382,28 +387,32 @@ const handler = baseApi({ auth: true }).post(
 
       const maxTokens = 4096;
       const ceilingUsd = completionRequestCeilingUsd(modelInfo, messages, maxTokens, LATTICE_TOOLS);
+      const runCeilingUsd = completionRequestCeilingUsd(runModelInfo, messages, maxTokens, LATTICE_TOOLS);
       const reservation = await reserveCompletionCredits(req, ceilingUsd, 'Lattice chat');
 
       let assistantMessage = '';
       let lastCompletionInfo: CompletionInfo | undefined;
       const usage: CompletionUsage = {};
-      const settleUsage = (usd: number) =>
+      const settleUsage = (usd: number, costUsd: number) =>
         settleCompletion(reservation, req, {
           model: modelInfo.id,
           provider: modelInfo.backend,
           usd,
+          costUsd,
+          executed: runModelInfo,
           inputTokens: usage.inputTokens ?? 0,
           outputTokens: usage.outputTokens ?? 0,
         });
       try {
         await llm.complete(
-          modelInfo.id,
+          runModelInfo.id,
           messages,
           {
             maxTokens,
             stream: true,
             tools: LATTICE_TOOLS,
             executeTools: false, // Return tool calls without executing - client will execute
+            ...shadowIdentityOptions(modelInfo, runModelInfo),
           },
           async (textChunks, completionInfo) => {
             for (const chunk of textChunks) {
@@ -419,7 +428,7 @@ const handler = baseApi({ auth: true }).post(
         logger.error('[Lattice Chat] LLM call failed:', error);
         // A stream can report billable usage before a later provider failure.
         if (hasReportedUsage(usage)) {
-          await settleUsage(completionUsd(modelInfo, usage));
+          await settleUsage(completionUsd(modelInfo, usage), completionUsd(runModelInfo, usage));
         } else {
           await reservation.refund();
         }
@@ -428,8 +437,12 @@ const handler = baseApi({ auth: true }).post(
 
       // An adapter that reports no usage is charged the reservation ceiling rather than nothing.
       const reported = hasReportedUsage(usage);
-      if (!reported) logger.warn(`[Lattice Chat] ${modelInfo.id} reported no usage; charging the reservation ceiling`);
-      await settleUsage(reported ? completionUsd(modelInfo, usage) : ceilingUsd);
+      if (!reported)
+        logger.warn(`[Lattice Chat] ${runModelInfo.id} reported no usage; charging the reservation ceiling`);
+      await settleUsage(
+        reported ? completionUsd(modelInfo, usage) : ceilingUsd,
+        reported ? completionUsd(runModelInfo, usage) : runCeilingUsd
+      );
 
       const toolCalls: Array<{
         id: string;
