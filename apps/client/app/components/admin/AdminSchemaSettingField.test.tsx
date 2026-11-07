@@ -209,6 +209,55 @@ describe('AdminSchemaSettingField', () => {
     renderField('abuseAssessmentConfig', undefined, true);
     type('admin-setting-abuseAssessmentConfig-dailyBudgetUsd-input', '5000');
     expect(byId('admin-save-bar')).toHaveTextContent('Fix the highlighted fields before saving.');
+    expect(byId('admin-save-confirm-btn')).toBeDisabled();
+  });
+
+  it('evaluates staged warnings against the stored value at save time', () => {
+    const { rerender } = renderField(
+      'autoContainmentConfig',
+      { ...settingsMap.autoContainmentConfig.defaultValue, mode: 'enforce' },
+      true
+    );
+    type('admin-setting-autoContainmentConfig-maxPerHour-input', '3');
+
+    rerender(
+      <CssVarsProvider theme={appTheme}>
+        <SettingsDraftProvider>
+          <AdminSchemaSettingField
+            setting={settingsMap.autoContainmentConfig}
+            structured={STRUCTURED_SETTINGS.autoContainmentConfig}
+            storedValue={{ ...settingsMap.autoContainmentConfig.defaultValue, mode: 'shadow' }}
+            index={0}
+          />
+        </SettingsDraftProvider>
+      </CssVarsProvider>
+    );
+
+    expect(byId('admin-setting-autoContainmentConfig-mode-input')).toHaveTextContent('enforce');
+    fireEvent.click(byId('admin-save-confirm-btn'));
+    expect(byId('admin-settings-warning-dialog')).toHaveTextContent('contains real accounts');
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('shows group validation errors after applying JSON', () => {
+    renderField('usagePatternSignalsConfig');
+    fireEvent.click(byId('admin-setting-usagePatternSignalsConfig-view-json-btn'));
+    type(
+      'admin-setting-usagePatternSignalsConfig-json-input',
+      JSON.stringify({ ...settingsMap.usagePatternSignalsConfig.defaultValue, weights: null })
+    );
+    fireEvent.click(byId('admin-setting-usagePatternSignalsConfig-json-apply-btn'));
+    expect(byId('admin-setting-usagePatternSignalsConfig-weights-group-error')).toBeInTheDocument();
+  });
+
+  it('fills schema defaults when applying partial JSON', () => {
+    renderField('autoContainmentConfig');
+    fireEvent.click(byId('admin-setting-autoContainmentConfig-view-json-btn'));
+    type('admin-setting-autoContainmentConfig-json-input', '{"maxPerHour":3}');
+    fireEvent.click(byId('admin-setting-autoContainmentConfig-json-apply-btn'));
+    expect(byId('admin-setting-autoContainmentConfig-mode-input')).toHaveTextContent('shadow');
+    expect(byId('admin-setting-autoContainmentConfig-minConfidence-input')).toHaveValue(0.9);
+    expect(byId('admin-setting-autoContainmentConfig-maxPerHour-input')).toHaveValue(3);
   });
 
   it('edits the value as JSON and applies it to the form', () => {

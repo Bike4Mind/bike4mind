@@ -214,6 +214,11 @@ function FieldGrid({ fields, value, defaults, errors, disabled, testIdPrefix, on
                     {field.help}
                   </Typography>
                 )}
+                {errors[id] && (
+                  <Typography level="body-sm" color="danger" sx={{ mb: 1 }} data-testid={`${testId}-group-error`}>
+                    {errors[id]}
+                  </Typography>
+                )}
                 <FieldGrid
                   fields={field.fields}
                   value={value}
@@ -490,7 +495,8 @@ const AdminSchemaSettingField = ({
           testIdPrefix={testIdPrefix}
           onClose={() => setJsonOpen(false)}
           onApply={next => {
-            setValue(next);
+            const parsed = schema.safeParse(next);
+            setValue(parsed.success ? (parsed.data as ConfigObject) : next);
             setJsonOpen(false);
           }}
         />

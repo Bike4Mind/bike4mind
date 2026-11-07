@@ -23,7 +23,7 @@ type Draft = {
   value: unknown;
   save(value: unknown): Promise<unknown>;
   blocked?: string;
-  warnings?: string[];
+  warnings?(value: unknown): string[];
 };
 type DraftContext = {
   drafts: Record<string, Draft>;
@@ -64,7 +64,7 @@ export function SettingsDraftProvider({ children }: { children: ReactNode }) {
       if (useAdminModal.getState().tabChangeGuard === guard) useAdminModal.getState().setTabChangeGuard(null);
     };
   }, [dirty, router]);
-  const warnings = entries.flatMap(([, draft]) => draft.warnings ?? []);
+  const [confirmWarnings, setConfirmWarnings] = useState<string[]>([]);
   const save = async () => {
     if (saving.current || blockedReason) return;
     saving.current = true;
@@ -119,7 +119,13 @@ export function SettingsDraftProvider({ children }: { children: ReactNode }) {
           setDrafts({});
           setError(undefined);
         }}
-        onSave={() => (warnings.length ? setConfirming(true) : void save())}
+        onSave={() => {
+          const current = entries.flatMap(([, draft]) => draft.warnings?.(draft.value) ?? []);
+          if (current.length) {
+            setConfirmWarnings(current);
+            setConfirming(true);
+          } else void save();
+        }}
       />
       <UnsavedChangesGuard
         dirty={dirty}
@@ -132,7 +138,7 @@ export function SettingsDraftProvider({ children }: { children: ReactNode }) {
       />
       <SettingsWarningDialog
         open={confirming}
-        warnings={warnings}
+        warnings={confirmWarnings}
         onClose={() => setConfirming(false)}
         onSave={() => void save()}
       />
@@ -183,8 +189,10 @@ export function useSettingsDraft<T>(
             value: next,
             save: value => optionsRef.current.save(value as T),
             blocked: options.blocked?.(next),
-            warnings:
-              typeof options.warning === 'function' ? options.warning(next) : options.warning ? [options.warning] : [],
+            warnings: draftValue => {
+              const warning = optionsRef.current.warning;
+              return typeof warning === 'function' ? warning(draftValue as T) : warning ? [warning] : [];
+            },
           }
     );
   };
