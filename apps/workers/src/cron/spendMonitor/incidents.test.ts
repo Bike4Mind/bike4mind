@@ -57,6 +57,21 @@ describe('decideIncidents', () => {
     });
   });
 
+  it('snapshots the applied account tier and thresholds on open and update', () => {
+    const paidBreach = breach({ accountTier: 'paid', spikeFloorCredits: 20000, ceilingCredits: 40000 });
+    const [opened] = decideIncidents([], [paidBreach], now, windowEnd);
+    expect(opened).toMatchObject({
+      kind: 'open',
+      alert: { context: { accountTier: 'paid', spikeFloorCredits: 20000, ceilingCredits: 40000 } },
+    });
+    const [updated] = decideIncidents([active({ context: { trusted: true } })], [paidBreach], now, windowEnd);
+    expect(updated).toMatchObject({
+      kind: 'update',
+      patch: { context: { accountTier: 'paid', spikeFloorCredits: 20000, ceilingCredits: 40000 } },
+    });
+    if (updated.kind !== 'open') expect(updated.patch.context).not.toHaveProperty('trusted');
+  });
+
   it('treats 1.5x the last notified value as a silent update', () => {
     const [decision] = decideIncidents([active()], [breach({ value: 150 })], now, windowEnd);
 

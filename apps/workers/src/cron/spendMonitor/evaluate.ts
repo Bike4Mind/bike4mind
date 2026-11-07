@@ -20,6 +20,7 @@ import {
 } from './rules';
 import { resolveScopes, scopeMapKey, type ResolvedScope, type ResolveScopeDeps, type ScopeKey } from './resolveScope';
 import { buildSpendAlertMessage, type SpendAlertMessageInput } from './slackMessage';
+import { resolvePaidScopes, type PaidScopeDeps } from './paidScopes';
 import { resolveTrustedScopes, type SpendTrustConfig } from './trust';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -38,6 +39,7 @@ export type EvaluateDeps = {
   rollups: Pick<ISpendRollupRepository, 'sumWindow' | 'windowSeries' | 'latestBucketStart' | 'sourceMix'>;
   alerts: Pick<ISpendAlertRepository, 'findActive' | 'create' | 'update' | 'applyEvaluation'>;
   resolveScopeDeps: ResolveScopeDeps;
+  paidScopeDeps: PaidScopeDeps;
   /** Posting is best effort; a disabled Slack integration passes a no-op, which counts as success. */
   post: (message: SlackAlarmMessage) => Promise<void>;
   messageContext: Pick<SpendAlertMessageInput, 'creditUsd' | 'stage' | 'appUrl' | 'mention'>;
@@ -171,10 +173,12 @@ async function scopeCandidatesForType(
   thresholds: SpendThresholds
 ): Promise<ScopeCandidates> {
   const totals = await deps.rollups.sumWindow(scopeType, windowStart, windowEnd);
-  // Trust is not known yet, so the lowest limit of either tier decides who is worth a closer look.
+  // Trust is not known yet, so the lowest limit of every tier decides who is worth a closer look.
   const candidateFloor = Math.min(
     thresholds.accountSpikeFloorCredits,
     thresholds.accountCeilingCredits,
+    thresholds.paidAccountSpikeFloorCredits,
+    thresholds.paidAccountCeilingCredits,
     thresholds.trustedAccountSpikeFloorCredits,
     thresholds.trustedAccountCeilingCredits
   );
@@ -190,6 +194,7 @@ async function scopeBreaches(
   { scopeType, totals, candidates }: ScopeCandidates,
   windowStart: Date,
   trustedKeys: ReadonlySet<string>,
+  paidKeys: ReadonlySet<string>,
   deps: EvaluateDeps,
   thresholds: SpendThresholds
 ): Promise<SpendBreach[]> {
@@ -202,7 +207,8 @@ async function scopeBreaches(
   );
   return candidates.flatMap(scopeId => {
     const baseline = scopeBaseline(windowSums(history.get(scopeId) ?? [], windowStart, SCOPE_BASELINE_DAYS, 'credits'));
-    const tier = trustedKeys.has(scopeMapKey(scopeType, scopeId)) ? 'trusted' : 'standard';
+    const key = scopeMapKey(scopeType, scopeId);
+    const tier = trustedKeys.has(key) ? 'trusted' : paidKeys.has(key) ? 'paid' : 'standard';
     return evaluateScope({ scopeType, scopeId, value: creditsOf(totals.get(scopeId)), baseline }, thresholds, tier);
   });
 }
@@ -545,13 +551,21 @@ export async function evaluateSpend(
     perType.push(candidates);
     accountTotals.set(scopeType, candidates.totals);
   }
-  // Failing closed: if the lookup fails every account is held to the standard thresholds, so alerts still fire.
+  // A failed lookup applies no explicit trust; subscription classification remains independent.
   const trustedKeys = await resolveTrustedScopes(
     perType.flatMap(({ scopeType, candidates }) => candidates.map(scopeId => ({ scopeType, scopeId }))),
     trust,
     deps.resolveScopeDeps
   ).catch(error => {
     deps.logger.error('spend-monitor-trust-lookup-failed', { error });
+    return new Set<string>();
+  });
+  const paidKeys = await resolvePaidScopes(
+    perType.flatMap(({ scopeType, candidates }) => candidates.map(scopeId => ({ scopeType, scopeId }))),
+    deps.resolveScopeDeps,
+    deps.paidScopeDeps
+  ).catch(error => {
+    deps.logger.error('spend-monitor-paid-lookup-failed', { error });
     return new Set<string>();
   });
   // Same fail-closed rule: with no trusted spend subtracted, the platform is judged on its full total.
@@ -561,7 +575,7 @@ export async function evaluateSpend(
   });
   breaches.push(...(await platformBreaches(windowStart, windowEnd, trustedSpend, deps, thresholds)));
   for (const candidates of perType) {
-    breaches.push(...(await scopeBreaches(candidates, windowStart, trustedKeys, deps, thresholds)));
+    breaches.push(...(await scopeBreaches(candidates, windowStart, trustedKeys, paidKeys, deps, thresholds)));
   }
   const window: EvaluatedWindow = { start: windowStart, end: windowEnd, accountTotals };
 
