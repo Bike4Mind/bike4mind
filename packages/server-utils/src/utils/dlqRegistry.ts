@@ -68,7 +68,7 @@ const DLQ_REGISTRY = [
   },
   {
     label: 'release-notes',
-    displayName: 'Release Notes',
+    displayName: 'Release Notes and Highlights',
     application: 'ReleaseNotes',
     sourceQueue: 'whatsNewGenerationQueue',
   },

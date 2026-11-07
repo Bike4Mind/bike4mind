@@ -28,9 +28,11 @@ vi.mock('./releaseNotes/generate', () => ({
   writeReleaseNotes: h.writeReleaseNotes,
   createReleaseNotesCompleter: h.createCompleter,
 }));
+vi.mock('./whatsNewHighlights', () => ({ runHighlightsJob: vi.fn() }));
 vi.stubGlobal('fetch', h.fetch);
 
-import { dispatch, GENERATION_BUDGET_MS } from './releaseNotes';
+import { dispatch } from './whatsNewJob';
+import { GENERATION_BUDGET_MS } from './releaseNotes';
 
 const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never as {
   warn: ReturnType<typeof vi.fn>;

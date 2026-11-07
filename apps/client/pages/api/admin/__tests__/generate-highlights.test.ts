@@ -33,7 +33,7 @@ vi.mock('@bike4mind/server-utils/releaseNotes/adminReleaseNotes', async importOr
 
 const mockSendToQueue = vi.fn();
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => mockSendToQueue(...a) }));
-vi.mock('sst', () => ({ Resource: { App: { stage: 'dev' }, whatsNewHighlightsQueue: { url: 'https://queue' } } }));
+vi.mock('sst', () => ({ Resource: { App: { stage: 'dev' }, whatsNewGenerationQueue: { url: 'https://queue' } } }));
 const mockAudit = vi.fn();
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: (...a: unknown[]) => mockAudit(...a) }));
 
@@ -128,6 +128,7 @@ describe('POST /api/admin/generate-highlights admin audit', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockSendToQueue).toHaveBeenCalledTimes(1);
+    expect(mockSendToQueue).toHaveBeenCalledWith('https://queue', expect.objectContaining({ kind: 'highlights' }));
     expect(mockAudit).toHaveBeenCalledTimes(1);
     expect(mockAudit.mock.calls[0][0]).toBe(req);
     expect(mockAudit.mock.calls[0][1]).toMatchObject({

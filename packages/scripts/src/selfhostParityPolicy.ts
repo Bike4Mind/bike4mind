@@ -706,8 +706,8 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gapBecause(
     'queue:infra/queues.ts:whatsNewGenerationQueue',
-    '7df5242a93aeaf78aa95a16ddb7595d308df55e9ca19a3273809dac56b69b856',
-    'Not registered. Only the release-notes pipeline (releaseNotes.dispatch) produces it, and self-host has no release pipeline.',
+    'd0df58f8c022f702f5837cd4dfceb85dbeb506fc9fa7a349b0f6bdc5fc665a89',
+    'Not registered. whatsNewJob.dispatch consumes release notes and admin-triggered highlights; self-host has no release-notes pipeline or highlights consumer.',
     [
       'bedrock:InvokeModel',
       'bedrock:InvokeModelWithResponseStream',
@@ -722,7 +722,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   gapBecause(
     'queue:infra/queues.ts:whatsNewHighlightsQueue',
     '606bf264dcf3693c1579a07bd828bc627684657e755851c8f289fb9798437011',
-    'Not registered, so the admin generate-highlights route fails. Needs the same content-generation decision as whatsNewGenerationQueue.',
+    'Not registered. Legacy highlights queue retained to drain hosted in-flight messages; the admin route now produces to whatsNewGenerationQueue.',
     [
       'bedrock:InvokeModel',
       'bedrock:InvokeModelWithResponseStream',

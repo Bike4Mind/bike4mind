@@ -150,12 +150,13 @@ const PENDING_SCOPE_DECISION: Record<string, string> = {
   webhookDeliveryQueue: 'reachable from the webhook retry and replay-dlq routes - needs a consumer first',
 
   // Admin-only, and each needs something self-host has not got.
-  whatsNewGenerationQueue: 'subscribes releaseNotes.dispatch; self-host has no release-notes pipeline to run it',
-  // Same feature family, surfaced once the scanner learned to read a wide cast and a wrapped
-  // access. Worth noting for whoever wires it: the 500 guard at generate-highlights.ts cannot
+  // Surfaced once the scanner learned to read a wide cast and a wrapped access.
+  // Worth noting for whoever wires it: the 500 guard at generate-highlights.ts cannot
   // fire on self-host, because the shim's Proxy throws on the property access before `?.url` is
   // ever evaluated.
-  whatsNewHighlightsQueue: 'admin route; needs the same content-generation decision',
+  whatsNewGenerationQueue:
+    'release-notes pipeline and admin highlights route; self-host needs a content-generation consumer',
+  whatsNewHighlightsQueue: 'legacy drain only; no producer remains after highlights moved to whatsNewGenerationQueue',
   secopsTriageQueue: 'admin security-dashboard ingest; needs Prowler and AWS findings',
   sreJobQueue: 'admin SRE rerun/retry routes; handler needs Bedrock and CloudWatch',
 

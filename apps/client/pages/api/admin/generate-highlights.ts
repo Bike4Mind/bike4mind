@@ -7,7 +7,7 @@ import { AdminSettings } from '@bike4mind/database';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
-import type { WhatsNewHighlightsPayload } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
+import type { WhatsNewHighlightsJob } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 import { Logger } from '@bike4mind/observability';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import {
@@ -118,7 +118,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         });
       }
 
-      const payload: WhatsNewHighlightsPayload = {
+      const payload: WhatsNewHighlightsJob = {
+        kind: 'highlights',
         correlationId,
         environment: Resource.App.stage === 'production' ? 'production' : 'dev',
         startDate: startDateStr,
@@ -131,9 +132,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       // Dispatch to queue
       // Type assertion needed: SST types are generated after first deploy
       const queueResource = (Resource as unknown as Record<string, { url: string } | undefined>)
-        .whatsNewHighlightsQueue;
+        .whatsNewGenerationQueue;
       if (!queueResource?.url) {
-        return res.status(500).json({ error: 'whatsNewHighlightsQueue not deployed — SQS queue URL unavailable' });
+        return res.status(500).json({ error: 'whatsNewGenerationQueue not deployed - SQS queue URL unavailable' });
       }
       await sendToQueue(queueResource.url, payload);
 
