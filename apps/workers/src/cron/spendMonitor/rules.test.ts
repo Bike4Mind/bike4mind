@@ -13,6 +13,8 @@ const thresholds: SpendThresholds = {
   platformSpikeFloorCredits: 5000,
   platformCostFloorUsd: 20,
   accountSpikeRatio: 10,
+  paidAccountMinAgeDays: 7,
+  riskReviewScoreThreshold: 50,
   accountSpikeFloorCredits: 1000,
   accountCeilingCredits: 5000,
   paidAccountSpikeFloorCredits: 20000,

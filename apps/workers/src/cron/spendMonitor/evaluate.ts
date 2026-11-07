@@ -1,4 +1,10 @@
 import {
+  resolveAccountContexts,
+  type AccountContextDeps,
+  type AccountContext,
+} from '@bike4mind/server-utils/lib/accounts/accountContext';
+import { selectSpendAccountPolicy, type SpendAccountPolicy } from './accountPolicy';
+import {
   SPEND_BUCKET_MS,
   spendAlertOpenKey,
   type ISpendAlertRepository,
@@ -20,7 +26,7 @@ import {
 } from './rules';
 import { resolveScopes, scopeMapKey, type ResolvedScope, type ResolveScopeDeps, type ScopeKey } from './resolveScope';
 import { buildSpendAlertMessage, type SpendAlertMessageInput } from './slackMessage';
-import { resolvePaidScopes, type PaidScopeDeps } from './paidScopes';
+import { resolvePaidScopes, scopePayers, type PaidScopeDeps } from './paidScopes';
 import { resolveTrustedScopes, type SpendTrustConfig } from './trust';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -40,6 +46,7 @@ export type EvaluateDeps = {
   alerts: Pick<ISpendAlertRepository, 'findActive' | 'create' | 'update' | 'applyEvaluation'>;
   resolveScopeDeps: ResolveScopeDeps;
   paidScopeDeps: PaidScopeDeps;
+  accountContextDeps: AccountContextDeps;
   /** Posting is best effort; a disabled Slack integration passes a no-op, which counts as success. */
   post: (message: SlackAlarmMessage) => Promise<void>;
   messageContext: Pick<SpendAlertMessageInput, 'creditUsd' | 'stage' | 'appUrl' | 'mention'>;
@@ -193,8 +200,7 @@ async function scopeCandidatesForType(
 async function scopeBreaches(
   { scopeType, totals, candidates }: ScopeCandidates,
   windowStart: Date,
-  trustedKeys: ReadonlySet<string>,
-  paidKeys: ReadonlySet<string>,
+  policies: ReadonlyMap<string, SpendAccountPolicy>,
   deps: EvaluateDeps,
   thresholds: SpendThresholds
 ): Promise<SpendBreach[]> {
@@ -208,8 +214,12 @@ async function scopeBreaches(
   return candidates.flatMap(scopeId => {
     const baseline = scopeBaseline(windowSums(history.get(scopeId) ?? [], windowStart, SCOPE_BASELINE_DAYS, 'credits'));
     const key = scopeMapKey(scopeType, scopeId);
-    const tier = trustedKeys.has(key) ? 'trusted' : paidKeys.has(key) ? 'paid' : 'standard';
-    return evaluateScope({ scopeType, scopeId, value: creditsOf(totals.get(scopeId)), baseline }, thresholds, tier);
+    const policy = policies.get(key) ?? { tier: 'standard' as const, reasons: ['account_context_unavailable'] };
+    return evaluateScope(
+      { scopeType, scopeId, value: creditsOf(totals.get(scopeId)), baseline },
+      thresholds,
+      policy.tier
+    ).map(breach => ({ ...breach, accountContext: policy.context, policyReasons: policy.reasons }));
   });
 }
 
@@ -560,22 +570,56 @@ export async function evaluateSpend(
     deps.logger.error('spend-monitor-trust-lookup-failed', { error });
     return new Set<string>();
   });
-  const paidKeys = await resolvePaidScopes(
-    perType.flatMap(({ scopeType, candidates }) => candidates.map(scopeId => ({ scopeType, scopeId }))),
-    deps.resolveScopeDeps,
-    deps.paidScopeDeps
-  ).catch(error => {
-    deps.logger.error('spend-monitor-paid-lookup-failed', { error });
-    return new Set<string>();
+  const scopeKeys = perType.flatMap(({ scopeType, candidates }) => candidates.map(scopeId => ({ scopeType, scopeId })));
+  const payers = await scopePayers(scopeKeys, deps.resolveScopeDeps).catch(error => {
+    deps.logger.error('spend-monitor-payer-lookup-failed', { error });
+    return new Map<string, { payerType: 'User' | 'Organization'; payerId: string }>();
   });
-  // Same fail-closed rule: with no trusted spend subtracted, the platform is judged on its full total.
-  const trustedSpend = await trustedOwnerSpend(perType, trustedKeys, windowEnd, deps).catch(error => {
+  const paidKeys = await resolvePaidScopes(scopeKeys, deps.resolveScopeDeps, deps.paidScopeDeps, payers).catch(
+    error => {
+      deps.logger.error('spend-monitor-paid-lookup-failed', { error });
+      return new Set<string>();
+    }
+  );
+  const accounts = [
+    ...new Map(
+      [...payers.values()].map(payer => [
+        scopeMapKey(payer.payerType, payer.payerId),
+        { ownerType: payer.payerType, ownerId: payer.payerId },
+      ])
+    ).values(),
+  ];
+  const contexts = await resolveAccountContexts(accounts, now, deps.accountContextDeps).catch(error => {
+    deps.logger.error('spend-monitor-account-context-failed', { error });
+    return new Map<string, AccountContext>();
+  });
+  const policies = new Map(
+    scopeKeys.map(key => {
+      const scopeKey = scopeMapKey(key.scopeType, key.scopeId);
+      const payer = payers.get(scopeKey);
+      return [
+        scopeKey,
+        selectSpendAccountPolicy({
+          context: payer ? contexts.get(scopeMapKey(payer.payerType, payer.payerId)) : undefined,
+          subscribed: paidKeys.has(scopeKey),
+          explicitlyTrusted: trustedKeys.has(scopeKey),
+          minimumPaidAgeDays: thresholds.paidAccountMinAgeDays,
+          riskReviewScoreThreshold: thresholds.riskReviewScoreThreshold,
+        }),
+      ] as const;
+    })
+  );
+  const effectiveTrustedKeys = new Set(
+    [...policies].filter(([, policy]) => policy.tier === 'trusted').map(([key]) => key)
+  );
+  // Only effective explicit trust is excluded; paid standing never removes platform spend.
+  const trustedSpend = await trustedOwnerSpend(perType, effectiveTrustedKeys, windowEnd, deps).catch(error => {
     deps.logger.error('spend-monitor-trusted-spend-failed', { error });
     return { current: 0, series: [] } satisfies TrustedSpend;
   });
   breaches.push(...(await platformBreaches(windowStart, windowEnd, trustedSpend, deps, thresholds)));
   for (const candidates of perType) {
-    breaches.push(...(await scopeBreaches(candidates, windowStart, trustedKeys, paidKeys, deps, thresholds)));
+    breaches.push(...(await scopeBreaches(candidates, windowStart, policies, deps, thresholds)));
   }
   const window: EvaluatedWindow = { start: windowStart, end: windowEnd, accountTotals };
 

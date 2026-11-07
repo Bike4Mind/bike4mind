@@ -24,6 +24,8 @@ const thresholds: SpendThresholds = {
   platformSpikeFloorCredits: 5000,
   platformCostFloorUsd: 20,
   accountSpikeRatio: 10,
+  paidAccountMinAgeDays: 7,
+  riskReviewScoreThreshold: 50,
   accountSpikeFloorCredits: 1000,
   accountCeilingCredits: 5000,
   paidAccountSpikeFloorCredits: 20000,
@@ -153,7 +155,22 @@ function createFakes() {
     findActiveSubscriptionsByOwners: vi.fn(async () => []),
     findPlanHolderOrganizations: vi.fn(async () => []),
   };
+  const accountContextDeps: EvaluateDeps['accountContextDeps'] = {
+    findUsers: vi.fn(async ids =>
+      ids.map(id => ({
+        id,
+        createdAt: new Date('2026-01-01'),
+        emailVerified: true,
+        riskScore: { score: 0, reviewState: 'none' as const },
+      }))
+    ),
+    findOrganizations: vi.fn(async ids =>
+      ids.map(id => ({ id, userId: `owner-${id}`, createdAt: new Date('2026-01-01') }))
+    ),
+    findPaymentHistory: vi.fn(async () => []),
+  };
   const deps: EvaluateDeps = {
+    accountContextDeps,
     paidScopeDeps,
     rollups: { sumWindow, windowSeries, latestBucketStart, sourceMix },
     alerts: { findActive, create, update, applyEvaluation } as unknown as EvaluateDeps['alerts'],
@@ -170,6 +187,7 @@ function createFakes() {
 
   return {
     deps,
+    accountContextDeps,
     paidScopeDeps,
     alerts,
     posts,
@@ -723,6 +741,80 @@ describe('evaluateSpend', () => {
       fakes.nextWindow();
       await run(fakes);
       expect(fakes.alerts[0].status).toBe('resolved');
+    });
+
+    it.each(['young', 'unknown-risk', 'pending', 'payment-risk', 'blocked-payment'])(
+      'keeps a paid account with %s context on standard limits',
+      async condition => {
+        const fakes = createFakes();
+        vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockResolvedValue(paidRows);
+        vi.mocked(fakes.accountContextDeps.findUsers).mockImplementation(async ids =>
+          ids.map(id => ({
+            id,
+            createdAt: condition === 'young' ? new Date(NOW.getTime() - DAY_MS) : new Date('2026-01-01'),
+            emailVerified: true,
+            riskScore:
+              condition === 'unknown-risk'
+                ? null
+                : { score: 10, reviewState: condition === 'pending' ? ('pending' as const) : ('none' as const) },
+            paymentRiskEventAt: condition === 'payment-risk' ? NOW : null,
+          }))
+        );
+        if (condition === 'blocked-payment') {
+          vi.mocked(fakes.accountContextDeps.findPaymentHistory).mockResolvedValue([
+            { userId: 'subscriber', succeeded: 1, failed: 1, radarBlocked: 1, elevatedRisk: 0, latestSucceededAt: NOW },
+          ]);
+        }
+        fakes.setRollups([
+          ...windowBuckets('platform', 'all', 3400).map(bucket => ({ ...bucket, costUsd: 1 })),
+          ...windowBuckets('User', 'subscriber', 3400),
+        ]);
+        await run(fakes);
+        expect(fakes.alerts[0]).toMatchObject({ rule: 'account_ceiling', context: { accountTier: 'standard' } });
+        expect(fakes.alerts[0].context.accountContext).toBeDefined();
+        expect(fakes.alerts[0].context.policyReasons).not.toEqual([]);
+      }
+    );
+
+    it('fails closed on context lookup errors and retains the account in platform totals', async () => {
+      const fakes = createFakes();
+      vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockResolvedValue(paidRows);
+      vi.mocked(fakes.accountContextDeps.findUsers).mockRejectedValue(new Error('context unavailable'));
+      fakes.setRollups([
+        ...quietPlatformHistory(),
+        ...windowBuckets('platform', 'all', 15000),
+        ...windowBuckets('User', 'subscriber', 15000),
+      ]);
+      await run(fakes, parseSpendTrustConfig('', 'subscriber'));
+      expect(fakes.alerts).toContainEqual(expect.objectContaining({ rule: 'platform_spike' }));
+      const alert = fakes.alerts.find(row => row.rule === 'account_ceiling');
+      expect(alert?.context).toMatchObject({ accountTier: 'standard', policyReasons: ['account_context_unavailable'] });
+      expect(alert?.context).not.toHaveProperty('trusted');
+      expect(fakes.deps.logger.error).toHaveBeenCalledWith('spend-monitor-account-context-failed', expect.anything());
+    });
+
+    it('applies recorded payment risk before explicit trust and platform exclusion', async () => {
+      const fakes = createFakes();
+      vi.mocked(fakes.accountContextDeps.findUsers).mockImplementation(async ids =>
+        ids.map(id => ({
+          id,
+          createdAt: new Date('2026-01-01'),
+          emailVerified: true,
+          riskScore: { score: 10, reviewState: 'none' as const },
+          paymentRiskEventAt: NOW,
+        }))
+      );
+      fakes.setRollups([
+        ...quietPlatformHistory(),
+        ...windowBuckets('platform', 'all', 15000),
+        ...windowBuckets('User', 'subscriber', 15000),
+      ]);
+      await run(fakes, parseSpendTrustConfig('', 'subscriber'));
+      expect(fakes.alerts).toContainEqual(expect.objectContaining({ rule: 'platform_spike' }));
+      const alert = fakes.alerts.find(row => row.rule === 'account_ceiling');
+      expect(alert?.context).toMatchObject({ accountTier: 'standard', policyReasons: ['payment_risk_event'] });
+      expect(alert?.context).not.toHaveProperty('trusted');
+      expect(fakes.alerts.some(row => row.context.trustedExcluded !== undefined)).toBe(false);
     });
 
     it('uses standard limits and logs a failed subscription lookup', async () => {

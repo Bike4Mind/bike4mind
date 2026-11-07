@@ -1,3 +1,4 @@
+import { defaultAccountContextDeps } from '@bike4mind/server-utils/lib/accounts/accountContext';
 import { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { MIN_PRICE_PER_CREDIT_USD, SPEND_BUCKET_MS } from '@bike4mind/common';
@@ -28,10 +29,13 @@ type ThresholdKey =
   | 'spendMonitorAccountCeilingCredits'
   | 'spendMonitorPaidAccountSpikeFloorCredits'
   | 'spendMonitorPaidAccountCeilingCredits'
+  | 'spendMonitorPaidAccountMinAgeDays'
   | 'spendMonitorTrustedAccountSpikeFloorCredits'
   | 'spendMonitorTrustedAccountCeilingCredits';
 
 function readThresholds(settings: SettingsMap): SpendThresholds {
+  const riskScoring = getSettingsValue('signupRiskScoring', settings);
+  if (riskScoring === undefined) throw new Error('Setting signupRiskScoring resolved to no value');
   const read = (key: ThresholdKey): number => {
     const value = getSettingsValue(key, settings);
     if (value === undefined) throw new Error(`Setting ${key} resolved to no value`);
@@ -43,6 +47,8 @@ function readThresholds(settings: SettingsMap): SpendThresholds {
     platformSpikeFloorCredits: read('spendMonitorPlatformSpikeFloorCredits'),
     platformCostFloorUsd: read('spendMonitorPlatformCostFloorUsd'),
     accountSpikeRatio: read('spendMonitorAccountSpikeRatio'),
+    paidAccountMinAgeDays: read('spendMonitorPaidAccountMinAgeDays'),
+    riskReviewScoreThreshold: riskScoring.reviewThreshold,
     accountSpikeFloorCredits: read('spendMonitorAccountSpikeFloorCredits'),
     accountCeilingCredits: read('spendMonitorAccountCeilingCredits'),
     paidAccountSpikeFloorCredits: read('spendMonitorPaidAccountSpikeFloorCredits'),
@@ -96,6 +102,7 @@ export async function handler(event: unknown): Promise<{ status: 'ok' | 'disable
       alerts: spendAlertRepository,
       resolveScopeDeps: defaultResolveScopeDeps(),
       paidScopeDeps: defaultPaidScopeDeps(),
+      accountContextDeps: defaultAccountContextDeps(),
       post: createSpendPost(slackEnabled, message => postAlarmToSlack(webhookUrl, message), logger),
       messageContext: {
         creditUsd: MIN_PRICE_PER_CREDIT_USD,

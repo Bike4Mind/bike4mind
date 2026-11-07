@@ -1,3 +1,4 @@
+import { AccountContextSchema } from '@bike4mind/server-utils/lib/accounts/accountContext';
 import { escapeSlackLine, type ISpendAlert, type SpendRuleId } from '@bike4mind/common';
 import {
   ADMIN_LINKS,
@@ -104,6 +105,46 @@ function accountLimitContext(alert: ISpendAlert): string[] {
   ];
 }
 
+const formatAge = (days: number | null): string => (days === null ? 'unknown' : `${days.toFixed(1)} days`);
+const formatFlag = (value: boolean | null): string => (value === null ? 'unknown' : value ? 'yes' : 'no');
+
+function accountContextSections(alert: ISpendAlert): string[] {
+  if (alert.context.accountContext === undefined && alert.context.policyReasons === undefined) return [];
+  const parsed = AccountContextSchema.safeParse(alert.context.accountContext);
+  const reasons = Array.isArray(alert.context.policyReasons)
+    ? alert.context.policyReasons
+        .filter((reason): reason is string => typeof reason === 'string')
+        .slice(0, 6)
+        .map(reason => escapeSlackLine(reason.slice(0, 100)))
+    : [];
+  const explanation = reasons.length > 0 ? [`Policy: ${reasons.join(', ')}`] : [];
+  if (!parsed.success)
+    return [
+      `*Account context*\nunknown (unavailable or invalid)${explanation.length > 0 ? `\n${explanation[0]}` : ''}`,
+    ];
+  const context = parsed.data;
+  const paymentHistory =
+    context.payments.status === 'observed'
+      ? `${context.payments.succeeded} succeeded, ${context.payments.failed} failed, ${context.payments.radarBlocked} blocked, ${context.payments.elevatedRisk} elevated-risk; latest succeeded attempt started ${formatAge(context.payments.latestSucceededAgeDays)} ago`
+      : 'unknown (no retained payment history)';
+  const evidence =
+    context.evidence.status === 'observed'
+      ? `observed, ${context.evidence.ageHours === null ? 'age unknown' : `${context.evidence.ageHours.toFixed(1)} hours old`}`
+      : 'unknown (no behavioral evidence)';
+  return [
+    [
+      '*Account context*',
+      `Account age: ${formatAge(context.accountAgeDays)}; responsible owner: ${formatAge(context.responsibleAccountAgeDays)}`,
+      `Email verified: ${formatFlag(context.emailVerified)}; review: ${context.reviewState}; risk score: ${context.riskScore ?? 'unknown'}`,
+      `Review reopened: ${formatFlag(context.reviewReopened)}; payment-risk event: ${formatFlag(context.paymentRiskEvent)}`,
+      `Unreversed credit purchase: ${formatFlag(context.hasCreditPurchase)}; latest purchase: ${formatAge(context.lastCreditPurchaseAgeDays)}`,
+      `Retained payment history: ${paymentHistory}`,
+      `Behavioral evidence: ${evidence}`,
+      ...explanation,
+    ].join('\n'),
+  ];
+}
+
 function buildResolveMessage(input: SpendAlertMessageInput, title: string): SlackAlarmMessage {
   const { alert, scope, creditUsd } = input;
   const peak =
@@ -118,7 +159,7 @@ function buildResolveMessage(input: SpendAlertMessageInput, title: string): Slac
     stage: input.stage,
     level: 'info',
     title: line,
-    sections: [],
+    sections: accountContextSections(alert),
     context: [...listPriceContext(input.stage, alert.rule, creditUsd), ...accountLimitContext(alert)],
     summary: 'spend incident resolved',
   });
@@ -155,7 +196,7 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
     fields.push(`*Trusted accounts, not in ratio*\n${formatAmount(alert.rule, trustedExcluded, creditUsd)}${estimate}`);
   }
 
-  const sections: string[] = [];
+  const sections: string[] = accountContextSections(alert);
   if (breakdown?.topModels.length) {
     const lines = breakdown.topModels.map(m => `${safe(m.model)}: ${formatCredits(m.credits)}`);
     sections.push(`*Top models (credits)*\n${lines.join('\n')}`);
