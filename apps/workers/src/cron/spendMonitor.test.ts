@@ -27,6 +27,8 @@ vi.mock('../events/alarmSlackMessage', () => ({
   postAlarmToSlack: mocks.postAlarmToSlack,
 }));
 vi.mock('../events/alarmSlackMention', () => ({ readAlarmMention: async () => undefined }));
+vi.mock('@bike4mind/server-utils/lib/accounts/accountContext', () => ({ defaultAccountContextDeps: () => ({}) }));
+vi.mock('./spendMonitor/paidScopes', () => ({ defaultPaidScopeDeps: () => ({}) }));
 vi.mock('./spendMonitor/resolveScope', () => ({ defaultResolveScopeDeps: () => ({}) }));
 vi.mock('./spendMonitor/evaluate', () => ({ evaluateSpend: mocks.evaluateSpend }));
 vi.mock('@bike4mind/utils', () => ({
@@ -45,23 +47,27 @@ import { handler } from './spendMonitor';
 
 const event = { time: '2026-10-30T10:12:00Z' };
 
-const defaultSettings: Record<string, boolean | number | string> = {
+const defaultSettings: Record<string, unknown> = {
   spendMonitorEnabled: true,
   spendMonitorSlackEnabled: false,
   spendMonitorPlatformSpikeRatio: 3,
   spendMonitorPlatformCriticalRatio: 6,
   spendMonitorPlatformSpikeFloorCredits: 5000,
   spendMonitorPlatformCostFloorUsd: 20,
+  signupRiskScoring: { reviewThreshold: 50 },
+  spendMonitorPaidAccountMinAgeDays: 7,
   spendMonitorAccountSpikeRatio: 10,
   spendMonitorAccountSpikeFloorCredits: 1000,
   spendMonitorAccountCeilingCredits: 5000,
+  spendMonitorPaidAccountSpikeFloorCredits: 20000,
+  spendMonitorPaidAccountCeilingCredits: 40000,
   spendMonitorTrustedEmailDomains: '',
   spendMonitorTrustedAccountIds: '',
   spendMonitorTrustedAccountSpikeFloorCredits: 20000,
   spendMonitorTrustedAccountCeilingCredits: 40000,
 };
 
-const useSettings = (overrides: Record<string, boolean | number | string> = {}) => {
+const useSettings = (overrides: Record<string, unknown> = {}) => {
   const settings = { ...defaultSettings, ...overrides };
   mocks.getSettingsValue.mockImplementation((key: string) => settings[key]);
 };
@@ -123,7 +129,7 @@ describe('spendMonitor handler', () => {
 
   it('evaluates after rolling, with thresholds read from settings', async () => {
     mocks.latestBucketStart.mockResolvedValue(new Date('2026-10-30T09:55:00.000Z'));
-    useSettings({ spendMonitorPlatformSpikeRatio: 4 });
+    useSettings({ spendMonitorPlatformSpikeRatio: 4, spendMonitorPaidAccountCeilingCredits: 45000 });
 
     await handler(event);
 
@@ -136,8 +142,12 @@ describe('spendMonitor handler', () => {
       platformSpikeFloorCredits: 5000,
       platformCostFloorUsd: 20,
       accountSpikeRatio: 10,
+      paidAccountMinAgeDays: 7,
+      riskReviewScoreThreshold: 50,
       accountSpikeFloorCredits: 1000,
       accountCeilingCredits: 5000,
+      paidAccountSpikeFloorCredits: 20000,
+      paidAccountCeilingCredits: 45000,
       trustedAccountSpikeFloorCredits: 20000,
       trustedAccountCeilingCredits: 40000,
     });

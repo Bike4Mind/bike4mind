@@ -38,6 +38,44 @@ const active = (overrides: Partial<SpendAlertRecord> = {}): SpendAlertRecord => 
 });
 
 describe('decideIncidents', () => {
+  it('snapshots account facts and policy reasons on each breach and clears obsolete facts on lookup failure', () => {
+    const accountContext = {
+      accountAgeDays: 30,
+      responsibleAccountAgeDays: 30,
+      emailVerified: true,
+      reviewState: 'approved' as const,
+      riskScore: 5,
+      reviewReopened: false,
+      paymentRiskEvent: false,
+      hasCreditPurchase: true,
+      lastCreditPurchaseAgeDays: 2,
+      payments: {
+        status: 'observed' as const,
+        succeeded: 1,
+        failed: 0,
+        radarBlocked: 0,
+        elevatedRisk: 0,
+        latestSucceededAgeDays: 2,
+      },
+      evidence: { status: 'missing' as const, ageHours: null },
+    };
+    const withContext = { ...breach(), accountContext, policyReasons: ['established_paid_account'] };
+    const [opened] = decideIncidents([], [withContext], now, windowEnd);
+    expect(opened).toMatchObject({
+      alert: { context: { accountContext, policyReasons: ['established_paid_account'] } },
+    });
+    const previous = active({ context: { accountContext, policyReasons: ['established_paid_account'] } });
+    const [updated] = decideIncidents(
+      [previous],
+      [{ ...breach(), policyReasons: ['account_context_unavailable'] }],
+      now,
+      windowEnd
+    );
+    expect(updated).toMatchObject({ patch: { context: { policyReasons: ['account_context_unavailable'] } } });
+    if (updated.kind === 'open') throw new Error('expected an existing incident update');
+    expect(updated.patch.context).not.toHaveProperty('accountContext');
+  });
+
   it('opens an incident for a breach with no active incident', () => {
     const [decision] = decideIncidents([], [breach({ value: 120 })], now, windowEnd);
 
@@ -55,6 +93,21 @@ describe('decideIncidents', () => {
         context: { baseline: 10, ratio: 10 },
       },
     });
+  });
+
+  it('snapshots the applied account tier and thresholds on open and update', () => {
+    const paidBreach = breach({ accountTier: 'paid', spikeFloorCredits: 20000, ceilingCredits: 40000 });
+    const [opened] = decideIncidents([], [paidBreach], now, windowEnd);
+    expect(opened).toMatchObject({
+      kind: 'open',
+      alert: { context: { accountTier: 'paid', spikeFloorCredits: 20000, ceilingCredits: 40000 } },
+    });
+    const [updated] = decideIncidents([active({ context: { trusted: true } })], [paidBreach], now, windowEnd);
+    expect(updated).toMatchObject({
+      kind: 'update',
+      patch: { context: { accountTier: 'paid', spikeFloorCredits: 20000, ceilingCredits: 40000 } },
+    });
+    if (updated.kind !== 'open') expect(updated.patch.context).not.toHaveProperty('trusted');
   });
 
   it('treats 1.5x the last notified value as a silent update', () => {
