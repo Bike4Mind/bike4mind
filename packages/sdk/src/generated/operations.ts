@@ -13,6 +13,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/projects/{id}/sessions',
   },
+  addProjectSystemPrompts: {
+    method: 'POST',
+    path: '/api/v1/projects/{id}/system-prompts',
+  },
   bulkDeleteFiles: {
     method: 'POST',
     path: '/api/v1/files/bulk-delete',
@@ -68,6 +72,10 @@ export const operations = {
   createProject: {
     method: 'POST',
     path: '/api/v1/projects',
+  },
+  createProjectInvite: {
+    method: 'POST',
+    path: '/api/v1/projects/{id}/invites',
   },
   createSession: {
     method: 'POST',
@@ -289,6 +297,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/projects/{id}/files',
   },
+  listProjectInvites: {
+    method: 'GET',
+    path: '/api/v1/projects/{id}/invites',
+  },
   listProjectSessions: {
     method: 'GET',
     path: '/api/v1/projects/{id}/sessions',
@@ -353,9 +365,17 @@ export const operations = {
     method: 'DELETE',
     path: '/api/v1/projects/{id}/files/{file_id}',
   },
+  removeProjectMember: {
+    method: 'DELETE',
+    path: '/api/v1/projects/{id}/members/{user_id}',
+  },
   removeProjectSession: {
     method: 'DELETE',
     path: '/api/v1/projects/{id}/sessions/{session_id}',
+  },
+  removeProjectSystemPrompt: {
+    method: 'DELETE',
+    path: '/api/v1/projects/{id}/system-prompts/{file_id}',
   },
   rescanSkillMarketVersion: {
     method: 'POST',
@@ -412,6 +432,10 @@ export const operations = {
   updateProject: {
     method: 'PATCH',
     path: '/api/v1/projects/{id}',
+  },
+  updateProjectSystemPrompt: {
+    method: 'PATCH',
+    path: '/api/v1/projects/{id}/system-prompts/{file_id}',
   },
   updateSession: {
     method: 'PUT',

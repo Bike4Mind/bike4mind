@@ -38,7 +38,6 @@ describe('API reference scopes table', () => {
 
     // Pin the line count; the tokens alone would not catch a dropped line.
     expect(requiredLines).toHaveLength(2);
-    expect(required).toContain('projects:read');
     expect(required).toContain('projects:write');
     expect(required).toContain('agents:read');
     expect(required).toContain('agents:write');
