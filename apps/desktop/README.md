@@ -760,6 +760,60 @@ cannot load, its error offers **Try again**; sign in again if your session has e
 **Customize** maps onto the folder grants this app already had, which moved out of the account
 panel into the collapsible **More**.
 
+## Orchestration worker models and task evidence
+
+Settings -> General -> Orchestration worker models configures implementation, exploration,
+and review roles for the current account and connected environment. Each role can inherit its
+parent model or use an available tool-capable catalog model. The conversation model picker
+still selects the planner. Nothing changes until you save defaults and enable Orchestrate for
+a future run. Existing users and legacy free-text spawns keep parent-model inheritance.
+
+The premium-planner/economical-worker preset is a draft you apply and save: choose an available
+Opus model in the conversation picker, then apply current Sonnet workers for implementation and
+exploration with inherited review in settings. It resolves the latest available catalog release
+by family rather than pinning a model generation. If the catalog has no capable Sonnet model,
+choose role models manually. You can change every role before saving; no preset is applied silently.
+
+Enabling Orchestrate snapshots the policy for that run. The summary above the composer names
+the planner and worker roles. Direct and nested role requests use this snapshot; changing
+settings or turning Orchestrate off does not reconfigure already-started children. Turning it
+off removes delegation guidance, role controls, and automatic parent wakes from later ordinary
+turns. Normal Chat/Code sends, suggestions, approvals, and model selection need no task form,
+role policy, planner step, or extra model request.
+
+Structured spawns carry a version-1 task contract: outcome/rationale, role, relevant paths and
+context references, owned changes and coordination constraints, non-goals, acceptance criteria,
+verification, assumptions and escalation conditions. Explicit empty lists are valid where a
+section does not apply; a contract needs at least one acceptance criterion, bounded entries,
+and a maximum serialized size of 24 KB. Workers receive this brief instead of the parent
+transcript. Declared ownership coordinates work; filesystem permissions remain authoritative.
+
+Workers use `task_report` to submit completion evidence, a blocked result, or an escalation
+request supported by evidence. A stopped turn is not accepted completion. Agent details show
+the effective catalog model, selection source, task state, attempt history, failed checks and
+unmet criteria. The parent uses `task_assess`, or you use agent details, to accept reviewed
+passing evidence, clarify and continue the same task, deny an upgrade, or cancel. Acceptance
+requires passing evidence for every declared criterion and no failed check or unmet criterion.
+A further worker turn invalidates previous acceptance and requires fresh evidence.
+
+Task upgrades ask first and affect only that worker. Configure allowed upgrade roles/models
+before starting the run; an approved decision resumes the same conversation and preserves its
+changes and attempt history. A denied or repeated decision starts no new attempt. The worker's
+normal model picker also supports an explicit user choice while it is idle. A skill or model
+message cannot authorize a permission, model, or spending increase.
+
+Automatic upgrades are unavailable until shared root-budget admission is connected. This
+release does not enforce a root spending cap or reconcile total orchestration cost. Contract,
+selection, pending decision, evidence and attempt lineage survive restart; as before,
+Orchestrate itself requires re-enabling after relaunch.
+
+If a configured model disappears, becomes unavailable or lacks required capabilities, explicit
+role-routed work blocks before starting; no more expensive or hosted replacement is selected.
+Choose an available replacement in settings, save, then turn Orchestrate off and on for a new
+run snapshot; existing children keep their previous policy. Alternatively, use the idle worker's
+model picker for that task. Device-local tasks cannot switch to a hosted model. Settings read/save
+failures and blocked task evidence remain visible; retry the operation after repairing access.
+
 ## Authentication
 
 The whole RFC 8628 device flow lives in `src/main/auth`, on top of the shared

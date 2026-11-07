@@ -1,4 +1,5 @@
 import type { ModelBuildReport, ModelPose, ModelView, ModelViewState } from '@shared/model3d';
+import type { SpawnOptions, TaskAction } from '@shared/orchestration';
 import type { CustomCommand } from '@bike4mind/cli/skills';
 import type { VideoModel } from '@bike4mind/common';
 import type { BrowserSnapshot } from '@shared/browserPage';
@@ -566,7 +567,13 @@ export interface HostContext {
    * Refused rather than queued when a cap is hit; see SpawnRefusal for which caps and why the
    * model is told them apart.
    */
-  spawn(prompt: string, title: string | undefined, placement: SpawnPlacement): Promise<SpawnOutcome>;
+  spawn(
+    prompt: string,
+    title: string | undefined,
+    placement: SpawnPlacement,
+    options?: SpawnOptions
+  ): Promise<SpawnOutcome>;
+  taskAction?(sessionId: string, action: TaskAction): Promise<string>;
   /**
    * What a worktree child's new branch is cut from: the branch this session is on. Resolved once,
    * for the approval card, and carried from there in the placement, so the base the card names

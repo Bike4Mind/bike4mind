@@ -48,6 +48,10 @@ cat > "$APT_CONFIG"
 cat "$APT_CONFIG"
 ''',
     'timeout': '''
+if [ "${1:-}" = --version ]; then
+  echo 'timeout (GNU coreutils) 9.7'
+  exit 0
+fi
 printf 'timeout %s\\n' "$*" >> "$CALL_LOG"
 [ "$1" = --signal=KILL ] || exit 91
 shift
@@ -95,6 +99,7 @@ class ChromiumActionTests(unittest.TestCase):
         self.config = self.root / 'apt-config'
         binary_directory = self.root / 'bin'
         binary_directory.mkdir()
+        self.binary_directory = binary_directory
         for name, body in STUBS.items():
             executable = binary_directory / name
             executable.write_text('#!/bin/bash\nset -eu\n' + body)
@@ -109,16 +114,60 @@ class ChromiumActionTests(unittest.TestCase):
             'RECOVERY_STATUS': '0',
             'RECOVERY_TIMEOUT': '0',
             'LAUNCH_STATUS': '0',
+            'TIMEOUT_COMMAND': str(binary_directory / 'timeout'),
+            'GITHUB_OUTPUT': str(self.root / 'outputs'),
         }
 
     def run_step(self, name='Install Chromium system dependencies', **statuses):
         environment = {**self.environment, **{key: str(value) for key, value in statuses.items()}}
         result = subprocess.run(
-            ['bash', '-e', '-o', 'pipefail', '-c', step_script(name)],
+            ['/bin/bash', '-e', '-o', 'pipefail', '-c', step_script(name)],
             env=environment, capture_output=True, text=True, timeout=5,
         )
         calls = self.log.read_text().splitlines() if self.log.exists() else []
         return result, calls
+
+    def test_prefers_gnutimeout_when_both_implementations_are_present(self):
+        gnutimeout = self.binary_directory / 'gnutimeout'
+        gnutimeout.write_text('#!/bin/bash\necho "timeout (GNU coreutils) 9.7"\n')
+        gnutimeout.chmod(0o755)
+        (self.binary_directory / 'timeout').write_text('#!/bin/bash\necho "timeout (uutils coreutils) 0.10.0"\n')
+        result, _ = self.run_step('Resolve GNU timeout', PATH=self.binary_directory)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / 'outputs').read_text(), f'command={gnutimeout}\n')
+
+    def test_uses_validated_timeout_when_gnutimeout_is_absent(self):
+        result, _ = self.run_step('Resolve GNU timeout', PATH=self.binary_directory)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / 'outputs').read_text(), f'command={self.binary_directory / "timeout"}\n')
+
+    def test_rejects_non_gnu_timeout_before_any_install(self):
+        (self.binary_directory / 'timeout').write_text('#!/bin/bash\necho "timeout (uutils coreutils) 0.10.0"\n')
+        result, calls = self.run_step('Resolve GNU timeout', PATH=self.binary_directory)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Install GNU coreutils', result.stdout)
+        self.assertFalse((self.root / 'outputs').exists())
+        self.assertEqual(calls, [])
+
+    def test_rejects_missing_timeout_before_any_install(self):
+        (self.binary_directory / 'timeout').unlink()
+        result, calls = self.run_step('Resolve GNU timeout', PATH=self.binary_directory)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('GNU coreutils timeout is required', result.stdout)
+        self.assertFalse((self.root / 'outputs').exists())
+        self.assertEqual(calls, [])
+
+    def test_install_steps_use_resolved_timeout(self):
+        source = ACTION.read_text()
+        bindings = (
+            ('Resolve GNU timeout', '      id: timeout'),
+            ('Download Chromium', '        TIMEOUT_COMMAND: ${{ steps.timeout.outputs.command }}'),
+            ('Install Chromium system dependencies', '        TIMEOUT_COMMAND: ${{ steps.timeout.outputs.command }}'),
+        )
+        for name, binding in bindings:
+            with self.subTest(step=name):
+                block = source.split(f'    - name: {name}\n', 1)[1].split('\n    - name:', 1)[0]
+                self.assertIn(binding, block)
 
     def test_dependency_success_writes_real_apt_lines_and_skips_recovery(self):
         result, calls = self.run_step()
@@ -216,14 +265,23 @@ def live_state_after(pid, grace=5.0):
         time.sleep(0.01)
 
 
-@unittest.skipUnless(sys.platform.startswith('linux') and shutil.which('timeout'), 'GNU timeout requires Linux')
+@unittest.skipUnless(sys.platform.startswith('linux') and (shutil.which('timeout') or shutil.which('gnutimeout')), 'GNU timeout process groups require Linux')
 class TimeoutProcessGroupTests(unittest.TestCase):
     def test_action_deadlines_kill_term_resistant_child(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'outputs'
+            resolved = subprocess.run(
+                ['bash', '-e', '-c', step_script('Resolve GNU timeout')],
+                env={**os.environ, 'GITHUB_OUTPUT': str(output)},
+                capture_output=True, text=True, timeout=5,
+            )
+            self.assertEqual(resolved.returncode, 0, resolved.stdout + resolved.stderr)
+            timeout_command = output.read_text().strip().removeprefix('command=')
         # Keep the action's actual option order, shortening only its durations.
         commands = (
-            ('Download Chromium', r'timeout (.+?) npx playwright install chromium'),
-            ('Install Chromium system dependencies', r'timeout (.+?) npx playwright install-deps chromium'),
-            ('Install Chromium system dependencies', r'timeout (.+?) dpkg --configure -a'),
+            ('Download Chromium', r'"\$TIMEOUT_COMMAND" (.+?) npx playwright install chromium'),
+            ('Install Chromium system dependencies', r'"\$TIMEOUT_COMMAND" (.+?) npx playwright install-deps chromium'),
+            ('Install Chromium system dependencies', r'"\$TIMEOUT_COMMAND" (.+?) dpkg --configure -a'),
         )
         for step, pattern in commands:
             with self.subTest(step=step, pattern=pattern):
@@ -238,7 +296,7 @@ class TimeoutProcessGroupTests(unittest.TestCase):
                         pid_tmp = shlex.quote(f'{pid_file}.tmp')
                         child = f'trap "" TERM; echo $$ > {pid_tmp}; mv {pid_tmp} {shlex.quote(str(pid_file))}; exec sleep 20'
                         process = subprocess.Popen(
-                            ['timeout', *options, 'bash', '-c', parent_script, 'bash', 'sh', '-c', child],
+                            [timeout_command, *options, 'bash', '-c', parent_script, 'bash', 'sh', '-c', child],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
                         )
                         try:

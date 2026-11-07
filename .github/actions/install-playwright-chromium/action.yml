@@ -21,6 +21,24 @@ inputs:
 runs:
   using: 'composite'
   steps:
+    - name: Resolve GNU timeout
+      id: timeout
+      shell: bash
+      run: |
+        if command -v gnutimeout > /dev/null 2>&1; then
+          timeout_executable=$(command -v gnutimeout)
+        elif command -v timeout > /dev/null 2>&1; then
+          timeout_executable=$(command -v timeout)
+        else
+          echo '::error::GNU coreutils timeout is required for process-group deadlines'
+          exit 1
+        fi
+        case "$("$timeout_executable" --version)" in
+          *'(GNU coreutils)'*) ;;
+          *) echo '::error::Install GNU coreutils timeout for process-group deadlines'; exit 1 ;;
+        esac
+        echo "command=$timeout_executable" >> "$GITHUB_OUTPUT"
+
     - name: Resolve Playwright version
       id: version
       shell: bash
@@ -39,13 +57,18 @@ runs:
     - name: Download Chromium
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        TIMEOUT_COMMAND: ${{ steps.timeout.outputs.command }}
       # Kill the whole group at the deadline; TERM can orphan resistant children.
       # A no-op on a cache hit.
-      run: timeout --signal=KILL 5m npx playwright install chromium
+      run: |
+        "$TIMEOUT_COMMAND" --signal=KILL 5m npx playwright install chromium
 
     - name: Install Chromium system dependencies
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        TIMEOUT_COMMAND: ${{ steps.timeout.outputs.command }}
       run: |
         # Shorten per-file stalls: apt's defaults let each dead connection sit
         # for minutes before moving on.
@@ -57,7 +80,7 @@ runs:
         # sudo starts apt in its own pty session and the kill never reaches it:
         # apt kept downloading and upgrading libs under the running tests.
         rc=0
-        sudo env "PATH=$PATH" timeout --signal=KILL 5m npx playwright install-deps chromium || rc=$?
+        sudo env "PATH=$PATH" "$TIMEOUT_COMMAND" --signal=KILL 5m npx playwright install-deps chromium || rc=$?
         if [ "$rc" -eq 0 ]; then
           exit 0
         fi
@@ -65,5 +88,5 @@ runs:
         echo "::warning::Playwright system dependency install failed (exit $rc); recovering package state before checking whether Chromium launches"
         # Finish interrupted package configuration before starting tests.
         # A failed or hung repair leaves the runner unsafe to reuse.
-        sudo timeout --signal=KILL 1m dpkg --configure -a
+        sudo "$TIMEOUT_COMMAND" --signal=KILL 1m dpkg --configure -a
         node -e "require('@playwright/test').chromium.launch().then((b) => b.close())"
