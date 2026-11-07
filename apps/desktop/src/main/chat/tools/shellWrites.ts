@@ -1304,6 +1304,52 @@ export async function indexListed(
 }
 
 /**
+ * What `git diff --name-only [--cached] <words>` run at the top `top` compares, read as git reads the words: each a
+ * revision (`A..B` its two ends, `A...B` whole) until one that is not a commit names a path, which with every later
+ * word is a pathspec. Null when git would refuse them.
+ */
+export async function diffTargets(
+  top: string,
+  words: readonly string[],
+  cached: boolean
+): Promise<{ targets: string[]; worktree: boolean; pathspecs: string[] } | null> {
+  const targets: string[] = [];
+  let ends = 0;
+  let at = 0;
+  for (; at < words.length; at++) {
+    const word = words[at] as string;
+    if (word.includes('..')) {
+      const range = word.includes('...') ? [word] : word.split('..').map(end => end || 'HEAD');
+      if (word.split('...').length > 2 || range.length > 2) return null;
+      targets.push(...range);
+      ends += 2;
+      continue;
+    }
+    const commit =
+      REVISION.test(word) &&
+      !word.startsWith('-') &&
+      (await gitQuery(top, ['rev-parse', '--verify', '--quiet', `${word}^{commit}`])) !== null;
+    if (commit) {
+      targets.push(word);
+      ends++;
+      continue;
+    }
+    const exists = await lstat(resolve(top, word)).then(
+      () => true,
+      () => false
+    );
+    if (!exists) return null;
+    break;
+  }
+  if (ends > 2) return null;
+  return {
+    targets: targets.length > 0 ? targets : cached ? ['HEAD'] : [],
+    worktree: !cached && ends < 2,
+    pathspecs: words.slice(at),
+  };
+}
+
+/**
  * What `git diff --name-only` run at the top `top` may print when it compares each of `targets` and, when
  * `worktree`, the work tree: the settings files among those paths, and the links at or on the way to them. Read
  * with diff-index against the index and hashed here, so git runs no filter on the work tree; null when git fails or

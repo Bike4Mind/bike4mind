@@ -29,6 +29,7 @@ import {
 } from './paths';
 import {
   diffListed,
+  diffTargets,
   findFolders,
   findLinks,
   findOddPaths,
@@ -635,27 +636,12 @@ const BRACED_NAME = /^[A-Za-z_]\w*\{([^{}=]*)\}[\w{},.]*\+?=/;
 const BRACED_ASSIGNMENT = { test: (word: string): boolean => /,|\.\./.test(BRACED_NAME.exec(word)?.[1] ?? '') };
 
 /**
- * Whether `command` may hold an ANSI-C quote: `$'` outside other quotes, so `grep 'ts$'` holds none. A heredoc,
- * whose body quotes nothing, or an unclosed quote leaves any `$'` counted.
+ * Whether the script parsed as `root` holds an ANSI-C quote (`$'...'`), so `grep 'ts$'` holds none; any `$'`
+ * counts when the parse has an error.
  */
-function ansiCQuoted(command: string): boolean {
-  if (command.includes('<<')) return command.includes("$'");
-  let quote = '';
-  for (let at = 0; at < command.length; at++) {
-    const char = command[at];
-    if (quote === "'") {
-      if (char === "'") quote = '';
-    } else if (char === '\\') {
-      at++;
-    } else if (quote === '"') {
-      if (char === '"') quote = '';
-    } else if (char === '"' || char === "'") {
-      quote = char;
-    } else if (char === '$' && command[at + 1] === "'") {
-      return true;
-    }
-  }
-  return quote !== '';
+function ansiCQuoted(root: Node, command: string): boolean {
+  if (root.hasError) return command.includes("$'");
+  return root.descendantsOfType('ansi_c_string').length > 0;
 }
 
 /**
@@ -663,8 +649,8 @@ function ansiCQuoted(command: string): boolean {
  * alias and command hash tables, a nameref, or a computed or brace-expanded name given to a builtin that
  * assigns by name. `text` has its quotes and backslashes removed.
  */
-function rebindsAnyName(command: string, text: string): boolean {
-  if (ansiCQuoted(command) || /BASH_ALIASES|BASH_CMDS/.test(text)) return true;
+function rebindsAnyName(root: Node, command: string, text: string): boolean {
+  if (ansiCQuoted(root, command) || /BASH_ALIASES|BASH_CMDS/.test(text)) return true;
   for (const segment of text.split(/[;&|\n()]/)) {
     const words = segment.trim().split(/\s+/);
     if (words.some(word => BRACED_ASSIGNMENT.test(word))) return true;
@@ -2372,9 +2358,38 @@ function linesFilter(raw: readonly string[]): boolean {
 function pipedFrom(node: Node): Node | null {
   const pipeline = node.parent;
   if (pipeline?.type !== 'pipeline') return null;
+  // `|&`, `2>&1` or a stdout redirect on the producer sends on more than its own output, or none of it.
+  if (node.previousSibling?.type === '|&') return null;
   const members = pipeline.namedChildren.filter((child): child is Node => child !== null);
-  const producer = members[members.findIndex(child => child.id === node.id) - 1];
-  return producer?.type === 'command' ? producer : null;
+  let producer: Node | undefined = members[members.findIndex(child => child.id === node.id) - 1];
+  const redirects: Node[] = [];
+  if (producer?.type === 'redirected_statement') {
+    const body = producer.childForFieldName('body');
+    redirects.push(...producer.namedChildren.filter((child): child is Node => child !== null && child.id !== body?.id));
+    producer = body ?? undefined;
+  }
+  if (producer?.type !== 'command') return null;
+  redirects.push(...producer.namedChildren.filter((child): child is Node => !!child?.type.endsWith('redirect')));
+  return redirects.every(stderrToFile) ? producer : null;
+}
+
+/** Whether a redirect sends only stderr to a file (`2>/dev/null`, `2>>log`). */
+function stderrToFile(redirect: Node): boolean {
+  const descriptor = redirect.children.find(child => child?.type === 'file_descriptor')?.text;
+  return (
+    redirect.type === 'file_redirect' && descriptor === '2' && ['>', '>>'].includes(redirectOperator(redirect) ?? '')
+  );
+}
+
+/** The words of the command an xargs among the leading wrappers runs, past its own options; none without one. */
+function xargsCommand(tokens: readonly string[]): string[] {
+  for (let at = 0; at < tokens.length && isWrapper(tokens[at]);) {
+    const end = pastWrapper(tokens, at);
+    if (programName(unquote(tokens[at])) === 'xargs') return tokens.slice(end);
+    if (end <= at) break;
+    at = end;
+  }
+  return [];
 }
 
 /** Entries of a folder `ls` prints before xargs that the scan reads before it stops. */
@@ -2467,9 +2482,13 @@ function xargsDelimiters(tokens: readonly string[]): (string | null)[] {
   return [];
 }
 
+/** pgrep long options that leave it printing process ids alone. */
+const PGREP_IDS_ONLY =
+  /^--(full|exact|newest|oldest|inverse|ignore-case|count|lightweight|euid|uid|group|pgroup|parent|session|terminal|older|runstates|cgroup)(=.*)?$/;
+
 /**
- * Whether what feeds `node`, past line filters, prints no word starting with `-`: plain words of `echo` or
- * `printf`, `pgrep` ids, `docker ps -q` or `docker images -q` ids, or `git branch` names.
+ * Whether what feeds `node`, past line filters, is safe as operands of a docker or git command: plain words of
+ * `echo` or `printf` and `pgrep` or `docker ps -q` ids, none starting with `-`, or `git branch` names.
  */
 function optionFreeFeed(node: Node): boolean {
   const { producer, filtered } = feeder(node);
@@ -2481,11 +2500,12 @@ function optionFreeFeed(node: Node): boolean {
     case 'echo':
     case 'printf': {
       const fed = filtered ? null : staticFeed(node);
-      return fed !== null && fed.words.every(word => !/^-|\\/.test(wordValue(word)));
+      // Unquoted, a word with a blank or quote is several words to xargs (`echo "main --force"`).
+      return fed !== null && fed.words.every(word => !/^-|[\s'"\\]/.test(wordValue(word)));
     }
     case 'pgrep':
       // Without -l, -a or -d it prints only process ids.
-      return !args.some(arg => /^-[^-]*[lad]/.test(arg) || /^--(list|delimiter)/.test(arg));
+      return args.every(arg => (arg.startsWith('--') ? PGREP_IDS_ONLY.test(arg) : !/^-[^-]*[lad]/.test(arg)));
     case 'docker': {
       const [verb = '', ...rest] = args[0] === 'container' || args[0] === 'image' ? args.slice(1) : args;
       if (!(verb === 'ps' || verb === 'images' || (verb === 'ls' && args[0] !== verb))) return false;
@@ -2499,7 +2519,8 @@ function optionFreeFeed(node: Node): boolean {
       return quiet;
     }
     case 'git':
-      // git refuses a branch name that starts with `-`.
+      // A crafted ref may print a name starting with `-`, which reaches only `git branch -d`'s own options, and
+      // none of those touches a file.
       return (
         args[0] === 'branch' &&
         args.slice(1).every(arg => !arg.startsWith('-') || /^--(no-)?merged(=.*)?$|^--list$/.test(arg))
@@ -2805,23 +2826,15 @@ function diffLists(args: readonly string[]): Listing | null {
     else if (arg.startsWith('-')) return null;
     else revisions.push(arg);
   }
-  // `A...B` stays whole and counts as two ends; diffListed compares B with the merge base of A and B.
-  const targets = revisions.flatMap(revision =>
-    revision.includes('...') ? [revision] : revision.split('..').map(end => end || 'HEAD')
-  );
-  const ends = targets.reduce((count, target) => count + (target.includes('...') ? 2 : 1), 0);
-  if (!names || ends > 2 || targets.some(target => target.split('...').length > 2)) return null;
+  if (!names) return null;
   return {
     folders: ['.'],
     tracked: true,
     links: 'diff',
     nul: args.slice(0, paths ? args.indexOf('--') : args.length).includes('-z'),
     pathspecs,
-    settings: {
-      kind: 'diff',
-      targets: targets.length > 0 ? targets : cached ? ['HEAD'] : [],
-      worktree: !cached && ends < 2,
-    },
+    // diffTargets reads the words as revisions or paths, as git does.
+    settings: { kind: 'diff', words: revisions, cached },
   };
 }
 
@@ -2970,7 +2983,7 @@ type ListedSettings =
     }
   | { kind: 'find'; files: boolean }
   | { kind: 'index'; changedOnly: boolean; patterns: Patterns | null }
-  | { kind: 'diff'; targets: string[]; worktree: boolean }
+  | { kind: 'diff'; words: string[]; cached: boolean }
   | { kind: 'tree' };
 
 /**
@@ -4328,7 +4341,7 @@ export async function scanShell(
     const dotlessGlobFolders = new Set<string>();
     // Bash removes quotes and backslashes before it reads a name, so the name gates read the script without them.
     const gateText = command.replace(/[\\'"]/g, '');
-    const anyName = rebindsAnyName(command, gateText);
+    const anyName = rebindsAnyName(tree.rootNode, command, gateText);
     const dotGlob = anyName || MAY_SET_DOTGLOB.test(gateText);
     // Links `ln -s` makes in this script, in guard form: the scan cannot follow one that does not exist yet.
     const createdLinks = new Set<string>();
@@ -4523,7 +4536,10 @@ export async function scanShell(
         if (settings.kind !== 'diff' || top === null || top !== (await realpath(state.cwd).catch(() => null))) {
           return false;
         }
-        const listed = await diffListed(top, settings.targets, settings.worktree, listing.pathspecs ?? [], stopped);
+        const diff = await diffTargets(top, settings.words, settings.cached);
+        if (diff === null) return false;
+        const pathspecs = [...diff.pathspecs, ...(listing.pathspecs ?? [])];
+        const listed = await diffListed(top, diff.targets, diff.worktree, pathspecs, stopped);
         if (listed === null || (split && listed.odd)) return false;
         printed.push(...listed.links);
         if (writing) for (const file of listed.settings) writes.add(file);
@@ -4822,17 +4838,22 @@ export async function scanShell(
       }
       const feeds = xargsFeeds(tokens);
       const consumer = withoutWrappers(tokens);
+      const replace = feeds ? xargsReplace(tokens) : null;
+      // A replace string inside a larger word, a wrapper's included, builds a path no lister prints.
+      const embedded =
+        replace !== null &&
+        (replace === '' ||
+          xargsCommand(tokens).some(word => wordValue(word) !== replace && wordValue(word).includes(replace)));
       if (feeds && takesNoFiles(consumer)) {
         // No NAMES_NOTHING option names or runs a file; a docker or git one may, so no fed word may read as one.
         const plain = NAMES_NOTHING.has(programName(unquote(consumer[0] ?? '')));
-        if (!plain && (feeds.file || stdinRedirected(node) || !optionFreeFeed(node))) unreadOperands++;
+        if (embedded || (!plain && (feeds.file || stdinRedirected(node) || !optionFreeFeed(node)))) unreadOperands++;
       } else if (feeds) {
         // xargs runs its command on words it reads, which only a lister over checked folders keeps to them.
         const writing = !onlyReads(consumer);
         const listing = listerFeeds(node, gateText);
         const nul = xargsReadsNul(tokens);
         const delimiters = xargsDelimiters(tokens);
-        const replace = xargsReplace(tokens);
         const fed = listing === null && xargsSplitsAtBlanks(tokens) ? staticFeed(node) : null;
         if (
           (writing && XARGS_SHELLS.has(programName(unquote(consumer[0] ?? '')))) ||
@@ -4842,12 +4863,9 @@ export async function scanShell(
           stdinRedirected(node) ||
           // A newline delimiter splits at less than the checks below allow for; another may split inside a name.
           !(delimiters.length === 0 || (!nul && delimiters.every(char => char === '\n'))) ||
-          // With a replace string each line is one name; only ls prints one per line, and a replace string
-          // inside a larger word builds a path no lister prints.
-          (replace !== null &&
-            (replace === '' ||
-              (fed !== null && !fed.ls) ||
-              consumer.some(word => wordValue(word) !== replace && wordValue(word).includes(replace)))) ||
+          // With a replace string each line is one name, and only ls prints one per line.
+          embedded ||
+          (replace !== null && fed !== null && !fed.ls) ||
           !trusted(node, feeder(node).producer) ||
           !(listing
             ? listing.nul === nul && (await listingChecked(listing, writing, !nul))
