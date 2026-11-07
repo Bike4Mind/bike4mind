@@ -6,6 +6,7 @@ import {
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { truncateIp } from '@bike4mind/server-utils/utils/ip';
+import { hostingNetworkOf } from '@server/auth/datacenterAsns';
 
 /**
  * The read side of the ban-evasion device rule: loads the banned accounts and the baseline a set of
@@ -55,7 +56,7 @@ export function toDeviceLinkAccount(row: DeviceLinkRow): userService.DeviceLinkA
     deviceKeys: userService.deviceKeysOf(row.devices),
     networkPrefix: row.signupIp ? truncateIp(row.signupIp) : null,
     asn: row.asn,
-    hosting: row.isDatacenter,
+    hosting: hostingNetworkOf({ isDatacenter: row.isDatacenter, wafAnonIp: row.wafAnonIp }),
     fingerprint: row.ja4,
   };
 }

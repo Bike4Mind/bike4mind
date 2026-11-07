@@ -156,6 +156,22 @@ describe('findBanEvasionLinks', () => {
     expect(link(false).linked).toBe(true);
   });
 
+  it('counts a shared residential ASN on a different /24 as network corroboration', () => {
+    const result = findBanEvasionLinks({
+      account: account('new'),
+      blocked: [
+        account('banned', {
+          networkPrefix: '203.0.113.0/24',
+          signedUpAt: new Date(T0.getTime() - 30 * 24 * HOUR),
+        }),
+      ],
+      networkSpread: spread([[RARE, 1]]),
+      commonFingerprints: new Set(),
+    });
+
+    expect(result.linked && result.matches[0].corroboration).toEqual(['network']);
+  });
+
   it('counts a residential ASN, a /24 and an uncommon JA4, strongest match first', () => {
     const old = new Date(T0.getTime() - 30 * 24 * HOUR);
     const weak = account('weak', { signedUpAt: new Date(T0.getTime() - 5 * HOUR), asn: 1, networkPrefix: null });

@@ -25,6 +25,7 @@ vi.mock('./executor', () => ({
 import type { Logger } from '@bike4mind/observability';
 import { getSettingsMap } from '@bike4mind/utils';
 import {
+  buildDeviceLinkDetection,
   checkDeviceLink,
   DeviceLinkAssessError,
   liveDeviceLinkDeps,
@@ -32,7 +33,7 @@ import {
   type DeviceLinkDeps,
 } from './deviceLink';
 import { loadAutoContainmentConfig } from './executor';
-import { evaluateDeviceLinks } from './deviceLinkEvaluation';
+import { evaluateDeviceLinks, toDeviceLinkAccount } from './deviceLinkEvaluation';
 
 const HOUR_MS = 60 * 60 * 1000;
 const NOW = new Date('2026-11-05T12:00:00Z');
@@ -49,6 +50,7 @@ const row = (userId: string, overrides: Partial<DeviceLinkRow> = {}): DeviceLink
   signupIp: '192.0.2.10',
   asn: 13335,
   isDatacenter: true,
+  wafAnonIp: null,
   ja4: null,
   devices: [RARE_DEVICE],
   ...overrides,
@@ -77,6 +79,35 @@ function makeDeps(overrides: Partial<DeviceLinkDeps> = {}): DeviceLinkDeps {
     ...overrides,
   };
 }
+
+describe('toDeviceLinkAccount', () => {
+  it('classifies a WAF anonymous-IP signup as hosting', () => {
+    expect(toDeviceLinkAccount(row('new-user', { isDatacenter: false, wafAnonIp: true })).hosting).toBe(true);
+  });
+});
+
+describe('buildDeviceLinkDetection', () => {
+  it('reports the closest signup even when the strongest match is older', () => {
+    const detection = buildDeviceLinkDetection(
+      'new-user',
+      {
+        linked: true,
+        deviceNetworkSpread: 1,
+        matches: [
+          { blockedUserId: 'strong', corroboration: ['fingerprint', 'network'], hoursApart: 720 },
+          { blockedUserId: 'recent', corroboration: ['timing'], hoursApart: 5 },
+        ],
+      },
+      { windowHours: 168, commonNetworks: 5 },
+      NOW
+    );
+
+    expect(detection.summary).toBe(
+      'Used the same device as 2 banned accounts, the closest 5 hours apart, with the same TLS fingerprint and the same signup network'
+    );
+    expect(detection.signals.find(signal => signal.key === 'hoursToBannedDeviceLink')?.observed).toBe(5);
+  });
+});
 
 describe('checkDeviceLink', () => {
   it("records and assesses a new account on a banned account's rare device despite a rotated VPN exit", async () => {
@@ -177,6 +208,48 @@ describe('checkDeviceLink', () => {
 });
 
 describe('sweepDeviceLinks', () => {
+  it('leaves remaining linked accounts unrecorded when the time budget is reached', async () => {
+    const deps = makeDeps();
+    const shouldStop = vi
+      .fn()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValue(true);
+
+    const report = await sweepDeviceLinks({
+      ...deps,
+      shouldStop,
+      loadRecent: vi.fn(async () => ({ rows: [newcomer, row('second-user')], truncated: false })),
+    });
+
+    expect(report).toMatchObject({ recorded: 1, skipped: 1, linked: 2, status: 'stopped' });
+    expect(deps.recordDetection).toHaveBeenCalledTimes(1);
+    expect(deps.claimOnce).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops before reading recent accounts when the time budget is reached', async () => {
+    const deps = makeDeps();
+    const loadRecent = vi.fn();
+    const report = await sweepDeviceLinks({ ...deps, loadRecent, shouldStop: () => true });
+
+    expect(report).toMatchObject({ status: 'stopped', recorded: 0, skipped: 0 });
+    expect(loadRecent).not.toHaveBeenCalled();
+  });
+
+  it('stops before evaluation when the recent-account read uses the remaining budget', async () => {
+    const deps = makeDeps();
+    const shouldStop = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+    const report = await sweepDeviceLinks({
+      ...deps,
+      shouldStop,
+      loadRecent: vi.fn(async () => ({ rows: [newcomer], truncated: false })),
+    });
+
+    expect(report).toMatchObject({ status: 'stopped', scanned: 1, recorded: 0 });
+    expect(deps.findBanned).not.toHaveBeenCalled();
+  });
+
   it('counts linked, recorded and failed accounts and keeps going after a failure', async () => {
     const second = row('second-user');
     const onError = vi.fn();
@@ -202,6 +275,7 @@ describe('sweepDeviceLinks', () => {
       linked: 2,
       recorded: 1,
       alreadyRecorded: 0,
+      skipped: 0,
       assessFailed: 0,
       failed: 1,
     });
@@ -321,6 +395,12 @@ describe('liveDeviceLinkDeps.loadConfig', () => {
   it('returns null when shadow detection recording is off', async () => {
     withSettings(false);
     vi.mocked(loadAutoContainmentConfig).mockResolvedValue(containment as never);
+    expect(await load()).toBeNull();
+  });
+
+  it('returns null when the device-link window is 0', async () => {
+    withSettings(true);
+    vi.mocked(loadAutoContainmentConfig).mockResolvedValue({ ...containment, deviceLinkWindowHours: 0 } as never);
     expect(await load()).toBeNull();
   });
 

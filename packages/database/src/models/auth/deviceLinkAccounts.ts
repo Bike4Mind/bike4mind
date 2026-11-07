@@ -12,6 +12,7 @@ export type DeviceLinkRow = {
   signupIp: string | null;
   asn: number | null;
   isDatacenter: boolean | null;
+  wafAnonIp: boolean | null;
   ja4: string | null;
   isBanned?: boolean;
   devices: { screenResolution: string | null; devicePixelRatio: number | null; userAgent: string | null }[];
@@ -24,7 +25,13 @@ type LeanDeviceUser = {
   _id: { toString(): string };
   createdAt?: Date | null;
   isBanned?: boolean | null;
-  signupMeta?: { ip?: string | null; asn?: number | null; isDatacenter?: boolean | null; ja4?: string | null } | null;
+  signupMeta?: {
+    ip?: string | null;
+    asn?: number | null;
+    isDatacenter?: boolean | null;
+    wafAnonIp?: boolean | null;
+    ja4?: string | null;
+  } | null;
   loginRecords?: { screenResolution?: string | null; devicePixelRatio?: number | null; userAgent?: string | null }[];
 };
 
@@ -34,6 +41,7 @@ const PROJECTION = {
   'signupMeta.ip': 1,
   'signupMeta.asn': 1,
   'signupMeta.isDatacenter': 1,
+  'signupMeta.wafAnonIp': 1,
   'signupMeta.ja4': 1,
   'loginRecords.screenResolution': 1,
   'loginRecords.devicePixelRatio': 1,
@@ -47,6 +55,7 @@ function toRow(user: LeanDeviceUser): DeviceLinkRow {
     signupIp: user.signupMeta?.ip ?? null,
     asn: user.signupMeta?.asn ?? null,
     isDatacenter: user.signupMeta?.isDatacenter ?? null,
+    wafAnonIp: user.signupMeta?.wafAnonIp ?? null,
     ja4: user.signupMeta?.ja4 ?? null,
     isBanned: user.isBanned === true,
     devices: (user.loginRecords ?? []).map(record => ({
