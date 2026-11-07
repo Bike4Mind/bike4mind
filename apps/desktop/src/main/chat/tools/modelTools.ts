@@ -93,8 +93,8 @@ function parseViews(input: Record<string, unknown>): ModelView[] {
 }
 
 /**
- * The pane is app-wide, so another session or the user can open a different file while this one
- * waits; anything read back after an await is checked against the path this call settled on.
+ * The user can open a different file in this conversation's pane while this call waits; anything
+ * read back after an await is checked against the path this call settled on.
  */
 function assertStillOpen(model: ModelContext, path: string): void {
   if (model.view.current().path !== path)
@@ -191,7 +191,7 @@ export const modelScreenshot: ToolDefinition = {
     const pose = parsePose(input);
     const requested = typeof input.path === 'string' && input.path.trim() ? input.path.trim() : undefined;
     const { report, path } = await openAndBuild(model, requested, context);
-    // The open model is app-wide, so without a path it may be another session's or the user's own pick.
+    // Without a path the open model may be the user's own pick in the pane rather than the agent's.
     const which = requested ? '' : `No path given; used the model open in the pane: ${path}\n`;
     if (!report.ok) return `${which}${formatModelSummary(report)}`;
     const png = Buffer.from(await model.view.capture(views, pose));

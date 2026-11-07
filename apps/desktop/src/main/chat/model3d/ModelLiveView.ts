@@ -41,14 +41,14 @@ type Waiter = {
 type PendingCapture = { resolve: (bytes: Uint8Array) => void; reject: (error: Error) => void; timer: NodeJS.Timeout };
 
 /**
- * The one model the app is showing, app-wide like the simulator's live view (one pane, following
- * the last `model_view`). Main owns the file: it watches it, hands its text to the renderer, and
+ * One conversation's open model (ModelLiveViews keeps one per conversation), following that
+ * conversation's last `model_view` or the user's own pick in its pane. Main owns the file: it watches it, hands its text to the renderer, and
  * performs the only writes (the sibling GLB and slider values). The renderer owns the build, which
  * runs in the sandboxed b4m-model: engine, and reports back per generation.
  *
  * Paths come from two places: the agent's tools, confined to the session's roots (modelTools.ts),
  * and the user's own Open dialog (modelIpc.ts), which may be anywhere. A tool call that names no
- * path works on whatever is open, including a file the user picked outside the roots.
+ * path works on whatever this conversation has open, including a file the user picked outside the roots.
  */
 function foreignGlbError(target: string): Error {
   return new Error(

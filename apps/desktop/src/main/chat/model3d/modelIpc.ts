@@ -4,7 +4,7 @@ import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electro
 import { IPC_CHANNELS } from '@shared/ipc';
 import { type ModelBuildReport, siblingGlbPath } from '@shared/model3d';
 import { stampModelPaneGlb } from './glbMarker';
-import type { ModelLiveView } from './ModelLiveView';
+import type { ModelLiveViews } from './ModelLiveViews';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -89,16 +89,31 @@ function windowOf(event: IpcMainInvokeEvent): BrowserWindow | null {
   return BrowserWindow.fromWebContents(event.sender);
 }
 
-/**
- * Renderer -> main handlers for the model pane. Every write lands where ModelLiveView allows
- * (the open model's sibling GLB, its params) or where the user chose in a save dialog.
- */
-export function modelIpcHandlers(view: ModelLiveView): void {
-  ipcMain.handle(IPC_CHANNELS.modelGetState, () => view.current());
-  ipcMain.handle(IPC_CHANNELS.modelClose, () => view.close());
-  ipcMain.handle(IPC_CHANNELS.modelReadAsset, () => view.readAsset());
+function requireSessionId(value: unknown): string {
+  if (typeof value !== 'string' || !value) throw new Error('A model request must name its conversation.');
+  return value;
+}
 
-  ipcMain.handle(IPC_CHANNELS.modelOpenDialog, async event => {
+/**
+ * Renderer -> main handlers for the model pane. Every request names the conversation (session id)
+ * whose model it is about; see ModelLiveViews. Every write lands where that conversation's
+ * ModelLiveView allows (the open model's sibling GLB, its params) or where the user chose in a
+ * save dialog.
+ */
+export function modelIpcHandlers(views: ModelLiveViews): void {
+  ipcMain.handle(IPC_CHANNELS.modelGetState, (_event, sessionId: unknown) =>
+    views.current(requireSessionId(sessionId))
+  );
+  ipcMain.handle(IPC_CHANNELS.modelClose, (_event, sessionId: unknown) =>
+    views.find(requireSessionId(sessionId))?.close()
+  );
+  ipcMain.handle(
+    IPC_CHANNELS.modelReadAsset,
+    async (_event, sessionId: unknown) => (await views.find(requireSessionId(sessionId))?.readAsset()) ?? null
+  );
+
+  ipcMain.handle(IPC_CHANNELS.modelOpenDialog, async (event, sessionId: unknown) => {
+    const session = requireSessionId(sessionId);
     const window = windowOf(event);
     const options: Electron.OpenDialogOptions = {
       title: 'Open a 3D model',
@@ -107,25 +122,30 @@ export function modelIpcHandlers(view: ModelLiveView): void {
     };
     const picked = await (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
     const path = picked.canceled ? undefined : picked.filePaths[0];
-    return path ? view.open(path) : null;
+    return path ? views.for(session).open(path) : null;
   });
 
-  ipcMain.handle(IPC_CHANNELS.modelBuildReport, (event, value: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.modelBuildReport, (event, sessionId: unknown, value: unknown) => {
+    const view = views.find(requireSessionId(sessionId));
     const report = parseBuildReport(value);
-    if (report) view.reportBuild(report, event.sender.id);
+    if (view && report) view.reportBuild(report, event.sender.id);
   });
 
-  ipcMain.handle(IPC_CHANNELS.modelWriteGlb, (_event, value: unknown) => {
-    if (!isRecord(value) || typeof value.generation !== 'number' || !(value.bytes instanceof Uint8Array)) return null;
+  ipcMain.handle(IPC_CHANNELS.modelWriteGlb, async (_event, sessionId: unknown, value: unknown) => {
+    const view = views.find(requireSessionId(sessionId));
+    if (!view || !isRecord(value) || typeof value.generation !== 'number' || !(value.bytes instanceof Uint8Array))
+      return null;
     return view.writeGlb(value.generation, value.bytes);
   });
 
-  ipcMain.handle(IPC_CHANNELS.modelSetParam, (_event, value: unknown) => {
-    if (!isRecord(value) || typeof value.key !== 'string' || typeof value.value !== 'number') return false;
+  ipcMain.handle(IPC_CHANNELS.modelSetParam, async (_event, sessionId: unknown, value: unknown) => {
+    const view = views.find(requireSessionId(sessionId));
+    if (!view || !isRecord(value) || typeof value.key !== 'string' || typeof value.value !== 'number') return false;
     return view.setParam(value.key, value.value);
   });
 
-  ipcMain.handle(IPC_CHANNELS.modelSaveExport, async (event, value: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.modelSaveExport, async (event, sessionId: unknown, value: unknown) => {
+    const session = requireSessionId(sessionId);
     if (
       !isRecord(value) ||
       (value.format !== 'glb' && value.format !== 'stl') ||
@@ -134,7 +154,7 @@ export function modelIpcHandlers(view: ModelLiveView): void {
       return null;
     }
     const format = value.format;
-    const current = view.current().path;
+    const current = views.current(session).path;
     const stem = current ? basename(current).replace(/\.(model\.js|glb|stl)$/i, '') : 'model';
     const window = windowOf(event);
     const options: Electron.SaveDialogOptions = {
@@ -151,7 +171,8 @@ export function modelIpcHandlers(view: ModelLiveView): void {
 
   ipcMain.on(IPC_CHANNELS.modelCaptureResult, (_event, value: unknown) => {
     if (!isRecord(value) || typeof value.id !== 'string') return;
-    view.resolveCapture(value.id, {
+    // Capture ids are unique across conversations, so any view holding this one resolves it.
+    views.resolveCapture(value.id, {
       bytes: value.bytes instanceof Uint8Array ? value.bytes : undefined,
       error: typeof value.error === 'string' ? value.error : undefined,
     });

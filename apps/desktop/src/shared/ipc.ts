@@ -123,7 +123,7 @@ import type {
 } from './models';
 import type { AccountUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
-import type { ModelBuildReport, ModelPose, ModelView, ModelViewState } from './model3d';
+import type { ModelBuildReport, ModelCaptureRequestEvent, ModelStateUpdate, ModelViewState } from './model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
 import type { LocalHistoryResult, LocalHistoryState } from './history';
 
@@ -425,7 +425,7 @@ export const IPC_CHANNELS = {
   /** main -> renderer push: one JPEG frame of the attached screen, at up to 10 a second. */
   simulatorFrame: 'simulator:frame',
   /**
-   * The 3D model pane. Main owns the open file and every write (main/chat/model3d/ModelLiveView.ts);
+   * The 3D model pane. Main owns each conversation's open file and every write (main/chat/model3d/ModelLiveViews.ts);
    * the renderer builds in the sandboxed b4m-model: engine and reports back. See @shared/model3d.
    */
   modelGetState: 'model:get-state',
@@ -1081,22 +1081,25 @@ export interface DesktopApi {
    * through its tools in main. What is here is the url bar: the one part of driving the page
    * that the user cannot do by clicking on it, because the page has no chrome of its own.
    */
-  /** The 3D model pane's bridge to main. */
+  /**
+   * The 3D model pane's bridge to main. Each conversation has its own open model, so every call
+   * names the session it is about, and every event says which session it came from.
+   */
   model: {
-    getState(): Promise<ModelViewState>;
+    getState(sessionId: string): Promise<ModelViewState>;
     /** Opens a picked .glb/.stl/.model.js; resolves to the new state, or null when cancelled. */
-    openDialog(): Promise<ModelViewState | null>;
-    close(): Promise<void>;
-    readAsset(): Promise<Uint8Array | null>;
-    reportBuild(report: ModelBuildReport): Promise<void>;
-    writeGlb(request: { generation: number; bytes: Uint8Array }): Promise<string | null>;
+    openDialog(sessionId: string): Promise<ModelViewState | null>;
+    close(sessionId: string): Promise<void>;
+    readAsset(sessionId: string): Promise<Uint8Array | null>;
+    reportBuild(sessionId: string, report: ModelBuildReport): Promise<void>;
+    writeGlb(sessionId: string, request: { generation: number; bytes: Uint8Array }): Promise<string | null>;
     /** False when the value could not be written back to the file. */
-    setParam(request: { key: string; value: number }): Promise<boolean>;
+    setParam(sessionId: string, request: { key: string; value: number }): Promise<boolean>;
     /** Resolves to the saved path, or null when cancelled. */
-    saveExport(request: { format: 'glb' | 'stl'; bytes: Uint8Array }): Promise<string | null>;
+    saveExport(sessionId: string, request: { format: 'glb' | 'stl'; bytes: Uint8Array }): Promise<string | null>;
     captureResult(result: { id: string; bytes?: Uint8Array; error?: string }): void;
-    onState(listener: (state: ModelViewState) => void): () => void;
-    onCaptureRequest(listener: (request: { id: string; views: ModelView[]; pose: ModelPose }) => void): () => void;
+    onState(listener: (update: ModelStateUpdate) => void): () => void;
+    onCaptureRequest(listener: (request: ModelCaptureRequestEvent) => void): () => void;
   };
   /** The live iOS Simulator view; `available` is false off macOS. */
   simulator: {

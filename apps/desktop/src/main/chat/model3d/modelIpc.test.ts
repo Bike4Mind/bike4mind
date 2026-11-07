@@ -7,10 +7,22 @@ vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return { ...actual, writeFile: vi.fn(actual.writeFile) };
 });
-vi.mock('electron', () => ({ BrowserWindow: {}, dialog: {}, ipcMain: {} }));
+const handlers = vi.hoisted(() => new Map<string, (event: unknown, ...args: unknown[]) => unknown>());
+vi.mock('electron', () => ({
+  BrowserWindow: { fromWebContents: () => null },
+  dialog: {},
+  ipcMain: {
+    handle: (channel: string, handler: (event: unknown, ...args: unknown[]) => unknown) =>
+      handlers.set(channel, handler),
+    on: (channel: string, handler: (event: unknown, ...args: unknown[]) => unknown) => handlers.set(channel, handler),
+  },
+}));
 
 const { writeFile: writeFileSpy } = await import('node:fs/promises');
-const { writeExport, parseBuildReport } = await import('./modelIpc');
+const { writeExport, parseBuildReport, modelIpcHandlers } = await import('./modelIpc');
+const { ModelLiveViews } = await import('./ModelLiveViews');
+const { IPC_CHANNELS } = await import('@shared/ipc');
+const { EMPTY_MODEL_STATE } = await import('@shared/model3d');
 const { isModelPaneGlb } = await import('./glbMarker');
 
 function glb(): Uint8Array {
@@ -96,5 +108,34 @@ describe('parseBuildReport', () => {
 
   it('drops a report without a generation', () => {
     expect(parseBuildReport({ ok: true })).toBeNull();
+  });
+});
+
+describe('modelIpcHandlers', () => {
+  const invoke = (channel: string, ...args: unknown[]) => handlers.get(channel)?.({ sender: { id: 7 } }, ...args);
+
+  it("answers each conversation with its own model, so a new chat does not show the last one's", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'model-ipc-'));
+    const file = join(dir, 'chest.model.js');
+    writeFileSync(file, 'export default () => null;\n');
+    const views = new ModelLiveViews({ state: () => {}, captureTarget: () => null, captureRequest: () => false });
+    modelIpcHandlers(views);
+    await views.for('chat-a').open(file);
+
+    expect(await invoke(IPC_CHANNELS.modelGetState, 'chat-a')).toMatchObject({ path: file });
+    expect(await invoke(IPC_CHANNELS.modelGetState, 'chat-b')).toEqual(EMPTY_MODEL_STATE);
+    // A report from the new chat's pane cannot settle the first chat's build.
+    const waiting = views.for('chat-a').waitForBuild();
+    await invoke(IPC_CHANNELS.modelBuildReport, 'chat-b', { generation: 1, ok: false, error: 'wrong chat' });
+    await invoke(IPC_CHANNELS.modelBuildReport, 'chat-a', { generation: 1, ok: true });
+    await expect(waiting).resolves.toMatchObject({ ok: true });
+    views.dispose();
+  });
+
+  it('refuses a request that names no conversation', async () => {
+    const views = new ModelLiveViews({ state: () => {}, captureTarget: () => null, captureRequest: () => false });
+    modelIpcHandlers(views);
+    await expect(Promise.resolve().then(() => invoke(IPC_CHANNELS.modelGetState))).rejects.toThrow(/conversation/);
+    views.dispose();
   });
 });

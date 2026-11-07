@@ -3,13 +3,13 @@ import type * as THREE from 'three';
 import {
   EMPTY_MODEL_STATE,
   jointsOf,
-  partTreeError,
   type ModelBuildOutcome,
   type ModelJoint,
   type ModelParam,
   type ModelSummary,
   type ModelViewState,
 } from '@shared/model3d';
+import { checkedOutcome, errorMessage, ModelEngineFrame, reportGoodFileBuild } from './modelEngineFrame';
 import {
   buildModelObject,
   exportGlb,
@@ -20,10 +20,6 @@ import {
   summarizeObject,
   summarizeParts,
 } from './modelScene';
-
-/** Must match MODEL_ENGINE_URL / MODEL_ENGINE_ORIGIN in main/chat/model3d/engineProtocol.ts. */
-const ENGINE_URL = 'b4m-model://engine/';
-const ENGINE_ORIGIN = 'b4m-model://engine';
 
 export type ModelBuildStatus = 'idle' | 'building' | 'ok' | 'error';
 
@@ -56,35 +52,20 @@ export type ModelEngine = {
   openFile(): Promise<void>;
 };
 
-type EngineFrame = { frame: HTMLIFrameElement; ready: Promise<void> };
-
-function mountEngineFrame(): EngineFrame {
-  const frame = document.createElement('iframe');
-  frame.src = ENGINE_URL;
-  frame.setAttribute('sandbox', 'allow-scripts allow-same-origin');
-  frame.setAttribute('aria-hidden', 'true');
-  frame.dataset.testid = 'model-engine-frame';
-  frame.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden';
-  const ready = new Promise<void>(resolve => {
-    const onMessage = (event: MessageEvent) => {
-      if (event.source !== frame.contentWindow || event.data?.type !== 'engine-ready') return;
-      window.removeEventListener('message', onMessage);
-      resolve();
-    };
-    window.addEventListener('message', onMessage);
-  });
-  document.body.appendChild(frame);
-  return { frame, ready };
-}
+type Tracked = { sessionId: string | null; state: ModelViewState };
 
 /**
- * Drives the model pane: follows main's open file, builds `.model.js` sources in the sandboxed
- * engine frame, loads binary assets, reports each generation's result to main (which the model
- * tools wait on), keeps the sibling GLB fresh and answers screenshot requests. Mounted once in
- * ChatShell so all of that keeps working while the pane itself is collapsed.
+ * Drives the model pane for the conversation on screen (`sessionId`): follows that conversation's
+ * open file in main, builds `.model.js` sources in the sandboxed engine frame, loads binary assets,
+ * reports each generation's result to main (which the model tools wait on), keeps the sibling GLB
+ * fresh and answers that conversation's screenshot requests. Mounted once in ChatShell so all of
+ * that keeps working while the pane itself is collapsed; useModelBackgroundBuilds does the same for
+ * every other conversation.
  */
-export function useModelEngine(dark: boolean): ModelEngine {
-  const [state, setState] = useState<ModelViewState>(EMPTY_MODEL_STATE);
+export function useModelEngine(dark: boolean, sessionId: string | null): ModelEngine {
+  const [tracked, setTracked] = useState<Tracked>({ sessionId: null, state: EMPTY_MODEL_STATE });
+  // Until this conversation's own state arrives it has no model, never the previous chat's.
+  const state = sessionId !== null && tracked.sessionId === sessionId ? tracked.state : EMPTY_MODEL_STATE;
   const [status, setStatus] = useState<ModelBuildStatus>('idle');
   const [error, setError] = useState<ModelEngine['error']>(null);
   const [object, setObject] = useState<THREE.Group | null>(null);
@@ -94,64 +75,71 @@ export function useModelEngine(dark: boolean): ModelEngine {
   const [joints, setJoints] = useState<ModelJoint[]>([]);
   const [clips, setClips] = useState<string[]>([]);
   const [jointAngles, setJointAnglesState] = useState<Record<string, number>>({});
+  // Reset during render, not in an effect, so the previous conversation's model is never painted.
+  const [shownSession, setShownSession] = useState(sessionId);
+  if (shownSession !== sessionId) {
+    setShownSession(sessionId);
+    setStatus('idle');
+    setError(null);
+    setObject(null);
+    setSummary(null);
+    setParams({});
+    setUnsaved([]);
+    setJoints([]);
+    setClips([]);
+    setJointAnglesState({});
+  }
   const posedPath = useRef<string | null>(null);
-  const engine = useRef<EngineFrame | null>(null);
-  const requestId = useRef(0);
-  const pending = useRef<((outcome: ModelBuildOutcome | null) => void) | null>(null);
+  const engine = useRef<ModelEngineFrame | null>(null);
   const fileBuild = useRef<Promise<ModelBuildOutcome | null> | null>(null);
   const previewFrame = useRef<number | null>(null);
   const darkRef = useRef(dark);
   darkRef.current = dark;
   const objectRef = useRef<THREE.Group | null>(null);
   const stateRef = useRef(state);
+  const sessionRef = useRef(sessionId);
   const overrides = useRef<Record<string, number>>({});
   stateRef.current = state;
+  sessionRef.current = sessionId;
   objectRef.current = object;
 
+  useEffect(
+    () => () => {
+      engine.current?.dispose();
+      engine.current = null;
+      if (previewFrame.current !== null) cancelAnimationFrame(previewFrame.current);
+    },
+    []
+  );
+
   useEffect(() => {
+    if (sessionId === null) return;
     let live = true;
-    const unsubscribe = window.b4m.model.onState(next => setState(next));
-    void window.b4m.model.getState().then(next => {
-      if (live) setState(next);
+    const unsubscribe = window.b4m.model.onState(update => {
+      if (update.sessionId === sessionId) setTracked(update);
+    });
+    void window.b4m.model.getState(sessionId).then(next => {
+      if (!live) return;
+      // A broadcast may have overtaken this reply; generations only grow, so the higher one is newer.
+      setTracked(current =>
+        current.sessionId === sessionId && current.state.generation >= next.generation
+          ? current
+          : { sessionId, state: next }
+      );
     });
     return () => {
       live = false;
       unsubscribe();
-      engine.current?.frame.remove();
-      engine.current = null;
-      if (previewFrame.current !== null) cancelAnimationFrame(previewFrame.current);
     };
-  }, []);
+  }, [sessionId]);
 
   const build = useCallback((source: string, values: Record<string, number>, purpose: BuildPurpose = 'file') => {
     const run = (async (): Promise<ModelBuildOutcome | null> => {
       // The engine runs one build at a time, so a preview or print started now would cancel a
       // file build and lose its GLB and report: those wait for it instead.
       while (purpose !== 'file' && fileBuild.current) await fileBuild.current;
-      engine.current ??= mountEngineFrame();
-      const { frame, ready } = engine.current;
-      await ready;
-      requestId.current += 1;
-      const id = requestId.current;
-      // A newer build supersedes this one: its caller gets null and stops.
-      pending.current?.(null);
-      return new Promise<ModelBuildOutcome | null>(resolve => {
-        const finish = (outcome: ModelBuildOutcome | null) => {
-          window.removeEventListener('message', onMessage);
-          if (pending.current === finish) pending.current = null;
-          resolve(outcome);
-        };
-        const onMessage = (event: MessageEvent) => {
-          if (event.source !== frame.contentWindow || event.data?.type !== 'built' || event.data.id !== id) return;
-          finish(event.data.outcome as ModelBuildOutcome);
-        };
-        pending.current = finish;
-        window.addEventListener('message', onMessage);
-        frame.contentWindow?.postMessage(
-          { type: 'build', id, source, params: values, print: purpose === 'print' },
-          ENGINE_ORIGIN
-        );
-      });
+      engine.current ??= new ModelEngineFrame();
+      return engine.current.build(source, values, purpose === 'print');
     })();
     if (purpose === 'file') {
       fileBuild.current = run;
@@ -162,40 +150,41 @@ export function useModelEngine(dark: boolean): ModelEngine {
     return run;
   }, []);
 
-  const showOutcome = useCallback(async (generation: number, built: ModelBuildOutcome, writeGlb: boolean) => {
-    if (stateRef.current.generation !== generation) return;
-    const treeError = built.ok ? partTreeError(built.parts) : null;
-    const outcome: ModelBuildOutcome = treeError ? { ok: false, error: treeError } : built;
-    if (!outcome.ok) {
-      setStatus('error');
-      setError({ message: outcome.error, line: outcome.line });
-      if (writeGlb)
-        await window.b4m.model.reportBuild({ generation, ok: false, error: outcome.error, line: outcome.line });
-      return;
-    }
-    const next = buildModelObject(outcome.parts, outcome.units);
-    const nextSummary = summarizeParts(outcome.parts, outcome.params, outcome.units);
-    setJoints(jointsOf(outcome.parts));
-    setClips([]);
-    setObject(next);
-    setSummary(nextSummary);
-    setParams(outcome.params);
-    setStatus('ok');
-    setError(null);
-    if (!writeGlb) return;
-    // The GLB first, so a tool woken by the report can name the file that is already on disk.
-    const glbError = await exportGlb(next)
-      .then(bytes => window.b4m.model.writeGlb({ generation, bytes }))
-      .then(
-        written => (written ? undefined : 'the model changed before it was saved'),
-        (caught: unknown) => (caught instanceof Error ? caught.message : String(caught))
-      );
-    await window.b4m.model.reportBuild({ generation, ok: true, summary: nextSummary, glbError });
-  }, []);
+  /** `writeGlb` is a file build's, which also writes the GLB and reports to main; a preview only shows. */
+  const showOutcome = useCallback(
+    async (session: string, generation: number, built: ModelBuildOutcome, writeGlb: boolean) => {
+      if (sessionRef.current !== session || stateRef.current.generation !== generation) return;
+      const outcome = checkedOutcome(built);
+      if (!outcome.ok) {
+        setStatus('error');
+        setError({ message: outcome.error, line: outcome.line });
+        if (writeGlb)
+          await window.b4m.model.reportBuild(session, {
+            generation,
+            ok: false,
+            error: outcome.error,
+            line: outcome.line,
+          });
+        return;
+      }
+      const next = buildModelObject(outcome.parts, outcome.units);
+      const nextSummary = summarizeParts(outcome.parts, outcome.params, outcome.units);
+      setJoints(jointsOf(outcome.parts));
+      setClips([]);
+      setObject(next);
+      setSummary(nextSummary);
+      setParams(outcome.params);
+      setStatus('ok');
+      setError(null);
+      if (writeGlb) await reportGoodFileBuild(session, generation, next, nextSummary);
+    },
+    []
+  );
 
   useEffect(() => {
     const { kind, source, generation, missing, path } = state;
     overrides.current = {};
+    if (sessionId === null) return;
     setUnsaved([]);
     // A rebuild keeps the pose so a lid held open stays open while editing; another file starts closed.
     if (posedPath.current !== path) {
@@ -223,10 +212,10 @@ export function useModelEngine(dark: boolean): ModelEngine {
       try {
         if (kind === 'model') {
           const outcome = await build(source ?? '', {});
-          if (outcome && !cancelled) await showOutcome(generation, outcome, true);
+          if (outcome && !cancelled) await showOutcome(sessionId, generation, outcome, true);
           return;
         }
-        const bytes = await window.b4m.model.readAsset();
+        const bytes = await window.b4m.model.readAsset(sessionId);
         if (!bytes) throw new Error('The file could not be read.');
         const loaded = await loadAsset(kind, bytes);
         if (cancelled) return;
@@ -238,23 +227,25 @@ export function useModelEngine(dark: boolean): ModelEngine {
         setParams({});
         setStatus('ok');
         setError(null);
-        await window.b4m.model.reportBuild({ generation, ok: true, summary: loadedSummary });
+        await window.b4m.model.reportBuild(sessionId, { generation, ok: true, summary: loadedSummary });
       } catch (caught) {
         if (cancelled) return;
-        const message = caught instanceof Error ? caught.message : String(caught);
+        const message = errorMessage(caught);
         setStatus('error');
         setError({ message });
-        await window.b4m.model.reportBuild({ generation, ok: false, error: message });
+        await window.b4m.model.reportBuild(sessionId, { generation, ok: false, error: message });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [state, build, showOutcome]);
+  }, [sessionId, state, build, showOutcome]);
 
   useEffect(
     () =>
-      window.b4m.model.onCaptureRequest(({ id, views, pose }) => {
+      window.b4m.model.onCaptureRequest(({ sessionId: session, id, views, pose }) => {
+        // Another conversation's model is rendered by useModelBackgroundBuilds.
+        if (session !== sessionRef.current) return;
         const current = objectRef.current;
         if (!current) {
           window.b4m.model.captureResult({ id, error: 'The model pane has nothing to show yet.' });
@@ -262,9 +253,7 @@ export function useModelEngine(dark: boolean): ModelEngine {
         }
         renderContactSheet(current, views, darkRef.current, pose === 'open' ? openPose(current) : {})
           .then(bytes => window.b4m.model.captureResult({ id, bytes }))
-          .catch(caught =>
-            window.b4m.model.captureResult({ id, error: caught instanceof Error ? caught.message : String(caught) })
-          );
+          .catch(caught => window.b4m.model.captureResult({ id, error: errorMessage(caught) }));
       }),
     []
   );
@@ -281,8 +270,10 @@ export function useModelEngine(dark: boolean): ModelEngine {
         previewFrame.current = null;
         const current = stateRef.current;
         if (current.kind !== 'model' || current.source === null) return;
+        const session = sessionRef.current;
+        if (session === null) return;
         void build(current.source, overrides.current, 'preview').then(outcome => {
-          if (outcome) void showOutcome(current.generation, outcome, false);
+          if (outcome) void showOutcome(session, current.generation, outcome, false);
         });
       });
     },
@@ -290,28 +281,31 @@ export function useModelEngine(dark: boolean): ModelEngine {
   );
 
   const commitParam = useCallback(async (key: string, value: number) => {
-    const saved = await window.b4m.model.setParam({ key, value });
+    const session = sessionRef.current;
+    if (session === null) return;
+    const saved = await window.b4m.model.setParam(session, { key, value });
     setUnsaved(previous => (saved ? previous.filter(entry => entry !== key) : [...new Set([...previous, key])]));
   }, []);
 
   const exportFile = useCallback(
     async (format: 'glb' | 'stl') => {
       const current = objectRef.current;
-      if (!current) return null;
-      if (format === 'glb') return window.b4m.model.saveExport({ format, bytes: await exportGlb(current) });
+      const session = sessionRef.current;
+      if (!current || session === null) return null;
+      if (format === 'glb') return window.b4m.model.saveExport(session, { format, bytes: await exportGlb(current) });
       const { kind, source } = stateRef.current;
       if (kind !== 'model' || source === null) return null;
       // A fresh build with every part unioned, at the current slider values, so the STL is one printable solid.
       const outcome = await build(source, overrides.current, 'print');
       if (!outcome) throw new Error('The model changed during the export. Try again.');
       if (!outcome.ok) throw new Error(`The model did not build for export: ${outcome.error}`);
-      return window.b4m.model.saveExport({ format, bytes: partsToStl(outcome.parts) });
+      return window.b4m.model.saveExport(session, { format, bytes: partsToStl(outcome.parts) });
     },
     [build]
   );
 
   const openFile = useCallback(async () => {
-    await window.b4m.model.openDialog();
+    if (sessionRef.current !== null) await window.b4m.model.openDialog(sessionRef.current);
   }, []);
 
   const setJointAngles = useCallback((angles: Record<string, number>) => setJointAnglesState(angles), []);
