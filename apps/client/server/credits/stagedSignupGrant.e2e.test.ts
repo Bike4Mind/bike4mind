@@ -575,7 +575,7 @@ describe('staged signup ledger', () => {
   });
 
   it('grants in full when a shadow collector query fails server-side', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const collectRiskSignals = vi.fn(async () => {
       await User.aggregate([{ $match: { $unknownOperator: 1 } }]);
       return { datacenter: false };
@@ -585,6 +585,8 @@ describe('staged signup ledger', () => {
       12
     );
     expect((await User.findById(user.id))?.signupGrantAssessment).not.toHaveProperty('signals');
+    expect(collectRiskSignals).toHaveBeenCalledOnce();
+    expect(warning).toHaveBeenCalledWith('[signup-risk] Shadow observation collection failed; signals not recorded');
   });
 
   it('grants in full and records no signals when shadow collection fails under a disabled policy', async () => {

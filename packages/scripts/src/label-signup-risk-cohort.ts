@@ -16,8 +16,8 @@ signup. Signups whose 7-day window is still open are skipped, so set --until at 
 a full cohort. Only signups assessed after grant-time signal recording shipped carry replayable signals.
 
 --policy is the candidate signupGrantRiskPolicy (enabled) to replay. --out receives the replay input,
-written with mode 600 and never overwritten; pass it to replaySignupRisk.ts. Set
-NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS so staff accounts are excluded; test accounts match --test-pattern or
+written with mode 600 and never overwritten; pass it to replaySignupRisk.ts. NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS is
+required and excludes staff accounts; test accounts match --test-pattern or
 ANALYTICS_TEST_PATTERN (the signup baseline's default otherwise). Prints aggregate counts only: no emails, ids or network data.
 `;
 
@@ -66,7 +66,7 @@ async function main() {
       since,
       until,
       now,
-      internalEmails: staffEmail ? [staffEmail, testEmail] : [testEmail],
+      internalEmails: [staffEmail, testEmail],
     });
     if (samples.length === 0) throw new Error('No labeled signups with recorded signals in this window');
     await writeFile(values.out, `${JSON.stringify({ policy, samples })}\n`, { mode: 0o600, flag: 'wx' });
