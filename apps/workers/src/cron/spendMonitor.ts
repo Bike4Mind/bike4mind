@@ -7,6 +7,7 @@ import { Resource } from 'sst';
 import { z } from 'zod';
 import { appUrlFromEnv, postAlarmToSlack, resolveAlarmWebhookUrl } from '../events/alarmSlackMessage';
 import { readAlarmMention } from '../events/alarmSlackMention';
+import { defaultPaidScopeDeps } from './spendMonitor/paidScopes';
 import { bucketsToRoll } from './spendMonitor/buckets';
 import { evaluateSpend } from './spendMonitor/evaluate';
 import { defaultResolveScopeDeps } from './spendMonitor/resolveScope';
@@ -25,6 +26,8 @@ type ThresholdKey =
   | 'spendMonitorAccountSpikeRatio'
   | 'spendMonitorAccountSpikeFloorCredits'
   | 'spendMonitorAccountCeilingCredits'
+  | 'spendMonitorPaidAccountSpikeFloorCredits'
+  | 'spendMonitorPaidAccountCeilingCredits'
   | 'spendMonitorTrustedAccountSpikeFloorCredits'
   | 'spendMonitorTrustedAccountCeilingCredits';
 
@@ -42,6 +45,8 @@ function readThresholds(settings: SettingsMap): SpendThresholds {
     accountSpikeRatio: read('spendMonitorAccountSpikeRatio'),
     accountSpikeFloorCredits: read('spendMonitorAccountSpikeFloorCredits'),
     accountCeilingCredits: read('spendMonitorAccountCeilingCredits'),
+    paidAccountSpikeFloorCredits: read('spendMonitorPaidAccountSpikeFloorCredits'),
+    paidAccountCeilingCredits: read('spendMonitorPaidAccountCeilingCredits'),
     trustedAccountSpikeFloorCredits: read('spendMonitorTrustedAccountSpikeFloorCredits'),
     trustedAccountCeilingCredits: read('spendMonitorTrustedAccountCeilingCredits'),
   };
@@ -90,6 +95,7 @@ export async function handler(event: unknown): Promise<{ status: 'ok' | 'disable
       rollups: spendRollupRepository,
       alerts: spendAlertRepository,
       resolveScopeDeps: defaultResolveScopeDeps(),
+      paidScopeDeps: defaultPaidScopeDeps(),
       post: createSpendPost(slackEnabled, message => postAlarmToSlack(webhookUrl, message), logger),
       messageContext: {
         creditUsd: MIN_PRICE_PER_CREDIT_USD,

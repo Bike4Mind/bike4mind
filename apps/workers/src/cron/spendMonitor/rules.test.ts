@@ -15,6 +15,8 @@ const thresholds: SpendThresholds = {
   accountSpikeRatio: 10,
   accountSpikeFloorCredits: 1000,
   accountCeilingCredits: 5000,
+  paidAccountSpikeFloorCredits: 20000,
+  paidAccountCeilingCredits: 40000,
   trustedAccountSpikeFloorCredits: 20000,
   trustedAccountCeilingCredits: 40000,
 };
@@ -190,4 +192,34 @@ describe('evaluateScope trusted tier', () => {
       'apikey_ceiling'
     );
   });
+});
+
+describe('evaluateScope paid tier', () => {
+  it('keeps a normal Desktop burst quiet even with no baseline', () => {
+    expect(evaluateScope(scope('User', 10040, 0), thresholds, 'paid')).toEqual([]);
+    expect(evaluateScope(scope('User', 39999, null), thresholds, 'paid')).toEqual([]);
+  });
+
+  it('requires both the paid spike floor and the ratio for a warning', () => {
+    expect(evaluateScope(scope('User', 19999, 1), thresholds, 'paid')).toEqual([]);
+    expect(evaluateScope(scope('User', 20000, 2001), thresholds, 'paid')).toEqual([]);
+    expect(evaluateScope(scope('User', 20000, 2000), thresholds, 'paid')).toEqual([
+      expect.objectContaining({
+        rule: 'account_spike',
+        severity: 'warning',
+        accountTier: 'paid',
+        spikeFloorCredits: 20000,
+        ceilingCredits: 40000,
+      }),
+    ]);
+  });
+
+  it.each(['User', 'Organization', 'Agent', 'apiKey'] as const)(
+    'pages %s at the paid ceiling regardless of baseline',
+    scopeType => {
+      const [breach] = evaluateScope(scope(scopeType, 40000, 40000), thresholds, 'paid');
+      expect(breach).toMatchObject({ severity: 'critical', accountTier: 'paid', ceilingCredits: 40000 });
+      expect(breach).not.toHaveProperty('trusted');
+    }
+  );
 });

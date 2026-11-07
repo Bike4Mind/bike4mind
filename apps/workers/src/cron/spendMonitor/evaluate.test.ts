@@ -10,6 +10,7 @@ import type { SlackAlarmMessage } from '../../events/alarmSlackMessage';
 import { evaluateSpend, type EvaluateDeps } from './evaluate';
 import type { SpendThresholds } from './rules';
 import { createSpendPost } from './slackPost';
+import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { NO_TRUST, parseSpendTrustConfig, type SpendTrustConfig } from './trust';
 
 const BUCKET_MS = 5 * 60 * 1000;
@@ -25,6 +26,8 @@ const thresholds: SpendThresholds = {
   accountSpikeRatio: 10,
   accountSpikeFloorCredits: 1000,
   accountCeilingCredits: 5000,
+  paidAccountSpikeFloorCredits: 20000,
+  paidAccountCeilingCredits: 40000,
   trustedAccountSpikeFloorCredits: 20000,
   trustedAccountCeilingCredits: 40000,
 };
@@ -146,7 +149,12 @@ function createFakes() {
     ids.map(id => ({ id, email: `${id}@example.com`, emailVerified: true }))
   );
 
+  const paidScopeDeps: EvaluateDeps['paidScopeDeps'] = {
+    findActiveSubscriptionsByOwners: vi.fn(async () => []),
+    findPlanHolderOrganizations: vi.fn(async () => []),
+  };
   const deps: EvaluateDeps = {
+    paidScopeDeps,
     rollups: { sumWindow, windowSeries, latestBucketStart, sourceMix },
     alerts: { findActive, create, update, applyEvaluation } as unknown as EvaluateDeps['alerts'],
     resolveScopeDeps: {
@@ -162,6 +170,7 @@ function createFakes() {
 
   return {
     deps,
+    paidScopeDeps,
     alerts,
     posts,
     post,
@@ -602,7 +611,11 @@ describe('evaluateSpend', () => {
       const fakes = createFakes();
       fakes.deps.resolveScopeDeps = {
         ...fakes.deps.resolveScopeDeps,
-        findApiKeysByIds: vi.fn().mockRejectedValueOnce(new Error('mongo down')).mockResolvedValue([]),
+        findApiKeysByIds: vi
+          .fn()
+          .mockResolvedValueOnce([])
+          .mockRejectedValueOnce(new Error('mongo down'))
+          .mockResolvedValue([]),
       };
       fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000), ...windowBuckets('apiKey', 'k1', 2000)]);
 
@@ -627,6 +640,104 @@ describe('evaluateSpend', () => {
     const mentioned = fakes.posts.filter(post => post.text.includes('<!channel>'));
     expect(mentioned).toHaveLength(1);
     expect(mentioned[0].text).toContain('Platform');
+  });
+
+  describe('paid accounts', () => {
+    const paidRows = [{ ownerId: 'subscriber', priceId: SUBSCRIPTION_PLANS[0].priceId, status: 'active' }];
+
+    it('keeps a legitimate Desktop-sized subscriber burst quiet without trusting the account', async () => {
+      const fakes = createFakes();
+      vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockResolvedValue(paidRows);
+      fakes.setRollups([
+        ...windowBuckets('platform', 'all', 3400).map(bucket => ({ ...bucket, costUsd: 1 })),
+        ...windowBuckets('User', 'subscriber', 3400),
+      ]);
+      await expect(run(fakes)).resolves.toEqual({ breaches: 0, posted: 0 });
+    });
+
+    it('retains subscriber spend in platform detection and pages above the paid ceiling', async () => {
+      const fakes = createFakes();
+      vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockResolvedValue(paidRows);
+      fakes.setRollups([
+        ...quietPlatformHistory(),
+        ...windowBuckets('platform', 'all', 15000),
+        ...windowBuckets('User', 'subscriber', 15000),
+      ]);
+      await run(fakes);
+      expect(fakes.alerts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ rule: 'platform_spike' }),
+          expect.objectContaining({
+            rule: 'account_ceiling',
+            context: expect.objectContaining({ accountTier: 'paid', ceilingCredits: 40000 }),
+          }),
+        ])
+      );
+      expect(fakes.alerts.some(alert => alert.context.trustedExcluded !== undefined)).toBe(false);
+    });
+
+    it('observes paid limits configured below standard candidate thresholds', async () => {
+      const fakes = createFakes();
+      vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockResolvedValue(paidRows);
+      fakes.setRollups([
+        ...windowBuckets('platform', 'all', 200).map(bucket => ({ ...bucket, costUsd: 1 })),
+        ...windowBuckets('User', 'subscriber', 200),
+      ]);
+      await evaluateSpend(
+        fakes.now(),
+        fakes.deps,
+        {
+          ...thresholds,
+          paidAccountSpikeFloorCredits: 200,
+          paidAccountCeilingCredits: 500,
+        },
+        NO_TRUST
+      );
+      expect(fakes.alerts).toContainEqual(
+        expect.objectContaining({
+          rule: 'account_ceiling',
+          context: expect.objectContaining({ accountTier: 'paid', ceilingCredits: 500 }),
+        })
+      );
+    });
+
+    it('re-evaluates subscription changes and resolves a standard-tier incident after renewal', async () => {
+      const fakes = createFakes();
+      const subscriptions = vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners);
+      fakes.setRollups([
+        ...windowBuckets('platform', 'all', 3400).map(bucket => ({ ...bucket, costUsd: 1 })),
+        ...windowBuckets('User', 'subscriber', 3400),
+      ]);
+      subscriptions.mockResolvedValue(paidRows);
+      await run(fakes);
+      expect(fakes.alerts).toHaveLength(0);
+
+      fakes.nextWindow();
+      subscriptions.mockResolvedValue(paidRows.map(row => ({ ...row, status: 'canceled' })));
+      await run(fakes);
+      expect(fakes.alerts[0]).toMatchObject({ status: 'open', context: { accountTier: 'standard' } });
+
+      subscriptions.mockResolvedValue(paidRows);
+      fakes.nextWindow();
+      await run(fakes);
+      fakes.nextWindow();
+      await run(fakes);
+      expect(fakes.alerts[0].status).toBe('resolved');
+    });
+
+    it('uses standard limits and logs a failed subscription lookup', async () => {
+      const fakes = createFakes();
+      vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockRejectedValue(
+        new Error('billing unavailable')
+      );
+      fakes.setRollups([
+        ...windowBuckets('platform', 'all', 3400).map(bucket => ({ ...bucket, costUsd: 1 })),
+        ...windowBuckets('User', 'subscriber', 3400),
+      ]);
+      await run(fakes);
+      expect(fakes.alerts).toContainEqual(expect.objectContaining({ rule: 'account_ceiling' }));
+      expect(fakes.deps.logger.error).toHaveBeenCalledWith('spend-monitor-paid-lookup-failed', expect.anything());
+    });
   });
 
   describe('trusted accounts', () => {

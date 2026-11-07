@@ -1529,6 +1529,8 @@ describe('spend monitor settings', () => {
     spendMonitorAccountSpikeRatio: 10,
     spendMonitorAccountSpikeFloorCredits: 1000,
     spendMonitorAccountCeilingCredits: 5000,
+    spendMonitorPaidAccountSpikeFloorCredits: 20_000,
+    spendMonitorPaidAccountCeilingCredits: 40_000,
     spendMonitorTrustedAccountSpikeFloorCredits: 20_000,
     spendMonitorTrustedAccountCeilingCredits: 40_000,
   } as const;
@@ -1545,6 +1547,8 @@ describe('spend monitor settings', () => {
     'spendMonitorPlatformCostFloorUsd',
     'spendMonitorAccountSpikeFloorCredits',
     'spendMonitorAccountCeilingCredits',
+    'spendMonitorPaidAccountSpikeFloorCredits',
+    'spendMonitorPaidAccountCeilingCredits',
     'spendMonitorTrustedAccountSpikeFloorCredits',
     'spendMonitorTrustedAccountCeilingCredits',
   ] as const)('%s rejects 0 and accepts 1', key => {

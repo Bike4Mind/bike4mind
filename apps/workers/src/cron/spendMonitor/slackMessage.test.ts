@@ -155,6 +155,30 @@ describe('buildSpendAlertMessage', () => {
     expect(json(build())).not.toContain('trusted');
   });
 
+  it('shows the paid tier and applied limits on open and resolved alerts', () => {
+    const paidAlert = {
+      ...baseAlert,
+      context: {
+        baseline: null,
+        ratio: null,
+        accountTier: 'paid',
+        spikeFloorCredits: 20000,
+        ceilingCredits: 40000,
+      },
+    };
+    for (const kind of ['open', 'resolve'] as const) {
+      const out = json(build({ kind, alert: paidAlert }));
+      expect(out).toContain('jane@example.com (paid)');
+      expect(out).toContain('paid-account limits');
+      expect(out).toContain('spike floor: 20,000 credits / 15m');
+      expect(out).toContain('critical ceiling: 40,000 credits / 15m');
+      expect(out).not.toContain('trusted');
+    }
+    const out = json(build({ alert: paidAlert }));
+    expect(out).toContain('no history');
+    expect(out).toContain('n/a');
+  });
+
   it('renders a short resolve message with peak and duration', () => {
     const out = json(build({ kind: 'resolve', alert: { ...baseAlert, resolvedAt: new Date('2026-10-30T12:10:00Z') } }));
     expect(out).toContain('Resolved: Account spend spike - jane@example.com, peak 7,000 credits, lasted 2h 10m');

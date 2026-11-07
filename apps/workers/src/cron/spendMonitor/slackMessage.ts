@@ -87,13 +87,31 @@ function listPriceContext(stage: string, rule: SpendRuleId, creditUsd: number): 
   return context;
 }
 
+function accountTierLabel(alert: ISpendAlert): string | null {
+  const tier = alert.context.accountTier;
+  if (tier === 'standard' || tier === 'paid' || tier === 'trusted') return tier;
+  return alert.context.trusted === true ? 'trusted' : null;
+}
+
+function accountLimitContext(alert: ISpendAlert): string[] {
+  const tier = accountTierLabel(alert);
+  const spikeFloor = numberOrNull(alert.context.spikeFloorCredits);
+  const ceiling = numberOrNull(alert.context.ceilingCredits);
+  return [
+    ...(tier ? [`${tier}-account limits`] : []),
+    ...(spikeFloor !== null ? [`spike floor: ${formatCredits(spikeFloor)} credits / ${WINDOW_LABEL}`] : []),
+    ...(ceiling !== null ? [`critical ceiling: ${formatCredits(ceiling)} credits / ${WINDOW_LABEL}`] : []),
+  ];
+}
+
 function buildResolveMessage(input: SpendAlertMessageInput, title: string): SlackAlarmMessage {
   const { alert, scope, creditUsd } = input;
   const peak =
     alert.rule === 'platform_cost_spike' ? formatUsd(alert.peakValue) : `${formatCredits(alert.peakValue)} credits`;
   const endedAt = alert.resolvedAt ?? new Date();
   const duration = formatDuration(endedAt.getTime() - alert.openedAt.getTime());
-  const tier = alert.context.trusted === true ? ' (trusted)' : '';
+  const accountTier = accountTierLabel(alert);
+  const tier = accountTier ? ` (${accountTier})` : '';
   const line = `Resolved: ${title} - ${scope.label}${tier}, peak ${peak}, lasted ${duration}`;
 
   return composeAlarmMessage({
@@ -101,7 +119,7 @@ function buildResolveMessage(input: SpendAlertMessageInput, title: string): Slac
     level: 'info',
     title: line,
     sections: [],
-    context: listPriceContext(input.stage, alert.rule, creditUsd),
+    context: [...listPriceContext(input.stage, alert.rule, creditUsd), ...accountLimitContext(alert)],
     summary: 'spend incident resolved',
   });
 }
@@ -116,12 +134,12 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
   const baseline = numberOrNull(alert.context.baseline);
   const ratio = numberOrNull(alert.context.ratio);
   const isCost = alert.rule === 'platform_cost_spike';
-  const trusted = alert.context.trusted === true;
+  const tier = accountTierLabel(alert);
   const excluded = numberOrNull(alert.context.trustedExcluded);
   const trustedExcluded = excluded !== null && excluded > 0 ? excluded : null;
 
   const fields = [
-    `*Scope*\n${safe(scope.label)}${trusted ? ' (trusted)' : ''}`,
+    `*Scope*\n${safe(scope.label)}${tier ? ` (${tier})` : ''}`,
     `*Last ${WINDOW_LABEL}*\n${formatAmount(alert.rule, alert.lastValue, creditUsd)}`,
     `*${trustedExcluded === null ? 'Normal' : 'Normal excl. trusted'} (${WINDOW_LABEL})*\n${baseline === null ? 'no history' : formatAmount(alert.rule, baseline, creditUsd)}`,
     `*Ratio*\n${ratio === null ? 'n/a' : `x${ratio.toFixed(1)}`}`,
@@ -161,7 +179,7 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
   }
 
   const context = [safe(stage), `${kind === 'escalate' ? 'escalated, ' : ''}${alert.severity}`];
-  if (trusted) context.push('trusted-account limits');
+  context.push(...accountLimitContext(alert));
   if (!isCost) context.push(listPriceNote(creditUsd));
 
   return composeAlarmMessage({
