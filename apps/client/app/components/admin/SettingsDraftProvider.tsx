@@ -23,7 +23,7 @@ type Draft = {
   value: unknown;
   save(value: unknown): Promise<unknown>;
   blocked?: string;
-  warning?: string;
+  warnings?: string[];
 };
 type DraftContext = {
   drafts: Record<string, Draft>;
@@ -64,7 +64,7 @@ export function SettingsDraftProvider({ children }: { children: ReactNode }) {
       if (useAdminModal.getState().tabChangeGuard === guard) useAdminModal.getState().setTabChangeGuard(null);
     };
   }, [dirty, router]);
-  const warnings = entries.flatMap(([, draft]) => (draft.warning ? [draft.warning] : []));
+  const warnings = entries.flatMap(([, draft]) => draft.warnings ?? []);
   const save = async () => {
     if (saving.current || blockedReason) return;
     saving.current = true;
@@ -148,7 +148,8 @@ export function useSettingsDraft<T>(
     save(value: T): Promise<unknown>;
     blocked?(value: T): string | undefined;
     equals?(left: T, right: T): boolean;
-    warning?: string;
+    /** Shown in the confirm dialog before the SaveBar saves this draft; a function reads the draft value. */
+    warning?: string | ((value: T) => string[]);
   }
 ) {
   const context = useContext(Context);
@@ -182,7 +183,8 @@ export function useSettingsDraft<T>(
             value: next,
             save: value => optionsRef.current.save(value as T),
             blocked: options.blocked?.(next),
-            warning: options.warning,
+            warnings:
+              typeof options.warning === 'function' ? options.warning(next) : options.warning ? [options.warning] : [],
           }
     );
   };
