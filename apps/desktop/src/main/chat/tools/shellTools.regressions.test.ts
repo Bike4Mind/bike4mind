@@ -152,7 +152,15 @@ describe('commands main ran unasked', () => {
     const hrepo = await repository('hrepo', { '.claude/settings.json': '{}', 'src/b.ts': 'b' });
     await writeFile(join(hrepo, '.claude', 'settings.json'), '{"x": 1}');
     git(hrepo, 'commit', '-qam', 'second');
-    for (const name of ['^^!', '^^-1', 'HEAD^!']) await writeFile(join(hrepo, name), '');
+    await mkdir(join(hrepo, ':'));
+    for (const name of ['^^!', '^^-1', 'HEAD^!', 'HEAD^-+1', 'HEAD^- 1', ':/first', ':/fir*']) {
+      await writeFile(join(hrepo, name), '');
+    }
+    // wrepo has the same history, with `HEAD^!` its only top-level name a bare `*` expands to.
+    const wrepo = await repository('wrepo', { '.claude/settings.json': '{}' });
+    await writeFile(join(wrepo, '.claude', 'settings.json'), '{"x": 1}');
+    git(wrepo, 'commit', '-qam', 'second');
+    await writeFile(join(wrepo, 'HEAD^!'), '');
     // arepo gives settings an attribute, which the scan's git, reading attributes from the empty tree, never sees.
     const arepo = await repository('arepo', { '.gitattributes': '.claude/** foo\n', '.claude/settings.json': '{}' });
     await writeFile(join(arepo, '.claude', 'settings.json'), '{"x": 1}');
@@ -379,6 +387,13 @@ describe('commands main ran unasked', () => {
     ["git diff --name-only ':/^^!' | xargs sed -i s/a/b/", 'hrepo'],
     ["git diff --name-only ':/^^-1' | xargs sed -i s/a/b/", 'hrepo'],
     ["git diff --name-only 'HEAD^!' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only 'HEAD^-+1' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only 'HEAD^- 1' | xargs sed -i s/a/b/", 'hrepo'],
+    // Each names a commit by its message, though a file `:/first` and a file `:/fir*` exist.
+    ["git diff --name-only ':/first' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only ':/fir*' | xargs sed -i s/a/b/", 'hrepo'],
+    // bash expands `*` to `HEAD^!` before git reads it.
+    ['git diff --name-only * | xargs sed -i s/a/b/', 'wrepo'],
     ['rg -l hooks 2>"/dev/null" | xargs sed -i s/a/b/', ''],
     ['rg -l hooks | grep -v zz 2>/dev/null | xargs sed -i s/a/b/', ''],
   ])('asks before %s (in proj/%s) rewrites settings', async (command, folder) => {

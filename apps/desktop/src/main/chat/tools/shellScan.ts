@@ -2805,7 +2805,7 @@ function listsNames(raw: readonly string[], script: string): Listing | null {
   }
   if (program === 'grep' || program === 'egrep' || program === 'fgrep') return grepLists(args);
   if (program === 'rg') return rgLists(args, containedCommand(raw), script);
-  if (program === 'git' && args[0] === 'diff') return diffLists(args.slice(1));
+  if (program === 'git' && args[0] === 'diff') return diffLists(args.slice(1), raw.slice(2));
   if (program === 'git' && args[0] === 'grep') return gitGrepLists(args.slice(1));
   if (program === 'git' && args[0] === 'ls-files') {
     const operands: string[] = [];
@@ -2954,17 +2954,34 @@ function grepLists(args: readonly string[]): Listing | null {
 }
 
 /**
- * `git diff --name-only [--cached|--staged] [rev [rev]] [-- pathspec...]`, which prints the paths that differ from
- * the top of the work tree; each `A..B` reads as its two ends.
+ * Whether bash may turn a word as written into other words: an unquoted glob, a brace expansion, or a tilde at its
+ * start or after an unquoted `=` or `:`.
  */
-function diffLists(args: readonly string[]): Listing | null {
+function shellExpands(raw: string): boolean {
+  const pieces = wordPieces(raw);
+  const live = pieces.some(
+    (piece, at) =>
+      !('char' in piece) ||
+      (piece.active && '*?['.includes(piece.char)) ||
+      (isActive(piece, '~') && (at === 0 || isActive(pieces[at - 1], '=') || isActive(pieces[at - 1], ':')))
+  );
+  return live || expandBraces(pieces)?.length !== 1;
+}
+
+/**
+ * `git diff --name-only [--cached|--staged] [rev [rev]] [-- pathspec...]`, which prints the paths that differ from
+ * the top of the work tree; each `A..B` reads as its two ends. `raw` is each of `args` as written.
+ */
+function diffLists(args: readonly string[], raw: readonly string[]): Listing | null {
   let names = false;
   let cached = false;
   let paths = false;
   const revisions: string[] = [];
   const pathspecs: string[] = [];
-  for (const arg of args) {
+  for (const [index, arg] of args.entries()) {
     if (paths) pathspecs.push(arg);
+    // Before `--`, the words bash expands one into may be revisions or options.
+    else if (shellExpands(raw[index] ?? '')) return null;
     else if (arg === '--') paths = true;
     else if (arg === '--name-only') names = true;
     else if (arg === '--cached' || arg === '--staged') cached = true;

@@ -1317,22 +1317,19 @@ function looksLikePathspec(word: string): boolean {
   return word.startsWith(':(');
 }
 
-/**
- * Revision syntax git diff may read in a word before it takes it as a path: `^` (`^!`, `^@`, `^-N`, `^N`, `^{...}`,
- * a leading negation), `~N`, `@{...}`, `<rev>:<path>` and `..`.
- */
-const REVISION_SYNTAX = /[\^~:]|@\{|\.\./;
+/** Revision syntax other than `^` that git diff may read in a word: `~N`, `@{...}`, `<rev>:<path>` and `..`. */
+const REVISION_SYNTAX = /[~:]|@\{|\.\./;
 
 /**
  * Whether git reads `word`, which is not a commit, as the first path of `git diff` run at the top `top`, as its
  * verify_filename does: a glob or long magic form, or a path that exists once a leading `:/`, `:!` or `:^` is taken
- * off. A word with a colon or a glob must also name no object, which git would read as a revision (`:/message`);
- * one whose pattern holds revision syntax counts only when it exists whole.
+ * off. A word with a colon or a glob must also name no object, which git would read as a revision (`:/message`) or
+ * refuse as ambiguous; one whose pattern holds other revision syntax counts only when it exists whole.
  */
 async function readsAsPath(top: string, word: string): Promise<boolean> {
-  // git dies on a `^` word that is no revision, and reads the parent shorthands as revisions with no check for a
-  // file of the same name.
-  if (word.startsWith('-') || word.startsWith('^') || /\^[!@]$|\^-\d*$/.test(word)) return false;
+  // git reads a `^` anywhere but a leading `:^` as revision syntax, and the parent shorthands (`^!`, `^@`, `^-N`)
+  // as revisions even when a file has the same name.
+  if (word.startsWith('-') || word.replace(/^:\^/, '').includes('^')) return false;
   const exists = (path: string): Promise<boolean> =>
     lstat(resolve(top, path)).then(
       () => true,
@@ -1340,12 +1337,9 @@ async function readsAsPath(top: string, word: string): Promise<boolean> {
     );
   const pathspec = looksLikePathspec(word);
   if (pathspec || word.startsWith(':')) {
-    const pattern = word.replace(/^:(\([^)]*\)|[/!^]*:?)/, '');
-    // rev-parse --verify exits 1 for the parent shorthands, which git diff reads as revisions; only exit 1 says
-    // there is no such object, as a timeout or other failure says nothing.
-    if (REVISION_SYNTAX.test(pattern) || (await gitRun(top, ['rev-parse', '--verify', '--quiet', word]))?.code !== 1) {
-      return exists(word);
-    }
+    // Only exit 1 says there is no such object; a timeout or other failure says nothing.
+    if ((await gitRun(top, ['rev-parse', '--verify', '--quiet', word]))?.code !== 1) return false;
+    if (REVISION_SYNTAX.test(word.replace(/^:(\([^)]*\)|[/!^]*:?)/, ''))) return exists(word);
     if (pathspec) return true;
   }
   const [, special, rest = ''] = /^(:[/!^])?(.*)$/s.exec(word) ?? [];
