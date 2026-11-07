@@ -544,6 +544,25 @@ function removeRawMcpServer(raw: Record<string, unknown>, name: string): boolean
   return false;
 }
 
+/** The file's own entry for the server named `name` in mcpServers, array or name-keyed map. */
+function rawMcpServerEntry(raw: Record<string, unknown>, name: string): Record<string, unknown> | undefined {
+  const servers = raw.mcpServers;
+  const entry = Array.isArray(servers)
+    ? servers.find(item => isJsonObject(item) && item.name === name)
+    : isJsonObject(servers)
+      ? ownValue(servers, name)
+      : undefined;
+  return isJsonObject(entry) ? entry : undefined;
+}
+
+/** Sets `enabled` on the server named `name` in the file's mcpServers; false when the file has no such server. */
+function setRawMcpServerEnabled(raw: Record<string, unknown>, name: string, enabled: boolean): boolean {
+  const entry = rawMcpServerEntry(raw, name);
+  if (!entry) return false;
+  entry.enabled = enabled;
+  return true;
+}
+
 /** Drops the items `drop` matches from the file's list at `key`; a value that is not a list is left alone. */
 function removeRawListItems(raw: Record<string, unknown>, key: string, drop: (item: unknown) => boolean): boolean {
   const list = raw[key];
@@ -558,6 +577,13 @@ interface DiskAuthFields {
   auth: unknown;
   authByEnv: unknown;
   apiConfig: unknown;
+}
+
+interface GlobalWriteOptions {
+  clearFeatures?: boolean;
+  authFields?: DiskAuthFields;
+  /** Applies the write to memory once the file holds it, before the steps after the rename that can fail. */
+  onCommit?: () => void;
 }
 
 /**
@@ -613,7 +639,8 @@ const DEFAULT_CONFIG: CliConfig = {
  * Looks for git repository root (.git directory)
  * Falls back to current working directory if no git repo found
  */
-function findProjectConfigDir(startDir: string = process.cwd()): string | null {
+function findProjectConfigDir(startDir: string | null = currentWorkingDir()): string | null {
+  if (startDir === null) return null;
   let currentDir = startDir;
   const { root } = path.parse(currentDir);
 
@@ -631,7 +658,16 @@ function findProjectConfigDir(startDir: string = process.cwd()): string | null {
   }
 
   // No git repo found, use current working directory as fallback
-  return process.cwd();
+  return currentWorkingDir();
+}
+
+/** The working directory, or null when it was removed after this process started in it. */
+function currentWorkingDir(): string | null {
+  try {
+    return process.cwd();
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -1045,6 +1081,9 @@ export class ConfigStore {
   // out of config.mcpServers so no spawn path can start them.
   private pendingMcpApprovals: NormalizedMcpServer[] = [];
   private pendingMcpWarned = false;
+  // Names of the MCP servers the last merge took from --mcp-config and from the trusted project's layers.
+  private injectedMcpNames = new Set<string>();
+  private projectMcpNames = new Set<string>();
 
   constructor(configPath?: string) {
     this.configPath = configPath || path.join(homedir(), '.bike4mind', 'config.json');
@@ -1207,11 +1246,6 @@ export class ConfigStore {
       this.config = await this.computeMerged();
       return this.config;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        // Config doesn't exist, create default
-        return this.reset();
-      }
-
       // Log Zod validation errors clearly
       if (error instanceof z.ZodError) {
         console.error('Config validation error:', error.issues);
@@ -1258,6 +1292,8 @@ export class ConfigStore {
     const repoServers = mergeMcpServersGlobalWins(undefined, mcpJson, project?.mcpServers, local?.mcpServers).filter(
       s => !globalNames.has(s.name)
     );
+    this.projectMcpNames = new Set(repoServers.map(s => s.name));
+    this.injectedMcpNames = new Set();
     const approved = new Set((this.projectRealPath && global.trustedMcpDefinitions?.[this.projectRealPath]) || []);
     const approvedRepo: NormalizedMcpServer[] = [];
     this.pendingMcpApprovals = [];
@@ -1274,6 +1310,7 @@ export class ConfigStore {
     const mcpConfigFile = process.env.B4M_MCP_CONFIG_FILE;
     if (mcpConfigFile) {
       const injected = await loadMcpConfigFile(mcpConfigFile);
+      this.injectedMcpNames = new Set((injected ?? []).map(s => s.name));
       if (process.env.B4M_STRICT_MCP_CONFIG === '1') {
         // Strict means strict: the injected set is the ONLY allowed scope. A
         // malformed/missing file (injected === null) yields an empty set, never
@@ -1702,10 +1739,7 @@ export class ConfigStore {
    * Writes the global layer. The sign-in and backend fields are written as the file holds them, so a stale or
    * signed-out process cannot undo another's sign-in; only `authFields` writers (a backend change, a reset) set them.
    */
-  private async persistGlobal(
-    config?: GlobalConfigPatch,
-    opts?: { clearFeatures?: boolean; authFields?: DiskAuthFields }
-  ): Promise<void> {
+  private async persistGlobal(config?: GlobalConfigPatch, opts?: GlobalWriteOptions): Promise<void> {
     await this.init();
 
     // Ensure the global snapshot exists (first save on a fresh store).
@@ -1716,10 +1750,7 @@ export class ConfigStore {
   }
 
   /** persistGlobal's read-modify-write of the file; the caller holds the config write lock. */
-  private async writeGlobal(
-    config?: GlobalConfigPatch,
-    opts?: { clearFeatures?: boolean; authFields?: DiskAuthFields }
-  ): Promise<void> {
+  private async writeGlobal(config?: GlobalConfigPatch, opts?: GlobalWriteOptions): Promise<void> {
     const fallbackBase = this.fallbackBase;
     let staged = fallbackBase ? structuredClone(this.globalConfig!) : null;
     try {
@@ -1762,7 +1793,7 @@ export class ConfigStore {
 
   private async writeGlobalLayer(
     config: GlobalConfigPatch | undefined,
-    opts: { clearFeatures?: boolean; authFields?: DiskAuthFields } | undefined,
+    opts: GlobalWriteOptions | undefined,
     onStaged: (snapshot: CliConfig) => void
   ): Promise<void> {
     const global = this.globalConfig!;
@@ -1855,18 +1886,31 @@ export class ConfigStore {
     try {
       // Persist ONLY the global layer, never the merged effective config.
       await this.writeConfigFile(JSON.stringify(contents, null, 2));
-      if (this.fallbackBase) this.fallbackBase = staged;
-
-      // Set secure permissions (0600 - only owner can read/write)
-      // This protects auth tokens and API keys from other users
-      await fs.chmod(this.configPath, 0o600);
     } catch (error) {
       console.error('Failed to save config:', error);
       throw error;
     }
 
-    // Refresh the merged effective config from the freshly-persisted global.
-    this.config = await this.computeMerged();
+    // The file holds the write from here on, so memory follows it even when a step below fails.
+    if (this.fallbackBase) this.fallbackBase = staged;
+    opts?.onCommit?.();
+    const failures: unknown[] = [];
+    try {
+      // Set secure permissions (0600 - only owner can read/write)
+      // This protects auth tokens and API keys from other users
+      await fs.chmod(this.configPath, 0o600);
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await this.refreshMerged();
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length > 0) {
+      console.error('Failed to save config:', failures[0]);
+      throw failures[0];
+    }
   }
 
   /**
@@ -1916,6 +1960,16 @@ export class ConfigStore {
     return merged;
   }
 
+  /** Rebuilds the merged view; on failure drops it, so the next load() rebuilds it from the file. */
+  private async refreshMerged(): Promise<void> {
+    try {
+      this.config = await this.computeMerged();
+    } catch (error) {
+      this.config = null;
+      throw error;
+    }
+  }
+
   private invalidConfigError(key?: string): Error {
     return new RefusedSaveError(
       `Could not save settings: ${this.configPath} failed validation, so it was left unchanged. Fix the file, or remove it to start over.`,
@@ -1942,7 +1996,7 @@ export class ConfigStore {
         // Only this change goes into the base, so other changes still pending in memory are saved by their own writes.
         if (this.fallbackBase) change(this.fallbackBase);
         if (this.globalConfig) change(this.globalConfig);
-        this.config = await this.computeMerged();
+        await this.refreshMerged();
         return true;
       });
     } catch (error) {
@@ -2030,16 +2084,60 @@ export class ConfigStore {
   }
 
   /**
-   * Enable/disable MCP server
+   * Enable/disable an MCP server saved in the user config. Rejects naming the server's source when the user config
+   * does not save it; `injectedStillApplies` says --mcp-config also defines it, so its definition stays in effect.
    */
-  async toggleMcpServer(name: string, enabled: boolean): Promise<void> {
+  async toggleMcpServer(name: string, enabled: boolean): Promise<{ injectedStillApplies: boolean }> {
     await this.load();
-    const g = this.globalConfig!;
-    const server = g.mcpServers.find(s => s.name === name);
-    if (server) {
-      server.enabled = enabled;
-      await this.save();
+    const result = { injectedStillApplies: this.injectedMcpNames.has(name) };
+    const toggle = (config: CliConfig) => {
+      const server = config.mcpServers.find(s => s.name === name);
+      if (server) server.enabled = enabled;
+    };
+    const toggleInFile = (raw: Record<string, unknown>) => {
+      if (!setRawMcpServerEnabled(raw, name, enabled)) throw this.mcpServerNotSavedError(name);
+      return true;
+    };
+    if (await this.patchInFallback(toggle, toggleInFile)) return result;
+    const server = this.globalConfig!.mcpServers.find(s => s.name === name);
+    if (!server) throw this.mcpServerNotSavedError(name);
+    server.enabled = enabled;
+    await this.save();
+    return result;
+  }
+
+  /**
+   * The MCP server `name` as enable/disable sees it: the user config's own entry when it saves one, read from the
+   * file itself when that fails validation. Rejects a server from another source, including a project definition
+   * awaiting approval, before the command decides whether a saved entry already has the requested state.
+   */
+  async findMcpServer(name: string): Promise<{ enabled: boolean; injectedStillApplies: boolean } | null> {
+    await this.load();
+    const injectedStillApplies = this.injectedMcpNames.has(name);
+    const saved = this.globalConfig!.mcpServers.find(s => s.name === name);
+    if (saved) return { enabled: saved.enabled, injectedStillApplies };
+    if (this.fallbackBase) {
+      const text = await this.readConfigText();
+      const raw = text === null ? null : this.parseConfigText(text);
+      const entry = raw ? rawMcpServerEntry(raw, name) : undefined;
+      if (entry) return { enabled: entry.enabled !== false, injectedStillApplies };
     }
+    if (injectedStillApplies || this.projectMcpNames.has(name)) throw this.mcpServerNotSavedError(name);
+    return null;
+  }
+
+  private mcpServerNotSavedError(name: string): Error {
+    if (this.injectedMcpNames.has(name)) {
+      return new Error(
+        `MCP server "${name}" comes from --mcp-config, not ${this.configPath}; enable or disable it in that file.`
+      );
+    }
+    if (this.projectMcpNames.has(name)) {
+      return new Error(
+        `MCP server "${name}" comes from this project's config, not ${this.configPath}; enable or disable it there.`
+      );
+    }
+    return new Error(`MCP server "${name}" was not found in ${this.configPath}.`);
   }
 
   /**
@@ -2142,9 +2240,10 @@ export class ConfigStore {
       const g = this.globalConfig!;
       await this.writeGlobal(undefined, {
         authFields: { auth: tokens, authByEnv: g.authByEnv, apiConfig: g.apiConfig },
+        onCommit: () => {
+          this.globalConfig!.auth = tokens;
+        },
       });
-      this.globalConfig!.auth = tokens;
-      if (this.config) this.config.auth = tokens;
       return true;
     }
     const file = this.parseConfigText(text);
@@ -2310,12 +2409,13 @@ export class ConfigStore {
       const disk = await this.diskAuthFields();
       await this.writeGlobal(undefined, {
         authFields: { ...disk, apiConfig, ...(signOut ? { auth: undefined } : {}) },
+        // writeGlobal replaced the snapshot object; update the new one only now the file holds the change.
+        onCommit: () => {
+          const g = this.globalConfig!;
+          g.apiConfig = apiConfig;
+          if (signOut) g.auth = undefined;
+        },
       });
-      // writeGlobal replaced the snapshot object; update the new one only now the file holds the change.
-      const g = this.globalConfig!;
-      g.apiConfig = apiConfig;
-      if (signOut) g.auth = undefined;
-      this.config = await this.computeMerged();
     });
   }
 
@@ -2331,14 +2431,21 @@ export class ConfigStore {
         raw.apiConfig = { ...onDisk, endpointChosen: true };
         return true;
       });
-      if (!patched) {
-        await this.writeGlobal(undefined, {
-          authFields: { auth: undefined, authByEnv: undefined, apiConfig: { endpointChosen: true } },
-        });
+      const choose = () => {
+        const g = this.globalConfig!;
+        g.apiConfig = { ...g.apiConfig, endpointChosen: true };
+        if (this.config) this.config.apiConfig = g.apiConfig;
+      };
+      if (patched) {
+        choose();
+        return;
       }
+      // With no file left, this process's sign-in and backend are the current ones, as for a first sign-in.
       const g = this.globalConfig!;
-      g.apiConfig = { ...g.apiConfig, endpointChosen: true };
-      if (this.config) this.config.apiConfig = g.apiConfig;
+      await this.writeGlobal(undefined, {
+        authFields: { auth: g.auth, authByEnv: g.authByEnv, apiConfig: { ...g.apiConfig, endpointChosen: true } },
+        onCommit: choose,
+      });
     });
   }
 
@@ -2440,15 +2547,22 @@ export class ConfigStore {
       );
       const apiConfig = swap.changed || !diskApi?.endpointChosen ? newApiConfig : diskApi;
       const nextAuthByEnv = swap.changed ? swap.authByEnv : authByEnv.data;
-      if (swap.changed || !diskApi?.endpointChosen) {
-        await this.writeGlobal(undefined, { authFields: { auth: swap.auth, authByEnv: nextAuthByEnv, apiConfig } });
-      }
       // Memory follows only once the file holds the switch; writeGlobal replaced the snapshot object.
-      const next = this.globalConfig!;
-      next.apiConfig = apiConfig;
-      next.authByEnv = nextAuthByEnv;
-      next.auth = swap.auth; // undefined -> user will be prompted to /login
-      this.config = await this.computeMerged();
+      const follow = () => {
+        const next = this.globalConfig!;
+        next.apiConfig = apiConfig;
+        next.authByEnv = nextAuthByEnv;
+        next.auth = swap.auth; // undefined -> user will be prompted to /login
+      };
+      if (swap.changed || !diskApi?.endpointChosen) {
+        await this.writeGlobal(undefined, {
+          authFields: { auth: swap.auth, authByEnv: nextAuthByEnv, apiConfig },
+          onCommit: follow,
+        });
+      } else {
+        follow();
+        await this.refreshMerged();
+      }
       return { url: newUrl, envName, changed: !wasHere, authenticated: isAuthTokenValid(swap.auth) };
     });
   }
