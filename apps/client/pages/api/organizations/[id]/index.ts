@@ -35,6 +35,7 @@ const updateOrgBodySchema = z.object({
     .pipe(z.coerce.number<string | number>().min(0))
     .optional(),
   systemPrompt: z.string().max(10000).optional(),
+  redactPushContent: z.boolean().optional(),
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
   storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
 });

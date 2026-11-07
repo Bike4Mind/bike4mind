@@ -7,6 +7,7 @@ import { handler as sessionContextSummarizationHandler } from '@workers/events/s
 import { handler as sessionTaggingHandler } from '@workers/events/sessionTagging';
 import { handler as notebookCurationHandler } from '@workers/events/notebookCuration';
 import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
+import { handler as sendPushHandler } from '@workers/events/sendPush';
 
 /**
  * Self-host event routing.
@@ -42,6 +43,8 @@ const HANDLERS: Record<string, EventHandler> = {
   'session.context_summarize': sessionContextSummarizationHandler,
   'session.tag': sessionTaggingHandler,
   'notebook.curation.start': notebookCurationHandler,
+  // No-ops unless all four APNS_* values are set (see readApnsCredentials in server-utils pushDelivery).
+  'notification.push': sendPushHandler,
 };
 
 export async function dispatchSelfHostEvent(

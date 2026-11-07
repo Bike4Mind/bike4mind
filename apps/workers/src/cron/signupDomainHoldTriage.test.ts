@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   recordAdminAction: vi.fn(),
   runAssessments: vi.fn(),
   assessmentDeps: vi.fn(),
+  runAgeRecheck: vi.fn(),
 }));
 
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
@@ -17,9 +18,14 @@ vi.mock('@bike4mind/database', () => ({
   adminAuditLogRepository: {},
   adminSettingsRepository: {},
   signupDomainReviewRepository: { listPending: h.listPending, autoConfirm: h.autoConfirm },
+  signupProtectionRepository: {},
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@bike4mind/services', () => ({ adminAuditService: { recordAdminAction: h.recordAdminAction } }));
+vi.mock('@bike4mind/services', () => ({
+  adminAuditService: { recordAdminAction: h.recordAdminAction },
+  userService: { getDomainIntel: vi.fn() },
+}));
+vi.mock('./signupDomainAgeRecheck', () => ({ runSignupDomainAgeRecheck: h.runAgeRecheck }));
 vi.mock('@server/security/signupDomainHoldAssessment/signupDomainHoldAssessment', () => ({
   runSignupDomainHoldAssessments: h.runAssessments,
   defaultSignupDomainHoldAssessmentDeps: h.assessmentDeps,
@@ -144,11 +150,16 @@ describe('signupDomainHoldTriage handler', () => {
     h.recordAdminAction.mockResolvedValue(null);
     h.assessmentDeps.mockImplementation((_logger: unknown, shouldStop: () => boolean) => ({ shouldStop }));
     h.runAssessments.mockResolvedValue({ status: 'skipped', reason: 'disabled' });
+    h.runAgeRecheck.mockResolvedValue({ looked: 0, failed: 0, marked: 0 });
   });
 
   it('reads the setting fresh and stops the rule when an operator turned it off', async () => {
     h.getSettingsMap.mockResolvedValue({ autoConfirmDisposableAggregateHolds: false });
-    expect(await handler()).toEqual({ status: 'disabled', assessment: { status: 'skipped', reason: 'disabled' } });
+    expect(await handler()).toEqual({
+      status: 'disabled',
+      assessment: { status: 'skipped', reason: 'disabled' },
+      ageRecheck: { looked: 0, failed: 0, marked: 0 },
+    });
     expect(h.getSettingsMap).toHaveBeenCalledWith(expect.anything(), {
       skipCache: true,
       names: ['autoConfirmDisposableAggregateHolds'],
@@ -187,5 +198,21 @@ describe('signupDomainHoldTriage handler', () => {
       skipped: {},
     });
     await expect(handler()).rejects.toThrow('1 of 2 assessments failed');
+  });
+
+  it('runs the young-domain age recheck even with the rule off, and fails the run when a lookup failed', async () => {
+    h.getSettingsMap.mockResolvedValue({ autoConfirmDisposableAggregateHolds: false });
+    h.runAgeRecheck.mockResolvedValue({ looked: 1, failed: 2, marked: 0 });
+    await expect(handler()).rejects.toThrow('2 young-domain age rechecks failed');
+    expect(h.runAgeRecheck).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the young-domain age from settings for the recheck, defaulting to 30 days', async () => {
+    h.getSettingsMap.mockResolvedValue({});
+    await handler();
+    const [deps] = h.runAgeRecheck.mock.calls[0];
+    expect(await deps.youngerThanDays()).toBe(30);
+    h.getSettingsMap.mockResolvedValue({ holdSignupsFromDomainsYoungerThanDays: 14 });
+    expect(await deps.youngerThanDays()).toBe(14);
   });
 });

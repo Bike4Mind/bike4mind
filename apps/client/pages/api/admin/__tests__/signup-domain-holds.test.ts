@@ -2,9 +2,23 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 
-const { handlers, find, reviewUpdate, release, eligible, count, baseOptions, recordAudit, listed } = vi.hoisted(() => ({
+const {
+  handlers,
+  find,
+  reviewUpdate,
+  release,
+  eligible,
+  count,
+  baseOptions,
+  recordAudit,
+  listed,
+  countByStatus,
+  settings,
+} = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => Promise<void>>,
-  listed: vi.fn(async (): Promise<unknown[]> => []),
+  listed: vi.fn(async (_filter: unknown, _page: number, _limit: number): Promise<unknown[]> => []),
+  countByStatus: vi.fn(async (_filter: unknown) => ({ pending: 0, blocked: 0, released: 0, all: 0 })),
+  settings: vi.fn(async (): Promise<Record<string, unknown>> => ({})),
   find: vi.fn(),
   reviewUpdate: vi.fn(),
   release: vi.fn(),
@@ -30,15 +44,15 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
+vi.mock('@bike4mind/utils', () => ({
+  getSettingsMap: settings,
+  getSettingsValue: (key: string, values: Record<string, unknown>, fallback: unknown) => values[key] ?? fallback,
+}));
 vi.mock('@bike4mind/database', () => {
-  const reviewQuery = {
-    sort: () => reviewQuery,
-    skip: () => reviewQuery,
-    limit: () => reviewQuery,
-    lean: () => listed(),
-  };
   return {
-    SignupDomainReviewModel: { findOneAndUpdate: reviewUpdate, find: () => reviewQuery, countDocuments: async () => 0 },
+    adminSettingsRepository: {},
+    signupDomainHoldListRepository: { list: listed, countByStatus },
+    SignupDomainReviewModel: { findOneAndUpdate: reviewUpdate },
     DomainIntelligenceModel: { estimatedDocumentCount: async () => 12 },
     disposableDomainRepository: {
       getDisposableSourceStatus: async () => [
@@ -78,7 +92,63 @@ beforeEach(() => {
   eligible.mockReset().mockResolvedValue(true);
   recordAudit.mockReset().mockResolvedValue(null);
 });
+const getList = async (query: Record<string, string> = {}) => {
+  const { req, res } = createMocks({ method: 'GET', query });
+  Object.assign(req, { user: { id: 'admin-1', isAdmin: true } });
+  await handlers.get(req, res);
+  return res;
+};
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 describe('signup domain hold listing', () => {
+  beforeEach(() => {
+    listed.mockClear();
+    countByStatus.mockClear();
+    settings.mockReset().mockResolvedValue({});
+  });
+  it('lists pending holds by default, hiding settled holds older than 90 days', async () => {
+    countByStatus.mockResolvedValueOnce({ pending: 3, blocked: 8, released: 1, all: 12 });
+    const before = Date.now();
+    const res = await getList();
+    const [filter, page, limit] = listed.mock.calls[0];
+    expect(filter).toMatchObject({ status: 'pending', reason: undefined });
+    expect(page).toBe(1);
+    expect(limit).toBe(25);
+    const { settledSince } = filter as { settledSince: Date };
+    expect(settledSince.getTime()).toBeGreaterThanOrEqual(before - 90 * DAY_MS);
+    expect(settledSince.getTime()).toBeLessThanOrEqual(Date.now() - 90 * DAY_MS);
+    expect(countByStatus).toHaveBeenCalledWith({ reason: undefined, settledSince });
+    expect(res._getJSONData()).toMatchObject({
+      total: 3,
+      counts: { pending: 3, blocked: 8, released: 1, all: 12 },
+      settledVisibleDays: 90,
+    });
+  });
+  it.each(['pending', 'blocked', 'released', 'all'] as const)(
+    'passes the %s status through with its total',
+    async status => {
+      countByStatus.mockResolvedValueOnce({ pending: 1, blocked: 2, released: 3, all: 6 });
+      const res = await getList({ status, reason: 'young-domain', page: '2' });
+      expect(listed).toHaveBeenCalledWith(expect.objectContaining({ status, reason: 'young-domain' }), 2, 25);
+      expect(res._getJSONData().total).toBe({ pending: 1, blocked: 2, released: 3, all: 6 }[status]);
+    }
+  );
+  it('shows every settled hold when Include older is on, and uses the configured window otherwise', async () => {
+    await getList({ status: 'all', includeOlder: 'true' });
+    expect(listed.mock.calls[0][0]).toEqual({ status: 'all', reason: undefined, settledSince: undefined });
+    settings.mockResolvedValueOnce({ signupDomainHoldsSettledVisibleDays: 7 });
+    const res = await getList({ status: 'blocked' });
+    const { settledSince } = listed.mock.calls[1][0] as { settledSince: Date };
+    expect(Math.round((Date.now() - settledSince.getTime()) / DAY_MS)).toBe(7);
+    expect(res._getJSONData().settledVisibleDays).toBe(7);
+  });
+  it.each([{ status: 'held' }, { reason: 'anything' }, { includeOlder: 'yes' }, { page: '0' }])(
+    'rejects an invalid list query %o',
+    async query => {
+      await expect(getList(query)).rejects.toThrow('Invalid page, status, reason or includeOlder');
+      expect(listed).not.toHaveBeenCalled();
+    }
+  );
   it('reports per-source list freshness and the lookup cache size', async () => {
     const { req, res } = createMocks({ method: 'GET', query: {} });
     Object.assign(req, { user: { id: 'admin-1', isAdmin: true } });

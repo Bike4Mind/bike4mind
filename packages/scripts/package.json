@@ -79,6 +79,7 @@
     "credits:reconcile-purchase-stamps": "tsx src/reconcile-purchase-stamps.ts",
     "backfill:fabfile-owner-organization": "tsx src/backfill-fabfile-owner-organization.ts",
     "report:signup-baseline": "tsx src/signup-baseline.ts",
+    "report:signup-risk-cohort": "tsx src/label-signup-risk-cohort.ts",
     "report:external-active-users": "tsx src/external-active-users.ts",
     "report:signup-cohorts": "tsx src/signup-cohort-sweep.ts",
     "repair:bedrock-profile-absence": "tsx src/repair-bedrock-profile-absence.ts",
