@@ -1108,9 +1108,8 @@ const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
-// What's New Highlights Queue
-// Generates a highlights summary from What's New modals and posts to Slack.
-// Fed only by the admin generate-highlights route; there is no scheduled trigger.
+// Legacy What's New highlights queue, retained with its consumer until in-flight messages drain.
+// The admin generate-highlights route now sends to whatsNewGenerationQueue; there is no scheduled trigger.
 const whatsNewHighlightsQueueDLQ = new sst.aws.Queue('whatsNewHighlightsQueueDLQ', {
   transform: {
     queue: {

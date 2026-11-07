@@ -43,6 +43,7 @@ describe('whatsNewJob dispatch', () => {
       expect.objectContaining({ kind: 'release-notes', releaseTag: 'v1.2.3.4' }),
       logger
     );
+    expect(h.runReleaseNotesJob.mock.calls[0][1]).toBe(logger);
     expect(h.runHighlightsJob).not.toHaveBeenCalled();
     expect(logger.updateMetadata).toHaveBeenCalledWith({ kind: 'release-notes' });
   });
@@ -54,6 +55,7 @@ describe('whatsNewJob dispatch', () => {
       expect.objectContaining({ kind: 'highlights', correlationId: 'c1' }),
       logger
     );
+    expect(h.runHighlightsJob.mock.calls[0][1]).toBe(logger);
     expect(h.runReleaseNotesJob).not.toHaveBeenCalled();
     expect(logger.updateMetadata).toHaveBeenCalledWith({ kind: 'highlights' });
   });
@@ -76,5 +78,15 @@ describe('whatsNewJob dispatch', () => {
 
   it('throws on invalid JSON', async () => {
     await expect(run('{not json')).rejects.toThrow();
+  });
+
+  it.each([
+    ['release-notes', releaseNotes, h.runReleaseNotesJob],
+    ['highlights', highlights, h.runHighlightsJob],
+  ])('propagates %s failures so the queue retries', async (_kind, payload, runJob) => {
+    const failure = new Error('generation failed');
+    runJob.mockRejectedValueOnce(failure);
+
+    await expect(run(JSON.stringify(payload))).rejects.toBe(failure);
   });
 });
