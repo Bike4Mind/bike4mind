@@ -76,6 +76,7 @@ import {
 } from '@server/generationJobs/wiring';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { customMcpToolHost } from '@server/mcpConnections/customMcpToolHost';
 import { checkFreeTierDailySpendCap, isFreeTierDailyCapError } from '@server/billing/freeTierDailyCapGate';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
@@ -206,6 +207,7 @@ export const getStaticOptions = () => {
     summarizeSession: summarizeSession,
     contextSummarizeSession: contextSummarizeSession,
     getMcpClient: getMcpClientAdapter,
+    customMcp: customMcpToolHost,
     logEvent: logEvent,
     cacheRepository: cacheRepository,
     publishTelemetryAlert: publishTelemetryAlertCallback,
