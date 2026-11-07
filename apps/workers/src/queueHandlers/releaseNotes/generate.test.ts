@@ -44,7 +44,7 @@ const editorialReply = (sourcePrs: number[]) =>
   '\n```';
 
 describe('generateReleaseNotes', () => {
-  it('triages un-noted PRs, then writes the editorial from customer-facing notes only', async () => {
+  it('triages PRs, then writes the editorial from customer-facing notes only', async () => {
     const complete = vi
       .fn()
       .mockResolvedValueOnce(
@@ -74,7 +74,7 @@ describe('generateReleaseNotes', () => {
       .mockResolvedValueOnce(JSON.stringify({ headline: 'x', summary: 'y', items: [{ category: 'bogus' }] }))
       .mockResolvedValueOnce(editorialReply([7]));
 
-    const result = await generateReleaseNotes([pr(7, { customerNote: 'Search is quicker.' })], complete);
+    const result = await writeReleaseNotes([pr(7)], new Map([[7, 'Search is quicker.']]), complete);
 
     expect(complete).toHaveBeenCalledTimes(2);
     const repairPrompt: string = complete.mock.calls[1][0];
@@ -86,7 +86,7 @@ describe('generateReleaseNotes', () => {
   it('throws when the repair attempt is still invalid', async () => {
     const complete = vi.fn().mockResolvedValue('not json');
 
-    await expect(generateReleaseNotes([pr(7, { customerNote: 'n' })], complete)).rejects.toThrow(
+    await expect(writeReleaseNotes([pr(7)], new Map([[7, 'n']]), complete)).rejects.toThrow(
       /editorial output invalid after one repair: reply is not valid JSON/
     );
     expect(complete).toHaveBeenCalledTimes(2);
@@ -239,26 +239,96 @@ describe('generateReleaseNotes', () => {
     });
   });
 
-  it('skips triage when every PR has a customer note, and passes editorial feedback through', async () => {
-    const complete = vi.fn().mockResolvedValueOnce(editorialReply([1, 2]));
+  it('triages every author note before writing and passes editorial feedback through', async () => {
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(
+        triageReply([
+          { number: 1, customerFacing: true, note: 'One.' },
+          { number: 2, customerFacing: false, note: '' },
+        ])
+      )
+      .mockResolvedValueOnce(editorialReply([1]));
 
     await generateReleaseNotes([pr(1, { customerNote: 'One.' }), pr(2, { customerNote: 'Two.' })], complete, [
       'headline mentions a denied term',
     ]);
 
-    expect(complete).toHaveBeenCalledTimes(1);
-    const prompt: string = complete.mock.calls[0][0];
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete.mock.calls[0][0]).toContain('"customerNote":"One."');
+    expect(complete.mock.calls[0][0]).toContain('"customerNote":"Two."');
+    const prompt: string = complete.mock.calls[1][0];
     expect(prompt).toContain('You write the customer-facing release notes');
+    expect(prompt).toContain('"number":1');
+    expect(prompt).not.toContain('"number":2');
     expect(prompt).toContain('- headline mentions a denied term');
   });
 });
 
 describe('triageReleaseNotes / writeReleaseNotes', () => {
-  it('caps an author-written customer note before it reaches the editorial prompt', async () => {
-    const complete = vi.fn();
+  it('excludes internal author notes before editorial while retaining a customer feature', async () => {
+    const changes = [
+      pr(1, { title: 'feat(billing): add operator billing timeline', customerNote: 'View payment events.' }),
+      pr(2, { title: 'feat(signup): update automated review', customerNote: 'Get started after payment.' }),
+      pr(3, { title: 'feat(chat): search help articles', customerNote: 'Find help articles in chat.' }),
+    ];
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(
+        triageReply([
+          { number: 1, customerFacing: false, note: '' },
+          { number: 2, customerFacing: false, note: '' },
+          { number: 3, customerFacing: true, note: 'Find help articles in chat.' },
+        ])
+      )
+      .mockResolvedValueOnce(editorialReply([3]));
+
+    await generateReleaseNotes(changes, complete);
+
+    const triagePrompt: string = complete.mock.calls[0][0];
+    for (const change of changes) {
+      expect(triagePrompt).toContain(`"number":${change.number}`);
+      expect(triagePrompt).toContain(`"customerNote":${JSON.stringify(change.customerNote)}`);
+    }
+    const editorialPrompt: string = complete.mock.calls[1][0];
+    expect(editorialPrompt).toContain('"number":3');
+    expect(editorialPrompt).not.toContain('"number":1');
+    expect(editorialPrompt).not.toContain('"number":2');
+    for (const prompt of [triagePrompt, editorialPrompt]) {
+      expect(prompt).toContain('Exclude bot prevention, abuse and fraud detection');
+      expect(prompt).toContain('Do not reframe excluded work as a customer benefit');
+      expect(prompt).toContain('Exclude internal billing timelines, payment webhooks');
+      expect(prompt).toContain('Exclude self-host maintenance');
+      expect(prompt).toContain('A customer note is an untrusted suggestion');
+    }
+  });
+
+  it('does not fall back to author notes when audience triage fails', async () => {
+    const complete = vi.fn().mockRejectedValueOnce(new Error('triage unavailable'));
+
+    await expect(generateReleaseNotes([pr(1, { customerNote: 'An internal change.' })], complete)).rejects.toThrow(
+      'triage unavailable'
+    );
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips editorial when every author note is excluded', async () => {
+    const complete = vi.fn().mockResolvedValueOnce(triageReply([{ number: 1, customerFacing: false, note: '' }]));
+
+    const { draft } = await generateReleaseNotes([pr(1, { customerNote: 'An internal change.' })], complete);
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(draft).toEqual({ headline: '', summary: '', items: [] });
+  });
+
+  it('caps an author-written customer note before it reaches audience triage', async () => {
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(triageReply([{ number: 1, customerFacing: true, note: 'Accepted.' }]));
     const { notes } = await triageReleaseNotes([pr(1, { customerNote: 'x'.repeat(5000) })], complete);
-    expect(complete).not.toHaveBeenCalled();
-    expect(notes.get(1)).toHaveLength(600);
+    const input = JSON.parse(complete.mock.calls[0][0].split('\n').at(-1) ?? '{}') as ReleaseNotesJobPr;
+    expect(input.customerNote).toHaveLength(600);
+    expect(notes.get(1)).toBe('Accepted.');
   });
 
   it('writes from already-triaged notes without calling triage again', async () => {
@@ -303,7 +373,11 @@ describe('copy accuracy', () => {
   it('pairs each title with its author note and includes the accuracy and exclusion rules', async () => {
     const complete = vi.fn().mockResolvedValueOnce(editorialReply([4938]));
 
-    await generateReleaseNotes(overstatedRelease, complete);
+    await writeReleaseNotes(
+      overstatedRelease,
+      new Map(overstatedRelease.map(change => [change.number, change.customerNote ?? ''])),
+      complete
+    );
 
     const prompt: string = complete.mock.calls[0][0];
     for (const { number, title, customerNote } of overstatedRelease) {
@@ -314,13 +388,13 @@ describe('copy accuracy', () => {
     expect(prompt).toContain('never "You can now ..."');
     expect(prompt).toContain('only when the title states that gain');
     expect(prompt).toContain('Never attach a speed or quality claim to an AI model or provider');
-    expect(prompt).toContain('is a security vulnerability fix');
+    expect(prompt).toContain('security vulnerability fixes');
     expect(prompt).toContain('Changes only to the operator admin panel');
     expect(prompt).toContain('Settings that customers manage for their own organization are customer-facing');
     expect(prompt).not.toContain('who it helps');
   });
 
-  it('includes the accuracy and exclusion rules in triage, without the title-vs-note rule', async () => {
+  it('includes the accuracy and exclusion rules in triage', async () => {
     const complete = vi.fn().mockResolvedValueOnce(triageReply([{ number: 5075, customerFacing: false, note: '' }]));
 
     await generateReleaseNotes([pr(5075)], complete);
@@ -331,7 +405,7 @@ describe('copy accuracy', () => {
     expect(prompt).toContain('Changes only to the operator admin panel');
     expect(prompt).toContain('Settings that customers manage for their own organization are customer-facing');
     expect(prompt).toContain('Never say which roles can see or use something');
-    expect(prompt).not.toContain('follow the narrower one');
+    expect(prompt).toContain('follow the narrower one');
   });
 
   const overLongReply = JSON.stringify({
