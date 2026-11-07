@@ -583,8 +583,13 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             />
           </MenuButton>
           <Menu
-            placement="right-start"
-            modifiers={[{ name: 'offset', options: { offset: [0, 18] } }]}
+            // On phones the sidebar spans the viewport, so a right-side menu opens off-screen;
+            // drop it below the row there instead.
+            placement={isMobile ? 'bottom-start' : 'right-start'}
+            modifiers={[
+              { name: 'offset', options: { offset: isMobile ? [0, 4] : [0, 18] } },
+              { name: 'preventOverflow', options: { padding: 8 } },
+            ]}
             sx={menuTheme => ({
               ...menuSurfaceSx(menuTheme, '12px'),
               ...menuItemListSx(menuTheme, { gap: '2px', radius: '12px' }),
