@@ -278,6 +278,20 @@ describe('commands main ran unasked', () => {
     ['git ls-files -z w | xargs -0 sed -i s/a/b/', 'brepo', unasked],
     ['rg -l0 hooks w | xargs -0 sed -i s/a/b/', 'brepo', unasked],
     ["find w -name '*.json' -print0 | xargs -0 sed -i s/a/b/", 'brepo', unasked],
+    ["git diff --name-only -- ':!x.lock' | xargs sed -i s/a/b/", '', unasked],
+    ["git diff --name-only ':!a' | xargs sed -i s/a/b/", '', unasked],
+    ["git diff --name-only ':^a' | xargs wc -l", '', unasked],
+    ["git diff --name-only -- . ':(exclude)src/c.ts' | xargs wc -l", '', unasked],
+    ["git diff --name-only -- ':(glob)src/**' | xargs sed -i s/a/b/", '', unasked],
+    ["git diff --name-only ':/src' | xargs sed -i s/a/b/", '', unasked],
+    ["git diff --name-only -- ':(top,icase)SRC' | xargs sed -i s/a/b/", '', unasked],
+    ["git diff --name-only '*.ts' | xargs sed -i s/a/b/", '', unasked],
+    ["git diff --name-only 'src/*.ts' ':!a' | xargs wc -l", '', unasked],
+    ['git diff --name-only --relative | xargs sed -i s/a/b/', '', unasked],
+    ['rg -l foo 2>"/dev/null" | xargs sed -i s/a/b/', '', unasked],
+    ["rg -l foo 2>'/dev/null' | xargs cat", '', unasked],
+    ['rg -l foo | grep -v zz 2>/dev/null | xargs sed -i s/a/b/', '', unasked],
+    ['git ls-files | grep -v x 2>/dev/null | head -5 | xargs wc -l', '', unasked],
     ['cat .claude/agents/x.md', '', unaskedNamingClaude],
     ['ls -la .claude/', '', unaskedNamingClaude],
     ['grep -r hooks .claude', '', unaskedNamingClaude],
@@ -336,6 +350,18 @@ describe('commands main ran unasked', () => {
     ['git diff --name-only main...side | xargs sed -i s/a/b/', 'mrepo'],
     ['find . -maxdepth 1 -type d | xargs -I{} time -o {}/settings.json du -sh {}', ''],
     ["git diff --name-only . ':(exclude,attr:!foo)' | xargs sed -i s/a/b/", 'arepo'],
+    ["git diff --name-only -- ':(attr:foo)' | xargs sed -i s/a/b/", 'arepo'],
+    ["git diff --name-only ':!src' | xargs sed -i s/a/b/", 'srepo'],
+    ["git diff --name-only -- .claude ':!.claude/x' | xargs sed -i s/a/b/", 'srepo'],
+    ["git diff --name-only -- ':(top).claude' | xargs sed -i s/a/b/", 'srepo'],
+    ["git diff --name-only -- ':(icase).CLAUDE' | xargs sed -i s/a/b/", 'srepo'],
+    ["git diff --name-only ':/.claude' | xargs sed -i s/a/b/", 'srepo'],
+    ["git diff --name-only '.c*' | xargs sed -i s/a/b/", 'srepo'],
+    ['git diff --name-only --relative | xargs sed -i s/a/b/', 'srepo'],
+    // `:/sid*` names the commit whose message matches, so git compares it with the work tree.
+    ["git diff --name-only ':/sid*' | xargs sed -i s/a/b/", 'mrepo'],
+    ['rg -l hooks 2>"/dev/null" | xargs sed -i s/a/b/', ''],
+    ['rg -l hooks | grep -v zz 2>/dev/null | xargs sed -i s/a/b/', ''],
   ])('asks before %s (in proj/%s) rewrites settings', async (command, folder) => {
     expect(await judge(command, folder)).toMatchObject(asks);
   });
@@ -506,6 +532,17 @@ describe('commands main ran unasked', () => {
     ["sed -n '1,5p' src/b.ts", unasked],
   ])('runs %s unasked', async (command, expected) => {
     expect(await judge(command, 'grepo')).toMatchObject(expected);
+  });
+
+  it.each([
+    'rg -l foo 2>"/dev/stdout" | xargs sed -i s/a/b/',
+    'rg -l foo 2>"$OUT" | xargs sed -i s/a/b/',
+    "rg -l foo | grep -E '( docs/secret' 2>/dev/stdout | xargs sed -i s/a/b/",
+    // A `..` after a link leads to the link target's parent, which may be /dev.
+    'rg -l foo 2>src/../err | xargs sed -i s/a/b/',
+    'rg -l foo | grep -v zz 2>src/../err | xargs sed -i s/a/b/',
+  ])('asks for %s, whose stderr may reach xargs', async command => {
+    expect(await judge(command)).toMatchObject(asks);
   });
 
   it.each([
