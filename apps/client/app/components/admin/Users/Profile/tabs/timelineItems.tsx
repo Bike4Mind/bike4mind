@@ -8,6 +8,7 @@ export const TIMELINE_TYPE_LABELS: Readonly<Record<UserTimelineType, string>> = 
   signup: 'Signup',
   signin: 'Sign-ins',
   key: 'API keys',
+  api_request: 'API requests',
   usage: 'Notebooks',
   spend: 'Spend',
   limit: 'Limits',
@@ -21,6 +22,7 @@ const TILES: Readonly<Record<UserTimelineType, TimelineTile>> = {
   signup: { text: 'SU', tone: 'good' },
   signin: { text: 'IN', tone: 'good' },
   key: { text: 'KY', tone: 'neutral' },
+  api_request: { text: 'AP', tone: 'info' },
   usage: { text: 'NB', tone: 'info' },
   spend: { text: 'AI', tone: 'info' },
   limit: { text: 'LM', tone: 'bad' },
@@ -53,6 +55,7 @@ export const adminMeta = (audit: AuditEntry): string =>
 export type TimelineHandlers = {
   onOpenAudit: (entry: AuditEntry) => void;
   onOpenCredits?: () => void;
+  onOpenApiRequests?: () => void;
 };
 
 export const timelineItem = (entry: UserTimelineEntry, handlers: TimelineHandlers): TimelineItem => {
@@ -77,10 +80,43 @@ export const timelineItem = (entry: UserTimelineEntry, handlers: TimelineHandler
     case 'spend':
     case 'payment':
       return { ...base, summary: entry.summary, meta: entry.detail || undefined, onOpen: handlers.onOpenCredits };
+    case 'api_request':
+      return { ...base, summary: entry.summary, meta: entry.detail, onOpen: handlers.onOpenApiRequests };
     case 'usage':
     case 'signup':
     case 'limit':
     case 'moderation':
       return { ...base, summary: entry.summary, meta: entry.detail };
   }
+};
+
+/** Groups only adjacent matching calls within a minute; counts describe loaded rows, not hidden pages. */
+export const timelineItems = (entries: readonly UserTimelineEntry[], handlers: TimelineHandlers): TimelineItem[] => {
+  const items: TimelineItem[] = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    const item = timelineItem(entry, handlers);
+    let count = 1;
+    if (entry.type === 'api_request') {
+      while (index + count < entries.length) {
+        const next = entries[index + count];
+        if (next.type !== 'api_request') break;
+        const age = entry.at.getTime() - next.at.getTime();
+        if (
+          age < 0 ||
+          age > 60_000 ||
+          next.request.keyId !== entry.request.keyId ||
+          next.request.method !== entry.request.method ||
+          next.request.endpoint !== entry.request.endpoint ||
+          next.request.statusCode !== entry.request.statusCode ||
+          next.request.ip !== entry.request.ip
+        )
+          break;
+        count += 1;
+      }
+    }
+    items.push(count > 1 ? { ...item, summary: `${entry.summary} (${count} calls in loaded activity)` } : item);
+    index += count - 1;
+  }
+  return items;
 };

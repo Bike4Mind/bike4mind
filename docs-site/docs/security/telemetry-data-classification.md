@@ -455,6 +455,13 @@ A scheduled job, off by default behind the `usagePatternSignalsEnabled` admin se
 
 ## Advisory abuse assessments
 
+The per-account summary can also include bounded request counts from the retained
+API-key log: successful responses, identity checks, admin-route requests, selected
+refusal statuses and server errors. The summary records its window, partial coverage,
+sample size and truncation, or a failed read. It sends no raw endpoints, request IPs
+or key identifiers. An empty partial log is not proof that no attempts occurred.
+These derived fields use the assessment summary's existing retention policy.
+
 Off by default behind the `abuseAssessmentEnabled` and `abuseAssessmentConfig` admin settings, an admin action or an hourly job can ask a Decisions model to judge a shadow detection as abuse, legitimate automation or insufficient evidence. The model receives only a pseudonymous summary built from an allowlist: detector name, window, a hosting-network flag, per-signal counts and thresholds, and per-account ages and counts from the stored behavioral evidence, with accounts named `acct_1`, `acct_2` and so on. It never receives an IP, network number, country, email, user id, prompt, document or free text. Calls use the platform's provider key and a platform budget, never the assessed account's credits or keys. The result is for admin review only and triggers no automatic action on the account, its access, its credits or its review state.
 
 | Data              | Storage                                                                                                | Lifetime                       | Purpose                              |
