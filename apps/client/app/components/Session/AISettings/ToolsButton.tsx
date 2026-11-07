@@ -105,7 +105,9 @@ const ToolsButton: FC<ToolsButtonProps> = ({
       : 'Tools'
     : showsCountBadge
       ? `${baseLabel}, ${otherActiveToolsCount} more on`
-      : baseLabel;
+      : showsActiveDot
+        ? `${baseLabel}, some on`
+        : baseLabel;
 
   const toolsSectionProps = {
     tools,

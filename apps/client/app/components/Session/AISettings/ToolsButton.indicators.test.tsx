@@ -29,11 +29,12 @@ vi.mock('./ToolsSection', () => ({
 // The named exports are re-declared because the real module's consumers (ToolsSection,
 // AdvancedAISettings) import them at module scope - a `default`-only factory makes those
 // imports undefined and the component throws before rendering anything.
-vi.mock('../../common/ToolIndicators', () => ({
+vi.mock('../../common/ToolIndicators', async importOriginal => ({
   default: () => <div data-testid="tool-indicators" />,
   ICONED_MCP_SERVERS: ['github', 'atlassian'],
   AGENT_ONLY_MCP_SERVERS: ['github', 'atlassian'],
-  hasToolIndicators: () => false,
+  // Real predicate: the hidden-label name depends on it.
+  hasToolIndicators: (await importOriginal<typeof import('../../common/ToolIndicators')>()).hasToolIndicators,
 }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({
   useModelInfo: () => ({ data: modelRepo }),
@@ -202,13 +203,40 @@ describe('ToolsButton in a crowded composer row', () => {
     expect(screen.getByRole('button', { name: 'Tools, 3 more on' })).toBeInTheDocument();
   });
 
-  it('names the button "Tools" on a tablet with no extra tools on', () => {
+  it('names the button "Tools" on a tablet with nothing on', () => {
+    modelRepo = [{ id: 'gpt-4o', name: 'GPT-4o', supportsTools: true }];
+    render(
+      <TestWrapper>
+        <ToolsButton
+          {...baseProps}
+          isTablet={true}
+          activePrimaryTools={[]}
+          isThinkingActive={false}
+          otherActiveToolsCount={0}
+          model="gpt-4o"
+        />
+      </TestWrapper>
+    );
+    expect(screen.getByRole('button', { name: 'Tools' })).toBeInTheDocument();
+  });
+
+  it('says some tools are on when a tablet shows indicator icons but no count', () => {
     modelRepo = [{ id: 'gpt-4o', name: 'GPT-4o', supportsTools: true }];
     render(
       <TestWrapper>
         <ToolsButton {...baseProps} isTablet={true} otherActiveToolsCount={0} model="gpt-4o" />
       </TestWrapper>
     );
-    expect(screen.getByRole('button', { name: 'Tools' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tools, some on' })).toBeInTheDocument();
+  });
+
+  it('names the button "Fast Tools" with no count on a tablet in Fast mode', () => {
+    modelRepo = [{ id: 'gpt-4o', name: 'GPT-4o', supportsTools: true }];
+    render(
+      <TestWrapper>
+        <ToolsButton {...baseProps} isTablet={true} toolMode="fast" model="gpt-4o" />
+      </TestWrapper>
+    );
+    expect(screen.getByRole('button', { name: 'Fast Tools' })).toBeInTheDocument();
   });
 });
