@@ -1,3 +1,11 @@
+import { z } from 'zod';
+import {
+  spawnOptionsSchema,
+  taskActionSchema,
+  taskContractSchema,
+  taskReportSchema,
+  workerRequirementsSchema,
+} from '@shared/orchestration';
 import { SPAWN_CHOICE_TEXT } from '@shared/chat';
 import { suggestBranchName } from '../project/branchName';
 import {
@@ -245,6 +253,15 @@ export const sessionSpawn: ToolDefinition = {
     const prompt = requireString(input, 'prompt');
     const title = optionalText(input, 'title');
 
+    const options = spawnOptionsSchema.parse({
+      ...(input.role !== undefined ? { role: input.role } : {}),
+      ...(input.requested_model_id !== undefined ? { requestedModelId: input.requested_model_id } : {}),
+      ...(input.contract !== undefined ? { contract: input.contract } : {}),
+      ...(input.model_requirements !== undefined ? { requirements: input.model_requirements } : {}),
+    });
+    if (host.suggestions && (options.role || options.requestedModelId || options.contract || options.requirements))
+      throw new Error('Turn on Orchestrate to use role routing or task contracts.');
+
     if (host.suggestions) {
       const summary = optionalText(input, 'summary');
       const suggestion = await host.suggestions.suggest({
@@ -271,7 +288,10 @@ export const sessionSpawn: ToolDefinition = {
     if (placement.kind === 'worktree') context.report?.progress(`Creating branch ${placement.branch} and worktree...`);
     // A worktree that could not be made fails the spawn. Falling back to this working directory
     // would run the agent un-isolated, editing the parent's files, while it was told otherwise.
-    const outcome = await host.spawn(prompt, title, placement);
+    const outcome =
+      Object.keys(options).length > 0
+        ? await host.spawn(prompt, title, placement, options)
+        : await host.spawn(prompt, title, placement);
     if (!outcome.ok) throw new Error(outcome.message);
     context.report?.label(`Started a session: ${outcome.session.title}`);
     const who = host.delegates ? 'It has' : 'The user gave it';
@@ -292,6 +312,19 @@ export const sessionSpawn: ToolDefinition = {
 /** session_spawn as declared to a session with Orchestrate in effect; same parameters, other contract. */
 export const delegatedSpawnSchema: ToolSchema = {
   ...sessionSpawn.schema,
+  parameters: {
+    ...sessionSpawn.schema.parameters,
+    properties: {
+      ...sessionSpawn.schema.parameters.properties,
+      role: { type: 'string', enum: ['implementation', 'exploration', 'review'] },
+      requested_model_id: {
+        type: 'string',
+        description: 'Request within user policy; never grants model or spending permission.',
+      },
+      contract: z.toJSONSchema(taskContractSchema, { unrepresentable: 'any' }),
+      model_requirements: z.toJSONSchema(workerRequirementsSchema),
+    },
+  },
   description:
     'Hand a self-contained piece of work to a NEW conversation in this project. The user turned ' +
     'on Orchestrate here, so this STARTS it at once: no card, nothing to approve. It runs in its ' +
@@ -567,5 +600,49 @@ export const sessionDelete: ToolDefinition = {
     const deleted = await host.deleteSession(sessionId);
     if (!deleted) return 'No conversation with that id in this project.';
     return 'Deleted it.';
+  },
+};
+
+export const taskReport: ToolDefinition = {
+  schema: {
+    name: 'task_report',
+    description:
+      'Report acceptance evidence, a block, or a disproven assumption with the smallest escalation decision. Completion requires parent assessment. Never grants permissions or spending.',
+    parameters: {
+      type: 'object',
+      properties: { report: z.toJSONSchema(taskReportSchema, { unrepresentable: 'any' }) },
+      required: ['report'],
+      additionalProperties: false,
+    },
+  },
+  async run(input, context) {
+    const host = requireHost(context);
+    if (!host.taskAction || !context.sessionId) throw new Error('No structured task is active.');
+    return host.taskAction(context.sessionId, { kind: 'report', report: taskReportSchema.parse(input.report) });
+  },
+};
+
+export const taskAssess: ToolDefinition = {
+  schema: {
+    name: 'task_assess',
+    description:
+      'Assess a direct child task: accept only after reviewing evidence, revise the same contract, deny a requested upgrade, or cancel. Model upgrades require a user choice in agent details.',
+    parameters: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string' },
+        action: z.toJSONSchema(taskActionSchema, { unrepresentable: 'any' }),
+      },
+      required: ['session_id', 'action'],
+      additionalProperties: false,
+    },
+  },
+  async run(input, context) {
+    const host = requireHost(context);
+    const action = taskActionSchema.parse(input.action);
+    if (action.kind === 'report' || action.kind === 'upgrade')
+      throw new Error('A model cannot authorize an upgrade or report for a child.');
+    if (!host.taskAction) throw new Error('Orchestration is off.');
+    return host.taskAction(requireString(input, 'session_id'), action);
   },
 };
