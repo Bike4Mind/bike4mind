@@ -381,6 +381,11 @@ export interface ToolContext {
   /** Protected folders not yet resolved: where a write lands relative to them is unknown, so every write is refused. */
   unresolvedProtectedPaths?: readonly string[];
   /**
+   * Folders no allow rule may cover (see protectedLocations.ts). A shell command reaching one asks in auto
+   * mode, as the rules would refuse it.
+   */
+  uncoverablePaths?: readonly string[];
+  /**
    * The conversation this call belongs to. Background processes are scoped by it, so one
    * conversation cannot read or stop another's just by naming a handle.
    */
@@ -724,8 +729,16 @@ export interface ApprovalAlways {
   directories: readonly string[];
   /** Physical paths named by a shell command, used to protect permission files even through aliases. */
   paths?: readonly string[];
+  /** Folders a glob or an expanded operand reaches anything under (see ShellScan.globFolders). */
+  globFolders?: readonly string[];
+  /** See ShellScan.dotlessGlobFolders. */
+  dotlessGlobFolders?: readonly string[];
   /** Paths in a WSL distro no root is in: asked each time, never covered by a rule, grant or saved answer. */
   ungranted?: readonly string[];
+  /** See ShellScan.writes: a rule never covers a write to a permission file. */
+  writes?: readonly string[];
+  /** See ShellScan.writtenTrees. */
+  writtenTrees?: readonly string[];
 }
 
 /** See ChatApprovalOption: this is that, plus what main does with the answer. */

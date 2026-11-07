@@ -48,7 +48,7 @@ cat > "$APT_CONFIG"
 cat "$APT_CONFIG"
 ''',
     'timeout': '''
-printf 'timeout %s\\n' "$*" >> "$CALL_LOG"
+printf '%s %s\\n' "${0##*/}" "$*" >> "$CALL_LOG"
 [ "$1" = --signal=KILL ] || exit 91
 shift
 case "$1" in
@@ -99,13 +99,15 @@ class ChromiumActionTests(unittest.TestCase):
         self.config = self.root / 'apt-config'
         binary_directory = self.root / 'bin'
         binary_directory.mkdir()
+        for name in ('bash', 'cat', 'env'):
+            (binary_directory / name).symlink_to(shutil.which(name))
         for name, body in STUBS.items():
             executable = binary_directory / name
             executable.write_text('#!/bin/bash\nset -eu\n' + body)
             executable.chmod(0o755)
         self.environment = {
             **os.environ,
-            'PATH': str(binary_directory) + os.pathsep + os.environ['PATH'],
+            'PATH': str(binary_directory),
             'CALL_LOG': str(self.log),
             'APT_CONFIG': str(self.config),
             'DEPS_STATUS': '0',
@@ -133,7 +135,7 @@ class ChromiumActionTests(unittest.TestCase):
             'Acquire::https::Timeout "20";\n'
         ))
         self.assertEqual(calls, [
-            'timeout --signal=KILL 5m npx playwright install-deps chromium',
+            'gnutimeout --signal=KILL 5m npx playwright install-deps chromium',
             'npx playwright install-deps chromium',
         ])
 
@@ -161,9 +163,9 @@ class ChromiumActionTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(f'exit {status}', result.stdout)
                 self.assertEqual(calls[:4], [
-                    'timeout --signal=KILL 5m npx playwright install-deps chromium',
+                    'gnutimeout --signal=KILL 5m npx playwright install-deps chromium',
                     'npx playwright install-deps chromium',
-                    'timeout --signal=KILL 1m dpkg --configure -a',
+                    'gnutimeout --signal=KILL 1m dpkg --configure -a',
                     'dpkg --configure -a',
                 ])
                 self.assertEqual(len(calls), 5)
@@ -181,7 +183,7 @@ class ChromiumActionTests(unittest.TestCase):
                 self.log.unlink(missing_ok=True)
                 result, calls = self.run_step(DEPS_STATUS=124, RECOVERY_TIMEOUT=status)
                 self.assertEqual(result.returncode, status, result.stderr)
-                self.assertIn('timeout --signal=KILL 1m dpkg --configure -a', calls)
+                self.assertIn('gnutimeout --signal=KILL 1m dpkg --configure -a', calls)
                 self.assertFalse(any(call.startswith('node ') for call in calls), calls)
 
     def test_launch_failure_fails_step(self):
@@ -196,11 +198,14 @@ class ChromiumActionTests(unittest.TestCase):
 
     def test_falls_back_to_timeout_on_older_runners(self):
         (self.root / 'bin' / 'gnutimeout').unlink()
-        (self.root / 'bin' / 'bash').symlink_to(shutil.which('bash'))
-        self.environment['PATH'] = str(self.root / 'bin')
-        result, calls = self.run_step('Download Chromium')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(calls[0], 'timeout --signal=KILL 5m npx playwright install chromium')
+        for step in ('Download Chromium', 'Install Chromium system dependencies'):
+            with self.subTest(step=step):
+                self.log.unlink(missing_ok=True)
+                result, calls = self.run_step(step, DEPS_STATUS=100)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(calls[0].startswith('timeout --signal=KILL 5m '), calls)
+                if step == 'Install Chromium system dependencies':
+                    self.assertIn('timeout --signal=KILL 1m dpkg --configure -a', calls)
 
     def test_download_uses_hard_deadline_and_propagates_failure(self):
         for status in (0, 1, 124, 137):
@@ -209,7 +214,7 @@ class ChromiumActionTests(unittest.TestCase):
                 result, calls = self.run_step('Download Chromium', DOWNLOAD_STATUS=status)
                 self.assertEqual(result.returncode, status, result.stderr)
                 self.assertEqual(calls, [
-                    'timeout --signal=KILL 5m npx playwright install chromium',
+                    'gnutimeout --signal=KILL 5m npx playwright install chromium',
                     'npx playwright install chromium',
                 ])
 
@@ -233,11 +238,14 @@ def live_state_after(pid, grace=5.0):
         time.sleep(0.01)
 
 
-@unittest.skipUnless(sys.platform.startswith('linux') and shutil.which('timeout'), 'GNU timeout requires Linux')
+@unittest.skipUnless(
+    sys.platform.startswith('linux') and (shutil.which('gnutimeout') or shutil.which('timeout')),
+    'GNU timeout requires Linux',
+)
 class TimeoutProcessGroupTests(unittest.TestCase):
     def test_action_deadlines_kill_term_resistant_child(self):
         # Keep the action's actual option order, shortening only its durations.
-        timeout_command = re.escape('"$(command -v gnutimeout || command -v timeout)"')
+        timeout_command = r'("\$\([^"\n]+\)")'
         commands = (
             ('Download Chromium', timeout_command + r' (.+?) npx playwright install chromium'),
             ('Install Chromium system dependencies', timeout_command + r' (.+?) npx playwright install-deps chromium'),
@@ -245,9 +253,14 @@ class TimeoutProcessGroupTests(unittest.TestCase):
         )
         for step, pattern in commands:
             with self.subTest(step=step, pattern=pattern):
-                match = re.search(pattern, step_script(step))
+                script = step_script(step)
+                match = re.search(pattern, script)
                 self.assertIsNotNone(match)
-                options = shlex.split(match.group(1))
+                selected = subprocess.run(
+                    ['bash', '-e', '-c', 'printf "%s" ' + match.group(1)],
+                    capture_output=True, text=True, check=True,
+                ).stdout
+                options = shlex.split(match.group(2))
                 options = ['0.5s' if option in ('5m', '1m') else option for option in options]
                 for parent_script in ('"$@" & wait', 'trap "" TERM; "$@" & wait'):
                     with tempfile.TemporaryDirectory() as directory:
@@ -256,7 +269,7 @@ class TimeoutProcessGroupTests(unittest.TestCase):
                         pid_tmp = shlex.quote(f'{pid_file}.tmp')
                         child = f'trap "" TERM; echo $$ > {pid_tmp}; mv {pid_tmp} {shlex.quote(str(pid_file))}; exec sleep 20'
                         process = subprocess.Popen(
-                            [shutil.which('gnutimeout') or shutil.which('timeout'), *options, 'bash', '-c', parent_script, 'bash', 'sh', '-c', child],
+                            [selected, *options, 'bash', '-c', parent_script, 'bash', 'sh', '-c', child],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
                         )
                         try:

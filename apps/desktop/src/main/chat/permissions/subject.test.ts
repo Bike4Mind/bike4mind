@@ -106,13 +106,10 @@ describe('everySessionRules', () => {
     'sudo curl -s http://localhost:3000',
     'nice curl -s http://localhost:3000',
     '/usr/bin/env curl -s http://localhost:3000',
-    '"env" curl -s http://localhost:3000',
     '/usr/bin/curl http://localhost:3000',
-    '"curl" http://localhost:3000',
     "gh 'api' repos/o/r",
     'gh "api" repos/o/r',
     'gh --repo o/r pr view 1',
-    '"gh" pr view 1',
     '/usr/bin/gh pr view 1',
   ])('saves only the complete command for a wrapper or network client: %s', async command => {
     const scan = await scanShell(command, place.workingDirectory, place.roots);
@@ -141,6 +138,17 @@ describe('everySessionRules', () => {
       }).decision
     ).toBeNull();
   });
+
+  it.each(['"env" curl -s http://localhost:3000', '"curl" http://localhost:3000', '"gh" pr view 1'])(
+    'saves no rule for a quoted program word: %s',
+    async command => {
+      const scan = await scanShell(command, place.workingDirectory, place.roots);
+      if (!scan) throw new Error('Expected the regression command to parse');
+      expect(scan.unread).toBe(true);
+      const prompt = shellPrompt(scan.commands.map(entry => ({ ...entry, pattern: entry.always })));
+      expect(rulesFor('bash_execute', { command }, prompt)).toEqual([]);
+    }
+  );
 
   it.each([
     'node -e "fetch(1)"',

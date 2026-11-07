@@ -440,6 +440,330 @@ describe('PermissionRuleSet', () => {
     expect(decide(set, bash)).toBe('allow');
   });
 
+  describe('a shell command beside a protected folder inside the shared one', () => {
+    let base: string;
+    let directory: string;
+    const allow = [
+      'Bash(rm:*)',
+      'Bash(mv:*)',
+      'Bash(ln:*)',
+      'Bash(unlink:*)',
+      'Bash(cat:*)',
+      'Bash(ls:*)',
+      'Bash(echo:*)',
+      'Bash(git commit:*)',
+    ];
+
+    beforeEach(async () => {
+      base = await realpath(await mkdtemp(join(tmpdir(), 'permission-shell-')));
+      directory = join(base, 'dir');
+      await mkdir(join(directory, 'app-data'), { recursive: true });
+      await mkdir(join(directory, 'src'));
+      await writeFile(join(directory, 'payload'), '{}');
+      await writeFile(join(directory, 'app-data', 'file'), '{}');
+      await symlink(join(directory, 'payload'), join(directory, 'app-data', 'lnk'));
+    });
+
+    afterEach(async () => {
+      await rm(base, { recursive: true, force: true });
+    });
+
+    const decideScript = async (script: string, cwd = directory): Promise<string | null> => {
+      const scan = await scanShell(script, cwd, [directory]);
+      if (!scan) throw new Error(`Expected ${script} to parse`);
+      return decide(set({ allow }, [join(directory, 'app-data')]), {
+        tool: 'bash_execute',
+        shell: { script, ...scan },
+      });
+    };
+
+    it.each(['rm app-data/file', 'rm app-data/sub/../file'])('asks for %s', async script => {
+      expect(await decideScript(script)).toBeNull();
+    });
+
+    it.each(['rm app-data/lnk', 'mv app-data/lnk moved', 'ln -sf payload app-data/lnk', 'unlink app-data/lnk'])(
+      'asks for %s, which acts on the link inside the protected folder',
+      async script => {
+        expect(await decideScript(script)).toBeNull();
+      }
+    );
+
+    it.each(['rm app-d?ta/file', 'rm app-*/file', 'rm */file', 'rm -r app-d*', 'cat app-d?ta/file'])(
+      'asks for %s, whose glob may reach the protected folder',
+      async script => {
+        expect(await decideScript(script)).toBeNull();
+      }
+    );
+
+    it.each([
+      'rm "$PWD/app-data/file"',
+      'rm `pwd`/app-data/file',
+      'X=app-data; rm $X/file',
+      'cd "$PWD/app-data" && rm file',
+      'cat < "$PWD/app-data/file"',
+    ])('asks for %s, whose operand a variable or substitution decides', async script => {
+      expect(await decideScript(script)).toBeNull();
+    });
+
+    it.each(['rm payload', 'rm src/x.ts', 'ls src/*.ts', 'cat "app-d?ta/file"', "cat '$x'", 'mv payload src/moved'])(
+      'still allows %s',
+      async script => {
+        expect(await decideScript(script)).toBe('allow');
+      }
+    );
+
+    it.each([
+      'rm "$PWD/../app-data/file"',
+      'rm $(echo ..)/app-data/file',
+      'cd "$PWD/../app-data" && rm file',
+      'cat < "$PWD/../app-data/file"',
+    ])('asks for %s from a folder that holds no protected one', async script => {
+      expect(await decideScript(script, join(directory, 'src'))).toBeNull();
+    });
+
+    describe('from a project whose .claude folder holds its settings', () => {
+      // As in production: the project's .claude is guarded by name, not listed as a protected root.
+      const fromProject = async (script: string): Promise<string | null> => {
+        const project = join(directory, 'project');
+        await mkdir(join(project, '.claude'), { recursive: true });
+        await mkdir(join(project, 'src'));
+        const scan = await scanShell(script, project, [directory]);
+        if (!scan) throw new Error(`Expected ${script} to parse`);
+        const roots = permissionProtectedLocations(
+          join(directory, 'app-data'),
+          join(base, 'home'),
+          join(base, 'managed'),
+          {
+            warn: () => {},
+          }
+        ).paths();
+        return decide(set({ allow: [...allow, 'Bash(grep:*)'] }, [...roots]), {
+          tool: 'bash_execute',
+          shell: { script, ...scan },
+        });
+      };
+
+      it.each(['echo "$X"', 'git commit -m "$(cat msg)"', 'grep "$PAT" src', 'ls *'])(
+        'still allows %s by its prefix rule',
+        async script => {
+          expect(await fromProject(script)).toBe('allow');
+        }
+      );
+
+      it.each(['rm "$X"', 'cat < "$X"', 'ls .c*'])('asks for %s', async script => {
+        expect(await fromProject(script)).toBeNull();
+      });
+    });
+
+    it.each(['git commit -m "$(cat msg)"', 'echo "$X"', 'echo hi'])(
+      'still allows %s, whose expanded argument names no path, by its prefix rule',
+      async script => {
+        expect(await decideScript(script, join(directory, 'src'))).toBe('allow');
+      }
+    );
+  });
+
+  describe('a shell command under prefix rules, with production-shaped protected locations', () => {
+    let base: string;
+    let home: string;
+    let directory: string;
+    const allow = [
+      'rm',
+      'cp',
+      'mv',
+      'ln',
+      'tee',
+      'cat',
+      'ls',
+      'echo',
+      'mkdir',
+      'touch',
+      'chmod',
+      'chown',
+      'find',
+      'grep',
+      'rg',
+      'sed',
+      'awk',
+      'dd',
+      'tar',
+      'rsync',
+      'git',
+      'head',
+      'tail',
+      'wc',
+      'sort',
+      'diff',
+      'unlink',
+      'install',
+      'du',
+      'tree',
+    ].map(program => `Bash(${program}:*)`);
+
+    beforeEach(async () => {
+      base = await realpath(await mkdtemp(join(tmpdir(), 'permission-review-')));
+      home = join(base, 'home');
+      directory = join(base, 'dir');
+      await mkdir(join(home, '.claude'), { recursive: true });
+      await mkdir(join(home, '.config', 'App'), { recursive: true });
+      await mkdir(join(home, 'proj', 'src'), { recursive: true });
+      await mkdir(join(directory, 'app-data'), { recursive: true });
+      await mkdir(join(directory, 'outside'), { recursive: true });
+      await mkdir(join(directory, 'src'), { recursive: true });
+      await mkdir(join(directory, 'stage'), { recursive: true });
+      await mkdir(join(directory, 'project', '.claude'), { recursive: true });
+      await mkdir(join(directory, 'project', 'src'), { recursive: true });
+      await writeFile(join(directory, 'payload'), '{}');
+      await writeFile(join(directory, 'app-data', 'file'), '{}');
+      await writeFile(join(directory, 'outside', 'vault'), '{}');
+      await writeFile(join(directory, 'project', '.claude', 'settings.local.json'), '{}');
+      vi.stubEnv('HOME', home);
+    });
+
+    afterEach(async () => {
+      vi.unstubAllEnvs();
+      await rm(base, { recursive: true, force: true });
+    });
+
+    /** The decision for `script` run in `cwd` with `userData` as the app's folder; the project's .claude is no root. */
+    const decideIn = async (
+      script: string,
+      cwd: string,
+      userData: string,
+      shared: readonly string[] = [directory]
+    ): Promise<string | null> => {
+      const scan = await scanShell(script, cwd, shared);
+      if (!scan) throw new Error(`Expected ${script} to parse`);
+      const roots = permissionProtectedLocations(userData, home, join(base, 'managed'), { warn: () => {} }).paths();
+      return decide(set({ allow }, [...roots]), { tool: 'bash_execute', shell: { script, ...scan } });
+    };
+    const fromShared = (script: string) => decideIn(script, directory, join(directory, 'app-data'));
+    const fromProject = (script: string) => decideIn(script, join(directory, 'project'), join(directory, 'app-data'));
+    const fromHome = (script: string) => decideIn(script, join(home, 'proj'), join(home, '.config', 'App'), [home]);
+
+    it.each([
+      'cp ../payload .c*/settings.local.json',
+      'tee .c*/settings.local.json < x',
+      'mv x .clau?e/settings.local.json',
+      'cp x .[c]laude/settings.local.json',
+      'rm .c*/settings.local.json',
+      'ln -s .c* l && cp x l/settings.local.json',
+      'rm -rf .',
+      'chmod -R 777 .',
+      'rsync -a ../stage/ ./',
+      'find . -name settings.local.json -delete',
+    ])('asks for %s, which reaches the project settings', async script => {
+      expect(await fromProject(script)).toBeNull();
+    });
+
+    it.each([
+      'rsync -a stage/ "$HOME"/',
+      'tar -C "$HOME"/.config/App -xf evil.tar',
+      'dd if=x of="$HOME"/.config/App/f',
+      'sed -i s/a/b/ "$HOME"/.config/App/f',
+      'grep -r x "$HOME"/.config/App',
+      'tar -C "$X" -xf x',
+    ])('asks for %s, whose expanded operand is a path', async script => {
+      expect(await fromHome(script)).toBeNull();
+    });
+
+    it.each(['sed -n p "$PWD"/../outside/vault', 'awk 1 ${PWD%/*}/outside/vault'])(
+      'asks for %s, which reads a protected folder through the working folder',
+      async script => {
+        expect(await decideIn(script, join(directory, 'src'), join(directory, 'outside'))).toBeNull();
+      }
+    );
+
+    it.each([
+      "cp x '.cl'aude/settings.local.json",
+      'cp x .cl""aude/settings.local.json',
+      'cp x .cl{a..a}ude/settings.local.json',
+      'echo x | tee .cl{a,}ude/settings.local.json',
+      "rm 'app'-data/file",
+      'rm app\\-data/file',
+      "git -C 'app'-data clean -fdx",
+      "rsync src/ 'app'-data/",
+      "dd of='app'-data/f",
+      "cat < 'app'-data/file",
+      'mkdir app-d{a,}ta/x',
+    ])('asks for %s, whose quoted, escaped or braced operand names a protected path', async script => {
+      expect(await fromShared(script)).toBeNull();
+    });
+
+    it.each(['ln -s app-data ../l6 && cp ../payload ../l6/file', 'ln -s app-data ../l6 && rm -rf ../l6/'])(
+      'asks for %s, which writes through a link it made',
+      async script => {
+        expect(await decideIn(script, join(directory, 'src'), join(directory, 'app-data'))).toBeNull();
+      }
+    );
+
+    it.each(['sed -i s/a/b/ ~+/app-data/file', 'cd src && sed -i s/a/b/ ~-/app-data/file'])(
+      'asks for %s, whose ~+ or ~- names a working folder',
+      async script => {
+        expect(await fromShared(script)).toBeNull();
+      }
+    );
+
+    it.each([
+      'find . -delete',
+      'find . -name file -delete',
+      'chmod -R 777 .',
+      'mv .. /tmp/x',
+      'grep -r x .',
+      'cd src && chmod -R 777 ..',
+    ])('asks for %s, which acts on a tree holding a protected folder', async script => {
+      expect(await fromShared(script)).toBeNull();
+    });
+
+    it.each([
+      `awk '{print > "out"}' x`,
+      `awk '{print | "sh"}' x`,
+      `awk 'BEGIN {system("id")}'`,
+      "sed -n 'w out' x",
+      "sed 's/a/b/w out' x",
+      "sed '1e id' x",
+      'sed -s p x',
+      'sed -f script.sed x',
+      'sed "$S" x',
+    ])('asks for %s, whose script writes, runs or cannot be read', async script => {
+      expect(await fromProject(script)).toBeNull();
+    });
+
+    it.each([
+      'echo "$X"',
+      'git commit -m "$(cat msg)"',
+      'grep "$PAT" src',
+      'git diff "$BASE"...HEAD',
+      'ls *',
+      'ls *.ts',
+      'rm -f *.log',
+      'mkdir -p src/{a,b}',
+      'rm -rf src/x',
+      'cp -r src/ out/',
+      'grep -rn foo src',
+      'grep -r x .',
+      "find src -name '*.ts'",
+      "cat 'src'/x",
+      'sed -n 1,5p src/x',
+      "sed -i 's/a/b/g' src/x",
+      `awk '{print $1}' src/x`,
+      `awk '$1 > 5' src/x`,
+    ])('still allows %s from the project', async script => {
+      expect(await fromProject(script)).toBe('allow');
+    });
+
+    it.each(['ls *', 'rm -f *.log', 'ls *.ts', 'cat ~/proj/src/x'])('still allows %s from home', async script => {
+      expect(await decideIn(script, home, join(home, '.config', 'App'), [home])).toBe('allow');
+    });
+
+    it.each(['ls .*', 'rm -rf .c*', 'cat ~/.c*/App/x'])(
+      'asks for %s from home, which may reach a dot folder',
+      async script => {
+        expect(await decideIn(script, home, join(home, '.config', 'App'), [home])).toBeNull();
+      }
+    );
+  });
+
   describe('when a path cannot be resolved', () => {
     let base: string;
     let rules: PermissionRuleSet;

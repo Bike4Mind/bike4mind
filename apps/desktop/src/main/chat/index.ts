@@ -763,6 +763,9 @@ export function registerChat(
     get unresolvedProtectedPaths() {
       return toolProtected.unresolved();
     },
+    get uncoverablePaths() {
+      return permissionProtected.paths();
+    },
     get deferredTools() {
       return deferredTools.current();
     },

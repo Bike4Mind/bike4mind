@@ -4,9 +4,16 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { BackgroundProcessInfo } from '@shared/chat';
 import type { OutputStream } from './outputBuffer';
-import { isWithin, realpathNearest, resolveWithinRoots } from './paths';
+import { guardForm, isWithin, realpathNearest, resolveWithinRoots, withinGuarded } from './paths';
 import { writesOwnRepository } from './ownRepository';
-import { inUngrantedDistro, scanShell, SYSTEM_DISTRO, UNNAMED_DISTRO, WSL_MANAGEMENT } from './shellScan';
+import {
+  inUngrantedDistro,
+  scanShell,
+  SYSTEM_DISTRO,
+  UNNAMED_DISTRO,
+  WSL_MANAGEMENT,
+  type ShellScan,
+} from './shellScan';
 import {
   expectShellRun,
   gitRunsConfiguredProgram,
@@ -17,7 +24,8 @@ import {
 } from './sessionScripts';
 import { commandEnv, launchCommand, spawnsDetached } from './commandLaunch';
 import { commandExit, signalCommandTree } from './commandTree';
-import type { SandboxedCommand } from './sandbox';
+import { protectionFor, secretPaths, type SandboxedCommand } from './sandbox';
+import { folderReaches, shellReachesProtected } from '../permissions/rules';
 import { shownPath, wslLocation } from '../../wsl/wslPath';
 import {
   capOutputMiddle,
@@ -388,6 +396,55 @@ export async function resolveCwd(
   return roots[0];
 }
 
+const CLAUDE_FOLDER = /[\\/]\.claude[\\/]*$/i;
+const CLAUDE_SETTINGS_NAME = /[\\/]\.claude[\\/]settings[^\\/]*$/i;
+
+/** Whether a folder the scan reaches whole holds or lies in one of `guarded`. */
+function foldersReach(scan: ShellScan, guarded: readonly string[]): boolean {
+  const roots = guarded.map(path => guardForm(path));
+  const reached = (folder: string, dotless: boolean): boolean =>
+    roots.some(root => folderReaches(guardForm(folder), root, dotless));
+  return (
+    [...(scan.globFolders ?? []), ...scan.writtenTrees].some(folder => reached(folder, false)) ||
+    (scan.dotlessGlobFolders ?? []).some(folder => reached(folder, true))
+  );
+}
+
+/**
+ * Whether a scanned command reaches a protected location: the app's own folders, a path the file tools
+ * refuse to write (sandbox.ts `protectionFor`), a write that replaces a whole `.claude` folder, or anything
+ * the permission rules' protected floor refuses (rules.ts `shellReachesProtected`). As with the file tools,
+ * a script that only reads may read project settings unasked.
+ */
+function reachesProtected(
+  command: string,
+  scan: ShellScan,
+  protectedPaths: readonly string[],
+  permissionPaths: readonly string[]
+): boolean {
+  const named = [...(scan.paths ?? []), ...scan.writes].filter(
+    path => !scan.readOnly || !CLAUDE_SETTINGS_NAME.test(path)
+  );
+  const guarded = [...protectedPaths, ...permissionPaths];
+  // The scan names a `.claude` folder itself when a write reaches it whole (`cp x .claude`, `find . -delete`).
+  const replaced = [...scan.writes, ...scan.writtenTrees, ...(scan.readOnly ? [] : (scan.paths ?? []))];
+  return (
+    named.some(path => withinGuarded(guarded, [path]) || protectionFor([path], 'write') !== undefined) ||
+    replaced.some(path => CLAUDE_FOLDER.test(path)) ||
+    foldersReach(scan, guarded) ||
+    shellReachesProtected({ script: command, ...scan, paths: named }, guarded)
+  );
+}
+
+/** Whether a command may read what no tool reads in any mode: the app's own data or a secret store (sandbox.ts). */
+function readsSecret(scan: ShellScan, protectedPaths: readonly string[]): boolean {
+  const named = [...(scan.paths ?? []), ...scan.writes];
+  return (
+    named.some(path => withinGuarded(protectedPaths, [path]) || protectionFor([path], 'read') !== undefined) ||
+    foldersReach(scan, [...protectedPaths, ...secretPaths()])
+  );
+}
+
 /**
  * The prompt for a shell command, shared by bash_execute and bash_background.
  *
@@ -440,7 +497,11 @@ export async function shellApproval(
     scriptCheckFailed = true;
     return null;
   });
-  const gitProgram = gitRunsConfiguredProgram(scan.commands);
+  const gitProgram = gitRunsConfiguredProgram(scan.commands) ?? scan.gitProgram ?? null;
+  const protectedPaths = context.protectedPaths ?? [];
+  const touchesProtected = reachesProtected(command, scan, protectedPaths, context.uncoverablePaths ?? []);
+  const secret = readsSecret(scan, protectedPaths);
+  const writesWhileUnresolved = (context.unresolvedProtectedPaths?.length ?? 0) > 0 && !scan.readOnly;
   const unreachable = [...new Set([...ungranted, ...scan.ungranted])];
   const named = unreachable.filter(
     place => place !== UNNAMED_DISTRO && place !== SYSTEM_DISTRO && place !== WSL_MANAGEMENT
@@ -460,6 +521,16 @@ export async function shellApproval(
       ? ['Runs git in a repository whose .git or .husky folder was changed in this session.']
       : []),
     ...(gitProgram ? [`Sets ${gitProgram}, which makes git run a program.`] : []),
+    ...(scan.remoteTree ? ['Clones a repository from another computer, whose files cannot be checked first.'] : []),
+    ...(touchesProtected || secret
+      ? ['Reaches a location Desktop protects, such as its own data or permission and hook settings.']
+      : []),
+    ...(scan.unread
+      ? ['Runs a program or builds a path that Desktop cannot follow, so where it acts cannot be checked.']
+      : []),
+    ...(writesWhileUnresolved
+      ? ['May write while Desktop cannot resolve a protected folder, so where it writes cannot be checked.']
+      : []),
     ...(named.length > 0
       ? [`Reaches ${named.map(shownPath).join(', ')}, in a WSL distro this project has no folder in.`]
       : []),
@@ -488,7 +559,13 @@ export async function shellApproval(
     !!script ||
     scriptCheckFailed ||
     !!gitProgram ||
-    unreachable.length > 0;
+    scan.remoteTree === true ||
+    unreachable.length > 0 ||
+    touchesProtected ||
+    secret ||
+    scan.unread === true ||
+    writesWhileUnresolved;
+  const asksInFull = (touchesProtected && !scan.readOnly) || scan.unread === true || secret || writesWhileUnresolved;
   // An exact "always" for the run lapses when the script is written again.
   const runKey = script ? `${key}\x00${script.generation}` : scriptCheckFailed ? `${key}\x00unchecked` : key;
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
@@ -496,6 +573,8 @@ export async function shellApproval(
     detail: [detail, ...reasons].join('\n\n'),
     key: runKey,
     ...(asks ? { askInAuto: true as const } : {}),
+    // The file tools refuse these writes, and reads of secrets, in every mode, so 'full' stops for them too.
+    ...(asksInFull ? { askInFull: true as const } : {}),
     ...(scriptCheckFailed ? { allowOnce: true as const } : {}),
     ...(scan.contained ? { contained: true as const } : {}),
     always: {
@@ -509,6 +588,10 @@ export async function shellApproval(
       })),
       directories: [...new Set([...directories, ...outside])],
       paths: scan.paths ?? [],
+      ...(scan.globFolders ? { globFolders: scan.globFolders } : {}),
+      ...(scan.dotlessGlobFolders ? { dotlessGlobFolders: scan.dotlessGlobFolders } : {}),
+      writes: scan.writes,
+      writtenTrees: scan.writtenTrees,
       ungranted: unreachable,
     },
   };
@@ -518,7 +601,7 @@ export async function shellApproval(
 export const UNREAD_WSL_COMMAND = 'a WSL distro this command may reach, which the scan could not read';
 
 /**
- * The prompt for a command the scan could not read. It asks in auto mode, and when the command
+ * The prompt for a command the scan could not read. It asks in auto and full mode, and when the command
  * may reach a WSL distro - it names wsl or a share, or runs in or beside a WSL folder - it also
  * carries `ungranted`, so no rule or saved answer covers it: what it reaches was never checked.
  */
@@ -532,7 +615,7 @@ function unreadApproval(
 ): ApprovalPrompt {
   const namesDistro = process.platform === 'win32' && /wsl|\\\\|\/\//i.test(command);
   const mayReachDistro = ungranted.length > 0 || namesDistro || places.some(place => wslLocation(place) !== null);
-  if (!mayReachDistro) return { detail, key, askInAuto: true };
+  if (!mayReachDistro) return { detail, key, askInAuto: true, askInFull: true };
   return {
     detail: [
       detail,
@@ -540,6 +623,7 @@ function unreadApproval(
     ].join('\n\n'),
     key,
     askInAuto: true,
+    askInFull: true,
     always: {
       namespace: tool,
       commands: [{ text: command, pattern: command, coverable: false, words: command }],

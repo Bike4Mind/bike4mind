@@ -64,6 +64,7 @@ describe('scanShell writes', () => {
     ['xz -dk a.tar.xz', ['a.tar']],
     ['zstd -d a.zst -o out.sh', ['out.sh']],
     ['git apply fix.diff', ['x.sh']],
+    ['git apply --cached fix.diff', ['x.sh']],
     ['cd repo/sub && git apply ../fix.diff', ['repo/sub/x.sh']],
     ['rsync -a src.sh bin/', ['bin', 'bin/src.sh']],
     ['scp host:/tmp/a.sh a.sh', ['a.sh']],
@@ -94,7 +95,7 @@ describe('scanShell writes', () => {
     ['unzip -o a.zip -d bin', ['bin']],
     ['unzip -q a.zip run.sh -x docs/*', ['run.sh']],
     ['7z x a.7z -obin', ['bin']],
-    ['cpio -idv < a.cpio', ['.']],
+    ['cpio -idv --no-absolute-filenames < a.cpio', ['.']],
     ['patch -p1 < missing.diff', ['.']],
     ['cat fix.diff | patch -p1', ['.']],
     ['git checkout -- bin', ['bin']],
@@ -107,6 +108,16 @@ describe('scanShell writes', () => {
     ['rsync -a src/ out/', ['out']],
   ])('records the folder %s may rewrite', async (command, expected) => {
     expect(await trees(command)).toEqual(expected.map(path => join(root, path)));
+  });
+
+  it.each([
+    'tar -xPf a.tar -C bin',
+    'tar --absolute-names -xf a.tar',
+    'unzip -: a.zip',
+    'cpio -idv < a.cpio',
+    '7z x -spf a.7z',
+  ])('records the whole filesystem for %s, whose members keep absolute and parent names', async command => {
+    expect(await trees(command)).toEqual(['/']);
   });
 
   it.each([
@@ -137,9 +148,6 @@ describe('scanShell writes', () => {
     'git config user.email',
     'git config --get user.email',
     'npm pkg get name',
-    'curl -O https://example.com/a',
-    'curl --output-dir d -O https://example.com/a',
-    'curl -sSLO https://example.com/a',
     "sed 's/a/b/' a.sh",
     "sed -n '/x/p' a.sh",
     "perl -pe 's/a/b/' a.sh",
@@ -149,7 +157,6 @@ describe('scanShell writes', () => {
     'gzip -dc a.sh.gz',
     'patch --dry-run -p1 < fix.diff',
     'git apply --check fix.diff',
-    'git apply --cached fix.diff',
     'tar -xOf a.tar run.sh',
   ])('records nothing for %s', async command => {
     expect(await writes(command)).toEqual([]);
@@ -164,6 +171,14 @@ describe('scanShell writes', () => {
     ["perl -pie 's/a/b/' a.txt", ['a.txt']],
     ["gawk -iinplace '{print}' a.sh", ['a.sh']],
   ])('records only the edited files for %s, not the program', async (command, expected) => {
+    expect(await writes(command)).toEqual(expected.map(path => join(root, path)));
+  });
+
+  it.each([
+    ['curl -O https://example.com/a', ['a']],
+    ['curl --output-dir d -O https://example.com/a', ['d/a']],
+    ['curl -sSLO https://example.com/a?x=1', ['a']],
+  ])('records the file curl names from the URL for %s', async (command, expected) => {
     expect(await writes(command)).toEqual(expected.map(path => join(root, path)));
   });
 });
