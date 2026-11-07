@@ -1,13 +1,17 @@
 import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 import { ModelBackend } from '@bike4mind/common';
+import { resolveEmbeddingCredentials, resolveEmbeddingWithKeylessFallback, type EmbeddingKeyTable } from './runtime';
+import { OPENAI_KEY_MISSING_MESSAGE, VOYAGE_KEY_MISSING_MESSAGE } from '@bike4mind/fab-pipeline';
 import {
-  resolveEmbeddingConfig,
-  resolveEmbeddingWithKeylessFallback,
-  type EmbeddingKeyTable,
-} from './resolveEmbeddingConfig';
-import { getProviderFromModel } from './getProviderFromModel';
+  bindEmbeddingModel,
+  buildEmbeddingRegistry,
+  embeddingBackendForModel,
+  getDefaultEmbeddingModel,
+  getEmbeddingProviderRegistry,
+} from './runtime';
 import {
   BedrockEmbeddingModel,
+  defaultEmbeddingModelForEnv,
   OllamaEmbeddingModel,
   OpenAIEmbeddingModel,
   VoyageAIEmbeddingModel,
@@ -15,7 +19,7 @@ import {
 
 const FULL: EmbeddingKeyTable = { openai: 'sk-test', voyageai: 'pa-test', ollama: 'http://localhost:11434' };
 
-describe('resolveEmbeddingConfig', () => {
+describe('resolveEmbeddingCredentials', () => {
   // Every provider against a table that has its credential and one that does not.
   // Exhaustive on purpose: adding a provider should fail here rather than at a call site.
   describe.each([
@@ -39,13 +43,13 @@ describe('resolveEmbeddingConfig', () => {
     },
   ])('$provider (keyed)', ({ provider, configKey, value, credential }) => {
     it('sets only its own config field when the credential is present', () => {
-      const { config, missing } = resolveEmbeddingConfig(provider, FULL);
+      const { config, missing } = resolveEmbeddingCredentials(provider, FULL);
       expect(missing).toBeNull();
       expect(config).toEqual({ [configKey]: value });
     });
 
     it('reports the missing credential and leaves the config empty when absent', () => {
-      const { config, missing } = resolveEmbeddingConfig(provider, { ...FULL, [credential]: undefined });
+      const { config, missing } = resolveEmbeddingCredentials(provider, { ...FULL, [credential]: undefined });
       expect(missing).toBe(credential);
       expect(config).toEqual({});
     });
@@ -54,7 +58,7 @@ describe('resolveEmbeddingConfig', () => {
       ['empty string', ''],
       ['null', null],
     ])('treats a %s credential as missing, not as usable', (_label, empty) => {
-      const { config, missing } = resolveEmbeddingConfig(provider, { ...FULL, [credential]: empty });
+      const { config, missing } = resolveEmbeddingCredentials(provider, { ...FULL, [credential]: empty });
       expect(missing).toBe(credential);
       expect(config).toEqual({});
     });
@@ -69,7 +73,7 @@ describe('resolveEmbeddingConfig', () => {
     { provider: ModelBackend.VoyageAI, credential: 'voyageai' as const },
   ])('$provider expired sentinel', ({ provider, credential }) => {
     it("treats the 'expired' sentinel as missing, not as a usable key", () => {
-      const { config, missing } = resolveEmbeddingConfig(provider, { ...FULL, [credential]: 'expired' });
+      const { config, missing } = resolveEmbeddingCredentials(provider, { ...FULL, [credential]: 'expired' });
       expect(missing).toBe(credential);
       expect(config).toEqual({});
     });
@@ -81,21 +85,21 @@ describe('resolveEmbeddingConfig', () => {
   // "no credentials available" and skipped embedding.
   describe('Bedrock (keyless)', () => {
     it('is ready with an empty config and never reports a missing credential', () => {
-      const { config, missing } = resolveEmbeddingConfig(ModelBackend.Bedrock, FULL);
+      const { config, missing } = resolveEmbeddingCredentials(ModelBackend.Bedrock, FULL);
       expect(missing).toBeNull();
       expect(config).toEqual({});
     });
 
     it('stays ready when no key table exists at all', () => {
       for (const table of [null, undefined, {}]) {
-        const { config, missing } = resolveEmbeddingConfig(ModelBackend.Bedrock, table);
+        const { config, missing } = resolveEmbeddingCredentials(ModelBackend.Bedrock, table);
         expect(missing).toBeNull();
         expect(config).toEqual({});
       }
     });
 
     it('does not borrow another provider credential that happens to be present', () => {
-      const { config } = resolveEmbeddingConfig(ModelBackend.Bedrock, FULL);
+      const { config } = resolveEmbeddingCredentials(ModelBackend.Bedrock, FULL);
       expect(config.openaiApiKey).toBeUndefined();
       expect(config.voyageApiKey).toBeUndefined();
       expect(config.ollamaBaseUrl).toBeUndefined();
@@ -109,7 +113,7 @@ describe('resolveEmbeddingConfig', () => {
       [ModelBackend.Ollama, 'ollama'],
     ])('reports %s as missing rather than throwing', (provider, credential) => {
       for (const table of [null, undefined]) {
-        expect(resolveEmbeddingConfig(provider, table)).toEqual({ config: {}, missing: credential });
+        expect(resolveEmbeddingCredentials(provider, table)).toEqual({ config: {}, missing: credential });
       }
     });
   });
@@ -117,15 +121,15 @@ describe('resolveEmbeddingConfig', () => {
   // Guards the seam this helper sits on: a model id must resolve to a provider this
   // function handles. A new provider reaching only one of the two is the defect that
   // produced the original bug.
-  describe('composes with getProviderFromModel', () => {
+  describe('composes with embeddingBackendForModel', () => {
     it.each([
       [OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL, false],
       [BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2, true],
       [OllamaEmbeddingModel.NOMIC_EMBED_TEXT, false],
       ['voyage-3', false],
     ] as Array<[string, boolean]>)('%s resolves to a handled provider', (model, expectKeyless) => {
-      const provider = getProviderFromModel(model);
-      const { missing, config } = resolveEmbeddingConfig(provider, FULL);
+      const provider = embeddingBackendForModel(model);
+      const { missing, config } = resolveEmbeddingCredentials(provider, FULL);
       expect(missing).toBeNull();
       // Only the keyless provider ends up with nothing to pass the factory.
       expect(Object.keys(config)).toHaveLength(expectKeyless ? 0 : 1);
@@ -222,5 +226,95 @@ describe('resolveEmbeddingWithKeylessFallback', () => {
   it('is a no-op for a model that already needs no credential', () => {
     const r = resolveEmbeddingWithKeylessFallback(BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2, null);
     expect(r).toEqual({ config: {}, missing: null, model: BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2 });
+  });
+});
+
+describe('catalog-backed runtime routing', () => {
+  it.each(['unknown-model', 'constructor', '__proto__'])(
+    'rejects unknown model %s before provider selection',
+    model => {
+      expect(() => embeddingBackendForModel(model)).toThrow(`Unknown embedding model: ${model}`);
+    }
+  );
+});
+
+describe('getDefaultEmbeddingModel', () => {
+  it('skips a placeholder OpenAI key and falls through to the next provider', () => {
+    expect(
+      getDefaultEmbeddingModel({ openaiApiKey: 'sk-oai-dummy-routing-test', ollamaBaseUrl: 'http://localhost:11434' })
+    ).toBe(OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B);
+  });
+
+  it('returns the local default embedder when only Ollama is configured', () => {
+    expect(getDefaultEmbeddingModel({ ollamaBaseUrl: 'http://localhost:11434' })).toBe(
+      OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B
+    );
+  });
+
+  // Must equal the admin-setting default, or the attached-file query embeds in a different space than the corpus
+  // and RAG silently returns nothing on keyless self-host.
+  it('agrees with defaultEmbeddingModelForEnv on keyless self-host', () => {
+    const saved = {
+      B4M_SELF_HOST: process.env.B4M_SELF_HOST,
+      OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    };
+    try {
+      process.env.B4M_SELF_HOST = 'true';
+      process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
+      delete process.env.OPENAI_API_KEY;
+      const model = getDefaultEmbeddingModel({ ollamaBaseUrl: 'http://localhost:11434' });
+      expect(model).toBe(defaultEmbeddingModelForEnv());
+      expect(model).toBe(OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
+});
+
+describe('bindEmbeddingModel', () => {
+  const registry = buildEmbeddingRegistry({ openaiApiKey: 'sk-oai-dummy-routing-test' }, { includeBedrock: false });
+
+  it.each([
+    [OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002, OPENAI_KEY_MISSING_MESSAGE],
+    [VoyageAIEmbeddingModel.VOYAGE_3, VOYAGE_KEY_MISSING_MESSAGE],
+  ])('throws the actionable key-missing message when %s has no usable key', (model, message) => {
+    expect(() => bindEmbeddingModel(registry, model)).toThrow(message);
+  });
+
+  it('keeps the generic message for a provider without a key-missing message', () => {
+    expect(() => bindEmbeddingModel(registry, OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B)).toThrow(
+      /Embedding provider ollama is not configured/
+    );
+  });
+});
+
+describe('getEmbeddingProviderRegistry', () => {
+  const saved = {
+    B4M_SELF_HOST: process.env.B4M_SELF_HOST,
+    AWS_LAMBDA_FUNCTION_NAME: process.env.AWS_LAMBDA_FUNCTION_NAME,
+  };
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  it('offers Bedrock on a hosted stage that has a keyless cloud embedder', () => {
+    delete process.env.B4M_SELF_HOST;
+    process.env.AWS_LAMBDA_FUNCTION_NAME = 'some-stage-web';
+    expect(getEmbeddingProviderRegistry({}).ids()).toContain('bedrock');
+  });
+
+  it('leaves Bedrock out on self-host, where no keyless embedder exists', () => {
+    process.env.B4M_SELF_HOST = 'true';
+    process.env.AWS_LAMBDA_FUNCTION_NAME = 'some-stage-web';
+    const registry = getEmbeddingProviderRegistry({ openai: 'sk-test' });
+    expect(registry.ids()).not.toContain('bedrock');
+    expect(registry.ids()).toContain('openai');
   });
 });

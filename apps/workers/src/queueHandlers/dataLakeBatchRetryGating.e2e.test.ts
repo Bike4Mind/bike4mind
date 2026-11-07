@@ -1,3 +1,16 @@
+vi.mock('@bike4mind/utils/embeddingProviders', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils/embeddingProviders')>()),
+  buildEmbeddingRegistry: vi.fn(() => ({})),
+  embeddingBackendForModel: vi.fn(() => 'openai'),
+  resolveEmbeddingCredentials: vi.fn(() => ({ config: {}, missing: null })),
+  resolveEmbeddingWithKeylessFallback: vi.fn((model: string) => ({ config: {}, missing: null, model })),
+
+  bindEmbeddingModel: (_registry: unknown, model: string) => ({
+    model,
+    maxInputTokens: 1000,
+    embed: async (inputs: readonly string[]) => ({ vectors: await Promise.all(inputs.map(text => h.getVector(text))) }),
+  }),
+}));
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
@@ -63,16 +76,6 @@ vi.mock('@bike4mind/services', async importOriginal => {
 });
 vi.mock('@bike4mind/fab-pipeline', () => ({
   ChunkSchema: z.object({}).passthrough(),
-  EmbeddingFactory: class {
-    createEmbeddingService() {
-      return { getModelInfo: () => ({ contextWindow: 1000 }) };
-    }
-  },
-  getProviderFromModel: vi.fn(() => 'openai'),
-  resolveEmbeddingConfig: vi.fn(() => ({ config: {}, missing: null })),
-  // Echoes the requested model back: these suites are about retry/recovery bookkeeping, not
-  // about the keyless fallback, so the handler must stamp exactly what the payload asked for.
-  resolveEmbeddingWithKeylessFallback: vi.fn((model: unknown) => ({ config: {}, missing: null, model })),
   // Mirror the real name-based guard so the failure branch classifies a plain Error correctly.
   isEmbeddingAuthError: (e: unknown) => e instanceof Error && e.name === 'EmbeddingAuthError',
   // The embedding-space guard (#2791) runs on every vectorize message, so both its export and

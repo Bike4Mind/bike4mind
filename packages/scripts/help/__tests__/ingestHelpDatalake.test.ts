@@ -1,3 +1,11 @@
+vi.mock('@bike4mind/utils/embeddingProviders', () => ({
+  buildEmbeddingRegistry: vi.fn(),
+  bindEmbeddingModel: vi.fn(),
+  embedOne: vi.fn(),
+  embeddingBackendForModel: vi.fn(),
+  resolveEmbeddingCredentials: vi.fn(),
+  resolveEmbeddingWithKeylessFallback: vi.fn(),
+}));
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -9,17 +17,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // off), so a real import here fails to resolve and the whole file errors at collection.
 // Same fix, same reason as vectorize-help-content.test.ts.
 //
-// The fab-pipeline symbols are only used by the module's own embedding-service builder,
+// The provider helpers are only used by the module's own embedding builder,
 // which these tests bypass via injected `deps.embed`. countCodePoints is mirrored rather
 // than stubbed because chunk charLength is derived from it.
 vi.mock('@bike4mind/common', () => ({
   countCodePoints: (text: string) => [...text].length,
   KnowledgeType: { TEXT: 'TEXT' },
-}));
-vi.mock('@bike4mind/fab-pipeline', () => ({
-  EmbeddingFactory: vi.fn(),
-  getProviderFromModel: vi.fn(),
-  resolveEmbeddingConfig: vi.fn(),
 }));
 
 import {

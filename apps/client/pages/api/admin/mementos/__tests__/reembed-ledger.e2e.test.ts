@@ -18,15 +18,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 // Everything below the provider is real: Mongo, the repository, the keyring, the cipher and the
 // service. Only the paid embedding call and the auth middleware are stood in.
 const generateEmbedding = vi.fn(async (text: string) => Array.from({ length: 1536 }, (_, i) => (i + text.length) % 7));
-vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
-  ...(await importOriginal<typeof import('@bike4mind/fab-pipeline')>()),
-  resolveEmbeddingConfig: () => ({ config: {}, missing: undefined }),
-  EmbeddingFactory: class {
-    createEmbeddingService() {
-      return { generateEmbedding };
-    }
-  },
-}));
+
 // The owner's key lookup is the first step of building the embedding service.
 const getEffectiveLLMApiKeys = vi.fn(async (): Promise<Record<string, string>> => ({}));
 vi.mock('@bike4mind/services', async importOriginal => {
@@ -225,3 +217,16 @@ describe('POST /api/admin/mementos/reembed-ledger against a real ledger', () => 
     expect(again).toMatchObject({ processedPrincipals: 1, backfilled: 1, embedderUnavailable: 0 });
   });
 });
+
+vi.mock('@bike4mind/utils/embeddingProviders', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils/embeddingProviders')>()),
+  resolveEmbeddingCredentials: () => ({ config: {}, missing: null }),
+  buildEmbeddingRegistry: vi.fn(() => ({})),
+  bindEmbeddingModel: (_registry: unknown, model: string) => ({
+    model,
+    maxInputTokens: 8192,
+    embed: async (inputs: readonly string[]) => ({
+      vectors: await Promise.all(inputs.map(text => generateEmbedding(text))),
+    }),
+  }),
+}));

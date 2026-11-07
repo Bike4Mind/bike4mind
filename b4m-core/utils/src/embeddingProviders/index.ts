@@ -6,3 +6,7 @@ export { OpenAIEmbeddingProvider } from './openai/OpenAIEmbeddingProvider';
 export { VoyageEmbeddingProvider } from './voyage/VoyageEmbeddingProvider';
 export { BedrockEmbeddingProvider } from './bedrock/BedrockEmbeddingProvider';
 export { OllamaEmbeddingProvider } from './ollama/OllamaEmbeddingProvider';
+
+export * from './runtime';
+
+export { GeminiEmbeddingProvider } from './gemini/GeminiEmbeddingProvider';

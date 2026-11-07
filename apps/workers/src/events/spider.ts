@@ -1,3 +1,11 @@
+import {
+  type BoundEmbeddingModel,
+  bindEmbeddingModel,
+  buildEmbeddingRegistry,
+  embedOne,
+  embeddingBackendForModel,
+  resolveEmbeddingWithKeylessFallback,
+} from '@bike4mind/utils/embeddingProviders';
 import { withEventContext } from '@workers/utils/eventContext';
 import {
   determineSessionOperations,
@@ -14,7 +22,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
+
 import crypto from 'crypto';
 import {
   ISessionDocument,
@@ -56,10 +64,6 @@ export interface SpiderStats {
   skipped: number;
 }
 
-export interface EmbeddingService {
-  generateEmbedding: (text: string) => Promise<number[]>;
-}
-
 /** Dependency-injection interface; allows mocking in tests. */
 export interface SpiderDependencies {
   sessionRepository: typeof sessionRepository;
@@ -68,13 +72,13 @@ export interface SpiderDependencies {
   publishTag: typeof SessionEvents.Tag.publish;
   sendProgress: (data: ISpiderProgressUpdateAction) => Promise<void>;
   logger: Logger;
-  embeddingService?: EmbeddingService;
+  embeddingService?: BoundEmbeddingModel;
   embeddingModel?: string;
 }
 
 async function generateEmbeddingsForSession(
   sessionId: string,
-  embeddingService: EmbeddingService,
+  embeddingService: BoundEmbeddingModel,
   embeddingModel: string,
   logger: Logger
 ): Promise<number> {
@@ -112,7 +116,7 @@ async function generateEmbeddingsForSession(
       // Hash to detect content changes on future runs
       const contentHash = crypto.createHash('md5').update(content).digest('hex');
 
-      const vector = await embeddingService.generateEmbedding(content);
+      const vector = await embedOne(embeddingService, content);
 
       await Quest.updateOne(
         { _id: message._id },
@@ -574,11 +578,11 @@ export const handler = withEventContext(async (event, logger) => {
           missing,
           model: embeddingModel,
         } = resolveEmbeddingWithKeylessFallback(defaultEmbeddingModel as SupportedEmbeddingModel, apiKeyTable);
-        const requiredProvider = getProviderFromModel(embeddingModel);
+        const requiredProvider = embeddingBackendForModel(embeddingModel);
 
         if (!missing) {
-          const embeddingFactory = new EmbeddingFactory(embeddingConfig);
-          deps.embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
+          const embeddingFactory = buildEmbeddingRegistry(embeddingConfig);
+          deps.embeddingService = bindEmbeddingModel(embeddingFactory, embeddingModel);
           deps.embeddingModel = embeddingModel;
           logger.info(`Embedding service configured with model: ${embeddingModel}`);
         } else {

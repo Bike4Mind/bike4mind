@@ -48,10 +48,9 @@ const tokenizer = {
 const warnings = () => (mockLogger.warn.mock.calls as unknown[][]).map(c => String(c[0])).join('\n');
 
 const embeddingFactory = {
-  getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
-  createEmbeddingService: () => ({
-    getModelInfo: () => ({ model: 'text-embedding-ada-002', contextWindow: 8192 }),
-    generateEmbedding: async () => [1, 0],
+  defaultModel: 'text-embedding-ada-002',
+  get: () => ({
+    embed: async () => ({ vectors: [[1, 0]] }),
   }),
 };
 

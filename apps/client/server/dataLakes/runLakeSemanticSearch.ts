@@ -20,10 +20,10 @@ import {
   scopedSettingsService,
 } from '@bike4mind/services';
 import {
-  getProviderFromModel,
-  resolveEmbeddingConfig,
+  embeddingBackendForModel,
+  resolveEmbeddingCredentials,
   resolveEmbeddingWithKeylessFallback,
-} from '@bike4mind/fab-pipeline';
+} from '@bike4mind/services/llm/embeddingProviders';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import {
   CreditHolderType,
@@ -290,7 +290,7 @@ export async function runLakeSemanticSearch(
   //     default should never present as a substitution candidate in the first place.
   const mayFallBack =
     !input.embeddingModelExplicit &&
-    getProviderFromModel(requestedEmbeddingModel) !== ModelBackend.Ollama &&
+    embeddingBackendForModel(requestedEmbeddingModel) !== ModelBackend.Ollama &&
     hasKeylessCloudEmbedder();
   const effectiveKeys = await apiKeyService.getEffectiveLLMApiKeys(
     userIdForService,
@@ -320,10 +320,10 @@ export async function runLakeSemanticSearch(
   // Where a fallback IS permitted, the resolver still declines for two states it refuses to
   // read as "this deployment is keyless" - an EXPIRED caller key and `missing: 'ollama'` - so
   // `substituted` tests whether one ACTUALLY happened rather than whether it was allowed.
-  const requestedProvider = getProviderFromModel(requestedEmbeddingModel);
+  const requestedProvider = embeddingBackendForModel(requestedEmbeddingModel);
   const resolution = mayFallBack
     ? resolveEmbeddingWithKeylessFallback(requestedEmbeddingModel, embeddingApiKeyTable)
-    : { ...resolveEmbeddingConfig(requestedProvider, embeddingApiKeyTable), model: requestedEmbeddingModel };
+    : { ...resolveEmbeddingCredentials(requestedProvider, embeddingApiKeyTable), model: requestedEmbeddingModel };
   const substituted = resolution.missing === null && resolution.model !== requestedEmbeddingModel;
   const searchEmbeddingModel = substituted ? resolution.model : requestedEmbeddingModel;
   if (substituted) {
@@ -335,7 +335,7 @@ export async function runLakeSemanticSearch(
   // About the PRIMARY model only - a hard refusal here concerns the model the caller actually asked
   // for, not a downstream alternate model's coverage, which degrades gracefully via
   // semanticDataLakeSearch's own missingCredential skip reason instead. `resolution.missing` is
-  // already scoped that way: it is `getProviderFromModel(requestedEmbeddingModel)`'s credential
+  // already scoped that way: it is `embeddingBackendForModel(requestedEmbeddingModel)`'s credential
   // and nothing else, and a keyless provider reports null because an empty config IS its ready
   // state.
   //
@@ -361,7 +361,7 @@ export async function runLakeSemanticSearch(
     }
   }
 
-  const embeddingProvider = getProviderFromModel(searchEmbeddingModel);
+  const embeddingProvider = embeddingBackendForModel(searchEmbeddingModel);
   // Counted under the model that will actually run, and reused by the settlement below so the
   // pre-flight and the charge can never disagree about the token basis either.
   const searchQueryTokens =
@@ -532,7 +532,7 @@ export async function runLakeSemanticSearch(
         // the same guard in knowledgeBaseSearch/index.ts's recordAllEmbeddingUsage.
         ...search.alternateModelsEmbedded
           .filter(isSupportedEmbeddingModel)
-          .map(altModel => recordEmbeddingUsage(altModel, getProviderFromModel(altModel))),
+          .map(altModel => recordEmbeddingUsage(altModel, embeddingBackendForModel(altModel))),
       ]);
     }
   } catch (recordErr) {
