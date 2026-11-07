@@ -318,7 +318,13 @@ describe('validateImageRequest', () => {
       );
     });
 
-    // One sample detail per code; the satisfies clause fails to compile when a code is added without one.
+    it('explains input-image sizing that supports an aspect ratio', () => {
+      expect(
+        reasonsOf(validateImageRequest({ mode: 'edit', inputs: [{ role: 'edit_source' }], size: '1024x1024' }, kontext))
+      ).toEqual(['This model takes an aspect ratio, not a size']);
+    });
+
+    // One sample detail per code; the it.each below fails when a code is added without one (tests are not type-checked).
     const SAMPLES = {
       unsupported_mode: { code: 'unsupported_mode', mode: 'edit' },
       missing_input: { code: 'missing_input', role: 'mask' },

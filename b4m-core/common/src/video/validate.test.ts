@@ -264,8 +264,8 @@ describe('validateAgainstCapabilities why-not reasons', () => {
   const veo: VideoModelCapabilities = { ...discreteCaps, displayName: 'Veo 3.1' };
 
   it('names the model, its limit and the requested length', () => {
-    expect(reasonOf({ ...base, durationSeconds: 12 }, veo)).toBe('Veo 3.1 supports up to 8s; you asked for 12s');
-    expect(reasonOf({ ...base, durationSeconds: 2 }, veo)).toBe('Veo 3.1 supports at least 4s; you asked for 2s');
+    expect(reasonOf({ ...base, durationSeconds: 12 }, veo)).toBe('Veo 3.1 supports 4, 6 or 8s; you asked for 12s');
+    expect(reasonOf({ ...base, durationSeconds: 2 }, veo)).toBe('Veo 3.1 supports 4, 6 or 8s; you asked for 2s');
     expect(reasonOf({ ...base, durationSeconds: 5 }, veo)).toBe('Veo 3.1 supports 4, 6 or 8s; you asked for 5s');
     expect(reasonOf({ ...base, durationSeconds: 3.5 }, rangeCaps)).toBe(
       'Range supports 3-10s in 1s steps; you asked for 3.5s'
@@ -301,7 +301,7 @@ describe('validateAgainstCapabilities why-not reasons', () => {
     });
   });
 
-  // One sample detail per code; the satisfies clause fails to compile when a code is added without one.
+  // One sample detail per code; the it.each below fails when a code is added without one (tests are not type-checked).
   const SAMPLES = {
     unsupported_mode: { model: 'Veo 3.1', code: 'unsupported_mode', mode: 'image_to_video' },
     missing_input_image: { model: 'Veo 3.1', code: 'missing_input_image' },

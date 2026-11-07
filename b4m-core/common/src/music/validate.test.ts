@@ -100,7 +100,7 @@ describe('validateMusicRequest why-not reasons', () => {
     });
   });
 
-  // One sample detail per code; the satisfies clause fails to compile when a code is added without one.
+  // One sample detail per code; the it.each below fails when a code is added without one (tests are not type-checked).
   const SAMPLES = {
     unsupported_duration: {
       model: 'Model',

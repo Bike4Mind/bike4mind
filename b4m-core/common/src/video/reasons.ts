@@ -32,16 +32,11 @@ const MODE_PHRASE: Record<VideoMode, string> = {
 };
 
 function durationReason(model: string, requested: number, allowed: DurationCapability): string {
-  const [min, max] =
-    allowed.kind === 'discrete'
-      ? [Math.min(...allowed.values), Math.max(...allowed.values)]
-      : [allowed.min, allowed.max];
-  const bounds = outOfBoundsPhrase(requested, min, max, 's');
   const supported =
-    bounds ??
-    (allowed.kind === 'discrete'
+    allowed.kind === 'discrete'
       ? `${joinWithOr(allowed.values.map(String))}s`
-      : `${allowed.min}-${allowed.max}s in ${allowed.step}s steps`);
+      : (outOfBoundsPhrase(requested, allowed.min, allowed.max, 's') ??
+        `${allowed.min}-${allowed.max}s in ${allowed.step}s steps`);
   return `${model} supports ${supported}; you asked for ${requested}s`;
 }
 

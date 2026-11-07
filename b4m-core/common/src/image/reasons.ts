@@ -48,7 +48,9 @@ function sizeReason(requested: string, sizing: ImageSizing): string {
     case 'aspectRatio':
       return 'This model takes an aspect ratio, not a size';
     case 'inputImage':
-      return 'This model keeps the size of its input image';
+      return sizing.aspectRatio
+        ? 'This model takes an aspect ratio, not a size'
+        : 'This model keeps the size of its input image';
     case 'fixed':
       return 'This model takes no size';
   }
