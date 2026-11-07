@@ -100,6 +100,7 @@ export const handler = withEventContext(async (event, logger) => {
     );
 
     await recordSessionOperationalUsage({
+      operation: 'notebook_naming',
       userId,
       sessionId,
       modelId,

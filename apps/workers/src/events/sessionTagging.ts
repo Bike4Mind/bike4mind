@@ -200,6 +200,7 @@ export const handler = withEventContext(async (event, logger) => {
   });
 
   await recordSessionOperationalUsage({
+    operation: 'notebook_tagging',
     user: payer,
     sessionId,
     modelId,

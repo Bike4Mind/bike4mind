@@ -1,10 +1,9 @@
 import React from 'react';
 import { ApiKeyStatus } from '@bike4mind/common';
 import { useAdminGetUserApiKeys } from '@client/app/hooks/data/userApiKeys';
-import { useUserCreditHistory } from '@client/app/hooks/data/adminUserActivity';
+import { useAdminCreditSummary } from '@client/app/hooks/data/adminUserCredits';
 import { RelativeTime, StatSparkline, StatStrip, StatTile } from '../../shared';
 import { formatCredits } from './actions/creditAdjustment';
-import { creditSpendFromHistory } from './creditSpend';
 import { LEVEL_LABELS, latestSignIn, type AdminUserProfile } from './userProfileModel';
 
 const SPEND_WINDOW_DAYS = 30;
@@ -13,9 +12,16 @@ const Pending = () => <span aria-label="Loading">-</span>;
 
 /** Five numbers an admin checks first; each comes from data the page already loads. */
 export const UserProfileStats: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
-  const creditHistory = useUserCreditHistory(user.id);
+  // The same charged-credits figure as the Credits tab's "Spent, 30 days", so the two never disagree.
+  const creditSummary = useAdminCreditSummary(user.id);
   const apiKeys = useAdminGetUserApiKeys(user.id);
-  const spend = creditHistory.data ? creditSpendFromHistory(creditHistory.data, SPEND_WINDOW_DAYS) : null;
+  const spend = creditSummary.data
+    ? {
+        total: creditSummary.data.spent.last30d,
+        writtenOff: creditSummary.data.writtenOff.last30d,
+        daily: creditSummary.data.daily.slice(-SPEND_WINDOW_DAYS).map(day => day.credits),
+      }
+    : null;
   const activeKeys = apiKeys.data?.apiKeys.filter(key => key.status === ApiKeyStatus.ACTIVE) ?? [];
   const lastKeyUse = activeKeys
     .map(key => key.lastUsedAt)
@@ -41,11 +47,11 @@ export const UserProfileStats: React.FC<{ user: AdminUserProfile }> = ({ user })
           ) : undefined
         }
         comparison={
-          creditHistory.isError
-            ? 'History unavailable'
-            : spend?.estimated
-              ? 'Estimate: early history is incomplete'
-              : 'From the daily balance'
+          creditSummary.isError
+            ? 'Spend unavailable'
+            : spend && spend.writtenOff > 0
+              ? `Credits charged; ${formatCredits(spend.writtenOff)} more written off`
+              : 'Credits charged'
         }
       />
       <StatTile

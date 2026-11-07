@@ -16,6 +16,7 @@ vi.mock('@client/app/hooks/data/adminUserCredits', () => ({
   useAdminCreditSummary: mocks.summary,
   useAdminCreditLedger: mocks.ledger,
   fetchCreditLedgerExport: mocks.exportCsv,
+  useAdminUsageReceipt: () => ({ data: undefined, isLoading: false, isError: false, refetch: vi.fn() }),
 }));
 vi.mock('./SignupGrantPendingCard', () => ({
   SignupGrantPendingCard: () => <div data-testid="user-credits-pending" />,
@@ -40,6 +41,7 @@ const daily = (credits: (day: number) => number): AdminCreditSummary['daily'] =>
 const SUMMARY: AdminCreditSummary = {
   balance: 12450,
   spent: { last24h: 412, last7d: 2100, last30d: 9000 },
+  writtenOff: { last24h: 0, last7d: 0, last30d: 0 },
   topModel30d: { model: 'claude-sonnet-5-5', credits: 6200 },
   lastTopUp: { at: '2026-10-15T00:00:00Z', credits: 10000, type: 'subscription' },
   // 10 credits a day for the oldest 60 days, 100 a day for the newest 30.
@@ -220,6 +222,26 @@ describe('CreditsTab', () => {
     expect(within(table).getByText('+2,000')).toBeInTheDocument();
     expect(within(table).getByText('Goodwill credit · by Support Admin')).toBeInTheDocument();
     expect(within(table).getByText('quest-123')).toBeInTheDocument();
+  });
+
+  it('shows a capped charge as charged plus written off, and opens its receipt from the request id', () => {
+    mocks.summary.mockReturnValue(
+      summaryResult({ data: { ...SUMMARY, writtenOff: { last24h: 18, last7d: 18, last30d: 18 } } })
+    );
+    mocks.ledger.mockReturnValue(
+      ledgerResult({
+        data: {
+          pages: [{ rows: [{ ...ROWS[0], credits: -1998, writtenOffCredits: 18, balanceAfter: 0 }], nextCursor: null }],
+        },
+      })
+    );
+    renderTab();
+
+    expect(screen.getByTestId('user-credits-written-off')).toHaveTextContent('18 written off');
+    expect(screen.getByTestId('user-credits-spent-30d-comparison')).toHaveTextContent('18 more written off');
+    expect(screen.queryByTestId('usage-receipt-drawer')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('user-credits-receipt-link'));
+    expect(screen.getByTestId('usage-receipt-drawer')).toHaveTextContent('Request quest-123');
   });
 
   it('filters the ledger by type on the server and loads older pages', () => {
