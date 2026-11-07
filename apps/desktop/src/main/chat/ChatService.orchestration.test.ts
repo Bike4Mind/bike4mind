@@ -231,6 +231,7 @@ describe('role routing and task runtime compatibility', () => {
 
   it.each([
     { requested_model_id: 'forbidden', role: 'implementation' },
+    { requested_model_id: 'planner', role: 'implementation' },
     { contract: { ...contract, outcome: '' } },
     { role: 'implementation', model_requirements: { vision: true } },
     { role: 'implementation', model_requirements: { contextTokens: 1000000 } },

@@ -84,12 +84,8 @@ export function resolveWorkerModel(
   const role = options.role ?? options.contract?.role;
   const requested = options.requestedModelId;
   const selected = role ? policy.roles[role] : 'inherit';
-  if (
-    requested &&
-    requested !== parentModel &&
-    requested !== selected &&
-    !policy.allowedOverrides.includes(requested)
-  ) {
+  const effectiveDefault = selected === 'inherit' ? parentModel : selected;
+  if (requested && requested !== effectiveDefault && !policy.allowedOverrides.includes(requested)) {
     throw new Error(
       'Model override needs an explicit user model-change decision. Choose an allowed override in orchestration settings.'
     );
@@ -98,7 +94,7 @@ export function resolveWorkerModel(
     ...(role ? { role } : {}),
     ...(requested ? { requestedModelId: requested } : {}),
     ...(options.requirements ? { requirements: options.requirements } : {}),
-    effectiveModel: requested ?? (selected === 'inherit' ? parentModel : selected),
+    effectiveModel: requested ?? effectiveDefault,
     source: requested ? 'override' : selected !== 'inherit' ? 'role-policy' : 'parent',
   };
 }
