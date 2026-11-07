@@ -11,7 +11,7 @@ import { useTheme } from '@mui/joy/styles';
 import type { AttentionOpenEvent } from '@shared/attention';
 import type { AuthState } from '@shared/auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
-import type { ChatArtifact, ChatModelOption, ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import type { ChatArtifact, ChatModelOption, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
 import {
   canSpawnDeeper,
@@ -45,7 +45,9 @@ import type { ComposerFill } from './composerInput';
 import { ModelsScreen } from '../models/ModelsScreen';
 import { ComposerOllamaNotice } from '../models/OllamaNotRunning';
 import { useModelServers } from '../models/useModelHub';
-import { CubeIcon, GlobeIcon, PanelRightIcon, PhoneIcon, SearchIcon, TerminalIcon } from './icons';
+import { PanelRightIcon } from './icons';
+import { OpenPaneButtons, PanesMenu, type PaneControl } from './PanesMenu';
+import { ProjectSubtitleLine } from './ProjectSubtitleLine';
 import { MessageThread } from './MessageThread';
 import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
@@ -172,24 +174,6 @@ function SessionHeader({ title, onRename }: { title: string; onRename: (title: s
     >
       {title}
     </Typography>
-  );
-}
-
-/**
- * The working directory a Code session's commands actually run in, under its title.
- *
- * Only shown when it differs from the project directory, because that difference IS the
- * worktree toggle: the session panel says which branch and that a worktree is on, and this is
- * the one thing it cannot fit - where that resolved to.
- */
-function WorkingDirectoryLine({ project }: { project: ChatProject }) {
-  if (project.workingDirectory === project.directory) return null;
-  return (
-    <Tooltip title={project.workingDirectory} size="sm" variant="soft" placement="bottom-start">
-      <Typography level="body-xs" textColor="text.tertiary" noWrap data-testid="chat-project-cwd">
-        worktree: {project.workingDirectory}
-      </Typography>
-    </Tooltip>
   );
 }
 
@@ -647,6 +631,25 @@ export function ChatShell({
    * disabled on the empty window rather than disappearing from it.
    */
   const browserAvailable = !!activeId;
+
+  // The header's pane toggles. The simulator and 3D model are left out where they cannot exist;
+  // terminal and browser only lack a conversation, so they stay listed and say so.
+  const paneControls: PaneControl[] = [
+    {
+      id: 'terminal',
+      open: terminalOpen,
+      unavailableReason: activeId ? undefined : 'Open a conversation to use the terminal.',
+      onToggle: toggleTerminal,
+    },
+    {
+      id: 'browser',
+      open: browserOpen && browserAvailable,
+      unavailableReason: browserAvailable ? undefined : 'Open a conversation to use the browser.',
+      onToggle: toggleBrowser,
+    },
+    ...(simulatorView.available ? [{ id: 'simulator' as const, open: simulatorOpen, onToggle: toggleSimulator }] : []),
+    ...(modelAvailable ? [{ id: 'model' as const, open: modelOpen, onToggle: toggleModel }] : []),
+  ];
 
   // Re-read when a reply ends anywhere, which is the only moment this window knows the balance
   // moved. See useAccountCredits for why it is not polled.
@@ -1466,7 +1469,7 @@ export function ChatShell({
                         void (activeSummary ? rename(activeSummary, title) : conversation.rename(title))
                       }
                     />
-                    {conversation.session.project && <WorkingDirectoryLine project={conversation.session.project} />}
+                    {conversation.session.project && <ProjectSubtitleLine project={conversation.session.project} />}
                   </>
                 ) : opening ? null : (
                   <Typography level="title-sm" textColor="text.tertiary">
@@ -1481,143 +1484,49 @@ export function ChatShell({
                 onSurfaceChange={orchestratorPrefs.setSurface}
                 canStart={orchestrateCapable}
               />
-              {!opening && conversation.session?.historyEnabled === true && (
-                <Tooltip
-                  size="sm"
-                  variant="soft"
-                  placement="bottom-end"
-                  title="Local history is on. Change it in the browser's ... menu."
-                >
-                  <Box
-                    component="span"
-                    role="img"
-                    aria-label="Local history is on"
-                    data-testid="chat-history-indicator"
-                    sx={{ display: 'inline-flex', color: 'text.tertiary', px: 0.5 }}
-                  >
-                    <SearchIcon />
-                  </Box>
-                </Tooltip>
-              )}
-              {panelProject && (
-                <Tooltip
-                  size="sm"
-                  variant="soft"
-                  placement="bottom-end"
-                  title={panelShown ? 'Hide the session panel' : 'Show the session panel'}
-                >
-                  <IconButton
-                    ref={panelToggle}
-                    size="sm"
-                    variant={panelShown ? 'soft' : 'plain'}
-                    color="neutral"
-                    aria-expanded={panelShown}
-                    aria-controls={panelShown ? SESSION_PANEL_ID : undefined}
-                    aria-label={panelShown ? 'Hide the session panel' : 'Show the session panel'}
-                    onClick={togglePanel}
-                    data-testid="chat-toggle-session-panel-btn"
-                  >
-                    <PanelRightIcon />
-                  </IconButton>
-                </Tooltip>
-              )}
-              {/* Inside the reading column, not out at the window edge: a tooltip opening from
-                  here cannot reach the pane, and a tooltip over the pane would be drawn behind
-                  the web page - see agentBrowser.ts. */}
-              <Tooltip
-                size="sm"
-                variant="soft"
-                placement="bottom-end"
-                title={
-                  activeId
-                    ? terminalOpen
-                      ? 'Hide the terminal (Ctrl+`)'
-                      : 'Show the terminal (Ctrl+`)'
-                    : 'Open a conversation to use the terminal.'
-                }
+              <Box
+                data-testid="chat-header-tools"
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 0.5,
+                  // Only beside the Chat / Agents switch, which renders nothing when it has nothing to switch.
+                  '[data-testid="chat-surface-toggle"] + &': {
+                    ml: 0.5,
+                    pl: 1,
+                    borderLeft: '1px solid',
+                    borderColor: 'divider',
+                  },
+                }}
               >
-                <Box component="span" sx={{ display: 'inline-flex' }}>
-                  <IconButton
+                {panelProject && (
+                  <Tooltip
                     size="sm"
-                    variant={terminalOpen ? 'soft' : 'plain'}
-                    color="neutral"
-                    disabled={!activeId}
-                    aria-pressed={terminalOpen}
-                    aria-label={terminalOpen ? 'Hide the terminal' : 'Show the terminal'}
-                    onClick={toggleTerminal}
-                    data-testid="chat-toggle-terminal-btn"
+                    variant="soft"
+                    placement="bottom-end"
+                    title={panelShown ? 'Hide the session panel' : 'Show the session panel'}
                   >
-                    <TerminalIcon />
-                  </IconButton>
-                </Box>
-              </Tooltip>
-              <Tooltip
-                size="sm"
-                variant="soft"
-                placement="bottom-end"
-                title={
-                  browserAvailable
-                    ? browserOpen
-                      ? 'Hide the browser'
-                      : 'Show the browser'
-                    : 'Open a conversation to use the browser.'
-                }
-              >
-                <Box component="span" sx={{ display: 'inline-flex' }}>
-                  <IconButton
-                    size="sm"
-                    variant={browserOpen && browserAvailable ? 'soft' : 'plain'}
-                    color="neutral"
-                    disabled={!browserAvailable}
-                    aria-pressed={browserOpen && browserAvailable}
-                    aria-label={browserOpen ? 'Hide the browser' : 'Show the browser'}
-                    onClick={toggleBrowser}
-                    data-testid="chat-toggle-browser-btn"
-                  >
-                    <GlobeIcon />
-                  </IconButton>
-                </Box>
-              </Tooltip>
-              {simulatorView.available && (
-                <Tooltip
-                  size="sm"
-                  variant="soft"
-                  placement="bottom-end"
-                  title={simulatorOpen ? 'Hide the iOS Simulator' : 'Show the iOS Simulator'}
-                >
-                  <IconButton
-                    size="sm"
-                    variant={simulatorOpen ? 'soft' : 'plain'}
-                    color="neutral"
-                    aria-pressed={simulatorOpen}
-                    aria-label={simulatorOpen ? 'Hide the iOS Simulator' : 'Show the iOS Simulator'}
-                    onClick={toggleSimulator}
-                    data-testid="chat-toggle-simulator-btn"
-                  >
-                    <PhoneIcon />
-                  </IconButton>
-                </Tooltip>
-              )}
-              {modelAvailable && (
-                <Tooltip
-                  size="sm"
-                  variant="soft"
-                  placement="bottom-end"
-                  title={modelOpen ? 'Hide the 3D model' : 'Show the 3D model'}
-                >
-                  <IconButton
-                    size="sm"
-                    variant={modelOpen ? 'soft' : 'plain'}
-                    color="neutral"
-                    aria-pressed={modelOpen}
-                    aria-label={modelOpen ? 'Hide the 3D model' : 'Show the 3D model'}
-                    onClick={toggleModel}
-                    data-testid="chat-toggle-model-btn"
-                  >
-                    <CubeIcon />
-                  </IconButton>
-                </Tooltip>
-              )}
+                    <IconButton
+                      ref={panelToggle}
+                      size="sm"
+                      variant={panelShown ? 'soft' : 'plain'}
+                      color="neutral"
+                      aria-expanded={panelShown}
+                      aria-controls={panelShown ? SESSION_PANEL_ID : undefined}
+                      aria-label={panelShown ? 'Hide the session panel' : 'Show the session panel'}
+                      onClick={togglePanel}
+                      data-testid="chat-toggle-session-panel-btn"
+                    >
+                      <PanelRightIcon />
+                    </IconButton>
+                  </Tooltip>
+                )}
+                {/* Inside the reading column, not out at the window edge: a popup opening from
+                  here cannot reach the pane, and one over the pane would be drawn behind the
+                  web page - see agentBrowser.ts. */}
+                <OpenPaneButtons panes={paneControls} />
+                <PanesMenu panes={paneControls} historyOn={!opening && conversation.session?.historyEnabled === true} />
+              </Box>
             </Box>
           </Box>
 
