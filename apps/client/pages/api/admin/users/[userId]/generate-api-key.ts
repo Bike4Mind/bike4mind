@@ -18,12 +18,13 @@ import { ApiKeyScope, UserApiKeyEvents, isBuiltInApiKeyScope } from '@bike4mind/
 import {
   ADMIN_ONLY_API_KEY_SCOPES,
   USER_API_KEY_SCOPE_VALUES,
+  isAdminProvisionedApiKeyScope,
   isApiKeyScopeOffered,
   isKnownApiKeyScope,
 } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { toEntitlementUser } from '@server/entitlements';
 import { resolveApiKeyScopeAccessForUser } from '@server/entitlements/apiKeyScopeAccess';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, readAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 // Scopes this admin endpoint may mint: the standard self-service set plus the
 // admin-provisioned ingest scopes. ADMIN and CC_BRIDGE are still excluded -
@@ -59,6 +60,8 @@ interface CreateApiKeyBody {
   };
   /** Lake ids to bind this key to for the manage-but-not-member session admission. Admin-only. */
   preauthorizedLakeIds?: string[];
+  /** Audit reason. Required when any scope is admin-provisioned, optional otherwise. */
+  reason?: unknown;
 }
 
 /**
@@ -204,7 +207,14 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
       const adminLabel = `${JSON.stringify(req.user.username)} (${req.user.id})`;
       const targetLabel = `${JSON.stringify(targetUser.username)} (${targetUserId})`;
 
-      const { name, scopes, expiresAt, rateLimit, preauthorizedLakeIds } = req.body as CreateApiKeyBody;
+      const {
+        name,
+        scopes,
+        expiresAt,
+        rateLimit,
+        preauthorizedLakeIds,
+        reason: rawReason,
+      } = req.body as CreateApiKeyBody;
 
       // Reject any scope outside the mintable allowlist, including admin:* and cc-bridge:connect.
       const requestedScopes = Array.isArray(scopes) ? scopes : [];
@@ -227,6 +237,12 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
           throw new ForbiddenError(`Scope not available on the target account: ${unentitled.join(', ')}`);
         }
       }
+
+      // An admin-provisioned scope reaches past the owner's own data (granting credits, writing ingest
+      // streams), so its audit entry must say why. Self-service-only keys keep the reason optional.
+      const reason = requestedScopes.some(isAdminProvisionedApiKeyScope)
+        ? parseAdminActionReason(rawReason)
+        : readAdminActionReason(rawReason);
 
       const lakeBinding = await screenPreauthorizedLakeIds(preauthorizedLakeIds, targetUserId, {
         logger: req.logger,
@@ -270,6 +286,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
           action: 'user.api_key.generated',
           target: { kind: 'user', id: targetUserId, displayName: targetUser.email ?? targetUser.username },
           summary: `generated API key ${newApiKey.keyPrefix} for user`,
+          reason,
           details: {
             keyId: newApiKey.id,
             keyPrefix: newApiKey.keyPrefix,
