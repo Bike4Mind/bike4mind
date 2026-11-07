@@ -454,6 +454,29 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
     expect(updateArg.authProviders[0].accessToken).toBe('access-tok');
   });
 
+  it('stores provider tokens encrypted when an at-rest key is configured', async () => {
+    const { configureSecretsAtRest, decryptAtRest, generateEncryptionKey } = await import('@bike4mind/utils/security');
+    configureSecretsAtRest(generateEncryptionKey());
+    try {
+      mockFindOne.mockResolvedValueOnce({
+        _id: 'u1',
+        email: 'user@example.com',
+        authProviders: [{ strategy: AuthStrategy.Google, id: 'google-sub-stable', accessToken: 'old' }],
+      });
+
+      await runStandard(AuthStrategy.Google, { id: 'google-sub-stable', emails: [{ value: 'user@example.com' }] });
+
+      const updateArg = mockUpdateOne.mock.calls[0][1];
+      const [stored] = updateArg.authProviders;
+      expect(stored.encrypted).toBe(true);
+      expect(stored.accessToken).not.toBe('access-tok');
+      expect(decryptAtRest(stored.accessToken)).toBe('access-tok');
+      expect(decryptAtRest(updateArg.oauthCredentials.accessToken)).toBe('access-tok');
+    } finally {
+      configureSecretsAtRest(undefined);
+    }
+  });
+
   it('stage-1 hit resolves user even when handle/email changed (fixes duplicate-account on rename)', async () => {
     // User changed their GitHub handle; stage-1 finds them by (strategy, id) regardless.
     mockFindOne.mockResolvedValueOnce({
