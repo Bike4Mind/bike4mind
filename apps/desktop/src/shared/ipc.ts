@@ -123,7 +123,7 @@ import type {
 } from './models';
 import type { AccountUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
-import type { ModelBuildReport, ModelPose, ModelView, ModelViewState } from './model3d';
+import type { ModelBuildReport, ModelCaptureRequest, ModelExportFormat, ModelViewState } from './model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
 import type { LocalHistoryResult, LocalHistoryState } from './history';
 
@@ -438,6 +438,7 @@ export const IPC_CHANNELS = {
   modelSetParam: 'model:set-param',
   /** Renderer -> main: save an export the user asked for (save dialog in main). */
   modelSaveExport: 'model:save-export',
+  modelSetRecording: 'model:set-recording',
   modelCaptureResult: 'model:capture-result',
   /** main -> renderer push: the open model changed (opened, edited on disk, closed). */
   modelState: 'model:state',
@@ -1093,10 +1094,15 @@ export interface DesktopApi {
     /** False when the value could not be written back to the file. */
     setParam(request: { key: string; value: number }): Promise<boolean>;
     /** Resolves to the saved path, or null when cancelled. */
-    saveExport(request: { format: 'glb' | 'stl'; bytes: Uint8Array }): Promise<string | null>;
+    saveExport(request: { format: ModelExportFormat; bytes: Uint8Array }): Promise<string | null>;
+    /**
+     * Marks a turntable recording as running or done. While one runs the window keeps full-rate timers
+     * in the background, since the clip's frame times are wall-clock times.
+     */
+    setRecording(active: boolean): Promise<void>;
     captureResult(result: { id: string; bytes?: Uint8Array; error?: string }): void;
     onState(listener: (state: ModelViewState) => void): () => void;
-    onCaptureRequest(listener: (request: { id: string; views: ModelView[]; pose: ModelPose }) => void): () => void;
+    onCaptureRequest(listener: (request: ModelCaptureRequest) => void): () => void;
   };
   /** The live iOS Simulator view; `available` is false off macOS. */
   simulator: {

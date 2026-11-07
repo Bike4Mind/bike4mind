@@ -336,6 +336,7 @@ const api: DesktopApi = {
     writeGlb: request => ipcRenderer.invoke(IPC_CHANNELS.modelWriteGlb, request),
     setParam: request => ipcRenderer.invoke(IPC_CHANNELS.modelSetParam, request),
     saveExport: request => ipcRenderer.invoke(IPC_CHANNELS.modelSaveExport, request),
+    setRecording: active => ipcRenderer.invoke(IPC_CHANNELS.modelSetRecording, active),
     captureResult: result => ipcRenderer.send(IPC_CHANNELS.modelCaptureResult, result),
     onState: listener => {
       const handler = (_event: unknown, state: ModelViewState) => listener(state);

@@ -45,7 +45,7 @@ export function spendsCredits(toolName: string): boolean {
  * `simulator_screenshot` for the same reason: the app on the device can show a web page or any
  * text its server sends.
  *
- * `model_view` and `model_screenshot` because they open any .glb/.stl: its node names reach
+ * `model_view`, `model_screenshot` and `model_record` because they open any .glb/.stl: its node names reach
  * the text result and its embedded textures reach the rendered image.
  *
  * `browser_*` and every server tool are matched by prefix, so a new one is covered as it ships.
@@ -59,6 +59,7 @@ const READS_UNTRUSTED: ReadonlySet<string> = new Set([
   'simulator_screenshot',
   'model_view',
   'model_screenshot',
+  'model_record',
 ]);
 
 export function readsUntrusted(toolName: string): boolean {
