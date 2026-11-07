@@ -242,19 +242,20 @@ const INJECTED_STILL_APPLIES =
  * Enable an MCP server
  */
 async function handleEnable(name: string, configStore: ConfigStore): Promise<void> {
-  const server = await configStore.findMcpServer(name);
-
-  if (!server) {
-    console.error(`❌ MCP server "${name}" not found.`);
-    process.exit(1);
-  }
-
-  if (server.enabled) {
-    console.log(`ℹ️  MCP server "${name}" is already enabled.`);
-    return;
-  }
-
   try {
+    const server = await configStore.findMcpServer(name);
+
+    if (!server) {
+      console.error(`❌ MCP server "${name}" not found.`);
+      process.exit(1);
+    }
+
+    if (server.enabled) {
+      console.log(`ℹ️  MCP server "${name}" is already enabled.`);
+      if (server.injectedStillApplies) console.log(INJECTED_STILL_APPLIES);
+      return;
+    }
+
     const { injectedStillApplies } = await configStore.toggleMcpServer(name, true);
     console.log(`✅ Enabled MCP server "${name}"`);
     console.log('');
@@ -269,19 +270,20 @@ async function handleEnable(name: string, configStore: ConfigStore): Promise<voi
  * Disable an MCP server
  */
 async function handleDisable(name: string, configStore: ConfigStore): Promise<void> {
-  const server = await configStore.findMcpServer(name);
-
-  if (!server) {
-    console.error(`❌ MCP server "${name}" not found.`);
-    process.exit(1);
-  }
-
-  if (!server.enabled) {
-    console.log(`ℹ️  MCP server "${name}" is already disabled.`);
-    return;
-  }
-
   try {
+    const server = await configStore.findMcpServer(name);
+
+    if (!server) {
+      console.error(`❌ MCP server "${name}" not found.`);
+      process.exit(1);
+    }
+
+    if (!server.enabled) {
+      console.log(`ℹ️  MCP server "${name}" is already disabled.`);
+      if (server.injectedStillApplies) console.log(INJECTED_STILL_APPLIES);
+      return;
+    }
+
     const { injectedStillApplies } = await configStore.toggleMcpServer(name, false);
     console.log(`✅ Disabled MCP server "${name}"`);
     console.log('');

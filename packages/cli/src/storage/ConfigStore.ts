@@ -2089,31 +2089,18 @@ export class ConfigStore {
    */
   async toggleMcpServer(name: string, enabled: boolean): Promise<{ injectedStillApplies: boolean }> {
     await this.load();
-    const notSaved = () => {
-      if (this.injectedMcpNames.has(name)) {
-        return new Error(
-          `MCP server "${name}" comes from --mcp-config, not ${this.configPath}; enable or disable it in that file.`
-        );
-      }
-      if (this.projectMcpNames.has(name)) {
-        return new Error(
-          `MCP server "${name}" comes from this project's config, not ${this.configPath}; enable or disable it there.`
-        );
-      }
-      return new Error(`MCP server "${name}" was not found in ${this.configPath}.`);
-    };
     const result = { injectedStillApplies: this.injectedMcpNames.has(name) };
     const toggle = (config: CliConfig) => {
       const server = config.mcpServers.find(s => s.name === name);
       if (server) server.enabled = enabled;
     };
     const toggleInFile = (raw: Record<string, unknown>) => {
-      if (!setRawMcpServerEnabled(raw, name, enabled)) throw notSaved();
+      if (!setRawMcpServerEnabled(raw, name, enabled)) throw this.mcpServerNotSavedError(name);
       return true;
     };
     if (await this.patchInFallback(toggle, toggleInFile)) return result;
     const server = this.globalConfig!.mcpServers.find(s => s.name === name);
-    if (!server) throw notSaved();
+    if (!server) throw this.mcpServerNotSavedError(name);
     server.enabled = enabled;
     await this.save();
     return result;
@@ -2121,20 +2108,36 @@ export class ConfigStore {
 
   /**
    * The MCP server `name` as enable/disable sees it: the user config's own entry when it saves one, read from the
-   * file itself when that fails validation, otherwise the server in effect. Null when there is none.
+   * file itself when that fails validation. Rejects a server from another source, including a project definition
+   * awaiting approval, before the command decides whether a saved entry already has the requested state.
    */
-  async findMcpServer(name: string): Promise<{ enabled: boolean } | null> {
-    const config = await this.load();
+  async findMcpServer(name: string): Promise<{ enabled: boolean; injectedStillApplies: boolean } | null> {
+    await this.load();
+    const injectedStillApplies = this.injectedMcpNames.has(name);
     const saved = this.globalConfig!.mcpServers.find(s => s.name === name);
-    if (saved) return { enabled: saved.enabled };
+    if (saved) return { enabled: saved.enabled, injectedStillApplies };
     if (this.fallbackBase) {
       const text = await this.readConfigText();
       const raw = text === null ? null : this.parseConfigText(text);
       const entry = raw ? rawMcpServerEntry(raw, name) : undefined;
-      if (entry) return { enabled: entry.enabled !== false };
+      if (entry) return { enabled: entry.enabled !== false, injectedStillApplies };
     }
-    const effective = config.mcpServers.find(s => s.name === name);
-    return effective ? { enabled: effective.enabled } : null;
+    if (injectedStillApplies || this.projectMcpNames.has(name)) throw this.mcpServerNotSavedError(name);
+    return null;
+  }
+
+  private mcpServerNotSavedError(name: string): Error {
+    if (this.injectedMcpNames.has(name)) {
+      return new Error(
+        `MCP server "${name}" comes from --mcp-config, not ${this.configPath}; enable or disable it in that file.`
+      );
+    }
+    if (this.projectMcpNames.has(name)) {
+      return new Error(
+        `MCP server "${name}" comes from this project's config, not ${this.configPath}; enable or disable it there.`
+      );
+    }
+    return new Error(`MCP server "${name}" was not found in ${this.configPath}.`);
   }
 
   /**
