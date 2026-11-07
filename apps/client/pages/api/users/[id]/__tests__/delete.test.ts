@@ -63,7 +63,7 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
   };
 });
 const { mockEmitBillingEvent } = vi.hoisted(() => ({ mockEmitBillingEvent: vi.fn() }));
-vi.mock('@server/analytics/signupEvents', () => ({ emitBillingEvent: mockEmitBillingEvent }));
+vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({ emitBillingEvent: mockEmitBillingEvent }));
 vi.mock('@server/services/purgeDeletedUserData', () => ({
   purgeDeletedUserData: (...a: unknown[]) => mockPurge(...a),
   readUserIntegrationGrants: (...a: unknown[]) => mockReadGrants(...a),
