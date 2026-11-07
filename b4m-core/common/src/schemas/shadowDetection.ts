@@ -87,11 +87,20 @@ export const shadowDetectionPaymentSchema = z.object({
 });
 export type ShadowDetectionPayment = z.infer<typeof shadowDetectionPaymentSchema>;
 
+/**
+ * Where a verdict came from. `review` is a grade recorded on the Detections page; `suspension` and
+ * `reinstatement` are recorded for the admin who suspended or reinstated an account the detection
+ * names. Absent on entries written before the field existed, which were all reviews.
+ */
+export const SHADOW_DETECTION_VERDICT_SOURCES = ['review', 'suspension', 'reinstatement'] as const;
+export type ShadowDetectionVerdictSource = (typeof SHADOW_DETECTION_VERDICT_SOURCES)[number];
+
 export const shadowDetectionVerdictEntrySchema = z.object({
   verdict: z.enum(SHADOW_DETECTION_VERDICTS),
   reason: z.string(),
   reviewerId: z.string(),
   reviewedAt: z.date(),
+  source: z.enum(SHADOW_DETECTION_VERDICT_SOURCES).optional(),
 });
 export type ShadowDetectionVerdictEntry = z.infer<typeof shadowDetectionVerdictEntrySchema>;
 
@@ -158,6 +167,17 @@ export const shadowDetectionVerdictRequestSchema = z.object({
   reason: z.unknown(),
 });
 export type ShadowDetectionVerdictRequest = z.infer<typeof shadowDetectionVerdictRequestSchema>;
+
+/**
+ * Suspension reasons that mean the admin judged the account abusive, so its open detections are graded
+ * confirmed abuse. The admin suspend dialog offers these as presets (adminReason.ts); a reason counts
+ * when it is the preset alone or "Preset: note".
+ */
+export const ABUSE_SUSPENSION_REASONS = ['Abuse / automated signups', 'Payment fraud', 'Terms violation'] as const;
+
+export function isAbuseSuspensionReason(reason: string): boolean {
+  return ABUSE_SUSPENSION_REASONS.some(preset => reason === preset || reason.startsWith(`${preset}: `));
+}
 
 /**
  * Precision of a would-act decision among graded detections. insufficient_evidence is excluded from
