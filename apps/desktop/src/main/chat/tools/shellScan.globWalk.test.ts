@@ -15,9 +15,12 @@ vi.mock('node:fs/promises', async importOriginal => {
   return { ...actual, readdir, default: { ...actual, readdir } };
 });
 
-const { globNamesPlain } = await import('./shellScan');
+const { globNames } = await import('./shellScan');
 
-describe('globNamesPlain', () => {
+/** `e` and a combining acute accent, which NFC composes into one character. */
+const NFD = `e${String.fromCharCode(0x301)}`;
+
+describe('globNames', () => {
   let base: string;
   const never = (): boolean => false;
 
@@ -25,6 +28,8 @@ describe('globNamesPlain', () => {
     base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-glob-walk-')));
     await mkdir(join(base, 'src'));
     await writeFile(join(base, 'src', 'a.ts'), '');
+    await mkdir(join(base, 'app', '[[...slug]]'), { recursive: true });
+    await writeFile(join(base, 'app', '[[...slug]]', 'page.tsx'), '');
   });
 
   afterAll(async () => {
@@ -33,38 +38,55 @@ describe('globNamesPlain', () => {
   });
 
   it.each([
-    [null, true],
-    ['ENOENT', true],
-    ['ENOTDIR', true],
-    ['EACCES', false],
-    ['EMFILE', false],
-    ['ENAMETOOLONG', false],
-    ['EIO', false],
-  ])('reads a folder read failing with %s as plain: %s', async (code, plain) => {
+    [null, ['src/a.ts']],
+    ['ENOENT', []],
+    ['ENOTDIR', []],
+    ['EACCES', null],
+    ['EMFILE', null],
+    ['ENAMETOOLONG', null],
+    ['EIO', null],
+  ])('reads a folder read failing with %s as %j', async (code, names) => {
     failure.code = code;
     try {
-      expect(await globNamesPlain(base, 'src/*', never)).toBe(plain);
+      expect(await globNames(base, 'src/*', never)).toEqual(names);
     } finally {
       failure.code = null;
     }
   });
 
-  it.each([
-    ['a name that is not UTF-8', Buffer.from([0x61, 0xff])],
-    ['a name read as magic', Buffer.from(':!x')],
-    ['a name read as a glob', Buffer.from('[.]x')],
-  ])('is not plain with %s', async (_, name) => {
+  it('gives each name as bash passes it', async () => {
+    expect(await globNames(base, 'app/*/page.tsx', never)).toEqual(['app/[[...slug]]/page.tsx']);
+  });
+
+  it('gives up on a name that is not UTF-8', async () => {
     const folder = join(base, 'odd');
     await mkdir(folder);
     try {
-      await writeFile(Buffer.concat([Buffer.from(`${folder}/`), name]), '');
-      expect(await globNamesPlain(folder, '*', never)).toBe(false);
+      await writeFile(Buffer.concat([Buffer.from(`${folder}/a`), Buffer.from([0xff])]), '');
+      expect(await globNames(folder, '*', never)).toBeNull();
     } finally {
       await rm(folder, { recursive: true, force: true });
     }
   });
 
+  it.each([
+    ['darwin', null],
+    ['linux', [NFD]],
+  ])('on %s reads a name that is not NFC as %j', async (platform, names) => {
+    const folder = join(base, 'nfd');
+    await mkdir(folder);
+    const real = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor;
+    try {
+      await writeFile(join(folder, NFD), '');
+      Object.defineProperty(process, 'platform', { value: platform });
+      expect(await globNames(folder, '*', never)).toEqual(names);
+    } finally {
+      Object.defineProperty(process, 'platform', real);
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
   it('stops when the scan is stopped', async () => {
-    expect(await globNamesPlain(base, 'src/*', () => true)).toBe(false);
+    expect(await globNames(base, 'src/*', () => true)).toBeNull();
   });
 });

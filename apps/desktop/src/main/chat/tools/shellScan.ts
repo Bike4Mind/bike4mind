@@ -3009,12 +3009,11 @@ function pathspecValues(raw: string): { text: string; glob: boolean }[] | null {
 }
 
 /**
- * Whether every name bash may expand a pattern of literals and `*`s to under `cwd` reaches git as a plain path: one
- * that does not start with `:` and holds no `[`, `]`, `?`, `*` or `\`. Names are matched ignoring leading dots, so
- * dotglob is covered. False for a folder that cannot be read, a name that is not UTF-8, or past WALK_ENTRIES or
- * GLOB_MATCHES.
+ * The names bash may expand a pattern of literals and `*`s to under `cwd`, as it passes them, matched ignoring
+ * leading dots so dotglob is covered. Null for a folder that cannot be read, a name that is not UTF-8 (or not NFC
+ * on macOS, where git may precompose it), or past WALK_ENTRIES or GLOB_MATCHES.
  */
-export async function globNamesPlain(cwd: string, pattern: string, stopped: () => boolean): Promise<boolean> {
+export async function globNames(cwd: string, pattern: string, stopped: () => boolean): Promise<string[] | null> {
   let found: { path: string; name: string }[] = [{ path: cwd, name: '' }];
   let entries = 0;
   const join = (name: string, child: string): string => (name === '' ? child : `${name}/${child}`);
@@ -3027,25 +3026,26 @@ export async function globNamesPlain(cwd: string, pattern: string, stopped: () =
     const matcher = new RegExp(`^${parts.join('.*')}$`, 'is');
     const next: typeof found = [];
     for (const { path, name } of found) {
-      if (stopped()) return false;
+      if (stopped()) return null;
       // Joined as written, so `..` after a link leads where bash's does.
       const listed = await readdir(path, { encoding: 'buffer' }).catch((error: unknown) =>
         missing(error) ? [] : null
       );
-      if (listed === null) return false;
+      if (listed === null) return null;
       entries += listed.length;
-      if (entries > WALK_ENTRIES) return false;
+      if (entries > WALK_ENTRIES) return null;
       for (const raw of listed) {
         const child = raw.toString('utf8');
         // A name that does not survive decoding is one the walk could neither follow nor check.
-        if (!Buffer.from(child, 'utf8').equals(raw)) return false;
+        if (!Buffer.from(child, 'utf8').equals(raw)) return null;
+        if (process.platform === 'darwin' && child.normalize('NFC') !== child) return null;
         if (matcher.test(child)) next.push({ path: `${path}/${child}`, name: join(name, child) });
       }
-      if (next.length > GLOB_MATCHES) return false;
+      if (next.length > GLOB_MATCHES) return null;
     }
     found = next;
   }
-  return found.every(({ name }) => !name.startsWith(':') && !/[[\]?*\\]/.test(name));
+  return found.map(({ name }) => name);
 }
 
 /**
@@ -3074,8 +3074,8 @@ function diffLists(raw: readonly string[]): Listing | null {
         pathspecs.push(text);
         continue;
       }
-      // Without nullglob, globstar or nocaseglob, bash passes the pattern as written or plain names it matches, which
-      // git's `*` (crossing `/`) also matches; `/*` adds what a matched folder holds.
+      // Without nullglob, globstar or nocaseglob, bash passes the pattern as written or names it matches, each of which
+      // git's `*` (crossing `/`) matches; `/*` adds a matched folder's contents, and listingChecked adds glob-like names.
       globs.push(text);
       pathspecs.push(`:(icase)${text}`, `:(icase)${text}/*`);
     }
@@ -3265,7 +3265,7 @@ interface Listing {
   nul: boolean;
   tests?: string[];
   pathspecs?: string[];
-  /** Patterns bash expands from where the lister runs, which count only when each name they may match is plain. */
+  /** Patterns bash expands from where the lister runs, whose matched names the listing check reads too. */
   globs?: string[];
   settings: ListedSettings;
 }
@@ -4900,10 +4900,17 @@ export async function scanShell(
           return false;
         }
         if (listing.globs !== undefined && listing.globs.length > 0 && globOptions) return false;
-        for (const glob of listing.globs ?? []) if (!(await globNamesPlain(state.cwd, glob, stopped))) return false;
+        const matched: string[] = [];
+        for (const glob of listing.globs ?? []) {
+          const names = await globNames(state.cwd, glob, stopped);
+          // A name with a leading `:` reaches git as magic, which can turn every other pathspec into an exclude.
+          if (names === null || names.some(name => name.startsWith(':'))) return false;
+          // git reads a name holding `[`, `]`, `?`, `*` or `\` as a pattern too, so its own git gets it as written.
+          matched.push(...names.filter(name => /[[\]?*\\]/.test(name)));
+        }
         const diff = await diffTargets(top, settings.words, settings.cached, stopped);
         if (diff === null) return false;
-        const pathspecs = [...diff.pathspecs, ...(listing.pathspecs ?? [])];
+        const pathspecs = [...diff.pathspecs, ...(listing.pathspecs ?? []), ...matched];
         const listed = await diffListed(top, diff.targets, diff.worktree, pathspecs, stopped);
         if (listed === null || (split && listed.odd)) return false;
         printed.push(...listed.links);

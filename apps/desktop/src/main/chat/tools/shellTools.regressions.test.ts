@@ -173,6 +173,15 @@ describe('commands main ran unasked', () => {
     const vrepo = await repository('vrepo', { 'w/.claude/settings.json': '{}' });
     await writeFile(join(vrepo, 'w', '.claude', 'settings.json'), '{"x": 1}');
     await writeFile(join(vrepo, '\\--relative=w'), '');
+    // nrepo is a Next.js layout with bracket route names, everything changed, and a planted name that git reads as
+    // a glob matching `.claude/settings.json`.
+    const routes = ['pages/[id].tsx', 'pages/index.tsx', 'app/[[...slug]]/page.tsx', 'app/home/page.tsx'];
+    const nrepo = await repository('nrepo', {
+      '.claude/settings.json': '{}',
+      ...Object.fromEntries(routes.map(route => [route, 'a'])),
+    });
+    for (const path of ['.claude/settings.json', ...routes]) await writeFile(join(nrepo, path), 'b');
+    await writeFile(join(nrepo, '[.]claude[!q]settings.jso[nq]'), '');
     // urepo is a clone two commits deep whose main tracks origin/main, with an untracked `u.ts` at its top.
     const orepo = await repository('orepo', { '.claude/settings.json': '{}', 'src/b.ts': 'b' });
     await writeFile(join(orepo, 'src', 'b.ts'), 'b2');
@@ -347,6 +356,11 @@ describe('commands main ran unasked', () => {
     ['git diff --name-only -- src/*.{ts,tsx} | xargs eslint', '', unasked],
     ['git diff --name-only -- *.{ts,tsx} | xargs eslint', '', unasked],
     ['git diff --name-only -- src/**/*.ts | xargs eslint', '', unasked],
+    // bash passes the bracket names, which the scan's git reads as the command's does.
+    ['git diff --name-only -- pages/*.tsx | xargs npx prettier --write', 'nrepo', unasked],
+    ['git diff --name-only -- app/**/*.tsx | xargs npx eslint', 'nrepo', unasked],
+    ['git diff --name-only -- app/*/page.tsx | xargs npx eslint --fix', 'nrepo', unasked],
+    ['git diff --name-only HEAD -- pages/*.tsx | xargs sed -i s/a/b/', 'nrepo', unasked],
     ['cat .claude/agents/x.md', '', unaskedNamingClaude],
     ['ls -la .claude/', '', unaskedNamingClaude],
     ['grep -r hooks .claude', '', unaskedNamingClaude],
@@ -465,6 +479,7 @@ describe('commands main ran unasked', () => {
     ['git diff --name-only -- *.ts | xargs sed -i s/a/b/', 'srepo'],
     ['git diff --name-only -- *z* | xargs sed -i s/a/b/', 'srepo'],
     ['git diff --name-only -- *test* | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- *q* | xargs sed -i s/a/b/', 'nrepo'],
     // A bash without globskipdots expands `src/.*.` to `src/..` too.
     ['git diff --name-only -- src/.*. | xargs sed -i s/a/b/', 'srepo'],
     // bash re-reads the `\` the range makes, passing git `.claude`.
