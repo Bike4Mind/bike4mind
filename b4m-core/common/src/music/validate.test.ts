@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { MusicGenerationRequest } from './request';
 import type { MusicModelCapabilities } from './types';
-import { validateMusicRequest } from './validate';
+import { musicFailureReason, type MusicFailureDetail } from './reasons';
+import { MUSIC_VALIDATION_ERROR_CODES, validateMusicRequest } from './validate';
 
 const caps = (overrides: Partial<MusicModelCapabilities> = {}): MusicModelCapabilities => ({
   provider: 'test',
@@ -65,5 +66,64 @@ describe('validateMusicRequest', () => {
     expect(validateMusicRequest(base, instrumentalOnly)).toMatchObject({ ok: true, request: { instrumental: true } });
     expect(codeOf({ ...base, instrumental: false }, instrumentalOnly)).toBe('unsupported_vocals');
     expect(codeOf({ ...base, lyrics: 'la la' }, instrumentalOnly)).toBe('unsupported_lyrics');
+  });
+});
+
+describe('validateMusicRequest why-not reasons', () => {
+  const reasonOf = (request: MusicGenerationRequest, capabilities = caps()) => {
+    const result = validateMusicRequest(request, capabilities);
+    return result.ok ? null : result.reason;
+  };
+
+  it('names the model, its limit and the requested length', () => {
+    expect(reasonOf({ ...base, durationSeconds: 61 })).toBe('Model supports up to 60s; you asked for 61s');
+    expect(reasonOf({ ...base, durationSeconds: 2 })).toBe('Model supports at least 3s; you asked for 2s');
+    expect(reasonOf({ ...base, durationSeconds: 45 }, caps({ duration: { control: 'fixed', seconds: 30 } }))).toBe(
+      'Model makes 30s tracks only; you asked for 45s'
+    );
+  });
+
+  it('reports the lyric length that broke the limit', () => {
+    expect(reasonOf({ ...base, lyrics: 'x'.repeat(51) })).toBe(
+      'Model takes up to 50 characters of lyrics; yours have 51'
+    );
+    const lineCapped = caps({ lyrics: { maxChars: 500, maxLineChars: 10 } });
+    expect(reasonOf({ ...base, lyrics: 'short\nthis line is long' }, lineCapped)).toBe(
+      'Model takes up to 10 characters per lyric line; your longest has 17'
+    );
+  });
+
+  it('carries the typed detail the reason was built from', () => {
+    expect(validateMusicRequest({ ...base, durationSeconds: 61 }, caps())).toMatchObject({
+      ok: false,
+      detail: { model: 'Model', code: 'unsupported_duration', requested: 61 },
+    });
+  });
+
+  // One sample detail per code; the satisfies clause fails to compile when a code is added without one.
+  const SAMPLES = {
+    unsupported_duration: {
+      model: 'Model',
+      code: 'unsupported_duration',
+      requested: 200,
+      allowed: { control: 'approximate', min: 10, max: 180, default: 30 },
+    },
+    unsupported_lyrics: { model: 'Model', code: 'unsupported_lyrics' },
+    unsupported_vocals: { model: 'Model', code: 'unsupported_vocals' },
+    lyrics_with_instrumental: { model: 'Model', code: 'lyrics_with_instrumental' },
+    lyrics_too_long: { model: 'Model', code: 'lyrics_too_long', limit: 'total', max: 3000, requested: 3500 },
+  } satisfies { [C in MusicFailureDetail['code']]: Extract<MusicFailureDetail, { code: C }> };
+
+  it.each(MUSIC_VALIDATION_ERROR_CODES)('has a short ASCII reason for %s', code => {
+    const reason = musicFailureReason(SAMPLES[code]);
+    expect(reason).toMatch(/^[\x20-\x7e]+$/);
+    expect(reason.length).toBeLessThanOrEqual(120);
+  });
+
+  it('phrases each sample for a person, not a developer', () => {
+    expect(musicFailureReason(SAMPLES.unsupported_duration)).toBe('Model supports up to 180s; you asked for 200s');
+    expect(musicFailureReason(SAMPLES.unsupported_lyrics)).toBe('Model does not take custom lyrics');
+    expect(musicFailureReason(SAMPLES.unsupported_vocals)).toBe('Model makes instrumental music only');
+    expect(musicFailureReason(SAMPLES.lyrics_with_instrumental)).toBe('An instrumental track cannot have lyrics');
   });
 });
