@@ -247,6 +247,11 @@ function tarExtraction(
   let archive: string | undefined;
   let strip = 0;
   const members: string[] = [];
+  const changeDirectory = (value: string | undefined): void => {
+    // Repeated -C options are relative to the previous directory, including through links.
+    if (directory !== undefined) unread = true;
+    directory = value;
+  };
   const takeShort = (letters: string, attached: boolean): void => {
     for (let index = 0; index < letters.length; index++) {
       const letter = letters[index];
@@ -256,7 +261,7 @@ function tarExtraction(
       if (!TAR_VALUED.includes(letter)) continue;
       const tail = letters.slice(index + 1);
       const value = attached && tail ? tail : rest.shift();
-      if (letter === 'C') directory = value;
+      if (letter === 'C') changeDirectory(value);
       if (letter === 'f') archive = value;
       if (attached) return;
     }
@@ -273,7 +278,7 @@ function tarExtraction(
       if (names('extract') || names('get')) extract = true;
       if (names('absolute-names')) absolute = true;
       if (TAR_UNREAD_LONG.some(names)) unread = true;
-      if (name.length >= 3 && 'directory'.startsWith(name)) directory = value ?? rest.shift();
+      if (name.length >= 3 && 'directory'.startsWith(name)) changeDirectory(value ?? rest.shift());
       else if (name.length >= 3 && 'strip-components'.startsWith(name)) strip = Number(value ?? rest.shift());
       else if (name === 'file') archive = value ?? rest.shift();
       else if (value === undefined && TAR_VALUED_LONG.some(names)) rest.shift();
@@ -1624,6 +1629,8 @@ async function gitTreeWrites(
       const [path, target] = add.positionals;
       if (moved || add.unknown || path === undefined || add.paths.length > 0) return UNREAD_TREE;
       if (has(add, 'no-checkout', 'orphan')) return NO_TREE;
+      // Without a branch or detach option, git may select a branch named after the folder.
+      if (target === undefined && !has(add, 'b', 'B', 'd', 'detach')) return UNREAD_TREE;
       return treeListing(cwd, target ?? 'HEAD', resolveOperand(cwd, path));
     }
     case 'clone': {

@@ -536,6 +536,7 @@ function braceSequence(inner: readonly WordPiece[]): WordPiece[][] | null | 'man
     ? [Number(match[1]), Number(match[2])]
     : [(match[1] as string).charCodeAt(0), (match[2] as string).charCodeAt(0)];
   const step = Math.abs(Number(match[3] ?? 1)) || 1;
+  if (![from, to, step, to - from].every(Number.isSafeInteger)) return 'many';
   const count = Math.floor(Math.abs(to - from) / step) + 1;
   if (count > BRACE_LIMIT) return 'many';
   const padded = numeric && (/^-?0\d/.test(match[1] as string) || /^-?0\d/.test(match[2] as string));
@@ -543,7 +544,8 @@ function braceSequence(inner: readonly WordPiece[]): WordPiece[][] | null | 'man
   const words: WordPiece[][] = [];
   for (let index = 0; index < count; index++) {
     const value = from + (to >= from ? 1 : -1) * index * step;
-    const text = numeric ? String(value).padStart(size, '0') : String.fromCharCode(value);
+    const digits = String(Math.abs(value)).padStart(value < 0 ? Math.max(0, size - 1) : size, '0');
+    const text = numeric ? `${value < 0 ? '-' : ''}${digits}` : String.fromCharCode(value);
     words.push([...text].map(char => ({ char, active: false })));
   }
   return words;
@@ -822,11 +824,12 @@ function globTokens(pattern: readonly GlobChar[]): GlobToken[] {
     const negated = glob && char === '[' && (special(pattern[body], '!') || special(pattern[body], '^'));
     if (negated) body++;
     if (glob && char === '[') {
-      // A `]` right after the opening (or its negation) is a member, as in `[]a]`, and so is one closing `[:alpha:]`.
+      // A leading `]` is a member; POSIX classes, collating symbols and equivalence classes contain their own `]`.
       for (let index = body; index < pattern.length; index++) {
-        if (special(pattern[index], '[') && pattern[index + 1]?.char === ':') {
+        const marker = pattern[index + 1]?.char;
+        if (special(pattern[index], '[') && marker !== undefined && [':', '.', '='].includes(marker)) {
           const end = pattern.findIndex(
-            (piece, at) => at > index + 1 && piece.char === ':' && pattern[at + 1]?.char === ']'
+            (piece, at) => at > index + 1 && special(piece, marker) && special(pattern[at + 1], ']')
           );
           if (end !== -1) index = end + 1;
         } else if (index > body && special(pattern[index], ']')) {
@@ -841,8 +844,15 @@ function globTokens(pattern: readonly GlobChar[]): GlobToken[] {
       continue;
     }
     const members = pattern.slice(body, close);
-    // A named class such as `[:alpha:]` is read as matching anything, which only asks more.
-    const anything = members.some((piece, index) => special(piece, '[') && members[index + 1]?.char === ':');
+    // Locale-dependent classes may match anything even when negated; collating symbols can span characters.
+    const complex = members.some(
+      (piece, index) => special(piece, '[') && [':', '.', '='].includes(members[index + 1]?.char ?? '')
+    );
+    if (complex) {
+      tokens.push({ kind: 'star' });
+      at = close;
+      continue;
+    }
     const tests: ((char: string) => boolean)[] = [];
     for (let index = 0; index < members.length; index++) {
       const low = (members[index] as GlobChar).char;
@@ -854,7 +864,7 @@ function globTokens(pattern: readonly GlobChar[]): GlobToken[] {
         tests.push(candidate => candidate === low);
       }
     }
-    const inClass = (candidate: string): boolean => anything || tests.some(test => test(candidate));
+    const inClass = (candidate: string): boolean => tests.some(test => test(candidate));
     // Case is ignored, which only asks more: either case of the name's character may satisfy the class.
     const matches = (candidate: string): boolean =>
       [candidate, candidate.toLowerCase(), candidate.toUpperCase()].some(form => inClass(form) !== negated);
@@ -4701,7 +4711,8 @@ export async function scanShell(
       let landed: string | null = null;
       for (const word of words) {
         if (processPath(word.text, cwd)) unreadOperands++;
-        landed ??= await checkWord(word, '', cwd, probe, reader, reach);
+        const checked = await checkWord(word, '', cwd, probe, reader, reach);
+        landed ??= checked;
       }
       return landed;
     };
