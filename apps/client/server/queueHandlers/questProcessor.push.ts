@@ -26,14 +26,22 @@ export type ChatCompletedPushDeps = {
  * A turn that ended parked on a Confirm card (an MCP write preview saved by ToolBuilder's
  * onPendingAction) sends `approval_needed` instead, with the same copy and collapse id as the agent
  * path (apps/workers/src/queueHandlers/agentExecutor.pendingAction.ts).
- * API-key turns are skipped too; their caller polls or streams the result itself. Never throws.
+ * API-key turns are skipped too; their caller polls or streams the result itself.
+ * Slack turns are skipped because Slack delivers the reply itself. Never throws.
  */
 export async function publishChatCompletedPush(
-  turn: { userId: string; sessionId: string; questId: string; sessionName?: string; apiKeyId?: string },
+  turn: {
+    userId: string;
+    sessionId: string;
+    questId: string;
+    sessionName?: string;
+    apiKeyId?: string;
+    enableSlackTools?: boolean;
+  },
   deps: ChatCompletedPushDeps,
   logger: Pick<Logger, 'warn'>
 ): Promise<void> {
-  if (turn.apiKeyId || !isPushDeliveryConfigured()) return;
+  if (turn.apiKeyId || turn.enableSlackTools || !isPushDeliveryConfigured()) return;
   try {
     if (await hasLiveConnection(turn.userId, deps.connections, logger)) return;
     const quest = await deps.findQuest(turn.questId);

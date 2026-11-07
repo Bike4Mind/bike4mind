@@ -143,6 +143,29 @@ describe('deliverPush', () => {
     expect(sent.map(request => request.deviceToken)).toEqual(['tok-live']);
   });
 
+  it('delivers to live sessions when pruning ended-session tokens fails', async () => {
+    const { deps, sent } = makeDeps(
+      [
+        { token: 'tok-live', environment: 'production', sid: 'sid-live' },
+        { token: 'tok-expired', environment: 'production', sid: 'sid-expired' },
+      ],
+      { endedSids: ['sid-expired'] }
+    );
+    vi.mocked(deps.tokens.removeBySids).mockRejectedValueOnce(new Error('db down'));
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({
+      status: 'sent',
+      delivered: 1,
+      pruned: 0,
+      failed: 0,
+    });
+    expect(deps.tokens.removeBySids).toHaveBeenCalledExactlyOnceWith(['sid-expired']);
+    expect(sent.map(request => request.deviceToken)).toEqual(['tok-live']);
+    expect(logger.warn).toHaveBeenCalledWith('[Push] failed to prune device tokens of ended sessions', {
+      error: 'db down',
+    });
+  });
+
   it('skips without reading the user when every token belongs to an ended session', async () => {
     const { deps, removedSids } = makeDeps([{ token: 'tok-a', environment: 'production', sid: 'sid-gone' }], {
       endedSids: ['sid-gone'],

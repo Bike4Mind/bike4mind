@@ -229,7 +229,7 @@ export async function deliverPush(
 async function dropTokensOfEndedSessions<T extends { sid: string }>(
   tokens: ReadonlyArray<T>,
   deps: Pick<SendPushDeps, 'tokens' | 'sessions'>,
-  logger: Pick<Logger, 'info'>
+  logger: Pick<Logger, 'info' | 'warn'>
 ): Promise<{ tokens: T[]; pruned: number }> {
   if (tokens.length === 0) return { tokens: [], pruned: 0 };
   const liveSids = await deps.sessions.findLiveSids([...new Set(tokens.map(token => token.sid))]);
@@ -237,9 +237,16 @@ async function dropTokensOfEndedSessions<T extends { sid: string }>(
   if (live.length === tokens.length) return { tokens: live, pruned: 0 };
 
   const endedSids = [...new Set(tokens.filter(token => !liveSids.has(token.sid)).map(token => token.sid))];
-  const pruned = await deps.tokens.removeBySids(endedSids);
-  logger.info('[Push] pruned device tokens whose session has ended', { pruned });
-  return { tokens: live, pruned };
+  try {
+    const pruned = await deps.tokens.removeBySids(endedSids);
+    logger.info('[Push] pruned device tokens whose session has ended', { pruned });
+    return { tokens: live, pruned };
+  } catch (error) {
+    logger.warn('[Push] failed to prune device tokens of ended sessions', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { tokens: live, pruned: 0 };
+  }
 }
 
 function collapseIdFor(event: PushNotificationEvent): string {

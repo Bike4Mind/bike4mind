@@ -428,6 +428,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
       questId: params.questId,
       sessionName: session.name,
       apiKeyId: params.apiKeyId,
+      enableSlackTools: requestBody.enableSlackTools,
     },
     {
       connections: Connection,

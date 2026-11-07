@@ -82,6 +82,13 @@ describe('publishChatCompletedPush connection gating', () => {
     expect(deps.publish).not.toHaveBeenCalled();
   });
 
+  it('skips Slack turns with no live connection', async () => {
+    const deps = makeDeps();
+    await publishChatCompletedPush({ ...turn, enableSlackTools: true }, deps, logger);
+    expect(deps.connections.findByUserId).not.toHaveBeenCalled();
+    expect(deps.publish).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['still running', { status: 'running' }],
     ['errored', { status: 'done', type: 'error' }],
