@@ -6,6 +6,7 @@ import {
   resolveNavigationIntents,
   getViewById,
   VIEW_REGISTRY,
+  getAdminViewSummaryForLLM,
 } from './viewRegistry';
 
 describe('FEATURE_PATH_PREFIXES', () => {
@@ -130,5 +131,37 @@ describe('isNavigableFeaturePath', () => {
     expect(isNavigableFeaturePath('/admin-emergency')).toBe(false);
     expect(isNavigableFeaturePath('/login')).toBe(false);
     expect(isNavigableFeaturePath('/optimizer-blog')).toBe(false);
+  });
+});
+
+describe('getAdminViewSummaryForLLM', () => {
+  // Sent on every admin assistant turn outside the cached prefix, so growth costs tokens per turn.
+  const ADMIN_SUMMARY_CHAR_BUDGET = 16_000;
+
+  it('stays within its size budget', () => {
+    expect(getAdminViewSummaryForLLM().length).toBeLessThanOrEqual(ADMIN_SUMMARY_CHAR_BUDGET);
+  });
+
+  it('sends keywords the label and description do not already say', () => {
+    const usersLine = getAdminViewSummaryForLLM()
+      .split('\n')
+      .find(line => line.startsWith('- admin.users:'));
+    expect(usersLine).toContain('(also: ');
+    expect(usersLine).toContain('manage users');
+  });
+
+  it('dedupes keywords by whole word, not substring', () => {
+    const holdsLine = getAdminViewSummaryForLLM()
+      .split('\n')
+      .find(line => line.startsWith('- admin.signup_domain_holds:'));
+    // "domain holds" is in the label; "disposable email" is not, though "email" is.
+    expect(holdsLine).not.toMatch(/also:.*domain holds/);
+    expect(holdsLine).toContain('disposable email');
+  });
+
+  it('names AI advisories on every tab that shows them', () => {
+    for (const id of ['admin.dashboard', 'admin.users', 'admin.shadow_detections', 'admin.signup_domain_holds']) {
+      expect(getViewById(id)?.description.toLowerCase(), id).toContain('ai advisory');
+    }
   });
 });
