@@ -1035,6 +1035,7 @@ export function useConversation(
           // Whatever the outcome: a refused turn has no 'start' coming to clear it.
           if (activeSessionId.current === sessionId) setPreparing(null);
         });
+      if (activeSessionId.current !== sessionId) return result.ok;
       if (!result.ok) {
         discardOptimistic();
         setSendError(result.error);
@@ -1069,7 +1070,10 @@ export function useConversation(
 
       const summary = await window.b4m.chat.getSession(sessionId);
       if (summary) {
-        setSession(summary);
+        // A late read for the chat we left must not put the selected thread back behind its opening gate.
+        if (activeSessionId.current === sessionId) {
+          setSession(current => (current?.id === sessionId ? summary : current));
+        }
         onSummaryChanged(summarizeSession(summary));
       }
       return true;
