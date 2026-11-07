@@ -635,12 +635,36 @@ const BRACED_NAME = /^[A-Za-z_]\w*\{([^{}=]*)\}[\w{},.]*\+?=/;
 const BRACED_ASSIGNMENT = { test: (word: string): boolean => /,|\.\./.test(BRACED_NAME.exec(word)?.[1] ?? '') };
 
 /**
+ * Whether `command` may hold an ANSI-C quote: `$'` outside other quotes, so `grep 'ts$'` holds none. A heredoc,
+ * whose body quotes nothing, or an unclosed quote leaves any `$'` counted.
+ */
+function ansiCQuoted(command: string): boolean {
+  if (command.includes('<<')) return command.includes("$'");
+  let quote = '';
+  for (let at = 0; at < command.length; at++) {
+    const char = command[at];
+    if (quote === "'") {
+      if (char === "'") quote = '';
+    } else if (char === '\\') {
+      at++;
+    } else if (quote === '"') {
+      if (char === '"') quote = '';
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === '$' && command[at + 1] === "'") {
+      return true;
+    }
+  }
+  return quote !== '';
+}
+
+/**
  * Whether the script can assign a variable whose name the text does not spell out: an ANSI-C quote, the
  * alias and command hash tables, a nameref, or a computed or brace-expanded name given to a builtin that
  * assigns by name. `text` has its quotes and backslashes removed.
  */
 function rebindsAnyName(command: string, text: string): boolean {
-  if (command.includes("$'") || /BASH_ALIASES|BASH_CMDS/.test(text)) return true;
+  if (ansiCQuoted(command) || /BASH_ALIASES|BASH_CMDS/.test(text)) return true;
   for (const segment of text.split(/[;&|\n()]/)) {
     const words = segment.trim().split(/\s+/);
     if (words.some(word => BRACED_ASSIGNMENT.test(word))) return true;
@@ -990,29 +1014,25 @@ function copyTarget(program: string, args: readonly string[]): CopyTarget | null
   return null;
 }
 
-/** Whether a leading xargs builds its command around a replace string (`-I{}`, `-i`, `--replace`), which no scan can fill in. */
-function xargsReplaces(tokens: readonly string[]): boolean {
-  const xargs = WRAPPERS.get('xargs') ?? NO_OPTIONS;
-  let at = 0;
-  while (at < tokens.length && isWrapper(tokens[at] as string)) {
-    const end = pastWrapper(tokens, at);
-    if (programName(unquote(tokens[at] as string)) === 'xargs') {
-      for (const word of tokens.slice(at + 1, end).map(unquote)) {
-        if (word.startsWith('--')) {
-          if (longOptionName(xargs, word.slice(2).split('=')[0] as string) === 'replace') return true;
-          continue;
-        }
-        if (!word.startsWith('-')) continue;
-        for (const letter of word.slice(1)) {
-          if (letter === 'I' || letter === 'i') return true;
-          if (xargs.values.includes(letter) || xargs.glued?.includes(letter)) break;
-        }
+/**
+ * The replace string an xargs among the leading wrappers builds its command around (`-I R`, `-i`, `--replace`),
+ * '' when the scan cannot read it, or null without one.
+ */
+function xargsReplace(tokens: readonly string[]): string | null {
+  let replace: string | null = null;
+  for (let at = 0; at < tokens.length && isWrapper(tokens[at]);) {
+    if (programName(unquote(tokens[at])) === 'xargs') {
+      for (const { option, value } of givenOptions(tokens, at)) {
+        if (option !== 'I' && option !== 'i' && option !== 'replace') continue;
+        const text = value === undefined ? (option === 'I' ? '' : '{}') : isDynamic(value) ? '' : wordValue(value);
+        replace = replace === null || replace === text ? text : '';
       }
     }
+    const end = pastWrapper(tokens, at);
     if (end <= at) break;
     at = end;
   }
-  return false;
+  return replace;
 }
 
 /** `git config` keys whose value is a program git runs, or a file of more config. Case is ignored, as git does. */
@@ -1205,7 +1225,7 @@ function findActions(args: readonly string[]): {
       named = true;
     } else if (/^-(type|maxdepth|mindepth)$/.test(word)) {
       at++;
-    } else if (/^-(depth|xdev|mount|print0?)$/.test(word)) {
+    } else if (/^-(depth|xdev|mount|prune|print0?)$/.test(word)) {
       continue;
     } else if (word.startsWith('-') || ['(', ')', '!', ','].includes(word)) {
       narrowed = false;
@@ -2261,8 +2281,91 @@ function stdinRedirected(node: Node): boolean {
  * output is all xargs reads; null otherwise.
  */
 function listerFeeds(node: Node, script: string): Listing | null {
-  const producer = pipedFrom(node);
-  return producer ? listsNames(words(producer), script) : null;
+  const { producer, filtered } = feeder(node);
+  const listing = producer ? listsNames(words(producer), script) : null;
+  // A line filter splits NUL-ended names at newlines.
+  return listing?.nul && filtered ? null : listing;
+}
+
+/** The command that feeds `node` past the line filters (linesFilter) between them, and whether there are any. */
+function feeder(node: Node): { producer: Node | null; filtered: boolean } {
+  let producer = pipedFrom(node);
+  let filtered = false;
+  while (producer !== null && linesFilter(words(producer))) {
+    filtered = true;
+    producer = pipedFrom(producer);
+  }
+  return { producer, filtered };
+}
+
+/** Each word's value when none expands (no expansion, glob, brace or tilde), else null. */
+function fixedWords(raw: readonly string[]): string[] | null {
+  const values: string[] = [];
+  for (const word of raw) {
+    const pieces = wordPieces(word);
+    if (pieces.some(piece => !('char' in piece) || (piece.active && '*?[{~'.includes(piece.char)))) return null;
+    values.push(pieces.map(piece => ('char' in piece ? piece.char : '')).join(''));
+  }
+  return values;
+}
+
+/** Values a line filter's options are read with: whole-line flags, and options that take a value. */
+const LINE_FILTERS: Record<string, { flags: string; values: string; long: RegExp }> = {
+  grep: {
+    flags: 'ivEFGPwxsqaUy',
+    values: 'em',
+    long: /^--(invert-match|ignore-case|no-ignore-case|extended-regexp|fixed-strings|basic-regexp|perl-regexp|word-regexp|line-regexp|no-messages|quiet|silent|text|regexp=.*|max-count=\d+)$/,
+  },
+  head: { flags: '', values: 'n', long: /^--lines=[+-]?\d+$/ },
+  sort: {
+    flags: 'bdfghiMnRrsuV',
+    values: 'kt',
+    long: /^--(reverse|unique|numeric-sort|general-numeric-sort|human-numeric-sort|month-sort|version-sort|ignore-case|dictionary-order|ignore-leading-blanks|stable)$/,
+  },
+  uniq: { flags: 'diuD', values: 'fsw', long: /^--(repeated|unique|ignore-case)$/ },
+};
+
+/**
+ * Whether a command prints only whole lines of its input, some dropped or reordered: grep (the pattern its one
+ * operand), head or tail by line count, sort or uniq, with no file operand and no option that changes a line.
+ */
+function linesFilter(raw: readonly string[]): boolean {
+  const values = fixedWords(raw);
+  if (values === null || raw.length === 0 || isWrapper(raw[0] as string)) return false;
+  const [program = '', ...args] = values;
+  const name = programName(program);
+  const grammar = own(LINE_FILTERS, /^[ef]grep$/.test(name) ? 'grep' : name === 'tail' ? 'head' : name);
+  if (grammar === undefined) return false;
+  let pattern = name.endsWith('grep');
+  const operands: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] as string;
+    if (arg === '--') {
+      operands.push(...args.slice(index + 1));
+      break;
+    }
+    if (grammar === LINE_FILTERS.head && /^-\d+$/.test(arg)) continue;
+    if (arg.startsWith('--')) {
+      if (!grammar.long.test(arg)) return false;
+      if (arg.startsWith('--regexp=')) pattern = false;
+      continue;
+    }
+    if (!arg.startsWith('-') || arg === '-') {
+      operands.push(arg);
+      continue;
+    }
+    for (let at = 1; at < arg.length; at++) {
+      const letter = arg[at] as string;
+      if (grammar.flags.includes(letter)) continue;
+      if (!grammar.values.includes(letter)) return false;
+      const value = arg.slice(at + 1) || args[++index];
+      if (value === undefined) return false;
+      if (letter === 'e') pattern = false;
+      if (letter === 'n' && !/^[+-]?\d+$/.test(value)) return false;
+      break;
+    }
+  }
+  return operands.length === (pattern ? 1 : 0);
 }
 
 /** The plain command before `node` in its pipeline, if any. */
@@ -2331,6 +2434,81 @@ function xargsReadsNul(tokens: readonly string[]): boolean {
   return xargsGiven(tokens, ['0', 'null']) === true;
 }
 
+const DELIMITER_ESCAPES: Record<string, string> = {
+  a: '\x07',
+  b: '\b',
+  f: '\f',
+  n: '\n',
+  r: '\r',
+  t: '\t',
+  v: '\v',
+  '\\': '\\',
+};
+
+/** The byte GNU xargs reads a `-d` value as, escapes resolved; null for one it refuses. */
+function delimiterChar(text: string): string | null {
+  if (text.length === 1 && text.charCodeAt(0) < 0x80) return text;
+  const named = text.length === 2 && text[0] === '\\' ? own(DELIMITER_ESCAPES, text[1] as string) : undefined;
+  if (named !== undefined) return named;
+  const hex = /^\\x([0-9a-fA-F]+)$/.exec(text)?.[1];
+  const octal = /^\\(0[0-7]*)$/.exec(text)?.[1];
+  const code = hex !== undefined ? parseInt(hex, 16) : octal !== undefined ? parseInt(octal, 8) : 256;
+  return code < 256 ? String.fromCharCode(code) : null;
+}
+
+/** The delimiter each `-d`/`--delimiter` of a leading xargs names, null for one the scan cannot read. */
+function xargsDelimiters(tokens: readonly string[]): (string | null)[] {
+  for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
+    if (programName(unquote(tokens[at])) !== 'xargs') continue;
+    return givenOptions(tokens, at)
+      .filter(({ option }) => option === 'd' || option === 'delimiter')
+      .map(({ value }) => (value === undefined || isDynamic(value) ? null : delimiterChar(wordValue(value))));
+  }
+  return [];
+}
+
+/**
+ * Whether what feeds `node`, past line filters, prints no word starting with `-`: plain words of `echo` or
+ * `printf`, `pgrep` ids, `docker ps -q` or `docker images -q` ids, or `git branch` names.
+ */
+function optionFreeFeed(node: Node): boolean {
+  const { producer, filtered } = feeder(node);
+  const raw = producer ? words(producer) : [];
+  const values = fixedWords(raw);
+  if (values === null || raw.length === 0 || isWrapper(raw[0] as string)) return false;
+  const [program = '', ...args] = values;
+  switch (programName(program)) {
+    case 'echo':
+    case 'printf': {
+      const fed = filtered ? null : staticFeed(node);
+      return fed !== null && fed.words.every(word => !/^-|\\/.test(wordValue(word)));
+    }
+    case 'pgrep':
+      // Without -l, -a or -d it prints only process ids.
+      return !args.some(arg => /^-[^-]*[lad]/.test(arg) || /^--(list|delimiter)/.test(arg));
+    case 'docker': {
+      const [verb = '', ...rest] = args[0] === 'container' || args[0] === 'image' ? args.slice(1) : args;
+      if (!(verb === 'ps' || verb === 'images' || (verb === 'ls' && args[0] !== verb))) return false;
+      let quiet = false;
+      for (let index = 0; index < rest.length; index++) {
+        const arg = rest[index] as string;
+        if (/^-a?q[aq]*$/.test(arg) || arg === '--quiet') quiet = true;
+        else if (arg === '-f' || arg === '--filter') index++;
+        else if (!/^(-a|--all|--no-trunc|--filter=.*)$/.test(arg)) return false;
+      }
+      return quiet;
+    }
+    case 'git':
+      // git refuses a branch name that starts with `-`.
+      return (
+        args[0] === 'branch' &&
+        args.slice(1).every(arg => !arg.startsWith('-') || /^--(no-)?merged(=.*)?$|^--list$/.test(arg))
+      );
+    default:
+      return false;
+  }
+}
+
 /** Whether a leading xargs is given one of `options`; null without one. */
 function xargsGiven(tokens: readonly string[], options: readonly string[]): boolean | null {
   for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
@@ -2386,7 +2564,7 @@ const XARGS_SHELLS = new Set(['sh', 'bash', 'dash', 'zsh', 'ksh', 'mksh', 'fish'
 /** Programs whose arguments name no file, so input words handed to them reach nothing. */
 const NAMES_NOTHING = new Set(['echo', 'printf', 'basename', 'dirname', 'true', 'false', 'kill']);
 
-/** docker and podman subcommands whose operands are containers or images. */
+/** docker subcommands whose operands are containers or images. */
 const CONTAINER_OPERANDS = /^(stop|kill|rm|rmi|start|restart|pause|unpause|wait|inspect|logs)$/;
 
 /**
@@ -2397,7 +2575,7 @@ function takesNoFiles(consumer: readonly string[]): boolean {
   const [program = '', ...args] = consumer.map(unquote);
   const name = programName(program);
   if (NAMES_NOTHING.has(name)) return true;
-  if (name === 'docker' || name === 'podman') {
+  if (name === 'docker') {
     const sub = args[0] === 'container' || args[0] === 'image' ? args[1] : args[0];
     return CONTAINER_OPERANDS.test(sub ?? '');
   }
@@ -2624,11 +2802,15 @@ function diffLists(args: readonly string[]): Listing | null {
     else if (arg === '--name-only') names = true;
     else if (arg === '--cached' || arg === '--staged') cached = true;
     else if (/^(-z|--no-renames|--diff-filter=[A-Za-z]*)$/.test(arg)) continue;
-    else if (arg.startsWith('-') || arg.includes('...')) return null;
+    else if (arg.startsWith('-')) return null;
     else revisions.push(arg);
   }
-  const targets = revisions.flatMap(revision => revision.split('..').map(end => end || 'HEAD'));
-  if (!names || targets.length > 2) return null;
+  // `A...B` stays whole and counts as two ends; diffListed compares B with the merge base of A and B.
+  const targets = revisions.flatMap(revision =>
+    revision.includes('...') ? [revision] : revision.split('..').map(end => end || 'HEAD')
+  );
+  const ends = targets.reduce((count, target) => count + (target.includes('...') ? 2 : 1), 0);
+  if (!names || ends > 2 || targets.some(target => target.split('...').length > 2)) return null;
   return {
     folders: ['.'],
     tracked: true,
@@ -2638,7 +2820,7 @@ function diffLists(args: readonly string[]): Listing | null {
     settings: {
       kind: 'diff',
       targets: targets.length > 0 ? targets : cached ? ['HEAD'] : [],
-      worktree: !cached && targets.length < 2,
+      worktree: !cached && ends < 2,
     },
   };
 }
@@ -4639,12 +4821,18 @@ export async function scanShell(
         await check(output, state.cwd);
       }
       const feeds = xargsFeeds(tokens);
-      if (feeds && !takesNoFiles(withoutWrappers(tokens))) {
+      const consumer = withoutWrappers(tokens);
+      if (feeds && takesNoFiles(consumer)) {
+        // No NAMES_NOTHING option names or runs a file; a docker or git one may, so no fed word may read as one.
+        const plain = NAMES_NOTHING.has(programName(unquote(consumer[0] ?? '')));
+        if (!plain && (feeds.file || stdinRedirected(node) || !optionFreeFeed(node))) unreadOperands++;
+      } else if (feeds) {
         // xargs runs its command on words it reads, which only a lister over checked folders keeps to them.
-        const consumer = withoutWrappers(tokens);
         const writing = !onlyReads(consumer);
         const listing = listerFeeds(node, gateText);
         const nul = xargsReadsNul(tokens);
+        const delimiters = xargsDelimiters(tokens);
+        const replace = xargsReplace(tokens);
         const fed = listing === null && xargsSplitsAtBlanks(tokens) ? staticFeed(node) : null;
         if (
           (writing && XARGS_SHELLS.has(programName(unquote(consumer[0] ?? '')))) ||
@@ -4652,7 +4840,15 @@ export async function scanShell(
           (listing === null && fed === null) ||
           effects.folders.length > 0 ||
           stdinRedirected(node) ||
-          !trusted(node, pipedFrom(node)) ||
+          // A newline delimiter splits at less than the checks below allow for; another may split inside a name.
+          !(delimiters.length === 0 || (!nul && delimiters.every(char => char === '\n'))) ||
+          // With a replace string each line is one name; only ls prints one per line, and a replace string
+          // inside a larger word builds a path no lister prints.
+          (replace !== null &&
+            (replace === '' ||
+              (fed !== null && !fed.ls) ||
+              consumer.some(word => wordValue(word) !== replace && wordValue(word).includes(replace)))) ||
+          !trusted(node, feeder(node).producer) ||
           !(listing
             ? listing.nul === nul && (await listingChecked(listing, writing, !nul))
             : fed
@@ -4714,7 +4910,6 @@ export async function scanShell(
         directoryChanges++;
         Object.assign(state, { lost: true, stackLost: true });
       }
-      if (xargsReplaces(tokens)) unreadOperands++;
       const configured = gitConfigProgram(withoutWrappers(tokens));
       gitProgram ??= configured;
 

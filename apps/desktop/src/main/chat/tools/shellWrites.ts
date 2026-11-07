@@ -374,7 +374,7 @@ async function listArchive(
 /** find tests that only select by name, path or type, with the value each takes; a last `-print` is dropped. */
 const FIND_TESTS = /^-(name|iname|path|ipath|wholename|iwholename|type)$/;
 /** Tests that only narrow what find prints, so without `-o`, `!` or a group dropping one prints more, never other. */
-const FIND_NARROWS = /^-(empty|readable|writable|executable|nouser|nogroup|xdev|mount|depth)$/;
+const FIND_NARROWS = /^-(empty|readable|writable|executable|nouser|nogroup|xdev|mount)$/;
 const FIND_NARROWS_VALUED =
   /^-(mtime|mmin|atime|amin|ctime|cmin|used|size|newer|anewer|cnewer|newer[aBcmt]{2}|perm|user|group|uid|gid|links|inum|samefile|regex|iregex|fstype)$/;
 const FIND_LISTED = 1000;
@@ -400,6 +400,9 @@ async function findSelected(
     if (/^-(maxdepth|mindepth)$/.test(test) && value !== undefined && /^\d+$/.test(value)) {
       globals.push(test, value);
       index++;
+    } else if (test === '-depth') {
+      // Kept, as it turns `-prune` off.
+      globals.push(test);
     } else if (FIND_TESTS.test(test) && value !== undefined) {
       kept.push(test, value);
       index++;
@@ -1318,7 +1321,20 @@ export async function diffListed(
   if (entries === null) return null;
   const printed = new Set<string>();
   const links = new Set<string>();
+  const ends: string[] = [];
   for (const target of targets) {
+    if (!target.includes('...')) {
+      ends.push(target);
+      continue;
+    }
+    // `A...B` compares B with the merge base of A and B.
+    const [from = '', to = ''] = target.split('...').map(end => end || 'HEAD');
+    if (![from, to].every(end => REVISION.test(end) && !end.startsWith('-'))) return null;
+    const base = (await gitQuery(top, ['merge-base', from, to]))?.trim();
+    if (base === undefined || !/^[0-9a-f]{40,64}$/.test(base)) return null;
+    ends.push(base, to);
+  }
+  for (const target of ends) {
     if (!REVISION.test(target) || target.startsWith('-')) return null;
     const raw = await gitQuery(top, [
       'diff-index',
@@ -1358,7 +1374,8 @@ export async function diffListed(
   return {
     settings: [...printed].filter(isSettingsPath).map(path => `${top}/${path}`),
     links: [...links],
-    odd: [...printed].some(oddForXargs),
+    // The work tree may differ from the index at any entry, which only settings and links are compared for.
+    odd: [...printed, ...(worktree ? entries.map(({ path }) => path) : [])].some(oddForXargs),
   };
 }
 
