@@ -1,5 +1,11 @@
 # @bike4mind/cli
 
+## 4.3.1
+
+### Patch Changes
+
+- [#6792](https://github.com/Bike4Mind/bike4mind/pull/6792) [`09ee8d1`](https://github.com/Bike4Mind/bike4mind/commit/09ee8d1cb0541e12ef93ac03b54b153c54b92407) Thanks [@maconard](https://github.com/maconard)! - keep the saved config and session in sync, and fix mcp enable/disable
+
 ## 4.3.0
 
 ### Minor Changes
