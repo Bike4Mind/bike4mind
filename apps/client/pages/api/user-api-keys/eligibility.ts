@@ -3,7 +3,7 @@ import { organizationRepository } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userApiKeyService } from '@bike4mind/services';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
-import type { ActiveSubscriptionsRequest } from '@server/entitlements/activeSubscriptions';
+import type { ActiveSubscriptionsRequest } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
   API_KEY_ACCESS_DENIED_MESSAGE,
