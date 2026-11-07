@@ -36,6 +36,8 @@ const PROGRAMS = [
   'head',
 ];
 
+const REPLACEMENT = String.fromCharCode(0xfffd);
+
 /** Commands that ran unasked on main and must still run as the mode allows, in a repository with a large node_modules. */
 describe('commands main ran unasked', () => {
   let base: string;
@@ -182,6 +184,8 @@ describe('commands main ran unasked', () => {
     });
     for (const path of ['.claude/settings.json', ...routes]) await writeFile(join(nrepo, path), 'b');
     await writeFile(join(nrepo, '[.]claude[!q]settings.jso[nq]'), '');
+    await writeFile(join(nrepo, `[.]claude[!q]settings.jso[n${REPLACEMENT}]`), '');
+    await writeFile(join(nrepo, 'a'.repeat(56)), '');
     // urepo is a clone two commits deep whose main tracks origin/main, with an untracked `u.ts` at its top.
     const orepo = await repository('orepo', { '.claude/settings.json': '{}', 'src/b.ts': 'b' });
     await writeFile(join(orepo, 'src', 'b.ts'), 'b2');
@@ -374,6 +378,13 @@ describe('commands main ran unasked', () => {
     expect(await judge(command, folder)).toEqual(expected);
   });
 
+  it('reads a glob of many stars against a long name in linear time', async () => {
+    const started = performance.now();
+    expect(await judge('git diff --name-only -- *a*a*a*a*a*a*a*a*b | xargs wc -l', 'nrepo')).toEqual(unasked);
+    // Room for the git runs on a loaded host; the matching alone took minutes when it backtracked.
+    expect(performance.now() - started).toBeLessThan(10000);
+  });
+
   it.each([
     ['grep -rl hooks . | xargs sed -i s/a/b/', ''],
     ['rg -l --hidden hooks | xargs sed -i s/a/b/', ''],
@@ -480,6 +491,10 @@ describe('commands main ran unasked', () => {
     ['git diff --name-only -- *z* | xargs sed -i s/a/b/', 'srepo'],
     ['git diff --name-only -- *test* | xargs sed -i s/a/b/', 'srepo'],
     ['git diff --name-only -- *q* | xargs sed -i s/a/b/', 'nrepo'],
+    // The shell gets a lone surrogate as U+FFFD, which the planted name holds.
+    [`git diff --name-only -- *${REPLACEMENT}* | xargs sed -i s/a/b/`, 'nrepo'],
+    [`git diff --name-only -- *${String.fromCharCode(0xd800)}* | xargs sed -i s/a/b/`, 'nrepo'],
+    [`git diff --name-only -- *${String.fromCharCode(0xdc00)}* | xargs sed -i s/a/b/`, 'nrepo'],
     // A bash without globskipdots expands `src/.*.` to `src/..` too.
     ['git diff --name-only -- src/.*. | xargs sed -i s/a/b/', 'srepo'],
     // bash re-reads the `\` the range makes, passing git `.claude`.

@@ -86,6 +86,45 @@ describe('globNames', () => {
     }
   });
 
+  describe('matching', () => {
+    let folder: string;
+    let long: string;
+
+    beforeAll(async () => {
+      folder = join(base, 'm');
+      long = join(base, 'long');
+      await mkdir(folder);
+      await mkdir(long);
+      for (const name of ['a', 'ab', 'a\nb.ts', 'README.md', '.x']) await writeFile(join(folder, name), '');
+      for (const name of ['a'.repeat(56), 'component-library-settings-panel-test.md']) {
+        await writeFile(join(long, name), '');
+      }
+    });
+
+    it.each([
+      ['a*a', []],
+      ['*ab*b', []],
+      ['a**b', ['ab']],
+      ['*b', ['ab']],
+      ['a*', ['a', 'a\nb.ts', 'ab']],
+      ['*.ts', ['a\nb.ts']],
+      ['read*', ['README.md']],
+      ['.*', ['.x']],
+    ])('matches %j to %j', async (pattern, names) => {
+      expect((await globNames(folder, pattern, never))?.sort()).toEqual(names);
+    });
+
+    it.each([['********.ts'], ['*a*a*a*a*a*a*a*a*b']])(
+      'matches %s in linear time',
+      async pattern => {
+        const started = performance.now();
+        expect(await globNames(long, pattern, never)).toEqual([]);
+        expect(performance.now() - started).toBeLessThan(2000);
+      },
+      2000
+    );
+  });
+
   it('stops when the scan is stopped', async () => {
     expect(await globNames(base, 'src/*', () => true)).toBeNull();
   });

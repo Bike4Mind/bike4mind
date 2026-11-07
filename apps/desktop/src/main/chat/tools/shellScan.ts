@@ -376,9 +376,10 @@ function globMayMatchEnvFile(path: string): boolean {
   const name = basename(path);
   if (isEnvFile(name.replace(/\[[^\]]*\]|[?*]/g, ''))) return true;
   if (/^[?*[]/.test(name)) return false;
+  // One `.*` per run of stars keeps the backtracking bounded by the short samples.
   const pattern = name
     .replace(/[.+^${}()|\\]/g, '\\$&')
-    .replace(/\*/g, '.*')
+    .replace(/\*+/g, '.*')
     .replace(/\?/g, '.');
   try {
     const matcher = new RegExp(`^${pattern}$`);
@@ -3008,10 +3009,33 @@ function pathspecValues(raw: string): { text: string; glob: boolean }[] | null {
   return values;
 }
 
+/** Folded one code point at a time, so the fold of joined text is the join of the folds. */
+const foldCase = (text: string): string => Array.from(text, char => char.toUpperCase().toLowerCase()).join('');
+
+/**
+ * Whether `name` is the literals `parts` with any text, newlines included, between each pair: the split of a
+ * pattern whose `*` runs are collapsed. Linear in the name, with each middle part taken at its first fit.
+ */
+function starMatches(parts: readonly string[], name: string): boolean {
+  const first = parts[0] ?? '';
+  const last = parts.at(-1) ?? '';
+  if (parts.length < 2) return name === first;
+  if (name.length < first.length + last.length || !name.startsWith(first) || !name.endsWith(last)) return false;
+  const end = name.length - last.length;
+  let at = first.length;
+  for (let index = 1; index < parts.length - 1; index++) {
+    const part = parts[index] as string;
+    const found = name.indexOf(part, at);
+    if (found < 0 || found + part.length > end) return false;
+    at = found + part.length;
+  }
+  return true;
+}
+
 /**
  * The names bash may expand a pattern of literals and `*`s to under `cwd`, as it passes them, matched ignoring
- * leading dots so dotglob is covered. Null for a folder that cannot be read, a name that is not UTF-8 (or not NFC
- * on macOS, where git may precompose it), or past WALK_ENTRIES or GLOB_MATCHES.
+ * leading dots so dotglob is covered, and ignoring case as well as exactly. Null for a folder that cannot be read, a
+ * name that is not UTF-8 (or not NFC on macOS, where git may precompose it), or past WALK_ENTRIES or GLOB_MATCHES.
  */
 export async function globNames(cwd: string, pattern: string, stopped: () => boolean): Promise<string[] | null> {
   let found: { path: string; name: string }[] = [{ path: cwd, name: '' }];
@@ -3022,8 +3046,8 @@ export async function globNames(cwd: string, pattern: string, stopped: () => boo
       found = found.map(({ path, name }) => ({ path: `${path}/${component}`, name: join(name, component) }));
       continue;
     }
-    const parts = component.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    const matcher = new RegExp(`^${parts.join('.*')}$`, 'is');
+    const parts = component.replace(/\*+/g, '*').split('*');
+    const folded = parts.map(foldCase);
     const next: typeof found = [];
     for (const { path, name } of found) {
       if (stopped()) return null;
@@ -3039,7 +3063,9 @@ export async function globNames(cwd: string, pattern: string, stopped: () => boo
         // A name that does not survive decoding is one the walk could neither follow nor check.
         if (!Buffer.from(child, 'utf8').equals(raw)) return null;
         if (process.platform === 'darwin' && child.normalize('NFC') !== child) return null;
-        if (matcher.test(child)) next.push({ path: `${path}/${child}`, name: join(name, child) });
+        if (starMatches(parts, child) || starMatches(folded, foldCase(child))) {
+          next.push({ path: `${path}/${child}`, name: join(name, child) });
+        }
       }
       if (next.length > GLOB_MATCHES) return null;
     }
@@ -4676,7 +4702,8 @@ export async function scanShell(
   roots: readonly string[],
   deadlineMs = wslLocation(startDirectory) === null ? SCAN_DEADLINE_MS : WSL_SCAN_DEADLINE_MS
 ): Promise<ShellScan | null> {
-  if (command.length > MAX_SCRIPT) return null;
+  // The shell gets a lone surrogate as U+FFFD, a character the scan would never compare against.
+  if (command.length > MAX_SCRIPT || !command.isWellFormed()) return null;
   const tree = await parseBash(command);
   if (!tree) return null;
 
