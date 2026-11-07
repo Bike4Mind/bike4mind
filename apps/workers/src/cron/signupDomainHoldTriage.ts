@@ -10,6 +10,8 @@
  * Advisory assessment: after the rule, pending young-domain holds get a Decisions verdict when
  * signupDomainHoldAssessmentEnabled is on; a confident abuse verdict confirms the same way (see
  * apps/client/server/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts).
+ * Young-domain recheck: last, runSignupDomainAgeRecheck (signupDomainAgeRecheck.ts) marks pending
+ * young-domain holds whose domain has since aged, for an admin to release. It never releases.
  * Schedule: rate(10 minutes) (infra/cron.ts signupDomainHoldTriage), on stages that run scheduled
  * jobs. Not on self-host yet; it ports with disposableDomainRefresh (selfhostParityPolicy.ts).
  */
@@ -24,10 +26,11 @@ import {
   adminSettingsRepository,
   connectDB,
   signupDomainReviewRepository,
+  signupProtectionRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { adminAuditService } from '@bike4mind/services';
+import { adminAuditService, userService } from '@bike4mind/services';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { Resource } from 'sst';
@@ -36,11 +39,13 @@ import {
   defaultSignupDomainHoldAssessmentDeps,
   runSignupDomainHoldAssessments,
 } from '@server/security/signupDomainHoldAssessment/signupDomainHoldAssessment';
+import { runSignupDomainAgeRecheck } from './signupDomainAgeRecheck';
 
 const logger = new Logger({ metadata: { service: 'signupDomainHoldTriage' } });
 
 /** Stop starting new assessments this long before the Lambda timeout. */
 const STOP_MARGIN_MS = 60_000;
+const INTEL_TIMEOUT_MS = 5000;
 
 /** Holds confirmed per run; a larger backlog drains over the following runs. */
 export const TRIAGE_BATCH_LIMIT = 200;
@@ -126,11 +131,26 @@ export const handler = async (_event?: unknown, context?: Pick<Context, 'getRema
     now: () => new Date(),
     logger,
   });
-  const assessment = await runSignupDomainHoldAssessments(
-    defaultSignupDomainHoldAssessmentDeps(logger, () =>
-      context ? context.getRemainingTimeInMillis() < STOP_MARGIN_MS : false
-    )
-  );
+  const shouldStop = () => (context ? context.getRemainingTimeInMillis() < STOP_MARGIN_MS : false);
+  const assessment = await runSignupDomainHoldAssessments(defaultSignupDomainHoldAssessmentDeps(logger, shouldStop));
+  const ageRecheck = await runSignupDomainAgeRecheck({
+    holds: signupDomainReviewRepository,
+    youngerThanDays: async () => {
+      const settings = await getSettingsMap(
+        { adminSettings: adminSettingsRepository },
+        { names: ['holdSignupsFromDomainsYoungerThanDays'] }
+      );
+      return getSettingsValue('holdSignupsFromDomainsYoungerThanDays', settings, 30);
+    },
+    domainIntel: async domain => {
+      const { findDomainIntel, saveDomainIntel } = signupProtectionRepository;
+      if (!findDomainIntel || !saveDomainIntel) return null;
+      return userService.getDomainIntel(domain, { findDomainIntel, saveDomainIntel }, { timeoutMs: INTEL_TIMEOUT_MS });
+    },
+    shouldStop,
+    now: () => new Date(),
+    logger,
+  });
   // Surface partial failure as a Lambda error so the alarm sees it; the next run retries the rest.
   // A provider failure is a stored verdict, not an error; only unexpected errors count here.
   if (result.status === 'ran' && result.failed > 0) {
@@ -139,5 +159,8 @@ export const handler = async (_event?: unknown, context?: Pick<Context, 'getRema
   if (assessment.status !== 'skipped' && assessment.errors > 0) {
     throw new Error(`signupDomainHoldTriage: ${assessment.errors} of ${assessment.considered} assessments failed`);
   }
-  return { ...result, assessment };
+  if (ageRecheck.failed > 0) {
+    throw new Error(`signupDomainHoldTriage: ${ageRecheck.failed} young-domain age rechecks failed`);
+  }
+  return { ...result, assessment, ageRecheck };
 };

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { setupMongoTest } from '../../__test__/utils';
 import {
+  signupDomainHoldListRepository,
   SignupDomainReviewModel,
   signupDomainReviewRepository,
   SignupObservationModel,
@@ -189,5 +190,137 @@ describe('signup protection persistence', () => {
     expect(await signupProtectionRepository.isOrganizationDomain('a@otherexample.net')).toBe(false);
     await PartnerSignupRule.updateOne({ domain: 'example.net' }, { $set: { enabled: false } });
     expect(await signupProtectionRepository.isOrganizationDomain('a@example.net')).toBe(false);
+  });
+
+  describe('admin hold list', () => {
+    const window = new Date('2026-03-01');
+    const seed = () =>
+      SignupDomainReviewModel.create([
+        { ...hold, domain: 'pending-old.test', triggeredAt: new Date('2025-01-01') },
+        {
+          ...hold,
+          domain: 'pending-young.test',
+          reason: 'young-domain (<30 days)',
+          triggeredAt: new Date('2026-03-05'),
+        },
+        { ...hold, domain: 'blocked-new.test', status: 'blocked', reviewedAt: new Date('2026-03-10') },
+        { ...hold, domain: 'blocked-old.test', status: 'blocked', reviewedAt: new Date('2025-06-01') },
+        { ...hold, domain: 'released-new.test', status: 'released', reviewedAt: new Date('2026-03-02') },
+        { ...hold, domain: 'released-old.test', status: 'released', reviewedAt: new Date('2025-06-01') },
+        // No reviewedAt on a legacy settled row: its trigger time decides.
+        { ...hold, domain: 'legacy-old.test', status: 'blocked', triggeredAt: new Date('2025-01-01') },
+      ]);
+    const domains = async (filter: Parameters<typeof signupDomainHoldListRepository.list>[0]) =>
+      (await signupDomainHoldListRepository.list(filter, 1, 25)).map(review => review.domain).sort();
+
+    it('filters by status and keeps every pending hold regardless of age', async () => {
+      await seed();
+      expect(await domains({ status: 'pending', settledSince: window })).toEqual([
+        'pending-old.test',
+        'pending-young.test',
+      ]);
+      expect(await domains({ status: 'blocked', settledSince: window })).toEqual(['blocked-new.test']);
+      expect(await domains({ status: 'released', settledSince: window })).toEqual(['released-new.test']);
+    });
+
+    it('hides settled holds decided before the window but never deletes them', async () => {
+      await seed();
+      expect(await domains({ status: 'all', settledSince: window })).toEqual([
+        'blocked-new.test',
+        'pending-old.test',
+        'pending-young.test',
+        'released-new.test',
+      ]);
+      expect(await domains({ status: 'all' })).toHaveLength(7);
+      expect(await domains({ status: 'blocked' })).toEqual(['blocked-new.test', 'blocked-old.test', 'legacy-old.test']);
+      expect(await SignupDomainReviewModel.countDocuments()).toBe(7);
+    });
+
+    it('narrows by reason family and counts each status view under the same filter', async () => {
+      await seed();
+      expect(await domains({ status: 'all', reason: 'young-domain' })).toEqual(['pending-young.test']);
+      expect(await signupDomainHoldListRepository.countByStatus({ settledSince: window })).toEqual({
+        pending: 2,
+        blocked: 1,
+        released: 1,
+        all: 4,
+      });
+      expect(await signupDomainHoldListRepository.countByStatus({ reason: 'young-domain' })).toEqual({
+        pending: 1,
+        blocked: 0,
+        released: 0,
+        all: 1,
+      });
+    });
+
+    it('pages newest first', async () => {
+      await seed();
+      const first = await signupDomainHoldListRepository.list({ status: 'all' }, 1, 2);
+      const second = await signupDomainHoldListRepository.list({ status: 'all' }, 2, 2);
+      const times = [...first, ...second].map(review => new Date(review.triggeredAt).getTime());
+      expect(times).toEqual([...times].sort((a, b) => b - a));
+      expect(new Set([...first, ...second].map(review => review.domain)).size).toBe(4);
+    });
+  });
+
+  describe('young-domain age recheck', () => {
+    const young = 'young-domain (<30 days)';
+    const now = new Date('2026-03-01');
+    const retryBefore = new Date('2026-02-28');
+
+    it('lists pending young-domain holds with no known registration date, retrying a failed lookup later', async () => {
+      await SignupDomainReviewModel.create([
+        { ...hold, domain: 'fresh.test', reason: young },
+        { ...hold, domain: 'retry.test', reason: young, domainAgeCheckedAt: new Date('2026-02-01') },
+        { ...hold, domain: 'recent-try.test', reason: young, domainAgeCheckedAt: new Date('2026-02-28T12:00:00Z') },
+        { ...hold, domain: 'known.test', reason: young, domainRegisteredAt: new Date('2026-02-10') },
+        { ...hold, domain: 'decided.test', reason: young, status: 'blocked' },
+        { ...hold, domain: 'other.test', reason: 'disposable-aggregate' },
+      ]);
+      const listed = await signupDomainReviewRepository.listForAgeRecheck(retryBefore, 10);
+      expect(listed.map(review => review.domain).sort()).toEqual(['fresh.test', 'retry.test']);
+    });
+
+    it('records a lookup only on a still-pending hold', async () => {
+      await SignupDomainReviewModel.create([
+        { ...hold, domain: 'fresh.test', reason: young },
+        { ...hold, domain: 'decided.test', reason: young, status: 'released' },
+      ]);
+      const registeredAt = new Date('2026-01-01');
+      expect(await signupDomainReviewRepository.recordDomainAgeCheck('fresh.test', now, registeredAt)).toBe(true);
+      expect(await signupDomainReviewRepository.recordDomainAgeCheck('decided.test', now, registeredAt)).toBe(false);
+      const stored = await SignupDomainReviewModel.findOne({ domain: 'fresh.test' }).lean();
+      expect(stored?.domainRegisteredAt).toEqual(registeredAt);
+      expect(stored?.domainAgeCheckedAt).toEqual(now);
+      expect((await SignupDomainReviewModel.findOne({ domain: 'decided.test' }).lean())?.domainAgeCheckedAt).toBe(
+        undefined
+      );
+    });
+
+    it('marks only pending young-domain holds registered before the cutoff, and never changes a status', async () => {
+      const cutoff = new Date('2026-01-30');
+      await SignupDomainReviewModel.create([
+        { ...hold, domain: 'aged.test', reason: young, domainRegisteredAt: new Date('2026-01-01') },
+        { ...hold, domain: 'still-young.test', reason: young, domainRegisteredAt: new Date('2026-02-20') },
+        { ...hold, domain: 'unknown.test', reason: young },
+        {
+          ...hold,
+          domain: 'blocked.test',
+          reason: young,
+          status: 'blocked',
+          domainRegisteredAt: new Date('2026-01-01'),
+        },
+        { ...hold, domain: 'other.test', reason: 'pattern', domainRegisteredAt: new Date('2026-01-01') },
+      ]);
+      expect(await signupDomainReviewRepository.markAgedDomains(cutoff, now)).toBe(1);
+      expect(await signupDomainReviewRepository.markAgedDomains(cutoff, now)).toBe(0);
+      const rows = await SignupDomainReviewModel.find().lean();
+      const byDomain = Object.fromEntries(rows.map(row => [row.domain, row]));
+      expect(byDomain['aged.test'].domainAgedAt).toEqual(now);
+      expect(byDomain['aged.test'].status).toBe('held_pending_review');
+      for (const domain of ['still-young.test', 'unknown.test', 'blocked.test', 'other.test'])
+        expect(byDomain[domain].domainAgedAt).toBeUndefined();
+      expect(byDomain['blocked.test'].status).toBe('blocked');
+    });
   });
 });
