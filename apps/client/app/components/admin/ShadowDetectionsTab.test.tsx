@@ -47,6 +47,8 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 
 import ShadowDetectionsTab, { formatPaymentAmount } from './ShadowDetectionsTab';
+vi.mock('./CampaignWatches/CampaignWatchesPanel', () => ({ CampaignWatchesPanel: () => null }));
+vi.mock('./CampaignWatches/WatchAccountsButton', () => ({ WatchAccountsButton: () => null }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -124,6 +126,10 @@ describe('ShadowDetectionsTab', () => {
 
   it('defaults to unreviewed detections and renders rows and stats', () => {
     renderTab();
+
+    expect(screen.getByTestId('detections-start-here')).toHaveTextContent('Open Review evidence');
+    expect(screen.getByTestId('detections-start-here')).toHaveTextContent('does not change account access');
+    expect(screen.getByText('Suggested response')).toBeInTheDocument();
 
     expect(m.useShadowDetections).toHaveBeenCalledWith({ detector: undefined, verdict: 'unreviewed' });
     const row = screen.getByTestId(`shadow-detection-row-${DETECTION_ID}`);

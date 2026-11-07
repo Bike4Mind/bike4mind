@@ -15,6 +15,7 @@ import {
   integrationRequestRepository,
   memoryPrincipalKeyRepository,
   shadowDetectionRepository,
+  campaignWatchRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
@@ -565,5 +566,6 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
   await retainDeletedSignupTraces(userId);
   await authEventRepository.deleteAllForUser(userId);
   await shadowDetectionRepository.removeUser(userId);
+  await campaignWatchRepository.removeUser(userId);
   logger.info(`[AccountDeletion] Purged personal content for user ${userId}`);
 }
