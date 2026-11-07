@@ -88,7 +88,8 @@ export function buildDeviceLinkDetection(
   const [best] = link.matches;
   const count = link.matches.length;
   const has = (axis: userService.DeviceLinkAxis) => (best.corroboration.includes(axis) ? 1 : 0);
-  const hours = best.hoursApart;
+  const hoursApart = link.matches.flatMap(match => (match.hoursApart === null ? [] : [match.hoursApart]));
+  const hours = hoursApart.length > 0 ? Math.min(...hoursApart) : null;
   return {
     detector: 'deviceLinkedToBlocked',
     policyVersion: DEVICE_LINKED_TO_BLOCKED_POLICY_VERSION,
@@ -199,12 +200,14 @@ export async function checkDeviceLink(userId: string, deps: DeviceLinkDeps): Pro
 }
 
 export type DeviceLinkSweepReport = {
-  status: 'disabled' | 'done';
+  status: 'disabled' | 'done' | 'stopped';
   scanned: number;
   scanTruncated: boolean;
   linked: number;
   recorded: number;
   alreadyRecorded: number;
+  /** Linked accounts left unrecorded because the run hit its time budget. */
+  skipped: number;
   /** Accounts whose detection was recorded but whose assessment failed. */
   assessFailed: number;
   /** Accounts whose detection could not be recorded. */
@@ -222,6 +225,7 @@ export async function sweepDeviceLinks(
       truncated: boolean;
     }>;
     onError?: (userId: string, error: unknown) => void;
+    shouldStop?: () => boolean;
   }
 ): Promise<DeviceLinkSweepReport> {
   const report: DeviceLinkSweepReport = {
@@ -231,11 +235,14 @@ export async function sweepDeviceLinks(
     linked: 0,
     recorded: 0,
     alreadyRecorded: 0,
+    skipped: 0,
     assessFailed: 0,
     failed: 0,
   };
   const config = await deps.loadConfig();
   if (!config) return { ...report, status: 'disabled' };
+  const shouldStop = deps.shouldStop ?? (() => false);
+  if (shouldStop()) return { ...report, status: 'stopped' };
   const now = deps.now();
   const recent = await deps.loadRecent({
     since: new Date(now.getTime() - RECENT_SIGNUP_HOURS * HOUR_MS),
@@ -244,14 +251,21 @@ export async function sweepDeviceLinks(
   });
   report.scanned = recent.rows.length;
   report.scanTruncated = recent.truncated;
+  if (shouldStop()) return { ...report, status: 'stopped' };
   const results = await evaluateDeviceLinks(
     recent.rows.filter(row => !row.isBanned),
     config,
     deps
   );
-  for (const [userId, result] of results) {
+  const entries = [...results];
+  report.linked = entries.filter(([, result]) => result.linked).length;
+  for (const [index, [userId, result]] of entries.entries()) {
     if (!result.linked) continue;
-    report.linked += 1;
+    if (shouldStop()) {
+      report.status = 'stopped';
+      report.skipped = entries.slice(index).filter(([, remaining]) => remaining.linked).length;
+      break;
+    }
     try {
       const outcome = await recordLink(userId, result, config, deps);
       if (outcome.status === 'recorded') report.recorded += 1;

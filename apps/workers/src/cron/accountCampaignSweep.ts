@@ -41,6 +41,7 @@ const COMMON_FINGERPRINT_BASELINE_DAYS = 30;
 const COMMON_FINGERPRINT_MIN_SIGNUPS = 50;
 const COMMON_FINGERPRINT_LIMIT = 1_000;
 
+const STOP_MARGIN_MS = 60_000;
 const HOUR_MS = 60 * 60 * 1000;
 const PERSONAL_MAIL_DOMAINS: ReadonlySet<string> = new Set([
   ...personalEmailProviders,
@@ -148,6 +149,7 @@ export async function handler(_event: unknown, context: Context) {
   const deviceLinks = await sweepDeviceLinks({
     ...liveDeviceLinkDeps(logger),
     loadRecent: loadRecentDeviceLinkAccounts,
+    shouldStop: () => context.getRemainingTimeInMillis() < STOP_MARGIN_MS,
     onError: (userId, error) =>
       logger.error(
         error instanceof DeviceLinkAssessError
