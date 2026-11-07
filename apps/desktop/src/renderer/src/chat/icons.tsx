@@ -391,6 +391,16 @@ export function PhoneIcon() {
   );
 }
 
+/** An isometric cube, for the 3D model pane. */
+export function CubeIcon() {
+  return (
+    <Glyph>
+      <path d="M8 1.75 13.75 5v6L8 14.25 2.25 11V5z" />
+      <path d="M2.25 5 8 8.25 13.75 5M8 8.25v6" />
+    </Glyph>
+  );
+}
+
 export function TerminalIcon() {
   return (
     <Glyph>

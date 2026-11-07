@@ -260,6 +260,7 @@ const CHANNEL_LABELS: Readonly<Record<SessionOriginChannel, string>> = {
   api: 'API',
   slack: 'Slack',
   cli: 'CLI',
+  desktop: 'Desktop app',
   agent: 'Agent',
 };
 

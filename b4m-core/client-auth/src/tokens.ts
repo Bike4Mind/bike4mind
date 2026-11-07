@@ -17,8 +17,13 @@ export interface AuthTokens {
  */
 export interface TokenStore {
   getAuthTokens(): Promise<AuthTokens | null>;
-  setAuthTokens(tokens: AuthTokens): Promise<void>;
-  clearAuthTokens(): Promise<void>;
+  /**
+   * With `expectedRefreshToken`, saves only while storage still holds that refresh token. Resolves
+   * false when it did not save; a store with no such check may resolve nothing.
+   */
+  setAuthTokens(tokens: AuthTokens, expectedRefreshToken?: string): Promise<boolean | void>;
+  /** With `expectedRefreshToken`, clears only while storage still holds that refresh token. Resolves as setAuthTokens. */
+  clearAuthTokens(expectedRefreshToken?: string): Promise<boolean | void>;
   isAuthenticated(): Promise<boolean>;
   /**
    * Read the tokens straight from durable storage, bypassing any in-memory cache. Optional: a
@@ -27,6 +32,12 @@ export interface TokenStore {
    * presents a refresh token that process has already rotated.
    */
   reloadAuthTokens?(): Promise<AuthTokens | null>;
+  /**
+   * Run `work` while holding a lock that other processes sharing this storage also take, so
+   * only one of them exchanges a refresh token at a time. Optional, for a store whose storage
+   * is shared across processes. Rejects, without running `work`, if the lock stays held too long.
+   */
+  withRefreshLock?<T>(work: () => Promise<T>): Promise<T>;
 }
 
 /**

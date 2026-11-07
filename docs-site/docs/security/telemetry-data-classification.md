@@ -435,6 +435,15 @@ Every request to a `baseApi` route that authenticates with an API key writes one
 | Client IP      | `ipAddress`, resolved server-side | 90 days (TTL index) | Abuse and security investigation, anomaly alerts |
 | Key and owner  | `keyId` and `userId`              | 90 days (TTL index) | Attribute usage to a key and its owner           |
 
+## Client usage
+
+Every authenticated request to a `baseApi` route records which client the account used on the user record (`clientUsage`): the web app, the desktop app, the CLI, or the API (an API key or an OAuth token without a first-party client header). The desktop app and the CLI name themselves in their `User-Agent` and `X-B4M-Client` headers, so the value is a claim the caller makes, used only for statistics and for hiding the desktop app prompt, never for access decisions. A record is written at most once a day per client, or sooner when the client reports a new version. Impersonation sessions, sign-ins still waiting on MFA, system accounts and accounts pending deletion write nothing. The account owner and admins can see it, and it is deleted with the account.
+
+| Data           | Storage                                                         | Lifetime                                    | Purpose                                         |
+| -------------- | --------------------------------------------------------------- | ------------------------------------------- | ----------------------------------------------- |
+| Client seen    | `clientUsage.<web, desktop, cli or api>.firstSeenAt`, `lastSeenAt` | Account lifetime; deleted with the account | Usage statistics, hiding the desktop app prompt |
+| Client version | `clientUsage.<desktop or cli>.version`, at most 32 characters   | Account lifetime; deleted with the account | Usage statistics                                |
+
 ## Usage pattern signals
 
 A scheduled job, off by default behind the `usagePatternSignalsEnabled` admin setting, derives a usage profile for recently active free-tier accounts and stores the latest result per user in the `UserUsagePatternSignals` collection. It collects no new raw data: every input already exists in `UsageEvent`, `ApiKeyUsageLog` or `UserApiKey`. The result is for admin review only and triggers no automatic action on the account, its keys or its balance. Paid accounts get a marker with no signals.

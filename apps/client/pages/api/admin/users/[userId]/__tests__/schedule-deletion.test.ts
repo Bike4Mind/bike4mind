@@ -7,6 +7,8 @@ const h = vi.hoisted(() => ({
   guard: null as null | ((req: Request, res: Response, next: () => void) => void),
   options: null as null | Record<string, unknown>,
   findById: vi.fn(),
+  policy: vi.fn(),
+  requestApproval: vi.fn(),
   audit: vi.fn(),
   core: vi.fn(),
   deny: vi.fn(),
@@ -42,6 +44,14 @@ vi.mock('@server/users/accountDeletion', () => ({
   clearAccountDeletion: vi.fn(),
 }));
 
+vi.mock('@server/admin/approvals/service', () => ({
+  getApprovalPolicy: h.policy,
+  requestApproval: h.requestApproval,
+}));
+vi.mock('@server/admin/creditGrants/approval', () => ({
+  approvalDetails: (approval?: { id: string }) => (approval ? { approval: { id: approval.id } } : {}),
+}));
+
 await import('../schedule-deletion');
 
 const REASON = 'Request sent from the email on file';
@@ -64,6 +74,8 @@ const scheduledFor = new Date('2026-11-20T00:00:00Z');
 beforeEach(() => {
   vi.clearAllMocks();
   h.audit.mockResolvedValue(null);
+  h.policy.mockResolvedValue({ enabled: false });
+  h.requestApproval.mockResolvedValue({ approvalId: 'approval-1', status: 'pending' });
   h.deny.mockRejectedValue(Object.assign(new Error('self'), { statusCode: 403 }));
   h.findById.mockResolvedValue({ id: 'user-1', username: 'u', email: 'a@customer.example' });
   h.core.mockImplementation(async (_req: unknown, input: { recordInTransaction: (d: unknown) => Promise<void> }) => {
@@ -181,6 +193,43 @@ describe('POST /api/admin/users/[userId]/schedule-deletion', () => {
       call({ receivedAt: RECEIVED, reason: REASON }, { isAdmin: false, adminPermissions: ['users:delete'] })
     ).rejects.toMatchObject({ statusCode: 403 });
     expect(h.core).not.toHaveBeenCalled();
+  });
+
+  it('queues an admin deletion without locking down the account when approvals are enabled', async () => {
+    h.policy.mockResolvedValue({ enabled: true });
+    h.findById.mockResolvedValue({ id: 'user-1', username: 'boss', isAdmin: true });
+    const response = await call({ receivedAt: RECEIVED, reason: REASON });
+    expect(response._getJSONData()).toEqual({ approvalId: 'approval-1', status: 'pending' });
+    expect(h.requestApproval).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.schedule_admin_deletion',
+        params: { userId: 'user-1', receivedAt: RECEIVED, reason: REASON },
+        requiredPermission: 'users:delete',
+        requiresFullAdmin: true,
+      }),
+      expect.anything()
+    );
+    expect(h.core).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('still schedules a nonadmin directly when approvals are enabled', async () => {
+    h.policy.mockResolvedValue({ enabled: true });
+    const response = await call({ receivedAt: RECEIVED, reason: REASON });
+    expect(response._getJSONData()).toMatchObject({ deletion: { source: 'support' } });
+    expect(h.core).toHaveBeenCalledOnce();
+    expect(h.requestApproval).not.toHaveBeenCalled();
+  });
+
+  it('refuses a direct target promoted to admin before the lockdown transaction', async () => {
+    h.policy.mockResolvedValue({ enabled: true });
+    h.findById
+      .mockResolvedValueOnce({ id: 'user-1', username: 'u' })
+      .mockResolvedValueOnce({ id: 'user-1', username: 'u' })
+      .mockResolvedValue({ id: 'user-1', username: 'boss', isAdmin: true });
+    await expect(call({ receivedAt: RECEIVED, reason: REASON })).rejects.toMatchObject({ statusCode: 409 });
+    expect(h.audit).not.toHaveBeenCalled();
   });
 
   it('answers 404 for an unknown user', async () => {

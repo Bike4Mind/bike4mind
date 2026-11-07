@@ -5,11 +5,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createEventBusDeadLetter } from '../eventBusDeadLetter';
 
 const readInfra = (name: string) => readFileSync(new URL(`../${name}`, import.meta.url), 'utf8');
-const cronSource = readInfra('cron.ts');
-// Execute the actual declaration, bounded before the next cron, without loading the full SST app.
+const cronSource = readInfra('youngAccountSpendAlert.ts');
+// Execute the actual declaration, bounded before the module's export, without loading the full SST app.
 const declaration = cronSource.slice(
   cronSource.indexOf('const [youngAccountSpendPageAlarm, youngAccountSpendWarnAlarm] ='),
-  cronSource.indexOf('// Signup Grant Held Release')
+  cronSource.indexOf('export { youngAccountSpendAlert };')
 );
 
 /** What alarmSlackMentionFunctionArgs() returns on a monitored stage; declared above the sliced source. */

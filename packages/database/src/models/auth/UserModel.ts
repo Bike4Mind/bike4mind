@@ -1708,6 +1708,15 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     lastActiveAt: { type: Date },
     isOnline: { type: Boolean, default: false },
 
+    // Written by apps/client/server/middlewares/clientUsage.ts; keys must match CLIENT_SURFACES.
+    // A hydrated doc reads an unset surface as {} (truthy): test `lastSeenAt`, not the surface object.
+    clientUsage: {
+      web: { firstSeenAt: Date, lastSeenAt: Date, version: String },
+      desktop: { firstSeenAt: Date, lastSeenAt: Date, version: String },
+      cli: { firstSeenAt: Date, lastSeenAt: Date, version: String },
+      api: { firstSeenAt: Date, lastSeenAt: Date, version: String },
+    },
+
     mementos: [
       {
         type: Schema.Types.ObjectId,
@@ -1972,6 +1981,11 @@ UserSchema.index({ 'riskScore.reviewState': 1, 'riskScore.score': -1 }, { name: 
 UserSchema.index(
   { signupGrantHeldReason: 1, _id: 1 },
   { partialFilterExpression: { signupGrantHeldReason: { $type: 'string' } }, name: 'user_signupGrantHeldReason' }
+);
+// Serves the Invite Center pending list and exposure summary. Built by the ensure-user-signup-grant-stage-index migration.
+UserSchema.index(
+  { 'signupGrant.stage': 1, _id: 1 },
+  { partialFilterExpression: { 'signupGrant.stage': { $type: 'string' } }, name: 'user_signupGrant_stage' }
 );
 // Serves the held-release job's scan for payment unlocks whose settling window has passed.
 UserSchema.index(

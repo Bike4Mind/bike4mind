@@ -9,6 +9,7 @@ import {
   signupRiskReviewDecisionSchema,
   signupRiskReviewListSchema,
   type SignupRiskAutoApprovalItem,
+  type SignupRiskReviewAdvisory,
   type SignupRiskReviewItem,
   type SignupRiskReviewState,
 } from '@bike4mind/common';
@@ -27,6 +28,7 @@ import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { releaseRiskReviewedSignupGrant } from '@server/credits/riskReviewGrantRelease';
+import { findRiskReviewAdvisories } from '@server/security/abuseAssessment/riskReviewAdvisory';
 import {
   denySelfAdminAction,
   isSelfOrImpersonator,
@@ -66,7 +68,9 @@ const domainOf = (email: string | null | undefined) => {
 
 /**
  * The signup risk review queue (admin Risk review tab). GET lists pending accounts with what a
- * reviewer needs to decide, plus recent automatic approvals (riskReviewAutoApproval.ts) to reopen; POST approves them (or reopens an approval), one audited transaction
+ * reviewer needs to decide, including any advisory model verdict (riskReviewAdvisory.ts), which no
+ * decision here reads, plus recent automatic approvals (riskReviewAutoApproval.ts) to reopen; POST
+ * approves them (or reopens an approval), one audited transaction
  * per user. Approving also pays a signup tranche the signup grant policy withheld, which reopening
  * does not take back. Suspending goes through the bulk abuse response routes instead (admin/abuse/bulk-*).
  */
@@ -86,10 +90,15 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       ]);
       const listed = users.slice(0, SIGNUP_RISK_REVIEW_LIST_LIMIT);
       const ids = listed.map(user => user.id);
-      const [creditsSpent, apiKeysCreated, settings] = await Promise.all([
+      const [creditsSpent, apiKeysCreated, settings, advisories] = await Promise.all([
         usageEventRepository.creditsSpentByUsers(ids),
         userApiKeyRepository.countCreatedByUserIds(ids),
         getSettingsMap({ adminSettings: adminSettingsRepository }),
+        // Advisory only: a missing verdict must not fail the queue.
+        findRiskReviewAdvisories(ids, req.logger).catch(error => {
+          req.logger.warn('Signup risk review advisories unavailable', { error });
+          return new Map<string, SignupRiskReviewAdvisory>();
+        }),
       ]);
       const { reviewThreshold } = getSettingsValue('signupRiskScoring', settings, SignupRiskScoringSchema.parse({}));
       const data = listed.flatMap((user): SignupRiskReviewItem[] =>
@@ -107,6 +116,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
                 creditsSpent: creditsSpent[user.id] ?? 0,
                 apiKeysCreated: apiKeysCreated[user.id] ?? 0,
                 grantHeld: userService.isSignupGrantHeldForReview(user),
+                advisory: advisories.get(user.id) ?? null,
               },
             ]
           : []

@@ -40,6 +40,9 @@ import {
   deleteArtifactContract,
   listArtifactVersionsContract,
   getArtifactVersionContract,
+  createArtifactVersionContract,
+  searchArtifactsContract,
+  listArtifactTypesContract,
 } from './artifacts.contract';
 import { createTranscriptionUploadContract, createTranscriptionContract } from './transcription.contract';
 import { createSessionContract } from './sessionCreate.contract';
@@ -189,6 +192,9 @@ export const CONTRACTS: readonly EndpointContract[] = [
   deleteArtifactContract,
   listArtifactVersionsContract,
   getArtifactVersionContract,
+  createArtifactVersionContract,
+  searchArtifactsContract,
+  listArtifactTypesContract,
   createTranscriptionUploadContract,
   createTranscriptionContract,
   updateProjectContract,

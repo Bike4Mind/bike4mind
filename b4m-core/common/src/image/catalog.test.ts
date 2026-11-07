@@ -7,6 +7,7 @@ import {
   isKontextModel,
   rejectsTransparentBackground,
   supportsImageEditEndpoint,
+  takesBflInputImageList,
 } from '../utils/modelHelpers';
 import { getImageModelCatalogEntry } from './catalog';
 import { validateImageRequest, type ImageCapabilityRequest } from './validate';
@@ -34,9 +35,9 @@ describe.each(IMAGE_MODELS)('IMAGE_MODEL_CATALOG[%s]', model => {
     expect(entry.qualities).toEqual(advertised.supports.qualities);
     expect(generate === undefined).toBe(advertised.supports.requiresInputImage);
     expect((generate ?? edit)?.maxOutputs).toBe(advertised.supports.maxImages);
-    // referenceImageFabFileIds ride with an edit_source on gpt-image and with the generate inputs on FLUX.2.
+    // referenceImageFabFileIds ride with an edit_source on gpt-image and with the generate inputs on FLUX.2 and FLUX 3.
     // FLUX.1's lone image_prompt is the workbench image, which is not counted as a reference image.
-    const anchorMode = isFlux2ImageModel(model) ? generate : edit;
+    const anchorMode = takesBflInputImageList(model) ? generate : edit;
     expect(anchorMode?.inputs.reference?.max ?? 0).toBe(advertised.supports.maxReferenceImages);
   });
 

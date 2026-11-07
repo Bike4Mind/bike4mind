@@ -8,6 +8,7 @@ import type {
   SignupDomainHoldJudgment,
   SignupDomainReview,
 } from '@bike4mind/common';
+import { PENDING_GRANTS_QUERY_KEY } from '@client/app/hooks/data/adminSignupGrant';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import { DataTable } from './shared/DataTable';
@@ -57,13 +58,16 @@ export default function SignupDomainHoldsTab() {
           nextCursor: string | null;
         }>(ENDPOINT, input)
       ).data,
-    onSuccess: async (result, input) => {
+    onSuccess: (result, input) => {
       if (result.status === 'released')
         setCursors(current => ({ ...current, [input.domain]: result.nextCursor ?? undefined }));
-      await queryClient.invalidateQueries({ queryKey: QUERY_KEY });
     },
-    onSettled: () => {
+    onSettled: async (_result, _error, input) => {
       decisionInFlight.current = false;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
+        ...(input.action === 'release' ? [queryClient.invalidateQueries({ queryKey: PENDING_GRANTS_QUERY_KEY })] : []),
+      ]);
     },
   });
   const decide = (input: { domain: string; action: 'confirm' | 'release'; afterUserId?: string }) => {

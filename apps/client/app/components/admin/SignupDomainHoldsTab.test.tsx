@@ -28,6 +28,7 @@ const reviews: SignupDomainReview[] = reviewInputs.map(([domain, status]) => ({
 
 function renderTab() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
   render(
     <QueryClientProvider client={queryClient}>
       <CssVarsProvider theme={theme}>
@@ -35,6 +36,7 @@ function renderTab() {
       </CssVarsProvider>
     </QueryClientProvider>
   );
+  return invalidate;
 }
 
 beforeEach(() => {
@@ -154,6 +156,14 @@ describe('SignupDomainHoldsTab', () => {
     expect(postMock).toHaveBeenCalledTimes(1);
   });
 
+  it('refreshes pending exposure when a domain release fails after possible payouts', async () => {
+    postMock.mockRejectedValue(new Error('Request interrupted'));
+    const invalidate = renderTab();
+    fireEvent.click(await screen.findByTestId('signup-domain-release-alpha.test'));
+    expect(await screen.findByText('Request interrupted')).toBeInTheDocument();
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] });
+  });
+
   it('keeps each domain release cursor when retrying pending grants', async () => {
     postMock
       .mockResolvedValueOnce({
@@ -163,9 +173,10 @@ describe('SignupDomainHoldsTab', () => {
         data: { status: 'released', creditsReleased: 5, remaining: 1, nextCursor: 'beta-cursor' },
       })
       .mockResolvedValue({ data: { status: 'released', creditsReleased: 0, remaining: 0, nextCursor: null } });
-    renderTab();
+    const invalidate = renderTab();
     fireEvent.click(await screen.findByTestId('signup-domain-release-alpha.test'));
     await waitFor(() => expect(screen.getByTestId('signup-domain-release-beta.test')).toBeEnabled());
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] });
     fireEvent.click(screen.getByTestId('signup-domain-release-beta.test'));
     await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.getByTestId('signup-domain-release-alpha.test')).toBeEnabled());

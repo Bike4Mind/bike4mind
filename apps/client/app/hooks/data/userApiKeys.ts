@@ -155,7 +155,7 @@ export function useBillingOrganizations() {
   });
 }
 
-/** Whether the user may mint a personal (user-billed) key; org-billed keys are never gated. */
+/** Whether the user may mint a personal (user-billed) key, and whether an org-billed one can still pass. */
 export function useApiKeyEligibility() {
   return useQuery<ApiKeyEligibilityResponse>({
     queryKey: ['user-api-keys', 'eligibility'],

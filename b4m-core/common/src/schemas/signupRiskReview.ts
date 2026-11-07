@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { SIGNUP_RISK_SIGNALS } from './settings';
+import { ABUSE_ASSESSMENT_JUDGMENTS } from './abuseAssessment';
+import { SHADOW_DETECTORS } from './shadowDetection';
 
 /**
  * Pending accounts returned by one list request. The admin table sorts and pages the whole set
@@ -11,6 +13,24 @@ export const SIGNUP_RISK_REVIEW_LIST_LIMIT = 500;
 export const MAX_SIGNUP_RISK_REVIEW_BATCH = 200;
 
 const ObjectIdStringSchema = z.string().regex(/^[a-f0-9]{24}$/i, 'Not a valid user id');
+
+/**
+ * The Decisions model's latest judgment of a shadow detection naming the account
+ * (b4m-core/common/src/schemas/abuseAssessment.ts). Advisory: shown to the reviewer, never read to
+ * approve or change reviewState. An abuse judgment wins over a newer non-abuse one.
+ */
+export const signupRiskReviewAdvisorySchema = z.object({
+  detectionId: z.string(),
+  detector: z.enum(SHADOW_DETECTORS),
+  result: z.enum(ABUSE_ASSESSMENT_JUDGMENTS),
+  confidence: z.number().nullable(),
+  assessedAt: z.date(),
+  /** Judged detections naming the account besides the one shown. */
+  otherVerdicts: z.number().int().nonnegative(),
+  /** Of otherVerdicts, those assessed after the one shown (non-zero only when an abuse verdict outranks them). */
+  newerVerdicts: z.number().int().nonnegative(),
+});
+export type SignupRiskReviewAdvisory = z.infer<typeof signupRiskReviewAdvisorySchema>;
 
 export const signupRiskReviewItemSchema = z.object({
   userId: z.string(),
@@ -26,6 +46,8 @@ export const signupRiskReviewItemSchema = z.object({
   apiKeysCreated: z.number(),
   /** The signup grant policy withheld the signup tranche; approving releases it. */
   grantHeld: z.boolean(),
+  /** Null when no detection naming the account has a judged assessment. */
+  advisory: signupRiskReviewAdvisorySchema.nullable(),
 });
 export type SignupRiskReviewItem = z.infer<typeof signupRiskReviewItemSchema>;
 

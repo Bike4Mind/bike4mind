@@ -1,5 +1,11 @@
 # @bike4mind/client-auth
 
+## 0.4.0
+
+### Minor Changes
+
+- [#6790](https://github.com/Bike4Mind/bike4mind/pull/6790) [`841f45f`](https://github.com/Bike4Mind/bike4mind/commit/841f45fed7786b1f104861e2466a93e2d02cf264) Thanks [@maconard](https://github.com/maconard)! - chat with local models without signing in
+
 ## 0.3.0
 
 ### Minor Changes

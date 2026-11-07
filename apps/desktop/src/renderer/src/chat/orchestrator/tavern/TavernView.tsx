@@ -1,6 +1,6 @@
 import Box from '@mui/joy/Box';
 import { keyframes } from '@mui/system';
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { SESSION_SETUP_LABEL } from '@shared/chat';
 import { activityLabel, toolKind, type ToolKind } from '../activity';
 import { prefersReducedMotion } from '../motion';
@@ -14,6 +14,7 @@ import {
   LABEL_SPAN,
   characterFor,
   nameLabelLayout,
+  hiddenByCounter,
   placeAgents,
   poseFor,
   type NameLabel,
@@ -24,9 +25,11 @@ import { INNKEEPER_ART, TAVERN_BACKDROP, characterSprite, type InnkeeperPose } f
 
 const BUBBLE_MAX = 28;
 const NAME_MAX = 26;
-const WALK = '1.2s ease-in-out';
-// Of the scene height, so sprites scale with the window; sprite canvases are square.
-const SPRITE_HEIGHT = '15%';
+const WALK_MS = 1200;
+const WALK = `${WALK_MS / 1000}s ease-in-out`;
+// Percent of the scene height, so sprites scale with the window; sprite canvases are square.
+const SPRITE_HEIGHT_PERCENT = 15;
+const SPRITE_HEIGHT = `${SPRITE_HEIGHT_PERCENT}%`;
 const NO_MOTION = '@media (prefers-reduced-motion: reduce)';
 // Pointing at, focusing or selecting an agent brings it forward and shows its label uncapped.
 const LIFTED = '&:hover, &:focus-visible, &[aria-pressed="true"]';
@@ -179,6 +182,33 @@ function Spark({ kind }: { kind: ToolKind }) {
   );
 }
 
+/**
+ * The soft patch of floor under a sprite's feet that keeps it from reading as pasted on. Rendered
+ * before the art so the sprite paints over it; the art's feet sit at the bottom centre of its box.
+ */
+function ContactShadow({ hidden = false }: { hidden?: boolean }) {
+  return (
+    <Box
+      aria-hidden
+      data-contact-shadow
+      sx={{
+        position: 'absolute',
+        left: '50%',
+        bottom: 0,
+        width: '48%',
+        height: '9%',
+        transform: 'translate(-50%, 40%)',
+        borderRadius: '50%',
+        background: 'radial-gradient(closest-side, rgba(14, 7, 2, 0.6), rgba(14, 7, 2, 0))',
+        opacity: hidden ? 0 : 1,
+        transition: `opacity ${WALK}`,
+        pointerEvents: 'none',
+        [NO_MOTION]: { transition: 'none' },
+      }}
+    />
+  );
+}
+
 function NameLabelPlate({ testId, label, text }: { testId: string; label: NameLabel; text: string }) {
   return (
     <Box
@@ -275,12 +305,15 @@ function Sprite({
         [LIFTED]: { zIndex: LIFTED_Z, '& [data-name-label]': { display: 'block', maxWidth: 'none' } },
       }}
     >
+      <ContactShadow />
       <Box
         component="img"
         src={characterSprite(characterFor(agent.id, persona?.epithet), pose)}
         alt=""
         draggable={false}
         sx={{
+          // Positioned so it paints over the ContactShadow before it.
+          position: 'relative',
           display: 'block',
           width: '100%',
           height: '100%',
@@ -339,11 +372,54 @@ function Innkeeper({
   label: NameLabel;
   onSelect?(): void;
 }) {
+  const hidden = hiddenByCounter(point, SPRITE_HEIGHT_PERCENT);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const artRef = useRef<HTMLImageElement>(null);
+  const walkedFrom = useRef(point);
+  const rest = `inset(0 0 ${hidden}% 0)`;
+
+  // The counter overlap is not linear along a walk, so the clip follows his live position instead of easing.
+  useLayoutEffect(() => {
+    const from = walkedFrom.current;
+    walkedFrom.current = point;
+    const button = buttonRef.current;
+    const art = artRef.current;
+    const scene = button?.parentElement;
+    if (!button || !art || !scene || (from.x === point.x && from.y === point.y) || prefersReducedMotion()) return;
+    const follow = () => {
+      const box = scene.getBoundingClientRect();
+      if (box.height <= 0) return;
+      const feet = button.getBoundingClientRect();
+      const live = {
+        x: ((feet.left + feet.width / 2 - box.left) / box.width) * 100,
+        y: ((feet.bottom - box.top) / box.height) * 100,
+      };
+      art.style.clipPath = `inset(0 0 ${hiddenByCounter(live, SPRITE_HEIGHT_PERCENT)}% 0)`;
+    };
+    let start: number | undefined;
+    let frame = 0;
+    const tick = (now: number) => {
+      start ??= now;
+      if (now - start >= WALK_MS) {
+        art.style.clipPath = rest;
+        return;
+      }
+      follow();
+      frame = requestAnimationFrame(tick);
+    };
+    follow();
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+    // Keyed on the coordinates: a re-render with an equal point must not cancel a walk in progress.
+  }, [point.x, point.y, rest]);
+
   return (
     <Box
+      ref={buttonRef}
       component="button"
       type="button"
       disabled={!onSelect}
+      data-behind-counter={hidden > 0 || undefined}
       tabIndex={onSelect ? undefined : -1}
       data-testid="orchestrator-tavern-innkeeper"
       data-pose={pose}
@@ -360,19 +436,33 @@ function Innkeeper({
         p: 0,
         border: 0,
         bgcolor: 'transparent',
-        cursor: onSelect ? 'pointer' : 'default',
+        // Only the art takes the pointer: its clip-path keeps the part hidden behind the counter from being hit.
+        pointerEvents: 'none',
         transition: `left ${WALK}, top ${WALK}`,
         [NO_MOTION]: { transition: 'none' },
         '&:focus-visible': { outline: '2px solid #f5c542', outlineOffset: 2, borderRadius: '4px' },
         [LIFTED]: { zIndex: LIFTED_Z, '& [data-name-label]': { display: 'block', maxWidth: 'none' } },
       }}
     >
+      <ContactShadow hidden={hidden > 0} />
       <Box
         component="img"
         src={INNKEEPER_ART[pose]}
         alt=""
         draggable={false}
-        sx={{ display: 'block', width: '100%', height: '100%', imageRendering: 'pixelated' }}
+        ref={artRef}
+        data-testid="orchestrator-tavern-innkeeper-art"
+        // The resting clip; while he walks the layout effect above overrides it frame by frame.
+        style={{ clipPath: rest }}
+        sx={{
+          position: 'relative',
+          display: 'block',
+          width: '100%',
+          height: '100%',
+          imageRendering: 'pixelated',
+          pointerEvents: 'auto',
+          cursor: onSelect ? 'pointer' : 'default',
+        }}
       />
       {bubble && (
         <Bubble testId="orchestrator-tavern-innkeeper-bubble" text={truncate(bubble, BUBBLE_MAX)} urgent={urgent} />
@@ -438,14 +528,18 @@ export function TavernView({
   const innkeeperPoint = visitedPoint && !reducedMotion && arrived ? standBeside(visitedPoint) : INNKEEPER_POINT;
 
   return (
+    // The scene is a framed picture on the page surface rather than a dark band edge to edge, so the
+    // composer below sits on the same surface as the margin around it instead of cutting the scene off.
     <Box
+      data-testid="orchestrator-tavern-frame"
       sx={{
         flex: 1,
         minHeight: 0,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        bgcolor: '#140c06',
+        p: 1.5,
+        bgcolor: 'background.body',
         containerType: 'size',
         overflow: 'hidden',
       }}
@@ -458,6 +552,11 @@ export function TavernView({
           aspectRatio: '16 / 9',
           containerType: 'size',
           overflow: 'hidden',
+          borderRadius: 'lg',
+          bgcolor: '#140c06',
+          boxShadow: 'md',
+          outline: '1px solid',
+          outlineColor: 'divider',
         }}
       >
         <Box

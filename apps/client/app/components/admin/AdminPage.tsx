@@ -58,6 +58,7 @@ const AdminLiveOpsTriageMultiConfigTab = dynamic(() => import('./AdminLiveOpsTri
 });
 const WebhookAuditLogsTab = dynamic(() => import('./WebhookAuditLogs'), { ssr: false });
 const AuditLogTab = dynamic(() => import('./AuditLog'), { ssr: false });
+const ApprovalsTab = dynamic(() => import('./Approvals'), { ssr: false });
 
 const MigrateUsersTab = dynamic(() => import('./MigrateUsersTab'), { ssr: false });
 const AgentOpsTab = dynamic(() => import('./AgentOpsTab'), { ssr: false });
@@ -144,7 +145,12 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   return (
     <UndoToastProvider>
       <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-        <AdminCommandPalette onNavigate={setActiveTab} canOpenTab={isAdminTabRenderable} onOpenHelp={openHelpPanel} />
+        <AdminCommandPalette
+          enableEntitySearch={!!currentUser?.isAdmin}
+          onNavigate={setActiveTab}
+          canOpenTab={isAdminTabRenderable}
+          onOpenHelp={openHelpPanel}
+        />
         <Tabs
           aria-label="Admin tabs"
           value={activeTab}
@@ -302,6 +308,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
             {activeTab === AdminTab.WebhookAuditLogs && <WebhookAuditLogsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.AuditLog}>{activeTab === AdminTab.AuditLog && <AuditLogTab />}</TabPanel>
+          <TabPanel value={AdminTab.Approvals}>{activeTab === AdminTab.Approvals && <ApprovalsTab />}</TabPanel>
           <TabPanel value={AdminTab.GitHubConnection}>
             {activeTab === AdminTab.GitHubConnection && <GitHubConnectionTab />}
           </TabPanel>

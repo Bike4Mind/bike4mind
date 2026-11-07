@@ -300,7 +300,7 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
   },
   {
     label: 'release-notes',
-    displayName: 'Release Notes',
+    displayName: 'Release Notes and Highlights',
     application: 'ReleaseNotes',
     sourceQueue: 'whatsNewGenerationQueue',
     queue: whatsNewGenerationQueueDLQ,

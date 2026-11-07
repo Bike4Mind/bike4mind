@@ -74,8 +74,8 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
   fabFileIds: z.array(z.string()).prefault([]),
   /**
    * Extra reference images, as access- and moderation-checked fabFile ids. GPT-image accepts
-   * up to 15 alongside its primary image; FLUX.2 accepts up to 8 total inputs (4 for Klein),
-   * including all images attached through fabFileIds. Repeated ids collapse to one input.
+   * up to 15 alongside its primary image; FLUX.2 accepts up to 8 total inputs (4 for Klein) and
+   * FLUX 3 up to 10, including all images attached through fabFileIds. Repeated ids collapse to one input.
    * Other models reject these on public endpoints and drop them in the service backstop.
    */
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),

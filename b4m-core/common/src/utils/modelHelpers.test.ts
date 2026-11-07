@@ -8,6 +8,11 @@ import {
   getMaxEditReferenceImages,
   getMaxReferenceImages,
   supportsPromptUpsampling,
+  usesDiscreteImageDimensions,
+  isFlux3ImageModel,
+  takesBflInputImageList,
+  supportsBflSeed,
+  supportsBflOutputFormat,
   isVideoModel,
   isGPTImageModel,
   isGPTImage2Model,
@@ -358,6 +363,8 @@ describe('getMaxReferenceImages', () => {
     [ImageModels.FLUX_2_MAX, 8],
     [ImageModels.FLUX_2_KLEIN_9B, 4],
     [ImageModels.FLUX_2_KLEIN_4B, 4],
+    [ImageModels.FLUX_3_IMAGE, 10],
+    [ImageModels.FLUX_3_IMAGE_KLEIN, 10],
     [ImageModels.FLUX_PRO_1_1, 0],
     [ImageModels.GEMINI_3_PRO_IMAGE, 0],
   ])('%s accepts %s references', (model, limit) => {
@@ -402,9 +409,37 @@ describe('supportsPromptUpsampling', () => {
     [ImageModels.FLUX_2_KLEIN_9B, false],
     [ImageModels.FLUX_2_KLEIN_9B_PREVIEW, false],
     [ImageModels.FLUX_2_KLEIN_4B, false],
+    [ImageModels.FLUX_3_IMAGE, false],
+    [ImageModels.FLUX_3_IMAGE_KLEIN, false],
     [ImageModels.FLUX_PRO_1_1, true],
     [ImageModels.GPT_IMAGE_2, false],
   ])('%s exposes a prompt enhancement control: %s', (model, supported) => {
     expect(supportsPromptUpsampling(model)).toBe(supported);
+  });
+});
+
+describe('FLUX 3 request-schema predicates', () => {
+  it.each([
+    [ImageModels.FLUX_3_IMAGE, { flux3: true, inputList: true, seed: false, outputFormat: false }],
+    [ImageModels.FLUX_3_IMAGE_KLEIN, { flux3: true, inputList: true, seed: true, outputFormat: true }],
+    [ImageModels.FLUX_2_PRO, { flux3: false, inputList: true, seed: true, outputFormat: true }],
+    [ImageModels.FLUX_PRO_1_1, { flux3: false, inputList: false, seed: true, outputFormat: true }],
+    [ImageModels.GPT_IMAGE_2, { flux3: false, inputList: false, seed: false, outputFormat: false }],
+  ])('%s', (model, expected) => {
+    expect({
+      flux3: isFlux3ImageModel(model),
+      inputList: takesBflInputImageList(model),
+      seed: supportsBflSeed(model),
+      outputFormat: supportsBflOutputFormat(model),
+    }).toEqual(expected);
+  });
+
+  it('does not treat other FLUX 3 endpoints as image models', () => {
+    expect(isFlux3ImageModel('flux-3-video')).toBe(false);
+  });
+
+  it('sizes FLUX 3 by width and height', () => {
+    expect(usesDiscreteImageDimensions(ImageModels.FLUX_3_IMAGE)).toBe(true);
+    expect(usesDiscreteImageDimensions(ImageModels.FLUX_3_IMAGE_KLEIN)).toBe(true);
   });
 });

@@ -1,11 +1,13 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database/infra';
+import type { Request } from 'express';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { selfIdsOf } from '@server/admin/usersBulk/actor';
 import { usersBulkExecuteDeps } from '@server/admin/usersBulk/adapters';
+import { requestUsersBulkApprovalIfNeeded } from '@server/admin/usersBulk/approvalGate';
 import { executeAdminUsersBulk } from '@server/admin/usersBulk/execute';
 import {
   AdminUsersBulkExecuteRequestSchema,
@@ -19,7 +21,8 @@ export const USERS_BULK_EXECUTE_RATE_LIMIT = 10;
 /**
  * Runs a confirmed users-list bulk action: 400 over the cap, 409 when the eligible count no longer
  * matches `expectedCount` or the same idempotency key is still running, 403 when Contain blocks email
- * domains without permission to edit admin settings. One transaction per user.
+ * domains without permission to edit admin settings. One transaction per user. 202 with an approval id
+ * when approvals are on and the batch is over a threshold: nothing runs until a second admin approves.
  */
 const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: USERS_BULK_EXECUTE_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'admin-users-bulk-execute' }))
@@ -31,12 +34,22 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       if (blocksEmailDomains(request.action) && !req.ability?.can('update', AdminSettings)) {
         throw new ForbiddenError('Blocking email domains needs permission to edit admin settings.');
       }
-      const result: AdminUsersBulkResult = await executeAdminUsersBulk(
-        request,
-        { id: req.user.id, selfIds: selfIdsOf(req.user) },
-        usersBulkExecuteDeps(req, request.reason, req.logger)
-      );
-      return res.json(result);
+      const gate = await requestUsersBulkApprovalIfNeeded(req as unknown as Request, request);
+      if (gate.pending) return res.status(202).json(gate.pending);
+      try {
+        const result: AdminUsersBulkResult = await executeAdminUsersBulk(
+          request,
+          {
+            id: req.user.id,
+            selfIds: selfIdsOf(req.user),
+            ...(gate.creditBalances ? { creditBalances: gate.creditBalances } : {}),
+          },
+          usersBulkExecuteDeps(req, request.reason, req.logger)
+        );
+        return res.json(result);
+      } finally {
+        await gate.release();
+      }
     })
   );
 
