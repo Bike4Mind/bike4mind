@@ -5,7 +5,7 @@ import { resolveCommitSha, type GitHubCommit, type GitHubRelease, type PRSummary
 
 export const PRODUCTION_TAG = /^v\d+\.\d+\.\d+\.\d+$/;
 export const EXCERPT_CHARS = 500;
-// Matches the editorial summary cap; author notes skip triage, so they are bounded here.
+// Bound author notes before they enter the audience triage and editorial prompts.
 export const CUSTOMER_NOTE_CHARS = 600;
 // SQS caps a message at 256 KiB; leave headroom for attributes and encoding.
 export const MAX_PAYLOAD_BYTES = 240_000;
@@ -19,7 +19,7 @@ const SIZE_TIERS = [
 
 const HTML_COMMENT = /<!--[\s\S]*?-->/g;
 // The `admin` scope is mostly the operator admin panel (apps/client/app/components/admin), which customers never see.
-// Some admin-scoped PRs still change customer UI, so an author's customer note keeps the PR.
+// An author's customer note keeps mixed customer UI changes eligible for worker audience triage.
 const OPERATOR_ONLY_SCOPES = new Set(['admin']);
 const CUSTOMER_NOTE_HEADING = /^##\s+customer note\s*$/im;
 const PLACEHOLDER_NOTE = /^(n\/?a|none|-+)$/i;

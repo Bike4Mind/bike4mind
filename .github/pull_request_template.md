@@ -1,23 +1,30 @@
 # Pull Request
 
 ## Optional Screenshot/Video
+
 <!--
 If applicable, add screenshots or a video to help explain your changes. This can be particularly useful for UI changes or visual bug fixes.
 -->
 
 ## Description
+
 <!--
 Provide a detailed description of what this PR does. Explain the problem you're solving or the feature you're adding.
 -->
 
 ## Customer note
+
 <!--
 Optional. One or two plain sentences a customer would understand, used for the in-app release notes.
-Leave empty (or write "none") for internal changes. No internal names, ticket numbers or links.
+Leave empty (or write "none") for operator admin tools, bot/abuse/fraud prevention, internal security controls,
+and infrastructure or maintenance without a visible customer benefit. Author notes still undergo audience triage.
+Describe what customers can use or notice; omit detection rules, thresholds and implementation details.
+No internal names, ticket numbers or links.
 Say only what the code does: no role names for who can see it, and no speed or quality claim you did not measure.
 -->
 
 ## Changes
+
 <!--
 List the changes you've made in this PR. This is to help the reviewers understand the impact of your changes.
 - Change 1
@@ -26,6 +33,7 @@ List the changes you've made in this PR. This is to help the reviewers understan
 -->
 
 ## Guide for Testers
+
 <!--
 Write step-by-step instructions that both human QA testers AND AI agents (e.g., Playwright) can follow without codebase knowledge.
 
@@ -42,11 +50,13 @@ See CLAUDE.md → "Test Guide Standards" for full guidelines and examples.
 -->
 
 ## Additional Information
+
 <!--
 Include any additional information or context that you think would be helpful for your reviewers.
 -->
 
 ## Developer Notes (Optional)
+
 <!--
 Document capability unlocks, architectural improvements, and reusable patterns introduced by this PR.
 This helps future developers understand what new building blocks are available.
@@ -64,6 +74,7 @@ Example:
 -->
 
 ## Security Testing (for security-labeled PRs only)
+
 <!--
 Required for any PR closing a security-labeled issue. Delete this section
 if the PR is not security-related.
