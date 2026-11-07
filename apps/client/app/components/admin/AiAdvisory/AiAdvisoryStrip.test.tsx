@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }));
 vi.mock('@client/app/hooks/data/aiAdvisory', () => ({ useAiAdvisory: () => ({ data: mocks.data }) }));
+vi.mock('../CampaignWatches/WatchAccountsButton', () => ({ WatchAccountsButton: () => null }));
 vi.mock('../BlockedIPs/IpBlockDialogs', () => ({
   BlockIpDialog: ({ initialIp }: { initialIp: string }) => <div data-testid="block-ip-dialog">{initialIp}</div>,
 }));
