@@ -12,10 +12,15 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => unknown> = [];
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
-      (req: unknown, res: unknown) => routes[(req as { method?: string }).method ?? 'GET']?.(req, res),
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) await middleware(req, res, () => undefined);
+        return routes[(req as { method?: string }).method ?? 'GET']?.(req, res);
+      },
       {
+        use: (fn: (req: unknown, res: unknown, next: () => void) => unknown) => (middlewares.push(fn), chain),
         get: (fn: (req: unknown, res: unknown) => unknown) => ((routes.GET = fn), chain),
         post: (fn: (req: unknown, res: unknown) => unknown) => ((routes.POST = fn), chain),
       }
@@ -45,7 +50,6 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYP
 vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
-import { Logger } from '@bike4mind/observability';
 import handler from '../index';
 
 const SECRET_VALUE = 'sk-test-plaintext-value';
@@ -105,14 +109,14 @@ describe('POST /api/admin/system-secrets admin audit', () => {
 });
 
 describe('non-admin requests', () => {
-  it.each(['GET', 'POST'] as const)('%s is refused with a 403 logged at warn, not error', async method => {
+  it.each(['GET', 'POST'] as const)('%s is refused before any secret work', async method => {
     const { req, res } = createMocks({ method, body: { secretName: 'OPENAI_API_KEY', value: SECRET_VALUE } });
     (req as Record<string, unknown>).user = { id: 'user-1', isAdmin: false };
-    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
 
-    expect(res._getStatusCode()).toBe(403);
-    expect(Logger.warn).toHaveBeenCalledTimes(1);
-    expect(Logger.error).not.toHaveBeenCalled();
+    await expect((handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res)).rejects.toThrow(
+      /missing permission/i
+    );
     expect(h.findBySecretName).not.toHaveBeenCalled();
+    expect(h.upsertSecret).not.toHaveBeenCalled();
   });
 });

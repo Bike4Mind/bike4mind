@@ -11,8 +11,15 @@ import { resolveCatalogRecords } from '@bike4mind/llm-adapters';
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
-    const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
-    chain.use = () => chain;
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => unknown> = [];
+    const chain = async (req: { method: string }, res: unknown) => {
+      for (const middleware of middlewares) await middleware(req, res, () => undefined);
+      return handlers[req.method](req, res);
+    };
+    chain.use = (fn: (typeof middlewares)[number]) => {
+      middlewares.push(fn);
+      return chain;
+    };
     chain.get = (fn: (typeof handlers)[string]) => {
       handlers.GET = fn;
       return chain;
@@ -133,7 +140,7 @@ beforeEach(() => {
 describe('GET /api/admin/model-deprecation-status', () => {
   it('rejects non-admin users', async () => {
     const { run } = call({ method: 'GET', isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow(/missing permission/i);
     expect(mockRowsInForce).not.toHaveBeenCalled();
   });
 
@@ -225,7 +232,7 @@ describe('GET /api/admin/model-deprecation-status', () => {
 describe('POST /api/admin/model-deprecation-status', () => {
   it('rejects non-admin users', async () => {
     const { run } = call({ method: 'POST', isAdmin: false, body: { modelId: 'gpt-sunset', action: 'dismiss' } });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow(/missing permission/i);
     expect(mockResolveSuggestion).not.toHaveBeenCalled();
   });
 

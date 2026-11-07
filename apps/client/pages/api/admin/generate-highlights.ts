@@ -1,10 +1,9 @@
 import { Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { AdminSettings } from '@bike4mind/database';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
 import type { WhatsNewHighlightsPayload } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
@@ -22,14 +21,9 @@ const ONE_MINUTE_MS = 60 * 1000;
 
 const SETTING_NAME = 'whatsNewHighlightsConfig';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: GENERATE_RATE_LIMIT, windowMs: ONE_MINUTE_MS }))
   .post(async (req: Request, res: Response) => {
-    // Check if user is admin
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     try {
       // Get configuration
       const setting = await AdminSettings.findOne({ settingName: SETTING_NAME });

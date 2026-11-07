@@ -12,8 +12,15 @@ import { ApiKeyScope } from '@bike4mind/common';
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
-    const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
-    chain.use = () => chain;
+    const middlewares: ((req: unknown, res: unknown, next: () => void) => unknown)[] = [];
+    const chain = async (req: { method: string }, res: unknown) => {
+      for (const middleware of middlewares) await middleware(req, res, () => undefined);
+      return handlers[req.method](req, res);
+    };
+    chain.use = (middleware: (typeof middlewares)[number]) => {
+      middlewares.push(middleware);
+      return chain;
+    };
     chain.get = (fn: (typeof handlers)[string]) => {
       handlers.GET = fn;
       return chain;
@@ -62,7 +69,7 @@ describe('GET /api/admin/provider-invoices', () => {
 
   it('rejects non-admin users', async () => {
     const { run } = call({ method: 'GET', isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow(/missing permission/i);
     expect(mockNewest).not.toHaveBeenCalled();
   });
 
@@ -79,7 +86,7 @@ describe('POST /api/admin/provider-invoices', () => {
 
   it('rejects non-admin users', async () => {
     const { run } = call({ method: 'POST', isAdmin: false, body: BODY });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow(/missing permission/i);
     expect(mockAppend).not.toHaveBeenCalled();
   });
 

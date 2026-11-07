@@ -1,10 +1,10 @@
 import { createHash } from 'crypto';
 import { z } from 'zod';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { generateModelPriceSeed, modelPriceRepository, SEED_NOTE, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope, DISCOVERY_PRICE_NOTE_PREFIX, MODEL_PRICE_UNITS, ModelPriceTier } from '@bike4mind/common';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Admin surface over the versioned model price catalog. Prices here are
@@ -185,10 +185,11 @@ const RevertBody = z.object({
   action: z.literal('revert-to-seed'),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
-
     const history = req.query.history;
     if (typeof history === 'string' && history.length > 0) {
       return res.json({ history: await modelPriceRepository.historyForModel(history) });
@@ -196,8 +197,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.json({ rows: await modelPriceRepository.rowsInForce() });
   })
   .post(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
-
     // Deliberately ahead of, and exempt from, the reprice guardrails below:
     // the rates written here are the adapter literals computed server-side, so
     // a client cannot smuggle a magnitude slip through this branch, and a

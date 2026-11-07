@@ -12,8 +12,8 @@
 
 import { systemSecretRepository, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { encryptSecret, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import {
@@ -35,13 +35,12 @@ function maskSecretValue(value: string | undefined): string {
   return '****' + value.slice(-4);
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const dbSecrets = await systemSecretRepository.findAll();
 
       // Build response with resolution status for each configurable secret
@@ -78,20 +77,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           'Tier 1 secrets (SECRET_ENCRYPTION_KEY, MONGODB_URI, SESSION_SECRET, JWT_SECRET) cannot be configured via this API. They must be set using SST CLI.',
       });
     } catch (error) {
-      if (error instanceof ForbiddenError) {
-        Logger.warn('Error fetching system secrets status:', error.message);
-        return res.status(403).json({ error: error.message });
-      }
       Logger.error('Error fetching system secrets status:', error);
       return res.status(500).json({ error: 'Failed to fetch system secrets' });
     }
   })
   .post(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { secretName, value } = req.body;
 
       if (!secretName || typeof secretName !== 'string') {
@@ -170,10 +161,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           : `Secret ${secretName} created successfully`,
       });
     } catch (error) {
-      if (error instanceof ForbiddenError) {
-        Logger.warn('Error creating/updating system secret:', error.message);
-        return res.status(403).json({ error: error.message });
-      }
       Logger.error('Error creating/updating system secret:', error);
       if (error instanceof BadRequestError) {
         return res.status(400).json({ error: error.message });

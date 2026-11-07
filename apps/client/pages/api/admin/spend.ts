@@ -1,4 +1,4 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { usageEventRepository, cacheRepository } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { cacheService } from '@bike4mind/services';
@@ -17,7 +17,6 @@ import {
   type SpendServerPayload,
 } from '@bike4mind/common';
 import { CacheKeys } from '@server/utils/cacheKeys';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { resolveUserNames } from '@server/utils/resolveUserNames';
 import { Request } from 'express';
 import { z } from 'zod';
@@ -289,14 +288,10 @@ async function buildSpendData(query: Omit<SpendQuery, 'recache'>): Promise<Spend
  * requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
  * before req.user is set, so a key issued for a narrow integration can't read org
  * spend just because its owner is an admin. JWT/browser admins skip that check and
- * still pass the isAdmin gate below.
+ * still pass the admin permission gate.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
   async (req: Request<{}, {}, {}, SpendQuery>, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const { recache, ...query } = QuerySchema.parse(req.query);
 
     const cacheKey = CacheKeys.spend(query);

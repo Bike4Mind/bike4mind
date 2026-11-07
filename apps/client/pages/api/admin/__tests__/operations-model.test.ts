@@ -12,9 +12,14 @@ const h = vi.hoisted(() => ({
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => unknown> = [];
     const chain = Object.assign(
-      (req: unknown, res: unknown) => routes[(req as { method?: string }).method ?? 'GET']?.(req, res),
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) await middleware(req, res, () => undefined);
+        return routes[(req as { method?: string }).method ?? 'GET']?.(req, res);
+      },
       {
+        use: (fn: (typeof middlewares)[number]) => (middlewares.push(fn), chain),
         get: (fn: (req: unknown, res: unknown) => unknown) => ((routes.GET = fn), chain),
         put: (fn: (req: unknown, res: unknown) => unknown) => ((routes.PUT = fn), chain),
       }
@@ -87,5 +92,19 @@ describe('PUT /api/admin/operations-model admin audit', () => {
     expect(res._getStatusCode()).toBe(500);
     expect(res._getJSONData()).not.toHaveProperty('success');
     expect(h.getModel).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/admin/operations-model permission gate', () => {
+  it.each(['GET', 'PUT'] as const)('refuses %s for a user without admin access before any work', async method => {
+    const { req, res } = createMocks({ method, body });
+    (req as Record<string, unknown>).user = { id: 'user-1', isAdmin: false };
+
+    await expect((handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res)).rejects.toThrow(
+      /missing permission/i
+    );
+    expect(h.getModel).not.toHaveBeenCalled();
+    expect(h.update).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
   });
 });
