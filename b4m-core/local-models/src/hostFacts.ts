@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   HostFactsSchema,
   MODEL_HOST_LIMITS,
+  ollamaHardware,
   OllamaSettingsSchema,
   type HostFacts,
   type OllamaSettings,
@@ -155,8 +156,9 @@ export async function probeModelHost(options: ModelHostProbeOptions = {}): Promi
   ]);
   const hardware = clipHardware({ ...measured, diskFreeBytes: disk.freeBytes ?? measured.diskFreeBytes });
   const gpuTotals = usage.gpus.map(gpu => gpu.memoryBytes);
-  const defaultContext = ollamaDefaultContext(hardware, env, gpuTotals);
-  const vramContext = ollamaDefaultContext(hardware, { ...env, OLLAMA_CONTEXT_LENGTH: undefined }, gpuTotals);
+  const ollamaMachine = ollamaHardware(hardware);
+  const defaultContext = ollamaDefaultContext(ollamaMachine, env, gpuTotals);
+  const vramContext = ollamaDefaultContext(ollamaMachine, { ...env, OLLAMA_CONTEXT_LENGTH: undefined }, gpuTotals);
   const cpu = cpuinfo ? parseCpuinfo(cpuinfo) : { model: null, cores: null, threads: null };
 
   const host = HostFactsSchema.parse({

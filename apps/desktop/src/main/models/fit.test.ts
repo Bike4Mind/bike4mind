@@ -314,6 +314,8 @@ describe('fitFromSize', () => {
     needBytes: 3.5 * GIB,
     budgetBytes: 12 * GIB,
     offloadBytes: 0,
+    marginBytes: 2 * GIB,
+    ramPoolBytes: 0.7 * 32 * GIB,
     cpuOnly: false,
     context: 16384,
     ...overrides,
@@ -543,6 +545,18 @@ describe('machineView', () => {
       gpuMemoryBytes: 24 * GIB,
       gpuName: 'NVIDIA GeForce RTX 4090',
       confidence: 'high',
+      gpuVendor: null,
+      vramNeedsLlamaServer: false,
     });
+    expect(machineView({ ...gpu(24, 64), gpuVendor: 'nvidia' }).gpuVendor).toBe('nvidia');
+  });
+
+  it('flags an Intel card on Linux of unknown memory, which llama-server would read', () => {
+    const intel = { ...gpu(24, 64), gpuMemoryBytes: null, gpuVendor: 'intel' as const, confidence: 'low' as const };
+    expect(machineView({ ...intel, platform: 'linux' }).vramNeedsLlamaServer).toBe(true);
+    expect(machineView({ ...intel, platform: 'win32' }).vramNeedsLlamaServer).toBe(false);
+    expect(machineView({ ...intel, platform: 'linux', gpuMemoryBytes: 24 * GIB }).vramNeedsLlamaServer).toBe(false);
+    expect(machineView({ ...intel, platform: 'linux', gpuVendor: 'nvidia' }).vramNeedsLlamaServer).toBe(false);
+    expect(machineView({ ...intel, platform: 'linux', memoryKind: 'unified' }).vramNeedsLlamaServer).toBe(false);
   });
 });

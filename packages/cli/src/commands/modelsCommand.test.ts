@@ -1252,6 +1252,52 @@ describe('models curated', () => {
     expect(h.lines).toContain('For this computer (CPU only):');
   });
 
+  it('says what reads the memory of an Intel card on Linux', async () => {
+    const arc = machine({
+      gpuMemoryBytes: null,
+      gpuName: 'Intel GPU [8086:e223]',
+      gpuVendor: 'intel',
+      confidence: 'low',
+    });
+    const h = harness({ hardware: async () => arc });
+    await runModelsCommand('curated', { _: [] }, h.deps);
+    expect(h.lines[0]).toMatch(
+      /64 GiB of RAM and an Intel GPU \[8086:e223\] of unknown memory, so its picks assume the CPU\. Linux does not report it; put a llama\.cpp SYCL or Vulkan build of llama-server first on PATH, with its ggml-sycl or ggml-vulkan library beside it, and b4m reads it from there\.$/
+    );
+    expect(h.lines).toContain('For this computer (CPU only):');
+    const named = harness({ hardware: async () => ({ ...arc, gpuName: 'Intel Battlemage G31 [Arc Pro B70]' }) });
+    await runModelsCommand('curated', { _: [] }, named.deps);
+    expect(named.lines[0]).toContain('64 GiB of RAM and an Intel Battlemage G31 [Arc Pro B70] of unknown memory');
+    const unnamed = harness({ hardware: async () => ({ ...arc, gpuName: null }) });
+    await runModelsCommand('curated', { _: [] }, unnamed.deps);
+    expect(unnamed.lines[0]).toContain('64 GiB of RAM and an Intel GPU of unknown memory');
+    const unprefixed = harness({ hardware: async () => ({ ...arc, gpuName: 'NVIDIA GeForce RTX 4090 (Intel host)' }) });
+    await runModelsCommand('curated', { _: [] }, unprefixed.deps);
+    expect(unprefixed.lines[0]).toContain(
+      '64 GiB of RAM and an Intel GPU (NVIDIA GeForce RTX 4090 (Intel host)) of unknown memory'
+    );
+  });
+
+  it('names Intel integrated graphics on a machine whose memory they share', async () => {
+    const igpu = machine({
+      memoryKind: 'unified',
+      gpuMemoryBytes: null,
+      gpuName: 'Intel Lunar Lake [Intel Arc Graphics 130V / 140V]',
+      gpuVendor: 'intel',
+    });
+    const h = harness({ hardware: async () => igpu });
+    await runModelsCommand('curated', { _: [] }, h.deps);
+    expect(h.lines[0]).toMatch(
+      /This computer has 64 GiB of memory, shared with its GPU \(Intel Lunar Lake \[Intel Arc Graphics 130V \/ 140V\]\)\. Ollama does not use Intel integrated graphics, so picks and badges assume the CPU\.$/
+    );
+    const amd = harness({ hardware: async () => ({ ...igpu, gpuName: null, gpuVendor: 'amd' }) });
+    await runModelsCommand('curated', { _: [] }, amd.deps);
+    expect(amd.lines[0]).toMatch(/This computer has 64 GiB of memory, shared with its GPU\.$/);
+    const gb10 = harness({ hardware: async () => ({ ...igpu, gpuName: 'NVIDIA GB10', gpuVendor: 'nvidia' }) });
+    await runModelsCommand('curated', { _: [] }, gb10.deps);
+    expect(gb10.lines[0]).toMatch(/This computer has 64 GiB of memory, shared with its GPU \(NVIDIA GB10\)\.$/);
+  });
+
   it('prints the picks and entries as JSON', async () => {
     const { h } = offline();
     await runModelsCommand('curated', { _: [], 'output-format': 'json' }, h.deps);

@@ -975,6 +975,88 @@ describe('probedSummary', () => {
       { memoryKind: 'unified', totalMemoryBytes: 62 * GIB, gpuMemoryBytes: 31 * GIB, gpuName: null, confidence: 'low' },
       '62 GiB of RAM, and the GPU can use at least 31 GiB of memory',
     ],
+    [
+      'Intel integrated graphics on Linux by name',
+      {
+        memoryKind: 'unified',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'Intel Raptor Lake-P [Iris Xe Graphics]',
+        confidence: 'high',
+      },
+      '32 GiB of memory shared with the GPU (Intel Raptor Lake-P [Iris Xe Graphics])',
+    ],
+    [
+      'Intel integrated graphics on Windows with its shared-memory limit',
+      {
+        memoryKind: 'unified',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: 16 * GIB,
+        gpuName: 'Intel(R) Iris(R) Xe Graphics',
+        confidence: 'high',
+      },
+      '32 GiB of RAM, and the GPU (Intel(R) Iris(R) Xe Graphics) can use 16 GiB of memory',
+    ],
+    [
+      'an Intel card on Linux of unknown memory, with what reads it',
+      {
+        memoryKind: 'discrete',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'Intel GPU [8086:e223]',
+        confidence: 'low',
+        vramNeedsLlamaServer: true,
+      },
+      '32 GiB of RAM and an Intel GPU [8086:e223] of unknown memory, which a llama.cpp SYCL or Vulkan build of llama-server reads',
+    ],
+    [
+      'a named Intel card on Linux of unknown memory',
+      {
+        memoryKind: 'discrete',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'Intel Battlemage G31 [Arc Pro B70]',
+        confidence: 'low',
+        vramNeedsLlamaServer: true,
+      },
+      '32 GiB of RAM and an Intel Battlemage G31 [Arc Pro B70] of unknown memory, which a llama.cpp SYCL or Vulkan build of llama-server reads',
+    ],
+    [
+      'an Intel card named without a leading Intel',
+      {
+        memoryKind: 'discrete',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'NVIDIA GeForce RTX 4090 (Intel host)',
+        confidence: 'low',
+        vramNeedsLlamaServer: true,
+      },
+      '32 GiB of RAM and an Intel GPU (NVIDIA GeForce RTX 4090 (Intel host)) of unknown memory, which a llama.cpp SYCL or Vulkan build of llama-server reads',
+    ],
+    [
+      'an unnamed Intel card on Linux of unknown memory',
+      {
+        memoryKind: 'discrete',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: null,
+        confidence: 'low',
+        vramNeedsLlamaServer: true,
+      },
+      '32 GiB of RAM and an Intel GPU of unknown memory, which a llama.cpp SYCL or Vulkan build of llama-server reads',
+    ],
+    [
+      'an Intel card once its memory is read',
+      {
+        memoryKind: 'discrete',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: 32 * GIB,
+        gpuName: 'Intel GPU [8086:e223]',
+        confidence: 'high',
+        vramNeedsLlamaServer: false,
+      },
+      '32 GiB of RAM and 32 GiB of GPU memory (Intel GPU [8086:e223])',
+    ],
   ] satisfies [string, MachineView, string][])('describes %s', (_label, machine, text) => {
     expect(probedSummary(machine)).toBe(text);
   });

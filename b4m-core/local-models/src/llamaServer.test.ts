@@ -1,10 +1,12 @@
+import type { ChildProcess } from 'node:child_process';
 import { getEventListeners } from 'node:events';
+import { closeSync, openSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LlamaServerBinaryError,
   LlamaServerExitError,
@@ -17,12 +19,17 @@ import {
 import type { HubGgufBuild, HubModelDetail, HuggingFaceHub } from './huggingface';
 import {
   DEFAULT_LLAMA_SERVER_CONTEXT_SIZE,
+  LLAMA_SERVER_FIT_TARGET_BUILD,
   LLAMA_SERVER_FLASH_ATTN_VALUE_BUILD,
   LLAMA_SERVER_PORT_GRACE_MS,
   MIN_LLAMA_SERVER_BUILD,
   findLlamaServer,
+  fitTargetArgs,
   flashAttentionArgs,
   listenerProblem,
+  listLlamaServerDevices,
+  missingLibraryError,
+  parseListedDevices,
   startLlamaServer,
   trackedLlamaServerCount,
   type ListenerScan,
@@ -33,10 +40,34 @@ import {
 } from './llamaServer';
 import { LlamaServerRuntime, parseLlamaServerPullRef, type LlamaServerRuntimeOptions } from './llamaServerRuntime';
 import { OpenAICompatibleRuntime } from './openaiCompatible';
+import {
+  LIST_DEVICES_NONE,
+  LIST_DEVICES_SYCL_B580_IGPU,
+  LIST_DEVICES_SYCL_G31,
+  LIST_DEVICES_VULKAN_G31,
+} from './__test__/hardwareFixtures';
+
+const childHooks = vi.hoisted(() => ({ survivesKill: false }));
+
+// execFile as is, unless a test needs a child that outlives SIGKILL, as one stuck in a driver call does.
+vi.mock('node:child_process', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  const execFile = (...args: unknown[]) => {
+    const child = (actual.execFile as (...params: unknown[]) => ChildProcess)(...args);
+    if (childHooks.survivesKill) child.kill = () => true;
+    return child;
+  };
+  return { ...actual, execFile };
+});
 
 const FIXTURE = fileURLToPath(new URL('./__test__/fakeLlamaServer.mjs', import.meta.url));
 const GGUF_BYTES = Buffer.concat([Buffer.from('GGUF'), Buffer.alloc(60)]);
 const FAKE_VERSION = '0.7.0-dev (build 11912, commit fake)';
+const INTEL_LLVM = { FAKE_LLAMA_BUILT_WITH: 'IntelLLVM 2025.2.0 for Linux x86_64' };
+const MiB = 1024 * 1024;
+const ARC_DEVICE = 'SYCL0: Intel(R) Arc(TM) B580 Graphics (11605 MiB, 11245 MiB free)';
+const loaderError = (library: string) =>
+  `process.stderr.write("llama-server: error while loading shared libraries: ${library}: cannot open shared object file: No such file or directory\\n"); process.exit(127);`;
 // The fake runs under this Node, so the tests need no executable file and work on Windows too.
 const BINARY = { binaryPath: process.execPath, binaryArgs: [FIXTURE] };
 
@@ -176,6 +207,164 @@ describe('findLlamaServer', () => {
     );
   });
 
+  it('warns of a SYCL build, known by its IntelLLVM compiler, that lists no GPU', async () => {
+    const found = await findLlamaServer({ ...pathOf(BINARY), env: INTEL_LLVM });
+    expect(found).toMatchObject({ path: process.execPath, build: 11912 });
+    expect(found?.warning).toMatch(
+      /is a SYCL build but lists no GPU, so it runs on the CPU\. It needs Intel's GPU driver with Level Zero and the oneAPI runtime .*setvars\.sh.*Vulkan build instead\.$/
+    );
+    expect(
+      await findLlamaServer({ ...pathOf(BINARY), env: { ...INTEL_LLVM, FAKE_LLAMA_DEVICES: ARC_DEVICE } })
+    ).toEqual({ path: process.execPath, version: FAKE_VERSION, build: 11912 });
+    expect(await findLlamaServer({ ...pathOf(BINARY), env: {} })).toMatchObject({ build: 11912 });
+  });
+
+  it('names the missing library and what provides it', () => {
+    const path = '/opt/llama/llama-server';
+    const glibc = (library: string) =>
+      missingLibraryError(
+        path,
+        `${path}: error while loading shared libraries: ${library}: cannot open shared object file: No such file or directory`,
+        { code: 127 },
+        false
+      )?.message;
+    for (const library of [
+      'libsycl.so.8',
+      'libur_loader.so.0',
+      'libze_loader.so.1',
+      'libmkl_core.so.2',
+      'libsvml.so',
+    ]) {
+      expect(glibc(library)).toBe(
+        `llama-server at ${path} cannot start: ${library} is missing. It is part of the Intel oneAPI runtime a SYCL build needs. It needs Intel's GPU driver with Level Zero and the oneAPI runtime (on Linux, source oneAPI's setvars.sh before starting it), or use llama.cpp's Vulkan build instead.`
+      );
+    }
+    expect(glibc('libvulkan.so.1')).toMatch(/libvulkan\.so\.1 is missing\. Install the Vulkan loader/);
+    expect(glibc('libcurl.so.4')).toMatch(/libcurl\.so\.4 is missing\. Install it, or use a llama\.cpp build/);
+    const dyld = missingLibraryError(path, 'dyld[512]: Library not loaded: @rpath/libvulkan.1.dylib', null, false);
+    expect(dyld?.message).toMatch(/libvulkan\.1\.dylib is missing\. Install the Vulkan loader/);
+    expect(dyld).toBeInstanceOf(LlamaServerBinaryError);
+  });
+
+  it('reads the Windows DLL-not-found exit code, with the oneAPI hint only for a SYCL build', () => {
+    const exe = 'C:\\llama\\llama-server.exe';
+    for (const code of [3221225781, -1073741515]) {
+      expect(missingLibraryError(exe, '', { code }, true)?.message).toMatch(
+        /cannot start: a DLL it needs is missing\. It is part of the Intel oneAPI runtime/
+      );
+      expect(missingLibraryError(exe, '', { code }, false)?.message).toMatch(/a DLL it needs is missing\. Install it/);
+    }
+    expect(missingLibraryError(exe, 'error: unknown argument', { code: 1 }, true)).toBeNull();
+    expect(missingLibraryError(exe, '', null, true)).toBeNull();
+  });
+
+  describe.skipIf(process.platform === 'win32')('beside a GPU backend library', () => {
+    const fake = `import(${JSON.stringify(FIXTURE)});`;
+    const builds = new Map<string, string>();
+    async function buildDir(name: string, body: string, library?: string): Promise<string> {
+      const dir = join(root, 'backends', name);
+      await mkdir(dir, { recursive: true });
+      await writeExecutable(join(dir, 'llama-server'), body);
+      if (library) await writeFile(join(dir, library), '');
+      builds.set(name, dir);
+      return dir;
+    }
+    const binaryIn = (name: string) => join(builds.get(name) ?? '', 'llama-server');
+
+    beforeAll(async () => {
+      await buildDir('sycl', fake, 'libggml-sycl.so');
+      await buildDir('vulkan', fake, 'libggml-vulkan.so');
+      await buildDir('plain', fake);
+      await buildDir('no-oneapi', loaderError('libsycl.so.8'));
+      await buildDir('no-vulkan', loaderError('libvulkan.so.1'));
+      // A SYCL build started from a shell that has not sourced setvars.sh, as a real one fails.
+      await buildDir('no-svml', loaderError('libsvml.so'), 'libggml-sycl.so');
+      // Starts for --version but not once the backend loads, as a build with the oneAPI loader missing does.
+      await buildDir(
+        'no-level-zero',
+        `if (process.argv.includes('--version')) { ${fake} } else { ${loaderError('libze_loader.so.1')} }`,
+        'libggml-sycl.so'
+      );
+      await buildDir(
+        'failing',
+        `if (process.argv.includes('--version')) { ${fake} } else { process.exit(3); }`,
+        'libggml-vulkan.so'
+      );
+    });
+
+    it('accepts a SYCL or Vulkan build that lists a GPU', async () => {
+      for (const name of ['sycl', 'vulkan']) {
+        expect(
+          await findLlamaServer({
+            path: binaryIn(name),
+            env: { FAKE_LLAMA_DEVICES: `${ARC_DEVICE}|Vulkan0: Other (1 MiB, 1 MiB free)` },
+          })
+        ).toEqual({ path: binaryIn(name), version: FAKE_VERSION, build: 11912 });
+      }
+    });
+
+    it('warns of a SYCL or Vulkan build that lists no GPU, naming the backend and the fix', async () => {
+      const warning = async (name: string) => (await findLlamaServer({ path: binaryIn(name), env: {} }))?.warning;
+      expect(await warning('sycl')).toMatch(/is a SYCL build but lists no GPU, so it runs on the CPU\. .*oneAPI/);
+      expect(await warning('vulkan')).toMatch(
+        /is a Vulkan build but lists no GPU, so it runs on the CPU\. To use the GPU, install or update its Vulkan driver/
+      );
+      expect(await warning('failing')).toMatch(/is a Vulkan build but lists no GPU \(Command failed: .*\), so it runs/);
+      expect(await findLlamaServer({ path: binaryIn('plain'), env: {} })).toEqual({
+        path: binaryIn('plain'),
+        version: FAKE_VERSION,
+        build: 11912,
+      });
+    });
+
+    it('names the library a build cannot load, from the version probe or the device listing', async () => {
+      await expect(findLlamaServer({ path: binaryIn('no-oneapi'), env: {} })).rejects.toMatchObject({
+        name: 'LlamaServerBinaryError',
+        message: expect.stringMatching(
+          /cannot start: libsycl\.so\.8 is missing\. It is part of the Intel oneAPI runtime/
+        ),
+      });
+      await expect(findLlamaServer({ path: binaryIn('no-vulkan'), env: {} })).rejects.toThrow(
+        /libvulkan\.so\.1 is missing\. Install the Vulkan loader/
+      );
+      await expect(findLlamaServer({ path: binaryIn('no-svml'), env: {} })).rejects.toThrow(
+        /cannot start: libsvml\.so is missing\. It is part of the Intel oneAPI runtime a SYCL build needs\. .*setvars\.sh/
+      );
+      await expect(findLlamaServer({ path: binaryIn('no-level-zero'), env: {} })).rejects.toThrow(
+        /libze_loader\.so\.1 is missing\. It is part of the Intel oneAPI runtime/
+      );
+    });
+
+    it('passes over unusable builds on PATH and throws the first problem only when none qualifies', async () => {
+      const PATH = (...names: string[]) => names.map(name => builds.get(name)).join(':');
+      expect(await findLlamaServer({ env: { PATH: PATH('no-oneapi', 'plain', 'sycl') }, platform: 'linux' })).toEqual({
+        path: binaryIn('plain'),
+        version: FAKE_VERSION,
+        build: 11912,
+      });
+      expect(
+        await findLlamaServer({ env: { PATH: PATH('sycl'), FAKE_LLAMA_DEVICES: ARC_DEVICE }, platform: 'linux' })
+      ).toMatchObject({ path: binaryIn('sycl') });
+      // A build that lists no GPU still runs, on the CPU, so a PATH search takes it.
+      expect(await findLlamaServer({ env: { PATH: PATH('no-vulkan', 'sycl') }, platform: 'linux' })).toMatchObject({
+        path: binaryIn('sycl'),
+        warning: expect.stringMatching(/is a SYCL build but lists no GPU/),
+      });
+      await expect(
+        findLlamaServer({ env: { PATH: PATH('no-vulkan', 'no-oneapi') }, platform: 'linux' })
+      ).rejects.toThrow(/libvulkan\.so\.1 is missing/);
+    });
+
+    it('starts a SYCL build that lists no GPU when probing it for the fit target', async () => {
+      const server = await start({ binaryPath: binaryIn('sycl'), binaryArgs: [], fitTargetMiB: 1536 });
+      try {
+        expect(server.port).toBeGreaterThan(0);
+      } finally {
+        await server.stop();
+      }
+    });
+  });
+
   describe.skipIf(process.platform === 'win32')('on PATH', () => {
     let decoy: string;
     let old: string;
@@ -214,6 +403,323 @@ describe('findLlamaServer', () => {
 function pathOf(binary: typeof BINARY) {
   return { path: binary.binaryPath, binaryArgs: binary.binaryArgs };
 }
+
+describe('parseListedDevices', () => {
+  it('reads SYCL and Vulkan device lines, in MiB, from stdout', () => {
+    expect(parseListedDevices(LIST_DEVICES_SYCL_G31)).toEqual([
+      { name: 'SYCL0', description: 'Intel(R) Graphics [0xe223]', totalBytes: 32656 * MiB, freeBytes: 32611 * MiB },
+    ]);
+    expect(parseListedDevices(LIST_DEVICES_VULKAN_G31.replace(/\n/g, '\r\n'))).toEqual([
+      {
+        name: 'Vulkan0',
+        description: 'Intel(R) Arc(TM) Pro B70 Graphics',
+        totalBytes: 32558 * MiB,
+        freeBytes: 31789 * MiB,
+      },
+    ]);
+    expect(parseListedDevices(LIST_DEVICES_SYCL_B580_IGPU).map(device => device.name)).toEqual(['SYCL0', 'SYCL1']);
+    expect(parseListedDevices(LIST_DEVICES_NONE)).toEqual([]);
+  });
+
+  it('skips lines that are not device lines or carry figures no GPU has', () => {
+    const text = [
+      'Available devices:',
+      '|  0| [level_zero:gpu:0]| Intel Arc B580 Graphics| 20.1| 160| 1024| 32| 12216M| 1.6.33276|',
+      'SYCL0: Intel(R) Arc(TM) A770 Graphics (16288 MiB, 16265 MiB free)',
+      '  SYCL1: Intel(R) Arc(TM) A770 Graphics (16288 MiB, lots MiB free)',
+      '  SYCL2: Intel(R) Arc(TM) A770 Graphics (0 MiB, 0 MiB free)',
+      '  SYCL3: Intel(R) Arc(TM) A770 Graphics (99999999999999999 MiB, 1 MiB free)',
+      '  SYCL4: Intel(R) Arc(TM) A770 Graphics (16288 MiB, 99999999999999999999 MiB free)',
+    ].join('\n');
+    expect(parseListedDevices(text)).toEqual([]);
+  });
+
+  it('caps free memory at the total', () => {
+    expect(parseListedDevices('  Vulkan0: Intel(R) Arc(TM) B580 Graphics (12216 MiB, 13000 MiB free)\n')).toEqual([
+      {
+        name: 'Vulkan0',
+        description: 'Intel(R) Arc(TM) B580 Graphics',
+        totalBytes: 12216 * MiB,
+        freeBytes: 12216 * MiB,
+      },
+    ]);
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('listLlamaServerDevices', () => {
+  let dir: string;
+  let count: string;
+  let serial = 0;
+
+  // A llama-server whose device listing counts its runs in `count`, prints `stdout`, then runs `after`.
+  async function listingBuild(stdout: string, library: string | null = 'libggml-sycl.so', after = ''): Promise<string> {
+    const build = join(dir, `build-${serial++}`);
+    await mkdir(build, { recursive: true });
+    const list = `import('node:fs').then(fs => { fs.appendFileSync(${JSON.stringify(count)}, 'x'); process.stdout.write(${JSON.stringify(stdout)}); ${after} });`;
+    const script = `if (process.argv.includes('--version')) process.stderr.write(${JSON.stringify(`version: ${FAKE_VERSION}\n`)}); else ${list}`;
+    await writeExecutable(join(build, 'llama-server'), script);
+    if (library) await writeFile(join(build, library), '');
+    return join(build, 'llama-server');
+  }
+  const runs = async () => (await readFile(count, 'utf8').catch(() => '')).length;
+
+  beforeAll(async () => {
+    dir = join(root, 'listings');
+    await mkdir(dir, { recursive: true });
+  });
+
+  beforeEach(async () => {
+    count = join(dir, `runs-${serial++}`);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('lists the devices of a SYCL or Vulkan build', async () => {
+    const sycl = await listingBuild(LIST_DEVICES_SYCL_G31);
+    expect(await listLlamaServerDevices({ path: sycl })).toEqual(parseListedDevices(LIST_DEVICES_SYCL_G31));
+    const vulkan = await listingBuild(LIST_DEVICES_VULKAN_G31, 'libggml-vulkan.so');
+    expect(await listLlamaServerDevices({ path: vulkan })).toMatchObject([{ name: 'Vulkan0' }]);
+    expect(await listLlamaServerDevices({ path: await listingBuild(LIST_DEVICES_NONE) })).toEqual([]);
+  });
+
+  it('does not run a build with neither backend beside it', async () => {
+    const plain = await listingBuild(LIST_DEVICES_SYCL_G31, null);
+    expect(await listLlamaServerDevices({ path: plain })).toEqual([]);
+    expect(await runs()).toBe(0);
+  });
+
+  it('rejects for a missing binary, a failed listing, and one that times out', async () => {
+    await expect(listLlamaServerDevices({ path: join(dir, 'nowhere', 'llama-server') })).rejects.toThrow(
+      /llama-server at .*nowhere\/llama-server is missing or not executable/
+    );
+    const failing = await listingBuild('', 'libggml-sycl.so', 'process.exit(3);');
+    await expect(listLlamaServerDevices({ path: failing })).rejects.toThrow(
+      /could not list its devices: Command failed: /
+    );
+    const hanging = await listingBuild('', 'libggml-vulkan.so', 'setInterval(() => {}, 1000);');
+    await expect(listLlamaServerDevices({ path: hanging, timeoutMs: 300 })).rejects.toThrow(
+      /could not list its devices: timed out after 300 ms/
+    );
+  });
+
+  it('keeps devices listed before a failing exit', async () => {
+    const partial = await listingBuild(LIST_DEVICES_SYCL_G31, 'libggml-sycl.so', 'process.exit(1);');
+    expect(await listLlamaServerDevices({ path: partial })).toHaveLength(1);
+  });
+
+  it('reuses a listing until the binary changes or it is older than maxAgeMs', async () => {
+    const path = await listingBuild(LIST_DEVICES_SYCL_G31);
+    const [first, second] = await Promise.all([listLlamaServerDevices({ path }), listLlamaServerDevices({ path })]);
+    expect(second).toEqual(first);
+    await listLlamaServerDevices({ path });
+    expect(await runs()).toBe(1);
+    await listLlamaServerDevices({ path, maxAgeMs: 0 });
+    expect(await runs()).toBe(2);
+    await utimes(path, new Date(), new Date(Date.now() + 5_000));
+    await listLlamaServerDevices({ path });
+    expect(await runs()).toBe(3);
+    // A launcher's arguments are part of what is listed.
+    await listLlamaServerDevices({ path, binaryArgs: ['--verbose'] });
+    expect(await runs()).toBe(4);
+  });
+
+  it('retries a failed or empty listing after a minute', async () => {
+    const failing = await listingBuild('', 'libggml-sycl.so', 'process.exit(3);');
+    const empty = await listingBuild(LIST_DEVICES_NONE);
+    await expect(listLlamaServerDevices({ path: failing })).rejects.toThrow(/could not list/);
+    await expect(listLlamaServerDevices({ path: failing })).rejects.toThrow(/could not list/);
+    expect(await listLlamaServerDevices({ path: empty })).toEqual([]);
+    expect(await listLlamaServerDevices({ path: empty })).toEqual([]);
+    expect(await runs()).toBe(2);
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 61_000 });
+    await expect(listLlamaServerDevices({ path: failing })).rejects.toThrow(/could not list/);
+    expect(await listLlamaServerDevices({ path: empty })).toEqual([]);
+    expect(await runs()).toBe(4);
+  });
+
+  it('shares a listing still running with callers that want a fresh one', async () => {
+    const path = await listingBuild(LIST_DEVICES_SYCL_G31, 'libggml-sycl.so', 'setTimeout(() => {}, 300);');
+    const listings = await Promise.all([
+      listLlamaServerDevices({ path }),
+      listLlamaServerDevices({ path, maxAgeMs: 0 }),
+      listLlamaServerDevices({ path, maxAgeMs: 0 }),
+    ]);
+    expect(listings[1]).toEqual(listings[0]);
+    expect(listings[2]).toEqual(listings[0]);
+    expect(await runs()).toBe(1);
+    await listLlamaServerDevices({ path, maxAgeMs: 0 });
+    expect(await runs()).toBe(2);
+  });
+
+  it('warns that a GPU build did not list its devices in time, without saying where it runs', async () => {
+    const hanging = await listingBuild('', 'libggml-vulkan.so', 'setInterval(() => {}, 1000);');
+    expect((await findLlamaServer({ path: hanging, env: {}, timeoutMs: 300 }))?.warning).toBe(
+      `llama-server at ${hanging} is a Vulkan build that did not list its devices within 0.3 s, so whether it can use the GPU is unknown.`
+    );
+  });
+
+  it('settles a listing whose child ignores SIGTERM within a second of its timeout, and keeps it as a failure', async () => {
+    const stubborn = await listingBuild(
+      '',
+      'libggml-vulkan.so',
+      "process.on('SIGTERM', () => {}); setTimeout(() => {}, 6000);"
+    );
+    const started = Date.now();
+    await expect(listLlamaServerDevices({ path: stubborn, env: {}, timeoutMs: 1_000 })).rejects.toThrow(
+      /timed out after 1000 ms/
+    );
+    expect(Date.now() - started).toBeLessThan(2_700);
+    expect((await findLlamaServer({ path: stubborn, env: {}, timeoutMs: 1_000 }))?.warning).toMatch(
+      /did not list its devices within 1 s/
+    );
+    expect(await runs()).toBe(1);
+  });
+
+  it('keeps one listing process per binary while a killed child has not exited, then a minute after', async () => {
+    const exitedMarker = join(dir, `exited-${serial}`);
+    const stuck = await listingBuild(
+      '',
+      'libggml-vulkan.so',
+      `setTimeout(() => fs.writeFileSync(${JSON.stringify(exitedMarker)}, ''), 3000);`
+    );
+    const list = () => listLlamaServerDevices({ path: stuck, env: {}, timeoutMs: 300 });
+    childHooks.survivesKill = true;
+    try {
+      const started = Date.now();
+      await expect(list()).rejects.toThrow(/timed out after 300 ms/);
+      expect(Date.now() - started).toBeLessThan(2_000);
+      await expect(listLlamaServerDevices({ path: stuck, env: {}, timeoutMs: 300, maxAgeMs: 0 })).rejects.toThrow(
+        /timed out after 300 ms/
+      );
+      expect(await runs()).toBe(1);
+      // Past the retry window from the start, so only a window from the child's exit keeps the failure.
+      vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 61_000 });
+      await vi.waitFor(async () => expect(await readFile(exitedMarker, 'utf8')).toBe(''), {
+        timeout: 8_000,
+        interval: 100,
+      });
+      await new Promise(resolve => setTimeout(resolve, 300));
+      await expect(list()).rejects.toThrow(/timed out after 300 ms/);
+      expect(await runs()).toBe(1);
+    } finally {
+      childHooks.survivesKill = false;
+    }
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 61_000 });
+    await expect(list()).rejects.toThrow(/timed out after 300 ms/);
+    expect(await runs()).toBe(2);
+  });
+
+  it('names the pid of a stuck listing of a binary since replaced, rather than starting another', async () => {
+    const stuck = await listingBuild('', 'libggml-vulkan.so', 'setTimeout(() => {}, 3000);');
+    childHooks.survivesKill = true;
+    try {
+      await expect(listLlamaServerDevices({ path: stuck, env: {}, timeoutMs: 300 })).rejects.toThrow(/timed out/);
+      await utimes(stuck, new Date(), new Date(Date.now() + 5_000));
+      const previous =
+        /an earlier `llama-server --list-devices` \(pid \d+\) of the previous binary has not exited; end it or restart the computer/;
+      await expect(listLlamaServerDevices({ path: stuck, env: {}, timeoutMs: 300 })).rejects.toThrow(previous);
+      expect((await findLlamaServer({ path: stuck, env: {}, timeoutMs: 300 }))?.warning).toMatch(previous);
+      expect(await runs()).toBe(1);
+    } finally {
+      childHooks.survivesKill = false;
+    }
+  });
+
+  it('rejects a binary that cannot be spawned without pinning its listing or leaving a rejection unhandled', async () => {
+    const path = await listingBuild(LIST_DEVICES_SYCL_G31);
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      // Open for writing, the file cannot be executed.
+      const handle = openSync(path, 'r+');
+      try {
+        await expect(listLlamaServerDevices({ path, env: {} })).rejects.toThrow(/ETXTBSY/);
+        await expect(listLlamaServerDevices({ path, env: {}, maxAgeMs: 0 })).rejects.toThrow(/ETXTBSY/);
+      } finally {
+        closeSync(handle);
+      }
+      expect(await listLlamaServerDevices({ path, env: {} })).toHaveLength(1);
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+  });
+
+  it('skips a PATH entry that cannot be spawned and finds the next one', async () => {
+    const busy = await listingBuild(LIST_DEVICES_SYCL_G31);
+    const plain = await listingBuild(LIST_DEVICES_SYCL_G31, null);
+    const handle = openSync(busy, 'r+');
+    try {
+      const PATH = `${dirname(busy)}:${dirname(plain)}`;
+      expect(await findLlamaServer({ env: { PATH }, platform: 'linux' })).toMatchObject({ path: plain });
+    } finally {
+      closeSync(handle);
+    }
+  });
+
+  it('reads a wrapper that exits 0 while a grandchild holds its output as a timeout, not as no GPU', async () => {
+    const pidFile = join(dir, `grandchild-${serial}`);
+    const wrapper = await listingBuild(
+      '',
+      'libggml-vulkan.so',
+      `import('node:child_process').then(cp => { const kid = cp.spawn(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], { stdio: ['ignore', 'inherit', 'inherit'] }); fs.writeFileSync(${JSON.stringify(pidFile)}, String(kid.pid)); process.exit(0); });`
+    );
+    try {
+      expect((await findLlamaServer({ path: wrapper, env: {}, timeoutMs: 500 }))?.warning).toMatch(
+        /did not list its devices within 0\.5 s/
+      );
+    } finally {
+      const pid = Number(await readFile(pidFile, 'utf8').catch(() => ''));
+      if (pid > 0) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // Already gone.
+        }
+      }
+    }
+  });
+
+  it('reports a binary that vanishes before its listing as missing, and moves on along PATH', async () => {
+    const vanishing = async () => {
+      const build = join(dir, `vanishing-${serial++}`);
+      await mkdir(build, { recursive: true });
+      await writeExecutable(
+        join(build, 'llama-server'),
+        `import('node:fs').then(fs => { fs.unlinkSync(process.argv[1]); process.stderr.write(${JSON.stringify(`version: ${FAKE_VERSION}\n`)}); });`
+      );
+      await writeFile(join(build, 'libggml-vulkan.so'), '');
+      return build;
+    };
+    const gone = join(await vanishing(), 'llama-server');
+    await expect(findLlamaServer({ path: gone, env: {} })).rejects.toMatchObject({
+      name: 'LlamaServerBinaryError',
+      message: `llama-server at ${gone} is missing or not executable`,
+    });
+    const plain = await listingBuild(LIST_DEVICES_SYCL_G31, null);
+    const PATH = `${await vanishing()}:${dirname(plain)}`;
+    expect(await findLlamaServer({ env: { PATH }, platform: 'linux' })).toMatchObject({ path: plain });
+  });
+
+  it('lists again under another environment', async () => {
+    const path = await listingBuild(LIST_DEVICES_SYCL_G31);
+    await listLlamaServerDevices({ path, env: { ZES_ENABLE_SYSMAN: '1' } });
+    await listLlamaServerDevices({ path, env: { ZES_ENABLE_SYSMAN: '1' } });
+    await listLlamaServerDevices({ path, env: {} });
+    expect(await runs()).toBe(2);
+  });
+
+  it("shares one listing between findLlamaServer's device check and a later listing", async () => {
+    const path = await listingBuild(LIST_DEVICES_SYCL_G31);
+    expect(await findLlamaServer({ path, env: {} })).toEqual({ path, version: FAKE_VERSION, build: 11912 });
+    expect(await findLlamaServer({ path, env: {} })).toEqual({ path, version: FAKE_VERSION, build: 11912 });
+    await listLlamaServerDevices({ path, env: {} });
+    expect(await runs()).toBe(1);
+  });
+});
 
 describe('startLlamaServer', () => {
   it('serves on loopback with a per-process key passed outside argv, then stops cleanly', async () => {
@@ -610,6 +1116,34 @@ describe('startLlamaServer', () => {
     expect(await argsFor({ build: 5501, extraArgs: ['-ctv', 'q8_0'] })).toEqual(['-fa']);
   });
 
+  it('passes --fit-target only to builds that have --fit', () => {
+    expect(fitTargetArgs({ fitTargetMiB: 1536 }, LLAMA_SERVER_FIT_TARGET_BUILD)).toEqual(['--fit-target', '1536']);
+    expect(fitTargetArgs({ fitTargetMiB: 0 }, 11912)).toEqual(['--fit-target', '0']);
+    expect(fitTargetArgs({ fitTargetMiB: 1536 }, LLAMA_SERVER_FIT_TARGET_BUILD - 1)).toEqual([]);
+    expect(fitTargetArgs({ fitTargetMiB: 1536 }, undefined)).toEqual([]);
+    expect(fitTargetArgs({}, 11912)).toEqual([]);
+  });
+
+  it('passes the fit target for the build, probing it when not given, and drops it for an unnumbered build', async () => {
+    const argsFor = async (overrides: Partial<StartLlamaServerOptions>, extra: Record<string, string> = {}) => {
+      const record = join(root, `record-fit-${Date.now()}-${Math.random()}.json`);
+      const server = await start(overrides, { FAKE_LLAMA_RECORD: record, ...extra });
+      await server.stop();
+      const { args } = await recorded(record);
+      const at = args.indexOf('--fit-target');
+      return at === -1 ? [] : args.slice(at, at + 2);
+    };
+    expect(await argsFor({ fitTargetMiB: 1536 })).toEqual(['--fit-target', '1536']);
+    expect(await argsFor({ build: 11912, fitTargetMiB: 1536, flashAttention: 'on' })).toEqual(['--fit-target', '1536']);
+    expect(await argsFor({ build: LLAMA_SERVER_FIT_TARGET_BUILD - 1, fitTargetMiB: 1536 })).toEqual([]);
+    expect(await argsFor({ fitTargetMiB: 1536 }, { FAKE_LLAMA_VERSION: '7000 (abc)' })).toEqual([]);
+    expect(await argsFor({ fitTargetMiB: 1536 }, { FAKE_LLAMA_VERSION: 'dev' })).toEqual([]);
+    expect(await argsFor({})).toEqual([]);
+    await expect(
+      start({ fitTargetMiB: 1536, flashAttention: 'on' }, { FAKE_LLAMA_VERSION: 'dev' })
+    ).rejects.toBeInstanceOf(LlamaServerVersionError);
+  });
+
   it('refuses flashAttention off with a quantized V cache, and an unknown mode, before spawning', async () => {
     const record = join(root, 'record-fa-refused.json');
     await expect(
@@ -637,6 +1171,9 @@ describe('startLlamaServer', () => {
     await expect(start({ modelPath: join(root, 'missing.gguf') })).rejects.toBeInstanceOf(ModelNotFoundError);
     await expect(start({ contextSize: -1 })).rejects.toBeInstanceOf(LocalRuntimeError);
     await expect(start({ gpuLayers: -1 })).rejects.toThrow('gpuLayers must be a non-negative integer');
+    for (const fitTargetMiB of [-1, 1.5, Number.NaN, Infinity]) {
+      await expect(start({ fitTargetMiB })).rejects.toThrow('fitTargetMiB must be a non-negative integer');
+    }
     await expect(start({ alias: 'a,b' })).rejects.toThrow('cannot be a llama-server alias');
     const commaPath = join(root, 'tiny,Q4_K_M.gguf');
     await writeFile(commaPath, GGUF_BYTES);

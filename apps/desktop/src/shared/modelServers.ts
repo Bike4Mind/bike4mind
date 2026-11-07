@@ -103,7 +103,7 @@ export interface ModelServerLaunchView {
   pendingRestart: boolean;
   /** Nothing answers there, and Desktop has what it needs to start the server. */
   canStart: boolean;
-  /** Why Desktop cannot start it, or why its last start or run ended. */
+  /** Why Desktop cannot start it, why its last start or run ended, or why the server it runs is not on the GPU. */
   problem: string | null;
   /** "This computer" only: Desktop found no Ollama program to start. Information, not a fault, for hosted-only users. */
   programMissing?: string;

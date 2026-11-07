@@ -1827,6 +1827,8 @@ describe('ModelHubService curated list', () => {
       gpuMemoryBytes: null,
       gpuName: null,
       confidence: 'high',
+      gpuVendor: null,
+      vramNeedsLlamaServer: false,
     });
     expect(list.entries.every(entry => entry.vision && entry.thinking && entry.tools)).toBe(true);
     expect(list.entries.find(entry => entry.id === 'gemma-4-26b')).toMatchObject({

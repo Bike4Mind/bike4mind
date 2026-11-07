@@ -7,7 +7,14 @@
 import { createInterface } from 'readline';
 import { lookup } from 'dns/promises';
 import { Writable } from 'stream';
-import type { CuratedSlot, HubBuild, HubEntry, HubManifest, HubTier } from '@bike4mind/common';
+import {
+  vramNeedsLlamaServer,
+  type CuratedSlot,
+  type HubBuild,
+  type HubEntry,
+  type HubManifest,
+  type HubTier,
+} from '@bike4mind/common';
 import {
   HUGGING_FACE_SSH_KEYS_URL,
   HuggingFaceHub,
@@ -111,6 +118,8 @@ import {
   FIT_LABELS,
   fitForHubBuild,
   fitForPlan,
+  LLAMA_SERVER_VRAM_HELP,
+  OLLAMA_SKIPS_INTEL_IGPU,
   machineLabel,
   machineReader,
   type MachineReader,
@@ -417,13 +426,24 @@ const formatGiB = (bytes: number) => {
   return `${gib >= 100 ? Math.round(gib) : Number(gib.toFixed(1))} GiB`;
 };
 
+/** "an Intel GPU (NAME)", or the name alone when it already starts with "Intel", as the probe's names on Linux do. */
+function anIntelGpu(name: string | null): string {
+  if (!name) return 'an Intel GPU';
+  return /^Intel\b/.test(name) ? `an ${clean(name)}` : `an Intel GPU (${clean(name)})`;
+}
+
 function machineText(hw: HardwareProfile): string {
   const memory = formatGiB(hw.totalMemoryBytes);
-  if (hw.memoryKind === 'unified') return `This computer has ${memory} of memory, shared with its GPU.`;
+  if (hw.memoryKind === 'unified') {
+    const shared = `This computer has ${memory} of memory, shared with its GPU${hw.gpuName ? ` (${clean(hw.gpuName)})` : ''}.`;
+    return hw.gpuVendor === 'intel' ? `${shared} ${OLLAMA_SKIPS_INTEL_IGPU}` : shared;
+  }
   if (hw.memoryKind === 'discrete' && hw.gpuMemoryBytes)
     return `This computer has ${memory} of RAM and ${formatGiB(hw.gpuMemoryBytes)} of GPU memory${
       hw.gpuName ? ` (${clean(hw.gpuName)})` : ''
     }.`;
+  if (vramNeedsLlamaServer(hw))
+    return `This computer has ${memory} of RAM and ${anIntelGpu(hw.gpuName)} of unknown memory, so its picks assume the CPU. ${LLAMA_SERVER_VRAM_HELP}`;
   return `This computer has ${memory} of RAM and no GPU memory was detected, so its picks assume the CPU.`;
 }
 

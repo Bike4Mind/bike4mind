@@ -1,8 +1,9 @@
 import {
   estimateFit,
   estimateFitFromSize,
-  fitMarginBytes,
   memoryBudgets,
+  ollamaHardware,
+  vramNeedsLlamaServer,
   type FitModel,
   type FitPlan,
   type FitRuntime,
@@ -160,7 +161,8 @@ export function fitFromArch(
 ): ModelFit {
   const { where = 'local', ...extras } = options;
   const planned = plan(arch, weightsBytes, hardware, context, extras);
-  const { level, detail } = withTightNote(describe(planned, memoryBudgets(hardware).cpuOnly, where), where);
+  const cpuOnly = memoryBudgets(ollamaHardware(hardware)).cpuOnly;
+  const { level, detail } = withTightNote(describe(planned, cpuOnly, where), where);
   return { level, detail: detail + replySpeed(planned), basis: 'arch', context: planned.context };
 }
 
@@ -175,8 +177,12 @@ export function fitFromSize(
   options: { limitKnown?: boolean; where?: FitWhere } = {}
 ): ModelFit {
   const where = options.where ?? 'local';
-  const { level, needBytes, budgetBytes, offloadBytes, cpuOnly } = estimateFitFromSize(sizeBytes, hardware, context);
-  const { usable, machine } = limits(budgetBytes, memoryBudgets(hardware).ramPool, fitMarginBytes(hardware));
+  const { level, needBytes, budgetBytes, offloadBytes, marginBytes, ramPoolBytes, cpuOnly } = estimateFitFromSize(
+    sizeBytes,
+    hardware,
+    context
+  );
+  const { usable, machine } = limits(budgetBytes, ramPoolBytes, marginBytes);
   const ctx =
     options.limitKnown === false
       ? `the context chat will use (up to ${contextLabel(context)})`
@@ -208,5 +214,7 @@ export function machineView(hardware: HardwareProfile): MachineView {
     gpuMemoryBytes: hardware.gpuMemoryBytes,
     gpuName: hardware.gpuName,
     confidence: hardware.confidence,
+    gpuVendor: hardware.gpuVendor ?? null,
+    vramNeedsLlamaServer: vramNeedsLlamaServer(hardware),
   };
 }

@@ -1,3 +1,4 @@
+import { llamaServerFitTargetMiB, type HardwareProfile } from '@bike4mind/common';
 import {
   DEFAULT_OLLAMA_SERVE_START_TIMEOUT_MS,
   findOllamaBinary,
@@ -26,6 +27,8 @@ export interface ServerHandle {
   readonly exited: Promise<{ code: number | null; signal: NodeJS.Signals | null; stopped: boolean }>;
   /** llama-server only: the per-process key every request needs. */
   readonly apiKey?: string;
+  /** Why it runs other than expected (a GPU build that found no GPU), shown as the server's problem while it runs. */
+  readonly warning?: string;
   log(): string[];
   stop(): Promise<unknown>;
 }
@@ -224,6 +227,10 @@ export class LocalServerSupervisor {
         throw controller.signal.reason;
       }
       slot.handle = handle;
+      if (handle.warning) {
+        this.problems.set(id, handle.warning);
+        this.deps.logger.warn(`MODEL SERVERS: ${handle.warning}`);
+      }
       this.watch(id, slot, handle);
       await this.remember(id, slot, handle);
     } catch (error) {
@@ -258,6 +265,7 @@ export class LocalServerSupervisor {
       }
     }
     if (this.slots.get(id) === slot) this.slots.delete(id);
+    if (handle.warning && this.problems.get(id) === handle.warning) this.problems.delete(id);
     await this.forget(id);
     this.deps.changed(id);
   }
@@ -351,10 +359,12 @@ export interface HostLauncherOptions {
   env?: NodeJS.ProcessEnv;
   /** Whether this computer's GPU uses system memory (HardwareProfile memoryKind 'unified'); false when unknown. */
   unifiedMemory?(): Promise<boolean>;
+  /** The probed GPU vendor, which sets llama-server's --fit-target; null when there is none or the probe failed. */
+  gpuVendor?(): Promise<HardwareProfile['gpuVendor'] | null>;
 }
 
 /** Starts servers on this computer's own OS, finding programs on the user's login-shell PATH. */
-export function hostLaunchers({ env = process.env, unifiedMemory }: HostLauncherOptions = {}): Launchers {
+export function hostLaunchers({ env = process.env, unifiedMemory, gpuVendor }: HostLauncherOptions = {}): Launchers {
   return {
     async program(runtime, settings) {
       if (runtime === 'ollama') {
@@ -392,7 +402,11 @@ export function hostLaunchers({ env = process.env, unifiedMemory }: HostLauncher
         env: childEnv,
         startTimeoutMs: DEFAULT_OLLAMA_SERVE_START_TIMEOUT_MS,
       });
-      return runtime.startRouter({ port: request.port, flashAttention, signal });
+      const fitTargetMiB =
+        llamaServerFitTargetMiB({ gpuVendor: (await gpuVendor?.().catch(() => null)) ?? null }) ?? undefined;
+      const router = await runtime.startRouter({ port: request.port, flashAttention, fitTargetMiB, signal });
+      const warning = await runtime.warning();
+      return warning ? Object.assign(router, { warning }) : router;
     },
   };
 }
