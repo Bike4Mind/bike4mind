@@ -3,9 +3,11 @@ import type { ChatSessionStatus, ChatSessionSummary, SessionSetupStep } from '@s
 import type { PrSummary } from '@shared/pullRequest';
 import { bufferUntrackedActivity, foldActivity, type AgentActivity } from './activity';
 import {
+  readAmbient,
   readDockOpen,
   readSurface,
   readView,
+  writeAmbient,
   writeDockOpen,
   writeSurface,
   writeView,
@@ -117,6 +119,8 @@ interface OrchestratorPrefs {
   setView(view: OrchestratorViewId): void;
   dockOpen: boolean;
   setDockOpen(open: boolean): void;
+  ambient: boolean;
+  setAmbient(on: boolean): void;
 }
 
 interface SessionPrefs {
@@ -131,10 +135,11 @@ function readSessionPrefs(sessionId: string | null): SessionPrefs {
     : { sessionId, surface: readSurface(sessionId), view: readView(sessionId) };
 }
 
-/** Per-session surface and view, plus the global dock flag. Setters update state and storage together. */
+/** Per-session surface and view, plus the global dock and ambient flags. Setters update state and storage together. */
 export function useOrchestratorPrefs(sessionId: string | null): OrchestratorPrefs {
   const [prefs, setPrefs] = useState(() => readSessionPrefs(sessionId));
   const [dockOpen, setDockOpenState] = useState(readDockOpen);
+  const [ambient, setAmbientState] = useState(readAmbient);
 
   // Re-read during render rather than in an effect, so a session switch never paints the old session's mode.
   const current = prefs.sessionId === sessionId ? prefs : readSessionPrefs(sessionId);
@@ -163,5 +168,19 @@ export function useOrchestratorPrefs(sessionId: string | null): OrchestratorPref
     setDockOpenState(open);
   }, []);
 
-  return { surface: current.surface, setSurface, view: current.view, setView, dockOpen, setDockOpen };
+  const setAmbient = useCallback((on: boolean) => {
+    writeAmbient(on);
+    setAmbientState(on);
+  }, []);
+
+  return {
+    surface: current.surface,
+    setSurface,
+    view: current.view,
+    setView,
+    dockOpen,
+    setDockOpen,
+    ambient,
+    setAmbient,
+  };
 }
