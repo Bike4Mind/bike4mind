@@ -7375,9 +7375,11 @@ const SIMULATOR_GUIDANCE: readonly string[] = [
 
 const MODEL_GUIDANCE: readonly string[] = [
   'The model_* tools make 3D models as code. When the user asks for a 3D model or game asset, write',
-  'a <name>.model.js file (contract in the model_view description) with the file tools, call',
-  'model_view to open it in their live pane and build it, fix any build error it reports, then check',
-  'it with model_screenshot from several angles before saying it is done. Each good build also writes',
+  'a short first version of a <name>.model.js file (contract in the model_view description) with the',
+  'file tools and, once that write returns, call model_view to open it in their live pane. Then add the',
+  'remaining parts in a few more saves, calling model_view after each one returns (never in the same',
+  'batch as the save) to fix any build error it reports. Check it',
+  'with model_screenshot from several angles before saying it is done. Each good build also writes',
   '<name>.glb beside it, ready for three.js or Unity (via glTFast); wire it into their game if asked.',
 ];
 

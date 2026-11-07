@@ -4,8 +4,11 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatMedia } from '@shared/chat';
 import { EMPTY_MODEL_STATE, type ModelBuildReport, type ModelViewState } from '@shared/model3d';
+import { BUILD_TIMEOUT_MS } from '../model3d/engineProtocol';
 import { modelScreenshot, modelView } from './modelTools';
 import type { ModelViewPort, ToolContext, ToolReporter } from './types';
+
+vi.mock('electron', () => ({ protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() } }));
 
 const OK: ModelBuildReport = {
   generation: 1,
@@ -58,6 +61,24 @@ function setup(report: ModelBuildReport = OK) {
 }
 
 describe('model_view', () => {
+  const description = modelView.schema.description;
+
+  it('tells the agent to open a short first version, then add parts in further saves', () => {
+    expect(description).toContain('1. Write a short first version');
+    expect(description).toMatch(/call this as\s+soon as the write returns\. That opens the pane\./);
+    expect(description).toContain('2. Add the rest in a few further saves');
+    expect(description).toContain('After each save returns, call this to get its build result');
+    expect(description).toContain('Never call this in the same batch as the write or edit it should check');
+    expect(description).toContain('3. Check the finished model with model_screenshot');
+  });
+
+  it('states the build time limit the engine enforces, for every save', () => {
+    expect(description).toContain(
+      `Every save is built on its own and must finish within ${BUILD_TIMEOUT_MS / 1000} seconds`
+    );
+    expect(description).toContain('each save is a complete, valid module');
+  });
+
   it('opens a relative path and returns the build summary with the GLB path', async () => {
     const { root, view, context } = setup();
     const text = await modelView.run({ path: 'chest.model.js' }, context);
