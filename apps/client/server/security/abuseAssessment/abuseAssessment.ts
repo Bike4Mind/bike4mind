@@ -96,6 +96,10 @@ export const ABUSE_ASSESSMENT_QUESTION: DecisionQuestion = {
     'fingerprint, a fast first API key, quick interaction) is not enough for abuse; require several',
     'independent signals. Missing or failed facts are unknown, not evidence either way. When in doubt,',
     'answer insufficient_evidence.',
+    'Campaign evidence identifies which summarized members share each relationship and how many scanned',
+    'accounts share it. Shared infrastructure, a fingerprint, or matching setup steps can also describe',
+    'legitimate users; coordination alone does not establish abuse. Ignored relationships are not positive',
+    'evidence, and transitive membership alone does not justify action. Truncated evidence is incomplete.',
   ].join(' '),
   choices: [
     { value: 'abuse', description: 'Several independent signals point to coordinated abuse.' },
