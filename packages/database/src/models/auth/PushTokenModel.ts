@@ -14,6 +14,8 @@ export type PushTokenEnvironment = (typeof PUSH_TOKEN_ENVIRONMENTS)[number];
  * A push-delivery token registered by a first-party client, bound to the auth session (`sid`) that
  * registered it so that ending the session (logout, revoke, admin revoke) ends its pushes. The
  * pruning lives in AuthSessionRepository's revoke methods; see revokeBySid and revokeAllByUserId there.
+ * Sessions that expire are deleted by AuthSession's TTL index without a revoke; their tokens are
+ * pruned at delivery instead (deliverPush in apps/workers/src/events/sendPush.ts).
  *
  * `token` is globally unique: a physical device token belongs to one account at a time, so
  * re-registering it under another user (shared device, account switch) moves ownership.
@@ -93,18 +95,32 @@ export class PushTokenRepository {
   /**
    * Returns whether a row was removed; an unknown token is not an error. Pass `userId` to remove only
    * a token that user owns (the API route does, so one account cannot unregister another's device).
+   * Pass `sid` to remove the row only while it is still bound to the session it was read under: push
+   * delivery prunes with the read-time sid, so a token re-registered under a new session meanwhile
+   * keeps its row (the same race removeBySids guards).
    */
-  async removeByToken(token: string, options?: { userId?: string }): Promise<boolean> {
+  async removeByToken(token: string, options?: { userId?: string; sid?: string }): Promise<boolean> {
     if (options?.userId !== undefined && !mongoose.isObjectIdOrHexString(options.userId)) return false;
     const result = await PushTokenModel.deleteOne({
       token,
       ...(options?.userId !== undefined && { userId: new Types.ObjectId(options.userId) }),
+      ...(options?.sid !== undefined && { sid: options.sid }),
     }).exec();
     return result.deletedCount > 0;
   }
 
   async removeBySid(sid: string): Promise<number> {
     const result = await PushTokenModel.deleteMany({ sid }).exec();
+    return result.deletedCount;
+  }
+
+  /**
+   * Keyed on sid, not token: a token re-registered under a new session after it was read keeps its row.
+   * Push delivery uses this for sessions the AuthSession TTL index deleted without a revoke.
+   */
+  async removeBySids(sids: readonly string[]): Promise<number> {
+    if (sids.length === 0) return 0;
+    const result = await PushTokenModel.deleteMany({ sid: { $in: [...sids] } }).exec();
     return result.deletedCount;
   }
 

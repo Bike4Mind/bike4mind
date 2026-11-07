@@ -341,6 +341,15 @@ describe('applyBaseUserUpdates - preferences merge', () => {
     expect(result.preferences?.language).toBe('en');
   });
 
+  it('keeps other push categories when a partial pushNotifications object is written', () => {
+    const result = applyBaseUserUpdates(
+      makeUser({ ...storedPreferences, pushNotifications: { agent_failed: false, chat_completed: false } }),
+      { preferences: { pushNotifications: { chat_completed: true } } }
+    );
+
+    expect(result.preferences?.pushNotifications).toEqual({ agent_failed: false, chat_completed: true });
+  });
+
   it('produces the same result as a replace when the caller sends the full object', () => {
     const fullObject = { ...storedPreferences, showDebug: false };
 
