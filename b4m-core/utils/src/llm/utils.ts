@@ -400,10 +400,21 @@ function researchModeReplyText(results: IChatHistoryItem['researchModeResults'])
   return answers.map((answer, i) => `[Response ${i + 1} of ${answers.length}]\n${answer}`).join('\n\n');
 }
 
-/** The turn's text answer for history: the first non-thinking reply, else its Research Mode answers. */
+/**
+ * The turn's non-thinking reply slots, in order. Slots follow the provider's content blocks, so a
+ * turn that called tools holds the pre-tool preamble first and the final answer in a later slot.
+ */
+function historyReplySlots(item: Pick<IChatHistoryItem, 'replies'>): string[] {
+  const slots = (item.replies ?? []).filter((r: string) => !r.trim().startsWith('<think>'));
+  // A lone slot passes through untouched so single-slot turns replay exactly as they always have.
+  return slots.length > 1 ? slots.filter(r => r.trim()) : slots;
+}
+
+const REPLY_SLOT_SEPARATOR = '\n\n';
+
+/** The turn's text answer for history: every non-thinking reply slot, else its Research Mode answers. */
 function historyTextReply(item: Pick<IChatHistoryItem, 'replies' | 'researchModeResults'>): string {
-  const reply = item.replies?.find((r: string) => !r.trim().startsWith('<think>'));
-  return reply || researchModeReplyText(item.researchModeResults);
+  return historyReplySlots(item).join(REPLY_SLOT_SEPARATOR) || researchModeReplyText(item.researchModeResults);
 }
 
 /**
@@ -423,21 +434,15 @@ export function isStoppedBeforeReply(
 }
 
 /**
- * Whether the slot `historyTextReply` picks (the first non-`<think>` one) is also the turn's last
- * visible slot. On a multi-slot turn it is a pre-tool preamble, which must never carry the block.
+ * Whether the history text ends with the turn's last visible slot, the only place a choices block
+ * belongs. It does not when that slot opens with `<think>`, which `historyReplySlots` leaves out.
  */
-function isFinalVisibleReply(item: Pick<IChatHistoryItem, 'replies'>): boolean {
+function endsWithFinalVisibleReply(item: Pick<IChatHistoryItem, 'replies'>): boolean {
   const replies = item.replies ?? [];
-  const firstNonThinkIndex = replies.findIndex(r => !r.trim().startsWith('<think>'));
-  if (firstNonThinkIndex === -1) return false;
-  let lastVisibleIndex = -1;
   for (let i = replies.length - 1; i >= 0; i--) {
-    if (visibleReplyText(replies[i])) {
-      lastVisibleIndex = i;
-      break;
-    }
+    if (visibleReplyText(replies[i])) return !replies[i].trim().startsWith('<think>');
   }
-  return lastVisibleIndex !== -1 && firstNonThinkIndex === lastVisibleIndex;
+  return false;
 }
 
 /**
@@ -873,8 +878,11 @@ export async function fetchAndProcessPreviousMessages(
     // this branch and Priority 3 are mutually exclusive, so entering here on result-less calls
     // replaces a genuine answer with a list of tool invocations and empty outcomes.
     else if (toolCalls.length > 0 && !disableToolReplay) {
-      // Get text reply (excluding thinking blocks)
-      const textReply = historyTextReply(cur);
+      // On a multi-slot turn the first slot is the pre-tool preamble and the rest came after the
+      // tool results, so the answer is replayed after them rather than ahead of the tool_use blocks.
+      const slots = historyReplySlots(cur);
+      const textReply = slots.length > 1 ? slots[0] : historyTextReply(cur);
+      const finalAnswer = slots.slice(1).join(REPLY_SLOT_SEPARATOR);
 
       // Build assistant message with text + tool_use blocks
       const assistantContent: MessageContentObject[] = [];
@@ -912,15 +920,19 @@ export async function fetchAndProcessPreviousMessages(
           is_error: fc.success === false,
         })),
       });
+
+      if (finalAnswer) {
+        const text = stripToolOutputMarker(finalAnswer);
+        const reattach = includeReplyChoices && endsWithFinalVisibleReply(cur);
+        acc.push({ role: 'assistant', content: reattach ? withStoredChoices(text, cur) : text });
+      }
     }
     // Priority 3: Legacy fallback - text-only replies
     else {
       const textReply = historyTextReply(cur);
       if (textReply) {
         const text = stripToolOutputMarker(textReply);
-        // Only re-attach when the picked slot is also the turn's final visible answer - see
-        // isFinalVisibleReply for why an earlier slot must never get the block.
-        const reattach = includeReplyChoices && isFinalVisibleReply(cur);
+        const reattach = includeReplyChoices && endsWithFinalVisibleReply(cur);
         acc.push({ role: 'assistant', content: reattach ? withStoredChoices(text, cur) : text });
       }
     }
