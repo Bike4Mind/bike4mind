@@ -148,6 +148,10 @@ describe('commands main ran unasked', () => {
     await writeFile(join(mrepo, '.claude', 'settings.json'), '{"x": 1}');
     git(mrepo, 'commit', '-qam', 'side');
     git(mrepo, 'checkout', '-q', 'main');
+    // hrepo's last commit, "second", changes its settings, and its work tree matches that commit.
+    const hrepo = await repository('hrepo', { '.claude/settings.json': '{}', 'src/b.ts': 'b' });
+    await writeFile(join(hrepo, '.claude', 'settings.json'), '{"x": 1}');
+    git(hrepo, 'commit', '-qam', 'second');
     // arepo gives settings an attribute, which the scan's git, reading attributes from the empty tree, never sees.
     const arepo = await repository('arepo', { '.gitattributes': '.claude/** foo\n', '.claude/settings.json': '{}' });
     await writeFile(join(arepo, '.claude', 'settings.json'), '{"x": 1}');
@@ -286,6 +290,7 @@ describe('commands main ran unasked', () => {
     ["git diff --name-only ':/src' | xargs sed -i s/a/b/", '', unasked],
     ["git diff --name-only -- ':(top,icase)SRC' | xargs sed -i s/a/b/", '', unasked],
     ["git diff --name-only '*.ts' | xargs sed -i s/a/b/", '', unasked],
+    ["git diff --name-only 'src/[id].tsx' | xargs sed -i s/a/b/", '', unasked],
     ["git diff --name-only 'src/*.ts' ':!a' | xargs wc -l", '', unasked],
     ['git diff --name-only --relative | xargs sed -i s/a/b/', '', unasked],
     ['rg -l foo 2>"/dev/null" | xargs sed -i s/a/b/', '', unasked],
@@ -360,6 +365,15 @@ describe('commands main ran unasked', () => {
     ['git diff --name-only --relative | xargs sed -i s/a/b/', 'srepo'],
     // `:/sid*` names the commit whose message matches, so git compares it with the work tree.
     ["git diff --name-only ':/sid*' | xargs sed -i s/a/b/", 'mrepo'],
+    // git diff reads each as revisions of the last commit, though rev-parse --verify exits 1 for the parent forms.
+    ["git diff --name-only 'HEAD^{/.*}^!' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only 'HEAD^{/.*}^@' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only 'HEAD^{/.*}^-' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only 'HEAD^{/.*}^-1' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only ':/sec*^!' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only ':/sec*^@' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only ':/sec*^-' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only '^HEAD^{/fir*}' | xargs sed -i s/a/b/", 'hrepo'],
     ['rg -l hooks 2>"/dev/null" | xargs sed -i s/a/b/', ''],
     ['rg -l hooks | grep -v zz 2>/dev/null | xargs sed -i s/a/b/', ''],
   ])('asks before %s (in proj/%s) rewrites settings', async (command, folder) => {
