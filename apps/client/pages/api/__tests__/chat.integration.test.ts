@@ -1251,6 +1251,20 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       expect(name).toMatch(/^API chat - /);
     });
 
+    // Without the placeholder, the auto-naming worker reads the fresh generated name as a recent
+    // user rename and skips naming whenever the turn finishes inside its 10s guard (async turns).
+    it.each([
+      ['API key', VALID_KEY, { message: 'hi' }],
+      ['new conversation', null, { message: 'hi', newConversation: true }],
+    ] as const)('marks the generated name as the auto-name placeholder (%s)', async (_label, apiKey, body) => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      withOpenNotebook();
+      const { req, res } = fire({ apiKey, body });
+      await handler(req, res);
+      const params = mockCreateSession.mock.calls[0][1] as { name: string; autoNamePlaceholder?: string };
+      expect(params.autoNamePlaceholder).toBe(params.name);
+    });
+
     // A rejected organization must not have already minted a notebook: resolveActiveOrg runs
     // BEFORE session resolution, so a 403/404 leaves no empty "API chat - ..." behind in the list.
     it('does not create a notebook when the requested org is rejected (403)', async () => {
