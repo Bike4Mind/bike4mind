@@ -6,6 +6,7 @@ import type { CompletionRequest } from '../chat/completions';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
 import { ModelServerRegistry } from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';
+import { inertLaunchers } from './testLaunchers';
 import { contextTooSmallHint, longMessageNotice, OpenAICompatibleChat } from './OpenAICompatibleChat';
 
 const MAX_MODEL_LEN = FAKE_VLLM_MAX_MODEL_LEN;
@@ -338,6 +339,7 @@ describe('ModelServerRegistry with a vLLM server', () => {
     const servers = new ModelServerRegistry({
       store: new ModelServerStore(cipher, memoryFile(), quiet),
       logger: quiet,
+      launchers: inertLaunchers(),
       changed,
       fetchFor: () => fetchLike,
       localFetch: async () => new Response('{"version":"0.12.0"}'),
@@ -373,6 +375,7 @@ describe('ModelServerRegistry with a vLLM server', () => {
     const servers = new ModelServerRegistry({
       store: new ModelServerStore(cipher, memoryFile(), quiet),
       logger: quiet,
+      launchers: inertLaunchers(),
       fetchFor: () => fetchLike,
       localFetch: async () => new Response('{"version":"0.12.0"}'),
       resolve: async () => ['127.0.0.1'],

@@ -188,6 +188,8 @@ export const ABUSE_ASSESSMENT_SKIP_REASONS = [
   'in_flight',
   'attempts_exhausted',
   'detection_not_found',
+  /** The detector records its own Decisions verdict (SELF_ASSESSED_SHADOW_DETECTORS). */
+  'self_assessed',
   /** A replay ran out of its request time; rerun the remaining examples. */
   'time_budget',
 ] as const;

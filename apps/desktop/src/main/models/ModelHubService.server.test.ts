@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
 import { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
 import { ModelServerStore } from '../modelServers/ModelServerStore';
+import { inertLaunchers } from '../modelServers/testLaunchers';
 import {
   ModelHubService,
   type HubTokenPort,
@@ -193,6 +194,7 @@ async function setup(
   const registry = new ModelServerRegistry({
     store: new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined }),
     logger: { debug: () => undefined, warn: () => undefined },
+    launchers: inertLaunchers(),
   });
   const [, saved] = await registry.add({
     address: fake.origin,

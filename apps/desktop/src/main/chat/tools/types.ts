@@ -1,3 +1,4 @@
+import type { ModelBuildReport, ModelPose, ModelView, ModelViewState } from '@shared/model3d';
 import type { CustomCommand } from '@bike4mind/cli/skills';
 import type { VideoModel } from '@bike4mind/common';
 import type { BrowserSnapshot } from '@shared/browserPage';
@@ -331,6 +332,21 @@ export interface SimulatorContext {
   detach(): void;
 }
 
+/** The parts of main's ModelLiveView (main/chat/model3d) the model tools use. */
+export interface ModelViewPort {
+  current(): ModelViewState;
+  open(path: string): Promise<ModelViewState>;
+  waitForBuild(): Promise<ModelBuildReport>;
+  capture(views: ModelView[], pose?: ModelPose): Promise<Uint8Array>;
+  glbPath(): string | null;
+}
+
+export interface ModelContext {
+  view: ModelViewPort;
+  /** Keep a screenshot for the transcript, as BrowserContext.keepScreenshot does. */
+  keepScreenshot(bytes: Buffer, caption: string): Promise<ChatMedia | undefined>;
+}
+
 /**
  * Everything a tool may use. Narrow by default: no api client and no token, except for the
  * server-backed generation tools, which get exactly {@link MediaContext}, and the web tools,
@@ -392,6 +408,8 @@ export interface ToolContext {
   screen?: ScreenContext;
   /** Absent off macOS and in tests; the simulator tools are then not declared at all. */
   simulator?: SimulatorContext;
+  /** Absent outside a Code session with a working directory; the model tools are then not declared. */
+  model?: ModelContext;
   /** Absent outside the chat loop, where an image has nowhere to go; file_read then describes it in text. */
   images?: ImageContext;
   /**

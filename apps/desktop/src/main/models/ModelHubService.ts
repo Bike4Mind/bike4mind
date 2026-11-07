@@ -116,6 +116,7 @@ import type { ModelLoadSettings } from '@shared/modelSettings';
 import {
   LOCAL_SERVER_ID,
   LOCAL_SERVER_NAME,
+  OLLAMA_NOT_RUNNING,
   serverRuntimeId,
   specsRate,
   type FlashAttention,
@@ -320,7 +321,7 @@ function runtimeCheckRefusal(failure: Exclude<RuntimeCheck, { ok: true }>, targe
     return refused(
       'runtime-unavailable',
       target.local
-        ? 'Ollama is not running. Start it, then retry.'
+        ? `${OLLAMA_NOT_RUNNING}. Start it, then retry.`
         : (failure.error ?? `Could not reach ${target.name}. Check it, then retry.`),
       true
     );

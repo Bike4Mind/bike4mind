@@ -2,6 +2,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
+import {
+  isApprovalPending,
+  notifyApprovalSubmitted,
+  type ApprovalPendingResponse,
+} from '@client/app/hooks/data/adminApprovals';
 
 export const ADMIN_GRANTS_KEY = ['admin', 'organizations', 'grants'] as const;
 
@@ -51,10 +56,14 @@ export function useGrantOrganization() {
       initialCredits: number;
       reason: string;
     }) => {
-      const res = await api.post<{ organizationId: string }>('/api/admin/organizations/grant', params);
+      const res = await api.post<{ organizationId: string } | ApprovalPendingResponse>(
+        '/api/admin/organizations/grant',
+        params
+      );
       return res.data;
     },
-    onSuccess: () => {
+    onSuccess: data => {
+      if (isApprovalPending(data)) return notifyApprovalSubmitted(queryClient);
       toast.success('Free organization granted');
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       queryClient.invalidateQueries({ queryKey: ADMIN_GRANTS_KEY });
@@ -80,7 +89,8 @@ export function useTopUpOrganization() {
       });
       return res.data;
     },
-    onSuccess: () => {
+    onSuccess: data => {
+      if (isApprovalPending(data)) return notifyApprovalSubmitted(queryClient);
       toast.success('Credits added');
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
     },
@@ -101,35 +111,6 @@ export function useAdjustOrgSeats() {
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
     },
     onError: err => toast.error(apiErrorMessage(err, 'Seat update failed')),
-  });
-}
-
-/**
- * Re-sync an org's seat count to its active subscription's billed quantity.
- * Unlike useAdjustOrgSeats (PATCH /seats, which the backend refuses for
- * Stripe-billed orgs), this only PULLS from what Stripe already invoices, so
- * it is the repair path for orgs whose seats drifted from their paid quantity.
- */
-export function useReconcileOrgSeats() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (params: { organizationId: string; reason: string }) => {
-      const { organizationId, ...body } = params;
-      const res = await api.post<{ organizationId: string; before: number; after: number }>(
-        `/api/admin/organizations/${organizationId}/reconcile-seats`,
-        body
-      );
-      return res.data;
-    },
-    onSuccess: data => {
-      toast.success(
-        data.before === data.after
-          ? `Seats already in sync (${data.after})`
-          : `Seats reconciled: ${data.before} -> ${data.after}`
-      );
-      queryClient.invalidateQueries({ queryKey: ['organizations'] });
-    },
-    onError: err => toast.error(apiErrorMessage(err, 'Reconcile failed')),
   });
 }
 

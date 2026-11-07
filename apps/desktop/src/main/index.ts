@@ -8,13 +8,14 @@ import macAppIcon from '../../build/icon-mac.png?asset';
 import { registerAccount } from './account';
 import { onAuthStateChanged, registerAuth } from './auth';
 import { registerChat } from './chat';
-import { sessionScopeFor, sessionScopeKey } from './chat/sessionScope';
+import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './chat/sessionScope';
 import { closeBrowsersOnScopeChange } from './chat/browser/browserScope';
 import { resolveUserPath } from './chat/tools/userPath';
 import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlog';
 import { registerFleet } from './fleet';
 import { registerModels } from './models';
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
+import { registerModelScheme } from './chat/model3d/engineProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
 import { isExternallyOpenable } from '@shared/externalLinks';
 import { persistConsoleWarnings } from './logFile';
@@ -31,6 +32,7 @@ const rendererDevUrl = process.env.ELECTRON_RENDERER_URL;
 // the handlers that serve them are installed later, in registerChat.
 registerMediaScheme();
 registerArtifactScheme();
+registerModelScheme();
 
 function buildAppInfo(): AppInfo {
   return {
@@ -127,7 +129,7 @@ void app.whenReady().then(async () => {
   // After ready, not before: safeStorage is only usable once the app is ready, and the vault
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
-  registerAttention();
+  const attention = registerAttention({ openWindow: createWindow });
   registerAccount(auth);
   registerUsage(auth);
   const fleet = registerFleet();
@@ -137,6 +139,7 @@ void app.whenReady().then(async () => {
     mcp,
     browser,
     simulatorView,
+    modelView,
     pullRequests,
     claudeImport,
     spareWorktrees,
@@ -150,6 +153,7 @@ void app.whenReady().then(async () => {
     sessionClosed: sessionId => terminals.killSession(sessionId),
     releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
     observeStream: event => fleet.observe(event),
+    observeSessionStatus: event => needsYou.observe(event),
     cancelModelPull: key => models.stop(key),
     pinnedProjectors: () => models.pinnedProjectors(),
     catalogSampling: ({ name, modelBlob, parameters, hasAdapter }) =>
@@ -160,6 +164,21 @@ void app.whenReady().then(async () => {
     { localContext: () => localContext.read(), modelSettings: modelId => modelSettings.get(modelId) },
     capabilityLedger
   );
+  const needsYou = attention.watchNeedsYou({
+    listSessions: () => chat.listSessions(),
+    sessionMessages: async sessionId => (await chat.getSession(sessionId))?.messages ?? [],
+  });
+  const chatScopeKeyOf = (state: Parameters<typeof sessionScopeForChat>[0]) => {
+    const scope = sessionScopeForChat(state);
+    return scope ? sessionScopeKey(scope) : null;
+  };
+  let needsYouScope = chatScopeKeyOf(auth.getState());
+  onAuthStateChanged(state => {
+    const next = chatScopeKeyOf(state);
+    if (next === needsYouScope) return;
+    needsYouScope = next;
+    needsYou.scopeChanged();
+  });
   fleet.setDirectoryResolver(async sessionId => {
     const session = await chat.getSession(sessionId);
     return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;
@@ -253,6 +272,7 @@ void app.whenReady().then(async () => {
     terminals.shutdownSync();
     browser.closeAll();
     simulatorView.dispose();
+    modelView.dispose();
   });
 
   // Ctrl-C in a dev terminal, or a `kill` of the app. Children other than WSL commands lead their own
@@ -268,6 +288,7 @@ void app.whenReady().then(async () => {
 
   createWindow();
   claudeImport.start();
+  app.on('browser-window-focus', () => claudeImport.onWindowFocus());
   onAuthStateChanged(closeBrowsersOnScopeChange(auth.getState(), () => browser.closeAll()));
   let importScope = sessionScopeKeyOf(auth.getState());
   onAuthStateChanged(state => {

@@ -201,7 +201,6 @@ export interface ITurnTiming {
 export interface IChatHistoryItem {
   id?: string;
   sessionId: string;
-  signupActivity?: { userId: string; turnId: string; startedAt: Date };
   conversationItemId?: string;
   openaiMessageId?: string;
   claudeMessageId?: string;
@@ -664,7 +663,7 @@ export interface IConversationContext {
 ////////
 
 /** Where a session was created. Absent on sessions that predate the field; render those as 'web'. */
-export const SESSION_ORIGIN_CHANNELS = ['web', 'api', 'slack', 'cli', 'agent'] as const;
+export const SESSION_ORIGIN_CHANNELS = ['web', 'api', 'slack', 'cli', 'desktop', 'agent'] as const;
 export type SessionOriginChannel = (typeof SESSION_ORIGIN_CHANNELS)[number];
 
 export interface ISessionOrigin {
@@ -1171,6 +1170,16 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * @returns The sessions
    */
   findAllByIds: (ids: string[], options?: { includeDeleted?: boolean }) => Promise<ISessionDocument[]>;
+
+  /**
+   * One ascending-by-`_id` page of these ids (live rows only), resuming strictly after `afterId`.
+   * `hasMore` is true when a row exists past the page. Rows carry only the public session fields
+   * (see toPublicSession), so they are for rendering, never for writing back.
+   */
+  findPageByIds: (
+    ids: string[],
+    options: { afterId?: string; limit: number }
+  ) => Promise<{ data: ISessionDocument[]; hasMore: boolean }>;
 
   /**
    * Find all session IDs by user ID

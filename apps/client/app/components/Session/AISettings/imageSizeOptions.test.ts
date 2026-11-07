@@ -23,6 +23,8 @@ const SIZED: readonly [string, readonly string[], string][] = [
   [ImageModels.FLUX_2_KLEIN_9B, BFL.sizes, BFL.defaultSize],
   [ImageModels.FLUX_2_KLEIN_9B_PREVIEW, BFL.sizes, BFL.defaultSize],
   [ImageModels.FLUX_2_KLEIN_4B, BFL.sizes, BFL.defaultSize],
+  [ImageModels.FLUX_3_IMAGE, BFL.sizes, BFL.defaultSize],
+  [ImageModels.FLUX_3_IMAGE_KLEIN, BFL.sizes, BFL.defaultSize],
   [ImageModels.DALL_E_2, DALL_E_2.sizes, DALL_E_2.defaultSize],
 ];
 

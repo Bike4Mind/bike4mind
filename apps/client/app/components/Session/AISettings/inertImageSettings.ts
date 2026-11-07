@@ -1,4 +1,10 @@
-import { isGeminiImageModel, usesDiscreteImageDimensions } from '@bike4mind/common';
+import {
+  isBflImageModel,
+  isGeminiImageModel,
+  supportsBflOutputFormat,
+  supportsBflSeed,
+  usesDiscreteImageDimensions,
+} from '@bike4mind/common';
 // Imported from the module rather than the `help` barrel: component tests mock the barrel.
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 
@@ -13,6 +19,26 @@ import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
  * disabled control still tells you the setting exists on other providers.
  */
 export const ignoresUpsamplingAndSeed = (model?: string | null): boolean => isGeminiImageModel(model);
+
+/** BFL models whose endpoint defines no `seed`; `BFLImageService.generate` leaves it out of the body. */
+const bflIgnoresSeed = (model?: string | null): boolean => isBflImageModel(model) && !supportsBflSeed(model);
+
+/** True for image models that ignore Seed: Gemini (see above) and flux-3-image. */
+export const ignoresSeed = (model?: string | null): boolean => ignoresUpsamplingAndSeed(model) || bflIgnoresSeed(model);
+
+/** The inert note for a disabled Seed control, naming the provider that ignores it. */
+export const seedInertNote = (model?: string | null): string =>
+  bflIgnoresSeed(model) ? FIELD_TOOLTIPS.unsupportedByFlux3Image : FIELD_TOOLTIPS.unsupportedByGeminiImage;
+
+/**
+ * BFL models whose endpoint defines no `output_format` (flux-3-image: BFL picks the format), so the
+ * Output Format control has no effect. Must stay in sync with `BFLImageService.generate`.
+ */
+export const ignoresOutputFormat = (model?: string | null): boolean =>
+  isBflImageModel(model) && !supportsBflOutputFormat(model);
+
+export const OUTPUT_FORMAT_INERT_NOTE = FIELD_TOOLTIPS.unsupportedByFlux3Image;
+export const OUTPUT_FORMAT_TOOLTIP = FIELD_TOOLTIPS.imageOutputFormat;
 
 /**
  * A model sized by discrete width/height builds its request from those alone - `BFLImageService.generate`

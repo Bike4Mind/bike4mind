@@ -12,7 +12,13 @@ import TabPanel from '@mui/joy/TabPanel';
 import Tabs from '@mui/joy/Tabs';
 import Typography from '@mui/joy/Typography';
 import type { ChatModelOption } from '@shared/chat';
-import { LOCAL_SERVER_ID, LOCAL_SERVER_NAME, serverManagement, type ModelServerView } from '@shared/modelServers';
+import {
+  LOCAL_SERVER_ID,
+  LOCAL_SERVER_NAME,
+  serverManagement,
+  type ModelServerLaunchView,
+  type ModelServerView,
+} from '@shared/modelServers';
 import { OLLAMA_DOWNLOAD_URL, type ModelPull, type ModelRuntimeStatus } from '@shared/models';
 import { CloseIcon, ReloadIcon } from '../chat/icons';
 import { isWindows } from '../chat/platform';
@@ -25,6 +31,7 @@ import { GpuMemoryCapWarning } from './GpuMemoryCapWarning';
 import { serverIdentity } from './installedCache';
 import { InstalledTab, type ModelsInUse } from './InstalledTab';
 import { manageNote, type ChatWith, type ModelTarget, type ModelWith } from './modelTarget';
+import { OllamaNotRunning } from './OllamaNotRunning';
 import { pullLabel, pullPercent } from './pullDisplay';
 import { ServerSwitcher } from './ServerSwitcher';
 import { useModelHub, useModelServers } from './useModelHub';
@@ -40,15 +47,19 @@ let rememberedServer = LOCAL_SERVER_ID;
 
 const dot = (color: string) => <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />;
 
-/** No Ollama answers on this computer: the two ways forward, neither of which installs anything by itself. */
+/** No Ollama answers on this computer: Start when Desktop can, and the other ways forward; none installs anything. */
 function NoLocalRuntime({
   status,
   address,
+  launch,
+  onStarted,
   onRetry,
   onOpenModelServers,
 }: {
   status: ModelRuntimeStatus;
   address: ReactNode;
+  launch: ModelServerLaunchView | null | undefined;
+  onStarted: () => void;
   onRetry: () => void;
   onOpenModelServers?: () => void;
 }) {
@@ -59,49 +70,57 @@ function NoLocalRuntime({
       data-testid="models-runtime-status"
       data-state="down"
     >
-      <Stack direction="row" alignItems="center" spacing={1}>
-        {dot('danger.500')}
-        <Typography level="title-sm">Ollama did not answer on this computer</Typography>
-      </Stack>
-      <Typography level="body-sm" sx={{ mt: 0.5 }} data-testid="models-no-runtime-text">
-        Local models run in Ollama, and Desktop got no answer from {address}. If it is not installed, install it; if it
-        is, start it or give it a moment. This checks again every few seconds. To use models on another machine instead,
-        point Desktop at its server.
-      </Typography>
-      {isWindows && onOpenModelServers && (
-        <Typography level="body-sm" sx={{ mt: 0.5 }} data-testid="models-no-runtime-wsl-hint">
-          If Ollama runs in WSL, start it there. Desktop looks for it at {address} on Windows, which works only when WSL
-          shares that address with Windows. If it does not, add it with Point at a server.
+      <OllamaNotRunning
+        launch={launch}
+        onStarted={onStarted}
+        icon={dot('danger.500')}
+        actions={
+          <>
+            {/* Not before the list loads or the program look settles, or Install flashes ahead of Start. */}
+            {launch !== undefined && !launch?.canStart && !launch?.programPending && (
+              <Button
+                size="sm"
+                onClick={() => void window.b4m.shell.openExternal(OLLAMA_DOWNLOAD_URL)}
+                data-testid="models-install-ollama-btn"
+              >
+                Install Ollama
+              </Button>
+            )}
+            {onOpenModelServers && (
+              <Button
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                onClick={onOpenModelServers}
+                data-testid="models-point-at-server-btn"
+              >
+                Point at a server
+              </Button>
+            )}
+          </>
+        }
+        onRetry={onRetry}
+        retryTestId="models-runtime-retry-btn"
+      >
+        <Typography level="body-sm" data-testid="models-no-runtime-text">
+          Desktop got no answer from {address}.
+          {launch === undefined || launch?.canStart || launch?.programPending
+            ? ''
+            : ' If Ollama is not installed, install it.'}{' '}
+          To use models on another machine instead, point Desktop at its server.
         </Typography>
-      )}
-      {status.error && (
-        <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }} data-testid="models-no-runtime-error">
-          {status.error}
-        </Typography>
-      )}
-      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
-        <Button
-          size="sm"
-          onClick={() => void window.b4m.shell.openExternal(OLLAMA_DOWNLOAD_URL)}
-          data-testid="models-install-ollama-btn"
-        >
-          Install Ollama
-        </Button>
-        {onOpenModelServers && (
-          <Button
-            size="sm"
-            variant="outlined"
-            color="neutral"
-            onClick={onOpenModelServers}
-            data-testid="models-point-at-server-btn"
-          >
-            Point at a server
-          </Button>
+        {isWindows && onOpenModelServers && (
+          <Typography level="body-sm" data-testid="models-no-runtime-wsl-hint">
+            If Ollama runs in WSL, start it there. Desktop looks for it at {address} on Windows, which works only when
+            WSL shares that address with Windows. If it does not, add it with Point at a server.
+          </Typography>
         )}
-        <Button size="sm" variant="plain" color="neutral" onClick={onRetry} data-testid="models-runtime-retry-btn">
-          Check again
-        </Button>
-      </Stack>
+        {status.error && (
+          <Typography level="body-xs" textColor="text.tertiary" data-testid="models-no-runtime-error">
+            {status.error}
+          </Typography>
+        )}
+      </OllamaNotRunning>
     </Sheet>
   );
 }
@@ -109,11 +128,15 @@ function NoLocalRuntime({
 function RuntimeStatusBar({
   status,
   target,
+  launch,
+  onStarted,
   onRetry,
   onOpenModelServers,
 }: {
   status: ModelRuntimeStatus | null;
   target: ModelTarget;
+  launch: ModelServerLaunchView | null | undefined;
+  onStarted: () => void;
   onRetry: () => void;
   onOpenModelServers?: () => void;
 }) {
@@ -150,7 +173,14 @@ function RuntimeStatusBar({
     );
   if (target.local)
     return (
-      <NoLocalRuntime status={status} address={address} onRetry={onRetry} onOpenModelServers={onOpenModelServers} />
+      <NoLocalRuntime
+        status={status}
+        address={address}
+        launch={launch}
+        onStarted={onStarted}
+        onRetry={onRetry}
+        onOpenModelServers={onOpenModelServers}
+      />
     );
   return (
     <Stack direction="row" alignItems="center" spacing={1} data-testid="models-runtime-status" data-state="down">
@@ -448,6 +478,10 @@ export function ModelsScreen({
           <RuntimeStatusBar
             status={status}
             target={target}
+            launch={
+              servers === null ? undefined : (servers.find(server => server.id === LOCAL_SERVER_ID)?.launch ?? null)
+            }
+            onStarted={() => void refreshAll()}
             onRetry={() => void hub.refresh()}
             onOpenModelServers={onOpenModelServers}
           />

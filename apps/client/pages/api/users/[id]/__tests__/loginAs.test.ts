@@ -19,8 +19,19 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => fn }));
 const txEvents: string[] = [];
+const { mockPolicy, mockFindById, mockRequestApproval, mockRedeem } = vi.hoisted(() => ({
+  mockPolicy: vi.fn(),
+  mockFindById: vi.fn(),
+  mockRequestApproval: vi.fn(),
+  mockRedeem: vi.fn(),
+}));
+vi.mock('@server/admin/approvals/service', () => ({
+  getApprovalPolicy: () => mockPolicy(),
+  requestApproval: (...a: unknown[]) => mockRequestApproval(...a),
+  redeemApproval: (...a: unknown[]) => mockRedeem(...a),
+}));
 vi.mock('@bike4mind/database', () => ({
-  userRepository: {},
+  userRepository: { findById: (...a: unknown[]) => mockFindById(...a) },
   SupportAccess: { create: vi.fn().mockResolvedValue([]) },
   withTransaction: async (fn: () => Promise<unknown>) => {
     txEvents.push('tx:start');
@@ -63,6 +74,10 @@ const post = (body: Record<string, unknown>, id = 'target1') => {
 describe('POST /api/users/:id/loginAs - respond() boundary', () => {
   beforeEach(() => {
     txEvents.length = 0;
+    mockPolicy.mockReset().mockResolvedValue({ enabled: false, expiryHours: 24 });
+    mockFindById.mockReset().mockResolvedValue({ id: 'target1', name: 'Target', isAdmin: false });
+    mockRequestApproval.mockReset().mockResolvedValue({ approvalId: 'appr1', status: 'pending', expiresAt: 'later' });
+    mockRedeem.mockReset();
     mockLoginAs.mockReset().mockResolvedValue({ id: 'target1', name: 'Target', notInSchema: 'x' });
     mockIssueSession
       .mockReset()
@@ -187,5 +202,180 @@ describe('POST /api/users/:id/loginAs - respond() boundary', () => {
     await expect((handler as any)(req, res)).rejects.toThrow('audit down');
     expect(mockSetRefreshCookie).not.toHaveBeenCalled();
     expect(mockSetAdminReturnCookie).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/users/:id/loginAs - admin targets need approval', () => {
+  const approval = {
+    id: 'appr1',
+    requestedBy: { id: 'admin1', name: 'Admin', email: 'a@example.com', selfIds: ['admin1'] },
+  };
+
+  beforeEach(() => {
+    txEvents.length = 0;
+    mockPolicy.mockReset().mockResolvedValue({ enabled: true, expiryHours: 24 });
+    mockFindById.mockReset().mockResolvedValue({ id: 'target1', name: 'Target Admin', isAdmin: true });
+    mockRequestApproval.mockReset().mockResolvedValue({ approvalId: 'appr1', status: 'pending', expiresAt: 'later' });
+    mockRedeem.mockReset().mockResolvedValue(approval);
+    mockLoginAs.mockReset().mockResolvedValue({ id: 'target1', name: 'Target Admin' });
+    mockIssueSession
+      .mockReset()
+      .mockResolvedValue({ accessToken: 'tok', refreshToken: 'target-refresh', sid: 'sid-1' });
+    mockRecord.mockReset().mockResolvedValue(null);
+    mockSetRefreshCookie.mockReset();
+    mockSetAdminReturnCookie.mockReset();
+  });
+
+  it('answers 202 with a pending request after the admin and MFA check, minting no session', async () => {
+    const order: string[] = [];
+    mockLoginAs.mockImplementation(async () => {
+      order.push('loginAs');
+      return { id: 'target1', name: 'Target Admin' };
+    });
+    mockRequestApproval.mockImplementation(async () => {
+      order.push('request');
+      return { approvalId: 'appr1', status: 'pending', expiresAt: 'later' };
+    });
+    const { req, res } = post({ mfaToken: '123456', reason: REASON });
+    await (handler as any)(req, res);
+
+    expect(res._getStatusCode()).toBe(202);
+    expect(res._getJSONData()).toMatchObject({ approvalId: 'appr1', status: 'pending' });
+    expect(mockRequestApproval).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'user.impersonate_admin',
+        params: { targetUserId: 'target1' },
+        requiredPermission: 'users:impersonate',
+        requiresFullAdmin: true,
+        reason: REASON,
+      }),
+      expect.anything()
+    );
+    expect(order).toEqual(['loginAs', 'request']);
+    expect(mockIssueSession).not.toHaveBeenCalled();
+    expect(mockSetRefreshCookie).not.toHaveBeenCalled();
+  });
+
+  it('stores no request when the admin or MFA check refuses the caller', async () => {
+    mockLoginAs.mockRejectedValue(new ForbiddenError('Admin privileges required'));
+    const { req, res } = post({ mfaToken: '123456', reason: REASON });
+
+    await expect((handler as any)(req, res)).rejects.toThrow('Admin privileges required');
+    expect(mockRequestApproval).not.toHaveBeenCalled();
+  });
+
+  it('gates a delegated admin target too', async () => {
+    mockFindById.mockResolvedValue({ id: 'target1', isAdmin: false, adminPermissions: ['support:read'] });
+    const { req, res } = post({ mfaToken: '123456', reason: REASON });
+    await (handler as any)(req, res);
+    expect(res._getStatusCode()).toBe(202);
+  });
+
+  it('redeems the approval after the MFA check and records it on the started entry', async () => {
+    const order: string[] = [];
+    mockLoginAs.mockImplementation(async () => {
+      order.push('loginAs');
+      return { id: 'target1', name: 'Target Admin' };
+    });
+    mockRedeem.mockImplementation(async () => {
+      order.push('redeem');
+      txEvents.push('redeem');
+      return approval;
+    });
+    const { req, res } = post({ mfaToken: '123456', reason: REASON, approvalId: 'appr1' });
+    await (handler as any)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(order).toEqual(['loginAs', 'redeem']);
+    // Spent inside the transaction that mints the session, so a failed mint leaves it unspent.
+    expect(txEvents).toEqual(['tx:start', 'redeem', 'tx:end']);
+    expect(mockRedeem).toHaveBeenCalledWith(req, 'appr1', 'user.impersonate_admin', { targetUserId: 'target1' });
+    expect(mockRequestApproval).not.toHaveBeenCalled();
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.impersonation.started',
+        details: expect.objectContaining({ approval: expect.objectContaining({ id: 'appr1' }) }),
+      })
+    );
+    expect(mockSetRefreshCookie).toHaveBeenCalledWith(res, 'target-refresh');
+  });
+
+  it.each([
+    ['another admin', new ForbiddenError('Only the admin who requested this can use the approval.')],
+    ['a used approval', new HTTPError(409, 'This approval was already used or has expired.')],
+    ['an expired approval', new HTTPError(410, 'This approval request has expired.')],
+  ])('mints no session when redeeming %s fails', async (_label, error) => {
+    mockRedeem.mockRejectedValue(error);
+    const { req, res } = post({ mfaToken: '123456', reason: REASON, approvalId: 'appr1' });
+
+    await expect((handler as any)(req, res)).rejects.toBe(error);
+    expect(mockIssueSession).not.toHaveBeenCalled();
+    expect(mockSetRefreshCookie).not.toHaveBeenCalled();
+    expect(mockSetAdminReturnCookie).not.toHaveBeenCalled();
+  });
+
+  it('runs a non-admin target immediately, ignoring a stray approvalId', async () => {
+    mockFindById.mockResolvedValue({ id: 'target1', name: 'Target', isAdmin: false });
+    const { req, res } = post({ mfaToken: '123456', reason: REASON, approvalId: 'appr1' });
+    await (handler as any)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRequestApproval).not.toHaveBeenCalled();
+    expect(mockRedeem).not.toHaveBeenCalled();
+  });
+
+  it('skips the target lookup entirely while approvals are off', async () => {
+    mockPolicy.mockResolvedValue({ enabled: false, expiryHours: 24 });
+    const { req, res } = post({ mfaToken: '123456', reason: REASON });
+    await (handler as any)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockFindById).not.toHaveBeenCalled();
+    expect(mockRequestApproval).not.toHaveBeenCalled();
+  });
+});
+
+describe('impersonation target role changes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPolicy.mockResolvedValue({ enabled: true, expiryHours: 24 });
+    mockFindById.mockReset().mockResolvedValue({ id: 'target1', isAdmin: false });
+    mockLoginAs.mockReset().mockResolvedValue({ id: 'target1', name: 'Target', isAdmin: false });
+    mockIssueSession.mockReset().mockResolvedValue({ accessToken: 'tok', refreshToken: 'refresh', sid: 'sid-1' });
+    mockRequestApproval.mockReset().mockResolvedValue({ approvalId: 'appr1', status: 'pending', expiresAt: 'later' });
+    mockRecord.mockReset().mockResolvedValue(null);
+  });
+
+  it('requests approval when the verified target gained admin access during MFA', async () => {
+    mockLoginAs.mockResolvedValue({ id: 'target1', name: 'Target', isAdmin: true });
+    const { req, res } = post({ mfaToken: '123456', reason: REASON });
+    const invoke = handler as unknown as (request: typeof req, response: typeof res) => Promise<void>;
+
+    await invoke(req, res);
+
+    expect(res._getStatusCode()).toBe(202);
+    expect(mockRequestApproval).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ action: 'user.impersonate_admin' }),
+      expect.anything()
+    );
+    expect(mockIssueSession).not.toHaveBeenCalled();
+    expect((req as unknown as { logger: { info: unknown } }).logger.info).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { id: 'target1', isAdmin: true },
+    { id: 'target1', isAdmin: false, adminPermissions: ['support:read'] },
+  ])('refuses a newly privileged target before minting the session', async target => {
+    mockFindById.mockResolvedValueOnce({ id: 'target1', isAdmin: false }).mockResolvedValue(target);
+    const { req, res } = post({ mfaToken: '123456', reason: REASON });
+    const invoke = handler as unknown as (request: typeof req, response: typeof res) => Promise<void>;
+
+    await expect(invoke(req, res)).rejects.toMatchObject({ statusCode: 409 });
+    expect(mockIssueSession).not.toHaveBeenCalled();
+    expect(mockSetRefreshCookie).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled();
   });
 });

@@ -22,6 +22,7 @@ import type { DataColumn } from '../../shared/DataTable';
 import type { AiAbuseAdvisoryRow } from '@client/app/hooks/data/aiAdvisory';
 import { AiAdvisoryBadge } from './AiAdvisoryBadge';
 import { formatAccountAge, formatAccountCreatedTitle, formatLastActiveTitle } from '../formatAccountAge';
+import { clientSurfacesSummary } from '../Profile/userProfileModel';
 
 export const PLAN_LABELS: Record<string, string> = {
   DemoUser: 'Demo',
@@ -192,6 +193,15 @@ export function usersColumns({
       },
     },
     {
+      id: 'clients',
+      label: 'Clients',
+      width: '8rem',
+      render: row => {
+        const summary = clientSurfacesSummary(row);
+        return summary ? <Muted>{summary}</Muted> : <Dash />;
+      },
+    },
+    {
       id: 'credits',
       label: 'Credits',
       sortable: true,
@@ -212,13 +222,16 @@ export function usersColumns({
       id: 'spend',
       label: '30d spend',
       numeric: true,
-      width: '7rem',
+      // Fits a 7-char count + gap + 56px InlineBar inside the 12px cell padding.
+      width: '9rem',
       render: row =>
         row.spend30d === null ? (
           <Dash />
         ) : (
           <Stack direction="row" alignItems="center" justifyContent="flex-end" gap={1}>
-            <span>{formatNumber(row.spend30d)}</span>
+            <Typography component="span" sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
+              {formatNumber(row.spend30d)}
+            </Typography>
             <InlineBar value={row.spend30d} max={maxSpend} />
           </Stack>
         ),

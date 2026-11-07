@@ -7,7 +7,6 @@ import { voidOpenSubscriptionInvoices } from '@bike4mind/server-utils/integratio
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { handler } from './customerSubscriptionUpdated';
-import { BadRequestError } from '@bike4mind/utils';
 
 vi.mock('@bike4mind/database', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
@@ -129,31 +128,24 @@ describe('customerSubscriptionUpdated — resilient seat sync', () => {
     vi.clearAllMocks();
   });
 
-  it('force-syncs org.seats when setSeats validation rejects, to avoid Stripe/DB drift', async () => {
-    (stripe.subscriptions.retrieve as any).mockResolvedValue(buildStripeSub(3));
-    const org = { id: 'org-a', seats: 5, users: [] };
-    (organizationRepository.findByStripeCustomerId as any).mockResolvedValue(org);
-
-    // Simulate setSeats throwing because team-size floor / platform min fails.
-    (setSeats as any).mockRejectedValue(new BadRequestError('Minimum required seats: 4'));
-
-    await handler({ properties: { subscriptionId: 'sub_stripe_a' } } as any, logger as any);
-
-    // Despite the validation failure, we must reflect Stripe's quantity locally.
-    expect(organizationRepository.update).toHaveBeenCalledWith({ id: 'org-a', seats: 3 });
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Force-syncing'));
-  });
-
-  it('does not force-write when setSeats succeeds', async () => {
+  it('writes Stripe quantity to org.seats directly, never through the nested-transaction setSeats', async () => {
     (stripe.subscriptions.retrieve as any).mockResolvedValue(buildStripeSub(6));
     const org = { id: 'org-a', seats: 4, users: [] };
     (organizationRepository.findByStripeCustomerId as any).mockResolvedValue(org);
-    (setSeats as any).mockResolvedValue(org);
+
+    await handler({ properties: { subscriptionId: 'sub_stripe_a' } } as any, logger as any);
+
+    expect(organizationRepository.update).toHaveBeenCalledWith({ id: 'org-a', seats: 6 });
+    expect(setSeats).not.toHaveBeenCalled();
+  });
+
+  it('leaves org.seats alone when the subscription is not billing', async () => {
+    (stripe.subscriptions.retrieve as any).mockResolvedValue({ ...buildStripeSub(6), status: 'unpaid' });
+    (organizationRepository.findByStripeCustomerId as any).mockResolvedValue({ id: 'org-a', seats: 4, users: [] });
 
     await handler({ properties: { subscriptionId: 'sub_stripe_a' } } as any, logger as any);
 
     expect(organizationRepository.update).not.toHaveBeenCalled();
-    expect(setSeats).toHaveBeenCalledWith('org-a', 6, { type: 'stripe' });
   });
 });
 
@@ -360,7 +352,8 @@ describe('customerSubscriptionUpdated — stage guard', () => {
         trialEndsAt: new Date(1700604800 * 1000),
         stripeCustomerId: 'cus_u',
         lastSyncedAt: expect.any(Date),
-      })
+      }),
+      undefined
     );
   });
 });

@@ -20,6 +20,11 @@ const h = vi.hoisted(() => ({
   storageDelete: vi.fn(),
   generatedStorageDelete: vi.fn(),
   recordConfigChange: vi.fn(),
+  unpublish: vi.fn(),
+}));
+
+vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+  unpublishUserArtifactsBySource: h.unpublish,
 }));
 
 // Same callable chain as index.put.test.ts: the module registers get/put/delete in sequence and
@@ -174,6 +179,20 @@ describe('DELETE /api/files/[id] - data-lake stats', () => {
       creatorUserId: LAKE.createdByUserId,
     });
     expect(h.setStats).toHaveBeenCalledWith(LAKE.id, { fileCount: 3, totalSizeBytes: 300, totalChunkedChars: 0 });
+  });
+
+  it("takes down the owner's pages published from the deleted file", async () => {
+    givenOwnedFile([]);
+    const { res, json } = makeRes();
+
+    await run(res);
+
+    expect(json.mock.calls[0][0]).toMatchObject({ action: 'deleted' });
+    expect(h.unpublish).toHaveBeenCalledWith(
+      OWNER,
+      { kind: 'fabfile', fabFileIds: [expect.any(String)] },
+      expect.anything()
+    );
   });
 
   it('does not recompute when the outcome is unshared', async () => {

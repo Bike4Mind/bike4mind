@@ -50,7 +50,17 @@ const summary = (over: Partial<ISpendSummary> = {}): ISpendSummary => ({
   latency: { p50: 500, p95: 1500 },
   status: { total: 100, errors: 2, timeouts: 1, refusals: 5, degenerates: 3 },
   byModel: [{ provider: 'bedrock', model: 'opus', requests: 60, cogsUsd: 12, creditsCharged: 1200 }],
-  byAccount: [{ ownerId: 'user-1', ownerType: 'User', requests: 100, cogsUsd: 20, creditsCharged: 2000 } as never],
+  byAccount: [
+    {
+      ownerId: 'user-1',
+      ownerType: 'User',
+      requests: 100,
+      cogsUsd: 20,
+      creditsCharged: 2000,
+      failures: 3,
+      p95LatencyMs: 1500,
+    } as never,
+  ],
   dailyCost: [{ day: '2026-08-01', cogsUsd: 20 }],
   ...over,
 });
@@ -191,5 +201,55 @@ describe('GET /api/admin/spend', () => {
     const { res, run } = call({ query: {} });
     await run();
     expect(res._getJSONData().byAccount[0].accountName).toBe('Northwind Labs');
+  });
+
+  describe('account threshold flags', () => {
+    // 30-day window, so $50/day is $1500 over the window.
+    const window = { dateFrom: '2026-07-08T00:00:00Z', dateTo: '2026-08-07T00:00:00Z' };
+    const bucket = (over: Record<string, unknown>) => ({
+      ownerType: 'User',
+      requests: 100,
+      cogsUsd: 10,
+      creditsCharged: 1000,
+      failures: 0,
+      p95LatencyMs: 1000,
+      ...over,
+    });
+
+    async function rowsFor(accounts: Array<Record<string, unknown>>) {
+      mockSpendSummary.mockResolvedValue(summary({ byAccount: accounts as never }));
+      mockResolveUserNames.mockResolvedValue(new Map());
+      const { res, run } = call({ query: window });
+      await run();
+      return Object.fromEntries(
+        (res._getJSONData().byAccount as Array<{ accountId: string }>).map(r => [r.accountId, r])
+      ) as Record<string, { flags: string[]; errorRate: number; p95LatencyMs: number }>;
+    }
+
+    it('flags an account over every limit and leaves a healthy one unflagged', async () => {
+      const rows = await rowsFor([
+        bucket({ ownerId: 'hot', cogsUsd: 1600, failures: 6, p95LatencyMs: 130_000 }),
+        bucket({ ownerId: 'calm', cogsUsd: 1400, failures: 5, p95LatencyMs: 120_000 }),
+      ]);
+
+      expect(rows.hot.flags).toEqual(['dailyCost', 'errorRate', 'p95Latency']);
+      expect(rows.hot.errorRate).toBeCloseTo(0.06);
+      expect(rows.hot.p95LatencyMs).toBe(130_000);
+      // Exactly at a limit is not over it.
+      expect(rows.calm.flags).toEqual([]);
+    });
+
+    it('needs a minimum request count before flagging error rate or latency', async () => {
+      const rows = await rowsFor([bucket({ ownerId: 'tiny', requests: 3, failures: 3, p95LatencyMs: 200_000 })]);
+      expect(rows.tiny.errorRate).toBe(1);
+      expect(rows.tiny.flags).toEqual([]);
+    });
+
+    it('does not scale a sub-day window up to a daily rate', async () => {
+      mockSpendSummary.mockResolvedValue(summary({ byAccount: [bucket({ ownerId: 'u', cogsUsd: 40 })] as never }));
+      const { res, run } = call({ query: { dateFrom: '2026-08-07T00:00:00Z', dateTo: '2026-08-07T01:00:00Z' } });
+      await run();
+      expect(res._getJSONData().byAccount[0].flags).toEqual([]);
+    });
   });
 });

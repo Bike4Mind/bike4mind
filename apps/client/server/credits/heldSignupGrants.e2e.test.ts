@@ -27,9 +27,8 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 let server: Awaited<ReturnType<typeof createMongoReplSet>>;
 const UNCAPPED = '1000000000';
 const config: Record<string, string> = {
-  stagedSignupGrantEnabled: 'true',
-  signupGrantCredits: '12',
-  verifiedUnlockCredits: '28',
+  signupGrantInitialCredits: '12',
+  signupGrantDripCap: '28',
   signupGrantSignupPoolDaily: UNCAPPED,
   signupGrantTricklePoolDaily: UNCAPPED,
 };
@@ -315,7 +314,6 @@ describe('held signup grant release', () => {
   });
 
   it('records no credits when the grant was already paid, so revoke cannot debit it', async () => {
-    config.defaultFreeCredits = '12';
     const user = await createUser(false, 7);
     expect(await userService.grantFreeCredits(user, adapters)).toMatchObject({ creditsGranted: 12 });
     await User.updateOne(

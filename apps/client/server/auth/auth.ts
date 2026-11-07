@@ -469,7 +469,7 @@ export const setupSamlStrategy = (idp: {
 // The setupOktaStrategy function has been removed in favor of proper OIDC/PKCE support
 
 passport.serializeUser((user, done) => {
-  Logger.log('auth.ts passport.serializeUser user', user);
+  Logger.log('auth.ts passport.serializeUser', { userId: user.id });
   done(null, user.id);
 });
 

@@ -39,6 +39,25 @@ const publishedArtifactsBucketName =
       ? `dev-${$app.name}-buckets-publishedartifactsbucket`
       : undefined);
 
+// Bucket-wide rollback window for versioned buckets. Without it, on a stage with ENABLE_BUCKET_VERSIONING
+// every delete or overwrite keeps its bytes forever as a noncurrent version. The noncurrent and delete-marker
+// actions only matter on a versioned bucket; the 1-day multipart abort applies on every stage.
+// infra/__tests__/versionedBucketNoncurrentExpiry.test.ts requires it (or an equivalent) on every versioned bucket.
+const expireNoncurrentVersionsRule = {
+  id: 'expire-noncurrent-versions',
+  status: 'Enabled',
+  filter: {},
+  noncurrentVersionExpiration: {
+    noncurrentDays: 30,
+  },
+  expiration: {
+    expiredObjectDeleteMarker: true,
+  },
+  abortIncompleteMultipartUpload: {
+    daysAfterInitiation: 1,
+  },
+};
+
 /**
  * ===============================
  * FabFileBucket
@@ -159,6 +178,11 @@ const generatedImagesBucket = new sst.aws.Bucket(
     retainOnDelete: generatedImagesBucketName ? true : false,
   }
 );
+
+const generatedImagesBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('generatedImagesBucketLifecycle', {
+  bucket: generatedImagesBucket.name,
+  rules: [expireNoncurrentVersionsRule],
+});
 
 // PARITY: these routeBucket prefixes are mirrored by resolveProxyTarget in
 // packages/server-utils/src/utils/appFileProxy.ts (the dev local-proxy path) and by
@@ -296,6 +320,7 @@ const historyImportBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('
         daysAfterInitiation: 1, // Clean up failed uploads after 1 day
       },
     },
+    expireNoncurrentVersionsRule,
   ],
 });
 
@@ -315,6 +340,9 @@ const appFilesBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('appFi
       expiration: {
         days: 1,
       },
+      noncurrentVersionExpiration: {
+        noncurrentDays: 1,
+      },
       abortIncompleteMultipartUpload: {
         daysAfterInitiation: 1,
       },
@@ -330,6 +358,9 @@ const appFilesBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('appFi
       },
       expiration: {
         days: 1,
+      },
+      noncurrentVersionExpiration: {
+        noncurrentDays: 1,
       },
       abortIncompleteMultipartUpload: {
         daysAfterInitiation: 1,
@@ -348,6 +379,9 @@ const appFilesBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('appFi
       },
       expiration: {
         days: 1,
+      },
+      noncurrentVersionExpiration: {
+        noncurrentDays: 1,
       },
       abortIncompleteMultipartUpload: {
         daysAfterInitiation: 1,
@@ -368,6 +402,7 @@ const appFilesBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('appFi
         daysAfterInitiation: 1,
       },
     },
+    expireNoncurrentVersionsRule,
   ],
 });
 
@@ -497,8 +532,10 @@ const publishedArtifactsBucketLifecycle = new aws.s3.BucketLifecycleConfiguratio
         status: 'Enabled',
         filter: { prefix: 'drafts/' },
         expiration: { days: 1 },
+        noncurrentVersionExpiration: { noncurrentDays: 1 },
         abortIncompleteMultipartUpload: { daysAfterInitiation: 1 },
       },
+      expireNoncurrentVersionsRule,
     ],
   }
 );
@@ -533,6 +570,7 @@ export {
   fabFileBucket,
   fabFileBucketLifecycle,
   generatedImagesBucket,
+  generatedImagesBucketLifecycle,
   appFilesBucket,
   publishedArtifactsBucket,
   publishedArtifactsBucketLifecycle,

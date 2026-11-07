@@ -309,7 +309,7 @@ export interface paths {
     put?: never;
     /**
      * Generate an image
-     * @description Queues an image generation and returns immediately with the quest that will carry the result - no image yet, and the call never blocks on the render. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `generateImage200PollResult` schema). Omit `sessionId` to create a new session. The prompt is resolved against the session history first, so a follow-up such as "make it darker" binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. Send `prompt_resolution: "literal"` to skip that step and have the prompt sent as written (apart from truncation to the model's prompt limit). `referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input image taken from `fabFileIds`. GPT-image accepts 15 references; FLUX.2 accepts 8 total input images (4 for Klein), including images attached through `fabFileIds`. Unsupported models and an oversized reference list are rejected with a 400. The combined FLUX.2 input limit is checked when the render resolves attachments; exceeding it fails the polled quest. Which `size` values a model accepts, and whether it honours `background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block of `GET /api/v1/models`. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/generate-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @description Queues an image generation and returns immediately with the quest that will carry the result - no image yet, and the call never blocks on the render. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `generateImage200PollResult` schema). Omit `sessionId` to create a new session. The prompt is resolved against the session history first, so a follow-up such as "make it darker" binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. Send `prompt_resolution: "literal"` to skip that step and have the prompt sent as written (apart from truncation to the model's prompt limit). `referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input image taken from `fabFileIds`. GPT-image accepts 15 references; FLUX.2 accepts 8 total input images (4 for Klein) and FLUX 3 accepts 10, including images attached through `fabFileIds`. Unsupported models and an oversized reference list are rejected with a 400. The combined FLUX.2 or FLUX 3 input limit is checked when the render resolves attachments; exceeding it fails the polled quest. Which `size` values a model accepts, and whether it honours `background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block of `GET /api/v1/models`. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/generate-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
      *
      *     Optional `callbackUrl`: an https URL that receives a signed POST when the quest settles (success, failure, or a stop; a failed render is `type: "error"` in the body, same as the poll). The body is the `GET /api/v1/quests/{id}` response. Headers: `X-Webhook-Event-ID` (the same on every attempt for one settlement; delivery is at-least-once, so dedupe on it, and a retried quest settles again under a new one), `X-Webhook-Delivery-ID` (unique per attempt), `X-Webhook-Timestamp` (unix seconds), `X-Webhook-Signature-256` (`sha256=` + hex HMAC-SHA256 of `<timestamp>.<raw body>` keyed with the API key's callback signing secret), and `X-Event-Type: quest.settled`. Delivery makes up to 5 attempts, retrying on a 5xx, 408, 429, timeout or network error - never on any other 4xx, and redirects are not followed; your endpoint must answer 2xx within 10 seconds. Requires API-key authentication and a signing secret on that key (returned once at key creation, or via `POST /api/user-api-keys/{id}/callback-secret`). A `callbackUrl` is rejected with a 400 when the request is not API-key authenticated, the key has no signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks; a URL that is not https fails request validation with a 422. Polling still works whether or not `callbackUrl` is set.
      */
@@ -1131,7 +1131,11 @@ export interface paths {
      */
     get: operations['listArtifactVersions'];
     put?: never;
-    post?: never;
+    /**
+     * Create an artifact version
+     * @description Adds a new version to an artifact you can edit, even when `content` is unchanged, and makes it the current one. `PATCH /api/v1/artifacts/{id}` also versions changed content, but it cannot tag a version or force one for unchanged content. Unknown body fields are rejected.
+     */
+    post: operations['createArtifactVersion'];
     delete?: never;
     options?: never;
     head?: never;
@@ -1150,6 +1154,46 @@ export interface paths {
      * @description Returns one version of an artifact you can read, with its content.
      */
     get: operations['getArtifactVersion'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/artifacts/search': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Search artifacts
+     * @description Full-text search over the artifacts you own, excluding deleted ones, newest first. Items carry `content: null`; fetch an artifact by id for its content. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`, and start again without a cursor when `q` or `type` changes.
+     */
+    get: operations['searchArtifacts'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/artifacts/types': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List artifact types
+     * @description The fixed catalog of artifact types a `type` field accepts, with each one's name, description, category and MIME type. It is a small bounded set, returned whole rather than paginated.
+     */
+    get: operations['listArtifactTypes'];
     put?: never;
     post?: never;
     delete?: never;
@@ -1195,6 +1239,94 @@ export interface paths {
      */
     post: operations['createTranscription'];
     delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/projects/{id}/files': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List a project's files
+     * @description Lists the files grouped in a project the caller can read, as file summaries (no download URL: read one file by id for that). Files that have since been deleted are omitted. Anyone the project is shared with can read every file and session it groups, so grouping content shares it with them, and ungrouping it revokes the access the project granted. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`.
+     */
+    get: operations['listProjectFiles'];
+    put?: never;
+    /**
+     * Add files to a project
+     * @description Groups existing files in a project you own or can edit. Every listed file must be readable by the caller. Files already in the project are left as they are. Anyone the project is shared with can read every file and session it groups, so grouping content shares it with them, and ungrouping it revokes the access the project granted. Unknown body fields are rejected. Nothing is attached if any file is rejected.
+     */
+    post: operations['addProjectFiles'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/projects/{id}/files/{file_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Remove a file from a project
+     * @description Ungroups a file from a project. The file itself is kept, but the access the project granted on it is revoked. The project owner can remove any file; anyone else with access to the project can remove only files they own. The owner can also remove a `file_ids` entry whose file was since deleted. Removing a file that is not in the project changes nothing and answers 204, provided the caller owns the project or the file; otherwise it is the 403 below.
+     */
+    delete: operations['removeProjectFile'];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/projects/{id}/sessions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List a project's sessions
+     * @description Lists the sessions (called "notebooks" in the product UI) grouped in a project the caller can read. Each item has the same shape `GET /api/v1/sessions` returns. Sessions that have since been deleted are omitted. Anyone the project is shared with can read every file and session it groups, so grouping content shares it with them, and ungrouping it revokes the access the project granted. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`.
+     */
+    get: operations['listProjectSessions'];
+    put?: never;
+    /**
+     * Add sessions to a project
+     * @description Groups existing sessions in a project you own or can edit. Every listed session must be readable by the caller. The knowledge files a session uses are grouped with it. Attaching a session queues a summary of it, billed to the caller's credits; when the credits are insufficient the summary is skipped and the attach still succeeds. Anyone the project is shared with can read every file and session it groups, so grouping content shares it with them, and ungrouping it revokes the access the project granted. Unknown body fields are rejected. Nothing is attached if any session is rejected.
+     */
+    post: operations['addProjectSessions'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/projects/{id}/sessions/{session_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Remove a session from a project
+     * @description Ungroups a session from a project. The session itself is kept, but the access the project granted on it is revoked. The project owner can remove any session; anyone else with access to the project can remove only sessions they own. The owner can also remove a `session_ids` entry whose session was since deleted. Removing a session that is not in the project changes nothing and answers 204, provided the caller owns the project or the session; otherwise it is the 403 below.
+     */
+    delete: operations['removeProjectSession'];
     options?: never;
     head?: never;
     patch?: never;
@@ -1630,7 +1762,7 @@ export interface components {
       };
     };
     /**
-     * @description The quest polled at `GET /api/v1/quests/{id}` after this ACK. The render is finished once `status` is `"done"`: on success `images` holds the rendered images; a render that FAILED is `type: "error"` with the reason in `reply`, never a 4xx. That covers credit exhaustion (tagged `errorCode: "insufficient_credits"`, the same vocabulary as the synchronous 422s on the audio endpoints), a provider error, a reference image that is missing, not an image, or still in moderation, and the combined FLUX.2 input-image limit after attachments are resolved. Check `type` before reading `images`; `errorCode` is absent on unclassified failures, so its absence does not mean success.
+     * @description The quest polled at `GET /api/v1/quests/{id}` after this ACK. The render is finished once `status` is `"done"`: on success `images` holds the rendered images; a render that FAILED is `type: "error"` with the reason in `reply`, never a 4xx. That covers credit exhaustion (tagged `errorCode: "insufficient_credits"`, the same vocabulary as the synchronous 422s on the audio endpoints), a provider error, a reference image that is missing, not an image, or still in moderation, and the combined FLUX.2 or FLUX 3 input-image limit after attachments are resolved. Check `type` before reading `images`; `errorCode` is absent on unclassified failures, so its absence does not mean success.
      * @example {
      *       "id": "664f1c2b9a1e4d0012ab34cd",
      *       "sessionId": "664f1c2b9a1e4d0012ab34aa",
@@ -1662,7 +1794,7 @@ export interface components {
       images?: string[];
     };
     /**
-     * @description The quest polled at `GET /api/v1/quests/{id}` after this ACK. The render is finished once `status` is `"done"`: on success `images` holds the rendered images; a render that FAILED is `type: "error"` with the reason in `reply`, never a 4xx. That covers credit exhaustion (tagged `errorCode: "insufficient_credits"`, the same vocabulary as the synchronous 422s on the audio endpoints), a provider error, a reference image that is missing, not an image, or still in moderation, and the combined FLUX.2 input-image limit after attachments are resolved. Check `type` before reading `images`; `errorCode` is absent on unclassified failures, so its absence does not mean success.
+     * @description The quest polled at `GET /api/v1/quests/{id}` after this ACK. The render is finished once `status` is `"done"`: on success `images` holds the rendered images; a render that FAILED is `type: "error"` with the reason in `reply`, never a 4xx. That covers credit exhaustion (tagged `errorCode: "insufficient_credits"`, the same vocabulary as the synchronous 422s on the audio endpoints), a provider error, a reference image that is missing, not an image, or still in moderation, and the combined FLUX.2 or FLUX 3 input-image limit after attachments are resolved. Check `type` before reading `images`; `errorCode` is absent on unclassified failures, so its absence does not mean success.
      * @example {
      *       "id": "664f1c2b9a1e4d0012ab34cd",
      *       "sessionId": "664f1c2b9a1e4d0012ab34aa",
@@ -3145,6 +3277,8 @@ export interface components {
             | 'flux-2-klein-9b'
             | 'flux-2-klein-9b-preview'
             | 'flux-2-klein-4b'
+            | 'flux-3-image'
+            | 'flux-3-image-klein'
             | 'grok-imagine-image-quality'
             | 'gemini-2.5-flash-image'
             | 'gemini-3-pro-image-preview'
@@ -3329,6 +3463,8 @@ export interface components {
             | 'flux-2-klein-9b'
             | 'flux-2-klein-9b-preview'
             | 'flux-2-klein-4b'
+            | 'flux-3-image'
+            | 'flux-3-image-klein'
             | 'grok-imagine-image-quality'
             | 'gemini-2.5-flash-image'
             | 'gemini-3-pro-image-preview'
@@ -5931,6 +6067,181 @@ export interface components {
     };
     /**
      * @example {
+     *       "id": "<artifactId>",
+     *       "type": "mermaid",
+     *       "title": "Signup flow",
+     *       "description": null,
+     *       "version": 3,
+     *       "version_tag": "v2",
+     *       "status": "draft",
+     *       "tags": [
+     *         "onboarding"
+     *       ],
+     *       "session_id": "<sessionId>",
+     *       "project_id": null,
+     *       "visibility": "private",
+     *       "created_at": "2026-10-01T12:00:00.000Z",
+     *       "updated_at": "2026-10-02T09:30:00.000Z",
+     *       "content": "graph TD; A[Sign up] --> B[Verify email] --> C[Done]"
+     *     }
+     */
+    createArtifactVersionResponse201: {
+      id: string;
+      /** @enum {string} */
+      type:
+        | 'mermaid'
+        | 'recharts'
+        | 'chess'
+        | 'python'
+        | 'react'
+        | 'html'
+        | 'svg'
+        | 'code'
+        | 'quest'
+        | 'file'
+        | 'questmaster'
+        | 'lattice'
+        | 'blog-draft';
+      title: string;
+      description: string | null;
+      /** @description The current version. Starts at 1; each content change adds one. */
+      version: number;
+      version_tag: string | null;
+      /** @enum {string} */
+      status: 'draft' | 'review' | 'published' | 'archived';
+      tags: string[];
+      session_id: string | null;
+      project_id: string | null;
+      /** @enum {string} */
+      visibility: 'private' | 'project' | 'organization' | 'public';
+      /** @description ISO 8601 timestamp. */
+      created_at: string;
+      /** @description ISO 8601 timestamp. */
+      updated_at: string;
+      /** @description The current version's content. `null` in a list (fetch the artifact by id for it), and in an update response to a caller who may edit the artifact but not read it, unless that update sent content. */
+      content: string | null;
+    };
+    /**
+     * @example {
+     *       "content": "graph TD; A[Sign up] --> B[Verify email] --> C[Done]",
+     *       "change_description": "Added the final step",
+     *       "version_tag": "v2"
+     *     }
+     */
+    createArtifactVersionRequest: {
+      /** @description The new version's content. */
+      content: string;
+      /** @description A short note on what changed. */
+      change_description?: string;
+      /** @description A label for this version, such as `v2`. */
+      version_tag?: string;
+    };
+    /**
+     * @example {
+     *       "data": [
+     *         {
+     *           "id": "<artifactId>",
+     *           "type": "mermaid",
+     *           "title": "Signup flow",
+     *           "description": null,
+     *           "version": 2,
+     *           "version_tag": null,
+     *           "status": "draft",
+     *           "tags": [
+     *             "onboarding"
+     *           ],
+     *           "session_id": "<sessionId>",
+     *           "project_id": null,
+     *           "visibility": "private",
+     *           "created_at": "2026-10-01T12:00:00.000Z",
+     *           "updated_at": "2026-10-02T09:30:00.000Z",
+     *           "content": null
+     *         }
+     *       ],
+     *       "next_cursor": null
+     *     }
+     */
+    searchArtifactsResponse200: {
+      data: {
+        id: string;
+        /** @enum {string} */
+        type:
+          | 'mermaid'
+          | 'recharts'
+          | 'chess'
+          | 'python'
+          | 'react'
+          | 'html'
+          | 'svg'
+          | 'code'
+          | 'quest'
+          | 'file'
+          | 'questmaster'
+          | 'lattice'
+          | 'blog-draft';
+        title: string;
+        description: string | null;
+        /** @description The current version. Starts at 1; each content change adds one. */
+        version: number;
+        version_tag: string | null;
+        /** @enum {string} */
+        status: 'draft' | 'review' | 'published' | 'archived';
+        tags: string[];
+        session_id: string | null;
+        project_id: string | null;
+        /** @enum {string} */
+        visibility: 'private' | 'project' | 'organization' | 'public';
+        /** @description ISO 8601 timestamp. */
+        created_at: string;
+        /** @description ISO 8601 timestamp. */
+        updated_at: string;
+        /** @description The current version's content. `null` in a list (fetch the artifact by id for it), and in an update response to a caller who may edit the artifact but not read it, unless that update sent content. */
+        content: string | null;
+      }[];
+      next_cursor: string | null;
+    };
+    /**
+     * @example {
+     *       "types": [
+     *         {
+     *           "type": "mermaid",
+     *           "name": "Mermaid Diagram",
+     *           "description": "Flowcharts, sequence diagrams, and other visual diagrams using Mermaid syntax",
+     *           "category": "visualization",
+     *           "mime_type": "text/plain"
+     *         }
+     *       ],
+     *       "categories": [
+     *         "visualization"
+     *       ]
+     *     }
+     */
+    listArtifactTypesResponse200: {
+      types: {
+        /** @enum {string} */
+        type:
+          | 'mermaid'
+          | 'recharts'
+          | 'chess'
+          | 'python'
+          | 'react'
+          | 'html'
+          | 'svg'
+          | 'code'
+          | 'quest'
+          | 'file'
+          | 'questmaster'
+          | 'lattice'
+          | 'blog-draft';
+        name: string;
+        description: string;
+        category: string;
+        mime_type: string;
+      }[];
+      categories: string[];
+    };
+    /**
+     * @example {
      *       "upload_url": "https://<bucket>.s3.amazonaws.com/",
      *       "upload_fields": {
      *         "key": "transcribe-uploads/<userId>/<uuid>.mp3",
@@ -6037,6 +6348,97 @@ export interface components {
       /** @description Unique among your live projects. */
       name?: string;
       description?: string;
+    };
+    listProjectFilesResponse200: {
+      data: {
+        id: string;
+        file_name: string;
+        mime_type: string;
+        file_size: number;
+        /** @enum {string|null} */
+        moderation_status: 'pending' | 'scanning' | 'clean' | 'blocked' | null;
+        created_at: string;
+      }[];
+      next_cursor: string | null;
+    };
+    addProjectFilesResponse200: {
+      id: string;
+      name: string;
+      description: string;
+      /** @description Sessions grouped in the project. Anyone the project is shared with can read them. */
+      session_ids: string[];
+      /** @description Files grouped in the project. Anyone the project is shared with can read them. */
+      file_ids: string[];
+      /** @description ISO 8601 timestamp. */
+      created_at: string | null;
+      /** @description ISO 8601 timestamp. */
+      updated_at: string | null;
+    };
+    /**
+     * @example {
+     *       "file_ids": [
+     *         "664f1c2b9a1e4d0012ab34bb"
+     *       ]
+     *     }
+     */
+    addProjectFilesRequest: {
+      /** @description Files to group in the project. Each must be readable by the caller. */
+      file_ids: string[];
+    };
+    listProjectSessionsResponse200: {
+      data: {
+        id: string;
+        _id?: string;
+        name: string;
+        userId: string;
+        knowledgeIds?: string[];
+        artifactIds?: string[];
+        tags?: {
+          name: string;
+          strength: number;
+        }[];
+        forceKnowledgeRetrieval?: boolean;
+        retrievalTags?: string[];
+        /** @description True when `retrievalTags` is a deliberate choice, so an empty list means "no lake" rather than "any". */
+        lakeScopeExplicit?: boolean;
+        /** @description Whether the session grounds on your own library alongside its lakes. Absent when never set. */
+        includeLibraryFiles?: boolean;
+        /**
+         * @description The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+         * @enum {string}
+         */
+        promptCacheTtl?: '5m' | '1h';
+        lastUsedModel?: string | null;
+        /** Format: date-time */
+        firstCreated: string;
+        /** Format: date-time */
+        lastUpdated: string;
+      }[];
+      next_cursor: string | null;
+    };
+    addProjectSessionsResponse200: {
+      id: string;
+      name: string;
+      description: string;
+      /** @description Sessions grouped in the project. Anyone the project is shared with can read them. */
+      session_ids: string[];
+      /** @description Files grouped in the project. Anyone the project is shared with can read them. */
+      file_ids: string[];
+      /** @description ISO 8601 timestamp. */
+      created_at: string | null;
+      /** @description ISO 8601 timestamp. */
+      updated_at: string | null;
+    };
+    /**
+     * @example {
+     *       "session_ids": [
+     *         "664f1c2b9a1e4d0012ab34aa"
+     *       ]
+     *     }
+     */
+    addProjectSessionsRequest: {
+      /** @description Sessions to group in the project. Each must be readable by the caller. */
+      session_ids: string[];
     };
     listAgentsResponse200: {
       data: {
@@ -12568,7 +12970,7 @@ export interface operations {
         /** @description Lists only sessions of this product surface. When omitted, only sessions with no surface are listed. */
         surface?: string;
         /** @description Lists only sessions created through this channel. `web` also matches sessions with no recorded origin. */
-        origin?: 'web' | 'api' | 'slack' | 'cli' | 'agent';
+        origin?: 'web' | 'api' | 'slack' | 'cli' | 'desktop' | 'agent';
       };
       header?: never;
       path?: never;
@@ -17845,6 +18247,162 @@ export interface operations {
       };
     };
   };
+  createArtifactVersion: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['createArtifactVersionRequest'];
+      };
+    };
+    responses: {
+      /** @description The artifact at its new version, with the content that was sent. */
+      201: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createArtifactVersionResponse201'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `notebooks:write`. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No artifact with that id is yours to edit. One you can only read (shared read-only, or public) is reported as 404 too, like one that does not exist. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request body failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
   getArtifactVersion: {
     parameters: {
       query?: never;
@@ -17968,6 +18526,257 @@ export interface operations {
           'X-RateLimit-Remaining-Day'?: number;
           /** @description Unix epoch (seconds) when the day window resets. */
           'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  searchArtifacts: {
+    parameters: {
+      query: {
+        limit?: number;
+        cursor?: string;
+        /** @description The text to search for. */
+        q: string;
+        /** @description Only artifacts of this type. */
+        type?:
+          | 'mermaid'
+          | 'recharts'
+          | 'chess'
+          | 'python'
+          | 'react'
+          | 'html'
+          | 'svg'
+          | 'code'
+          | 'quest'
+          | 'file'
+          | 'questmaster'
+          | 'lattice'
+          | 'blog-draft';
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description One page of matching artifacts, newest first. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['searchArtifactsResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key holds neither `notebooks:read` nor `notebooks:write`. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description `q` is missing or too long, `limit` or `type` is invalid, or `cursor` is malformed or was issued by a different endpoint. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  listArtifactTypes: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Every artifact type and the categories they fall into. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['listArtifactTypesResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key holds neither `notebooks:read` nor `notebooks:write`. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
           [name: string]: unknown;
         };
         content: {
@@ -18330,6 +19139,976 @@ export interface operations {
       };
       /** @description The transcription exceeded the request deadline; reserved credits are returned. */
       504: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  listProjectFiles: {
+    parameters: {
+      query?: {
+        limit?: number;
+        cursor?: string;
+      };
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description One page of file summaries, ordered by `id`. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['listProjectFilesResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key holds neither `projects:read` nor `projects:write`. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No project with that id is visible to the caller. A project that exists but is not yours to read, a deleted project and a malformed id are all reported as 404, so project ids cannot be probed through this endpoint. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description `limit` is out of range, or `cursor` is malformed or was issued by a different endpoint or for a different project. A cursor is opaque: pass back exactly the `next_cursor` you were given. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  addProjectFiles: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['addProjectFilesRequest'];
+      };
+    };
+    responses: {
+      /** @description The project with the files added. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['addProjectFilesResponse200'];
+        };
+      };
+      /** @description A listed file does not exist or is not readable by the caller, or the body is not valid JSON. Nothing is attached. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `projects:write`. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No project with that id is yours to change. A project you can only read, one that does not exist, a deleted project and a malformed id are all reported as 404, so project ids cannot be probed through this endpoint. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request body failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  removeProjectFile: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+        file_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The file is no longer in the project. */
+      204: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `projects:write`, or the caller does not own the project and does not own the file. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No project with that id is visible to the caller, or no file with that id is readable by the caller. A malformed id is reported as 404 too, so ids cannot be probed through this endpoint, unless the project lists it as a legacy entry, which this removes. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  listProjectSessions: {
+    parameters: {
+      query?: {
+        limit?: number;
+        cursor?: string;
+      };
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description One page of sessions, ordered by `id`. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['listProjectSessionsResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key holds neither `projects:read` nor `projects:write`. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No project with that id is visible to the caller. A project that exists but is not yours to read, a deleted project and a malformed id are all reported as 404, so project ids cannot be probed through this endpoint. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description `limit` is out of range, or `cursor` is malformed or was issued by a different endpoint or for a different project. A cursor is opaque: pass back exactly the `next_cursor` you were given. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  addProjectSessions: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['addProjectSessionsRequest'];
+      };
+    };
+    responses: {
+      /** @description The project with the sessions added. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['addProjectSessionsResponse200'];
+        };
+      };
+      /** @description A listed session does not exist or is not readable by the caller, or the body is not valid JSON. Nothing is attached. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `projects:write`. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No project with that id is yours to change. A project you can only read, one that does not exist, a deleted project and a malformed id are all reported as 404, so project ids cannot be probed through this endpoint. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request body failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  removeProjectSession: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+        session_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The session is no longer in the project. */
+      204: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `projects:write`, or the caller does not own the project and does not own the session. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No project with that id is visible to the caller, or no session with that id is readable by the caller. A malformed id is reported as 404 too, so ids cannot be probed through this endpoint, unless the project lists it as a legacy entry, which this removes. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;

@@ -30,6 +30,7 @@ export const FIELD_TOOLTIPS = {
     'The shape of the image: 16:9 is wide/landscape, 3:4 is tall/portrait, 1:1 is square. Supported on some models only.',
   imageSeed:
     'A number that makes a result reproducible: the same seed with the same prompt and settings regenerates the same image. Leave empty for a random result each time.',
+  imageOutputFormat: 'The file format of the generated image: PNG is lossless, JPEG is smaller.',
   safetyTolerance:
     'How permissive content moderation is (Flux only). Lower is stricter, higher is more permissive (hard-capped).',
   promptEnhancement:
@@ -37,8 +38,9 @@ export const FIELD_TOOLTIPS = {
   // Appended to the tooltip of a control the selected model ignores, rather than hiding the control:
   // see `inertImageSettings.ts`.
   unsupportedByGeminiImage: 'Gemini image models do not accept this setting, so it has no effect on the result.',
+  unsupportedByFlux3Image: 'FLUX 3 Image does not accept this setting, so it has no effect on the result.',
   aspectRatioUnsupportedByFluxPro:
-    'Flux Pro models size images from Image Size (width and height), so this has no effect on the result.',
+    'This model sizes images from Image Size (width and height), so this has no effect on the result.',
 } as const;
 
 export type FieldTooltipKey = keyof typeof FIELD_TOOLTIPS;

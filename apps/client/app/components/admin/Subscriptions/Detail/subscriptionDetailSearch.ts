@@ -3,7 +3,7 @@
  * imports it eagerly. Mirrors userProfileSearch.ts.
  */
 
-export const SUBSCRIPTION_DETAIL_TABS = ['overview', 'admin'] as const;
+export const SUBSCRIPTION_DETAIL_TABS = ['overview', 'timeline', 'admin'] as const;
 
 export type SubscriptionDetailTab = (typeof SUBSCRIPTION_DETAIL_TABS)[number];
 
@@ -11,6 +11,7 @@ export const DEFAULT_SUBSCRIPTION_DETAIL_TAB: SubscriptionDetailTab = 'overview'
 
 export const SUBSCRIPTION_DETAIL_TAB_LABELS: Readonly<Record<SubscriptionDetailTab, string>> = {
   overview: 'Overview',
+  timeline: 'Timeline',
   admin: 'Admin log',
 };
 

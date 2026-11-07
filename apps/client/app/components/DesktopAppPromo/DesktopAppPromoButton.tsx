@@ -3,6 +3,7 @@ import { useMediaQuery } from '@mui/system';
 import { useTranslation } from 'react-i18next';
 import CloseIcon from '@mui/icons-material/Close';
 import DesktopMacOutlinedIcon from '@mui/icons-material/DesktopMacOutlined';
+import { useUser } from '@client/app/contexts/UserContext';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useDesktopPromoEnabled } from '@client/app/hooks/useDesktopPromoEnabled';
 import { openInNewTab } from '@client/app/utils/externalLinks';
@@ -15,16 +16,19 @@ export const DESKTOP_PROMO_MEDIA_QUERY = '(min-width: 900px) and (hover: hover) 
  * footer above the profile card: every corner of the content area is taken by the composer, toasts,
  * the data-lake upload indicator or a notebook's header actions.
  * Gated by the `showDesktopAppPromo` admin setting; closing it sets the user's
- * `desktopPromoDismissed` preference, so it stays gone on every device.
+ * `desktopPromoDismissed` preference, so it stays gone on every device. It also stays hidden for
+ * anyone the server has already seen signed in from the desktop app (`clientUsage.desktop`).
  */
 export default function DesktopAppPromoButton() {
   const enabled = useDesktopPromoEnabled();
   const { settings, isHydrated, updatePreferences } = useUserSettings();
   const wideScreenWithMouse = useMediaQuery(DESKTOP_PROMO_MEDIA_QUERY);
+  const hasUsedDesktopApp = useUser(s => !!s.currentUser?.clientUsage?.desktop);
   const { t } = useTranslation();
 
   // isHydrated: the preference defaults to false until the user record lands.
-  if (!enabled || !isHydrated || settings.desktopPromoDismissed || !wideScreenWithMouse) return null;
+  if (!enabled || !isHydrated || settings.desktopPromoDismissed || hasUsedDesktopApp || !wideScreenWithMouse)
+    return null;
 
   const openDesktopPage = () => openInNewTab('/desktop');
 

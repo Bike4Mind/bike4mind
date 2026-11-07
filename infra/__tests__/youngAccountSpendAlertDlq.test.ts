@@ -5,11 +5,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createEventBusDeadLetter } from '../eventBusDeadLetter';
 
 const readInfra = (name: string) => readFileSync(new URL(`../${name}`, import.meta.url), 'utf8');
-const cronSource = readInfra('cron.ts');
-// Execute the actual declaration, bounded before the next cron, without loading the full SST app.
+const cronSource = readInfra('youngAccountSpendAlert.ts');
+// Execute the actual declaration, bounded before the module's export, without loading the full SST app.
 const declaration = cronSource.slice(
-  cronSource.indexOf('const youngAccountSpendAlert ='),
-  cronSource.indexOf('// Signup Grant Held Release')
+  cronSource.indexOf('const [youngAccountSpendPageAlarm, youngAccountSpendWarnAlarm] ='),
+  cronSource.indexOf('export { youngAccountSpendAlert };')
 );
 
 /** What alarmSlackMentionFunctionArgs() returns on a monitored stage; declared above the sliced source. */
@@ -18,11 +18,28 @@ const MENTION = {
   permissions: [{ actions: ['ssm:GetParameter'], resources: ['alarm-slack-mention-arn'] }],
 };
 
+/** Alarm resources supplied to the real threshold-override wiring below. */
+const SPEND_ALARMS = [
+  { name: 'app-production-young-account-spend-rate', arn: 'page-arn' },
+  { name: 'app-production-young-account-spend-rate-warn', arn: 'warn-arn' },
+];
+
+/** Expected permissions and environment produced by that wiring. */
+const ALARMS = {
+  environment: {
+    YOUNG_ACCOUNT_SPEND_ALARM_NAME: 'app-production-young-account-spend-rate',
+    YOUNG_ACCOUNT_SPEND_WARN_ALARM_NAME: 'app-production-young-account-spend-rate-warn',
+  },
+  permissions: [
+    { actions: ['cloudwatch:DescribeAlarms', 'cloudwatch:PutMetricAlarm'], resources: ['page-arn', 'warn-arn'] },
+  ],
+};
+
 function output<T>(value: T) {
   return { value, apply: <Result>(callback: (input: T) => Result) => callback(value) };
 }
 
-function loadCron(source = declaration, runsScheduledJobs = true) {
+function loadCron(source = declaration, runsScheduledJobs = true, youngAccountSpendAlarms = SPEND_ALARMS) {
   const policy = vi.fn(function (_name: string, _args: Record<string, unknown>) {});
   vi.stubGlobal('aws', { sqs: { QueuePolicy: policy } });
   vi.stubGlobal('$util', {
@@ -43,6 +60,7 @@ function loadCron(source = declaration, runsScheduledJobs = true) {
     runsScheduledJobs,
     youngAccountSpendAlertDeadLetter: deadLetter,
     youngAccountSpendAlertMention: MENTION,
+    youngAccountSpendAlarms,
     sst: { aws: { Cron: cron } },
     lambdaVpc: {},
     allSecrets: [],
@@ -54,7 +72,7 @@ function loadCron(source = declaration, runsScheduledJobs = true) {
   const configuration = cron.mock.calls[0]?.[1];
   const transform = configuration?.transform as { target: Record<string, unknown> } | undefined;
   const target: Record<string, unknown> = { input: '{}', ...transform?.target };
-  return { cron, policy, target };
+  return { cron, policy, target, configuration };
 }
 
 function verifyDeadLetters(source = declaration) {
@@ -65,8 +83,12 @@ function verifyDeadLetters(source = declaration) {
       schedule: 'rate(1 hour)',
       transform: { target: { deadLetterConfig: { arn: 'spend-alert-dlq' }, input: undefined } },
       function: expect.objectContaining({
-        environment: expect.objectContaining(MENTION.environment),
-        permissions: [{ actions: ['sqs:SendMessage'], resources: ['spend-alert-dlq'] }, ...MENTION.permissions],
+        environment: expect.objectContaining({ ...MENTION.environment, ...ALARMS.environment }),
+        permissions: [
+          { actions: ['sqs:SendMessage'], resources: ['spend-alert-dlq'] },
+          ...MENTION.permissions,
+          ...ALARMS.permissions,
+        ],
         transform: { function: { deadLetterConfig: { targetArn: 'spend-alert-dlq' } } },
       }),
     })
@@ -111,13 +133,38 @@ describe('young-account spend alert failure recovery', () => {
   });
 
   it.each([
-    'permissions: [youngAccountSpendAlertDeadLetter.sendPermission, ...youngAccountSpendAlertMention.permissions],',
+    'youngAccountSpendAlertDeadLetter.sendPermission,',
+    '...youngAccountSpendAlarmArgs.permissions,',
     'transform: youngAccountSpendAlertDeadLetter.functionTarget,',
     '...youngAccountSpendAlertDeadLetter.ruleTarget.target,',
     'youngAccountSpendAlertDeadLetter.allowRules([$util.output(youngAccountSpendAlert)]);',
   ])('rejects a missing recovery link: %s', wiring => {
     expect(declaration).toContain(wiring);
     expect(() => verifyDeadLetters(declaration.replace(wiring, ''))).toThrow();
+  });
+
+  it.each([{ alarmResources: [] }, { alarmResources: SPEND_ALARMS.slice(0, 1) }])(
+    'omits alarm management when the alarm set is incomplete: $alarmResources',
+    ({ alarmResources }) => {
+      const { configuration } = loadCron(declaration, true, alarmResources);
+      expect(configuration?.function).toMatchObject({
+        environment: {
+          YOUNG_ACCOUNT_SPEND_ALARM_NAME: '',
+          YOUNG_ACCOUNT_SPEND_WARN_ALARM_NAME: '',
+        },
+        permissions: [{ actions: ['sqs:SendMessage'], resources: ['spend-alert-dlq'] }, ...MENTION.permissions],
+      });
+    }
+  );
+
+  it.each([
+    ['youngAccountSpendPageAlarm.name', "''"],
+    ['youngAccountSpendWarnAlarm.name', "''"],
+    ['youngAccountSpendAlarms.map(alarm => alarm.arn)', "['unrelated-alarm-arn']"],
+    ["['cloudwatch:DescribeAlarms', 'cloudwatch:PutMetricAlarm']", "['cloudwatch:DescribeAlarms']"],
+  ])('rejects broken threshold-override wiring: %s', (wiring, replacement) => {
+    expect(declaration).toContain(wiring);
+    expect(() => verifyDeadLetters(declaration.replace(wiring, replacement))).toThrow();
   });
 
   it('retains failures for 14 days and registers a standalone DLQ alarm', () => {

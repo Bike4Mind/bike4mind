@@ -20,6 +20,7 @@ describe('subscriptionActionAvailability', () => {
       stripeResume: false,
       editCredits: { visible: true, disabledReason: null },
       remove: { disabledReason: null },
+      sync: { visible: false, disabledReason: null },
     });
   });
 
@@ -30,6 +31,7 @@ describe('subscriptionActionAvailability', () => {
       stripeResume: false,
       editCredits: { visible: true, disabledReason: null },
       remove: { disabledReason: REMOVE_LIVE_STRIPE_REASON },
+      sync: { visible: true, disabledReason: null },
     });
   });
 
@@ -43,6 +45,7 @@ describe('subscriptionActionAvailability', () => {
       stripeResume: false,
       editCredits: { visible: false, disabledReason: null },
       remove: { disabledReason: null },
+      sync: { visible: true, disabledReason: null },
     });
     expect(
       subscriptionActionAvailability(buildDetail({ subscription: { status: 'incomplete_expired' } })).compActions
@@ -72,7 +75,7 @@ describe('subscriptionActionAvailability', () => {
     const legacyComp = subscriptionActionAvailability(
       buildDetail({ subscription: { ...STRIPE_ROW, source: 'stripe', subscriptionId: 'admin_granted_1' } })
     );
-    expect([legacyComp.stripeCancel, legacyComp.stripeResume]).toEqual([false, false]);
+    expect([legacyComp.stripeCancel, legacyComp.stripeResume, legacyComp.sync.visible]).toEqual([false, false, false]);
     expect(legacyComp.remove.disabledReason).not.toBe(REMOVE_LIVE_STRIPE_REASON);
   });
 

@@ -12,6 +12,7 @@ import { apiKeyAnomalyDetection } from '@server/middlewares/apiKeyAnomalyDetecti
 import { apiKeyRateLimit } from '@server/middlewares/apiKeyRateLimit';
 import { defaultWriteRateLimit } from '@server/middlewares/defaultWriteRateLimit';
 import { analyticsMiddleware } from '@server/analytics/analyticsMiddleware';
+import { clientUsageMiddleware } from '@server/middlewares/clientUsage';
 import { connectDB } from '@bike4mind/database';
 import { ApiKeyScopeValue, MethodNotAllowedError } from '@bike4mind/common';
 import { Request, Response } from 'express';
@@ -259,6 +260,9 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     // Fire-and-forget analytics: ≤1 emit/user/UTC-day per Lambda instance (best-effort).
     // Gates on human JWT only; no-op when B4M_ANALYTICS_ENABLED is false or secrets unset.
     router.use(analyticsMiddleware());
+
+    // Per-user record of which clients (web, desktop, CLI, API) they use; at most one write a day.
+    router.use(clientUsageMiddleware());
 
     // An admin's `all` IP block refuses every write an authenticated caller makes from that network:
     // checkout, every AI completion route, and whatever spends money or compute next, with no per-route

@@ -39,9 +39,21 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 const mockSessionFindById = vi.fn();
 const mockQuestFindBySessionIdAndId = vi.fn();
 const mockQuestUpdate = vi.fn();
+const mockSessionUpdate = vi.fn();
+const transactionState = { active: false };
+const mockWithTransaction = vi.fn(async (work: () => Promise<unknown>) => {
+  transactionState.active = true;
+  try {
+    return await work();
+  } finally {
+    transactionState.active = false;
+  }
+});
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: (work: () => Promise<unknown>) => mockWithTransaction(work),
   sessionRepository: {
     findById: (...a: any[]) => mockSessionFindById(...a),
+    update: (...args: unknown[]) => mockSessionUpdate(...args),
     shareable: { findUpdateAccessById: async () => ({ id: 'sess-1' }) },
   },
   questRepository: {
@@ -54,6 +66,7 @@ vi.mock('@bike4mind/services', () => ({
   sessionService: { deleteSessionMessage: vi.fn() },
 }));
 
+import { sessionService } from '@bike4mind/services';
 import handler from '@pages/api/sessions/[id]/chat/[messageId]/index';
 
 function fire({ method = 'GET', body = {} }: { method?: string; body?: unknown } = {}) {
@@ -80,6 +93,57 @@ describe('GET/PUT /api/sessions/[id]/chat/[messageId] - non-owner redaction', ()
     vi.clearAllMocks();
     mockQuestFindBySessionIdAndId.mockResolvedValue(messageWithFunctionCalls());
     mockQuestUpdate.mockResolvedValue(messageWithFunctionCalls());
+    mockSessionUpdate.mockResolvedValue({ id: 'sess-1' });
+  });
+
+  it('advances the notebook version after a reply edit', async () => {
+    mockQuestUpdate.mockImplementationOnce(async () => {
+      expect(transactionState.active).toBe(true);
+      return messageWithFunctionCalls();
+    });
+    mockSessionUpdate.mockImplementationOnce(async () => {
+      expect(transactionState.active).toBe(true);
+      return { id: 'sess-1' };
+    });
+    mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'jwt-user', users: [] });
+    const { req, res } = fire({ method: 'PUT', body: { reply: 'edited reply' } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockSessionUpdate).toHaveBeenCalledWith({ id: 'sess-1', updatedAt: expect.any(Date) });
+    expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('advances the notebook version after a message deletion', async () => {
+    vi.mocked(sessionService.deleteSessionMessage).mockImplementationOnce(async () => {
+      expect(transactionState.active).toBe(true);
+      return messageWithFunctionCalls() as never;
+    });
+    mockSessionUpdate.mockImplementationOnce(async () => {
+      expect(transactionState.active).toBe(true);
+      return { id: 'sess-1' };
+    });
+    const { req, res } = fire({ method: 'DELETE' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockSessionUpdate).toHaveBeenCalledWith({ id: 'sess-1', updatedAt: expect.any(Date) });
+    expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails the transaction when the deletion version cannot be written', async () => {
+    mockSessionUpdate.mockRejectedValueOnce(new Error('version write failed'));
+    const { req, res } = fire({ method: 'DELETE' });
+    await expect(handler(req, res)).rejects.toThrow('version write failed');
+    expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+    expect(sessionService.deleteSessionMessage).toHaveBeenCalled();
+    expect(res._isEndCalled()).toBe(false);
+  });
+
+  it('does not advance the content version for a pin-only change', async () => {
+    mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'jwt-user', users: [] });
+    const { req, res } = fire({ method: 'PUT', body: { pinned: true } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockSessionUpdate).not.toHaveBeenCalled();
   });
 
   // The gate that matters: session access alone is not enough. A caller who owns THEIR OWN

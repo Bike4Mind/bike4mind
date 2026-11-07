@@ -82,7 +82,7 @@ export async function backfillAnalyticsRollup(
       log(`[dry run] would roll up ${day}`);
     } else {
       const result = await rollupDay(day, { now });
-      log(`${day}: dau=${result.dau} wau=${result.wau} mau=${result.mau}`);
+      log(`${day}: dau=${result.dau} wau=${result.wau} mau=${result.mau} api.dau=${result.api.dau}`);
     }
     processed++;
   }

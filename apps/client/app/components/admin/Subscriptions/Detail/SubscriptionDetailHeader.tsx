@@ -74,6 +74,9 @@ export const SubscriptionDetailHeader: React.FC<SubscriptionDetailHeaderProps> =
               data-testid="subscription-detail-comped-chip"
             />
           )}
+          {detail.mismatch && (
+            <StatusChip tone="warn" label="Mismatch" data-testid="subscription-detail-mismatch-chip" />
+          )}
         </>
       }
       times={[{ prefix: 'Created', at: subscription.createdAt, 'data-testid': 'subscription-detail-created' }]}
@@ -150,7 +153,15 @@ export const SubscriptionDetailHeader: React.FC<SubscriptionDetailHeaderProps> =
                   data-testid="subscription-detail-menu-credits-item"
                 />
               )}
-              {available.editCredits.visible && <ListDivider />}
+              {available.sync.visible && (
+                <ExplainedMenuItem
+                  label="Sync from Stripe"
+                  disabledReason={available.sync.disabledReason}
+                  onClick={() => onAction('sync')}
+                  data-testid="subscription-detail-menu-sync-item"
+                />
+              )}
+              {(available.editCredits.visible || available.sync.visible) && <ListDivider />}
               <ExplainedMenuItem
                 label="Remove subscription"
                 danger

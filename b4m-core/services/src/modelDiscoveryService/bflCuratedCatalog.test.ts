@@ -96,6 +96,23 @@ describe('FLUX.2 curated catalog entries', () => {
   });
 });
 
+describe('FLUX 3 curated catalog entries', () => {
+  it.each([ImageModels.FLUX_3_IMAGE, ImageModels.FLUX_3_IMAGE_KLEIN] as const)(
+    'gives %s a name, a description, capabilities and a price',
+    async id => {
+      const entry = (await bflTable()).find(model => model.id === id);
+
+      expect(entry, `${id} is missing from the BFL adapter table`).toBeDefined();
+      expect(entry!.name).not.toBe(id);
+      expect(entry!.description).toMatch(new RegExp(`^${entry!.name} - \\S`));
+      expect(entry!.supportsImageVariation).toBe(true);
+      expect(entry!.supportsSafetyTolerance).toBe(true);
+      // The adapter's flat price (tenths of a cent) must be the figure the cost path charges.
+      expect(entry!.pricing[1]?.output).toBeCloseTo(new FluxImageCostCalculator().getCost({ model: id }) * 10000);
+    }
+  );
+});
+
 describe('curated adapter table invariants', () => {
   // The adapter table and BFL_IMAGE_MODELS are two hand-maintained lists, and curation is what
   // makes an endpoint a product. An id in one but not the other still passes discovery, then

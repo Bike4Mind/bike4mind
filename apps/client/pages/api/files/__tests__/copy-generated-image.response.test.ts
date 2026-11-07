@@ -6,7 +6,8 @@ const h = vi.hoisted(() => ({
   findAllAccessibleByIds: vi.fn(),
   download: vi.fn(),
   getMetadata: vi.fn(),
-  createFabFile: vi.fn(),
+  saveGeneratedAsset: vi.fn(),
+  findById: vi.fn(),
   signUrl: vi.fn(),
 }));
 
@@ -19,13 +20,12 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: h.signUrl }),
   getGeneratedImageStorage: () => ({ download: h.download, getMetadata: h.getMetadata }),
 }));
-vi.mock('@bike4mind/services', () => ({
-  fabFilesService: { createFabFile: h.createFabFile },
-}));
+vi.mock('@bike4mind/services', () => ({ saveGeneratedAsset: h.saveGeneratedAsset }));
 vi.mock('@bike4mind/database', () => ({
   organizationRepository: {},
   FabFile: {},
   User: {},
+  fabFileRepository: { findById: h.findById, findOne: async () => null },
   adminSettingsRepository: {},
   scopedSettingsRepository: {},
   dataLakeRepository: {},
@@ -47,6 +47,7 @@ const run = (res: unknown) =>
       method: 'POST',
       user: { id: 'me', groups: [] },
       ability: {},
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       body: { imageS3Key: 'abc.png' },
     } as never,
     res
@@ -59,11 +60,12 @@ describe('POST /api/files/copy-generated-image response boundary', () => {
     h.findAllAccessibleByIds.mockResolvedValue([{ id: 's1' }]);
     h.getMetadata.mockResolvedValue({ contentType: 'image/png' });
     h.download.mockResolvedValue(Buffer.from('image-bytes'));
+    h.saveGeneratedAsset.mockResolvedValue({ saved: true, fileId: 'f1', s3Key: 'k', fileName: 'image.png' });
   });
 
   it('strips undeclared keys and keeps the signed fileUrl on the serveable-image return', async () => {
     h.signUrl.mockResolvedValue('https://signed.test/img.png');
-    h.createFabFile.mockResolvedValue({
+    h.findById.mockResolvedValue({
       id: 'f1',
       fileName: 'image.png',
       filePath: 'owned/image.png',
@@ -86,7 +88,7 @@ describe('POST /api/files/copy-generated-image response boundary', () => {
   });
 
   it('strips undeclared keys on the plain return when the image is not yet serveable', async () => {
-    h.createFabFile.mockResolvedValue({
+    h.findById.mockResolvedValue({
       id: 'f2',
       fileName: 'image.png',
       _id: 'raw-object-id',

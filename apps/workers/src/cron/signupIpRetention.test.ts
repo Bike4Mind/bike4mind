@@ -14,6 +14,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://localhost/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
+const runSubscribers = vi.hoisted(() => vi.fn());
+vi.mock('./subscriberNetworkRetention', () => ({ runSubscriberNetworkRetention: runSubscribers }));
 import { handler, runSignupIpRetention } from './signupIpRetention';
 const context = { awsRequestId: 'local-test', functionName: 'retention', functionVersion: '1' } as Context;
 
@@ -27,6 +29,7 @@ beforeEach(() => {
   connect.mockResolvedValue(undefined);
   find.mockImplementation(() => ({ lean: () => ({ cursor: () => iterate(rows.current) }) }));
   bulkWrite.mockImplementation(async (ops: unknown[]) => ({ modifiedCount: ops.length }));
+  runSubscribers.mockResolvedValue({ clearedCount: 2, cutoff: 'x' });
 });
 
 describe('signup IP retention adapter', () => {
@@ -35,7 +38,13 @@ describe('signup IP retention adapter', () => {
     expect(connect).toHaveBeenCalledWith('mongodb://localhost/test', expect.anything());
     expect(connect.mock.invocationCallOrder[0]).toBeLessThan(find.mock.invocationCallOrder[0]);
     expect(result.statusCode).toBe(200);
-    expect(JSON.parse(result.body)).toEqual({ truncatedCount: 0, batches: 0, cutoff: expect.any(String) });
+    expect(JSON.parse(result.body)).toEqual({
+      truncatedCount: 0,
+      batches: 0,
+      cutoff: expect.any(String),
+      subscriberNetworkCleared: 2,
+    });
+    expect(runSubscribers).toHaveBeenCalledOnce();
   });
 
   it('rethrows hosted database connection failures', async () => {

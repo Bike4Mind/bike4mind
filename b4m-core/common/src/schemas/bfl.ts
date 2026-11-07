@@ -48,6 +48,8 @@ export const BFL_IMAGE_MODELS = [
   ImageModels.FLUX_2_KLEIN_9B,
   ImageModels.FLUX_2_KLEIN_9B_PREVIEW,
   ImageModels.FLUX_2_KLEIN_4B,
+  ImageModels.FLUX_3_IMAGE,
+  ImageModels.FLUX_3_IMAGE_KLEIN,
 ] as const;
 
 /**

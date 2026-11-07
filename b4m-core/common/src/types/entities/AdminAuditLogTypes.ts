@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { AdminAuditCategory, AdminAuditSeverity } from './adminAuditCatalogue';
+import type { AdminAuditAction, AdminAuditCategory, AdminAuditSeverity } from './adminAuditCatalogue';
 import type { AuditLogCursor, AuditLogFilters, AuditSummary } from './adminAuditQuery';
 import type { ListAuditReviewQueue } from './adminAuditReview';
 
@@ -114,9 +114,23 @@ export interface IAdminAuditLogRepository {
   listAscending(page: { after: AuditLogCursor | null; until: Date; limit: number }): Promise<AuditEntry[]>;
   /** Grants (positive `details.credits` on a grant action) by one actor with occurredAt in (from, to]. */
   countCreditGrants(actorUserId: string, window: { from: Date; to: Date }): Promise<number>;
-  /** Total credits one actor granted with occurredAt at or after `since`. */
-  sumCreditsGranted(actorUserId: string, since: Date): Promise<number>;
+  /** Credit total since the cutoff; approvals additionally include subscription grants and skip approval-run rows. */
+  sumCreditsGranted(
+    actorUserId: string,
+    since: Date,
+    options?: { excludeApproved?: boolean; includeSubscriptionGrants?: boolean }
+  ): Promise<number>;
+  /** Entries one actor recorded under `actions` with occurredAt at or after `since`, skipping approval-run ones. */
+  countActions(actorUserId: string, actions: readonly AdminAuditAction[], since: Date): Promise<number>;
 }
+
+/** The subscription Timeline read capability, without extending the base repository's required contract. */
+export type SubscriptionTimelineAuditLogRepository = IAdminAuditLogRepository & {
+  listForSubscriptionOrOwner(
+    scope: { owner: { kind: 'user' | 'organization'; id: string }; subscriptionIds: string[] },
+    page: { limit: number; cursor?: AuditLogCursor }
+  ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }>;
+};
 
 /** An actor whose credit-grant burst has already alerted; it stays open while grants keep coming. */
 export type AdminAuditOpenBurst = { actorUserId: string; lastGrantAt: Date };

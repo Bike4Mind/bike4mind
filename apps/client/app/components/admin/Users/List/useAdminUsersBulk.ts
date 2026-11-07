@@ -8,6 +8,7 @@ import type {
   AdminUsersBulkResult,
   AdminUsersBulkUndoResult,
 } from '@client/app/utils/adminUsersBulk';
+import type { ApprovalPendingResponse } from '@client/app/hooks/data/adminApprovals';
 
 /** Dry run: writes nothing. `null` keeps it idle while the dialog's inputs are incomplete. */
 export function useAdminUsersBulkPreview(request: AdminUsersBulkPreviewRequest | null) {
@@ -27,7 +28,10 @@ export function useAdminUsersBulkExecute() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (request: AdminUsersBulkExecuteRequest) => {
-      const { data } = await api.post<AdminUsersBulkResult>('/api/admin/users/bulk/execute', request);
+      const { data } = await api.post<AdminUsersBulkResult | ApprovalPendingResponse>(
+        '/api/admin/users/bulk/execute',
+        request
+      );
       return data;
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: adminUsersQueryKey }),

@@ -42,6 +42,9 @@ export {
   deleteArtifactContract,
   listArtifactVersionsContract,
   getArtifactVersionContract,
+  createArtifactVersionContract,
+  searchArtifactsContract,
+  listArtifactTypesContract,
 } from './contracts/artifacts.contract';
 export { createTranscriptionUploadContract, createTranscriptionContract } from './contracts/transcription.contract';
 export { createSessionContract } from './contracts/sessionCreate.contract';
@@ -79,6 +82,14 @@ export {
   updateProjectContract,
   deleteProjectContract,
 } from './contracts/projects.contract';
+export {
+  listProjectFilesContract,
+  addProjectFilesContract,
+  removeProjectFileContract,
+  listProjectSessionsContract,
+  addProjectSessionsContract,
+  removeProjectSessionContract,
+} from './contracts/projectContent.contract';
 export {
   listAgentsContract,
   getAgentContract,

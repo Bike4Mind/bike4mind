@@ -63,11 +63,11 @@ test.describe('Teams', () => {
 
     const ctx = await playwright.request.newContext();
     mainTeamId = await apiGrantTeam(ctx, adminToken, { name: MAIN_TEAM, ownerEmail: owner.email, seats: 6 });
-    await apiAddTeamMember(ctx, owner.accessToken, mainTeamId, member.userId);
-    await apiAddTeamMember(ctx, owner.accessToken, mainTeamId, manager.userId);
+    await apiAddTeamMember(ctx, adminToken, mainTeamId, member.userId);
+    await apiAddTeamMember(ctx, adminToken, mainTeamId, manager.userId);
 
     fullTeamId = await apiGrantTeam(ctx, adminToken, { name: FULL_TEAM, ownerEmail: owner.email, seats: 2 });
-    await apiAddTeamMember(ctx, owner.accessToken, fullTeamId, member.userId);
+    await apiAddTeamMember(ctx, adminToken, fullTeamId, member.userId);
 
     disposableTeamId = await apiGrantTeam(ctx, adminToken, {
       name: DISPOSABLE_TEAM,
@@ -175,7 +175,7 @@ test.describe('Teams', () => {
   });
 
   test('revoking an active member removes them from the roster', async ({ teamsPage, page, request }) => {
-    await apiAddTeamMember(request, owner.accessToken, mainTeamId, invitee.userId);
+    await apiAddTeamMember(request, adminToken, mainTeamId, invitee.userId);
 
     await teamsPage.gotoTeam(mainTeamId, 'members');
     const row = teamsPage.memberRow(invitee.userId);

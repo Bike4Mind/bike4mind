@@ -5,3 +5,5 @@ export * from './AdminSavedViewModel';
 export * from './AdminSupportAccessAuditLogModel';
 export * from './InternalTeamMemberModel';
 export * from './OrganizationModel';
+export * from './AdminApprovalModel';
+export * from './AdminGateReservationModel';

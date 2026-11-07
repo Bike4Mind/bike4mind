@@ -10,6 +10,13 @@ export interface IAnalyticsDailySignups {
   bySignal: Record<string, number>;
 }
 
+/** Public API users: counted separately and never part of dau/wau/mau. */
+export interface IAnalyticsDailyApiUsers {
+  dau: number;
+  wau: number;
+  mau: number;
+}
+
 /**
  * Activity of the internal accounts the top-level counts exclude (admin, system, synthetic, staff domain).
  * userIds lets WAU/MAU be re-derived as the union over the window without per-user rows for them.
@@ -34,6 +41,7 @@ export interface IAnalyticsDaily {
   dau: number;
   wau: number;
   mau: number;
+  api?: IAnalyticsDailyApiUsers;
   requestsByFeature: Record<string, number>;
   requestsBySource: Record<string, number>;
   requestsByModel: Record<string, number>;
@@ -67,6 +75,17 @@ const AnalyticsDailySchema = new Schema<IAnalyticsDailyDocument>(
     dau: { type: Number, required: true, default: 0 },
     wau: { type: Number, required: true, default: 0 },
     mau: { type: Number, required: true, default: 0 },
+    api: {
+      type: new Schema(
+        {
+          dau: { type: Number, required: true, default: 0 },
+          wau: { type: Number, required: true, default: 0 },
+          mau: { type: Number, required: true, default: 0 },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
     requestsByFeature: { type: Schema.Types.Mixed, default: {} },
     requestsBySource: { type: Schema.Types.Mixed, default: {} },
     requestsByModel: { type: Schema.Types.Mixed, default: {} },

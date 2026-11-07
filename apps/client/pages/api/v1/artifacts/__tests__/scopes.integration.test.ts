@@ -9,18 +9,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
-const { mockValidate, mockFindUser, mockRateLimit, mockList, mockGet, mockCreate, mockUpdate, mockDelete } = vi.hoisted(
-  () => ({
+const { mockValidate, mockFindUser, mockRateLimit, mockList, mockSearch, mockGet, mockCreate, mockUpdate, mockDelete } =
+  vi.hoisted(() => ({
     mockValidate: vi.fn(),
     mockFindUser: vi.fn(),
     mockRateLimit: vi.fn(),
     mockList: vi.fn(),
+    mockSearch: vi.fn(),
     mockGet: vi.fn(),
     mockCreate: vi.fn(),
     mockUpdate: vi.fn(),
     mockDelete: vi.fn(),
-  })
-);
+  }));
 
 vi.mock('@server/utils/apiKeyTrust', () => ({
   resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
@@ -66,7 +66,11 @@ vi.mock('@bike4mind/database', async orig => {
     connectDB: vi.fn().mockResolvedValue(undefined),
     User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => mockFindUser(...a) }),
     userRepository: { findById: (...a: unknown[]) => mockFindUser(...a) },
-    artifactRepository: { listOwnedBeforeId: (...a: unknown[]) => mockList(...a), findOne: vi.fn() },
+    artifactRepository: {
+      listOwnedBeforeId: (...a: unknown[]) => mockList(...a),
+      searchOwnedBeforeId: (...a: unknown[]) => mockSearch(...a),
+      findOne: vi.fn(),
+    },
     artifactContentRepository: { findLatestContent: vi.fn().mockResolvedValue(null) },
   };
 });
@@ -80,6 +84,9 @@ vi.mock('@server/auth/auth', async orig => ({
 import { ApiKeyScope } from '@bike4mind/common';
 import listOrCreate from '../index';
 import byId from '../[id]/index';
+import versions from '../[id]/versions/index';
+import search from '../search';
+import types from '../types';
 
 const ARTIFACT_ID = 'mermaid-signup-flow-1';
 const ARTIFACT = {
@@ -127,8 +134,19 @@ const patchOne = (body: object = { title: 'Renamed' }) =>
 const deleteOne = () =>
   fire(byId, { method: 'DELETE', url: `/api/v1/artifacts/${ARTIFACT_ID}`, query: { id: ARTIFACT_ID } });
 
+const createVersion = (body: object = { content: 'graph TD; A-->B-->C' }) =>
+  fire(versions, {
+    method: 'POST',
+    url: `/api/v1/artifacts/${ARTIFACT_ID}/versions`,
+    query: { id: ARTIFACT_ID },
+    body,
+  });
+const searchFor = () => fire(search, { method: 'GET', url: '/api/v1/artifacts/search', query: { q: 'signup' } });
+const listTypes = () => fire(types, { method: 'GET', url: '/api/v1/artifacts/types' });
+
 beforeEach(() => {
   vi.clearAllMocks();
+  mockSearch.mockResolvedValue({ data: [], hasMore: false });
   mockFindUser.mockResolvedValue({ id: 'user-1', _id: 'user-1', groups: [], isBanned: false, disputePending: false });
   mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: {} });
   mockList.mockResolvedValue({ data: [ARTIFACT], hasMore: false });
@@ -201,5 +219,53 @@ describe('/api/v1/artifacts scope enforcement (real middleware chain)', () => {
     withScopes([ApiKeyScope.READ_NOTEBOOKS]);
     expect((await list({ cursor: 'not-a-cursor' }))._getStatusCode()).toBe(422);
     expect(mockList).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/v1/artifacts version-create, search and types scope enforcement (real middleware chain)', () => {
+  it.each([[ApiKeyScope.READ_NOTEBOOKS], [ApiKeyScope.WRITE_NOTEBOOKS]])(
+    'a %s key can search and list types',
+    async scope => {
+      withScopes([scope]);
+      expect((await searchFor())._getStatusCode()).toBe(200);
+      expect((await listTypes())._getStatusCode()).toBe(200);
+    }
+  );
+
+  it('a key without a notebooks scope can neither search nor list types (403) and nothing is read', async () => {
+    withScopes([ApiKeyScope.READ_FILES]);
+    for (const res of [await searchFor(), await listTypes()]) {
+      expect(res._getStatusCode()).toBe(403);
+    }
+    expect(mockSearch).not.toHaveBeenCalled();
+  });
+
+  it('a read-only key cannot create a version (403) and nothing is written', async () => {
+    withScopes([ApiKeyScope.READ_NOTEBOOKS]);
+    const res = await createVersion();
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().required_scopes).toEqual([ApiKeyScope.WRITE_NOTEBOOKS]);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('a key without a notebooks scope cannot create a version (403)', async () => {
+    withScopes([ApiKeyScope.READ_FILES]);
+    expect((await createVersion())._getStatusCode()).toBe(403);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('a write key can create a version (201)', async () => {
+    withScopes([ApiKeyScope.WRITE_NOTEBOOKS]);
+    expect((await createVersion())._getStatusCode()).toBe(201);
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('an invalid key is refused (401) on all three routes', async () => {
+    mockValidate.mockResolvedValue({ isValid: false });
+    for (const res of [await createVersion(), await searchFor(), await listTypes()]) {
+      expect(res._getStatusCode()).toBe(401);
+    }
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockSearch).not.toHaveBeenCalled();
   });
 });

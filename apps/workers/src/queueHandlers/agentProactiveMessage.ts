@@ -19,6 +19,7 @@ import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { apiKeyService } from '@bike4mind/services';
 import { isTerminalCreditRefusal } from '@bike4mind/common';
+import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import * as agentProactiveMessagingService from '@bike4mind/services/agentProactiveMessagingService';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
@@ -131,9 +132,10 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
         meter: createCompletionMeter(user, logger, 'proactive agent messages', { sessionId: config.sessionId }),
       });
     } catch (err) {
-      // Refused before any provider call; retrying cannot help until the owner adds credits or the daily cap resets.
-      if (!isTerminalCreditRefusal(err)) throw err;
-      logger.info(`Skipping proactive message for agent ${config.agentId}: ${(err as Error).message}`);
+      // Refused before any provider call; retrying cannot help until the owner adds credits, the daily cap
+      // resets, or an admin restores the account's AI access.
+      if (!isTerminalCreditRefusal(err) && !isAiAccessRefusal(err)) throw err;
+      logger.warn(`Skipping proactive message for agent ${config.agentId}: ${(err as Error).message}`);
       return;
     }
 

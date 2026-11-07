@@ -68,6 +68,69 @@ describe('SignupDomainHoldsTab', () => {
     expect(screen.getByTestId('signup-domain-release-beta.test')).toBeEnabled();
     expect(screen.getByTestId('signup-domain-confirm-beta.test')).toBeDisabled();
   });
+  it('shows the advisory verdict, its auto-confirmation and a failed assessment', async () => {
+    const young = 'young-domain (<30 days)';
+    getMock.mockResolvedValue({
+      data: {
+        data: [
+          {
+            ...reviews[1],
+            reason: young,
+            autoDecision: { policy: 'advisory-decision', decidedAt: '2026-01-02T00:00:00.000Z' },
+            assessment: {
+              outcome: 'judged',
+              policyVersion: 1,
+              judgment: 'abuse',
+              confidence: 0.94,
+              model: 'gpt-6-luna',
+              assessedAt: '2026-01-02T00:00:00.000Z',
+            },
+          },
+          {
+            ...reviews[0],
+            reason: young,
+            assessment: {
+              outcome: 'judged',
+              policyVersion: 1,
+              judgment: 'insufficient_evidence',
+              confidence: 0.6,
+              model: 'gpt-6-luna',
+              assessedAt: '2026-01-02T00:00:00.000Z',
+            },
+          },
+          {
+            ...reviews[2],
+            status: 'held_pending_review',
+            reason: young,
+            assessment: {
+              outcome: 'failed',
+              policyVersion: 1,
+              failure: 'provider_error',
+              attempts: 2,
+              model: 'gpt-6-luna',
+              assessedAt: '2026-01-02T00:00:00.000Z',
+            },
+          },
+        ],
+        total: 3,
+      },
+    });
+    renderTab();
+    expect(await screen.findByTestId('signup-domain-assessment-beta.test')).toHaveTextContent(
+      'Advisory verdict: abuse (94% confidence)'
+    );
+    expect(screen.getByTestId('signup-domain-auto-decision-beta.test')).toHaveTextContent(
+      'Auto-confirmed by the advisory assessment'
+    );
+    expect(screen.getByTestId('signup-domain-assessment-alpha.test')).toHaveTextContent(
+      'Advisory verdict: insufficient evidence (60% confidence)'
+    );
+    expect(screen.queryByTestId('signup-domain-auto-decision-alpha.test')).not.toBeInTheDocument();
+    expect(screen.getByTestId('signup-domain-confirm-alpha.test')).toBeEnabled();
+    expect(screen.getByTestId('signup-domain-assessment-gamma.test')).toHaveTextContent(
+      'Advisory assessment failed (provider error, attempt 2)'
+    );
+  });
   it('uses server pagination without a second local pager', async () => {
     renderTab();
     expect(await screen.findByTestId('signup-domain-confirm-alpha.test')).toBeEnabled();

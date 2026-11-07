@@ -22,6 +22,12 @@ export type CompletionSource = 'web' | 'cli' | 'desktop' | 'api' | 'agent' | 'sy
 
 export const COMPLETION_SOURCES = ['web', 'cli', 'desktop', 'api', 'agent', 'system'] as const;
 
+/**
+ * Sources that count toward active users: first-party surfaces (and agent runs). `api` is third-party and
+ * shown as its own series; `system` is background work. Must stay in sync with COMPLETION_SOURCES.
+ */
+export const ACTIVE_SOURCES = ['web', 'cli', 'desktop', 'agent'] as const satisfies readonly CompletionSource[];
+
 /** The sources an API-key-authed request can carry - see {@link resolveApiCompletionSource}. */
 export const API_KEY_COMPLETION_SOURCES = ['api', 'cli', 'desktop'] as const satisfies readonly CompletionSource[];
 
@@ -168,4 +174,40 @@ export function resolveApiCompletionSource(headers: Record<string, string | unde
   const client = resolveRequestClient(headers) ?? '';
   if (/^b4m-desktop\/\S+$/i.test(client)) return 'desktop';
   return /^b4m-cli\//i.test(client) ? 'cli' : 'api';
+}
+
+/**
+ * The first-party surfaces recorded per user on `IUser.clientUsage`. A subset of
+ * {@link CompletionSource}: `agent` and `system` are never a person using a client.
+ */
+export const CLIENT_SURFACES = ['web', 'desktop', 'cli', 'api'] as const satisfies readonly CompletionSource[];
+
+export type ClientSurface = (typeof CLIENT_SURFACES)[number];
+
+export interface ClientSurfaceSignal {
+  surface: ClientSurface;
+  /** The `<ver>` of a `b4m-desktop/<ver>` or `b4m-cli/<ver>` client, when it is well-formed. */
+  version?: string;
+}
+
+const FIRST_PARTY_CLIENT = /^b4m-(desktop|cli)\/(\S+)$/i;
+// Caller-controlled and persisted, so only a short semver-ish token is kept.
+const CLIENT_VERSION = /^[\w.+-]{1,32}$/;
+
+/**
+ * Which surface an authenticated request came from. Same caller-controlled signal as
+ * {@link resolveApiCompletionSource}, so it is attribution only, never an authorization input.
+ * A first-party client header wins; otherwise a delegated credential (API key, OAuth token) is
+ * `api` and a session cookie is `web`.
+ */
+export function resolveClientSurface(
+  headers: Record<string, string | undefined>,
+  options: { delegatedCredential: boolean }
+): ClientSurfaceSignal {
+  const match = FIRST_PARTY_CLIENT.exec(resolveRequestClient(headers) ?? '');
+  if (match) {
+    const surface = match[1].toLowerCase() as 'desktop' | 'cli';
+    return CLIENT_VERSION.test(match[2]) ? { surface, version: match[2] } : { surface };
+  }
+  return { surface: options.delegatedCredential ? 'api' : 'web' };
 }

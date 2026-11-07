@@ -40,6 +40,9 @@ import {
   deleteArtifactContract,
   listArtifactVersionsContract,
   getArtifactVersionContract,
+  createArtifactVersionContract,
+  searchArtifactsContract,
+  listArtifactTypesContract,
 } from './artifacts.contract';
 import { createTranscriptionUploadContract, createTranscriptionContract } from './transcription.contract';
 import { createSessionContract } from './sessionCreate.contract';
@@ -77,6 +80,14 @@ import {
   updateProjectContract,
   deleteProjectContract,
 } from './projects.contract';
+import {
+  listProjectFilesContract,
+  addProjectFilesContract,
+  removeProjectFileContract,
+  listProjectSessionsContract,
+  addProjectSessionsContract,
+  removeProjectSessionContract,
+} from './projectContent.contract';
 import {
   listAgentsContract,
   getAgentContract,
@@ -181,10 +192,19 @@ export const CONTRACTS: readonly EndpointContract[] = [
   deleteArtifactContract,
   listArtifactVersionsContract,
   getArtifactVersionContract,
+  createArtifactVersionContract,
+  searchArtifactsContract,
+  listArtifactTypesContract,
   createTranscriptionUploadContract,
   createTranscriptionContract,
   updateProjectContract,
   deleteProjectContract,
+  listProjectFilesContract,
+  addProjectFilesContract,
+  removeProjectFileContract,
+  listProjectSessionsContract,
+  addProjectSessionsContract,
+  removeProjectSessionContract,
   listAgentsContract,
   getAgentContract,
   createAgentContract,

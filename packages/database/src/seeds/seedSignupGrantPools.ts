@@ -1,6 +1,6 @@
 import { carryLegacyGrantBudgetSpend } from '../models/auth/SignupGrantBudgetModel';
 
-/** Seed for a pool when the retired signupGrantDailyBudget held no positive cap (0 used to mean unmetered). */
+/** Seed for a pool when the removed signupGrantDailyBudget row held no positive cap (0 used to mean unmetered). */
 export const POOL_SEED_UNMETERED = 1_000_000_000;
 
 export const SIGNUP_GRANT_POOL_SETTING_NAMES = {
@@ -42,6 +42,7 @@ export interface SignupGrantPoolSeedStore {
  * spend on the retired counter onto the pool counters (carryLegacyGrantBudgetSpend).
  */
 export async function seedSignupGrantPools(store: SignupGrantPoolSeedStore, now: Date = new Date()): Promise<void> {
+  // Raw name: the key left settingsMap, and migration 20260921239996 deletes the row after this seed runs.
   const legacy = await store.findOne({ settingName: 'signupGrantDailyBudget' });
   const seeds = signupGrantPoolSeedValues(legacy?.settingValue);
   for (const pool of ['signup', 'trickle'] as const) {

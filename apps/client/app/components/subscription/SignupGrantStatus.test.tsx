@@ -7,7 +7,6 @@ import type { SignupGrant } from '@bike4mind/common';
 const h = vi.hoisted(() => ({
   grant: undefined as SignupGrant | undefined,
   held: undefined as 'budget_exhausted' | undefined,
-  activity: true as boolean | string | undefined,
   daily: 1000 as number | string | undefined,
   minSeconds: undefined as number | undefined,
 }));
@@ -18,7 +17,6 @@ vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: (key: string) => (key === 'signupGrantActivityMinActiveSeconds' ? h.minSeconds : undefined),
   useSettingsFromServer: () => ({
     data: [
-      { settingName: 'signupGrantActivityEnabled', settingValue: h.activity },
       { settingName: 'signupGrantDailyCredits', settingValue: h.daily },
       { settingName: 'signupGrantDripCap', settingValue: '9000' },
     ],
@@ -35,7 +33,6 @@ const show = () =>
 
 describe('signup grant status', () => {
   beforeEach(() => {
-    h.activity = true;
     h.daily = 1000;
     h.held = undefined;
     h.minSeconds = undefined;
@@ -111,22 +108,12 @@ describe('signup grant status', () => {
     show();
     expect(screen.queryByRole('button')).toBeNull();
   });
-  it.each([
-    [true, 0],
-    [true, '0'],
-    [true, undefined],
-  ])('omits the daily drip when activity=%j and daily=%j', (activity, daily) => {
-    h.activity = activity;
+  it.each([[0], ['0'], [undefined]])('omits the daily drip when daily=%j', daily => {
     h.daily = daily;
     show();
     const paths = screen.getByTestId('signup-grant-unlock-paths');
     expect(paths).not.toHaveTextContent('each day');
     expect(paths).toHaveTextContent('when you subscribe');
-  });
-  it('advertises the daily drip with the retired activity flag off while the daily amount is positive', () => {
-    h.activity = false;
-    show();
-    expect(screen.getByTestId('signup-grant-unlock-paths')).toHaveTextContent('each day');
   });
   it('drops the unlock paths once the grant is fully released', () => {
     h.grant = { ...h.grant!, creditsReleased: 10000, stage: 'unlocked', nextCondition: null };

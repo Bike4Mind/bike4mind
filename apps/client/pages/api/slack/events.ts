@@ -908,7 +908,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     channelId: slackEvent.channel,
     logger,
   });
-  req.logger.info(systemPrompt);
+  req.logger.info('Slack system prompt built', { systemPromptLength: systemPrompt.length });
 
   // Build command with file metadata context for upload tools
   // This tells the AI which fabFileId to use when delegating file uploads

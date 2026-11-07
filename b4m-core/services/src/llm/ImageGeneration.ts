@@ -35,7 +35,8 @@ import {
   XAI_IMAGE_MODELS,
   GEMINI_IMAGE_MODELS,
   isBflImageModel,
-  isFlux2ImageModel,
+  takesBflInputImageList,
+  supportsBflOutputFormat,
   getMaxReferenceImages,
   isGPTImageModel,
   rejectsTransparentBackground,
@@ -101,6 +102,9 @@ import type { ImageCreditHolds } from './imageCreditHolds';
 import { shouldSummarizeSession } from './ChatCompletionFeatures';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
+
+/** BFL models with no output_format field (flux-3-image): BFL picks the format, so none is persisted. */
+const bflPicksOutputFormat = (model: string): boolean => isBflImageModel(model) && !supportsBflOutputFormat(model);
 
 /**
  * The tier a GPT-Image request is both billed at and rendered at: standard -> medium,
@@ -365,7 +369,7 @@ export class ImageGenerationService {
         safety_tolerance: rest.safety_tolerance,
         prompt_upsampling: rest.prompt_upsampling,
         seed: rest.seed,
-        output_format: rest.output_format,
+        output_format: bflPicksOutputFormat(model) ? undefined : rest.output_format,
         background: rest.background,
         // `null` means "unset" for seed/output_format (both nullable), and PromptMetaZodSchema
         // declares these as plain optional numbers/enums, not nullable - a persisted `null` (the
@@ -640,7 +644,7 @@ export class ImageGenerationService {
     // Access-scoped: a caller-supplied fabFileId the caller cannot access is dropped here,
     // never presigned or fed to a provider (owner/share/group/global-read only).
     const fabFiles = await this.db.fabFiles.findAccessibleInIds(fabFileIds || [], { userId, userGroups }, lakeAccess);
-    const workbenchFiles = isFlux2ImageModel(model)
+    const workbenchFiles = takesBflInputImageList(model)
       ? (fabFileIds ?? [])
           .map(id => fabFiles.find(file => file.id === id))
           .filter((file): file is IFabFileDocument => !!file)
@@ -648,7 +652,7 @@ export class ImageGenerationService {
     const workbenchImage = workbenchFiles.find(file => file.mimeType.startsWith('image'));
 
     const referenceImages = await this.resolveReferenceImages({
-      referenceImageFabFileIds: isFlux2ImageModel(model)
+      referenceImageFabFileIds: takesBflInputImageList(model)
         ? [
             ...workbenchFiles
               .filter(file => file.mimeType.startsWith('image') && file.id !== workbenchImage?.id)
@@ -755,11 +759,11 @@ export class ImageGenerationService {
     }
 
     const selectedReferenceImages =
-      isFlux2ImageModel(model) && fileImage?.id
+      takesBflInputImageList(model) && fileImage?.id
         ? referenceImages.filter(reference => reference.id !== fileImage.id)
         : referenceImages;
     if (
-      isFlux2ImageModel(model) &&
+      takesBflInputImageList(model) &&
       selectedReferenceImages.length + (fileImage?.filePath ? 1 : 0) > getMaxReferenceImages(model)
     ) {
       throw new BadRequestError(`At most ${getMaxReferenceImages(model)} input images may be supplied for ${model}`);
@@ -786,7 +790,7 @@ export class ImageGenerationService {
    * they did not describe, with nothing in the response to say why it looks wrong.
    *
    * Anchors are never carried forward from session history; only this explicit field produces
-   * them, except FLUX.2 also accepts the current workbench images as inputs.
+   * them, except FLUX.2 and FLUX 3 also accept the current workbench images as inputs.
    */
   private async resolveReferenceImages({
     referenceImageFabFileIds,
@@ -1304,7 +1308,7 @@ export class ImageGenerationService {
           Logger.globalInstance.debug(`[DEBUG] ⚠️ No imageUrl available for base64 conversion`);
         }
 
-        const referenceImageData = isFlux2ImageModel(model)
+        const referenceImageData = takesBflInputImageList(model)
           ? await Promise.all(
               referenceImages.map(async reference => {
                 const url = await this.fabFileStorage.getSignedUrl(reference.filePath as string);
@@ -1372,7 +1376,7 @@ export class ImageGenerationService {
             user: userId,
             model: model as any,
             safety_tolerance,
-            ...(isFlux2ImageModel(model)
+            ...(takesBflInputImageList(model)
               ? { reference_images: [...(base64Image ? [base64Image] : []), ...referenceImageData] }
               : { image_prompt: base64Image }),
             prompt_upsampling,
@@ -1697,14 +1701,14 @@ export class ImageGenerationService {
         ...(seed != null && { seed }),
         ...(safety_tolerance !== undefined && { safety_tolerance }),
         prompt_upsampling,
-        ...(output_format && { output_format }),
+        ...(output_format && !bflPicksOutputFormat(model) && { output_format }),
         ...(background && { background }),
       };
       const derivedFrom = lineageOf(imageSource, fileImage, referenceImages);
 
       // Last, so a run that fails anywhere above (a later image blocked by moderation, billing) leaves no file.
       await Promise.all(
-        storedImages.map(({ buffer, contentType }, index) =>
+        storedImages.map(({ buffer, contentType, path }, index) =>
           saveGeneratedImage(
             this.saveGeneratedAsset,
             {
@@ -1722,6 +1726,7 @@ export class ImageGenerationService {
               ...(derivedFrom.length > 0 && { derivedFrom }),
               sessionId,
               questId,
+              generatedOutputKey: path,
             },
             logger
           )

@@ -6,7 +6,7 @@ import { assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { withTransaction, dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { reportAndNotifyKeptPersonalLakeShares } from '@server/utils/keptPersonalLakeSharesNotifier';
 import {
@@ -56,6 +56,13 @@ const handler = baseApi()
 
       if (!organizationId) {
         throw new BadRequestError('Organization ID is required');
+      }
+
+      // Adding an existing account directly, without an invite it accepts, is a platform-admin
+      // operation. Org owners and managers add people through invitations (sharingService).
+      // Checked before any lookup. Keep in sync with addUser.ts, which applies the same rule.
+      if (!req.user.isAdmin) {
+        throw new ForbiddenError('Members join an organization by accepting an invitation');
       }
 
       const body = addMemberBodySchema.parse(req.body);
