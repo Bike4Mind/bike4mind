@@ -2373,12 +2373,18 @@ function pipedFrom(node: Node): Node | null {
   return redirects.every(stderrToFile) ? producer : null;
 }
 
-/** Whether a redirect sends only stderr to a file (`2>/dev/null`, `2>>log`). */
+/**
+ * Whether a redirect sends only stderr to `/dev/null` or a fixed path outside `/dev` and `/proc` (`2>>log`), and so
+ * not back into the pipe as `2>/dev/stdout` would.
+ */
 function stderrToFile(redirect: Node): boolean {
   const descriptor = redirect.children.find(child => child?.type === 'file_descriptor')?.text;
-  return (
-    redirect.type === 'file_redirect' && descriptor === '2' && ['>', '>>'].includes(redirectOperator(redirect) ?? '')
-  );
+  const targets = redirect.childrenForFieldName('destination');
+  const target = targets.length === 1 ? targets[0] : null;
+  if (redirect.type !== 'file_redirect' || descriptor !== '2' || target?.type !== 'word') return false;
+  if (!['>', '>>'].includes(redirectOperator(redirect) ?? '') || !/^[\w./+-]+$/.test(target.text)) return false;
+  const path = posix.normalize(target.text);
+  return path === '/dev/null' || (!/^\/(dev|proc)(\/|$)/.test(path) && !path.split('/').includes('..'));
 }
 
 /** The words of the command an xargs among the leading wrappers runs, past its own options; none without one. */
@@ -4536,7 +4542,7 @@ export async function scanShell(
         if (settings.kind !== 'diff' || top === null || top !== (await realpath(state.cwd).catch(() => null))) {
           return false;
         }
-        const diff = await diffTargets(top, settings.words, settings.cached);
+        const diff = await diffTargets(top, settings.words, settings.cached, stopped);
         if (diff === null) return false;
         const pathspecs = [...diff.pathspecs, ...(listing.pathspecs ?? [])];
         const listed = await diffListed(top, diff.targets, diff.worktree, pathspecs, stopped);

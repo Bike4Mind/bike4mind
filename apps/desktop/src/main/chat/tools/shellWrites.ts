@@ -1311,7 +1311,8 @@ export async function indexListed(
 export async function diffTargets(
   top: string,
   words: readonly string[],
-  cached: boolean
+  cached: boolean,
+  stopped: () => boolean
 ): Promise<{ targets: string[]; worktree: boolean; pathspecs: string[] } | null> {
   const targets: string[] = [];
   let ends = 0;
@@ -1323,8 +1324,10 @@ export async function diffTargets(
       if (word.split('...').length > 2 || range.length > 2) return null;
       targets.push(...range);
       ends += 2;
+      if (ends > 2) return null;
       continue;
     }
+    if (stopped()) return null;
     const commit =
       REVISION.test(word) &&
       !word.startsWith('-') &&
@@ -1332,6 +1335,7 @@ export async function diffTargets(
     if (commit) {
       targets.push(word);
       ends++;
+      if (ends > 2) return null;
       continue;
     }
     const exists = await lstat(resolve(top, word)).then(
@@ -1341,7 +1345,8 @@ export async function diffTargets(
     if (!exists) return null;
     break;
   }
-  if (ends > 2) return null;
+  // Pathspec magic such as `attr:` would match against attributes git reads here with no GIT_ATTR_SOURCE.
+  if (words.slice(at).some(word => word.startsWith(':'))) return null;
   return {
     targets: targets.length > 0 ? targets : cached ? ['HEAD'] : [],
     worktree: !cached && ends < 2,
