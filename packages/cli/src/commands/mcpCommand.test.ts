@@ -202,18 +202,26 @@ describe('b4m mcp enable/disable', () => {
     expect(output).not.toContain('The server will connect next time you start the CLI.');
   });
 
-  it('enables a server whose saved enabled value is the string "false" and the loader then runs it', async () => {
-    await new ConfigStore(configPath).addMcpServer({ name: 'local', command: 'c', args: [], env: {}, enabled: true });
-    const saved = JSON.parse(await readFile(configPath, 'utf-8'));
-    saved.mcpServers[0].enabled = 'false';
-    await writeFile(configPath, JSON.stringify(saved), { mode: 0o600 });
+  it.each(
+    ['enable', 'disable'].flatMap(action =>
+      ['array', 'map'].flatMap(shape => ['false', 'true', '', 0, 1, null].map(value => ({ action, shape, value })))
+    )
+  )('repairs $shape enabled: $value on $action and the loader accepts it', async ({ action, shape, value }) => {
+    const entry = { command: 'c', enabled: value };
+    const mcpServers = shape === 'array' ? [{ name: 'local', ...entry }] : { local: entry };
+    await new ConfigStore(configPath).save();
+    const saved: Record<string, unknown> = JSON.parse(await readFile(configPath, 'utf-8'));
+    await writeFile(configPath, JSON.stringify({ ...saved, mcpServers }), { mode: 0o600 });
     expect((await new ConfigStore(configPath).load()).mcpServers).toEqual([]);
 
-    await handleMcpCommand('enable', { _: [], name: 'local' });
+    await handleMcpCommand(action, { _: [], name: 'local' });
 
-    expect(output.some(line => line.includes('Enabled MCP server "local"'))).toBe(true);
-    expect(JSON.parse(await readFile(configPath, 'utf-8')).mcpServers[0].enabled).toBe(true);
-    expect((await new ConfigStore(configPath).load()).mcpServers).toMatchObject([{ name: 'local', enabled: true }]);
+    expect(
+      output.some(line => line.includes(`${action === 'enable' ? 'Enabled' : 'Disabled'} MCP server "local"`))
+    ).toBe(true);
+    expect((await new ConfigStore(configPath).load()).mcpServers).toMatchObject([
+      { name: 'local', enabled: action === 'enable' },
+    ]);
   });
 
   it('prints a source refusal without the save-failure prefix', async () => {
