@@ -51,6 +51,19 @@ describe('orchestration contracts and role routing', () => {
     });
     expect(resolveWorkerModel('worker', policy, { role: 'exploration' })).toMatchObject({ effectiveModel: 'scout' });
     expect(resolveWorkerModel('planner', policy, { role: 'review' })).toMatchObject({ effectiveModel: 'planner' });
+    expect(() =>
+      resolveWorkerModel('planner', policy, { role: 'implementation', requestedModelId: 'planner' })
+    ).toThrow(/explicit user/);
+    expect(resolveWorkerModel('planner', policy, { role: 'review', requestedModelId: 'planner' })).toMatchObject({
+      effectiveModel: 'planner',
+    });
+    expect(
+      resolveWorkerModel(
+        'planner',
+        { ...policy, allowedOverrides: ['planner'] },
+        { role: 'implementation', requestedModelId: 'planner' }
+      )
+    ).toMatchObject({ effectiveModel: 'planner', source: 'override' });
     expect(
       resolveWorkerModel('planner', policy, { role: 'implementation', requestedModelId: 'alternative' })
     ).toMatchObject({ effectiveModel: 'alternative', source: 'override' });
