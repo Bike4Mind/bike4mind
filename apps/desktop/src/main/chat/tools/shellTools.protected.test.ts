@@ -647,7 +647,7 @@ describe('shell commands that reach a protected location', () => {
     );
   });
 
-  describe('a link into a process folder', () => {
+  describe.runIf(process.platform === 'linux')('a link into a process folder', () => {
     it('asks in every mode before a read through it', async () => {
       expect(await judge('cat pl/pc/Bike4Mind/vault.json', 'H')).toEqual(refusedEverywhere);
       expect(await judge('cp evil.json pl/pc/Bike4Mind/vault.json', 'H')).toEqual(refusedEverywhere);
