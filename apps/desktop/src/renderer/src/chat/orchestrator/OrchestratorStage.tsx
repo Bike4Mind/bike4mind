@@ -59,8 +59,6 @@ export interface OrchestratorStageProps {
   renderView?(view: OrchestratorViewId, props: OrchestratorViewProps): ReactNode;
   /** Rendered at the end of the header row. */
   dockControl?: ReactNode;
-  /** Set while the session's Orchestrate behaviour is off: the empty stage offers to turn it on. */
-  onTurnOn?(): void;
 }
 
 const NO_PARENT: ParentView = {};
@@ -86,7 +84,6 @@ export function OrchestratorStage({
   introPlaying,
   renderView,
   dockControl,
-  onTurnOn,
 }: OrchestratorStageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Keyed on ids, creation times and titles so status churn does not recompute names; the seed prompt
@@ -234,7 +231,6 @@ export function OrchestratorStage({
             <EmptyStage
               tavern={view === 'tavern' && renderView ? renderView(view, viewProps) : null}
               onExampleQuest={onExampleQuest}
-              onTurnOn={onTurnOn}
             />
           ) : renderView ? (
             renderView(view, viewProps)
@@ -257,26 +253,11 @@ export function OrchestratorStage({
 }
 
 /**
- * With no agents yet: the Tavern still opens with the Innkeeper at the bar; Board and Table show a line.
- * While Orchestrate is off, the example quests give way to the switch: a quest sent then would not delegate.
+ * With no agents: the Tavern still opens with the Innkeeper at the bar; Board and Table show a line.
+ * ChatShell mounts the stage only while the session has an agent, so this is the stage's own fallback.
  */
-function EmptyStage({
-  tavern,
-  onExampleQuest,
-  onTurnOn,
-}: {
-  tavern: ReactNode;
-  onExampleQuest?(prompt: string): void;
-  onTurnOn?(): void;
-}) {
-  const quests = onTurnOn ? (
-    <Button size="sm" variant="solid" color="primary" onClick={onTurnOn} data-testid="orchestrator-turn-on-btn">
-      Turn on Orchestrate
-    </Button>
-  ) : (
-    onExampleQuest && <ExampleQuestButtons onPick={onExampleQuest} />
-  );
-  const offLine = 'Orchestrate is off, so the assistant does the work itself in the conversation.';
+function EmptyStage({ tavern, onExampleQuest }: { tavern: ReactNode; onExampleQuest?(prompt: string): void }) {
+  const quests = onExampleQuest && <ExampleQuestButtons onPick={onExampleQuest} />;
   if (tavern) {
     return (
       <Box
@@ -286,7 +267,7 @@ function EmptyStage({
         {tavern}
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.25, p: 2 }}>
           <Typography level="body-sm" textColor="text.secondary" textAlign="center">
-            {onTurnOn ? offLine : 'No quests yet. Describe the work and the Innkeeper will split it across agents.'}
+            No quests yet. Describe the work and the Innkeeper will split it across agents.
           </Typography>
           {quests}
         </Box>
@@ -307,7 +288,7 @@ function EmptyStage({
       }}
     >
       <Typography level="body-sm" textColor="text.tertiary" textAlign="center">
-        {onTurnOn ? offLine : 'No agents yet. Describe the work and it will be split across agents.'}
+        No agents yet. Describe the work and it will be split across agents.
       </Typography>
       {quests}
     </Box>

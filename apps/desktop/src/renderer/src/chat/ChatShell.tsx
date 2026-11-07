@@ -107,6 +107,7 @@ import { useCreationTools } from './useCreationTools';
 import { BoardView } from './orchestrator/BoardView';
 import { OrchestratePill } from './orchestrator/OrchestratePill';
 import { OrchestrateToggle } from './orchestrator/OrchestrateToggle';
+import { ExampleQuestStrip } from './orchestrator/exampleQuests';
 import type { AgentActions, OrchestratorViewProps } from './orchestrator/OrchestratorStage';
 import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
 import { readIntroSeen, writeIntroSeen, writeSurface, type OrchestratorViewId } from './orchestrator/orchestratorPrefs';
@@ -687,15 +688,23 @@ export function ChatShell({
     canSpawnDeeper(activeSummary) &&
     modelSupportsTools(activeSummary.model, findModelOption(catalog.models, activeSummary.model));
   const delegating = activeSummary?.orchestrate === true;
-  // Showing the stage never changes the behaviour: an agentless Code session gets the empty stage,
-  // which offers to turn Orchestrate on. A Chat session with no agents has no stage at all.
-  const orchestrating = orchestratorPrefs.surface === 'orchestrate' && (spawnedStates.length > 0 || orchestrateCapable);
+  // The stage exists only once there is an agent to show, whatever the Orchestrate behaviour: a fresh
+  // orchestrating session gets its example quests above the composer instead (ExampleQuestStrip).
+  const hasAgents = spawnedStates.length > 0;
+  const orchestrating = orchestratorPrefs.surface === 'orchestrate' && hasAgents;
   const { setOrchestrate } = conversation;
+  // A stored 'orchestrate' with nothing to show (agents deleted, or left from an empty stage) is dropped,
+  // so the stage never pops up later on its own. Not while the list loads: it has no agents yet either.
+  const staleAgentsSurface = !settling && !hasAgents && orchestratorPrefs.surface === 'orchestrate';
+  useEffect(() => {
+    if (staleAgentsSurface) setOrchestratorSurface('chat');
+  }, [staleAgentsSurface, setOrchestratorSurface]);
+  const showExampleQuests =
+    orchestrateCapable && delegating && !hasAgents && !turnOpen && conversation.messages.length === 0;
 
   // Derived during render, not in an effect: TavernView only plays its intro if introPlaying is
-  // already true when it mounts, which is the same commit that enters orchestrate mode. Held back
-  // while the stage is empty, so the intro plays as the first agent walks in.
-  const orchestrateEntry = orchestrating && spawnedStates.length > 0 ? activeId : null;
+  // already true when it mounts, which is the same commit that enters orchestrate mode.
+  const orchestrateEntry = orchestrating ? activeId : null;
   const [introEntry, setIntroEntry] = useState<string | null>(null);
   const [introPhase, setIntroPhase] = useState<IntroPhase>('off');
   if (orchestrateEntry !== introEntry) {
@@ -1479,7 +1488,6 @@ export function ChatShell({
                 // The surface shown, which is Chat when a stored 'orchestrate' has nothing to show.
                 surface={orchestrating ? 'orchestrate' : 'chat'}
                 onSurfaceChange={orchestratorPrefs.setSurface}
-                canStart={orchestrateCapable}
               />
               {!opening && conversation.session?.historyEnabled === true && (
                 <Tooltip
@@ -1650,7 +1658,6 @@ export function ChatShell({
                   focusAgent={noticeFocus?.rootId === activeId ? noticeFocus.agentId : null}
                   onFocusAgentConsumed={clearNoticeFocus}
                   onExampleQuest={pickExampleQuest}
-                  onTurnOn={orchestrateCapable && !delegating ? () => void setOrchestrate(true) : undefined}
                   dockControl={
                     <Tooltip
                       size="sm"
@@ -1851,6 +1858,12 @@ export function ChatShell({
             turnOpen={turnOpen}
             sx={contentColumnSx}
           />
+
+          {showExampleQuests && (
+            <Box sx={contentColumnSx}>
+              <ExampleQuestStrip onPick={pickExampleQuest} />
+            </Box>
+          )}
 
           <Composer
             sessionId={activeId}
