@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const models = vi.hoisted(() => ({ userIndexes: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ User: { createIndexes: models.userIndexes } }));
-import migration from './20260921237490_ensure-user-signup-grant-stage-index';
+import migration from './20260921237495_ensure-user-signup-grant-stage-index';
 
 describe('signup grant stage index migration', () => {
   beforeEach(() => {

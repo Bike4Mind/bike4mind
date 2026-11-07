@@ -7,7 +7,7 @@ import { type MigrationFile } from './index';
  * no-op for indexes that already exist, and the name matches the schema declaration.
  */
 const migration: MigrationFile = {
-  id: 20260921237490,
+  id: 20260921237495,
   name: 'ensure user signup grant stage index',
 
   up: async () => {
