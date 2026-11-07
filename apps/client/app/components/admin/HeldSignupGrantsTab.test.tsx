@@ -18,6 +18,7 @@ const rows = ['a', 'b'].map(letter => ({
 
 function renderTab() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
   render(
     <QueryClientProvider client={queryClient}>
       <CssVarsProvider theme={theme}>
@@ -25,6 +26,7 @@ function renderTab() {
       </CssVarsProvider>
     </QueryClientProvider>
   );
+  return invalidate;
 }
 
 beforeEach(() => {
@@ -47,12 +49,14 @@ describe('HeldSignupGrantsTab', () => {
       .mockResolvedValueOnce({
         data: { batchId: 'batch-1', results: [{ userId: rows[1].id, outcome: 'reversed', credits: 12 }] },
       });
-    renderTab();
+    const invalidate = renderTab();
     fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[1].id}`));
     fireEvent.click(screen.getByTestId('held-signup-grants-release-btn'));
     await waitFor(() =>
       expect(postMock).toHaveBeenCalledWith('/api/admin/held-signup-grants/release', { userIds: [rows[1].id] })
     );
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] }));
+    invalidate.mockClear();
     fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-btn'));
     expect(await screen.findByTestId('held-signup-grants-revoke-dialog')).toHaveTextContent(
       'permanently debits the credits granted by this release'
@@ -65,6 +69,7 @@ describe('HeldSignupGrantsTab', () => {
     expect(await screen.findByTestId('held-signup-grants-revoke-result')).toHaveTextContent('Revoked 1 of 1');
     expect(screen.getByTestId('held-signup-grants-revoke-btn')).toBeDisabled();
     expect(getMock).toHaveBeenCalledTimes(3);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] });
   });
 
   it('allows another revoke when the previous one left a retryable entry', async () => {
@@ -82,6 +87,31 @@ describe('HeldSignupGrantsTab', () => {
     fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-confirm-btn'));
     expect(await screen.findByTestId('held-signup-grants-revoke-result')).toHaveTextContent('Revoked 0 of 1');
     await waitFor(() => expect(screen.getByTestId('held-signup-grants-revoke-btn')).not.toBeDisabled());
+  });
+
+  it('refreshes pending exposure when a release request fails after possible payouts', async () => {
+    postMock.mockRejectedValue(new Error('Request interrupted'));
+    const invalidate = renderTab();
+    fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[1].id}`));
+    fireEvent.click(screen.getByTestId('held-signup-grants-release-btn'));
+    expect(await screen.findByText('Request interrupted')).toBeInTheDocument();
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] });
+  });
+
+  it('refreshes pending exposure when a revoke request fails after possible debits', async () => {
+    postMock
+      .mockResolvedValueOnce({
+        data: { batchId: 'batch-1', results: [{ userId: rows[1].id, outcome: 'released', credits: 12 }] },
+      })
+      .mockRejectedValueOnce(new Error('Request interrupted'));
+    const invalidate = renderTab();
+    fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[1].id}`));
+    fireEvent.click(screen.getByTestId('held-signup-grants-release-btn'));
+    fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-btn'));
+    invalidate.mockClear();
+    fireEvent.click(screen.getByTestId('held-signup-grants-revoke-confirm-btn'));
+    expect(await screen.findByText('Request interrupted')).toBeInTheDocument();
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] });
   });
 
   it('disables Next without a cursor', async () => {

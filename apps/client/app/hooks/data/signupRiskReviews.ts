@@ -5,6 +5,7 @@ import type {
   SignupRiskReviewDecisionResult,
   SignupRiskReviewItem,
 } from '@bike4mind/common';
+import { PENDING_GRANTS_QUERY_KEY } from './adminSignupGrant';
 import { api } from '@client/app/contexts/ApiContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -42,6 +43,10 @@ export function useSignupRiskReviewDecision() {
   return useMutation({
     mutationFn: async (decision: Omit<SignupRiskReviewDecision, 'reason'> & { reason: string }) =>
       (await api.post<SignupRiskReviewDecisionResult>(ENDPOINT, decision)).data,
-    onSettled: () => queryClient.invalidateQueries({ queryKey: SIGNUP_RISK_REVIEWS_QUERY_KEY }),
+    onSettled: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: SIGNUP_RISK_REVIEWS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: PENDING_GRANTS_QUERY_KEY }),
+      ]),
   });
 }

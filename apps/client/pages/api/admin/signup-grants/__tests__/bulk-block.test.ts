@@ -80,6 +80,13 @@ describe('admin bulk block signup grant', () => {
     expect(h.run).not.toHaveBeenCalled();
   });
 
+  it('accepts exactly the cap', async () => {
+    const userIds = Array.from({ length: 100 }, (_, n) => id(n));
+    await h.handler!(request({ body: { userIds, reason: 'Confirmed farming ring' } }), { json: vi.fn() });
+
+    expect(h.run.mock.calls[0][0].userIds).toHaveLength(100);
+  });
+
   it('requires a reason for a real run', async () => {
     await expect(h.handler!(request({ body: { userIds: [id(1)], reason: '' } }), { json: vi.fn() })).rejects.toThrow(
       'reason required'
@@ -146,6 +153,10 @@ describe('admin bulk block signup grant', () => {
         target: { kind: 'user', id: id(2), displayName: 'two' },
       })
     );
+    await adapters.auditFor(id(1))();
+    const [first, second] = h.audit.mock.calls.map(([, entry]) => entry.details.bulkId);
+    expect(first).toEqual(expect.any(String));
+    expect(second).toBe(first);
     expect(res.json).toHaveBeenCalledOnce();
   });
 });

@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { heldCreditRewardRepository, userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { adminApi } from '@server/middlewares/adminApi';
@@ -23,6 +24,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
         await userService.previewSignupGrantAction({ action: 'unblock', userIds }, { users: userRepository })
       );
     }
+    const bulkId = randomUUID();
     const result = await userService.bulkSetSignupGrantBlock(
       { action: 'unblock', userIds },
       {
@@ -35,7 +37,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
             target: targets.get(userId) ?? signupGrantAuditTarget(userId),
             summary: 'unblocked signup grants and rewards',
             reason,
-            details: { bulk: true },
+            details: { bulk: true, bulkId },
           });
         },
       }

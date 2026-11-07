@@ -1982,6 +1982,11 @@ UserSchema.index(
   { signupGrantHeldReason: 1, _id: 1 },
   { partialFilterExpression: { signupGrantHeldReason: { $type: 'string' } }, name: 'user_signupGrantHeldReason' }
 );
+// Serves the Invite Center pending list and exposure summary. Built by the ensure-user-signup-grant-stage-index migration.
+UserSchema.index(
+  { 'signupGrant.stage': 1, _id: 1 },
+  { partialFilterExpression: { 'signupGrant.stage': { $type: 'string' } }, name: 'user_signupGrant_stage' }
+);
 // Serves the held-release job's scan for payment unlocks whose settling window has passed.
 UserSchema.index(
   { 'signupGrant.heldUnlock.releaseAt': 1, _id: 1 },
