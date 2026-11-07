@@ -252,7 +252,9 @@ Try breaking compound queries into simpler steps, or send a concrete computation
 
 Wolfram Alpha responded: Invalid input`
         );
-        expect(mockLogger.error).toHaveBeenCalledWith('Wolfram Alpha: API error', {
+        expect(mockLogger.error).not.toHaveBeenCalled();
+        expect(mockLogger.warn).toHaveBeenCalledTimes(1);
+        expect(mockLogger.warn).toHaveBeenCalledWith('Wolfram Alpha: API error', {
           status: 501,
           statusText: 'Not Implemented',
           errorText: 'Invalid input',

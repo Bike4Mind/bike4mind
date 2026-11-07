@@ -1,3 +1,4 @@
+import { ExpectedToolError } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { ToolDefinition } from '../../base/types';
 import type { MathJsInstance } from 'mathjs';
@@ -53,13 +54,27 @@ function formatResult(math: MathJsInstance, value: unknown, precision?: number):
  * Thrown for an expression the tool cannot evaluate. A throw (not an "Error: ..." return value) is
  * what makes the adapters record the call as failed; they still pass the message to the model.
  */
-class MathEvaluationError extends Error {}
+class MathEvaluationError extends ExpectedToolError {}
+
+/**
+ * mathjs rejected the expression itself. Only this becomes a MathEvaluationError: a throw from the
+ * tool's own code is a defect and must keep its error-level log.
+ */
+class MathInputError extends Error {}
+
+function evaluateInput<T>(evaluate: () => T): T {
+  try {
+    return evaluate();
+  } catch (error: unknown) {
+    throw new MathInputError(error instanceof Error ? error.message : 'Unknown error');
+  }
+}
 
 async function evaluateMath(params: MathParams): Promise<string> {
   Logger.globalInstance.log('🔢 Math Tool: Starting evaluation of expression:', params.expression);
 
+  const math = await loadMath();
   try {
-    const math = await loadMath();
     let expression = params.expression.trim();
 
     // Strip block comments /* ... */ and line comments // (not supported by mathjs)
@@ -91,7 +106,7 @@ async function evaluateMath(params: MathParams): Promise<string> {
     // mathjs natively supports these and returns a ResultSet - we extract the last result
     if (expression.includes(';')) {
       Logger.globalInstance.log('🔢 Math Tool: Detected multi-statement expression, evaluating with shared scope...');
-      const result = math.evaluate(expression);
+      const result = evaluateInput(() => math.evaluate(expression));
 
       // math.evaluate returns a ResultSet for semicolon-separated expressions
       if (math.typeOf(result) === 'ResultSet') {
@@ -133,10 +148,9 @@ async function evaluateMath(params: MathParams): Promise<string> {
         // Convert to standard form (everything on left side = 0)
         const equation = rightSide === '0' ? leftSide : `(${leftSide}) - (${rightSide})`;
 
+        // Try different solving approaches
+        let solutions;
         try {
-          // Try different solving approaches
-          let solutions;
-
           // Method 1: Use mathjs solve function with string format
           try {
             solutions = math.evaluate(`solve("${equation} = 0", "${variable}")`);
@@ -168,26 +182,26 @@ async function evaluateMath(params: MathParams): Promise<string> {
               throw e2;
             }
           }
-
-          if (solutions === null || solutions === undefined) {
-            return 'No solutions found for this equation.';
-          }
-
-          return Array.isArray(solutions)
-            ? `Solutions: ${solutions.map(s => `${variable} = ${math.format(s, { precision: params.precision })}`).join(', ')}`
-            : `Solution: ${variable} = ${math.format(solutions, { precision: params.precision })}`;
         } catch (solveError) {
           Logger.globalInstance.debug('❌ Math Tool: Solve error:', solveError);
-          throw new Error(
+          throw new MathInputError(
             `Could not solve equation "${expression}". The equation format may not be supported or may have no real solutions.`
           );
         }
+
+        if (solutions === null || solutions === undefined) {
+          return 'No solutions found for this equation.';
+        }
+
+        return Array.isArray(solutions)
+          ? `Solutions: ${solutions.map(s => `${variable} = ${math.format(s, { precision: params.precision })}`).join(', ')}`
+          : `Solution: ${variable} = ${math.format(solutions, { precision: params.precision })}`;
       }
     }
 
     // Regular expression evaluation
     Logger.globalInstance.log('🔢 Math Tool: Evaluating expression...');
-    const result = math.evaluate(expression);
+    const result = evaluateInput(() => math.evaluate(expression));
     Logger.globalInstance.log('🔢 Math Tool: Raw result:', result);
 
     if (math.typeOf(result) === 'Matrix') {
@@ -201,7 +215,8 @@ async function evaluateMath(params: MathParams): Promise<string> {
   } catch (error: unknown) {
     if (error instanceof MathEvaluationError) throw error;
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    Logger.globalInstance.error(`❌ Math Tool: Evaluation error for expression "${params.expression}":`, errorMessage);
+    // Same message either way, so the model sees no difference; only the log level does.
+    const FailureError = error instanceof MathInputError ? MathEvaluationError : Error;
 
     // Undefined symbol = the expression uses a variable that was never assigned a value
     // (e.g. "currentRatio = (cashPrior + 100) / debt" without a prior "cashPrior = ..." statement).
@@ -210,12 +225,12 @@ async function evaluateMath(params: MathParams): Promise<string> {
     const undefinedSymbol = errorMessage.match(/Undefined symbol (\w+)/);
     if (undefinedSymbol) {
       const symbol = undefinedSymbol[1];
-      throw new MathEvaluationError(
+      throw new FailureError(
         `Failed to evaluate math expression "${params.expression}". Reason: the symbol "${symbol}" is used but never assigned a value. Assign it first with a semicolon-separated statement (e.g. "${symbol} = <value>; ...") before referencing it, then try again.`
       );
     }
 
-    throw new MathEvaluationError(
+    throw new FailureError(
       `Failed to evaluate math expression "${params.expression}". Reason: ${errorMessage}. Please provide a valid mathjs expression (no natural language or JavaScript syntax).`
     );
   }
@@ -361,7 +376,7 @@ export const mathTool: ToolDefinition = {
     toolFn: value => evaluateMath(value as MathParams),
     toolSchema: {
       name: 'math_evaluate',
-      description: `Evaluate mathematical expressions using mathjs syntax. Supports arithmetic, algebra, trigonometry, calculus, and statistics. Supports multi-step calculations with semicolon-separated statements sharing a scope (e.g., "x = 5; y = 10; x * y" returns 50). IMPORTANT: Use simple mathematical notation only - no loops, programming constructs or JavaScript ("...", Math.max). On an error, fix the expression; never resend it.
+      description: `Evaluate mathjs expressions. Use 1-based square-bracket indexing: m[1:7], not m(1:7). Element-wise operations: A .* B; map(M, sin), not sin(M). Convert compatible units before combining; never add unitless numbers to unit quantities. Semicolon-separated assignments share scope ("x=5; x*2" returns 10). No loops, comments, JavaScript or programming constructs. On error, correct the expression rather than resending it.
 
 Present mathematical work in your response using LaTeX: $...$ inline, $$...$$ for display equations. Inline spans are only rendered as math when they contain a backslash command, so write $\\int_0^3 x^2 dx = 9$ rather than $x^2 = 9$. That rendering is part of your response text, not a tool call.`,
       parameters: {
@@ -370,7 +385,7 @@ Present mathematical work in your response using LaTeX: $...$ inline, $$...$$ fo
           expression: {
             type: 'string',
             description:
-              'The mathematical expression to evaluate using mathjs syntax. Supports single expressions (e.g., "5 * 6 + 3", "sin(pi/4)") and multi-step semicolon-separated statements with variable assignments (e.g., "muE=3.986e14; d=3.844e8; muE/d"). Array results are supported (e.g., "a=3; b=4; [a, b]"). DO NOT use loops (for/while) or comments (//).',
+              'Mathjs expression, such as "5*6+3", "sin(pi/4)", or "a=3;b=4;[a,b]". Assign variables before using them.',
           },
           precision: {
             type: 'number',

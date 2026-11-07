@@ -21,7 +21,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 }));
 
 vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', () => ({
-  readStateNonceHash: () => 'nonce-hash',
+  readStateNonceHash: vi.fn(() => 'nonce-hash'),
   clearStateNonce: vi.fn(),
 }));
 
@@ -43,6 +43,7 @@ vi.mock('@bike4mind/server-utils/utils/invokeMcpHandler', () => ({
 }));
 
 import jwt from 'jsonwebtoken';
+import { readStateNonceHash } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import handler from '@pages/api/auth/github/mcp-callback';
 import { mcpServerRepository, userRepository } from '@bike4mind/database';
 import { getSettingsMap } from '@bike4mind/utils';
@@ -132,6 +133,7 @@ const STALE = '2026-01-01T00:00:00.000Z';
 describe('/api/auth/github/mcp-callback reconnect', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(readStateNonceHash).mockReturnValue('nonce-hash');
     // resetAllMocks also wipes the vi.mock factory implementations; re-seed them.
     vi.mocked(getSettingsMap).mockResolvedValue({} as any);
     vi.mocked(invokeMcpHandler).mockRejectedValue(new Error('discovery skipped in test'));
@@ -139,6 +141,36 @@ describe('/api/auth/github/mcp-callback reconnect', () => {
     vi.mocked(userRepository.findById).mockResolvedValue({ id: 'user-123' } as any);
     mockUpdate.mockImplementation(async data => data as any);
     mockCreate.mockImplementation(async data => ({ ...data, id: 'server-new' }) as any);
+  });
+
+  it('warns once for an expired state without alerting or looking up a user', async () => {
+    const { req, res } = makeReqRes();
+    req.query.state = jwt.sign({ userId: 'user-123', nh: 'nonce-hash' }, 'test-jwt-secret', { expiresIn: -1 });
+    await handler(req, res);
+    expect(req.logger.warn).toHaveBeenCalledTimes(1);
+    expect(req.logger.error).not.toHaveBeenCalled();
+    expect(userRepository.findById).not.toHaveBeenCalled();
+    expect(res._getRedirectUrl()).toContain('error=invalid_state');
+  });
+
+  it('warns once when the browser nonce has expired', async () => {
+    vi.mocked(readStateNonceHash).mockReturnValue(null);
+    const { req, res } = makeReqRes();
+    await handler(req, res);
+    expect(req.logger.warn).toHaveBeenCalledTimes(1);
+    expect(req.logger.error).not.toHaveBeenCalled();
+    expect(userRepository.findById).not.toHaveBeenCalled();
+    expect(res._getRedirectUrl()).toContain('error=session_expired');
+  });
+
+  it('warns once for a reused authorization code', async () => {
+    mockFindOne.mockResolvedValue(null);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ json: async () => ({ error: 'bad_verification_code' }) }));
+    const { req, res } = makeReqRes();
+    await handler(req, res);
+    expect(req.logger.warn).toHaveBeenCalledTimes(1);
+    expect(req.logger.error).not.toHaveBeenCalled();
+    expect(res._getRedirectUrl()).toContain('error=auth_code_reused');
   });
 
   afterEach(() => {

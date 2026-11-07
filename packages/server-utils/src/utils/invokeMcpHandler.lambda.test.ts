@@ -1,3 +1,4 @@
+import { ExpectedToolError } from '@bike4mind/common';
 /**
  * Tests for the deployed path of invokeMcpHandler: the mcpHandler Lambda is configured, so the
  * MCP child must be spawned there and never in this process.
@@ -131,6 +132,15 @@ describe('invokeMcpHandler on the deployed Lambda path', () => {
       expect(mockLocalMcpHandler).not.toHaveBeenCalled();
     }
   );
+
+  it('preserves an expected tool failure without selecting local execution', async () => {
+    mockSend.mockResolvedValue({
+      FunctionError: 'Unhandled',
+      Payload: encode({ errorType: 'ExpectedToolError', errorMessage: 'MCP connection closed' }),
+    });
+    await expect(invokeMcpHandler(payload)).rejects.toBeInstanceOf(ExpectedToolError);
+    expect(mockLocalMcpHandler).not.toHaveBeenCalled();
+  });
 
   it('does not fall back when the invoke itself fails', async () => {
     const transportError = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
