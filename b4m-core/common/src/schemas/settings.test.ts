@@ -1531,6 +1531,7 @@ describe('spend monitor settings', () => {
     spendMonitorAccountCeilingCredits: 5000,
     spendMonitorPaidAccountSpikeFloorCredits: 20_000,
     spendMonitorPaidAccountCeilingCredits: 40_000,
+    spendMonitorPaidAccountMinAgeDays: 7,
     spendMonitorTrustedAccountSpikeFloorCredits: 20_000,
     spendMonitorTrustedAccountCeilingCredits: 40_000,
   } as const;
@@ -1554,6 +1555,13 @@ describe('spend monitor settings', () => {
   ] as const)('%s rejects 0 and accepts 1', key => {
     expect(settingsMap[key].schema.safeParse(0).success).toBe(false);
     expect(settingsMap[key].schema.parse(1)).toBe(1);
+  });
+
+  it('allows a zero paid-account minimum age and rejects negative or fractional days', () => {
+    const schema = settingsMap.spendMonitorPaidAccountMinAgeDays.schema;
+    expect(schema.parse(0)).toBe(0);
+    expect(schema.safeParse(-1).success).toBe(false);
+    expect(schema.safeParse(0.5).success).toBe(false);
   });
 
   it.each(['spendMonitorTrustedEmailDomains', 'spendMonitorTrustedAccountIds'] as const)(

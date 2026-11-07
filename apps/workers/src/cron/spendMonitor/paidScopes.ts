@@ -26,9 +26,9 @@ const planHolderIds = (organization: PlanHolderOrganization): string[] => [
   ...(organization.users ?? []).filter(orgAclRowConfersMembership).map(member => member.userId),
 ];
 
-type Payer = { payerType: 'User' | 'Organization'; payerId: string };
+export type Payer = { payerType: 'User' | 'Organization'; payerId: string };
 
-async function scopePayers(keys: ScopeKey[], deps: ResolveScopeDeps): Promise<Map<string, Payer>> {
+export async function scopePayers(keys: ScopeKey[], deps: ResolveScopeDeps): Promise<Map<string, Payer>> {
   const idsFor = (scopeType: ScopeKey['scopeType']): string[] => [
     ...new Set(keys.filter(key => key.scopeType === scopeType).map(key => key.scopeId)),
   ];
@@ -63,10 +63,11 @@ async function scopePayers(keys: ScopeKey[], deps: ResolveScopeDeps): Promise<Ma
 export async function resolvePaidScopes(
   keys: ScopeKey[],
   scopeDeps: ResolveScopeDeps,
-  paidDeps: PaidScopeDeps
+  paidDeps: PaidScopeDeps,
+  resolvedPayers?: ReadonlyMap<string, Payer>
 ): Promise<Set<string>> {
   if (keys.length === 0) return new Set();
-  const scopes = await scopePayers(keys, scopeDeps);
+  const scopes = resolvedPayers ?? (await scopePayers(keys, scopeDeps));
   const userIds = new Set<string>();
   const organizationIds = new Set<string>();
   for (const scope of scopes.values()) {

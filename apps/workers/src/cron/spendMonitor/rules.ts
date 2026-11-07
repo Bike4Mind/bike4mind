@@ -1,3 +1,4 @@
+import type { AccountContext } from '@bike4mind/server-utils/lib/accounts/accountContext';
 import type { SpendAlertSeverity, SpendRollupScopeType, SpendRuleId } from '@bike4mind/common';
 
 export type SpendThresholds = {
@@ -6,6 +7,8 @@ export type SpendThresholds = {
   platformSpikeFloorCredits: number;
   platformCostFloorUsd: number;
   accountSpikeRatio: number;
+  paidAccountMinAgeDays: number;
+  riskReviewScoreThreshold: number;
   accountSpikeFloorCredits: number;
   accountCeilingCredits: number;
   paidAccountSpikeFloorCredits: number;
@@ -28,6 +31,8 @@ export type SpendBreach = {
   /** Set on account-level breaches of a trusted scope. */
   trusted?: true;
   accountTier?: AccountTier;
+  accountContext?: AccountContext;
+  policyReasons?: string[];
   spikeFloorCredits?: number;
   ceilingCredits?: number;
   /** Names of API keys whose own breach was folded into this payer's, and their ids. */
