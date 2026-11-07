@@ -162,7 +162,11 @@ describe('commands main ran unasked', () => {
     for (const name of ['\\*', ':\\!src', ':\\(exclude\\)src', '\\--output=.claude/settings.json', '*', ':.claude']) {
       await writeFile(join(srepo, name), '');
     }
-    await writeFile(join(srepo, 'src', 'q]x'), '');
+    // Names bash may pass git that git reads as magic or as a glob reaching `.claude/settings.json`.
+    for (const name of [':!x.ts', '[.]claude[!z]settings.json', '[.]claude[.-0test]settings.json']) {
+      await writeFile(join(srepo, name), '');
+    }
+    for (const name of ['q]x', '.x.']) await writeFile(join(srepo, 'src', name), '');
     // vrepo has settings changed below `w`, and a file named as `\--relative=w` is written.
     const vrepo = await repository('vrepo', { 'w/.claude/settings.json': '{}' });
     await writeFile(join(vrepo, 'w', '.claude', 'settings.json'), '{"x": 1}');
@@ -334,6 +338,13 @@ describe('commands main ran unasked', () => {
     ['git diff --name-only HEAD~1 -- src/*.ts | xargs sed -i s/a/b/', 'urepo', unasked],
     ['git diff --name-only -- *.ts | xargs sed -i s/a/b/', 'urepo', unasked],
     ['git diff --name-only -- src/{b,c}.ts | xargs sed -i s/a/b/', 'urepo', unasked],
+    // With no match, bash passes each pattern as written.
+    ['git diff --name-only -- *.ts | xargs eslint', '', unasked],
+    ['git diff --name-only -- src/*.tsx | xargs eslint', '', unasked],
+    ['git diff --name-only -- src/*.ts src/*.tsx | xargs eslint', '', unasked],
+    ['git diff --name-only -- src/*.{ts,tsx} | xargs eslint', '', unasked],
+    ['git diff --name-only -- *.{ts,tsx} | xargs eslint', '', unasked],
+    ['git diff --name-only -- src/**/*.ts | xargs eslint', '', unasked],
     ['cat .claude/agents/x.md', '', unaskedNamingClaude],
     ['ls -la .claude/', '', unaskedNamingClaude],
     ['grep -r hooks .claude', '', unaskedNamingClaude],
@@ -443,12 +454,20 @@ describe('commands main ran unasked', () => {
     ['git diff --name-only \\--relative=w | xargs sed -i s/a/b/', 'vrepo'],
     // bash expands `*w` to the folder `w`, which git lists the settings below.
     ['git diff --name-only -- *w | xargs sed -i s/a/b/', 'vrepo'],
-    // Globs after `--` the scan does not read: bash may make names git reads more widely (`*`, `:.claude`) or none.
+    // Globs after `--` the scan does not read: bash may make names git reads more widely (`*`, `:.claude`).
     ['git diff --name-only -- ? | xargs sed -i s/a/b/', 'srepo'],
     ['git diff --name-only -- :* | xargs sed -i s/a/b/', 'srepo'],
-    ['git diff --name-only -- nomatch* | xargs sed -i s/a/b/', 'srepo'],
     ['git diff --name-only -- src/*\\]x | xargs sed -i s/a/b/', 'srepo'],
     ['git diff --name-only -- src/[ab].ts | xargs sed -i s/a/b/', 'srepo'],
+    // bash passes a name git reads as an exclude-only pathspec or as a glob reaching the settings.
+    ['git diff --name-only -- *.ts | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- *z* | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- *test* | xargs sed -i s/a/b/', 'srepo'],
+    // A bash without globskipdots expands `src/.*.` to `src/..` too.
+    ['git diff --name-only -- src/.*. | xargs sed -i s/a/b/', 'srepo'],
+    // bash re-reads the `\` the range makes, passing git `.claude`.
+    ['git diff --name-only -- .cl{a..Z..5}aude | xargs sed -i s/a/b/', 'srepo'],
+    ['shopt -s nullglob; git diff --name-only -- src/*.ts | xargs sed -i s/a/b/', 'srepo'],
     ['rg -l hooks 2>"/dev/null" | xargs sed -i s/a/b/', ''],
     ['rg -l hooks | grep -v zz 2>/dev/null | xargs sed -i s/a/b/', ''],
   ])('asks before %s (in proj/%s) rewrites settings', async (command, folder) => {
@@ -654,6 +673,19 @@ describe('commands main ran unasked', () => {
       expect(await judge(command)).toMatchObject(expected);
     } finally {
       vi.stubEnv(variable, undefined);
+    }
+  });
+
+  // bash reads BASHOPTS from its environment at startup.
+  it.each([
+    ['nullglob', 'git diff --name-only -- src/*.ts | xargs sed -i s/a/b/'],
+    ['globstar', 'git diff --name-only -- src/**/*.ts | xargs sed -i s/a/b/'],
+  ])('with BASHOPTS=%s asks for %s', async (options, command) => {
+    vi.stubEnv('BASHOPTS', options);
+    try {
+      expect(await judge(command)).toMatchObject(asks);
+    } finally {
+      vi.stubEnv('BASHOPTS', undefined);
     }
   });
 

@@ -536,7 +536,10 @@ const BRACE_LIMIT = 64;
 /** A word with braces longer than this is not expanded, which keeps the search for pairs bounded. */
 const BRACE_PIECES = 1024;
 
-/** The words a `{a..e}` or `{1..9..2}` sequence makes, null when it is no sequence, or 'many' past the limit. */
+/**
+ * The words a `{a..e}` or `{1..9..2}` sequence makes, null when it is no sequence, or 'many' past the limit or when
+ * the scan cannot tell them.
+ */
 function braceSequence(inner: readonly WordPiece[]): WordPiece[][] | null | 'many' {
   if (!inner.every(piece => 'char' in piece && piece.active)) return null;
   const text = inner.map(piece => ('char' in piece ? piece.char : '')).join('');
@@ -549,6 +552,8 @@ function braceSequence(inner: readonly WordPiece[]): WordPiece[][] | null | 'man
     : [(match[1] as string).charCodeAt(0), (match[2] as string).charCodeAt(0)];
   const step = Math.abs(Number(match[3] ?? 1)) || 1;
   if (![from, to, step, to - from].every(Number.isSafeInteger)) return 'many';
+  // Bash reads a `\` or backtick a letter range between `Z` and `a` makes as quoting, not as a letter.
+  if (letters && Math.min(from, to) <= 0x60 && Math.max(from, to) >= 0x5b) return 'many';
   const count = Math.floor(Math.abs(to - from) / step) + 1;
   if (count > BRACE_LIMIT) return 'many';
   const padded = numeric && (/^-?0\d/.test(match[1] as string) || /^-?0\d/.test(match[2] as string));
@@ -2990,8 +2995,13 @@ function pathspecValues(raw: string): { text: string; glob: boolean }[] | null {
       values.push({ text, glob: false });
       continue;
     }
-    // A leading `:` would be read as magic, `**` may be globstar's, and an empty component is not walked here.
-    const plain = !/[?[\]\\]|\*\*/.test(text) && !text.startsWith(':') && !text.split('/').includes('');
+    // A leading `:` would be read as magic, a `.*` component may match `..` in a bash without globskipdots, and an
+    // empty component is not walked here.
+    const components = text.split('/');
+    const plain =
+      !/[?[\]\\]/.test(text) &&
+      !text.startsWith(':') &&
+      !components.some(component => component === '' || (component.startsWith('.') && component.includes('*')));
     if (!plain || stars !== [...text].filter(char => char === '*').length) return null;
     values.push({ text, glob: true });
   }
@@ -2999,42 +3009,36 @@ function pathspecValues(raw: string): { text: string; glob: boolean }[] | null {
 }
 
 /**
- * Whether a pattern of literals and `*`s (each a glob) matches a name under `cwd`, read as bash with no shell
- * options: case kept, and a leading dot matched only by a literal one. Bounded by WALK_ENTRIES and GLOB_MATCHES.
+ * Whether every name bash may expand a pattern of literals and `*`s to under `cwd` reaches git as a plain path: one
+ * that does not start with `:` and holds no `[`, `]`, `?`, `*` or `\`. Names are matched ignoring case and leading
+ * dots, so dotglob and nocaseglob are covered. False past WALK_ENTRIES or GLOB_MATCHES.
  */
-async function globFinds(cwd: string, pattern: string, stopped: () => boolean): Promise<boolean> {
-  let found = [cwd];
+async function globNamesPlain(cwd: string, pattern: string, stopped: () => boolean): Promise<boolean> {
+  let found: { path: string; name: string }[] = [{ path: cwd, name: '' }];
   let entries = 0;
+  const join = (name: string, child: string): string => (name === '' ? child : `${name}/${child}`);
   for (const component of pattern.split('/')) {
     if (!component.includes('*')) {
-      found = found.map(path => `${path}/${component}`);
+      found = found.map(({ path, name }) => ({ path: `${path}/${component}`, name: join(name, component) }));
       continue;
     }
     const parts = component.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    const matcher = new RegExp(`^${parts.join('.*')}$`, 's');
-    const next: string[] = [];
-    for (const path of found) {
+    const matcher = new RegExp(`^${parts.join('.*')}$`, 'is');
+    const next: typeof found = [];
+    for (const { path, name } of found) {
       if (stopped()) return false;
       // Joined as written, so `..` after a link leads where bash's does; an unreadable folder matches nothing.
-      const names = await readdir(path).catch(() => []);
-      entries += names.length;
+      const children = await readdir(path).catch(() => []);
+      entries += children.length;
       if (entries > WALK_ENTRIES) return false;
-      for (const name of names) {
-        if (matcher.test(name) && (component.startsWith('.') || !name.startsWith('.'))) next.push(`${path}/${name}`);
+      for (const child of children) {
+        if (matcher.test(child)) next.push({ path: `${path}/${child}`, name: join(name, child) });
       }
       if (next.length > GLOB_MATCHES) return false;
     }
     found = next;
   }
-  for (const path of found) {
-    if (stopped()) return false;
-    const exists = await lstat(path).then(
-      () => true,
-      () => false
-    );
-    if (exists) return true;
-  }
-  return false;
+  return found.every(({ name }) => !name.startsWith(':') && !/[[\]?*\\]/.test(name));
 }
 
 /**
@@ -3063,8 +3067,8 @@ function diffLists(raw: readonly string[]): Listing | null {
         pathspecs.push(text);
         continue;
       }
-      // Each name bash's `*` makes from it, dotglob or not, is matched by git's `*`, which crosses `/`; `/*` takes in
-      // what a matched folder holds, and icase what nocaseglob adds. Bash passes it as written only with no match.
+      // Without nullglob or globstar, bash passes the pattern as written or plain names it matches, which git's `*`
+      // (crossing `/`) also matches; `/*` adds what a matched folder holds, and icase what nocaseglob matches.
       globs.push(text);
       pathspecs.push(`:(icase)${text}`, `:(icase)${text}/*`);
     }
@@ -3254,7 +3258,7 @@ interface Listing {
   nul: boolean;
   tests?: string[];
   pathspecs?: string[];
-  /** Patterns bash expands from where the lister runs, each of which must match a name for the listing to count. */
+  /** Patterns bash expands from where the lister runs, which count only when each name they may match is plain. */
   globs?: string[];
   settings: ListedSettings;
 }
@@ -4688,6 +4692,11 @@ export async function scanShell(
     const gateText = command.replace(/[\\'"]/g, '');
     const anyName = rebindsAnyName(tree.rootNode, command, gateText);
     const dotGlob = anyName || MAY_SET_DOTGLOB.test(gateText);
+    // nullglob drops a pattern with no match, leaving git no pathspec; globstar lets `**` match no folder at all.
+    const globOptions =
+      anyName ||
+      /shopt|BASHOPTS|nullglob|globstar/.test(gateText) ||
+      /nullglob|globstar/.test(process.env.BASHOPTS ?? '');
     // Links `ln -s` makes in this script, in guard form: the scan cannot follow one that does not exist yet.
     const createdLinks = new Set<string>();
     // Folders whose `.claude` holds settings this session may load: its own and each shared root's.
@@ -4881,8 +4890,8 @@ export async function scanShell(
         if (settings.kind !== 'diff' || top === null || top !== (await realpath(state.cwd).catch(() => null))) {
           return false;
         }
-        // A pattern with no match may be dropped (nullglob), leaving no pathspec to narrow the listing.
-        for (const glob of listing.globs ?? []) if (!(await globFinds(state.cwd, glob, stopped))) return false;
+        if (listing.globs !== undefined && listing.globs.length > 0 && globOptions) return false;
+        for (const glob of listing.globs ?? []) if (!(await globNamesPlain(state.cwd, glob, stopped))) return false;
         const diff = await diffTargets(top, settings.words, settings.cached, stopped);
         if (diff === null) return false;
         const pathspecs = [...diff.pathspecs, ...(listing.pathspecs ?? [])];
