@@ -1,6 +1,6 @@
 import { FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
-import { Box, Dropdown, Menu, MenuButton, Modal, ModalDialog, Typography } from '@mui/joy';
+import { Box, Dropdown, Menu, MenuButton, Modal, ModalDialog, Tooltip, Typography } from '@mui/joy';
 import HandymanIcon from '@mui/icons-material/HandymanOutlined';
 import { B4MLLMTools } from '@bike4mind/common';
 import ToolsSection from './ToolsSection';
@@ -97,7 +97,15 @@ const ToolsButton: FC<ToolsButtonProps> = ({
       enabledMcpServers,
       availableMcpServers,
     });
-  const squareLabel = showsActiveDot ? 'Tools, some on' : 'Tools';
+  const labelHidden = isTablet || iconOnly;
+  const baseLabel = toolMode === 'smart' ? 'Tools' : 'Fast Tools';
+  const hiddenLabel = iconOnly
+    ? showsActiveDot
+      ? 'Tools, some on'
+      : 'Tools'
+    : showsCountBadge
+      ? `${baseLabel}, ${otherActiveToolsCount} more on`
+      : baseLabel;
 
   const toolsSectionProps = {
     tools,
@@ -168,57 +176,61 @@ const ToolsButton: FC<ToolsButtonProps> = ({
         }
       }}
     >
-      <MenuButton
-        data-testid="session-tools-dropdown-toggle"
-        variant="outlined"
-        aria-label={iconOnly ? squareLabel : undefined}
-        sx={{
-          display: 'flex',
-          position: 'relative',
-          borderRadius: '6px',
-          // globals.css sets `min-width: 0` everywhere; without this the label squeezes under the indicators
-          // instead of the row overflowing into icons (useOverflowCompact). Same as InspectableSettingsButton.
-          flexShrink: 0,
-          ...fixedHeight,
-          px: 1,
-          ...(iconOnly && { px: 0, width: '32px', minWidth: '32px' }),
-          // When the count badge ends the button, give it the same 6px to the edge as above and
-          // below it (5px padding + the 1px border).
-          ...(showsCountBadge && { pr: '5px' }),
-        }}
-      >
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <HandymanIcon sx={[{ width: '16px', height: '16px' }, toolbarIconSx('var(--joy-palette-text-primary)')]} />
-            {!isTablet && !iconOnly && (
-              <Typography
-                level="body-sm"
-                sx={{
-                  color: 'text.primary',
-                  fontWeight: '400',
-                  fontSize: '13px',
-                }}
-              >
-                {toolMode === 'smart' ? 'Tools' : 'Fast Tools'}
-              </Typography>
-            )}
-          </Box>
-          {/* Nothing is actually active in either of two cases, so hide all indicators (tool
+      <Tooltip title={labelHidden ? hiddenLabel : ''} placement="top">
+        <MenuButton
+          data-testid="session-tools-dropdown-toggle"
+          variant="outlined"
+          aria-label={labelHidden ? hiddenLabel : undefined}
+          sx={{
+            display: 'flex',
+            position: 'relative',
+            borderRadius: '6px',
+            // globals.css sets `min-width: 0` everywhere; without this the label squeezes under the indicators
+            // instead of the row overflowing into icons (useOverflowCompact). Same as InspectableSettingsButton.
+            flexShrink: 0,
+            ...fixedHeight,
+            px: 1,
+            ...(iconOnly && { px: 0, width: '32px', minWidth: '32px' }),
+            // When the count badge ends the button, give it the same 6px to the edge as above and
+            // below it (5px padding + the 1px border).
+            ...(showsCountBadge && { pr: '5px' }),
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <HandymanIcon
+                sx={[{ width: '16px', height: '16px' }, toolbarIconSx('var(--joy-palette-text-primary)')]}
+              />
+              {!isTablet && !iconOnly && (
+                <Typography
+                  level="body-sm"
+                  sx={{
+                    color: 'text.primary',
+                    fontWeight: '400',
+                    fontSize: '13px',
+                  }}
+                >
+                  {toolMode === 'smart' ? 'Tools' : 'Fast Tools'}
+                </Typography>
+              )}
+            </Box>
+            {/* Nothing is actually active in either of two cases, so hide all indicators (tool
               icons, count, and thinking): Fast mode sends no tools, and a model that cannot run
               them has its selection stripped at dispatch (resolveTools in useLLMSettingsAssembly).
               Selections persist either way and reappear on a Smart, tool-capable model. */}
-          {!iconOnly && toolsLive && (
-            <ToolIndicators
-              activePrimaryTools={activePrimaryTools}
-              isThinkingActive={isThinkingActive}
-              otherActiveToolsCount={otherActiveToolsCount}
-              enabledMcpServers={enabledMcpServers}
-              availableMcpServers={availableMcpServers}
-            />
-          )}
-        </Box>
-        {iconOnly && showsActiveDot && <ActiveDot />}
-      </MenuButton>
+            {!iconOnly && toolsLive && (
+              <ToolIndicators
+                activePrimaryTools={activePrimaryTools}
+                isThinkingActive={isThinkingActive}
+                otherActiveToolsCount={otherActiveToolsCount}
+                enabledMcpServers={enabledMcpServers}
+                availableMcpServers={availableMcpServers}
+              />
+            )}
+          </Box>
+          {iconOnly && showsActiveDot && <ActiveDot />}
+        </MenuButton>
+      </Tooltip>
 
       <Menu
         ref={menuRef}

@@ -191,4 +191,24 @@ describe('ToolsButton in a crowded composer row', () => {
     );
     expect(screen.getByTestId('session-tools-dropdown-toggle')).toHaveStyle({ flexShrink: '0' });
   });
+
+  it('names the button with the active count when the tablet layout hides the label', () => {
+    modelRepo = [{ id: 'gpt-4o', name: 'GPT-4o', supportsTools: true }];
+    render(
+      <TestWrapper>
+        <ToolsButton {...baseProps} isTablet={true} model="gpt-4o" />
+      </TestWrapper>
+    );
+    expect(screen.getByRole('button', { name: 'Tools, 3 more on' })).toBeInTheDocument();
+  });
+
+  it('names the button "Tools" on a tablet with no extra tools on', () => {
+    modelRepo = [{ id: 'gpt-4o', name: 'GPT-4o', supportsTools: true }];
+    render(
+      <TestWrapper>
+        <ToolsButton {...baseProps} isTablet={true} otherActiveToolsCount={0} model="gpt-4o" />
+      </TestWrapper>
+    );
+    expect(screen.getByRole('button', { name: 'Tools' })).toBeInTheDocument();
+  });
 });
