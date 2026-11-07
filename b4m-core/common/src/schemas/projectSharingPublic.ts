@@ -12,9 +12,9 @@ import { MAX_PROJECT_CREATE_IDS } from './projectPublic';
  * this file free of `@bike4mind/*` imports - the CI spec job loads it without building anything.
  */
 
-/** Must stay in sync with MAX_INVITE_RECIPIENTS in apps/client/types/api.ts. */
+/** Shared limit for SPA and public project invitations. */
 export const MAX_PROJECT_INVITE_RECIPIENTS = 25;
-/** Must stay in sync with MAX_INVITE_MESSAGE_LENGTH in apps/client/types/api.ts. */
+/** Shared message limit for SPA and public project invitations. */
 export const MAX_PROJECT_INVITE_MESSAGE_LENGTH = 1000;
 
 /**
@@ -105,8 +105,8 @@ export const CreatedProjectInviteSchema = ProjectInviteSchema.extend({
   link: z
     .string()
     .describe(
-      'The share link. It is a bearer secret: anyone holding it can accept while uses remain. It is ' +
-        'returned only here, never by the list.'
+      'The invitation link. Named recipients can accept while uses remain. It is returned only here, ' +
+        'never by the list.'
     ),
 });
 export type CreatedProjectInvite = z.infer<typeof CreatedProjectInviteSchema>;
@@ -120,11 +120,10 @@ export const CreateProjectInviteRequestSchema = z
     permissions: z.array(z.enum(PROJECT_INVITE_PERMISSIONS)).min(1).describe('What an invitee gets on the project.'),
     recipients: z
       .array(z.string().min(1))
+      .min(1)
       .max(MAX_PROJECT_INVITE_RECIPIENTS)
-      .optional()
       .describe(
-        'Email addresses, usernames or user ids to invite. Each is emailed a link. Omit it, or send an ' +
-          'empty list, for a share link that names nobody.'
+        'At least one email address, username or user id to invite. Each resolved recipient is emailed a link.'
       ),
     description: z
       .string()

@@ -128,8 +128,8 @@ export const createProjectInviteContract = defineEndpoint({
   operationId: 'createProjectInvite',
   summary: 'Invite people to a project',
   description:
-    'Creates an invite to a project you can share and emails each recipient a link. With no ' +
-    'recipients it creates a share link that names nobody. The response carries the link once. ' +
+    'Creates an invite to a project you can share and emails each recipient a link. At least one ' +
+    'recipient is required. The response carries the link once. ' +
     'Recipient email is sent in the background, so a mail failure does not fail the invite. Unknown ' +
     'body fields are rejected.',
   tags: ['Projects'],

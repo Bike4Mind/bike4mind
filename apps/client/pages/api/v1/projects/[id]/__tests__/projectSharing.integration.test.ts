@@ -8,6 +8,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'events';
+import type { NextFunction } from 'express';
 import { createMocks } from 'node-mocks-http';
 
 const {
@@ -93,8 +94,7 @@ vi.mock('@bike4mind/database', async orig => {
 
 vi.mock('@server/auth/auth', async orig => ({
   ...(await orig<Record<string, unknown>>()),
-  // any: node-mocks-http req/res aren't structurally the Express types this seam is typed for.
-  auth: (_req: any, _res: any, next: any) => next(),
+  auth: (_req: unknown, _res: unknown, next: NextFunction) => next(),
 }));
 
 import { ApiKeyScope, ForbiddenError, NotFoundError, UnauthorizedError } from '@bike4mind/common';
@@ -146,14 +146,12 @@ function withScopes(scopes: ApiKeyScope[]) {
 
 type FireInit = { method: 'GET' | 'POST' | 'PATCH' | 'DELETE'; url: string; query?: object; body?: object };
 
-// any: the handlers' Express-typed params vs node-mocks-http mocks.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function fire(handler: any, init: FireInit) {
+async function fire(handler: typeof memberHandler, init: FireInit) {
   const { req, res } = createMocks(
     { ...init, headers: { 'x-api-key': 'sk-test-valid-key', 'content-type': 'application/json' } } as never,
     { eventEmitter: EventEmitter }
   );
-  await handler(req, res);
+  await handler(req as unknown as Parameters<typeof handler>[0], res as unknown as Parameters<typeof handler>[1]);
   return res;
 }
 
@@ -347,9 +345,11 @@ describe('/api/v1/projects/{id}/invites', () => {
 
   it('answers 422 for a past expiry, a camelCase field or no permissions', async () => {
     for (const body of [
-      { permissions: ['read'], expires_at: '2000-01-01T00:00:00.000Z' },
-      { permissions: ['read'], expiresAt: '2999-01-01T00:00:00.000Z' },
-      { permissions: [] },
+      { permissions: ['read'], recipients: ['teammate@example.com'], expires_at: '2000-01-01T00:00:00.000Z' },
+      { permissions: ['read'], recipients: ['teammate@example.com'], expiresAt: '2999-01-01T00:00:00.000Z' },
+      { permissions: [], recipients: ['teammate@example.com'] },
+      { permissions: ['read'] },
+      { permissions: ['read'], recipients: [] },
     ]) {
       expect((await calls.createInvite(body))._getStatusCode()).toBe(422);
     }

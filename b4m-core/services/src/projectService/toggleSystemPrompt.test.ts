@@ -19,7 +19,11 @@ const setup = (enabled = true) => {
   };
 
   const run = (params: { fileId: string; enabled?: boolean }) =>
-    toggleSystemPrompt(OWNER, { projectId: 'project-1', ...params }, adapters as any);
+    toggleSystemPrompt(
+      OWNER,
+      { projectId: 'project-1', ...params },
+      adapters as unknown as Parameters<typeof toggleSystemPrompt>[2]
+    );
   return { projectUpdate, run };
 };
 
