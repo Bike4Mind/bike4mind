@@ -1330,7 +1330,9 @@ const REVISION_SYNTAX = /[\^~:]|@\{|\.\./;
  * one whose pattern holds revision syntax counts only when it exists whole.
  */
 async function readsAsPath(top: string, word: string): Promise<boolean> {
-  if (word.startsWith('-')) return false;
+  // git dies on a `^` word that is no revision, and reads the parent shorthands as revisions with no check for a
+  // file of the same name.
+  if (word.startsWith('-') || word.startsWith('^') || /\^[!@]$|\^-\d*$/.test(word)) return false;
   const exists = (path: string): Promise<boolean> =>
     lstat(resolve(top, path)).then(
       () => true,
