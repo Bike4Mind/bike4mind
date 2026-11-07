@@ -116,13 +116,19 @@ describe('ConfigStore --mcp-config', () => {
     delete process.env.B4M_STRICT_MCP_CONFIG;
     const store = new ConfigStore(globalConfigPath);
 
-    expect(await store.toggleMcpServer('existing-stdio', false)).toEqual({ injectedStillApplies: true });
+    expect(await store.toggleMcpServer('existing-stdio', false)).toEqual({ overriddenBy: 'mcp-config' });
     expect(JSON.parse(readFileSync(globalConfigPath, 'utf-8')).mcpServers[0].enabled).toBe(false);
-    expect(await store.toggleMcpServer('existing-stdio', true)).toEqual({ injectedStillApplies: true });
+    expect(await store.toggleMcpServer('existing-stdio', true)).toEqual({ overriddenBy: 'mcp-config' });
 
+    process.env.B4M_STRICT_MCP_CONFIG = '1';
+    expect(await new ConfigStore(globalConfigPath).toggleMcpServer('existing-stdio', false)).toEqual({
+      overriddenBy: 'strict-mcp-config',
+    });
+
+    delete process.env.B4M_STRICT_MCP_CONFIG;
     delete process.env.B4M_MCP_CONFIG_FILE;
     expect(await new ConfigStore(globalConfigPath).toggleMcpServer('existing-stdio', false)).toEqual({
-      injectedStillApplies: false,
+      overriddenBy: null,
     });
   });
 

@@ -151,4 +151,88 @@ describe('b4m mcp enable/disable', () => {
     expect(output.some(line => line.includes('--mcp-config also defines this server'))).toBe(true);
     expect(output).not.toContain('The server will not connect next time you start the CLI.');
   });
+
+  it('says the --mcp-config definition still applies when the saved server is already disabled', async () => {
+    await new ConfigStore(configPath).addMcpServer({ name: 'local', command: 'c', args: [], env: {}, enabled: false });
+    const injected = path.join(home, 'mcp.json');
+    await writeFile(injected, JSON.stringify({ mcpServers: { local: { command: 'other' } } }));
+    vi.stubEnv('B4M_MCP_CONFIG_FILE', injected);
+
+    await handleMcpCommand('disable', { _: [], name: 'local' });
+
+    expect(output.some(line => line.includes('is already disabled'))).toBe(true);
+    expect(output.some(line => line.includes('--mcp-config also defines this server'))).toBe(true);
+  });
+
+  it('names the project config for a project server still waiting for approval', async () => {
+    const project = path.join(home, 'proj');
+    await mkdir(path.join(project, '.git'), { recursive: true });
+    await writeFile(path.join(project, '.mcp.json'), JSON.stringify({ mcpServers: { repo: { command: 'r' } } }));
+    const cwd = process.cwd();
+    process.chdir(project);
+    try {
+      vi.stubEnv('B4M_NO_PROJECT_CONFIG', '');
+      await new ConfigStore(configPath).trustProject();
+      const before = await readFile(configPath, 'utf-8');
+
+      for (const subcommand of ['enable', 'disable']) {
+        output = [];
+        await expect(handleMcpCommand(subcommand, { _: [], name: 'repo' })).rejects.toThrow('exit 1');
+        expect(output).toEqual([
+          `\u274C MCP server "repo" comes from this project's config, not ${configPath}; enable or disable it there.`,
+        ]);
+      }
+      expect(await readFile(configPath, 'utf-8')).toBe(before);
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
+  it('says --strict-mcp-config ignores the user config when enabling a saved server', async () => {
+    await new ConfigStore(configPath).addMcpServer({ name: 'local', command: 'c', args: [], env: {}, enabled: false });
+    const injected = path.join(home, 'mcp.json');
+    await writeFile(injected, JSON.stringify({ mcpServers: { host: { command: 'h' } } }));
+    vi.stubEnv('B4M_MCP_CONFIG_FILE', injected);
+    vi.stubEnv('B4M_STRICT_MCP_CONFIG', '1');
+
+    await handleMcpCommand('enable', { _: [], name: 'local' });
+
+    expect(JSON.parse(await readFile(configPath, 'utf-8')).mcpServers[0].enabled).toBe(true);
+    expect(output.some(line => line.includes('--strict-mcp-config'))).toBe(true);
+    expect(output).not.toContain('The server will connect next time you start the CLI.');
+  });
+
+  it.each(
+    ['enable', 'disable'].flatMap(action =>
+      ['array', 'map'].flatMap(shape => ['false', 'true', '', 0, 1, null].map(value => ({ action, shape, value })))
+    )
+  )('repairs $shape enabled: $value on $action and the loader accepts it', async ({ action, shape, value }) => {
+    const entry = { command: 'c', enabled: value };
+    const mcpServers = shape === 'array' ? [{ name: 'local', ...entry }] : { local: entry };
+    await new ConfigStore(configPath).save();
+    const saved: Record<string, unknown> = JSON.parse(await readFile(configPath, 'utf-8'));
+    await writeFile(configPath, JSON.stringify({ ...saved, mcpServers }), { mode: 0o600 });
+    expect((await new ConfigStore(configPath).load()).mcpServers).toEqual([]);
+
+    await handleMcpCommand(action, { _: [], name: 'local' });
+
+    expect(
+      output.some(line => line.includes(`${action === 'enable' ? 'Enabled' : 'Disabled'} MCP server "local"`))
+    ).toBe(true);
+    expect((await new ConfigStore(configPath).load()).mcpServers).toMatchObject([
+      { name: 'local', enabled: action === 'enable' },
+    ]);
+  });
+
+  it('prints a source refusal without the save-failure prefix', async () => {
+    const injected = path.join(home, 'mcp.json');
+    await writeFile(injected, JSON.stringify({ mcpServers: { host: { command: 'h' } } }));
+    vi.stubEnv('B4M_MCP_CONFIG_FILE', injected);
+
+    await expect(handleMcpCommand('disable', { _: [], name: 'host' })).rejects.toThrow('exit 1');
+
+    expect(output).toEqual([
+      `\u274C MCP server "host" comes from --mcp-config, not ${configPath}; enable or disable it in that file.`,
+    ]);
+  });
 });
