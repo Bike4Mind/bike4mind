@@ -88,7 +88,8 @@ function CommandPalette({
   const entityCommands: AdminCommand[] = (entitySearch?.results ?? []).flatMap(result => {
     const label = `${result.type === 'user' ? 'Users' : result.type === 'key' ? 'API keys' : 'Organizations'}: ${result.displayName} - ${result.secondary}`;
     const id = `${result.type}-${result.id}`;
-    if (result.type === 'organization') return [{ id, label, run: () => navigate({ to: adminOrganizationHref(result.id) }) }];
+    if (result.type === 'organization')
+      return [{ id, label, run: () => navigate({ href: adminOrganizationHref(result.id) }) }];
     // A key without an owner has no profile to open.
     const ownerId = result.type === 'key' ? result.userId : result.id;
     if (!ownerId) return [];
@@ -107,7 +108,7 @@ function CommandPalette({
   });
   const results: AdminCommand[] = [
     ...entityCommands,
-    ...(userId && !entitySearch
+    ...(userId && !entityCommands.some(command => command.id === `user-${userId}`)
       ? [
           {
             id: 'user-id',
@@ -290,7 +291,9 @@ function CommandPalette({
               !entitySearch.loading &&
               !entitySearch.error &&
               !entitySearch.validationError && (
-                <Typography role="status">No matches. Check the identifier or use an exact organization name.</Typography>
+                <Typography role="status">
+                  No matches. Check the identifier or use an exact organization name.
+                </Typography>
               )
             : !results.length && (
                 <Typography role="status">No matching commands. Use the Users or Organizations page search.</Typography>

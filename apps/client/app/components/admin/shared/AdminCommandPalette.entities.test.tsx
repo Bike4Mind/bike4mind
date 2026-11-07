@@ -49,7 +49,7 @@ describe('entity search palette', () => {
     fireEvent.keyDown(input, { key: 'ArrowDown' });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() =>
-      expect(navigate).toHaveBeenCalledWith({ to: '/admin?tab=organizations&orgId=' + 'b'.repeat(24) })
+      expect(navigate).toHaveBeenCalledWith({ href: '/admin?tab=organizations&orgId=' + 'b'.repeat(24) })
     );
   });
   it('clears stale results as soon as the query changes and displays failures', async () => {
@@ -116,6 +116,13 @@ describe('entity search palette', () => {
     await screen.findByRole('option', { name: /Users: Example user/ });
     expect(screen.getAllByRole('option')).toHaveLength(1);
     expect(screen.queryByRole('option', { name: /Open user/ })).not.toBeInTheDocument();
+  });
+  it('keeps the user-id command when entity search fails', async () => {
+    get.mockRejectedValue(new Error('x'));
+    const input = setup();
+    fireEvent.change(input, { target: { value: userId } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('Search failed');
+    expect(screen.getByRole('option', { name: `Open user ${userId}` })).toBeVisible();
   });
   it('omits key results that have no owner', async () => {
     get.mockResolvedValue({

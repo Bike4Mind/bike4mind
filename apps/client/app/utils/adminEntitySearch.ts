@@ -6,9 +6,13 @@ export const AdminSearchQuerySchema = z.object({
     .trim()
     .min(2)
     .max(120)
-    .refine(value => !/^b4m_/i.test(value) || /^b4m_live_[a-f0-9]{3,7}$/.test(value), {
-      message: 'Use only the displayed API key prefix, never a full key',
-    }),
+    .refine(
+      value =>
+        !/b4m_live_[a-f0-9]{8,}/i.test(value) && (!/^b4m_/i.test(value) || /^b4m_live_[a-f0-9]{3,7}$/.test(value)),
+      {
+        message: 'Use only the displayed API key prefix, never a full key',
+      }
+    ),
 });
 
 export const AdminSearchResultSchema = z.object({

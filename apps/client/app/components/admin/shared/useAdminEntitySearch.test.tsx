@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AdminSearchQuerySchema } from '@client/app/utils/adminEntitySearch';
 
 const { get } = vi.hoisted(() => ({ get: vi.fn() }));
 vi.mock('@client/app/contexts/apiClient', () => ({ api: { get } }));
@@ -59,14 +60,22 @@ describe('useAdminEntitySearch', () => {
     expect(result.current.loading).toBe(true);
   });
 
-  it.each(['', ' a ', 'b4m_live_' + 'a'.repeat(32)])('is not loading and never fetches for %j', async q => {
-    const { result } = renderHook(() => useAdminEntitySearch(q), { wrapper });
-    expect(result.current.loading).toBe(false);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
-    });
-    expect(result.current.loading).toBe(false);
-    expect(result.current.results).toEqual([]);
-    expect(get).not.toHaveBeenCalled();
+  it('accepts a displayed key prefix and rejects a full key within text', () => {
+    expect(AdminSearchQuerySchema.safeParse({ q: 'b4m_live_abcd' }).success).toBe(true);
+    expect(AdminSearchQuerySchema.safeParse({ q: 'key: b4m_live_' + 'a'.repeat(32) }).success).toBe(false);
   });
+
+  it.each(['', ' a ', 'b4m_live_' + 'a'.repeat(32), 'key: b4m_live_' + 'a'.repeat(32)])(
+    'is not loading and never fetches for %j',
+    async q => {
+      const { result } = renderHook(() => useAdminEntitySearch(q), { wrapper });
+      expect(result.current.loading).toBe(false);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(result.current.loading).toBe(false);
+      expect(result.current.results).toEqual([]);
+      expect(get).not.toHaveBeenCalled();
+    }
+  );
 });
