@@ -3010,10 +3010,11 @@ function pathspecValues(raw: string): { text: string; glob: boolean }[] | null {
 
 /**
  * Whether every name bash may expand a pattern of literals and `*`s to under `cwd` reaches git as a plain path: one
- * that does not start with `:` and holds no `[`, `]`, `?`, `*` or `\`. Names are matched ignoring case and leading
- * dots, so dotglob and nocaseglob are covered. False past WALK_ENTRIES or GLOB_MATCHES.
+ * that does not start with `:` and holds no `[`, `]`, `?`, `*` or `\`. Names are matched ignoring leading dots, so
+ * dotglob is covered. False for a folder that cannot be read, a name that is not UTF-8, or past WALK_ENTRIES or
+ * GLOB_MATCHES.
  */
-async function globNamesPlain(cwd: string, pattern: string, stopped: () => boolean): Promise<boolean> {
+export async function globNamesPlain(cwd: string, pattern: string, stopped: () => boolean): Promise<boolean> {
   let found: { path: string; name: string }[] = [{ path: cwd, name: '' }];
   let entries = 0;
   const join = (name: string, child: string): string => (name === '' ? child : `${name}/${child}`);
@@ -3027,11 +3028,17 @@ async function globNamesPlain(cwd: string, pattern: string, stopped: () => boole
     const next: typeof found = [];
     for (const { path, name } of found) {
       if (stopped()) return false;
-      // Joined as written, so `..` after a link leads where bash's does; an unreadable folder matches nothing.
-      const children = await readdir(path).catch(() => []);
-      entries += children.length;
+      // Joined as written, so `..` after a link leads where bash's does.
+      const listed = await readdir(path, { encoding: 'buffer' }).catch((error: unknown) =>
+        missing(error) ? [] : null
+      );
+      if (listed === null) return false;
+      entries += listed.length;
       if (entries > WALK_ENTRIES) return false;
-      for (const child of children) {
+      for (const raw of listed) {
+        const child = raw.toString('utf8');
+        // A name that does not survive decoding is one the walk could neither follow nor check.
+        if (!Buffer.from(child, 'utf8').equals(raw)) return false;
         if (matcher.test(child)) next.push({ path: `${path}/${child}`, name: join(name, child) });
       }
       if (next.length > GLOB_MATCHES) return false;
@@ -3067,8 +3074,8 @@ function diffLists(raw: readonly string[]): Listing | null {
         pathspecs.push(text);
         continue;
       }
-      // Without nullglob or globstar, bash passes the pattern as written or plain names it matches, which git's `*`
-      // (crossing `/`) also matches; `/*` adds what a matched folder holds, and icase what nocaseglob matches.
+      // Without nullglob, globstar or nocaseglob, bash passes the pattern as written or plain names it matches, which
+      // git's `*` (crossing `/`) also matches; `/*` adds what a matched folder holds.
       globs.push(text);
       pathspecs.push(`:(icase)${text}`, `:(icase)${text}/*`);
     }
@@ -4692,11 +4699,13 @@ export async function scanShell(
     const gateText = command.replace(/[\\'"]/g, '');
     const anyName = rebindsAnyName(tree.rootNode, command, gateText);
     const dotGlob = anyName || MAY_SET_DOTGLOB.test(gateText);
-    // nullglob drops a pattern with no match, leaving git no pathspec; globstar lets `**` match no folder at all.
+    // nullglob drops a pattern with no match, leaving git no pathspec; globstar lets `**` match no folder at all;
+    // nocaseglob folds case as the locale does. bash -c runs BASH_ENV first, which may set any of them.
     const globOptions =
       anyName ||
-      /shopt|BASHOPTS|nullglob|globstar/.test(gateText) ||
-      /nullglob|globstar/.test(process.env.BASHOPTS ?? '');
+      /shopt|BASHOPTS|nullglob|globstar|nocaseglob/.test(gateText) ||
+      /nullglob|globstar|nocaseglob/.test(process.env.BASHOPTS ?? '') ||
+      (process.env.BASH_ENV ?? '') !== '';
     // Links `ln -s` makes in this script, in guard form: the scan cannot follow one that does not exist yet.
     const createdLinks = new Set<string>();
     // Folders whose `.claude` holds settings this session may load: its own and each shared root's.

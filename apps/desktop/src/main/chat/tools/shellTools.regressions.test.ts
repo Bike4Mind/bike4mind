@@ -167,6 +167,8 @@ describe('commands main ran unasked', () => {
       await writeFile(join(srepo, name), '');
     }
     for (const name of ['q]x', '.x.']) await writeFile(join(srepo, 'src', name), '');
+    // `*[<KELVIN SIGN>n]` matches `*k*` under nocaseglob, and git reads it as a glob matching `settings.json`.
+    await writeFile(join(srepo, `*[${String.fromCharCode(0x212a)}n]`), '');
     // vrepo has settings changed below `w`, and a file named as `\--relative=w` is written.
     const vrepo = await repository('vrepo', { 'w/.claude/settings.json': '{}' });
     await writeFile(join(vrepo, 'w', '.claude', 'settings.json'), '{"x": 1}');
@@ -676,16 +678,41 @@ describe('commands main ran unasked', () => {
     }
   });
 
-  // bash reads BASHOPTS from its environment at startup.
+  // Planted only for their own row, as no walk of the project could read past them.
   it.each([
-    ['nullglob', 'git diff --name-only -- src/*.ts | xargs sed -i s/a/b/'],
-    ['globstar', 'git diff --name-only -- src/**/*.ts | xargs sed -i s/a/b/'],
-  ])('with BASHOPTS=%s asks for %s', async (options, command) => {
-    vi.stubEnv('BASHOPTS', options);
+    // `:!<ff>x` is not UTF-8; bash passes its child as `:!<ff>x/a`, an exclude.
+    [
+      'a folder whose name is not UTF-8',
+      'git diff --name-only -- *x/* | xargs sed -i s/a/b/',
+      async (repo: string): Promise<Buffer> => {
+        const folder = Buffer.concat([Buffer.from(`${repo}/:!`), Buffer.from([0xff]), Buffer.from('x')]);
+        await mkdir(folder);
+        await writeFile(Buffer.concat([folder, Buffer.from('/a')]), '');
+        return folder;
+      },
+    ],
+  ])('asks with %s for %s', async (_, command, plant) => {
+    const planted = await plant(join(proj, 'srepo'));
     try {
-      expect(await judge(command)).toMatchObject(asks);
+      expect(await judge(command, 'srepo')).toMatchObject(asks);
     } finally {
-      vi.stubEnv('BASHOPTS', undefined);
+      await rm(planted, { recursive: true, force: true });
+    }
+  });
+
+  // bash reads BASHOPTS from its environment at startup, and `bash -c` runs the file BASH_ENV names first.
+  it.each([
+    ['BASHOPTS', 'nullglob', 'git diff --name-only -- src/*.ts | xargs sed -i s/a/b/', ''],
+    ['BASHOPTS', 'globstar', 'git diff --name-only -- src/**/*.ts | xargs sed -i s/a/b/', ''],
+    ['BASHOPTS', 'nocaseglob', 'git diff --name-only -- *k* | xargs sed -i s/a/b/', 'srepo'],
+    ['BASH_ENV', '/dev/null', 'git diff --name-only -- *.zz | xargs sed -i s/a/b/', ''],
+    ['BASH_ENV', '/dev/null', 'git diff --name-only -- **/w | xargs sed -i s/a/b/', ''],
+  ])('with %s=%s asks for %s (in proj/%s)', async (variable, value, command, folder) => {
+    vi.stubEnv(variable, value);
+    try {
+      expect(await judge(command, folder)).toMatchObject(asks);
+    } finally {
+      vi.stubEnv(variable, undefined);
     }
   });
 
