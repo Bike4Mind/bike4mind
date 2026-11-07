@@ -7,6 +7,9 @@
  * Rule: a `disposable-aggregate` hold is confirmed when the autoConfirmDisposableAggregateHolds
  * setting is on. Each confirmation writes a strict Admin Audit Log entry attributed to the system in
  * the same transaction, and the hold's autoDecision marks the row in the admin tab.
+ * Advisory assessment: after the rule, pending young-domain holds get a Decisions verdict when
+ * signupDomainHoldAssessmentEnabled is on; a confident abuse verdict confirms the same way (see
+ * apps/client/server/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts).
  * Schedule: rate(10 minutes) (infra/cron.ts signupDomainHoldTriage), on stages that run scheduled
  * jobs. Not on self-host yet; it ports with disposableDomainRefresh (selfhostParityPolicy.ts).
  */
@@ -28,8 +31,16 @@ import { adminAuditService } from '@bike4mind/services';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { Resource } from 'sst';
+import type { Context } from 'aws-lambda';
+import {
+  defaultSignupDomainHoldAssessmentDeps,
+  runSignupDomainHoldAssessments,
+} from '@server/security/signupDomainHoldAssessment/signupDomainHoldAssessment';
 
 const logger = new Logger({ metadata: { service: 'signupDomainHoldTriage' } });
+
+/** Stop starting new assessments this long before the Lambda timeout. */
+const STOP_MARGIN_MS = 60_000;
 
 /** Holds confirmed per run; a larger backlog drains over the following runs. */
 export const TRIAGE_BATCH_LIMIT = 200;
@@ -97,7 +108,7 @@ export async function runSignupDomainHoldTriage(
   return result;
 }
 
-export const handler = async () => {
+export const handler = async (_event?: unknown, context?: Pick<Context, 'getRemainingTimeInMillis'>) => {
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage));
   const result = await runSignupDomainHoldTriage({
     holds: signupDomainReviewRepository,
@@ -115,9 +126,18 @@ export const handler = async () => {
     now: () => new Date(),
     logger,
   });
+  const assessment = await runSignupDomainHoldAssessments(
+    defaultSignupDomainHoldAssessmentDeps(logger, () =>
+      context ? context.getRemainingTimeInMillis() < STOP_MARGIN_MS : false
+    )
+  );
   // Surface partial failure as a Lambda error so the alarm sees it; the next run retries the rest.
+  // A provider failure is a stored verdict, not an error; only unexpected errors count here.
   if (result.status === 'ran' && result.failed > 0) {
     throw new Error(`signupDomainHoldTriage: ${result.failed} of ${result.considered} holds failed`);
   }
-  return result;
+  if (assessment.status !== 'skipped' && assessment.errors > 0) {
+    throw new Error(`signupDomainHoldTriage: ${assessment.errors} of ${assessment.considered} assessments failed`);
+  }
+  return { ...result, assessment };
 };

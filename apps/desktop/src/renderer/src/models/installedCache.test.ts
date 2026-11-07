@@ -33,6 +33,7 @@ function view(id: string, extra: Partial<ModelServerView> = {}): ModelServerView
     health: { state: 'online', version: null, latencyMs: null, checkedAt: null, error: null },
     models: [],
     specs: null,
+    launch: null,
     ...extra,
   };
 }

@@ -73,6 +73,87 @@ describe('signup protection persistence', () => {
       reviewedBy: 'admin-1',
     });
   });
+  it('lists pending young-domain holds that need an assessment, bounding failed retries', async () => {
+    const policyVersion = 2;
+    const retryBefore = new Date('2026-02-01T12:00:00Z');
+    const judged = (version: number) => ({
+      outcome: 'judged',
+      policyVersion: version,
+      judgment: 'legitimate',
+      confidence: 0.8,
+      model: 'gpt-6-luna',
+      assessedAt: new Date('2026-02-01T00:00:00Z'),
+    });
+    const failed = (attempts: number, assessedAt: Date) => ({
+      outcome: 'failed',
+      policyVersion,
+      failure: 'provider_error',
+      attempts,
+      model: 'gpt-6-luna',
+      assessedAt,
+    });
+    const young = 'young-domain (<30 days)';
+    await SignupDomainReviewModel.create([
+      { ...hold, domain: 'fresh.test', reason: young, triggeredAt: new Date('2026-01-02') },
+      {
+        ...hold,
+        domain: 'stale-version.test',
+        reason: young,
+        triggeredAt: new Date('2026-01-01'),
+        assessment: judged(1),
+      },
+      { ...hold, domain: 'current.test', reason: young, assessment: judged(policyVersion) },
+      {
+        ...hold,
+        domain: 'retry.test',
+        reason: young,
+        triggeredAt: new Date('2026-01-03'),
+        assessment: failed(1, new Date('2026-02-01T11:00:00Z')),
+      },
+      { ...hold, domain: 'too-soon.test', reason: young, assessment: failed(1, new Date('2026-02-01T12:30:00Z')) },
+      { ...hold, domain: 'exhausted.test', reason: young, assessment: failed(3, new Date('2026-01-01')) },
+      { ...hold, domain: 'decided.test', reason: young, status: 'blocked' },
+      { ...hold, domain: 'other.test', reason: 'disposable-aggregate' },
+      { ...hold, domain: 'infix.test', reason: 'pattern young-domain' },
+    ]);
+    const listed = await signupDomainReviewRepository.listPendingForAssessment(
+      'young-domain',
+      { policyVersion, maxAttempts: 3, retryBefore },
+      10
+    );
+    expect(listed.map(review => review.domain)).toEqual(['stale-version.test', 'fresh.test', 'retry.test']);
+  });
+  it('records an assessment only on a still-pending hold, replacing the previous one', async () => {
+    await SignupDomainReviewModel.create([
+      { ...hold, domain: 'pending.test', reason: 'young-domain (<30 days)' },
+      { ...hold, domain: 'released.test', reason: 'young-domain (<30 days)', status: 'released' },
+    ]);
+    const assessedAt = new Date('2026-02-01');
+    expect(
+      await signupDomainReviewRepository.recordAssessment('pending.test', {
+        outcome: 'failed',
+        policyVersion: 1,
+        failure: 'provider_error',
+        attempts: 1,
+        model: 'gpt-6-luna',
+        assessedAt,
+      })
+    ).toBe(true);
+    const verdict = {
+      outcome: 'judged',
+      policyVersion: 1,
+      judgment: 'abuse',
+      confidence: 0.95,
+      model: 'gpt-6-luna',
+      assessedAt,
+    } as const;
+    expect(await signupDomainReviewRepository.recordAssessment('pending.test', verdict)).toBe(true);
+    expect(await signupDomainReviewRepository.recordAssessment('released.test', verdict)).toBe(false);
+    const stored = await signupProtectionRepository.findReview('pending.test');
+    expect(stored?.assessment).toEqual(verdict);
+    expect(stored?.status).toBe('held_pending_review');
+    expect((await signupProtectionRepository.findReview('released.test'))?.assessment).toBeUndefined();
+  });
   it('deduplicates observations by user and preserves the first verification timestamp', async () => {
     const first = {
       userId: 'user-1',

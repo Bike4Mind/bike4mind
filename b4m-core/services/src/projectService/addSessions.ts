@@ -65,9 +65,7 @@ export const addSessions = async (
   // the project 404 above. Counted as DISTINCT rows ignoring hex case: the reader returns one row
   // per document, so the same notebook sent twice - or sent as both `abc` and `ABC` - is not one
   // that could not be reached.
-  if (sessions.length === 0 || sessions.length !== distinctIdCount(sessionIds)) {
-    throw new BadRequestError('Some sessions are not accessible');
-  }
+  if (sessions.length !== distinctIdCount(sessionIds)) throw new BadRequestError('Some sessions are not accessible');
 
   // The ids that RESOLVED, not the request's raw list - same reason as the fileIds push below.
   project.sessionIds = mergeIds(

@@ -1,7 +1,13 @@
 import { useRef, useState } from 'react';
 import { Alert, Button, Stack, Typography } from '@mui/joy';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { DisposableSourceStatus, SignupDomainHoldAutoPolicy, SignupDomainReview } from '@bike4mind/common';
+import type {
+  DisposableSourceStatus,
+  SignupDomainHoldAssessment,
+  SignupDomainHoldAutoPolicy,
+  SignupDomainHoldJudgment,
+  SignupDomainReview,
+} from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import { DataTable } from './shared/DataTable';
@@ -10,7 +16,18 @@ const QUERY_KEY = ['signup-domain-holds'];
 const ENDPOINT = '/api/admin/signup-domain-holds';
 const AUTO_POLICY_LABELS: Record<SignupDomainHoldAutoPolicy, string> = {
   'disposable-aggregate-rule': 'Auto-confirmed by the disposable list rule',
+  'advisory-decision': 'Auto-confirmed by the advisory assessment',
 };
+const JUDGMENT_LABELS: Record<SignupDomainHoldJudgment, string> = {
+  abuse: 'abuse',
+  legitimate: 'legitimate',
+  insufficient_evidence: 'insufficient evidence',
+};
+
+const assessmentCaption = (assessment: SignupDomainHoldAssessment): string =>
+  assessment.outcome === 'judged'
+    ? `Advisory verdict: ${JUDGMENT_LABELS[assessment.judgment]} (${Math.round(assessment.confidence * 100)}% confidence)`
+    : `Advisory assessment failed (${assessment.failure.replace(/_/g, ' ')}, attempt ${assessment.attempts})`;
 
 export default function SignupDomainHoldsTab() {
   const [page, setPage] = useState(1);
@@ -64,7 +81,8 @@ export default function SignupDomainHoldsTab() {
         detection in Users settings. Released domains stay exempt from automatic holds. Holds from domains only on the
         aggregate disposable list are confirmed automatically on stages that run scheduled jobs unless that is turned
         off in Users settings; each is recorded in the Admin Audit Log as a system action and can still be released
-        here.
+        here. When the advisory assessment is on, a model judges young-domain holds from counts and flags; a confident
+        abuse verdict confirms the hold the same way, and any other verdict leaves it for you. It never releases a hold.
       </Typography>
       {decision.error && <Alert color="danger">{getErrorMessage(decision.error)}</Alert>}
       {decision.data?.status === 'blocked' && (
@@ -134,6 +152,11 @@ export default function SignupDomainHoldsTab() {
                   <Typography level="body-sm" data-testid={`signup-domain-auto-decision-${review.domain}`}>
                     {AUTO_POLICY_LABELS[review.autoDecision.policy]}{' '}
                     {new Date(review.autoDecision.decidedAt).toLocaleString()}
+                  </Typography>
+                )}
+                {review.assessment && (
+                  <Typography level="body-sm" data-testid={`signup-domain-assessment-${review.domain}`}>
+                    {assessmentCaption(review.assessment)}
                   </Typography>
                 )}
               </>

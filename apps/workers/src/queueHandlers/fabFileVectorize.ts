@@ -21,8 +21,7 @@ import {
   User,
   withTransaction,
 } from '@bike4mind/database';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { AI_ACCESS_REVOKED_MESSAGE } from '@bike4mind/services/userService/accountState';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { z } from 'zod';
 import {
@@ -46,6 +45,7 @@ import {
   recordOperationalUsage,
 } from '@bike4mind/services';
 import { reserveRequestCredits, type CreditReservation } from '@server/billing/reserveRequestCredits';
+import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
 import { activePlanResolver } from '@server/entitlements/activeSubscriptions';
 import { getEmbeddingModelCost, provenancePayloadShape } from '@bike4mind/common';
 import {
@@ -799,13 +799,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // A non-retryable spend-gate denial is deterministic (a budget does not regrow, the
     // switch does not flip itself): retrying only re-reserves spend from the wider meters
     // and burns delivery attempts, so it skips the retry deferral and accounts immediately.
-    // Insufficient credits, the free-tier daily cap and an administrator's AI-access revocation are
-    // likewise terminal.
-    // Match the moderation refusal specifically; unrelated authorization failures still retry.
+    // Insufficient credits, the free-tier daily cap and an AI-access refusal (a banned, suspended,
+    // dispute-held, deletion-pending, moderated or review-held account) are likewise terminal: files an
+    // account queued before an admin blocked it are still draining. Unrelated 403s still retry.
     const isTerminalVectorizeDenial =
       (err instanceof dataLakeService.EmbeddingSpendDeniedError && !err.retryable) ||
       isTerminalCreditRefusal(err) ||
-      (err instanceof ForbiddenError && err.message === AI_ACCESS_REVOKED_MESSAGE);
+      isAiAccessRefusal(err);
 
     // Only account a failure into the batch/file state on the LAST SQS delivery attempt -
     // see deferFailureIfRetryable's doc comment for why an earlier attempt must leave

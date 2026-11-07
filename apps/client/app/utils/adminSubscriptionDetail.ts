@@ -40,6 +40,31 @@ export type AdminCompChange = z.infer<typeof AdminCompChangeSchema>;
 
 export type AdminCompChangeResponse = { subscription: AdminSubscriptionRow };
 
+/**
+ * Body of POST /api/admin/subscriptions/[id]/sync, plus the audited `reason`. `expectedUpdatedAt` is the
+ * row version the admin previewed; a row changed since then is a 409.
+ */
+export const AdminSubscriptionSyncSchema = z.object({ expectedUpdatedAt: z.iso.datetime() });
+export type AdminSubscriptionSync = z.infer<typeof AdminSubscriptionSyncSchema>;
+
+/** One value Sync from Stripe would change. Dates are ISO strings, absent values null. */
+export type AdminSubscriptionSyncChange = { field: string; before: string | null; after: string | null };
+
+/** Response of GET /api/admin/subscriptions/[id]/sync: a live Stripe read, nothing written. */
+export type AdminSubscriptionSyncPreview = {
+  changes: AdminSubscriptionSyncChange[];
+  /** Stripe has no such subscription, so Sync marks the row canceled. */
+  stripeMissing: boolean;
+  stripeStatus: string | null;
+  /** The row version to send back as `expectedUpdatedAt`. */
+  updatedAt: string;
+};
+
+export type AdminSubscriptionSyncResponse = {
+  subscription: AdminSubscriptionRow;
+  changes: AdminSubscriptionSyncChange[];
+};
+
 type DateLike = Date | string | null | undefined;
 
 const isoOrNull = (value: DateLike): string | null => (value ? new Date(value).toISOString() : null);
@@ -136,6 +161,14 @@ export type AdminSubscriptionDetail = {
   otherSubscriptions: AdminSubscriptionRow[];
   /** Organization-owned rows only. */
   seats: AdminSubscriptionSeats | null;
+  /** The open reconciliation finding for this row, or null when Mongo and Stripe agree as of the last run. */
+  mismatch: {
+    kind: 'drift' | 'orphan_stripe' | 'orphan_mongo';
+    /** Display strings, dates as ISO; the Mongo value is null when the row has none. */
+    fields: { field: string; mongo: string | null; stripe: string | null }[];
+    firstSeenAt: string;
+    lastSeenAt: string;
+  } | null;
   /**
    * The user id the per-user subscription routes (credits, remove) take: the owner, or an org's billing owner.
    * `null` when no such user exists, which disables those actions.

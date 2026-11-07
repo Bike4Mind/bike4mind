@@ -1,11 +1,12 @@
 import type { AuthState } from '@shared/auth';
 import type { ChatModelOption } from '@shared/chat';
 import type { ModelRuntimeStatus } from '@shared/models';
+import { OLLAMA_NOT_RUNNING } from '../models/localRuntimeCopy';
 
 export interface NoLocalModels {
   reason: string;
-  /** Set when the Models screen is the way out; absent when Ollama itself has to be started. */
-  fix: 'open-models' | null;
+  /** `open-models` when the Models screen is the way out; `start-ollama` when Ollama itself has to be started. */
+  fix: 'open-models' | 'start-ollama';
 }
 
 /** Signed out by choice, as opposed to an account whose session expired (which keeps its hosted models). */
@@ -25,8 +26,8 @@ export function noLocalModels(catalog: {
   const { models, loading, runtime } = catalog;
   if (models.some(model => model.server && (!model.unavailable || model.pending))) return null;
   const down = (): NoLocalModels => ({
-    reason: `Ollama is not running at ${runtime?.url ?? 'its default address'}. Start it (open the Ollama app or run "ollama serve"); this checks again every few seconds.`,
-    fix: null,
+    reason: OLLAMA_NOT_RUNNING,
+    fix: 'start-ollama',
   });
   if (runtime && !runtime.reachable) return down();
   if (models.length > 0 || loading) return null;

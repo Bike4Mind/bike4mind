@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 
-const { handlers, find, reviewUpdate, release, eligible, count, baseOptions, recordAudit } = vi.hoisted(() => ({
+const { handlers, find, reviewUpdate, release, eligible, count, baseOptions, recordAudit, listed } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => Promise<void>>,
+  listed: vi.fn(async (): Promise<unknown[]> => []),
   find: vi.fn(),
   reviewUpdate: vi.fn(),
   release: vi.fn(),
@@ -34,7 +35,7 @@ vi.mock('@bike4mind/database', () => {
     sort: () => reviewQuery,
     skip: () => reviewQuery,
     limit: () => reviewQuery,
-    lean: async () => [],
+    lean: () => listed(),
   };
   return {
     SignupDomainReviewModel: { findOneAndUpdate: reviewUpdate, find: () => reviewQuery, countDocuments: async () => 0 },
@@ -89,6 +90,36 @@ describe('signup domain hold listing', () => {
         { source: 'curated', count: 3 },
         { source: 'aggregate', count: 0, lastError: 'HTTP 503' },
       ],
+    });
+  });
+  it('returns the advisory assessment stored on a hold', async () => {
+    const assessment = {
+      outcome: 'judged',
+      policyVersion: 1,
+      judgment: 'abuse',
+      confidence: 0.95,
+      model: 'gpt-6-luna',
+      assessedAt: new Date('2026-01-02T00:00:00Z'),
+    };
+    listed.mockResolvedValueOnce([
+      {
+        domain: 'young.test',
+        status: 'blocked',
+        reason: 'young-domain (<30 days)',
+        triggeredAt: new Date('2026-01-01T00:00:00Z'),
+        cohortUserIds: [],
+        sampleEmails: [],
+        signupCount: 4,
+        autoDecision: { policy: 'advisory-decision', decidedAt: new Date('2026-01-02T00:00:00Z') },
+        assessment,
+      },
+    ]);
+    const { req, res } = createMocks({ method: 'GET', query: {} });
+    Object.assign(req, { user: { id: 'admin-1', isAdmin: true } });
+    await handlers.get(req, res);
+    expect(res._getJSONData().data[0]).toMatchObject({
+      autoDecision: { policy: 'advisory-decision' },
+      assessment: { ...assessment, assessedAt: '2026-01-02T00:00:00.000Z' },
     });
   });
 });

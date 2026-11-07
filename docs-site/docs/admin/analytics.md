@@ -9,16 +9,16 @@ tags: [admin, analytics]
 
 The Analytics page (**Overview > Analytics**) shows who uses Bike4Mind, how often, and whether they come back. It is a trend page: the Dashboard answers "is anything wrong right now?", Analytics answers "are we growing?".
 
-All days are UTC days, and every chart says so. By default, counts exclude internal accounts: admin accounts, system accounts, accounts flagged as automated test accounts, and accounts on your internal staff email domains. Every other account is counted, including a test account that carries none of those flags.
+All days are UTC days, and every chart says so. By default, counts exclude internal accounts: admin accounts, system accounts, accounts flagged as automated test accounts, accounts on your internal staff email domains, accounts tagged Developer, and test personas (a `persona-` username or an email on a configured test domain). Active users and real signups also exclude banned accounts and accounts whose AI access is held (moderated, awaiting review, suspended or under a payment dispute). Every other account is counted. The activation funnel and its user lists follow the same rule, so banned or held accounts do not appear in any step.
 
 ## Toolbar
 
-| Control | Options | Default |
-|---------|---------|---------|
-| **Range** | 7d, 28d, 90d, 12m, Custom | 28d |
-| **Compare** | Previous period, Off | Previous period |
-| **Signups** | Legit only, All | Legit only |
-| **Accounts** | External only, Internal only, All | External only |
+| Control      | Options                           | Default         |
+| ------------ | --------------------------------- | --------------- |
+| **Range**    | 7d, 28d, 90d, 12m, Custom         | 28d             |
+| **Compare**  | Previous period, Off              | Previous period |
+| **Signups**  | Real only, All                    | Real only       |
+| **Accounts** | External only, Internal only, All | External only   |
 
 **Custom** shows two date inputs. Both days are included, and the range can cover at most 366 days.
 
@@ -30,21 +30,21 @@ The toolbar is kept in the page URL (`range`, `start`, `end`, `compare`, `signup
 
 ## Key numbers
 
-| Tile | What it shows |
-|------|---------------|
-| **Active users (MAU)** | Users active in the 28 days ending on the last complete day of the range |
-| **Daily active (avg)** | The average number of users active per day |
-| **Stickiness** | Average daily active users as a share of MAU |
-| **New signups** | Signups in the range (legit only, or all, per the Signups toggle), with the number of suspected signups underneath |
-| **Activation rate** | Not available yet |
+| Tile                   | What it shows                                                                                                     |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| **Active users (MAU)** | Users active in the 28 days ending on the last complete day of the range                                          |
+| **Daily active (avg)** | The average number of users active per day                                                                        |
+| **Stickiness**         | Average daily active users as a share of MAU                                                                      |
+| **New signups**        | Signups in the range (real only, or all, per the Signups toggle), with the number of suspected signups underneath |
+| **Activation rate**    | Not available yet                                                                                                 |
 
-A user is active on a day when they make at least one successful AI request that UTC day, from any source. That includes requests made through the public API and internal system traffic, so a user active only through the API still counts toward daily, weekly and monthly active users.
+A user is active on a day when they make at least one successful AI request that UTC day, from the web app, the CLI, Desktop or an agent run. Requests made through the public API and internal system traffic do not make a user active, so a user active only through the API is not counted in daily, weekly or monthly active users.
 
 The tiles cover complete days only. When the range ends today, today is still counting, so it is left out of the tiles and comparisons. With **Compare** on, each tile compares against the same number of days right before the range.
 
 ## Active users
 
-A line chart of daily, weekly and monthly active users per day. With **Compare** on, a faint dashed line shows MAU for the previous period. Today is drawn dashed because it is not finished.
+A line chart of daily, weekly and monthly active users per day. With **Compare** on, a faint dashed line shows MAU for the previous period. Today is drawn dashed because it is not finished. A separate **External API users (not counted)** line shows how many external accounts used the public API each day. This series always shows external accounts regardless of **Accounts**, and is never part of the active user numbers.
 
 Hover over any day to see its external and internal daily, weekly and monthly active users, whichever **Accounts** option is selected.
 
@@ -52,9 +52,9 @@ Switch to **By surface** to see AI requests per day stacked by surface as bars. 
 
 ## Signups: real vs suspected
 
-Stacked bars of likely legit, suspected and not-yet-classified signups. Bars are days for 7d and 28d, ISO weeks (starting Monday) for 90d, and months for 12m.
+Stacked bars of real and suspected signups. A signup is real when the account has a verified email, is not banned or held, and made a successful AI request within 7 days of signing up (system traffic does not count). Every other signup is suspected, so there is no unclassified bucket; a signup moves from suspected to real when its first request lands inside the 7 days, which the nightly job re-checks for 14 days. Bars are days for 7d and 28d, ISO weeks (starting Monday) for 90d, and months for 12m.
 
-Click a bar to open the Users list filtered to the accounts created in that bar's window. Below the chart, the signals that marked accounts in the range are listed with their counts.
+Click a Real or Suspected bar to open the Users list filtered to that verdict and the accounts created in that bar's window. In the table, click a date to list all accounts created in its window. Below the chart, the signals that marked accounts in the range are listed with their counts.
 
 ## Retention cohorts
 
@@ -62,8 +62,8 @@ A table of how many people come back. Each row is a signup week (weeks start on 
 
 - **Last 12 weeks.** Only signup weeks that are over appear, so a cohort never grows after you see it. The table is read through the last complete day and ignores the **Range** and **Compare** controls.
 - **Blank cells are gaps, not zero.** A cell is blank when its week is not over yet, when the nightly rollup is missing for a day it depends on, or when the cohort is empty. A real zero is printed as 0.0%.
-- **Signups toggle.** With **Legit only**, the cohort leaves out suspected signups and keeps accounts too new to classify. With **All**, it counts every signup. The size and the active counts follow the same rule.
-- **Active** uses the same definition as the rest of the page: at least one successful AI request that UTC day.
+- **Signups toggle.** With **Real only**, the cohort leaves out suspected signups; new accounts remain suspected until they meet the real-signup definition. With **All**, it counts every signup. The size and the active counts follow the same rule.
+- **Active** uses the same definition as the rest of the page: at least one successful first-party AI request that UTC day.
 
 ## Usage
 
@@ -77,9 +77,11 @@ Three cards show what people use. Rankings and totals cover the complete days in
 
 Two tables list the 10 heaviest users and the 10 heaviest organizations over the complete days of the range. Rows are ranked by active days, then by AI requests. Each row shows the plan, active days, AI requests, credits consumed and its share of all requests. Click a column header to sort, or a row to open the user's profile or the organization. A user or organization that has since been deleted is listed by its id and does not open.
 
+Active days require first-party AI requests. API requests and credits still contribute to the usage totals. For an organization to have an active day, a first-party request must be billed to that organization; personal activity does not make an API-only organization active.
+
 Suspected signups and suspended users are left out of both tables, and their usage is not added to any organization. The line under each table says how many accounts were left out.
 
-An organization's numbers add up only the usage its members billed to it. A member's personal usage, or usage in another organization on the same day, is not counted toward it. Days rolled up before per-organization usage was recorded still credit a member's whole day to their most-used organization until you re-run the day with `--force`.
+An organization's numbers add up only the usage its members billed to it. A member's personal usage, or usage in another organization on the same day, is not counted toward it. Days rolled up before per-organization usage was recorded still credit a member's whole day to their most-used organization until you re-run the day with `--force`. Re-running also fills the per-organization active-day flags on older rows.
 
 Both tables cover the complete days that have a nightly rollup. A day still waiting for its rollup is left out, and the line under each table says how many. The **Usage** cards say the same in their captions.
 

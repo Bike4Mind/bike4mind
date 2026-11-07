@@ -14,15 +14,20 @@ import {
   UserAuthAuditLogModel,
 } from '@bike4mind/database';
 import type { AuditLogCursor, UserTimelineEntry, UserTimelineType } from '@bike4mind/common';
-import { creditEventsFilter, listUserTimeline, type TimelineRange } from './userTimeline';
-import type { ActivitySubject } from './userActivity';
+import { creditEventsFilter, listUserTimeline, type TimelineRange, type TimelineSubject } from './userTimeline';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const USER_ID = '650000000000000000000001';
 const OTHER_USER_ID = '650000000000000000000009';
 const ADMIN_ID = '650000000000000000000002';
-const subject: ActivitySubject = { id: USER_ID, name: 'Ada', email: 'ada@example.com', isAdmin: false };
+const subject: TimelineSubject = {
+  id: USER_ID,
+  name: 'Ada',
+  email: 'ada@example.com',
+  isAdmin: false,
+  account: { createdAt: new Date(Date.UTC(2026, 9, 20)), currentCredits: 0, email: 'ada@example.com' },
+};
 
 // Whole seconds, so a notebook (second-precision ObjectId time) can tie with rows in other stores.
 const T = (second: number) => new Date(Date.UTC(2026, 9, 20, 12, 0, second));

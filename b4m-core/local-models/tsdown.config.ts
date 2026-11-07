@@ -7,6 +7,7 @@ export default defineConfig({
     servers: 'src/servers/index.ts',
     'curated-signing': 'src/curatedSigning.ts',
     licenses: 'src/licenses.ts',
+    'model-settings': 'src/modelSettings/index.ts',
   },
   format: ['esm', 'cjs'],
   dts: true,

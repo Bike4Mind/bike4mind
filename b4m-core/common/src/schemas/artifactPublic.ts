@@ -98,3 +98,32 @@ export const UpdateArtifactRequestSchema = z
   })
   .strict();
 export type UpdateArtifactRequest = z.infer<typeof UpdateArtifactRequestSchema>;
+
+/** Strict like the other bodies. `content` is required: an empty version marker has nothing to publish. */
+export const CreateArtifactVersionRequestSchema = z
+  .object({
+    content: z.string().min(1).describe("The new version's content."),
+    change_description: z.string().max(500).optional().describe('A short note on what changed.'),
+    version_tag: z.string().max(100).optional().describe('A label for this version, such as `v2`.'),
+  })
+  .strict();
+export type CreateArtifactVersionRequest = z.infer<typeof CreateArtifactVersionRequestSchema>;
+
+export const SearchArtifactsQuerySchema = PaginationQuerySchema.extend({
+  q: z.string().min(1).max(200).describe('The text to search for.'),
+  type: ArtifactTypeSchema.optional().describe('Only artifacts of this type.'),
+});
+
+export const ArtifactTypeInfoSchema = z.object({
+  type: ArtifactTypeSchema,
+  name: z.string(),
+  description: z.string(),
+  category: z.string(),
+  mime_type: z.string(),
+});
+
+export const ListArtifactTypesResponseSchema = z.object({
+  types: z.array(ArtifactTypeInfoSchema),
+  categories: z.array(z.string()),
+});
+export type ListArtifactTypesResponse = z.infer<typeof ListArtifactTypesResponseSchema>;

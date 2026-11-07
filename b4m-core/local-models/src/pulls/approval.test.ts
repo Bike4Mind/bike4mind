@@ -1,7 +1,7 @@
 import type { HubBuild, HubEntry } from '@bike4mind/common/modelHub';
 import { describe, expect, it, vi } from 'vitest';
 import { curatedLibrary } from '../curated';
-import type { HubModelDetail } from '../huggingface';
+import type { HubGgufBuild, HubModelDetail } from '../huggingface';
 import type { RuntimeHealth } from '../types';
 import { curatedHubDetail, curatedPick, hubBuild, hubDetail, servedLayers } from '../__test__/pullFixtures';
 import {
@@ -311,6 +311,17 @@ describe('checkApproval for a curated Hugging Face build', () => {
     expect(await checkApproval(approval, deps(hub))).toEqual({ ok: false, reason: 'layers-changed' });
   });
 
+  it('keeps a curated build that turned split blocked, even when the caller imports splits', async () => {
+    const { hub, approval } = setup(({ detail }) => {
+      detail.builds[0] = { ...detail.builds[0], split: true, ollamaRef: null, ollamaRefIssue: 'split' };
+    });
+    expect(await checkApproval(approval, deps(hub, { importSplit: true }))).toEqual({
+      ok: false,
+      reason: 'blocked',
+      block: 'split',
+    });
+  });
+
   it('needs the license accepted when the entry or its base model is not permissive, though the card is', async () => {
     const { hub, approval } = setup(({ entry }) => {
       entry.license.base.class = 'non-commercial';
@@ -355,6 +366,81 @@ describe('checkApproval for a curated Hugging Face build', () => {
       reason: 'cancelled',
     });
     expect(hub.ollamaLayers).not.toHaveBeenCalled();
+  });
+});
+
+describe('checkApproval for a split build the caller imports', () => {
+  const shard = (index: number, sha: string | null = String(index).repeat(64)) => ({
+    path: `model-Q8_0-0000${index}-of-00002.gguf`,
+    sizeBytes: 512,
+    sha256: sha,
+    url: 'u',
+  });
+  const splitBuild = (overrides: Partial<HubGgufBuild> = {}) =>
+    hubBuild({
+      id: 'model-Q8_0',
+      quant: 'Q8_0',
+      label: 'Q8_0',
+      files: [shard(1), shard(2)],
+      split: true,
+      ollamaRef: null,
+      ollamaRefIssue: 'split',
+      ...overrides,
+    });
+  const approval = (overrides: Partial<HubPullApproval> = {}) => hfApproval({ buildId: 'model-Q8_0', ...overrides });
+  const importing = (hub: PullCheckHub, overrides: Partial<ApprovalDeps> = {}) =>
+    deps(hub, {
+      importSplit: true,
+      health: vi.fn(async () => ({ ok: true, version: '0.35.0', error: null })),
+      ...overrides,
+    });
+
+  it('approves the name to create, without a registry ref, only when the caller imports', async () => {
+    const detail = hubDetail({ builds: [splitBuild()] });
+    const hub = fakeHub(detail);
+    expect(await checkApproval(approval(), importing(hub))).toEqual({
+      ok: true,
+      ref: 'hf.co/org/repo:Q8_0',
+      verified: true,
+      split: { detail, build: detail.builds[0] },
+    });
+    expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
+    expect(await checkApproval(approval(), deps(hub))).toEqual({ ok: false, reason: 'blocked', block: 'split' });
+  });
+
+  it('refuses a split build it cannot import', async () => {
+    const check = (build: HubGgufBuild, detail: Partial<HubModelDetail> = {}) =>
+      checkApproval(approval(), importing(fakeHub(hubDetail({ builds: [build], ...detail }))));
+    expect(await check(splitBuild({ complete: false }))).toMatchObject({ block: 'incomplete' });
+    expect(await check(splitBuild({ files: [shard(1), shard(2, null)] }))).toMatchObject({ block: 'no-checksum' });
+    expect(await check(splitBuild({ files: [shard(1), shard(2, null)] }), { gated: 'auto' })).toMatchObject({
+      block: 'needs-access',
+    });
+    expect(await check(splitBuild({ files: [shard(1), { ...shard(2), path: 'part2.gguf' }] }))).toMatchObject({
+      block: 'unsupported-name',
+    });
+  });
+
+  it('needs Ollama 0.35.0 or newer', async () => {
+    const hub = fakeHub(hubDetail({ builds: [splitBuild()] }));
+    for (const version of ['0.34.9', null]) {
+      const health = vi.fn(async () => ({ ok: true, version, error: null }));
+      expect(await checkApproval(approval(), importing(hub, { health }))).toEqual({
+        ok: false,
+        reason: 'runtime-too-old',
+        blocked: 'Adding a split build needs Ollama 0.35.0 or newer',
+        required: '0.35.0',
+        actual: version,
+      });
+    }
+  });
+
+  it("skips Ollama's own key steps, since Desktop downloads the files, but still needs the license", async () => {
+    const hub = fakeHub(hubDetail({ gated: 'manual', ollamaNeedsSshKey: true, builds: [splitBuild()] }));
+    expect(await checkApproval(approval(), importing(hub))).toMatchObject({ ok: true });
+    const restricted = fakeHub(hubDetail({ licenses: ['llama3.2'], builds: [splitBuild()] }));
+    expect(await checkApproval(approval(), importing(restricted))).toEqual({ ok: false, reason: 'license-required' });
+    expect(await checkApproval(approval({ licenseAccepted: true }), importing(restricted))).toMatchObject({ ok: true });
   });
 });
 

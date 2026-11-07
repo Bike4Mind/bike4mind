@@ -6,6 +6,7 @@ import { AUTH_EVENT_RETENTION_SECONDS, connectDB, User } from '@bike4mind/databa
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { truncateIp } from '@bike4mind/server-utils/utils/ip';
 import { Resource } from 'sst';
+import { runSubscriberNetworkRetention } from './subscriberNetworkRetention';
 
 const retentionLogger = new Logger({ metadata: { service: 'signupIpRetention' } });
 
@@ -25,8 +26,19 @@ export async function handler(event: never, context: Context) {
 
   try {
     await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage), logger);
-    const result = await runSignupIpRetention({ logger });
-    return { statusCode: 200, body: JSON.stringify(result) };
+    // Independent steps: one failing must not skip the other, but the run still fails.
+    const [ipStep, networkStep] = await Promise.allSettled([
+      runSignupIpRetention({ logger }),
+      runSubscriberNetworkRetention({ logger }),
+    ]);
+    if (ipStep.status === 'rejected') throw ipStep.reason;
+    if (networkStep.status === 'rejected') throw networkStep.reason;
+    const result = ipStep.value;
+    const subscribers = networkStep.value;
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ ...result, subscriberNetworkCleared: subscribers.clearedCount }),
+    };
   } catch (error) {
     logger.error('[SignupIpRetention] Failed:', error);
     throw error;

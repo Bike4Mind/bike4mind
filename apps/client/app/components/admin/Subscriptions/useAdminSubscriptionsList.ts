@@ -80,8 +80,15 @@ export function useSubscriptionsViewCounts() {
 // Must match the trailing lines written by pages/api/admin/subscriptions/export.ts.
 const EXPORT_TRUNCATED_MARKER = '# Truncated at ';
 const EXPORT_SEARCH_TRUNCATED_MARKER = '# Search matched more than';
+const EXPORT_MISMATCH_TRUNCATED_MARKER = '# Mismatched view covers the first';
 
-export type SubscriptionsExport = { blob: Blob; fileName: string; truncated: boolean; searchTruncated: boolean };
+export type SubscriptionsExport = {
+  blob: Blob;
+  fileName: string;
+  truncated: boolean;
+  searchTruncated: boolean;
+  mismatchTruncated: boolean;
+};
 
 /** Downloads the server-capped CSV for the filter; the caller saves the blob. */
 export const fetchSubscriptionsExport = async (filter: AdminSubscriptionsFilter): Promise<SubscriptionsExport> => {
@@ -96,5 +103,6 @@ export const fetchSubscriptionsExport = async (filter: AdminSubscriptionsFilter)
     fileName,
     truncated: tail.includes(EXPORT_TRUNCATED_MARKER),
     searchTruncated: tail.includes(EXPORT_SEARCH_TRUNCATED_MARKER),
+    mismatchTruncated: tail.includes(EXPORT_MISMATCH_TRUNCATED_MARKER),
   };
 };

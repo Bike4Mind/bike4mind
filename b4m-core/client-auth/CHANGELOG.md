@@ -1,5 +1,11 @@
 # @bike4mind/client-auth
 
+## 0.3.0
+
+### Minor Changes
+
+- [#6322](https://github.com/Bike4Mind/bike4mind/pull/6322) [`08cd6cc`](https://github.com/Bike4Mind/bike4mind/commit/08cd6ccc0439fa9949750c3f730e7246a9d68250) Thanks [@maconard](https://github.com/maconard)! - show a sign-in link with the code filled in and a key to copy it
+
 ## 0.2.2
 
 ### Patch Changes

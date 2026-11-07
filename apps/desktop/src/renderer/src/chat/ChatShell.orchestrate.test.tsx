@@ -261,6 +261,17 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('chat-thread-empty-host')).not.toBeNull();
   });
 
+  it("hides the dock from its own close button and hands focus to the header's dock toggle", async () => {
+    await openParent();
+    await enterOrchestrate();
+    expect(query('orchestrator-dock')).not.toBeNull();
+
+    act(() => el('orchestrator-dock-close-btn').click());
+    expect(query('orchestrator-dock')).toBeNull();
+    expect(query('orchestrator-dock-hidden')).not.toBeNull();
+    expect(document.activeElement).toBe(el('orchestrator-dock-toggle-btn'));
+  });
+
   it('keeps the same thread mounted across surface and dock toggles', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     await openParent();

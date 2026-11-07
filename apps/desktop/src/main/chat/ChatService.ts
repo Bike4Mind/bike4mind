@@ -185,7 +185,8 @@ import { findStaleResults, historyRounds, sentHistory, toolResultContent } from 
 import { stalePlanReminder, unfinishedPlanReminder } from './planReminder';
 import { buildExploreContext, shouldOfferExplore } from './explore';
 import { MediaApiClient } from './media/MediaApiClient';
-import type { MediaStore } from './media/MediaStore';
+import { type MediaStore, parseMediaUrl } from './media/MediaStore';
+import { fitToolImage, MAX_TOOL_IMAGE_INPUT_BYTES, sniffImageType } from './tools/toolImages';
 import type { VideoJobScheduler } from './media/VideoJobScheduler';
 import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
@@ -210,6 +211,7 @@ import { SkillsPromptCache } from './skills/prompt';
 import { skillSource, type SkillCatalog } from './skills/SkillCatalog';
 import type { McpManager, McpToolBinding } from './mcp/McpManager';
 import { desktopAppGuidance, mcpGuidance, mcpServerLines } from './mcp/prompt';
+import { GENERATED_IMAGE_TOOL } from './tools/mediaTools';
 import { describeFlags, modelSafeRequest, planMcpServerRequest } from './tools/mcpTools';
 import type { AccessStore } from './tools/AccessStore';
 import { forgetSessionWrites } from './tools/sessionScripts';
@@ -260,6 +262,8 @@ import {
   type ImageContext,
   type ScreenCapturer,
   type ScreenContext,
+  type ModelContext,
+  type ModelViewPort,
   type SimulatorContext,
   type SimulatorDriver,
   type ToolContext,
@@ -391,12 +395,6 @@ type SendOptions = {
  * Counts autonomous runs only. A user typing into a spawned session is not rationed.
  */
 export const MAX_CONCURRENT_SPAWNED = 10;
-
-/**
- * How long a spawned agent's first turn waits for its new worktree's dependency install (ms).
- * It cannot wait out an install itself: ending its turn reads as the agent having finished.
- */
-export const SPAWN_INSTALL_WAIT_MS = 10 * 60_000;
 
 /**
  * How long a title request may take before it is dropped.
@@ -543,6 +541,8 @@ export interface ChatServiceDeps {
    * The iOS Simulator and the user's live view of it. Wired on macOS only, so on any other
    * platform (and in tests that do not exercise it) the simulator tools are not declared.
    */
+  /** The 3D model pane's open file (main/chat/model3d/ModelLiveView.ts). Absent in tests that do not exercise it. */
+  model?: ModelViewPort;
   simulator?: {
     driver: SimulatorDriver;
     view: { attach(udid: string): Promise<unknown>; detach(): void; attachedUdid(): string | undefined };
@@ -683,10 +683,10 @@ export class ChatService {
 
   private readonly launching = new Set<string>();
 
-  /** Ends a spawned agent's wait for its install early, when it is stopped or deleted meanwhile. */
   /** Parents an agent worktree was cut for during this run; see mayHaveAgentWorktrees. */
   private readonly agentParents = new Set<string>();
-  private readonly installWaits = new Map<string, (reason: 'stopped' | 'deleted') => void>();
+  /** A stop or delete that reached a spawn still preparing; read before its first turn is sent. */
+  private readonly launchInterrupts = new Map<string, 'stopped' | 'deleted'>();
 
   /** Startup has failed; no new input may race its preservation or deletion. */
   private readonly abandoning = new Set<string>();
@@ -1931,8 +1931,8 @@ export class ChatService {
     const scopeKey = this.deps.store.scopeKey() ?? 'local';
     this.deps.approvals?.forgetSession(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
-    // Ahead of stop(), so a spawn waiting on its install reads this as the delete it is.
-    this.installWaits.get(sessionId)?.('deleted');
+    // Ahead of stop(), so a spawn still preparing reads this as the delete it is.
+    if (this.launching.has(sessionId)) this.launchInterrupts.set(sessionId, 'deleted');
     this.stop(sessionId);
     await this.deps.capabilities
       ?.revokeMatching(
@@ -1997,7 +1997,9 @@ export class ChatService {
    * server it started. `bash_kill` and the panel's Stop button are how those end.
    */
   stop(sessionId: string): void {
-    this.installWaits.get(sessionId)?.('stopped');
+    if (this.launching.has(sessionId) && !this.launchInterrupts.has(sessionId)) {
+      this.launchInterrupts.set(sessionId, 'stopped');
+    }
     this.active.get(sessionId)?.abort();
   }
 
@@ -2943,6 +2945,12 @@ export class ChatService {
             detach: () => simulatorDeps.view.detach(),
           }
         : undefined;
+      // Code sessions only: the model file and the GLB written beside it live in the project.
+      const modelDeps = this.deps.model;
+      const model: ModelContext | undefined =
+        modelDeps && workingDirectory
+          ? { view: modelDeps, keepScreenshot: (bytes, caption) => this.keepScreenshot(sessionId, bytes, caption) }
+          : undefined;
       const offerExplore = shouldOfferExplore(catalog?.models ?? [], session.model);
       const exploreFor = (granted: readonly string[]): ExploreContext | undefined =>
         api && !localTurn && granted.length > 0 && offerExplore
@@ -2990,6 +2998,7 @@ export class ChatService {
               browser: !!browser,
               screen: !!screen,
               simulator: !!simulator,
+              model: !!model,
               memory: !!memory,
               skills: !!skills,
               web: !!web,
@@ -3056,6 +3065,7 @@ export class ChatService {
           ask,
           screen: !!screen,
           simulator: !!simulator,
+          model: !!model,
         }),
       });
       const schemaFor = (name: string): ToolSchema | undefined =>
@@ -3111,6 +3121,10 @@ export class ChatService {
         tools = requestTools();
       } else {
         wire = await toCompletionMessages(session, readAttachment);
+      }
+      if (!resume && images?.vision) {
+        // Replayed images exist only on this turn's wire, so next turn the cached prefix changes at this user message and the rest is re-written to the cache once (accepted).
+        prependToPrompt(wire, await this.previousReplyImages(session, images));
       }
       const systemMessage = () =>
         buildSystemMessage(
@@ -3468,6 +3482,7 @@ export class ChatService {
                 browser,
                 screen,
                 simulator,
+                model,
                 images,
                 memory,
                 skills,
@@ -4033,6 +4048,55 @@ export class ChatService {
     });
   }
 
+  /**
+   * Content blocks re-showing the images generate_image made in the reply just before this prompt.
+   * A tool's image turn is never replayed (see sentRounds), so without this the model cannot see
+   * the picture a "turn this into a 3D model" refers to. Only that one reply, to bound the cost.
+   */
+  private async previousReplyImages(session: ChatSession, images: ImageContext): Promise<unknown[]> {
+    const store = this.deps.media;
+    if (!store) return [];
+    const history = sentHistory(session.messages);
+    if (history.at(-1)?.role !== 'user') return [];
+    const reply: ChatMessage[] = [];
+    for (let index = history.length - 2; index >= 0 && history[index].role === 'assistant'; index--) {
+      reply.unshift(history[index]);
+    }
+    const generated = reply
+      .flatMap(message => message.toolCalls ?? [])
+      .filter(call => call.name === GENERATED_IMAGE_TOOL && call.status === 'done')
+      .flatMap(call => (call.media ?? []).filter(item => item.kind === 'image'));
+
+    const shown: { image: { mediaType: string; data: string } }[] = [];
+    for (const item of generated) {
+      const location = parseMediaUrl(item.url);
+      const stored = location ? await store.read(location.sessionId, location.name) : null;
+      const type = stored ? sniffImageType(stored.bytes) : null;
+      if (!stored || !type || stored.bytes.length > MAX_TOOL_IMAGE_INPUT_BYTES) {
+        this.deps.logger.warn(`CHAT: not re-showing generated image ${item.url}: missing or unreadable`);
+        continue;
+      }
+      const fitted = fitToolImage(images, stored.bytes, type);
+      if (!fitted.ok) {
+        this.deps.logger.warn(`CHAT: not re-showing generated image ${item.url}: ${fitted.reason}`);
+        continue;
+      }
+      shown.push({ image: { mediaType: fitted.mediaType, data: fitted.bytes.toString('base64') } });
+    }
+    const { kept } = withinImageBudget(shown);
+    if (kept.length === 0) return [];
+    return [
+      {
+        type: 'text',
+        text: `${kept.length === 1 ? 'Image' : 'Images'} ${GENERATED_IMAGE_TOOL} made in the previous reply, shown again because the user may be referring to ${kept.length === 1 ? 'it' : 'them'}.`,
+      },
+      ...kept.map(({ image }) => ({
+        type: 'image',
+        source: { type: 'base64', media_type: image.mediaType, data: image.data },
+      })),
+    ];
+  }
+
   /** Images a finished call asked to show the model, handed over once. */
   private takeImages(callId: string): { mediaType: string; data: string }[] {
     const images = this.pendingImages.get(callId) ?? [];
@@ -4063,6 +4127,7 @@ export class ChatService {
       browser: BrowserContext | undefined;
       screen: ScreenContext | undefined;
       simulator: SimulatorContext | undefined;
+      model: ModelContext | undefined;
       images: ImageContext | undefined;
       memory: MemoryStore | undefined;
       skills: SkillContext | undefined;
@@ -4098,6 +4163,7 @@ export class ChatService {
       browser,
       screen,
       simulator,
+      model,
       images,
       memory,
       skills,
@@ -4250,6 +4316,7 @@ export class ChatService {
           ...(browser ? { browser } : {}),
           ...(screen ? { screen } : {}),
           ...(simulator ? { simulator } : {}),
+          ...(model ? { model } : {}),
           ...(images ? { images } : {}),
           ...(memory ? { memory } : {}),
           ...(skills ? { skills } : {}),
@@ -5354,12 +5421,16 @@ export class ChatService {
           const workingDirectory = child.project.workingDirectory;
           text = `${worktreePreamble(projectDirectory, { ...worktree, workingDirectory })}\n\n${seed}`;
         }
-        if (!unprepared) {
-          const waited = await this.awaitSpawnInstall(child.id);
-          if (waited !== 'ready') failure = 'It was stopped before its first turn.';
-          deleted = waited === 'deleted';
-          stopped = waited === 'stopped';
-        }
+      }
+      // The dependency install keeps running in the background: the turn starts now, and its
+      // prompt says how to block on the install (bash_output wait_seconds) when node_modules is needed.
+      // Awaiting only the install's planning, so that first prompt already knows one is running.
+      if (!failure) {
+        await this.deps.dependencies?.isInstalling(child.id);
+        const interrupted = await this.launchInterruption(child.id);
+        if (interrupted) failure = 'It was stopped before its first turn.';
+        deleted = interrupted === 'deleted';
+        stopped = interrupted === 'stopped';
       }
       if (!failure) {
         this.deps.activity?.preparingStep(child.id, 'starting');
@@ -5386,6 +5457,7 @@ export class ChatService {
     } finally {
       if (reservation) releaseBranchName(reservation);
       this.launching.delete(child.id);
+      this.launchInterrupts.delete(child.id);
       this.deps.activity?.preparingEnded(child.id);
       if (!failure) this.flushQueue(child.id);
     }
@@ -5397,35 +5469,16 @@ export class ChatService {
     }
   }
 
-  /**
-   * Hold a spawned agent's first turn until its worktree's install settles, or the cap passes.
-   * A timeout or failure still starts the turn, whose prompt then says the install is running or
-   * failed; only a stop or a delete meanwhile does not.
-   */
-  private async awaitSpawnInstall(sessionId: string): Promise<'ready' | 'stopped' | 'deleted'> {
-    const installer = this.deps.dependencies;
-    if (!installer) return 'ready';
-    let interrupted: 'stopped' | 'deleted' | null = null;
-    const stopped = new Promise<null>(resolve =>
-      this.installWaits.set(sessionId, reason => {
-        interrupted ??= reason;
-        resolve(null);
-      })
-    );
-    try {
-      if (await installer.isInstalling(sessionId)) this.deps.activity?.preparingStep(sessionId, 'dependencies');
-      const outcome = await Promise.race([installer.waitFor(sessionId, SPAWN_INSTALL_WAIT_MS), stopped]);
-      if (outcome && outcome !== 'none') this.deps.logger.debug(`CHAT: spawn ${sessionId} install wait: ${outcome}`);
-    } finally {
-      this.installWaits.delete(sessionId);
-    }
-    if (interrupted) return interrupted;
+  /** A stop or delete that arrived while the spawn was preparing, or a session gone meanwhile. */
+  private async launchInterruption(sessionId: string): Promise<'stopped' | 'deleted' | null> {
+    const flagged = this.launchInterrupts.get(sessionId);
+    if (flagged) return flagged;
     if (this.abandoning.has(sessionId) || !(await this.deps.store.get(sessionId))) return 'deleted';
-    return 'ready';
+    return null;
   }
 
   /**
-   * A spawned agent the user stopped while its install ran: keep the session and its worktree,
+   * A spawned agent the user stopped while it was preparing: keep the session and its worktree,
    * and hand the seed back unsent, since stopping is their call rather than a startup failure.
    */
   private async keepStoppedSpawn(parentId: string, child: ChatSessionSummary): Promise<void> {
@@ -7185,6 +7238,7 @@ export function buildToolStateText(state: {
   ask: boolean;
   screen: boolean;
   simulator?: boolean;
+  model?: boolean;
 }): string {
   const { roots, ask, mcpServers } = state;
   const mcp = mcpServers ? (ask ? 'manage' : 'read') : null;
@@ -7203,6 +7257,7 @@ export function buildToolStateText(state: {
     ...(state.browser ? BROWSER_GUIDANCE : []),
     ...(state.screen ? SCREEN_GUIDANCE : []),
     ...(state.simulator ? SIMULATOR_GUIDANCE : []),
+    ...(state.model ? MODEL_GUIDANCE : []),
     ...(state.media ? MEDIA_GUIDANCE : []),
     ...(state.host ? HOST_GUIDANCE : []),
     ...(state.memory ? MEMORY_GUIDANCE : []),
@@ -7318,6 +7373,14 @@ const SIMULATOR_GUIDANCE: readonly string[] = [
   'missing runtime or AXe) is for the user to run: tell them the exact fix and do not retry.',
 ];
 
+const MODEL_GUIDANCE: readonly string[] = [
+  'The model_* tools make 3D models as code. When the user asks for a 3D model or game asset, write',
+  'a <name>.model.js file (contract in the model_view description) with the file tools, call',
+  'model_view to open it in their live pane and build it, fix any build error it reports, then check',
+  'it with model_screenshot from several angles before saying it is done. Each good build also writes',
+  '<name>.glb beside it, ready for three.js or Unity (via glTFast); wire it into their game if asked.',
+];
+
 const WEB_GUIDANCE: readonly string[] = [
   'web_search and web_fetch run on the Bike4Mind server: use them for quick lookups and for reading',
   'a page. Keep the browser for interactive pages, logins, local dev servers and screenshots.',
@@ -7335,8 +7398,9 @@ const MEDIA_GUIDANCE: readonly string[] = [
   'Each of these SPENDS THE USER CREDITS and each asks them to approve it first, so use one only',
   'when the user has asked for that thing - never to check whether it works, and never as a',
   'flourish alongside a text answer. If they decline, do not try a variation; ask what they want.',
-  'The result is shown or played to the USER and is never returned to you: you cannot see the',
-  'image or hear the audio. Never describe what a generated image depicts or how audio sounds.',
+  'The result is shown or played to the USER. A generated image is also attached for you to see',
+  'when your model reads images (its result says whether it was); audio never is. Never describe',
+  'an image you were not shown or how audio sounds.',
 ];
 
 /**
@@ -7578,6 +7642,30 @@ function describeRootChange(before: readonly string[], after: readonly string[])
     ...after.filter(root => !before.includes(root)).map(path => ({ path, shared: true })),
     ...before.filter(root => !after.includes(root)).map(path => ({ path, shared: false })),
   ];
+}
+
+/**
+ * Put blocks ahead of the new prompt's own content, the way an attachment's images go. Inside the
+ * prompt rather than a turn of their own, so roles still alternate and no tool_result turn is touched.
+ */
+function prependToPrompt(wire: CompletionMessage[], blocks: unknown[]): void {
+  // A deferred-tools turn ends with a system tool-change message after the prompt.
+  const prompt = wire.findLast(message => message.role !== 'system');
+  if (blocks.length === 0 || prompt?.role !== 'user') return;
+  const own = typeof prompt.content === 'string' ? [{ type: 'text', text: prompt.content }] : prompt.content;
+  if (!Array.isArray(own)) return;
+  prompt.content = [...blocks, ...own.filter(block => !isEmptyText(block))];
+}
+
+function isEmptyText(block: unknown): boolean {
+  return (
+    typeof block === 'object' &&
+    block !== null &&
+    'type' in block &&
+    block.type === 'text' &&
+    'text' in block &&
+    block.text === ''
+  );
 }
 
 /**

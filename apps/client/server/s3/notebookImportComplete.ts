@@ -1,5 +1,5 @@
 /* eslint @typescript-eslint/no-explicit-any: "error" */
-import { InboxType, isImageServeable } from '@bike4mind/common';
+import { describeImportFailure, InboxType, isImageServeable } from '@bike4mind/common';
 import type { ArtifactType } from '@bike4mind/common';
 import { artifactService, notebookImportService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
@@ -552,9 +552,9 @@ export const dispatch = withContext(async (event, context, logger) => {
         .createInboxMessage({
           type: InboxType.COMMON,
           title: '❌ Notebook Import Failed',
-          message: `Failed to import notebooks. Error: ${
-            error instanceof Error ? error.message : 'Unknown error'
-          }. Please try again or contact support if the issue persists.`,
+          message: `Failed to import notebooks. ${
+            describeImportFailure(error instanceof Error ? error.message : undefined, 'Notebook').reason
+          } Please try again or contact support if the issue persists.`,
           receiverId: userId,
           userId,
         })

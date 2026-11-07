@@ -41,8 +41,8 @@ const NOT_UPDATABLE_404 =
   'through this endpoint.';
 
 const CURSOR_422 =
-  '`limit` is out of range, or `cursor` is malformed or was issued by a different endpoint. A cursor ' +
-  'is opaque: pass back exactly the `next_cursor` you were given.';
+  '`limit` is out of range, or `cursor` is malformed or was issued by a different endpoint or for a ' +
+  'different project. A cursor is opaque: pass back exactly the `next_cursor` you were given.';
 
 const FILES_EXAMPLE = { file_ids: [EXAMPLE_FILE_ID] };
 const SESSIONS_EXAMPLE = { session_ids: [EXAMPLE_SESSION_ID] };
@@ -131,7 +131,8 @@ export const removeProjectFileContract = defineEndpoint({
     404: {
       description:
         'No project with that id is visible to the caller, or no file with that id is readable by the ' +
-        'caller. A malformed id is reported as 404 too, so ids cannot be probed through this endpoint.',
+        'caller. A malformed id is reported as 404 too, so ids cannot be probed through this endpoint, ' +
+        'unless the project lists it as a legacy entry, which this removes.',
       schema: ApiErrorSchema,
     },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
@@ -225,7 +226,8 @@ export const removeProjectSessionContract = defineEndpoint({
     404: {
       description:
         'No project with that id is visible to the caller, or no session with that id is readable by the ' +
-        'caller. A malformed id is reported as 404 too, so ids cannot be probed through this endpoint.',
+        'caller. A malformed id is reported as 404 too, so ids cannot be probed through this endpoint, ' +
+        'unless the project lists it as a legacy entry, which this removes.',
       schema: ApiErrorSchema,
     },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },

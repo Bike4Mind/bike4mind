@@ -1,5 +1,11 @@
 # @bike4mind/memory
 
+## 0.2.5
+
+### Patch Changes
+
+- [#5890](https://github.com/Bike4Mind/bike4mind/pull/5890) [`6f04636`](https://github.com/Bike4Mind/bike4mind/commit/6f0463622a3d1ad6a8a66f4a643b5e7a22ed5b1d) Thanks [@aflordelis](https://github.com/aflordelis)! - move the next shared layer, including websocket and queue-handler utils, into the package
+
 ## 0.2.4
 
 ### Patch Changes

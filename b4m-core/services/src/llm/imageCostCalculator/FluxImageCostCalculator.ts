@@ -14,7 +14,9 @@ export type FluxModel =
   | ImageModels.FLUX_2_FLEX
   | ImageModels.FLUX_2_KLEIN_9B
   | ImageModels.FLUX_2_KLEIN_9B_PREVIEW
-  | ImageModels.FLUX_2_KLEIN_4B;
+  | ImageModels.FLUX_2_KLEIN_4B
+  | ImageModels.FLUX_3_IMAGE
+  | ImageModels.FLUX_3_IMAGE_KLEIN;
 
 export interface FluxCostInput {
   model: FluxModel;
@@ -25,9 +27,10 @@ export class FluxImageCostCalculator implements CostCalculator<FluxCostInput> {
     [ImageModels.FLUX_PRO_ULTRA]: 0.06,
     [ImageModels.FLUX_PRO_1_1]: 0.04,
     [ImageModels.FLUX_PRO]: 0.05,
-    // Fill is the ONLY BFL model EDIT_SUPPORTED_IMAGE_MODELS allows, so both edit
-    // dispatchers (ImageEdit.ts and the chat edit_image tool) bill every BFL edit
-    // through this entry. Omitting it made them throw "Model not supported".
+    // Fill is the only BFL model in EDIT_SUPPORTED_IMAGE_MODELS, so the chat edit_image
+    // tool and every non-FLUX.2 BFL edit bill through this entry; a FLUX.2 edit on
+    // /image-edits bills through its own FLUX.2 entry below. Omitting it made them
+    // throw "Model not supported".
     [ImageModels.FLUX_PRO_FILL]: 0.05, // $0.05 per inpaint
     [ImageModels.FLUX_KONTEXT_PRO]: 0.035, // $0.035 per transformation
     [ImageModels.FLUX_KONTEXT_MAX]: 0.045, // $0.045 per transformation
@@ -43,6 +46,10 @@ export class FluxImageCostCalculator implements CostCalculator<FluxCostInput> {
     [ImageModels.FLUX_2_KLEIN_9B]: 0.015,
     [ImageModels.FLUX_2_KLEIN_9B_PREVIEW]: 0.015,
     [ImageModels.FLUX_2_KLEIN_4B]: 0.014,
+    // FLUX 3 is billed per resolution tier; each entry is the tier covering the largest size
+    // BFL_DIMENSION_BOUNDS allows, so no reachable size under-bills (see bflBackend.ts).
+    [ImageModels.FLUX_3_IMAGE]: 0.1,
+    [ImageModels.FLUX_3_IMAGE_KLEIN]: 0.014,
   };
 
   getCost(input: FluxCostInput): number {

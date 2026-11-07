@@ -8,6 +8,7 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
+import { recordInsufficientCredits } from '@server/billing/userLimitEvents';
 import { creditService } from '@bike4mind/services';
 import type { CreditLedgerEntry } from '@bike4mind/services/creditService';
 import type { ILogger } from '@bike4mind/observability';
@@ -65,6 +66,7 @@ export const holdAdapters = {
   creditTransactions: creditTransactionRepository,
   deductCredits: creditService.deductCreditsWithOrgSupport,
   newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+  onInsufficientCredits: recordInsufficientCredits,
 };
 
 type ReserveRequestCreditsParams = {

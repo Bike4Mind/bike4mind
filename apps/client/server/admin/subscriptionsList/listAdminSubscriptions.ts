@@ -1,6 +1,7 @@
 import {
   Organization,
   User,
+  billingMismatchRepository,
   convertPipelineForDocumentDB,
   executeFacetCompatible,
   mongoose,
@@ -35,6 +36,10 @@ import { billedIntervalOf, mrrGroupStages, mrrTotal, subscriptionMrr, type MrrGr
 const LIST_MAX_TIME_MS = 10_000;
 /** Owners one text search may resolve to. Past this the search is reported as truncated. */
 export const OWNER_SEARCH_LIMIT = 500;
+/** Rows with an open finding the Mismatched filter and view count can match; past this they are reported as truncated. */
+export const MISMATCH_ID_LIMIT = 5000;
+/** Stripe-only findings the summary lists for the Mismatched view's callout. */
+const ORPHAN_LIST_LIMIT = 20;
 
 type Condition = Record<string, unknown>;
 
@@ -138,12 +143,25 @@ export async function adminSubscriptionsMatch(
   filter: AdminSubscriptionsFilter,
   now: Date,
   catalog: PlanCatalog
-): Promise<{ match: Condition; searchTruncated: boolean }> {
+): Promise<{ match: Condition; searchTruncated: boolean; mismatchTruncated: boolean }> {
   const search = await resolveSearch(filter.search);
+  const mismatch = filter.mismatch ? await mismatchRowCondition() : undefined;
   return {
-    match: buildAdminSubscriptionsMatch(filter, { now, catalog, searchCondition: search.condition }),
+    match: buildAdminSubscriptionsMatch(filter, {
+      now,
+      catalog,
+      searchCondition: search.condition,
+      mismatchCondition: mismatch?.condition,
+    }),
     searchTruncated: search.truncated,
+    mismatchTruncated: mismatch?.truncated ?? false,
   };
+}
+
+/** The rows with an open finding, as a condition on `_id`, resolved once per request. */
+async function mismatchRowCondition(): Promise<{ condition: Condition; truncated: boolean }> {
+  const { ids, truncated } = await billingMismatchRepository.openSubscriptionRowIds(MISMATCH_ID_LIMIT);
+  return { condition: { _id: { $in: toObjectIds(ids) } }, truncated };
 }
 
 const toObjectIds = (ids: string[]) =>
@@ -268,7 +286,7 @@ export async function listAdminSubscriptions(
   now = new Date()
 ): Promise<AdminSubscriptionsListResponse> {
   const catalog = subscriptionPlanCatalog();
-  const { match, searchTruncated } = await adminSubscriptionsMatch(params, now, catalog);
+  const { match, searchTruncated, mismatchTruncated } = await adminSubscriptionsMatch(params, now, catalog);
   const pipeline = asStages([{ $match: match }, { $sort: adminSubscriptionsSort(params.sortField, params.sortOrder) }]);
   const [result] = await executeFacetCompatible(
     Subscription,
@@ -286,6 +304,7 @@ export async function listAdminSubscriptions(
     page: params.page,
     totalPages: Math.ceil(total / params.limit),
     searchTruncated,
+    mismatchTruncated,
   };
 }
 
@@ -297,20 +316,28 @@ export async function adminSubscriptionsSummary(
 ): Promise<AdminSubscriptionsSummary> {
   const { match, searchTruncated } = await adminSubscriptionsMatch(filter, now, subscriptionPlanCatalog());
   const views = viewConditions(now);
-  const [result] = await executeFacetCompatible(
-    Subscription,
-    convertPipelineForDocumentDB(asStages([{ $match: match }])),
-    {
-      total: [{ $count: 'count' }],
-      paying: [{ $match: views.paying }, { $count: 'count' }],
-      pastDue: [{ $match: views.pastDue }, { $count: 'count' }],
-      comped: [{ $match: views.comped }, { $count: 'count' }],
-      churned: [{ $match: views.churned }, { $count: 'count' }],
-      mrr: mrrGroupStages(),
-      pastDueMrr: mrrGroupStages(views.pastDue),
-    },
-    { maxTimeMS: LIST_MAX_TIME_MS }
-  );
+  // The Mismatched count follows the current filters like every view, so it resolves the ids itself
+  // rather than relying on the `mismatch` filter being set.
+  const mismatched = await mismatchRowCondition();
+  const [[result], counts, orphans] = await Promise.all([
+    executeFacetCompatible(
+      Subscription,
+      convertPipelineForDocumentDB(asStages([{ $match: match }])),
+      {
+        total: [{ $count: 'count' }],
+        paying: [{ $match: views.paying }, { $count: 'count' }],
+        pastDue: [{ $match: views.pastDue }, { $count: 'count' }],
+        comped: [{ $match: views.comped }, { $count: 'count' }],
+        churned: [{ $match: views.churned }, { $count: 'count' }],
+        mismatched: [{ $match: mismatched.condition }, { $count: 'count' }],
+        mrr: mrrGroupStages(),
+        pastDueMrr: mrrGroupStages(views.pastDue),
+      },
+      { maxTimeMS: LIST_MAX_TIME_MS }
+    ),
+    billingMismatchRepository.openCounts(),
+    billingMismatchRepository.listOpenOrphanStripe(ORPHAN_LIST_LIMIT),
+  ]);
   return {
     total: countOf(result.total),
     views: {
@@ -318,10 +345,24 @@ export async function adminSubscriptionsSummary(
       pastDue: countOf(result.pastDue),
       comped: countOf(result.comped),
       churned: countOf(result.churned),
+      mismatched: countOf(result.mismatched),
+    },
+    mismatches: {
+      open: counts.open,
+      orphanStripe: counts.orphanStripe,
+      lastSeenAt: counts.lastSeenAt?.toISOString() ?? null,
+      orphans: orphans.map(finding => ({
+        stripeSubscriptionId: finding.stripeSubscriptionId,
+        ownerType: finding.ownerType,
+        ownerId: finding.ownerId,
+        stripeStatus: finding.stripeStatus,
+        firstSeenAt: finding.firstSeenAt.toISOString(),
+      })),
     },
     mrr: mrrTotal(result.mrr as MrrGroup[]),
     pastDueMrr: mrrTotal(result.pastDueMrr as MrrGroup[]),
     searchTruncated,
+    mismatchTruncated: mismatched.truncated,
   };
 }
 

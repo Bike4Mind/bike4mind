@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type Stripe from 'stripe';
-import { stripeMirrorFields } from './stripeMirror';
+import { stripeMirrorFields, stripeSubscriptionRowFields, type StripeSubscriptionRowSource } from './stripeMirror';
 
 const SYNCED_AT = new Date('2026-10-29T12:00:00Z');
 
@@ -133,5 +133,51 @@ describe('stripeMirrorFields', () => {
       interval: null,
       intervalCount: null,
     });
+  });
+});
+
+describe('stripeSubscriptionRowFields', () => {
+  const makeRowSource = (overrides: Record<string, unknown> = {}, item: Record<string, unknown> = {}) => {
+    const base = makeSubscription();
+    return {
+      ...base,
+      status: 'active',
+      canceled_at: null,
+      items: {
+        data: [
+          {
+            ...base.items.data[0],
+            price: { ...base.items.data[0].price },
+            current_period_start: 1_700_000_000,
+            current_period_end: 1_702_592_000,
+            quantity: 3,
+            ...item,
+          },
+        ],
+      },
+      ...overrides,
+    } as unknown as StripeSubscriptionRowSource;
+  };
+
+  it('projects lifecycle fields and spreads the mirror', () => {
+    expect(stripeSubscriptionRowFields(makeRowSource(), SYNCED_AT)).toEqual({
+      status: 'active',
+      periodStartsAt: new Date(1_700_000_000_000),
+      periodEndsAt: new Date(1_702_592_000_000),
+      canceledAt: null,
+      priceId: 'price_123',
+      quantity: 3,
+      ...stripeMirrorFields(makeSubscription(), SYNCED_AT),
+    });
+  });
+
+  it('defaults a missing quantity to 1 and converts canceled_at', () => {
+    const fields = stripeSubscriptionRowFields(
+      makeRowSource({ status: 'canceled', canceled_at: 1_701_000_000 }, { quantity: undefined }),
+      SYNCED_AT
+    );
+    expect(fields.quantity).toBe(1);
+    expect(fields.status).toBe('canceled');
+    expect(fields.canceledAt).toEqual(new Date(1_701_000_000_000));
   });
 });

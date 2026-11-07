@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { redactLogValue } from './redactLogValue';
+import { redactLogText, redactLogValue } from './redactLogValue';
 
 const json = (value: unknown) => JSON.stringify(redactLogValue(value));
 
@@ -102,5 +102,93 @@ describe('redactLogValue', () => {
     expect(redactLogValue({ error })).toMatchObject({
       error: { name: 'Error', message: 'boom with Bearer [REDACTED]' },
     });
+  });
+
+  it('masks an email address to its domain wherever it appears in a string', () => {
+    expect(redactLogValue('Failed to send invite to jane.doe+tag@example.co.uk')).toBe(
+      'Failed to send invite to ***@example.co.uk'
+    );
+    expect(redactLogValue({ to: 'a@b.io', note: 'from x_y@corp.example.com' })).toEqual({
+      to: '***@b.io',
+      note: 'from ***@corp.example.com',
+    });
+    const dupKey = new Error('E11000 duplicate key error dup key: { email: "jane@example.com" }');
+    expect(json({ dupKey })).not.toContain('jane@');
+  });
+
+  it('is idempotent on an already masked email', () => {
+    expect(redactLogText(redactLogText('jane@example.com'))).toBe('***@example.com');
+  });
+
+  it('redacts a JWT, platform and provider keys, and credentials in a URL query', () => {
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.c2lnbmF0dXJl';
+    const line = [
+      `token ${jwt}`,
+      'key b4m_live_abcdefghijklmnopqrstuvwxyz012345',
+      'key sk-ant-api03-abcdefghijklmnopqrstuv',
+      'slack xoxb-1234567890-abcdefghij',
+      'gh ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+      'aws AKIAABCDEFGHIJKLMNOP',
+      'cb https://app.test/callback?state=s1&code=abc123&x=1',
+      's3 https://b.test/o?X-Amz-Signature=deadbeef&X-Amz-Credential=cred',
+    ].join('\n');
+    const redacted = redactLogText(line);
+    for (const secret of [jwt, 'abcdefghijklmnopqrstuvwxyz012345', 'api03', 'xoxb-1234', 'ghp_abc', 'AKIAABCD']) {
+      expect(redacted).not.toContain(secret);
+    }
+    expect(redacted).toContain('[REDACTED_JWT]');
+    expect(redacted).toContain('?state=s1&code=[REDACTED]&x=1');
+    expect(redacted).toContain('X-Amz-Signature=[REDACTED]&X-Amz-Credential=[REDACTED]');
+  });
+
+  it('keeps JSON-escaped quotes intact after a scrubbed credential', () => {
+    const line = JSON.stringify({ message: 'auth "Bearer abc.def" and "https://x.test/cb?code=abc123"' });
+    const redacted = redactLogText(line);
+    expect(() => JSON.parse(redacted)).not.toThrow();
+    expect(redacted).not.toContain('abc123');
+    expect(redacted).not.toContain('abc.def');
+  });
+
+  it('redacts fragment tokens and client secrets', () => {
+    expect(redactLogText('https://x.test/cb#access_token=abc123&state=s')).toBe(
+      'https://x.test/cb#access_token=[REDACTED]&state=s'
+    );
+    expect(redactLogText('/token?client_secret=shh&x=1')).toBe('/token?client_secret=[REDACTED]&x=1');
+  });
+
+  it('leaves ordinary identifiers and prose alone', () => {
+    const line = 'task-runner risk-assessment user 64b7f0c2a1e4d3b2c1a09f87 status 502 quest ses_123 at 10:00';
+    expect(redactLogText(line)).toBe(line);
+  });
+
+  it('redacts one-time codes, names and free-text search fields by key', () => {
+    expect(
+      redactLogValue({
+        otc: '123456',
+        verificationCode: '654321',
+        username: 'jdoe',
+        firstName: 'Jane',
+        last_name: 'Doe',
+        subject: 'Re: my diagnosis',
+        query: 'symptoms of x',
+        userId: 'u1',
+      })
+    ).toEqual({
+      otc: '[REDACTED]',
+      verificationCode: '[REDACTED]',
+      username: '[REDACTED]',
+      firstName: '[REDACTED]',
+      last_name: '[REDACTED]',
+      subject: '[REDACTED]',
+      query: '[REDACTED]',
+      userId: 'u1',
+    });
+  });
+
+  it('scrubs a long string in linear time', () => {
+    const hostile = `${'a'.repeat(200_000)}@${'b.'.repeat(50_000)}`;
+    const started = performance.now();
+    redactLogText(hostile);
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 });

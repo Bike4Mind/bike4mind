@@ -13,7 +13,8 @@ import {
   type AdminUserProfile,
 } from './userProfileModel';
 
-type MenuEntry = { action: ProfileAction | 'compliance'; label: string; danger?: boolean } | 'divider';
+type MenuEntry =
+  { action: ProfileAction | 'compliance'; label: string; danger?: boolean; disabled?: boolean } | 'divider';
 
 const menuEntries = (user: AdminUserProfile): MenuEntry[] => [
   { action: 'editProfile', label: 'Edit profile' },
@@ -26,6 +27,15 @@ const menuEntries = (user: AdminUserProfile): MenuEntry[] => [
   { action: 'compliance', label: 'Compliance record' },
   { action: 'restrict', label: user.isModerated ? 'Lift restriction' : 'Restrict account' },
   { action: 'shadowTier', label: user.throttle?.tier === 'shadow' ? 'Remove limited tier' : 'Move to limited tier' },
+  user.deletion
+    ? {
+        action: 'cancelDeletion',
+        label: user.deletion.purgeStartedAt
+          ? 'Cancel scheduled deletion (purge in progress)'
+          : 'Cancel scheduled deletion',
+        disabled: !!user.deletion.purgeStartedAt,
+      }
+    : { action: 'scheduleDeletion', label: 'Schedule deletion (user request)', danger: true },
   { action: 'delete', label: 'Delete user', danger: true },
 ];
 
@@ -132,6 +142,7 @@ export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({ user, onAc
                   <MenuItem
                     key={entry.action}
                     color={entry.danger ? 'danger' : 'neutral'}
+                    disabled={entry.disabled}
                     onClick={() => (entry.action === 'compliance' ? onCompliance() : onAction(entry.action))}
                     data-testid={`user-profile-menu-${entry.action}-item`}
                   >

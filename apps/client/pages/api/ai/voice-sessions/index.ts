@@ -41,6 +41,7 @@ import { z } from 'zod';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
+import { recordVoiceRefusal } from '@server/billing/userLimitEvents';
 
 const CreateSessionBodySchema = z.object({
   sessionId: z.string().optional(),
@@ -103,6 +104,7 @@ const handler = baseApi().post(async (req, res) => {
   // Block voice sessions when user has no credits and credit enforcement is enabled
   const enforceCredits = getSettingsValue('enforceCredits', settings);
   if (enforceCredits && (req.user?.currentCredits ?? 0) <= 0) {
+    await recordVoiceRefusal(req.user.id, 1, req.user?.currentCredits ?? 0);
     throw new ForbiddenError('Out of Credits!');
   }
 
@@ -195,6 +197,7 @@ const handler = baseApi().post(async (req, res) => {
   if (enforceCredits && !reuseHold) {
     const currentUser = await userRepository.findById(req.user.id);
     if ((currentUser?.currentCredits ?? 0) < reservedCredits) {
+      await recordVoiceRefusal(req.user.id, reservedCredits, currentUser?.currentCredits ?? 0);
       throw new ForbiddenError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`);
     }
   }
@@ -445,8 +448,10 @@ When you get the tool result back, summarize it conversationally for voice.`;
       startedAt: new Date(),
       // Billed per response against this hold (server/websocket/voiceSessionEnded.ts).
       realtime: true,
-      unaffordable: () =>
-        new ForbiddenError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`),
+      unaffordable: () => {
+        void recordVoiceRefusal(req.user.id, reservedCredits);
+        return new ForbiddenError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`);
+      },
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
     });
     if (!opened) {

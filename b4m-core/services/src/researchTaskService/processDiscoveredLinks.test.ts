@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { processDiscoveredLinks } from './processDiscoveredLinks';
 import { NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
-import { insufficientCreditsError, ResearchTaskType } from '@bike4mind/common';
+import { ForbiddenError, insufficientCreditsError, ResearchTaskType } from '@bike4mind/common';
+import { ACCOUNT_BANNED_MESSAGE } from '../userService/accountState';
 import axios from 'axios';
 import { createSendStatusUpdate } from './utils';
 
@@ -352,6 +353,36 @@ describe('processDiscoveredLinks', () => {
       discoveredLinks: expect.arrayContaining([expect.objectContaining({ status: 'pending' })]),
     });
     expect(mockJobs.researchTasks.downloadRelevantLinks).not.toHaveBeenCalled();
+  });
+
+  it('propagates an AI-access refusal without retrying or discarding pending links', async () => {
+    const refusal = new ForbiddenError(ACCOUNT_BANNED_MESSAGE);
+    mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
+    mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
+    mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
+    mockedAxios.get.mockResolvedValue({ data: '# Content with links' });
+    mockLLM.complete.mockRejectedValue(refusal);
+
+    await expect(processDiscoveredLinks({ id: 'test-task-id' }, adapters)).rejects.toBe(refusal);
+
+    expect(mockLLM.complete).toHaveBeenCalledTimes(1);
+    expect(mockResearchTask.discoveredLinks.map((link: { status: string }) => link.status)).toEqual([
+      'pending',
+      'pending',
+    ]);
+    expect(mockJobs.researchTasks.downloadRelevantLinks).not.toHaveBeenCalled();
+  });
+
+  it('retries an unrelated forbidden error like any other extraction failure', async () => {
+    mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
+    mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
+    mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
+    mockedAxios.get.mockResolvedValue({ data: '# Content with links' });
+    mockLLM.complete.mockRejectedValue(new ForbiddenError('Unauthorized. Admin access required.'));
+
+    await processDiscoveredLinks({ id: 'test-task-id' }, adapters);
+
+    expect(mockLLM.complete.mock.calls.length).toBeGreaterThan(1);
   });
 
   it('does not advance to downloads when a concurrent batch is refused after another completes', async () => {

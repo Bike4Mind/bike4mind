@@ -201,7 +201,6 @@ export interface ITurnTiming {
 export interface IChatHistoryItem {
   id?: string;
   sessionId: string;
-  signupActivity?: { userId: string; turnId: string; startedAt: Date };
   conversationItemId?: string;
   openaiMessageId?: string;
   claudeMessageId?: string;
@@ -664,7 +663,7 @@ export interface IConversationContext {
 ////////
 
 /** Where a session was created. Absent on sessions that predate the field; render those as 'web'. */
-export const SESSION_ORIGIN_CHANNELS = ['web', 'api', 'slack', 'cli', 'agent'] as const;
+export const SESSION_ORIGIN_CHANNELS = ['web', 'api', 'slack', 'cli', 'desktop', 'agent'] as const;
 export type SessionOriginChannel = (typeof SESSION_ORIGIN_CHANNELS)[number];
 
 export interface ISessionOrigin {

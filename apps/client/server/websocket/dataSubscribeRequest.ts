@@ -1,3 +1,4 @@
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
 import { DataSubscribeRequestAction, Permission } from '@bike4mind/common';
 import { z } from 'zod';
@@ -23,7 +24,11 @@ import {
 import { Session as SessionModel } from '@bike4mind/database/auth';
 import { accessibleBy } from '@casl/mongoose';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
-import { inviteSubscriptionScope, questMasterPlanSubscriptionScope } from '@server/websocket/subscriptionScopes';
+import {
+  adminSettingsSubscriptionScope,
+  inviteSubscriptionScope,
+  questMasterPlanSubscriptionScope,
+} from '@server/websocket/subscriptionScopes';
 import { sendToConnection, withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
 import { verifyWsAccessToken } from '@server/websocket/verifyWsAccessToken';
 import { closeConnection } from '@bike4mind/server-utils/websocket/closeConnection';
@@ -160,7 +165,9 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       [User.collection.collectionName]: { _id: user._id },
       [SessionModel.collection.collectionName]: accessibleBy(userAbility).ofType(SessionModel),
       [FabFile.collection.collectionName]: accessibleBy(userAbility).ofType(FabFile),
-      [AdminSettings.collection.collectionName]: accessibleBy(userAbility).ofType(AdminSettings),
+      [AdminSettings.collection.collectionName]: adminSettingsSubscriptionScope(
+        accessibleBy(userAbility).ofType(AdminSettings)
+      ),
       [Inbox.collection.collectionName]: { receiverId: user._id },
       [ApiKey.collection.collectionName]: accessibleBy(userAbility).ofType(ApiKey),
       [Organization.collection.collectionName]: accessibleBy(userAbility).ofType(Organization),

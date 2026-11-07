@@ -36,6 +36,7 @@ vi.mock('../utils/adminAudit', async importOriginal => {
   return { ...original, recordAdminActionFromRequest: vi.fn(original.recordAdminActionFromRequest) };
 });
 const USER = '650000000000000000000001';
+const SUBJECT_ACCOUNT = { createdAt: new Date('2026-01-01T00:00:00Z'), currentCredits: 0 };
 const ADMIN = '650000000000000000000002';
 let server: MongoMemoryReplSet;
 const request = (
@@ -82,7 +83,7 @@ describe('admin user notes storage, service and timeline', () => {
     expect(edited.author.id).toBe(ADMIN);
     expect(deleted.deleted).toBe(true);
     const timeline = await listUserTimeline(
-      { id: USER, name: 'Synthetic user', isAdmin: false },
+      { id: USER, name: 'Synthetic user', isAdmin: false, account: SUBJECT_ACCOUNT },
       { types: ['admin'], limit: 50, range: {} }
     );
     expect(timeline.entries).toHaveLength(4);
@@ -172,7 +173,7 @@ describe('admin user notes storage, service and timeline', () => {
     };
     await writeTags([], ['pilot']);
     const timeline = await listUserTimeline(
-      { id: USER, name: 'Synthetic user', isAdmin: false },
+      { id: USER, name: 'Synthetic user', isAdmin: false, account: SUBJECT_ACCOUNT },
       { types: ['admin'], limit: 50, range: {} }
     );
     expect(timeline.entries).toHaveLength(1);

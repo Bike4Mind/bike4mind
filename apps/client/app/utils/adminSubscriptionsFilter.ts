@@ -92,6 +92,8 @@ export const AdminSubscriptionsFilterSchema = z.object({
   interval: z.enum(SUBSCRIPTION_INTERVAL_FILTERS).optional(),
   renews: z.enum(SUBSCRIPTION_RENEWS_FILTERS).optional(),
   cancel: z.enum(SUBSCRIPTION_CANCEL_FILTERS).optional(),
+  /** `yes`: only rows the nightly Stripe reconciliation has an open finding for. */
+  mismatch: z.enum(['yes']).optional(),
 });
 export type AdminSubscriptionsFilter = z.infer<typeof AdminSubscriptionsFilterSchema>;
 
@@ -215,6 +217,27 @@ export type AdminSubscriptionsListResponse = {
   totalPages: number;
   /** True when a free-text search matched more owners than it could resolve; narrow the search. */
   searchTruncated: boolean;
+  /** True when more rows have an open finding than the Mismatched filter can match; the list shows the first of them. */
+  mismatchTruncated: boolean;
+};
+
+/** A live Stripe subscription with no row here: it cannot appear in the table, so the Mismatched view lists it. */
+export type AdminSubscriptionOrphan = {
+  stripeSubscriptionId: string;
+  ownerType: string | null;
+  ownerId: string | null;
+  stripeStatus: string | null;
+  firstSeenAt: string;
+};
+
+export type AdminSubscriptionsMismatches = {
+  /** Every open finding, orphans included. */
+  open: number;
+  orphanStripe: number;
+  /** When the latest finding was last confirmed, so the banner can say how fresh it is. */
+  lastSeenAt: string | null;
+  /** Up to 20, oldest first. */
+  orphans: AdminSubscriptionOrphan[];
 };
 
 export type AdminSubscriptionsMrrTotal = {
@@ -229,15 +252,18 @@ export type AdminSubscriptionsMrrTotal = {
 
 /**
  * Counts for the built-in views and the MRR totals, each intersected with the current filters. Canceling is
- * counted by the summary route with cancel=scheduled, not a views field. Mismatched arrives with reconciliation.
+ * counted by the summary route with cancel=scheduled, not a views field.
  */
 export type AdminSubscriptionsSummary = {
   total: number;
-  views: { paying: number; pastDue: number; comped: number; churned: number };
+  views: { paying: number; pastDue: number; comped: number; churned: number; mismatched: number };
+  /** The nightly reconciliation's open findings, whatever the filters: the list banner's data. */
+  mismatches: AdminSubscriptionsMismatches;
   /** MRR of the matching rows, by the same definition as the row `mrr`. */
   mrr: AdminSubscriptionsMrrTotal;
   /** The part of `mrr` from rows the Past due view counts: MRR at risk. */
   pastDueMrr: AdminSubscriptionsMrrTotal;
   /** Same meaning as on the list response: the counts cover only the owners the search resolved. */
   searchTruncated: boolean;
+  mismatchTruncated: boolean;
 };

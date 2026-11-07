@@ -27,9 +27,8 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 let server: Awaited<ReturnType<typeof createMongoReplSet>>;
 const config = {
-  stagedSignupGrantEnabled: 'true',
-  signupGrantCredits: '12',
-  verifiedUnlockCredits: '28',
+  signupGrantInitialCredits: '12',
+  signupGrantDripCap: '28',
   // Payment unlocks pay on the payment here; paymentUnlockHold.e2e.test.ts covers the hold.
   signupUnlockPaymentHoldHours: '0',
 };
@@ -454,12 +453,9 @@ describe('staged signup ledger', () => {
 
   const activitySettings = (overrides: Record<string, string | undefined> = {}) => {
     const values: Record<string, string | undefined> = {
-      stagedSignupGrantEnabled: 'true',
-      signupGrantActivityEnabled: 'true',
       signupGrantActivityMinActiveSeconds: '600',
-      signupGrantActivityDailyCredits: '10',
-      signupGrantActivityMaxCredits: '28',
-      verifiedUnlockCredits: config.verifiedUnlockCredits,
+      signupGrantDailyCredits: '10',
+      signupGrantDripCap: config.signupGrantDripCap,
       signupGrantTricklePoolDaily: '1000000000',
       ...overrides,
     };
@@ -801,7 +797,7 @@ describe('staged signup ledger', () => {
     const at = new Date('2030-03-01T10:00:00Z');
     await User.collection.updateOne({ _id: user._id }, { $set: { createdAt: new Date('2030-02-01T00:00:00Z') } });
     await userService.releaseSignupTranche(user.id, adapters);
-    activitySettings({ signupGrantActivityDailyCredits: daily });
+    activitySettings({ signupGrantDailyCredits: daily });
     await accrue(user.id, '2030-03-01', 600_000);
     expect((await unlockSignupGrantFromActivity(user.id, at)).creditsGranted).toBe(0);
     expect((await User.findById(user.id))?.currentCredits).toBe(12);

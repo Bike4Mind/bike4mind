@@ -127,7 +127,7 @@ describe('getInvoiceFailureReason', () => {
 
 describe('notifyPaymentFailed', () => {
   it('claims the invoice and publishes one email to the owner', async () => {
-    await notifyPaymentFailed(userSub, invoice, logger);
+    await expect(notifyPaymentFailed(userSub, invoice, logger)).resolves.toBe(true);
 
     expect(mocks.claimFailure).toHaveBeenCalledWith('sub_1', 'in_1');
     expect(mocks.publish).toHaveBeenCalledTimes(1);
@@ -157,7 +157,7 @@ describe('notifyPaymentFailed', () => {
   it('never throws when publishing fails, and releases the claim for the next retry', async () => {
     mocks.publish.mockRejectedValue(new Error('event bus down'));
 
-    await expect(notifyPaymentFailed(userSub, invoice, logger)).resolves.toBeUndefined();
+    await expect(notifyPaymentFailed(userSub, invoice, logger)).resolves.toBe(false);
     expect(mocks.releaseFailure).toHaveBeenCalledWith('sub_1', 'in_1');
     expect(mocks.emitMetric).toHaveBeenCalledWith('Lumina5/Billing', 'BillingNoticeFailed', 1, {
       kind: 'payment_failed',
@@ -167,7 +167,7 @@ describe('notifyPaymentFailed', () => {
   it('never throws when APP_URL is unset', async () => {
     delete process.env.APP_URL;
 
-    await expect(notifyPaymentFailed(userSub, invoice, logger)).resolves.toBeUndefined();
+    await expect(notifyPaymentFailed(userSub, invoice, logger)).resolves.toBe(false);
     expect(mocks.publish).not.toHaveBeenCalled();
     expect(mocks.releaseFailure).toHaveBeenCalledWith('sub_1', 'in_1');
   });
@@ -176,7 +176,7 @@ describe('notifyPaymentFailed', () => {
     mocks.publish.mockRejectedValue(new Error('event bus down'));
     mocks.releaseFailure.mockRejectedValue(new Error('mongo blip'));
 
-    await expect(notifyPaymentFailed(userSub, invoice, logger)).resolves.toBeUndefined();
+    await expect(notifyPaymentFailed(userSub, invoice, logger)).resolves.toBe(false);
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Failed to send'), {
       error: expect.objectContaining({ message: 'event bus down' }),
     });
@@ -185,7 +185,7 @@ describe('notifyPaymentFailed', () => {
   it('never throws and releases nothing when the claim itself fails', async () => {
     mocks.claimFailure.mockRejectedValue(new Error('mongo down'));
 
-    await expect(notifyPaymentFailed(userSub, invoice, logger)).resolves.toBeUndefined();
+    await expect(notifyPaymentFailed(userSub, invoice, logger)).resolves.toBe(false);
     expect(mocks.releaseFailure).not.toHaveBeenCalled();
   });
 

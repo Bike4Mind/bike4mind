@@ -8,7 +8,7 @@ import { listUserTimeline } from '@server/utils/userTimeline';
 
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
 
-/** The unified per-user timeline: sign-ins, notebooks, credit events, API key events and admin actions, merged server-side. */
+/** The unified per-user timeline (spend, limits, security, money and admin rows), merged server-side; see userTimeline.ts. */
 const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   ensureAdmin(req.user?.isAdmin);
 
@@ -23,6 +23,13 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
     name: user.name || user.email || user.id,
     email: user.email ?? undefined,
     isAdmin: user.isAdmin,
+    account: {
+      createdAt: user.createdAt,
+      currentCredits: user.currentCredits ?? 0,
+      email: user.email ?? undefined,
+      signupMeta: user.signupMeta,
+      signupGrantHeldReason: user.signupGrantHeldReason,
+    },
   };
 
   const { entries, nextCursor } = await listUserTimeline(subject, { types, range, limit, cursor });

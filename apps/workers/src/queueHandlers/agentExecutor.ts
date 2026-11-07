@@ -150,6 +150,8 @@ import {
   evaluateConfidenceGate,
   formatConfidenceGateReason,
   decideIterationConfidencePause,
+  evaluateLowConfidenceCompletion,
+  DEFAULT_LOW_CONFIDENCE_COMPLETION,
 } from './agentExecutorUtils/confidenceGate';
 import { rehydrateOptiPlanState, ledgerForWrite } from './agentExecutorUtils/optiPlanLedger';
 import {
@@ -3494,6 +3496,59 @@ async function processExecution(
     // Execution complete - re-read totalCreditsUsed from DB for accurate value
     const updatedExecution = await agentExecutionRepository.findById(executionId);
     const finalCheckpoint = agent.toCheckpoint();
+
+    // A final-answer iteration runs no tools, so the per-iteration gate never scores it; `block`
+    // parks the run paused with the answer in the checkpoint (Continue iterates, Stop accepts).
+    const completedOnAnswer =
+      iterationResult?.isComplete && !iterationResult.reachedMaxIterations && !iterationResult.reachedMaxTotalTokens;
+    const lowConfidenceCompletion =
+      completedOnAnswer && (updatedExecution?.lowConfidenceStreak ?? 0) > 0
+        ? evaluateLowConfidenceCompletion({
+            mode:
+              orchestrationProfile?.lowConfidenceCompletion ??
+              (
+                await adminSettingsRepository.getSettingsValue('orchestrationDefaults').catch(err => {
+                  logger.warn('[ConfidenceGate] Failed to load orchestrationDefaults; using built-in default', {
+                    error: err instanceof Error ? err.message : String(err),
+                  });
+                  return undefined;
+                })
+              )?.lowConfidenceCompletion ??
+              DEFAULT_LOW_CONFIDENCE_COMPLETION,
+            lowConfidenceStreak: updatedExecution?.lowConfidenceStreak,
+            lastConfidence: updatedExecution?.lastConfidence,
+            threshold: orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD,
+          })
+        : null;
+    if (lowConfidenceCompletion) {
+      const { mode, confidence, reason } = lowConfidenceCompletion;
+      logger.info('[ConfidenceGate] Low-confidence completion', { executionId, mode, confidence });
+      await sendWs('low_confidence_completion', { executionId, confidence, reason, mode });
+      if (mode === 'block') {
+        // Stop on this pause finishes via handleGateResponse (apps/client/server/websocket/agentExecute.ts),
+        // which persists a thinner result than the completion below (no resolveDisplayAnswer, artifacts, images).
+        const paused = await agentExecutionRepository.setPendingGate(executionId, {
+          iteration: Math.max(0, finalCheckpoint.iteration - 1),
+          confidence,
+          reason,
+          requestedAt: new Date(),
+        });
+        if (!paused) {
+          logger.info('[ConfidenceGate] Aborted concurrently - bailing without pausing');
+          await sendWs('failed', { executionId, reason: 'aborted' });
+          return;
+        }
+        await sendWs('confidence_gate', {
+          executionId,
+          iteration: Math.max(0, finalCheckpoint.iteration - 1),
+          confidence,
+          reason,
+        });
+        await sendWs('progress', { executionId, status: 'paused' });
+        return;
+      }
+    }
+
     const finalAnswer = extractFinalAnswer(finalCheckpoint.steps);
     // A run that stopped on the iteration ceiling (not model completion) leaves `finalAnswer` as
     // a mid-sentence fragment; wrap it in a deterministic truncation notice so the user sees an
@@ -3524,6 +3579,9 @@ async function processExecution(
       totalTokens: finalCheckpoint.totalTokens,
       totalIterations: finalCheckpoint.iteration,
       reachedMaxIterations,
+      ...(lowConfidenceCompletion && {
+        lowConfidence: { confidence: lowConfidenceCompletion.confidence, reason: lowConfidenceCompletion.reason },
+      }),
     });
 
     await sendWs('completed', {

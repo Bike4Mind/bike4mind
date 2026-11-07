@@ -48,6 +48,7 @@ import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminSc
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
 import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
+import { recordVoiceRefusal } from '@server/billing/userLimitEvents';
 
 const DEFAULT_MODEL = ChatModels.CLAUDE_4_6_SONNET as ChatModelName;
 // Mirror v1's concurrency guard so a user (or a leaked session endpoint) can't
@@ -94,6 +95,7 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   const enforceCredits = getSettingsValue('enforceCredits', settings);
 
   if (enforceCredits && (req.user?.currentCredits ?? 0) <= 0) {
+    await recordVoiceRefusal(req.user.id, 1, req.user?.currentCredits ?? 0);
     throw insufficientCreditsError('Out of Credits!');
   }
 
@@ -213,6 +215,7 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   }
 
   if (enforceCredits && !reuseHold && (req.user?.currentCredits ?? 0) < reservedCredits) {
+    await recordVoiceRefusal(req.user.id, reservedCredits, req.user?.currentCredits ?? 0);
     throw insufficientCreditsError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`);
   }
 
@@ -257,8 +260,12 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       reservedCredits: enforceCredits ? reservedCredits : null,
       startedAt: holdStartedAt,
       realtime: false,
-      unaffordable: () =>
-        insufficientCreditsError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`),
+      unaffordable: () => {
+        void recordVoiceRefusal(req.user.id, reservedCredits);
+        return insufficientCreditsError(
+          `Insufficient credits for voice session (requires ~${reservedCredits} credits)`
+        );
+      },
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
     });
     if (!opened) {

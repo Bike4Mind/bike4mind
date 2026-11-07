@@ -35,16 +35,13 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 let server: Awaited<ReturnType<typeof createMongoReplSet>>;
 const UNCAPPED = '1000000000';
 const config: Record<string, string> = {
-  stagedSignupGrantEnabled: 'true',
-  signupGrantActivityEnabled: 'true',
-  signupGrantCredits: '1000',
-  verifiedUnlockCredits: '9000',
+  signupGrantInitialCredits: '1000',
+  signupGrantDailyCredits: '1000',
+  signupGrantDripCap: '9000',
   signupGrantSignupPoolDaily: UNCAPPED,
   signupGrantTricklePoolDaily: UNCAPPED,
   // Payment unlocks pay on the payment here; paymentUnlockHold.e2e.test.ts covers the hold.
   signupUnlockPaymentHoldHours: '0',
-  signupGrantActivityDailyCredits: '1000',
-  signupGrantActivityMaxCredits: '9000',
 };
 const adminSettings = {
   findBySettingName: async (key: string) => (key in config ? { settingValue: config[key] } : null),
@@ -53,7 +50,6 @@ const adminSettings = {
 } as unknown as Parameters<typeof newSignupGrant>[0] & { findBySettingNames: (keys: string[]) => Promise<unknown[]> };
 let clock = new Date();
 const notify = vi.fn<(alert: SignupGrantBudgetAlert) => Promise<void>>().mockResolvedValue();
-const notifyConfig = vi.fn<NonNullable<SignupProtection['notifyConfig']>>().mockResolvedValue();
 const signupProtection: SignupProtection = {
   repository: {
     findReview: async () => null,
@@ -63,7 +59,6 @@ const signupProtection: SignupProtection = {
     isOrganizationDomain: async () => false,
   },
   grantBudget: { repository: signupGrantBudgetRepository, notify, now: () => clock },
-  notifyConfig,
 };
 const adapters = {
   db: { users: userRepository, creditTransactions: creditTransactionRepository, adminSettings, signupProtection },
@@ -97,16 +92,11 @@ beforeEach(async () => {
   await AdminSettings.collection.deleteMany({});
   await SignupGrantBudgetDayModel.deleteMany({});
   config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = UNCAPPED;
-  config.signupGrantActivityDailyCredits = '1000';
-  config.signupGrantActivityMaxCredits = '9000';
-  config.signupGrantCredits = '1000';
-  config.verifiedUnlockCredits = '9000';
+  config.signupGrantInitialCredits = '1000';
+  config.signupGrantDailyCredits = '1000';
+  config.signupGrantDripCap = '9000';
   delete config.signupGrantRiskPolicy;
-  delete config.signupGrantDailyCredits;
-  delete config.signupGrantDripCap;
   notify.mockClear();
-  notifyConfig.mockClear();
-  userService.resetUnsetDripCapAlert();
   clock = new Date();
 });
 
@@ -138,7 +128,7 @@ const dripRows = (userId: string) =>
 
 describe('signup activity drip', () => {
   it.each([0, 1500])('never drips the risk-withheld tranche with an unlock pool of %i', async unlockCredits => {
-    config.verifiedUnlockCredits = String(unlockCredits);
+    config.signupGrantDripCap = String(unlockCredits);
     config.signupGrantRiskPolicy = JSON.stringify({
       enabled: true,
       version: 'reduced-tranche',
@@ -204,7 +194,7 @@ describe('signup activity drip', () => {
   });
 
   it('never pays past the configured cap', async () => {
-    config.signupGrantActivityMaxCredits = '2500';
+    config.signupGrantDripCap = '2500';
     const user = await createSignupStageUser();
     const granted: number[] = [];
     for (let n = 0; n < 5; n++) granted.push((await drip(user.id, n)).creditsGranted);
@@ -213,8 +203,6 @@ describe('signup activity drip', () => {
   });
 
   it.each([
-    ['daily rate', 'signupGrantActivityDailyCredits'],
-    ['cap', 'signupGrantActivityMaxCredits'],
     ['schedule daily rate', 'signupGrantDailyCredits'],
     ['schedule cap', 'signupGrantDripCap'],
   ])('is off when the %s is 0', async (_label, key) => {
@@ -240,7 +228,7 @@ describe('signup activity drip', () => {
   });
 
   it('grows the enrolled unlock pool when the cap is raised above its snapshot', async () => {
-    config.verifiedUnlockCredits = '2000';
+    config.signupGrantDripCap = '2000';
     const user = await createSignupStageUser();
     expect((await User.findById(user.id))?.signupGrant?.unlockCredits).toBe(2000);
     config.signupGrantDripCap = '3500';
@@ -301,39 +289,11 @@ describe('signup activity drip', () => {
     expect((await drip(user.id, 2)).creditsGranted).toBe(0);
   });
 
-  it('alerts once a day when the cap falls back to the activity max registry default', async () => {
-    delete config.signupGrantActivityMaxCredits;
+  it('drips nothing while the cap is unset', async () => {
+    delete config.signupGrantDripCap;
     const user = await createSignupStageUser();
-    await drip(user.id, 0);
-    await drip(user.id, 1);
-    expect(notifyConfig).toHaveBeenCalledTimes(1);
-    expect(notifyConfig).toHaveBeenCalledWith({ setting: 'signupGrantDripCap', fallback: 9000 });
-  });
-
-  it('does not alert on the default cap while the daily amount is 0', async () => {
-    delete config.signupGrantActivityMaxCredits;
-    config.signupGrantDailyCredits = '0';
-    const user = await createSignupStageUser();
-    await drip(user.id, 0);
-    expect(notifyConfig).not.toHaveBeenCalled();
-  });
-
-  it('retries the unset-cap alert on the next drip after an undelivered post', async () => {
-    delete config.signupGrantActivityMaxCredits;
-    notifyConfig.mockRejectedValueOnce(new Error('not delivered'));
-    const user = await createSignupStageUser();
-    await drip(user.id, 0);
-    await new Promise(resolve => setImmediate(resolve));
-    await drip(user.id, 1);
-    await new Promise(resolve => setImmediate(resolve));
-    await drip(user.id, 2);
-    expect(notifyConfig).toHaveBeenCalledTimes(2);
-  });
-
-  it('does not alert when a cap is configured', async () => {
-    const user = await createSignupStageUser();
-    await drip(user.id, 0);
-    expect(notifyConfig).not.toHaveBeenCalled();
+    expect((await drip(user.id, 0)).creditsGranted).toBe(0);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({ unlockCredits: 0 });
   });
 
   it('draws the daily budget, and an exhausted budget pays nothing and retries on a later day', async () => {
@@ -404,13 +364,14 @@ describe('signup activity drip', () => {
     expect(await drip(dripper.id, 1)).toMatchObject({ creditsGranted: 1000 });
   });
 
-  it('pays a credit pack buyer the rest of the schedule under the default cap, even with the pools at 0', async () => {
-    config.signupGrantCredits = '0';
+  it('pays a credit pack buyer the rest of the schedule under the stored cap, even with the pools at 0', async () => {
+    config.signupGrantInitialCredits = '0';
     config.signupGrantDailyCredits = '500';
     const user = await createSignupStageUser();
     for (let n = 0; n < 5; n++) expect((await drip(user.id, n)).creditsGranted).toBe(500);
-    // The release reads the real settings collection: no drip cap set, so the 9000 default applies.
+    // The release reads the real settings collection, not the mocked config.
     await AdminSettings.create([
+      { settingName: 'signupGrantDripCap', settingValue: '9000' },
       { settingName: 'signupUnlockPaymentHoldHours', settingValue: '0' },
       { settingName: 'signupGrantSignupPoolDaily', settingValue: '0' },
       { settingName: 'signupGrantTricklePoolDaily', settingValue: '0' },
@@ -558,10 +519,8 @@ describe('signup activity drip', () => {
     expect(await CreditTransaction.countDocuments({})).toBe(0);
   });
 
-  it('gives a staged-off environment seeded with drip cap 0 the flat grant, no drip and no unset-cap alert', async () => {
+  it('gives a drip cap of 0 the flat grant and no drip', async () => {
     const seeded = {
-      stagedSignupGrantEnabled: 'false',
-      signupGrantActivityEnabled: 'false',
       signupGrantInitialCredits: '1000',
       signupGrantDailyCredits: '0',
       signupGrantDripCap: '0',
@@ -574,7 +533,6 @@ describe('signup activity drip', () => {
       expect((await User.findById(user.id))?.signupGrant).toMatchObject({ unlockCredits: 0, creditsReleased: 1000 });
       expect((await drip(user.id, 0)).creditsGranted).toBe(0);
       expect(await creditsOf(user.id)).toBe(1000);
-      expect(notifyConfig).not.toHaveBeenCalled();
     } finally {
       for (const key of Object.keys(seeded)) delete config[key];
       Object.assign(config, prior);

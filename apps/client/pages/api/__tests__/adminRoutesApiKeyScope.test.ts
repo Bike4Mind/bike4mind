@@ -12,13 +12,13 @@ const {
   markAsReadMock,
   tagUpdateMock,
   toggleTagsMock,
-  createFabFileMock,
+  saveGeneratedAssetMock,
 } = vi.hoisted(() => ({
   inboxDeleteMock: vi.fn(),
   markAsReadMock: vi.fn(),
   tagUpdateMock: vi.fn(),
   toggleTagsMock: vi.fn(),
-  createFabFileMock: vi.fn(),
+  saveGeneratedAssetMock: vi.fn(),
   validateUserApiKeyMock: vi.fn(),
   findUserMock: vi.fn(),
   listBlockedMock: vi.fn(),
@@ -66,7 +66,8 @@ vi.mock('@bike4mind/services', async importOriginal => {
     userApiKeyService: { validateUserApiKey: validateUserApiKeyMock },
     userService: { ...actual.userService, adminRevokeUserSessions: revokeSessionsMock },
     tagService: { update: tagUpdateMock },
-    fabFilesService: { toggleTags: toggleTagsMock, createFabFile: createFabFileMock },
+    fabFilesService: { toggleTags: toggleTagsMock },
+    saveGeneratedAsset: saveGeneratedAssetMock,
     dataLakeService: { ...actual.dataLakeService, assertCanWriteDataLakeTags: vi.fn().mockResolvedValue(undefined) },
   };
 });
@@ -77,7 +78,11 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: (...args: unknown[]) => findUserMock(...args) },
   FabFile: {},
   fileTagRepository: {},
-  fabFileRepository: {},
+  fabFileRepository: {
+    findOne: vi.fn().mockResolvedValue(null),
+    findById: vi.fn().mockResolvedValue({ id: 'file-1' }),
+  },
+  questRepository: { findSessionIdsByImage: vi.fn().mockResolvedValue([]) },
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
   adminSettingsRepository: {},
@@ -180,7 +185,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   // A fresh document per read, as a real lookup returns, so the owner re-read is not the already-withheld one.
   findUserMock.mockImplementation(async () => ({ id: 'admin-1', isBanned: false, isAdmin: true }));
-  createFabFileMock.mockResolvedValue({ id: 'file-1' });
+  saveGeneratedAssetMock.mockResolvedValue({ saved: true, fileId: 'file-1', s3Key: 'k', fileName: 'f.png' });
   toggleTagsMock.mockResolvedValue([]);
   listBlockedMock.mockResolvedValue([]);
   revokeSessionsMock.mockResolvedValue(2);
@@ -233,8 +238,9 @@ describe('inbox/[id]/delete on an item addressed to another user', () => {
 });
 
 type ServiceOptions = { db: { users: { findById: (id: string) => Promise<{ isAdmin?: boolean } | null> } } };
-const ownerRoleSeenBy = async (mock: typeof tagUpdateMock) =>
-  (await (mock.mock.calls[0][2] as ServiceOptions).db.users.findById('admin-1'))?.isAdmin;
+// The service options sit third for the fabFile services and second for saveGeneratedAsset.
+const ownerRoleSeenBy = async (mock: typeof tagUpdateMock, argIndex = 2) =>
+  (await (mock.mock.calls[0][argIndex] as ServiceOptions).db.users.findById('admin-1'))?.isAdmin;
 
 describe.each([
   {
@@ -253,7 +259,7 @@ describe.each([
     name: 'files/copy-generated-image',
     scopes: [ApiKeyScope.WRITE_FILES],
     run: () => call(copyGeneratedImage, 'POST', 'key', { imageS3Key: 'img/1.png' }),
-    seen: () => ownerRoleSeenBy(createFabFileMock),
+    seen: () => ownerRoleSeenBy(saveGeneratedAssetMock, 1),
   },
 ])('$name service reads of the key owner', ({ scopes, run, seen }) => {
   it('see no admin role for a key without the admin scope', async () => {

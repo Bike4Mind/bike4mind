@@ -68,9 +68,28 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { creditService } from '@bike4mind/services';
 import { creditLotRepository, creditTransactionRepository, organizationRepository } from '@bike4mind/database';
+const approvalMocks = vi.hoisted(() => ({
+  policy: vi.fn(async (_credits: number): Promise<unknown> => null),
+  request: vi.fn(),
+}));
+vi.mock('@server/admin/creditGrants/gate', () => ({
+  creditGrantNeedsApproval: async (credits: number) => {
+    const policy = await approvalMocks.policy(credits);
+    return policy ? { policy } : { policy: null, release: async () => undefined };
+  },
+}));
+vi.mock('@server/admin/approvals/service', () => ({
+  requestApproval: (...a: unknown[]) => approvalMocks.request(...a),
+}));
+const POLICY = { enabled: true, bulkUserThreshold: 25, creditThreshold: 10, expiryHours: 24 };
+const PENDING = { approvalId: 'approval-1', status: 'pending' };
+
 import handler from '../top-up';
+import type { Request } from 'express';
+import { topUpOrg } from '@server/admin/creditGrants/topUpOrg';
 
 const BODY = { credits: 100, idempotencyKey: 'idem-key-12345', reason: 'Support goodwill top-up' };
 
@@ -115,6 +134,15 @@ describe('POST /api/admin/organizations/[id]/top-up', () => {
     const { res, run } = call({});
     await run();
     expect(mockAddCredits).toHaveBeenCalled();
+    expect(res._getJSONData()).toMatchObject({ organizationId: 'org-1', creditsAdded: 100 });
+  });
+
+  it('still answers success when the post-commit cache push fails', async () => {
+    vi.mocked(sendToClient).mockRejectedValueOnce(new Error('socket down'));
+    const { res, run } = call({});
+    await run();
+    expect(sendToClient).toHaveBeenCalled();
+    expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ organizationId: 'org-1', creditsAdded: 100 });
   });
 
@@ -317,5 +345,61 @@ describe('POST /api/admin/organizations/[id]/top-up credit kind', () => {
     const { run } = call({ isAdmin: false, body: { ...body, kind: 'refund' } });
     await expect(run()).rejects.toThrow(/[Aa]dmin/);
     expect(mockAddCredits).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/admin/organizations/[id]/top-up - approval gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockOrgFindById.mockResolvedValue({ id: 'org-1', userId: 'owner-1', name: 'Acme' });
+    mockAddCredits.mockResolvedValue({ creditHolder: {}, creditTransactionId: 'tx-topup' });
+    mockTxFindOne.mockResolvedValue(null);
+    approvalMocks.request.mockResolvedValue(PENDING);
+  });
+
+  it('answers 202 over the threshold with the idempotency key stored, and writes no ledger row', async () => {
+    approvalMocks.policy.mockResolvedValueOnce(POLICY);
+    const { res, run } = call({});
+    await run();
+    expect(approvalMocks.policy).toHaveBeenCalledWith(BODY.credits);
+    expect(res._getStatusCode()).toBe(202);
+    expect(approvalMocks.request).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.credits.top_up',
+        requiredPermission: 'credits:adjust',
+        requiresFullAdmin: true,
+        params: {
+          organizationId: 'org-1',
+          credits: BODY.credits,
+          kind: 'top_up',
+          idempotencyKey: BODY.idempotencyKey,
+          reason: BODY.reason,
+        },
+      }),
+      POLICY
+    );
+    expect(mockAddCredits).not.toHaveBeenCalled();
+  });
+
+  it('404s an unknown organization before storing a request', async () => {
+    approvalMocks.policy.mockResolvedValueOnce(POLICY);
+    mockOrgFindById.mockResolvedValueOnce(null);
+    await expect(call({}).run()).rejects.toThrow('Organization not found');
+    expect(approvalMocks.request).not.toHaveBeenCalled();
+  });
+
+  it('replays an approved top-up as idempotent: the stored key dedupes the second run', async () => {
+    const params = {
+      organizationId: 'org-1',
+      credits: 100,
+      kind: 'top_up' as const,
+      idempotencyKey: 'idem-key-12345',
+      reason: 'r',
+    };
+    const approverReq = { user: { id: 'admin-2', isAdmin: true }, logger: { info: vi.fn() } } as unknown as Request;
+    expect(await topUpOrg(approverReq, params)).toEqual({ organizationId: 'org-1', creditsAdded: 100 });
+    mockAddCredits.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }));
+    expect(await topUpOrg(approverReq, params)).toMatchObject({ idempotent: true });
   });
 });

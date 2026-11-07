@@ -37,6 +37,7 @@ import { creditService, userService } from '@bike4mind/services';
 import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
 import { unlockSignupGrantFromCreditPurchase } from '@server/credits/creditPurchaseUnlock';
 import { alertStripeRiskEvent, radarRiskLine, screenPaymentOutcome } from '@server/billing/paymentRisk';
+import { autoApproveRiskReviewAfterPayment } from '@server/security/riskReviewAutoApproval';
 import {
   forfeitHeldUnlockForFraudWarning,
   forfeitHeldUnlockForRefund,
@@ -48,6 +49,7 @@ import { respondToEarlyFraudWarning } from '@server/billing/earlyFraudWarning';
 import { propagateAccountRisk } from '@server/billing/linkedAccounts';
 import { disputeFacts, resolveLostUserDispute, resolveWonDispute } from '@server/billing/stripeDisputes';
 import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billing/paymentFailureNotice';
+import { recordBillingEvent, type BillingEventHints } from '@server/billing/billingEventStore';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { stripeMirrorFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
 import { emitBillingEvent, emitPurchaseEvents } from '@server/analytics/signupEvents';
@@ -115,6 +117,9 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
   req.logger.info(`Received webhook of type ${event.type}`);
 
+  // Filled by branches that resolve something the payload alone cannot tell the BillingEvent store.
+  const recordHints: BillingEventHints = {};
+
   switch (event.type) {
     case 'payment_intent.succeeded': {
       const intent = event.data.object;
@@ -146,6 +151,8 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
             },
             req.logger
           );
+          // After screening, which records the Radar outcome and card this reads.
+          await autoApproveRiskReviewAfterPayment(subscriber.id, req.logger);
         }
         break;
       }
@@ -262,6 +269,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         },
         req.logger
       );
+      await autoApproveRiskReviewAfterPayment(user.id, req.logger);
 
       req.logger.info('[CreditPurchase] Credits granted', {
         step: 'credits_granted',
@@ -465,6 +473,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         }
 
         await userRepository.update({ id: user.id, stripeCustomerId: null });
+        recordHints.owner = { ownerType: 'user', ownerId: user.id };
         req.logger.info(`Removed Stripe customer ID from user ${user.id}`);
       } else {
         const organization = await organizationRepository.findByStripeCustomerId(customer.id);
@@ -474,6 +483,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         }
 
         await organizationRepository.update({ id: organization.id, stripeCustomerId: null });
+        recordHints.owner = { ownerType: 'organization', ownerId: organization.id };
         req.logger.info(`Removed Stripe customer ID from organization ${organization.id}`);
       }
 
@@ -559,6 +569,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
                 // Check if it belongs to an org (subscription dispute)
                 const org = await organizationRepository.findByStripeCustomerId(customerId);
                 if (org) {
+                  recordHints.owner = { ownerType: 'organization', ownerId: org.id };
                   await stripeDisputeRepository.recordOpened(disputeFacts(dispute, 'organization', org.id));
                   await postMessageToSlack(
                     `\u26A0\uFE0F *Stripe Dispute (Subscription/Org)* \u2014 dispute ${dispute.id}\n*Organization:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.Organization, ownerId: org.id })}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nNo automatic clawback for org subscription disputes. Resolve it in Admin > Disputes.`
@@ -575,6 +586,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         const disputeRadarSuffix = disputeRadarLine ? `\n${disputeRadarLine}` : '';
 
         if (user) {
+          recordHints.owner = { ownerType: 'user', ownerId: user.id };
           const { deactivatedKeys } = await userService.flagDisputePending(user, {
             db: {
               users: userRepository,
@@ -642,6 +654,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         }
       }
 
+      if (user) recordHints.owner = { ownerType: 'user', ownerId: user.id };
       const facts = user
         ? disputeFacts(dispute, 'user', user.id)
         : orgId
@@ -735,7 +748,9 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       const refundPaymentIntentId =
         typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
 
-      // Runs before the refund-list guard: newer webhook API versions omit charge.refunds, and the reward only needs the cumulative amount.
+      // The reversal and the forfeit run before the refund-list guard: newer webhook API versions omit
+      // charge.refunds, and neither needs the refund objects (the reward reads the cumulative amount, the
+      // forfeit only the payer).
       // Deferred so a failing reversal cannot block the idempotent payer-side steps; rethrown below so Stripe redelivers.
       let reversalError: unknown;
       if (refundPaymentIntentId) {
@@ -762,14 +777,14 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
       let payerError: unknown;
       refundPayer: try {
+        // Before the purchase lookup too: a refunded subscription charge has no credit purchase row.
+        await forfeitHeldUnlockForRefund(charge, req.logger);
+
         const refunds = charge.refunds?.data ?? [];
         if (refunds.length === 0) {
           req.logger.debug(`charge.refunded has no refund objects, skipping`);
           break refundPayer;
         }
-
-        // Before the purchase lookup: a refunded subscription charge has no credit purchase row.
-        await forfeitHeldUnlockForRefund(charge, req.logger);
 
         if (!refundPaymentIntentId) {
           req.logger.debug(`charge.refunded has no payment_intent, skipping`);
@@ -854,7 +869,9 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       }
       req.logger.info(`Subscription ${subscriptionId} set to past_due after payment failure`);
 
-      await notifyPaymentFailed(updated, invoice, req.logger);
+      if (await notifyPaymentFailed(updated, invoice, req.logger)) {
+        recordHints.data = { dunningNoticeSent: true };
+      }
 
       // Each failed attempt is its own event: the row comes back on every retry, so the attempt
       // number goes into the occurrence, and a redelivery of the same attempt sends the same id.
@@ -954,6 +971,10 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       req.logger.debug(`Ignoring webhook of type ${event.type}`);
     }
   }
+
+  // After the side effects (or, for worker-handled types, the publish) succeeded: a throw above skips
+  // this, Stripe redelivers, and the replay re-runs them under their own per-entity dedupe keys.
+  await recordBillingEvent(event, recordHints, req.logger);
 
   return res.status(200).send();
 });

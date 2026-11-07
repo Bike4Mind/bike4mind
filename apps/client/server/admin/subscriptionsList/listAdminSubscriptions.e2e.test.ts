@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { Organization, User, mongoose } from '@bike4mind/database';
+import { BillingMismatchModel, Organization, User, billingMismatchRepository, mongoose } from '@bike4mind/database';
 import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
@@ -31,7 +31,12 @@ beforeAll(async () => {
 
 afterEach(async () => {
   // Per-collection delete, NOT dropDatabase: dropping would also drop the unique subscriptionId index.
-  await Promise.all([Subscription.deleteMany({}), User.deleteMany({}), Organization.deleteMany({})]);
+  await Promise.all([
+    Subscription.deleteMany({}),
+    User.deleteMany({}),
+    Organization.deleteMany({}),
+    BillingMismatchModel.deleteMany({}),
+  ]);
 });
 
 afterAll(async () => {
@@ -397,10 +402,12 @@ describe('adminSubscriptionsSummary', () => {
     // None of these rows carries a mirrored amount, so every paying one is counted as unpriced.
     expect(summary).toEqual({
       total: 7,
-      views: { paying: 3, pastDue: 1, comped: 1, churned: 1 },
+      views: { paying: 3, pastDue: 1, comped: 1, churned: 1, mismatched: 0 },
+      mismatches: { open: 0, orphanStripe: 0, lastSeenAt: null, orphans: [] },
       mrr: { currency: 'usd', amount: 0, unpriced: 3, otherCurrency: 0 },
       pastDueMrr: { currency: 'usd', amount: 0, unpriced: 1, otherCurrency: 0 },
       searchTruncated: false,
+      mismatchTruncated: false,
     });
   });
 
@@ -411,11 +418,71 @@ describe('adminSubscriptionsSummary', () => {
 
     expect(summary).toEqual({
       total: 1,
-      views: { paying: 1, pastDue: 0, comped: 0, churned: 0 },
+      views: { paying: 1, pastDue: 0, comped: 0, churned: 0, mismatched: 0 },
+      mismatches: { open: 0, orphanStripe: 0, lastSeenAt: null, orphans: [] },
       mrr: { currency: 'usd', amount: 0, unpriced: 1, otherCurrency: 0 },
       pastDueMrr: { currency: 'usd', amount: 0, unpriced: 0, otherCurrency: 0 },
       searchTruncated: false,
+      mismatchTruncated: false,
     });
+  });
+});
+
+describe('mismatched findings', () => {
+  const finding = (stripeSubscriptionId: string, subscriptionRowId: string | null) => ({
+    stripeSubscriptionId,
+    kind: subscriptionRowId ? ('drift' as const) : ('orphan_stripe' as const),
+    subscriptionRowId,
+    ownerType: 'User',
+    ownerId: 'u1',
+    fields: [],
+    stripeStatus: 'active',
+  });
+
+  const seedFindings = async () => {
+    const user = await seedUser('jane');
+    const userId = String(user._id);
+    const flagged = await seedSubscription(userId, { subscriptionId: 'sub_flagged', status: 'past_due' });
+    await seedSubscription(userId, { subscriptionId: 'sub_clean' });
+    await billingMismatchRepository.upsertOpen(finding('sub_flagged', String(flagged._id)), NOW);
+    await billingMismatchRepository.upsertOpen(finding('sub_orphan', null), NOW);
+    return String(flagged._id);
+  };
+
+  it('lists only the rows with an open finding', async () => {
+    const flaggedId = await seedFindings();
+
+    const list = await listAdminSubscriptions({ ...params, mismatch: 'yes' }, NOW);
+
+    expect(list.subscriptions.map(row => row.id)).toEqual([flaggedId]);
+    expect(list).toMatchObject({ total: 1, mismatchTruncated: false });
+  });
+
+  it('stops matching a row once its finding is resolved', async () => {
+    const flaggedId = await seedFindings();
+    await billingMismatchRepository.resolveForSubscription(flaggedId, 'sync', NOW);
+
+    expect((await listAdminSubscriptions({ ...params, mismatch: 'yes' }, NOW)).total).toBe(0);
+  });
+
+  it('counts the Mismatched view under the current filters and reports the open totals and orphans', async () => {
+    await seedFindings();
+
+    const summary = await adminSubscriptionsSummary({ status: ['past_due'] }, NOW);
+    const other = await adminSubscriptionsSummary({ status: ['canceled'] }, NOW);
+
+    expect(summary.views.mismatched).toBe(1);
+    expect(other.views.mismatched).toBe(0);
+    expect(summary.mismatches).toMatchObject({ open: 2, orphanStripe: 1, lastSeenAt: NOW.toISOString() });
+    expect(summary.mismatches.orphans).toEqual([
+      {
+        stripeSubscriptionId: 'sub_orphan',
+        ownerType: 'User',
+        ownerId: 'u1',
+        stripeStatus: 'active',
+        firstSeenAt: NOW.toISOString(),
+      },
+    ]);
   });
 });
 

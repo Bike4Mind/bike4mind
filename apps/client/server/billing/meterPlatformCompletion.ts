@@ -45,6 +45,7 @@ import {
 import { getSettingsMap, getSettingsValue, usdToCredits, usdToCreditsStochastic } from '@bike4mind/utils';
 import { assertApiKeyOrgMembership } from '@bike4mind/server-utils/billing/assertApiKeyOrgMembership';
 import { persistedIsAdmin } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { recordPaidPlanRefusal } from '@server/billing/userLimitEvents';
 import { getUserEntitlements } from '@server/entitlements';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 import {
@@ -83,7 +84,7 @@ export async function createModelAdmission(
     isCreditsEnforced(),
     systemModel ? undefined : loadFreeTierAllowedModels(adminSettingsRepository),
   ]);
-  return createSharedModelAdmission({
+  const admission = createSharedModelAdmission({
     user,
     configs,
     getEntitlements: () => getUserEntitlements(user),
@@ -91,6 +92,17 @@ export async function createModelAdmission(
     enforceCredits,
     freeTierAllowedModels,
   });
+  return {
+    admits: modelId => admission.admits(modelId),
+    async assert(modelId) {
+      try {
+        await admission.assert(modelId);
+      } catch (error) {
+        await recordPaidPlanRefusal(user.id, modelId, error);
+        throw error;
+      }
+    },
+  };
 }
 
 /**

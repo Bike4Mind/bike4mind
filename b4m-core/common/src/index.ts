@@ -3,6 +3,7 @@ export * from './adminUserNotes';
 export * from './signupGrant';
 export * from './apiErrorCodes';
 export * from './groupTypes';
+export * from './importHistoryFailure';
 export * from './insufficientCredits';
 export * from './memberCreditPeriod';
 export * from './validation';

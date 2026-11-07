@@ -3,10 +3,11 @@ import {
   OllamaBackend,
   OpenAICompatibleBackend,
   type ICompletionBackend,
+  type OllamaRequestSettingsReader,
   type OpenAICompatibleBackendOptions,
 } from '@bike4mind/llm-adapters';
 import { detectRuntimes } from '@bike4mind/local-models';
-import { parseLocalModelId, type FetchLike } from '@bike4mind/local-models/servers';
+import { parseLocalModelId, serverRuntimeId, type FetchLike } from '@bike4mind/local-models/servers';
 import type { ILogger } from '@bike4mind/observability';
 import { extractErrorMessage } from '@bike4mind/utils';
 import type { CliConfig } from '../storage';
@@ -17,6 +18,7 @@ import { ServerLlmBackend } from '../llm/ServerLlmBackend';
 import { WebSocketLlmBackend } from '../llm/WebSocketLlmBackend';
 import { MultiLlmBackend, type LlmRoute } from '../llm/MultiLlmBackend.js';
 import { ServerModelBackend } from '../llm/ServerModelBackend.js';
+import { desktopRequestSettings, desktopRuntimeIdForHost } from '../llm/desktopModelSettings.js';
 import { clean } from '../models/localModels.js';
 import {
   loadModelServers,
@@ -108,10 +110,13 @@ export interface BuildLlmBackendDeps {
   /** Clear the server-tool executor: with SSE completions, tools run CLI-side. */
   clearWebSocketToolExecutor: () => void;
   createServerBackend: (opts: ConstructorParameters<typeof ServerLlmBackend>[0]) => CliLlmBackend;
-  /** `fetch` is a saved model server's, which adds its credentials; `redact` scrubs them from what is logged. */
+  /**
+   * `fetch` is a saved model server's, which adds its credentials; `redact` scrubs them from what is logged.
+   * `requestSettings` applies Desktop's per-model settings to the host's models.
+   */
   createOllamaBackend: (
     host: string,
-    options?: { fetch?: FetchLike; redact?: (text: string) => string }
+    options?: { fetch?: FetchLike; redact?: (text: string) => string; requestSettings?: OllamaRequestSettingsReader }
   ) => LocalBackend;
   createOpenAICompatibleBackend: (options: OpenAICompatibleBackendOptions) => LocalBackend;
   createMultiBackend: (
@@ -162,6 +167,8 @@ export const defaultLlmBackendDeps: BuildLlmBackendDeps = {
   createOllamaBackend: (host, options) =>
     new OllamaBackend(host, cliLogger(options?.redact), {
       fetch: options?.fetch as typeof globalThis.fetch | undefined,
+      requestSettings: options?.requestSettings,
+      settingsWarning: message => logger.warnToFile(options?.redact ? options.redact(message) : message),
     }),
   createOpenAICompatibleBackend: options => new OpenAICompatibleBackend({ logger: cliLogger(), ...options }),
   createMultiBackend: (server, serverModels, routes, defaultModel) =>
@@ -362,7 +369,11 @@ async function attachServer(
     const baseUrl = target.runtime.baseUrl;
     const inner =
       target.runtime.kind === 'ollama'
-        ? deps.createOllamaBackend(baseUrl, { fetch, redact: target.redact })
+        ? deps.createOllamaBackend(baseUrl, {
+            fetch,
+            redact: target.redact,
+            requestSettings: desktopRequestSettings(serverRuntimeId(server.id)),
+          })
         : deps.createOpenAICompatibleBackend({
             baseUrl,
             label: clean(server.name),
@@ -479,7 +490,13 @@ export async function attachLocalModels(
       : detected
         ? (opts.detectedListingTimeoutMs ?? DETECTED_OLLAMA_LISTING_TIMEOUT_MS)
         : (opts.listingTimeoutMs ?? SAVED_OLLAMA_LISTING_TIMEOUT_MS);
-    const backend = host ? deps.createOllamaBackend(host) : null;
+    const runtimeId = host ? desktopRuntimeIdForHost(host) : null;
+    const requestSettings = runtimeId ? desktopRequestSettings(runtimeId) : undefined;
+    const backend = host
+      ? requestSettings
+        ? deps.createOllamaBackend(host, { requestSettings })
+        : deps.createOllamaBackend(host)
+      : null;
     const listing: { models: ModelInfo[]; error?: string } = backend
       ? await withDeadline(backend.getModelInfo(), deadlineMs).then(
           listed => ({ models: listed }),

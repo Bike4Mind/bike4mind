@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { activityFiltersFromSearch, activitySearchFromFilters, parseActivitySearch } from './activitySearch';
+import { USER_TIMELINE_TYPES } from '@bike4mind/common';
+import {
+  activityFiltersFromSearch,
+  activitySearchFromFilters,
+  categoriesOfTypes,
+  parseActivitySearch,
+  typesOfCategories,
+} from './activitySearch';
 import { parseUserProfileSearch } from './userProfileSearch';
 
 describe('parseActivitySearch', () => {
@@ -9,7 +16,7 @@ describe('parseActivitySearch', () => {
 
   it('drops a type list that names nothing or everything', () => {
     expect(parseActivitySearch({ types: 'bogus' }).types).toBeUndefined();
-    expect(parseActivitySearch({ types: 'signin,usage,credit,key,admin' }).types).toBeUndefined();
+    expect(parseActivitySearch({ types: [...USER_TIMELINE_TYPES].reverse().join(',') }).types).toBeUndefined();
   });
 
   it('keeps valid days, drops invalid ones and swaps a reversed range', () => {
@@ -26,7 +33,7 @@ describe('parseActivitySearch', () => {
 
 describe('activity filters round trip', () => {
   it('reads absent types as every source', () => {
-    expect(activityFiltersFromSearch({}).types).toEqual(['signin', 'usage', 'credit', 'key', 'admin']);
+    expect(activityFiltersFromSearch({}).types).toEqual([...USER_TIMELINE_TYPES]);
   });
 
   it('writes the filters back as short URL params', () => {
@@ -35,6 +42,18 @@ describe('activity filters round trip', () => {
       from: '2026-10-01',
       to: undefined,
     });
+  });
+});
+
+describe('activity categories', () => {
+  it('maps categories to their types, and no category to every type', () => {
+    expect(typesOfCategories(['spend'])).toEqual(['usage', 'spend', 'limit']);
+    expect(typesOfCategories(['money', 'admin'])).toEqual(['credit', 'payment', 'admin', 'moderation']);
+    expect(typesOfCategories([])).toEqual([...USER_TIMELINE_TYPES]);
+  });
+
+  it('reads a category as on when any of its types is selected', () => {
+    expect(categoriesOfTypes(['signin', 'payment'])).toEqual(['security', 'money']);
   });
 });
 

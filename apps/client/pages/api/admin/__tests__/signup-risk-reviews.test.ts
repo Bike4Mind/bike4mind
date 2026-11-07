@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => Promise<void>>,
   baseOptions: vi.fn(),
   findPending: vi.fn(),
+  findAutoApprovals: vi.fn(),
   setState: vi.fn(),
   creditsSpent: vi.fn(),
   keysCreated: vi.fn(),
@@ -14,6 +15,8 @@ const h = vi.hoisted(() => ({
   inTransaction: false,
   settings: vi.fn(),
   release: vi.fn(),
+  advisories: vi.fn(),
+  warn: vi.fn(),
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
@@ -38,7 +41,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  userRepository: { findPendingRiskReviews: h.findPending, setRiskReviewState: h.setState },
+  userRepository: {
+    findPendingRiskReviews: h.findPending,
+    findRiskAutoApprovals: h.findAutoApprovals,
+    setRiskReviewState: h.setState,
+  },
   usageEventRepository: { creditsSpentByUsers: h.creditsSpent },
   userApiKeyRepository: { countCreatedByUserIds: h.keysCreated },
   adminSettingsRepository: {},
@@ -58,6 +65,7 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
   userAuditTarget: async (id: string) => ({ kind: 'user', id, displayName: `${id}@example.com` }),
 }));
 vi.mock('@server/credits/riskReviewGrantRelease', () => ({ releaseRiskReviewedSignupGrant: h.release }));
+vi.mock('@server/security/abuseAssessment/riskReviewAdvisory', () => ({ findRiskReviewAdvisories: h.advisories }));
 import '@pages/api/admin/signup-risk-reviews';
 
 const ADMIN_ID = 'a'.repeat(24);
@@ -67,7 +75,7 @@ const REASON = 'Spam or bot cohort';
 
 const request = (method: 'GET' | 'POST', body?: unknown, isAdmin = true) => {
   const { req, res } = createMocks({ method, body });
-  Object.assign(req, { user: { id: ADMIN_ID, isAdmin }, logger: {} });
+  Object.assign(req, { user: { id: ADMIN_ID, isAdmin }, logger: { warn: h.warn } });
   return { req, res };
 };
 
@@ -85,7 +93,10 @@ const pendingUser = (id: string, email: string, score: number) => ({
 });
 
 beforeEach(() => {
+  h.advisories.mockResolvedValue(new Map());
+  h.warn.mockReset();
   h.findPending.mockReset().mockResolvedValue([]);
+  h.findAutoApprovals.mockReset().mockResolvedValue([]);
   h.setState.mockReset().mockResolvedValue(true);
   h.settings.mockReset().mockResolvedValue({});
   h.creditsSpent.mockReset().mockResolvedValue({});
@@ -108,6 +119,34 @@ describe('signup risk review queue', () => {
 
     expect(h.findPending).not.toHaveBeenCalled();
     expect(h.setState).not.toHaveBeenCalled();
+  });
+
+  it('lists recent automatic approvals so a reviewer can reopen them', async () => {
+    const decidedAt = new Date('2026-11-01T09:00:00Z');
+    h.findAutoApprovals.mockResolvedValue([
+      {
+        id: USER_A,
+        email: 'payer@example.org',
+        username: 'payer',
+        riskScore: { score: 62, signals: [], computedAt: decidedAt, reviewState: 'approved' },
+        riskReviewAutoApproval: { policy: 'settled_payment', decidedAt },
+      },
+    ]);
+    const { req, res } = request('GET');
+
+    await h.handlers.get(req, res);
+
+    expect(h.findAutoApprovals).toHaveBeenCalledWith({ since: expect.any(Date), limit: 200 });
+    expect(res._getJSONData().autoApproved).toEqual([
+      {
+        userId: USER_A,
+        email: 'payer@example.org',
+        username: 'payer',
+        score: 62,
+        policy: 'settled_payment',
+        decidedAt: decidedAt.toISOString(),
+      },
+    ]);
   });
 
   it('lists pending accounts with their registrable domain, spend and key count', async () => {
@@ -135,6 +174,58 @@ describe('signup risk review queue', () => {
       points: 15,
       reason: 'First API key created 3 minutes after signup',
     });
+  });
+
+  it('attaches the advisory model verdict to the rows it names, and null elsewhere', async () => {
+    h.findPending.mockResolvedValue([
+      pendingUser(USER_A, 'bot1@np.burner-example.com', 80),
+      pendingUser(USER_B, 'jane@example.org', 55),
+    ]);
+    const assessedAt = new Date('2026-11-02T10:00:00Z');
+    h.advisories.mockResolvedValue(
+      new Map([
+        [
+          USER_A,
+          {
+            detectionId: 'd1',
+            detector: 'signupNetworkBurst',
+            result: 'abuse',
+            confidence: 0.8,
+            assessedAt,
+            otherVerdicts: 2,
+            newerVerdicts: 1,
+          },
+        ],
+      ])
+    );
+    const { req, res } = request('GET');
+
+    await h.handlers.get(req, res);
+
+    expect(h.advisories).toHaveBeenCalledWith([USER_A, USER_B], expect.objectContaining({ warn: h.warn }));
+    const body = res._getJSONData();
+    expect(body.data[0].advisory).toEqual({
+      detectionId: 'd1',
+      detector: 'signupNetworkBurst',
+      result: 'abuse',
+      confidence: 0.8,
+      assessedAt: assessedAt.toISOString(),
+      otherVerdicts: 2,
+      newerVerdicts: 1,
+    });
+    expect(body.data[1].advisory).toBeNull();
+  });
+
+  it('still lists the queue when the advisory read fails', async () => {
+    h.findPending.mockResolvedValue([pendingUser(USER_A, 'bot1@np.burner-example.com', 80)]);
+    h.advisories.mockRejectedValue(new Error('assessments down'));
+    const { req, res } = request('GET');
+
+    await h.handlers.get(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().data[0].advisory).toBeNull();
+    expect(h.warn).toHaveBeenCalledWith('Signup risk review advisories unavailable', { error: expect.any(Error) });
   });
 
   it('returns the configured review threshold', async () => {

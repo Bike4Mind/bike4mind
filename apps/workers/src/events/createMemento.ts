@@ -11,11 +11,13 @@ import {
   MementoTier,
   MementoType,
 } from '@bike4mind/common';
+import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { apiKeyService, mementoService } from '@bike4mind/services';
 import { MementoEvaluationService } from '@bike4mind/services/llm';
 import { isMementosV2Enabled, writeFactToLedger } from '@bike4mind/server-utils/memory/mementoLedgerMirror';
 import { generateMementoSummaryEmbedding } from '@bike4mind/server-utils/utils/mementoEmbedding';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
+import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
 
 const { findMostSimilarMemento } = mementoService;
 
@@ -66,6 +68,23 @@ export const handler = withEventContext(async (event, logger) => {
     },
     { logger }
   );
+
+  // Extraction runs on the chat turn's model, not the operations model, so that is the model whose
+  // price can waive a zero-balance refusal.
+  const resolveModelInfo = async () => {
+    const modelInfo = (await getAvailableModels(apiKeyTable)).find(candidate => candidate.id === model);
+    if (!modelInfo) throw new Error(`Memento model "${model}" is not available`);
+    return modelInfo;
+  };
+  if (
+    !(await payerCanFundSessionOperation({
+      payerId: userId,
+      operation: 'memento extraction',
+      resolveModelInfo,
+      logger,
+    }))
+  )
+    return;
 
   // STEP 1: Evaluate the prompt into distinct facts. The fact-style extraction prompt is a V2 change:
   // with V2 off the extraction uses the original prompt, so a flag-off V1 user's mementos are unchanged.

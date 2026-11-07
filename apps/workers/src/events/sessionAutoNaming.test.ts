@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   getOperationsModel: vi.fn(),
   autoName: vi.fn(),
   recordUsage: vi.fn(),
+  payerCanFund: vi.fn(),
 }));
 
 vi.mock('@workers/utils/eventContext', () => ({ withEventContext: (handler: unknown) => handler }));
@@ -23,6 +24,7 @@ vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: mocks.getOperationsModel },
 }));
 vi.mock('@workers/events/recordSessionOperationalUsage', () => ({ recordSessionOperationalUsage: mocks.recordUsage }));
+vi.mock('@workers/events/sessionOperationalCreditGate', () => ({ payerCanFundSessionOperation: mocks.payerCanFund }));
 
 import { handler } from './sessionAutoNaming';
 
@@ -40,6 +42,7 @@ describe('session auto-naming AI access', () => {
     mocks.findUser.mockResolvedValue({ id: 'owner-1' });
     mocks.getOperationsModel.mockResolvedValue({ modelId: 'test-model', llm: {}, modelInfo: {} });
     mocks.autoName.mockResolvedValue({ name: 'Generated name' });
+    mocks.payerCanFund.mockResolvedValue(true);
   });
 
   it.each([null, { id: 'owner-1', riskScore: { reviewState: 'pending' } }, { id: 'owner-1', isModerated: true }])(
@@ -60,6 +63,15 @@ describe('session auto-naming AI access', () => {
     expect(mocks.findUser).toHaveBeenCalledWith('actor-1');
     expect(mocks.autoName).toHaveBeenCalledTimes(1);
     expect(mocks.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'actor-1' }));
+  });
+
+  it('runs no model and records no usage when the payer cannot fund the operation', async () => {
+    mocks.payerCanFund.mockResolvedValue(false);
+    await run();
+    expect(mocks.payerCanFund).toHaveBeenCalledWith(expect.objectContaining({ payerId: 'owner-1' }));
+    expect(mocks.getOperationsModel).not.toHaveBeenCalled();
+    expect(mocks.autoName).not.toHaveBeenCalled();
+    expect(mocks.recordUsage).not.toHaveBeenCalled();
   });
 
   it('runs no model when the account lookup fails', async () => {

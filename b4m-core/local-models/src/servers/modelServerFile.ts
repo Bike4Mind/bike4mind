@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { parseSshDestination } from './ssh';
@@ -23,7 +23,7 @@ export interface ModelServerSpecs {
   gpuMemoryGiB: number | null;
   bandwidthGBps: number | null;
   unified: boolean;
-  /** The server's OLLAMA_KV_CACHE_TYPE as entered; absent is Ollama's f16 default. */
+  /** A remote or SSH Ollama's OLLAMA_KV_CACHE_TYPE as entered; absent is Ollama's f16 default. */
   kvCacheType?: QuantizedKvCacheType;
 }
 
@@ -219,19 +219,7 @@ export function serverRuntimeId(serverId: string): string {
   return `srv-${serverId}`;
 }
 
-export function localModelId(runtimeId: string, model: string): string {
-  return `local:${encodeURIComponent(runtimeId)}:${model}`;
-}
-
-export function parseLocalModelId(id: string): { runtimeId: string; model: string } | null {
-  const match = /^local:([^:]+):(.+)$/s.exec(id);
-  if (!match) return null;
-  try {
-    return { runtimeId: decodeURIComponent(match[1]), model: match[2] };
-  } catch {
-    return null;
-  }
-}
+export { localModelId, parseLocalModelId } from '../modelSettings/fields';
 
 export interface DesktopDirsOptions {
   platform?: NodeJS.Platform;
@@ -257,6 +245,37 @@ export function desktopUserDataDirs(opts: DesktopDirsOptions = {}): string[] {
   else if (platform === 'win32') appData = env.APPDATA || flavor.join(home, 'AppData', 'Roaming');
   else appData = env.XDG_CONFIG_HOME || flavor.join(home, '.config');
   return [flavor.join(appData, '@bike4mind', 'desktop'), flavor.join(appData, 'Bike4Mind')];
+}
+
+async function entryAt(target: string): Promise<'dir' | 'file' | 'missing' | 'unchecked'> {
+  try {
+    return (await stat(target)).isDirectory() ? 'dir' : 'file';
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'unchecked';
+  }
+}
+
+/**
+ * Where to read Desktop's file `name`: in `B4M_DESKTOP_USER_DATA` when set, else in the first of
+ * desktopUserDataDirs holding it, else in the first that exists. Null when none does.
+ */
+export async function desktopUserDataFile(name: string, opts: DesktopDirsOptions = {}): Promise<string | null> {
+  const flavor = (opts.platform ?? process.platform) === 'win32' ? path.win32 : path.posix;
+  const override = (opts.env ?? process.env).B4M_DESKTOP_USER_DATA?.trim();
+  if (override) return flavor.join(override, name);
+  // Electron creates the packaged folder on first launch, and each file may still sit in the older one. An entry
+  // that cannot be checked is taken, so its read reports why instead of falling through to another folder.
+  let firstExisting: string | null = null;
+  for (const dir of desktopUserDataDirs(opts)) {
+    const file = flavor.join(dir, name);
+    const folder = await entryAt(dir);
+    if (folder === 'unchecked') return file;
+    if (folder !== 'dir') continue;
+    firstExisting ??= file;
+    if ((await entryAt(file)) !== 'missing') return file;
+  }
+  return firstExisting;
 }
 
 export interface DesktopModelServers {
@@ -294,8 +313,13 @@ function withoutUserinfo(baseUrl: string): string {
  * Desktop is read as it is. A missing file is not a problem: Desktop may not be installed.
  */
 export async function readDesktopModelServers(opts: ReadDesktopOptions = {}): Promise<DesktopModelServers> {
-  for (const dir of opts.dirs ?? desktopUserDataDirs(opts)) {
-    const file = path.join(dir, FILE_NAME);
+  let files: string[];
+  if (opts.dirs) files = opts.dirs.map(dir => path.join(dir, FILE_NAME));
+  else {
+    const file = await desktopUserDataFile(FILE_NAME, opts);
+    files = file === null ? [] : [file];
+  }
+  for (const file of files) {
     let raw: string;
     try {
       raw = await readFile(file, 'utf8');

@@ -39,6 +39,13 @@ import {
 } from './toolParallelizer';
 import { RepeatedCallGuard, repeatedCallWarning, repeatedCallBlockedObservation } from './repeatedCallGuard';
 import { usableEvidenceConfidence } from './iterationConfidence';
+import {
+  parseSelfReport,
+  SELF_REPORT_CONFIDENCE_PROMPT,
+  SELF_REPORT_CONFIDENCE_REMINDER,
+  SelfReportStreamFilter,
+  type SelfReport,
+} from './selfReportConfidence';
 
 /**
  * Placeholder tool_result content for a tool_use that never ran because the run
@@ -300,6 +307,7 @@ export class ReActAgent extends EventEmitter {
     toolName: string;
     confidence: number;
     source: 'deterministic' | 'llm_self_report' | 'heuristic' | 'default';
+    reason?: string;
     timestamp: number;
   }> = [];
   /** Confidence scores collected during the current iteration (reset each iteration) */
@@ -560,6 +568,8 @@ export class ReActAgent extends EventEmitter {
         const processedToolIds = new Set<string>(); // Track which tool calls we've already processed
         let hadToolCalls = false; // Track if this iteration had any tool calls
         let thoughtEmitted = false; // Dedupe per-iteration thought step across multi-frame streaming
+        let selfReport: SelfReport | undefined; // The model's confidence report for this turn's tool calls
+        const selfReportFilter = this.context.selfReportConfidence ? new SelfReportStreamFilter() : undefined;
         const reasoningWithholder = this.createReasoningWithholder();
 
         // Drop the previous iteration's workflow reminder BEFORE trimming so
@@ -575,7 +585,7 @@ export class ReActAgent extends EventEmitter {
           trimSteps(this.steps, maxHistoryIterations);
         }
 
-        appendWorkflowReminder(messages, options.workflowReminder);
+        appendWorkflowReminder(messages, this.reminderProvider(options.workflowReminder, iterations > 1));
         this.repairTranscriptBeforeRequest(messages);
 
         // Build cache strategy for prompt caching (system prompt + tools are static
@@ -626,7 +636,8 @@ export class ReActAgent extends EventEmitter {
                 const text = this.visibleText(reasoningWithholder, rawText, completionInfo?.channel);
                 if (text) {
                   currentText += text;
-                  this.emit('text_delta', { delta: text, iteration: iterationIndex });
+                  const delta = selfReportFilter ? selfReportFilter.push(text) : text;
+                  if (delta) this.emit('text_delta', { delta, iteration: iterationIndex });
                 }
               }
 
@@ -687,10 +698,13 @@ export class ReActAgent extends EventEmitter {
                   // Emit the model's preamble as a single thought step before
                   // the first action of this iteration. Deduped across
                   // multi-frame streaming via `thoughtEmitted`.
-                  if (!thoughtEmitted && currentText.trim()) {
+                  const turn = thoughtEmitted ? undefined : this.readSelfReport(currentText);
+                  if (turn) selfReport = turn.report;
+                  const preamble = turn?.text.trim();
+                  if (preamble) {
                     const thoughtStep: AgentStep = {
                       type: 'thought',
-                      content: currentText.trim(),
+                      content: preamble,
                       metadata: {
                         timestamp: Date.now(),
                       },
@@ -749,7 +763,8 @@ export class ReActAgent extends EventEmitter {
                         toolUse.name,
                         observation,
                         isFailedResult(result) || this.takeToolFailure(toolUse),
-                        this.takeToolOutput(toolUse)
+                        this.takeToolOutput(toolUse),
+                        selfReport
                       );
                     }
                   } else {
@@ -777,7 +792,8 @@ export class ReActAgent extends EventEmitter {
                         toolUse.name,
                         observation,
                         this.takeToolFailure(toolUse),
-                        this.takeToolOutput(toolUse)
+                        this.takeToolOutput(toolUse),
+                        selfReport
                       );
                     }
                   }
@@ -785,7 +801,10 @@ export class ReActAgent extends EventEmitter {
               }
             }
           );
+          const heldDelta = selfReportFilter?.flush();
+          if (heldDelta) this.emit('text_delta', { delta: heldDelta, iteration: iterationIndex });
           currentText += this.flushHeldText(reasoningWithholder, iterationIndex);
+          if (!hadToolCalls) currentText = this.readSelfReport(currentText).text;
         } catch (completionError) {
           if (!reactiveCompactionAttempted && options.onContextLimit && isContextLimitError(completionError)) {
             reactiveCompactionAttempted = true;
@@ -1048,7 +1067,25 @@ export class ReActAgent extends EventEmitter {
     // same guidance so chart/code/HTML/SVG/Mermaid output is wrapped in
     // <artifact> tags. When unset, behavior is unchanged.
     const artifact = this.context.artifactEmissionPrompt?.trim();
-    return artifact ? `${composed}\n\n${artifact}` : composed;
+    const withArtifact = artifact ? `${composed}\n\n${artifact}` : composed;
+    return this.context.selfReportConfidence ? `${withArtifact}\n\n${SELF_REPORT_CONFIDENCE_PROMPT}` : withArtifact;
+  }
+
+  /**
+   * The trailing reminder source for a request: the caller's workflow state plus, on every request after
+   * the first, the confidence nudge. The first request already carries the system-prompt instruction.
+   */
+  private reminderProvider(
+    workflowReminder: (() => string | null) | undefined,
+    afterFirstIteration: boolean
+  ): (() => string | null) | undefined {
+    if (!this.context.selfReportConfidence || !afterFirstIteration) return workflowReminder;
+    return () => [workflowReminder?.()?.trim(), SELF_REPORT_CONFIDENCE_REMINDER].filter(Boolean).join('\n\n');
+  }
+
+  /** The turn text split into the model's confidence report and the rest; a no-op when self-report is off. */
+  private readSelfReport(text: string): { report?: SelfReport; text: string } {
+    return this.context.selfReportConfidence ? parseSelfReport(text) : { text };
   }
 
   private buildDefaultSystemPrompt(): string {
@@ -1474,7 +1511,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         trimSteps(this.steps, maxHistoryIterations);
       }
 
-      appendWorkflowReminder(this.messages, options.workflowReminder);
+      appendWorkflowReminder(this.messages, this.reminderProvider(options.workflowReminder, this.iterations > 1));
       // A resumed checkpoint can need repair inside its protected prefix; keep the prefix ending at the
       // same message so trimming never drops the query.
       const lastProtected = this.messages[this.initialMessageCount - 1];
@@ -1489,6 +1526,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       const gatedToolCalls: GatedToolCall[] = [];
       let hadToolCalls = false;
       let thoughtEmitted = false; // Dedupe per-iteration thought step across multi-frame streaming
+      let selfReport: SelfReport | undefined; // The model's confidence report for this turn's tool calls
+      const selfReportFilter = this.context.selfReportConfidence ? new SelfReportStreamFilter() : undefined;
       const reasoningWithholder = this.createReasoningWithholder();
       const iterStartInputTokens = this.totalInputTokens;
       const iterStartOutputTokens = this.totalOutputTokens;
@@ -1525,7 +1564,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
             const text = this.visibleText(reasoningWithholder, rawText, completionInfo?.channel);
             if (text) {
               currentText += text;
-              this.emit('text_delta', { delta: text, iteration: iterationIndex });
+              const delta = selfReportFilter ? selfReportFilter.push(text) : text;
+              if (delta) this.emit('text_delta', { delta, iteration: iterationIndex });
             }
           }
 
@@ -1583,10 +1623,13 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
               // Emit the model's preamble as a single thought step before
               // the first action of this iteration. Deduped via
               // `thoughtEmitted` across multi-frame streaming.
-              if (!thoughtEmitted && currentText.trim()) {
+              const turn = thoughtEmitted ? undefined : this.readSelfReport(currentText);
+              if (turn) selfReport = turn.report;
+              const preamble = turn?.text.trim();
+              if (preamble) {
                 const thoughtStep: AgentStep = {
                   type: 'thought',
-                  content: currentText.trim(),
+                  content: preamble,
                   // `this.iterations` is 1-indexed at the start of each
                   // runIteration (incremented at the top of the method). Subtract 1 so the
                   // persisted iteration matches the 0-indexed convention used
@@ -1650,7 +1693,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
                       toolUse.name,
                       observation,
                       isFailedResult(result) || this.takeToolFailure(toolUse),
-                      this.takeToolOutput(toolUse)
+                      this.takeToolOutput(toolUse),
+                      selfReport
                     );
                     iterationSteps.push(obsStep);
                   }
@@ -1681,7 +1725,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
                       toolUse.name,
                       observation,
                       this.takeToolFailure(toolUse),
-                      this.takeToolOutput(toolUse)
+                      this.takeToolOutput(toolUse),
+                      selfReport
                     );
                     iterationSteps.push(obsStep);
                   }
@@ -1691,7 +1736,10 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
           }
         }
       );
+      const heldDelta = selfReportFilter?.flush();
+      if (heldDelta) this.emit('text_delta', { delta: heldDelta, iteration: iterationIndex });
       currentText += this.flushHeldText(reasoningWithholder, iterationIndex);
+      if (!hadToolCalls) currentText = this.readSelfReport(currentText).text;
 
       // Final-answer decision deferred from the streaming callback. See the
       // matching comment in `run()` for full rationale.
@@ -1946,11 +1994,24 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
     toolName: string,
     observation: string,
     toolFailed = false,
-    toolOutput?: string
+    toolOutput?: string,
+    selfReport?: SelfReport
   ): AgentStep {
-    const { confidence, source: confidenceSource } = this.scoreToolResult(toolName, observation, toolOutput);
+    const scored = this.scoreToolResult(toolName, observation, toolOutput);
+    // Only a score nothing has verified yields to the model's own: an error, an empty result or a
+    // tool validator's verdict is ground truth the model's pre-result estimate must not override.
+    const useSelfReport = !!selfReport && (scored.source === 'default' || scored.source === 'heuristic');
+    const confidence = useSelfReport ? selfReport.confidence : scored.confidence;
+    const confidenceSource = useSelfReport ? 'llm_self_report' : scored.source;
+    const confidenceReason = useSelfReport ? selfReport.reason : undefined;
 
-    this.confidenceLog.push({ toolName, confidence, source: confidenceSource, timestamp: Date.now() });
+    this.confidenceLog.push({
+      toolName,
+      confidence,
+      source: confidenceSource,
+      ...(confidenceReason ? { reason: confidenceReason } : {}),
+      timestamp: Date.now(),
+    });
     this.iterationConfidences.push(confidence);
     this.iterationToolFailed.push(toolFailed);
 
@@ -1963,6 +2024,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         iteration: this.iterations - 1,
         confidence,
         confidenceSource,
+        ...(confidenceReason ? { confidenceReason } : {}),
         ...(toolFailed ? { toolFailed: true } : {}),
       },
     };
@@ -1974,8 +2036,14 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
   /**
    * Create and emit an observation step, scoring confidence for the result
    */
-  private emitObservationStep(toolName: string, observation: string, toolFailed = false, toolOutput?: string): void {
-    this.buildObservationStep(toolName, observation, toolFailed, toolOutput);
+  private emitObservationStep(
+    toolName: string,
+    observation: string,
+    toolFailed = false,
+    toolOutput?: string,
+    selfReport?: SelfReport
+  ): void {
+    this.buildObservationStep(toolName, observation, toolFailed, toolOutput, selfReport);
   }
 
   /**

@@ -56,6 +56,7 @@ import { registerAccountDeletionSweep } from './accountDeletionSweep';
 import { registerRealtimeConnectionSweep } from './realtimeConnectionSweep';
 import { registerIntegrationHealthCheck } from './integrationHealthCheck';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
+import { registerHelpDatalakeIngest } from './helpDatalakeIngest';
 import { registerDriveLakeResyncPoll } from './driveLakeResyncPoll';
 import { registerStorageReconciliation } from './storageReconciliation';
 import { registerGitHubLakeReconcile } from './githubLakeReconcile';
@@ -139,6 +140,7 @@ async function main() {
   registerRealtimeConnectionSweep(worker);
   registerIntegrationHealthCheck(worker, bootLogger);
   registerLakeHealthSweep(worker);
+  registerHelpDatalakeIngest(worker);
   registerDriveLakeResyncPoll(worker);
   registerStorageReconciliation(worker);
   registerGitHubLakeReconcile(worker);

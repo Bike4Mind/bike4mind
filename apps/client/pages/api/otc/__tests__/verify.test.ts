@@ -964,7 +964,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
         transactionId: 'domain-grant-credits:user-1',
       })
     );
-    // The returned user reflects the grant on top of the flat defaultFreeCredits.
+    // The returned user reflects the grant on top of the balance registration left.
     expect(res._getJSONData().user.currentCredits).toBe(1000 + EXPECTED_DOMAIN_CREDITS);
   });
 

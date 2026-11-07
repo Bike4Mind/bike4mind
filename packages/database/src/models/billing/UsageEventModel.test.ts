@@ -925,6 +925,28 @@ describe('UsageEventRepository', () => {
       expect(summary.latency.p95).toBeGreaterThanOrEqual(summary.latency.p50);
     });
 
+    it('counts failures and p95 latency per account', async () => {
+      const org = { ownerId: 'org-1', ownerType: CreditHolderType.Organization };
+      for (const latencyMs of [100, 200, 300]) {
+        await record({ ...org, latencyMs, status: 'ok' });
+      }
+      await record({ ...org, status: 'error', latencyMs: 400 });
+      await record({ ...org, status: 'timeout', latencyMs: 500 });
+      // Refusals and degenerates are their own rates, not failures.
+      await record({ ...org, status: 'refusal', latencyMs: 600 });
+      await record({ ...org, status: 'degenerate', latencyMs: 700 });
+      // No latencyMs anywhere: p95 reads 0 rather than null.
+      await record({ ownerId: 'user-9', ownerType: CreditHolderType.User, status: 'ok' });
+
+      const summary = await usageEventRepository.spendSummary();
+      const byOwner = Object.fromEntries(summary.byAccount.map(a => [a.ownerId, a]));
+
+      expect(byOwner['org-1']).toMatchObject({ requests: 7, failures: 2 });
+      expect(byOwner['org-1'].p95LatencyMs).toBeGreaterThanOrEqual(500);
+      expect(byOwner['org-1'].p95LatencyMs).toBeLessThanOrEqual(700);
+      expect(byOwner['user-9']).toMatchObject({ requests: 1, failures: 0, p95LatencyMs: 0 });
+    });
+
     it('honors the date window and the user/model filters', async () => {
       // timestamps:true governs createdAt through Mongoose, so age this row via the raw driver.
       const oldDoc = await record({ userId: 'u-a', model: 'opus' });

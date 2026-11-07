@@ -1,27 +1,32 @@
 import {
+  FabFileSourceType,
   FileEvents,
-  KnowledgeType,
+  GeneratedAssetMetadataSchema,
   Permission,
   SupportedFabFileMimeTypes,
   extensionFromMimeType,
   isImageServeable,
   fabFileResponseSchema,
+  type GeneratedAssetMetadata,
+  type IFabFileDocument,
 } from '@bike4mind/common';
 import {
   FabFile,
   User,
+  fabFileRepository,
   organizationRepository,
+  questRepository,
   withTransaction,
   adminSettingsRepository,
   dataLakeRepository,
   scopedSettingsRepository,
 } from '@bike4mind/database';
-import { fabFilesService } from '@bike4mind/services';
+import { saveGeneratedAsset } from '@bike4mind/services';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { respond } from '@server/utils/respond';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ForbiddenError, InternalServerError } from '@bike4mind/server-utils/utils/errors';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { userCanAccessGeneratedImage } from '@bike4mind/server-utils/utils/generatedImageAccess';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
@@ -45,7 +50,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
   })
   .post(
     asyncHandler<unknown, unknown, CopyGeneratedImageInput>(async (req, res) => {
-      const { user } = req;
+      const { user, logger } = req;
       const { imageS3Key, fileName } = copyGeneratedImageSchema.parse(req.body);
 
       // Object-level authz: generated-image keys are owner-less, so a caller could otherwise copy
@@ -55,87 +60,90 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
         throw new ForbiddenError('You do not have access to this image');
       }
 
-      const imageBuffer = await getGeneratedImageStorage().download(imageS3Key);
-
-      const metadata = await getGeneratedImageStorage().getMetadata(imageS3Key);
-      const storedType = metadata.contentType;
-      // An octet-stream (what S3 reports for objects written without an explicit ContentType)
-      // carries no type at all, and claim-first would then fall through to the caller-supplied
-      // fileName - storing PNG bytes as whatever "notes.txt" claims. Treat it as absent. This
-      // single substring match is deliberately broader than the two-spelling check in
-      // b4m-core/fab-pipeline/src/ingest.ts, so it also catches cased and parameterised variants
-      // (e.g. "; charset=binary").
-      const contentType =
-        !storedType || storedType.trim().toLowerCase().includes('octet-stream')
-          ? SupportedFabFileMimeTypes.PNG
-          : storedType;
-
-      // Derive the extension via the shared reverse lookup so structured types (e.g. Excel's
-      // spreadsheetml) map to ".xlsx" instead of a bogus ".sheet".
-      const extension = extensionFromMimeType(contentType) || 'png';
-      const finalFileName = fileName || `image_${Date.now()}.${extension}`;
-
-      await consumeFileUploadBudget(req, 1);
-
-      const result = await withTransaction(async () => {
-        return fabFilesService.createFabFile(
-          user.id,
-          {
-            type: KnowledgeType.FILE,
-            fileName: finalFileName,
-            mimeType: contentType,
-            fileSize: imageBuffer.length,
-            content: imageBuffer, // Pass the buffer as content to trigger upload
-          },
-          {
-            // The contentType comes off the stored S3 object, not the request body, so it outranks
-            // a caller-supplied fileName (an "image.txt" carrying image/png bytes stays image/png).
-            mimeTypePrecedence: 'claim-first',
-            db: {
-              adminSettings: adminSettingsRepository,
-              // Absent, the admission lever (#1680) resolves platform-only here, so a per-org/owner/lake
-              // enforcement override would silently not apply on this door.
-              scopedSettings: scopedSettingsRepository,
-              fabFiles: FabFile,
-              users: requesterScopedUsers(req, User),
-              organizations: organizationRepository,
-              dataLakes: dataLakeRepository,
-            },
-            storage: {
-              upload: async (filepath, _content, option) => {
-                try {
-                  console.log(`[copy-generated-image] Uploading to S3: ${filepath}, size: ${imageBuffer.length}`);
-                  // S3Storage.upload signature: (content, destination, options)
-                  await getFilesStorage().upload(imageBuffer, filepath, {
-                    ContentType: option?.ContentType || contentType,
-                  });
-                  console.log(`[copy-generated-image] Upload successful: ${filepath}`);
-                  return filepath;
-                } catch (error) {
-                  console.error('[copy-generated-image] Upload failed:', error);
-                  throw error;
-                }
-              },
-              generateSignedUrl: (filepath: string, expireInSeconds: number, mode?: 'get' | 'put') =>
-                getFilesStorage().getSignedUrl(filepath, mode ?? 'get', {
-                  expiresIn: expireInSeconds,
-                }),
-            },
-          }
-        );
+      // Provenance is secondary to keeping the image: a failed lookup saves it unrecorded rather than failing.
+      const original = await findOriginalGeneration(imageS3Key, user.id).catch((error: unknown) => {
+        logger.warn('[copy-generated-image] original generation lookup failed', { error });
+        return undefined;
       });
 
-      await logEvent(
-        { userId: user.id, type: FileEvents.CREATE_FILE, metadata: { fileId: result.id } },
-        { ability: req.ability }
-      );
+      const saveCopy = async (): Promise<string> => {
+        const imageBuffer = await getGeneratedImageStorage().download(imageS3Key);
+
+        const metadata = await getGeneratedImageStorage().getMetadata(imageS3Key);
+        const storedType = metadata.contentType;
+        // An octet-stream (what S3 reports for objects written without an explicit ContentType)
+        // carries no type at all, and claim-first would then fall through to the caller-supplied
+        // fileName - storing PNG bytes as whatever "notes.txt" claims. Treat it as absent. This
+        // single substring match is deliberately broader than the two-spelling check in
+        // b4m-core/fab-pipeline/src/ingest.ts, so it also catches cased and parameterised variants
+        // (e.g. "; charset=binary").
+        // A type with no known extension (e.g. image/avif) is likewise stored as PNG: the generated-asset seam
+        // refuses a type it cannot name a file for.
+        const contentType =
+          !storedType || storedType.trim().toLowerCase().includes('octet-stream') || !extensionFromMimeType(storedType)
+            ? SupportedFabFileMimeTypes.PNG
+            : storedType;
+
+        await consumeFileUploadBudget(req, 1);
+
+        return withTransaction(async () => {
+          const saved = await saveGeneratedAsset(
+            {
+              userId: user.id,
+              bytes: imageBuffer,
+              // Off the stored S3 object, never the request body, so it outranks a caller-supplied fileName.
+              contentType,
+              generation: original?.generation ?? UNRECORDED_IMAGE_GENERATION,
+              generatedOutputKey: imageS3Key,
+              ...(fileName && { fileName }),
+            },
+            {
+              db: {
+                adminSettings: adminSettingsRepository,
+                // Absent, the admission lever (#1680) resolves platform-only here, so a per-org/owner/lake
+                // enforcement override would silently not apply on this door.
+                scopedSettings: scopedSettingsRepository,
+                fabFiles: fabFileRepository,
+                users: requesterScopedUsers(req, User),
+                organizations: organizationRepository,
+                dataLakes: dataLakeRepository,
+              },
+              storage: {
+                upload: (filepath, content, option) =>
+                  getFilesStorage().upload(content, filepath, { ContentType: option?.ContentType || contentType }),
+                generateSignedUrl: (filepath: string, expireInSeconds: number, mode?: 'get' | 'put') =>
+                  getFilesStorage().getSignedUrl(filepath, mode ?? 'get', {
+                    expiresIn: expireInSeconds,
+                  }),
+              },
+              logger,
+            }
+          );
+          // The caller is waiting on this file, so a refused save fails the request and rolls the transaction
+          // back; a storage-limit refusal keeps its 400 and byte counts.
+          if (!saved.saved) throw saved.cause ?? new InternalServerError('Failed to save the image to your files');
+          return saved.fileId;
+        });
+      };
+
+      // The caller's own generated file is the saved image: return it rather than a duplicate copy.
+      const fileId = original?.ownFileId ?? (await saveCopy());
+      const result = await fabFileRepository.findById(fileId);
+      if (!result) throw new InternalServerError('Failed to save the image to your files');
+
+      if (!original?.ownFileId) {
+        await logEvent(
+          { userId: user.id, type: FileEvents.CREATE_FILE, metadata: { fileId: result.id } },
+          { ability: req.ability }
+        );
+      }
 
       // The generated image is already moderated, but the new FabFile row starts 'pending' until
       // the async objectCreated scan clears it - only return a working URL once serveable;
       // otherwise return the record with no fileUrl so the client can show a placeholder.
       const responseFile =
         typeof (result as { toJSON?: unknown }).toJSON === 'function'
-          ? (result as unknown as { toJSON: () => typeof result }).toJSON()
+          ? (result as unknown as { toJSON: () => IFabFileDocument }).toJSON()
           : result;
       if (responseFile.filePath && isImageServeable(responseFile)) {
         const presignedUrl = await getFilesStorage().getSignedUrl(responseFile.filePath, 'get', {
@@ -153,6 +161,34 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
       return respond(res, fabFileResponseSchema, responseFile);
     })
   );
+
+// A chat image from before generations were recorded: kept as a generated image with no request or lineage.
+// GenerationDetails hides this exact record; keep the two in sync.
+const UNRECORDED_IMAGE_GENERATION: GeneratedAssetMetadata = { generator: 'image', provider: 'unknown', prompt: '' };
+
+/**
+ * Matched within the chats that reference the key, which the partial sessionId index serves, to find the file the
+ * image producers saved for it. `ownFileId` is set only when that file is the caller's, to be returned as-is.
+ */
+async function findOriginalGeneration(
+  imageKey: string,
+  userId: string
+): Promise<{ generation: GeneratedAssetMetadata; ownFileId?: string } | undefined> {
+  const sessionIds = await questRepository.findSessionIdsByImage(imageKey);
+  if (sessionIds.length === 0) return undefined;
+  // Deliberately wide (soft-deleted, other users' sessions, no userId filter): authz already ran and the bytes are the same image.
+  const file = await fabFileRepository.findOne({
+    sourceType: FabFileSourceType.TOOL_GENERATED,
+    'sourceMetadata.sessionId': { $in: sessionIds },
+    'sourceMetadata.generatedOutputKey': imageKey,
+    deletedAt: null,
+  });
+  const generation = GeneratedAssetMetadataSchema.safeParse(file?.sourceMetadata?.generation);
+  if (!file || !generation.success) return undefined;
+  // A fresh save, not the original's job: reusing jobId would dedupe straight back to the original file.
+  const { jobId: _jobId, ...rest } = generation.data;
+  return { generation: rest, ...(file.userId === userId && { ownFileId: file.id }) };
+}
 
 export const config = {
   api: {

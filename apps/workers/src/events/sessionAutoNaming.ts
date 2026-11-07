@@ -5,6 +5,7 @@ import { OperationsModelService } from '@bike4mind/server-utils/services/operati
 import { sessionService } from '@bike4mind/services';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
+import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 
 export const handler = withEventContext(async (event, logger) => {
@@ -59,6 +60,8 @@ export const handler = withEventContext(async (event, logger) => {
     logger.warn(`Skipping auto-naming for session ${sessionId}: user missing or AI access held`);
     return;
   }
+
+  if (!(await payerCanFundSessionOperation({ payerId: user.id, operation: 'session auto-naming', logger }))) return;
 
   // Wrap in try/catch: auto-naming is a non-critical UX feature. LLM failures
   // (e.g. OpenAI 500s) must not cause a Lambda Invoke Error, so swallow and warn.

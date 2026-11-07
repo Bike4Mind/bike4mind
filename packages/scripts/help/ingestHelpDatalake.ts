@@ -122,6 +122,8 @@ export interface HelpDatalakeIngestOptions {
   helpContentRoot: string;
   /** Bounds the embedding work one run will do. Defaults to DEFAULT_MAX_CREATES_PER_RUN. */
   maxCreatesPerRun?: number;
+  /** Unattended runs must not recreate or reactivate a lake deleted after their initial lookup. */
+  requireActiveLake?: boolean;
   dryRun?: boolean;
 }
 
@@ -152,10 +154,16 @@ function memberSlug(file: IFabFileDocument): string | null {
 }
 
 /** Ensure the lake row exists and is active; returns its id. */
-async function ensureLake(deps: HelpDatalakeIngestDeps, opts: HelpDatalakeIngestOptions): Promise<string | null> {
+export async function ensureHelpDataLake(
+  deps: Pick<HelpDatalakeIngestDeps, 'db' | 'logger'>,
+  opts: Pick<HelpDatalakeIngestOptions, 'userId' | 'dryRun' | 'requireActiveLake'>
+): Promise<string | null> {
   // By tag, not slug: findBySlug skips deleted/purging lakes, which would send a deleted help lake
   // down the create path into the unique datalakeTag index instead of the reactivation below.
   const existing = await deps.db.dataLakes.findByDatalakeTag(HELP_DATALAKE_TAG);
+  if (opts.requireActiveLake && (!existing || existing.status !== 'active')) {
+    throw new Error('The system-help data lake is missing or inactive; refusing unattended reactivation');
+  }
   if (!existing) {
     deps.logger.info(`Creating public data lake "${HELP_DATALAKE_SLUG}"`);
     if (opts.dryRun) return null;
@@ -239,7 +247,7 @@ export async function ingestHelpDatalake(
 ): Promise<HelpDatalakeIngestResult> {
   const { logger } = deps;
   const maxCreates = opts.maxCreatesPerRun ?? DEFAULT_MAX_CREATES_PER_RUN;
-  const lakeId = await ensureLake(deps, opts);
+  const lakeId = await ensureHelpDataLake(deps, opts);
 
   const { entries, desired, missingContent } = loadDesiredCorpus(opts, logger);
   logger.info(`Public help articles in the index: ${entries.length}`);
@@ -416,9 +424,8 @@ export async function ingestHelpDatalake(
   if (removeIds.length > 0) {
     logger.info(`Removing ${removeIds.length} stale/withdrawn help fabfile(s) + their chunks`);
     if (!opts.dryRun) {
-      // No self-host OpenSearch mirror needed here: both drivers run against an SST-deployed
-      // stage, which never sets B4M_SELF_HOST - so selfHostOpenSearchEnabled() can never be
-      // true on a path that reaches this line.
+      // Help chunks have no ANN-readiness stamp and are retrieved by Mongo scan on both hosted
+      // and self-host deployments, so this mirror has no OpenSearch documents to remove.
       //
       // Files go first, chunks after (#2583). This cron has no redelivery on a mid-run failure -
       // it runs directly in a Lambda, not behind a queue - so it is the least protected of the

@@ -6,6 +6,8 @@ const h = vi.hoisted(() => ({
   autoConfirm: vi.fn(),
   getSettingsMap: vi.fn(),
   recordAdminAction: vi.fn(),
+  runAssessments: vi.fn(),
+  assessmentDeps: vi.fn(),
 }));
 
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
@@ -18,6 +20,10 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@bike4mind/services', () => ({ adminAuditService: { recordAdminAction: h.recordAdminAction } }));
+vi.mock('@server/security/signupDomainHoldAssessment/signupDomainHoldAssessment', () => ({
+  runSignupDomainHoldAssessments: h.runAssessments,
+  defaultSignupDomainHoldAssessmentDeps: h.assessmentDeps,
+}));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: h.getSettingsMap,
   getSettingsValue: (key: string, settings: Record<string, unknown>, fallback: unknown) => settings[key] ?? fallback,
@@ -136,11 +142,13 @@ describe('signupDomainHoldTriage handler', () => {
     h.listPending.mockResolvedValue([hold('one.test')]);
     h.autoConfirm.mockResolvedValue(true);
     h.recordAdminAction.mockResolvedValue(null);
+    h.assessmentDeps.mockImplementation((_logger: unknown, shouldStop: () => boolean) => ({ shouldStop }));
+    h.runAssessments.mockResolvedValue({ status: 'skipped', reason: 'disabled' });
   });
 
-  it('reads the setting fresh and stops when an operator turned it off', async () => {
+  it('reads the setting fresh and stops the rule when an operator turned it off', async () => {
     h.getSettingsMap.mockResolvedValue({ autoConfirmDisposableAggregateHolds: false });
-    expect(await handler()).toEqual({ status: 'disabled' });
+    expect(await handler()).toEqual({ status: 'disabled', assessment: { status: 'skipped', reason: 'disabled' } });
     expect(h.getSettingsMap).toHaveBeenCalledWith(expect.anything(), {
       skipCache: true,
       names: ['autoConfirmDisposableAggregateHolds'],
@@ -153,5 +161,31 @@ describe('signupDomainHoldTriage handler', () => {
     h.autoConfirm.mockRejectedValue(new Error('write conflict'));
     await expect(handler()).rejects.toThrow('1 of 1 holds failed');
     expect(h.listPending).toHaveBeenCalledWith('disposable-aggregate', TRIAGE_BATCH_LIMIT);
+  });
+
+  it('runs the advisory assessment after the rule, stopping a minute before the Lambda timeout', async () => {
+    h.getSettingsMap.mockResolvedValue({});
+    const assessment = { status: 'ran', considered: 1, confirmed: 1, recorded: 0, failed: 0, errors: 0, skipped: {} };
+    h.runAssessments.mockResolvedValue(assessment);
+    const context = { getRemainingTimeInMillis: vi.fn().mockReturnValue(30_000) };
+    expect(await handler(undefined, context)).toMatchObject({ status: 'ran', confirmed: 1, assessment });
+    const [, shouldStop] = h.assessmentDeps.mock.calls[0];
+    expect(shouldStop()).toBe(true);
+    context.getRemainingTimeInMillis.mockReturnValue(120_000);
+    expect(shouldStop()).toBe(false);
+  });
+
+  it('fails the run when an assessment hit an unexpected error', async () => {
+    h.getSettingsMap.mockResolvedValue({});
+    h.runAssessments.mockResolvedValue({
+      status: 'ran',
+      considered: 2,
+      confirmed: 0,
+      recorded: 1,
+      failed: 0,
+      errors: 1,
+      skipped: {},
+    });
+    await expect(handler()).rejects.toThrow('1 of 2 assessments failed');
   });
 });

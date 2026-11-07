@@ -82,6 +82,9 @@ import { SkillMarket } from './skills/SkillMarket';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
+import { registerModelProtocol } from './model3d/engineProtocol';
+import { ModelLiveView } from './model3d/ModelLiveView';
+import { modelIpcHandlers } from './model3d/modelIpc';
 import { ChatService, sessionForRenderer, type ChatServiceDeps } from './ChatService';
 import { DeferredToolsSetting, parseDeferredToolsOverride } from './DeferredToolsSetting';
 import { CHAT_STREAM_TAG } from './devLogTag';
@@ -104,11 +107,14 @@ import { captureHistoryPage } from './captureHistoryPage';
 import { forgetLocalContexts, forgetLocalContextOf, OllamaLocal } from './OllamaLocal';
 import { registerModelServersIpc } from '../modelServers/ipc';
 import { LocalModels, optionCatalogSampling, type CatalogSamplingHook } from '../modelServers/LocalModels';
+import { hostLaunchers } from '../modelServers/LocalServerSupervisor';
 import { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
 import { ModelServerStore } from '../modelServers/ModelServerStore';
+import { readHostOllamaEnv } from '../modelServers/observedOllama';
 import { withEnteredSpecs } from '../models/enteredHardware';
 import { machineView } from '../models/fit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
+import { MODEL_SETTINGS_FILE_NAME } from '@shared/modelSettings';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
@@ -151,7 +157,7 @@ import { XcodeSimulatorDriver } from './simulator/XcodeSimulatorDriver';
 import { devLog } from '../devlog/DevLogSink';
 import { registerPullRequests } from '../pr';
 import type { PrMonitor } from '../pr/PrMonitor';
-import { appWindows } from '../windows';
+import { appWindows, focusedAppWindow } from '../windows';
 import { registerClaudeImport } from '../claudeImport';
 import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
 
@@ -294,6 +300,8 @@ export interface RegisteredChat {
   browser: BrowserManager;
   /** The live iOS Simulator view, whose stream is stopped on quit. */
   simulatorView: SimulatorLiveView;
+  /** The 3D model pane's open file, whose watcher is stopped on quit. */
+  modelView: ModelLiveView;
   /** Each conversation's pull request, and the timers that watch it. */
   pullRequests: PrMonitor;
   /** Import from Claude; started once the window is up so it never delays launch. */
@@ -304,6 +312,8 @@ export interface RegisteredChat {
   modelServers: ModelServerRegistry;
   /** Stops their health checks and any pending model list reload, on quit. */
   stopModelServers(): void;
+  /** Stops the servers Desktop started, on the quit pass that can wait. */
+  stopLocalServers(): Promise<void>;
   /** The Settings choice of local model context, which the Models screen's fit badges also plan for. */
   localContext: LocalContextPreference;
   /** Per-model defaults; the fit badges plan for each model's own context and draft too. */
@@ -388,6 +398,8 @@ export function registerChat(
   auth: AuthService,
   hooks: Pick<ChatServiceDeps, 'sessionClosed' | 'releaseSessionTerminals'> & {
     observeStream?(event: ChatStreamEvent): void;
+    /** Every session status push, as the renderers get it; main's needs-you watch reads these. */
+    observeSessionStatus?(event: ChatSessionStatusEvent): void;
     /** Revoking a model-pull grant in Settings stops that download; true once it no longer runs. */
     cancelModelPull?(key: string): Promise<boolean>;
     /** The curated list's projector sizes, so chat sizes a vision model the way the Models screen does. */
@@ -479,6 +491,7 @@ export function registerChat(
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
   registerArtifactProtocol();
+  registerModelProtocol();
   const artifacts = new ArtifactPublisher(() => auth.getApiClient(), logger);
   const artifactLibrary = new ArtifactLibrary(() => auth.getApiClient(), logger);
   const skillMarket = new SkillMarket({
@@ -501,12 +514,15 @@ export function registerChat(
     setting: () => localContext.read(),
     pinnedProjectors: () => hooks.pinnedProjectors?.() ?? new Map(),
     kvCacheType: () => modelServers.localKvCacheType(),
+    flashAttention: () => modelServers.flashAttention(LOCAL_SERVER_ID),
   });
   const lateReload = createLateReload(() => {
     models.forgetLocal();
     send(IPC_CHANNELS.chatModelsChanged, undefined);
   }, LATE_RELOAD_DEBOUNCE_MS);
-  const modelSettings = new ModelSettingsStore(join(userData, 'model-settings.json'), message => logger.warn(message));
+  const modelSettings = new ModelSettingsStore(join(userData, MODEL_SETTINGS_FILE_NAME), message =>
+    logger.warn(message)
+  );
   const loadSettings = (modelId: string) => modelSettings.get(modelId);
   // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
   const modelServers = new ModelServerRegistry({
@@ -519,6 +535,12 @@ export function registerChat(
     },
     edited: () => models.forgetLocal(),
     listedLate: lateReload.notify,
+    readOllamaEnv: url => readHostOllamaEnv(url),
+    launchers: hostLaunchers({
+      unifiedMemory: async () => (await localHardware.profile())?.memoryKind === 'unified',
+    }),
+    ownedServers: privateFile(join(userData, 'local-servers.json')),
+    ownedCipher: safeStorage,
     localSpecsChanged: () => {
       forgetLocalContexts();
       localSizing.forget?.();
@@ -613,6 +635,7 @@ export function registerChat(
   // replying, and this turns the pair into the one status a sidebar row draws.
   const activity = new SessionActivity((event: ChatSessionStatusEvent) => {
     send(IPC_CHANNELS.chatSessionStatus, event);
+    hooks.observeSessionStatus?.(event);
     // Only reached once a turn has run, long after pullRequests below exists.
     if (event.status === 'done') pullRequests.turnSettled(event.sessionId);
   });
@@ -660,6 +683,21 @@ export function registerChat(
         },
       })
   );
+
+  const modelView = new ModelLiveView({
+    state: state => send(IPC_CHANNELS.modelState, state),
+    // One rendering is enough: the focused app window, else the first.
+    captureTarget: () => {
+      const target = focusedAppWindow();
+      return target && !target.isDestroyed() ? target.webContents.id : null;
+    },
+    captureRequest: (target, request) => {
+      const window = appWindows().find(entry => !entry.isDestroyed() && entry.webContents.id === target);
+      if (!window) return false;
+      window.webContents.send(IPC_CHANNELS.modelCaptureRequest, request);
+      return true;
+    },
+  });
 
   const simulatorDriver = new XcodeSimulatorDriver();
   const simulatorView = new SimulatorLiveView(
@@ -710,6 +748,7 @@ export function registerChat(
     pullRequests,
     screen: desktopScreenCapturer(app.getName()),
     ...(process.platform === 'darwin' ? { simulator: { driver: simulatorDriver, view: simulatorView } } : {}),
+    model: modelView,
     prepareImage: prepareToolImage,
     history,
     local,
@@ -1233,6 +1272,7 @@ export function registerChat(
     return mcp.state();
   });
 
+  modelIpcHandlers(modelView);
   ipcMain.handle(IPC_CHANNELS.simulatorGetState, () => simulatorView.current());
   ipcMain.handle(IPC_CHANNELS.simulatorListDevices, async () =>
     process.platform === 'darwin' ? (await simulatorDriver.devices()).devices : []
@@ -1431,6 +1471,7 @@ export function registerChat(
     },
     send,
     logger,
+    webApi: () => auth.getApiClient(),
   });
 
   return {
@@ -1439,6 +1480,7 @@ export function registerChat(
     mcp,
     browser,
     simulatorView,
+    modelView,
     pullRequests,
     claudeImport,
     spareWorktrees,
@@ -1447,6 +1489,7 @@ export function registerChat(
       lateReload.stop();
       modelServers.stop();
     },
+    stopLocalServers: () => modelServers.stopLocalServers(),
     localContext,
     modelSettings,
     capabilityLedger,

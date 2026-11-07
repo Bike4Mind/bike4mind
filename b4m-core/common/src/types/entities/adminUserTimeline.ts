@@ -6,9 +6,45 @@ import type { IActiveSessionDto } from './AuthSessionTypes';
  * The sources merged into a user's Activity timeline. Each is one store, paged on the same
  * (at, id) keyset by the server; see apps/client/server/utils/userTimeline.ts.
  */
-export const USER_TIMELINE_TYPES = ['signin', 'usage', 'credit', 'key', 'admin'] as const;
+export const USER_TIMELINE_TYPES = [
+  'signup',
+  'signin',
+  'key',
+  'usage',
+  'spend',
+  'limit',
+  'credit',
+  'payment',
+  'admin',
+  'moderation',
+] as const;
 export const UserTimelineTypeSchema = z.enum(USER_TIMELINE_TYPES);
 export type UserTimelineType = z.infer<typeof UserTimelineTypeSchema>;
+
+/** The filters an admin picks from; each covers several sources. */
+export const USER_TIMELINE_CATEGORIES = ['spend', 'security', 'money', 'admin'] as const;
+export type UserTimelineCategory = (typeof USER_TIMELINE_CATEGORIES)[number];
+
+export const USER_TIMELINE_CATEGORY_TYPES: Readonly<Record<UserTimelineCategory, readonly UserTimelineType[]>> = {
+  spend: ['spend', 'usage', 'limit'],
+  security: ['signup', 'signin', 'key'],
+  money: ['credit', 'payment'],
+  admin: ['admin', 'moderation'],
+};
+
+export const USER_TIMELINE_CATEGORY_LABELS: Readonly<Record<UserTimelineCategory, string>> = {
+  spend: 'Spend',
+  security: 'Security',
+  money: 'Money',
+  admin: 'Admin',
+};
+
+export const userTimelineCategoryOf = (type: UserTimelineType): UserTimelineCategory =>
+  USER_TIMELINE_CATEGORIES.find(category => USER_TIMELINE_CATEGORY_TYPES[category].includes(type)) ?? 'admin';
+
+/** The types behind a set of categories, in USER_TIMELINE_TYPES order. */
+export const userTimelineTypesFor = (categories: readonly UserTimelineCategory[]): UserTimelineType[] =>
+  USER_TIMELINE_TYPES.filter(type => categories.includes(userTimelineCategoryOf(type)));
 
 type UserTimelineEntryBase = {
   id: string;
@@ -17,6 +53,10 @@ type UserTimelineEntryBase = {
   summary: string;
   /** Muted second line, e.g. "203.0.113.7, Chrome on macOS". */
   detail?: string;
+  /** Short tags an admin should notice, e.g. "New IP" or "Disposable domain". */
+  flags?: string[];
+  /** Set by the server on rows that read as abnormal (a refusal, a negative balance, a failed charge). */
+  alert?: boolean;
 };
 
 /** Audit-backed entries carry the full row so the UI can open it in the audit drawer. */
@@ -27,6 +67,28 @@ export type UserTimelineAuditEntry = UserTimelineEntryBase & {
 
 export type UserTimelineUsageEntry = UserTimelineEntryBase & { type: 'usage'; notebookId: string };
 
+/**
+ * A roll-up of usage charges: one row per UTC hour, notebook, model, usage type, source and API key.
+ * `at`/`id` are the newest charge in the group, so the row pages on the shared keyset.
+ */
+export type UserTimelineSpendEntry = UserTimelineEntryBase & {
+  type: 'spend';
+  /** Credits spent, positive. */
+  credits: number;
+  calls: number;
+  transactionType: string;
+  model?: string;
+  notebookId?: string;
+  source?: string;
+  apiKeyId?: string;
+  /** The oldest charge in the group. */
+  firstAt: Date;
+  /** Balance right after the newest charge; absent when it could not be derived. */
+  balanceAfter?: number;
+  /** True when the hour held more charges than one read covers, so the totals are a lower bound. */
+  partial: boolean;
+};
+
 export type UserTimelineCreditEntry = UserTimelineEntryBase & {
   type: 'credit';
   /** Signed delta. */
@@ -34,7 +96,46 @@ export type UserTimelineCreditEntry = UserTimelineEntryBase & {
   transactionType: string;
 };
 
-export type UserTimelineEntry = UserTimelineAuditEntry | UserTimelineUsageEntry | UserTimelineCreditEntry;
+export type UserTimelineSignupEntry = UserTimelineEntryBase & { type: 'signup' };
+
+/** Refusals and limit hits, one row per user, kind and hour (see UserLimitEventModel). */
+export type UserTimelineLimitEntry = UserTimelineEntryBase & {
+  type: 'limit';
+  kind: UserLimitEventKind;
+  count: number;
+  firstAt: Date;
+};
+
+export type UserTimelinePaymentEntry = UserTimelineEntryBase & { type: 'payment'; outcome: string };
+
+export type UserTimelineModerationEntry = UserTimelineEntryBase & { type: 'moderation'; reviewStatus?: string };
+
+export type UserTimelineEntry =
+  | UserTimelineAuditEntry
+  | UserTimelineUsageEntry
+  | UserTimelineSpendEntry
+  | UserTimelineCreditEntry
+  | UserTimelineSignupEntry
+  | UserTimelineLimitEntry
+  | UserTimelinePaymentEntry
+  | UserTimelineModerationEntry;
+
+/**
+ * Limits and refusals worth showing an admin. Recorded at the refusal sites through
+ * recordUserLimitEvent (apps/client/server/billing/userLimitEvents.ts).
+ */
+export const USER_LIMIT_EVENT_KINDS = [
+  'new_account_hourly_cap',
+  'new_account_daily_cap',
+  'free_tier_daily_cap',
+  'model_requires_paid_plan',
+  'insufficient_credits',
+  'api_key_spend_cap',
+  'balance_debt',
+  'debt_written_off',
+] as const;
+export const UserLimitEventKindSchema = z.enum(USER_LIMIT_EVENT_KINDS);
+export type UserLimitEventKind = z.infer<typeof UserLimitEventKindSchema>;
 
 export type UserTimelinePage = { entries: UserTimelineEntry[]; nextCursor: string | null };
 

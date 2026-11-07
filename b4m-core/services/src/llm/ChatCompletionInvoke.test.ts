@@ -58,6 +58,7 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
   beforeEach(() => {
     mockedGetAvailableModels.mockReset().mockResolvedValue([]);
     mockDb = {
+      recordLimitEvent: vi.fn().mockResolvedValue(undefined),
       sessions: { findById: vi.fn().mockResolvedValue(session), update: vi.fn() },
       organizations: { findById: vi.fn() },
       quests: { findById: vi.fn(), create: vi.fn(), update: vi.fn() },
@@ -134,50 +135,33 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     nextCondition: 'verification' as const,
   };
 
-  it.each([
-    ['enrolled session', 'session', OWNER_ID, enrolledGrant, true],
-    ['legacy session', 'session', OWNER_ID, undefined, false],
-    ['different acting user', 'session', ATTACKER_ID, enrolledGrant, false],
-    ['enrolled API key', 'apiKey', OWNER_ID, enrolledGrant, false],
-    ['enrolled internal caller', 'internal', OWNER_ID, enrolledGrant, false],
-  ] as const)('records signup activity only for %s', async (_label, authOrigin, actorId, signupGrant, qualifies) => {
-    mockedGetAvailableModels.mockResolvedValue([
-      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
-    ] as never);
-    mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
-    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
-
-    await makeInvoke({ id: actorId, tags: [], signupGrant }).invoke({
-      body,
-      userId: OWNER_ID,
-      authOrigin,
-      ...(authOrigin === 'apiKey' ? { apiKeyId: 'key1' } : {}),
-    });
-
-    const created = mockDb.quests.create.mock.calls[0][0] as { signupActivity?: unknown };
-    if (qualifies) {
-      expect(created.signupActivity).toEqual({
-        userId: OWNER_ID,
-        turnId: expect.any(String),
-        startedAt: expect.any(Date),
-      });
-    } else {
-      expect(created).not.toHaveProperty('signupActivity');
-    }
-  });
-
-  it.each(['apiKey', 'internal'] as const)(
-    'removes first-party provenance when a failed turn is retried through %s',
+  it.each(['session', 'apiKey', 'internal'] as const)(
+    'stores no signup activity on a quest created through %s',
     async authOrigin => {
       mockedGetAvailableModels.mockResolvedValue([
         { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
       ] as never);
-      const priorQuest = {
-        id: 'quest-1',
-        sessionId: 'session-1',
-        status: 'error',
-        signupActivity: { userId: OWNER_ID, turnId: 'original', startedAt: new Date() },
-      };
+      mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+      mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+
+      await makeInvoke({ id: OWNER_ID, tags: [], signupGrant: enrolledGrant }).invoke({
+        body,
+        userId: OWNER_ID,
+        authOrigin,
+        ...(authOrigin === 'apiKey' ? { apiKeyId: 'key1' } : {}),
+      });
+
+      expect(mockDb.quests.create.mock.calls[0][0]).not.toHaveProperty('signupActivity');
+    }
+  );
+
+  it.each(['session', 'apiKey', 'internal'] as const)(
+    'stores no signup activity when a failed turn is retried through %s',
+    async authOrigin => {
+      mockedGetAvailableModels.mockResolvedValue([
+        { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+      ] as never);
+      const priorQuest = { id: 'quest-1', sessionId: 'session-1', status: 'error' };
       mockDb.quests.findById.mockResolvedValue(priorQuest);
       mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
       await makeInvoke({ id: OWNER_ID, signupGrant: enrolledGrant }).invoke({
@@ -186,34 +170,12 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
         authOrigin,
         ...(authOrigin === 'apiKey' ? { apiKeyId: 'key1' } : {}),
       });
-      expect(mockDb.quests.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'quest-1', status: 'running' }), {
-        unset: ['errorCode', 'turnTiming', 'signupActivity'],
-      });
-      expect(priorQuest).not.toHaveProperty('signupActivity');
+      const [updated, options] = mockDb.quests.update.mock.calls[0];
+      expect(updated).toEqual(expect.objectContaining({ id: 'quest-1', status: 'running' }));
+      expect(updated).not.toHaveProperty('signupActivity');
+      expect(options).toEqual({ unset: ['errorCode', 'turnTiming'] });
     }
   );
-
-  it('keeps distinct turns distinct when they start in the same millisecond', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    try {
-      vi.setSystemTime(new Date('2026-10-27T00:00:00Z'));
-      mockedGetAvailableModels.mockResolvedValue([
-        { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
-      ] as never);
-      mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
-      mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
-      const invoke = makeInvoke({ id: OWNER_ID, signupGrant: enrolledGrant });
-      await invoke.invoke({ body, userId: OWNER_ID, authOrigin: 'session' });
-      await invoke.invoke({ body, userId: OWNER_ID, authOrigin: 'session' });
-      const provenance = mockDb.quests.create.mock.calls.map(
-        ([created]: [{ signupActivity: { turnId: string; startedAt: Date } }]) => created.signupActivity
-      );
-      expect(provenance[0].startedAt).toEqual(provenance[1].startedAt);
-      expect(provenance[0].turnId).not.toBe(provenance[1].turnId);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 
   // Same boundary: a workflow-style caller's integration isolation would silently lapse on the
   // async path, handing a prompt the user did not write their MCP servers, agents and skills.
@@ -448,6 +410,7 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
     logger = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     invokeLambda = vi.fn();
     mockDb = {
+      recordLimitEvent: vi.fn().mockResolvedValue(undefined),
       sessions: {
         findById: vi.fn().mockResolvedValue({ id: 'session-1', userId: OWNER_ID, users: [], agentIds: [] }),
         update: vi.fn().mockResolvedValue(undefined),
@@ -526,6 +489,22 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
     // The caller's plan, not a fault: logged at warn so it does not page.
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(`Model ${SUCCESSOR_ID} is not admitted`));
     expect(logger.error).not.toHaveBeenCalledWith(expect.stringContaining('is not admitted'));
+    expect(mockDb.recordLimitEvent).toHaveBeenCalledWith({
+      userId: OWNER_ID,
+      kind: 'model_requires_paid_plan',
+      model: SUCCESSOR_ID,
+    });
+    expectErrorWithoutPin('requires a paid plan');
+  });
+
+  it('still refuses with the paid-plan reply when recording the refusal fails', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+    gate.loadFreeTierAllowedModels.mockResolvedValue(new Set(['some-free-model']));
+    mockDb.recordLimitEvent.mockRejectedValue(new Error('db down'));
+
+    const invoke = makeInvoke({ getEntitlements: vi.fn().mockResolvedValue(['base']) });
+    await invoke.invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
+
     expectErrorWithoutPin('requires a paid plan');
   });
 
@@ -818,6 +797,7 @@ describe('ChatCompletionInvoke.invoke - model modality', () => {
   beforeEach(() => {
     mockedGetAvailableModels.mockReset();
     mockDb = {
+      recordLimitEvent: vi.fn().mockResolvedValue(undefined),
       sessions: { findById: vi.fn().mockResolvedValue(session), update: vi.fn().mockResolvedValue(undefined) },
       organizations: { findById: vi.fn() },
       // Echo the created document back so questStartParams carries the promptMeta actually written,

@@ -2,6 +2,7 @@ import {
   ABUSE_ASSESSMENT_MAX_ATTEMPTS,
   AbuseAssessmentConfigSchema,
   type AbuseAssessmentItem,
+  SELF_ASSESSED_SHADOW_DETECTORS,
   type ShadowDetectionItem,
 } from '@bike4mind/common';
 import { DecisionProviderError } from '@bike4mind/utils/decisionProviders';
@@ -260,6 +261,17 @@ describe('assessShadowDetection', () => {
     expect(mocks.providerDecide).not.toHaveBeenCalled();
   });
 
+  it('skips a self-assessed detection without metering or calling the provider', async () => {
+    mocks.findDetection.mockResolvedValue({ ...detection, detector: 'signupDomainHold', wouldAction: 'confirmHold' });
+
+    expect(await run()).toEqual({ status: 'skipped', reason: 'self_assessed' });
+    expect(mocks.findSummaries).not.toHaveBeenCalled();
+    expect(mocks.callCap).not.toHaveBeenCalled();
+    expect(mocks.spend).not.toHaveBeenCalled();
+    expect(mocks.providerDecide).not.toHaveBeenCalled();
+    expect(mocks.save).not.toHaveBeenCalled();
+  });
+
   it('assesses without group evidence when its producer fails', async () => {
     const outcome = await assessShadowDetection({
       detectionId: DETECTION_ID,
@@ -329,6 +341,16 @@ describe('sweepAbuseAssessments', () => {
 
       expect(result).toMatchObject({ status: 'success', considered: 2, cached: 1, assessed: 1, errors: 0 });
       expect(mocks.providerDecide).toHaveBeenCalledTimes(1);
+    });
+
+    it('excludes self-assessed detectors in the query, before the row limit applies', async () => {
+      mocks.settings.config = sweepConfig(5);
+
+      await sweepAbuseAssessments({ logger });
+
+      expect(mocks.listUnreviewed).toHaveBeenCalledWith(expect.any(Date), 50, {
+        excludeDetectors: SELF_ASSESSED_SHADOW_DETECTORS,
+      });
     });
 
     it('counts a failing detection as an error and carries on with the next', async () => {

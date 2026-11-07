@@ -299,7 +299,6 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       id: 'quest-1',
       status: 'pending',
       prompt: 'Hello there',
-      signupActivity: { userId: 'private-user', turnId: 'private-turn', startedAt: new Date() },
       callback: { url: 'https://private.example.test', apiKeyId: 'private-key' },
       embedding: [0.1, 0.2],
       slackNotification: { channel: 'private-channel' },
@@ -309,7 +308,7 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     expect(res._getStatusCode()).toBe(200);
     const body = res._getJSONData();
     expect(body.quest).toMatchObject({ id: 'quest-1', status: 'pending', prompt: 'Hello there' });
-    for (const field of ['signupActivity', 'callback', 'embedding', 'slackNotification']) {
+    for (const field of ['callback', 'embedding', 'slackNotification']) {
       expect(body.quest).not.toHaveProperty(field);
     }
     expect(JSON.stringify(body)).not.toContain('private-');

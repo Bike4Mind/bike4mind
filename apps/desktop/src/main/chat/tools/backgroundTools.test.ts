@@ -107,8 +107,44 @@ describe('background tools', () => {
     expect(await bashKill.run({ id }, context)).toContain('stopped');
   }, 30_000);
 
+  it('waits inside the call for a process to exit when asked, then reads its output', async () => {
+    const started = await bashBackground.run({ command: 'sleep 3; echo installed' }, context);
+    const id = /\[([0-9a-f]{8})\]/.exec(started)?.[1];
+
+    const result = await bashOutput.run({ id, wait_seconds: 20 }, context);
+
+    expect(result).toContain('exited 0');
+    expect(result).toContain('installed');
+    expect(result).not.toContain('still running');
+  }, 30_000);
+
+  it('returns at the wait cap with the process still running, and says so', async () => {
+    const started = await bashBackground.run({ command: 'sleep 20' }, context);
+    const id = /\[([0-9a-f]{8})\]/.exec(started)?.[1];
+
+    const startedAt = Date.now();
+    const result = await bashOutput.run({ id, wait_seconds: 1 }, context);
+
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(result).toContain('still running after waiting 1s');
+  }, 30_000);
+
+  it('stops waiting as soon as the turn is stopped', async () => {
+    const started = await bashBackground.run({ command: 'sleep 20' }, context);
+    const id = /\[([0-9a-f]{8})\]/.exec(started)?.[1];
+    const turn = new AbortController();
+
+    const startedAt = Date.now();
+    const pending = bashOutput.run({ id, wait_seconds: 60 }, { ...context, signal: turn.signal });
+    setTimeout(() => turn.abort(), 100);
+
+    expect(await pending).toContain('running');
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  }, 30_000);
+
   it('tells the model plainly when a handle is not one of its own', async () => {
     await expect(bashOutput.run({ id: 'deadbeef' }, context)).rejects.toThrow(/No background process/);
+    await expect(bashOutput.run({ id: 'deadbeef', wait_seconds: 5 }, context)).rejects.toThrow(/No background process/);
     await expect(bashKill.run({ id: 'deadbeef' }, context)).rejects.toThrow(/No background process/);
   });
 

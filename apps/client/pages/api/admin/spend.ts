@@ -5,10 +5,13 @@ import { cacheService } from '@bike4mind/services';
 import {
   ApiKeyScope,
   CreditHolderType,
+  SPEND_ACCOUNT_FLAG_THRESHOLDS,
   SPEND_DEFAULT_WINDOW_DAYS,
   type CostByModelRow,
   type DailyCostPoint,
+  type ISpendAccountBucket,
   type ISpendSummary,
+  type SpendAccountFlag,
   type SpendByAccountRow,
   type SpendKpi,
   type SpendServerPayload,
@@ -191,8 +194,24 @@ function buildKpis(current: ISpendSummary, prior: ISpendSummary): SpendKpi[] {
   ];
 }
 
+/**
+ * Which SPEND_ACCOUNT_FLAG_THRESHOLDS an account crossed. Cost averages over the
+ * window's length in days (floored at one, so a sub-day window isn't scaled up).
+ */
+function accountFlags(a: ISpendAccountBucket, windowMs: number): SpendAccountFlag[] {
+  const t = SPEND_ACCOUNT_FLAG_THRESHOLDS;
+  const flags: SpendAccountFlag[] = [];
+  const windowDays = Math.max(windowMs / DAY_MS, 1);
+  if (a.cogsUsd / windowDays > t.dailyCostUsd) flags.push('dailyCost');
+  if (a.requests >= t.minRequests) {
+    if (a.failures / a.requests > t.errorRate) flags.push('errorRate');
+    if (a.p95LatencyMs > t.p95LatencyMs) flags.push('p95Latency');
+  }
+  return flags;
+}
+
 /** Resolve each account's ownerId to a display name (org name or user name), keyed by owner type. */
-async function resolveAccountRows(current: ISpendSummary): Promise<SpendByAccountRow[]> {
+async function resolveAccountRows(current: ISpendSummary, windowMs: number): Promise<SpendByAccountRow[]> {
   const accounts = current.byAccount;
   const userOwnerIds = accounts.filter(a => a.ownerType === CreditHolderType.User).map(a => a.ownerId);
   const orgOwnerIds = [
@@ -215,6 +234,9 @@ async function resolveAccountRows(current: ISpendSummary): Promise<SpendByAccoun
       requests: a.requests,
       creditsUsed: a.creditsCharged,
       costPerRequest: a.requests > 0 ? a.cogsUsd / a.requests : 0,
+      errorRate: a.requests > 0 ? a.failures / a.requests : 0,
+      p95LatencyMs: a.p95LatencyMs,
+      flags: accountFlags(a, windowMs),
     };
   });
 }
@@ -231,7 +253,7 @@ async function buildSpendData(query: Omit<SpendQuery, 'recache'>): Promise<Spend
     usageEventRepository.spendSummary({ ...prior, ...baseFilters }),
   ]);
 
-  const byAccount = await resolveAccountRows(currentSummary);
+  const byAccount = await resolveAccountRows(currentSummary, current.to.getTime() - current.from.getTime());
 
   const totalCogs = currentSummary.totals.cogsUsd;
   const byModel: CostByModelRow[] = currentSummary.byModel.map(m => ({

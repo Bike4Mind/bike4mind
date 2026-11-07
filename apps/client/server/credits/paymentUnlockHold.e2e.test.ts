@@ -51,9 +51,8 @@ beforeEach(async () => {
   vi.restoreAllMocks();
   for (const key of Object.keys(config)) delete config[key];
   Object.assign(config, {
-    stagedSignupGrantEnabled: 'true',
-    signupGrantCredits: '1000',
-    verifiedUnlockCredits: '9000',
+    signupGrantInitialCredits: '1000',
+    signupGrantDripCap: '9000',
     signupUnlockPaymentHoldHours: '72',
   });
   vi.spyOn(adminSettingsRepository, 'findBySettingName').mockImplementation(

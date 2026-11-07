@@ -38,7 +38,9 @@ const renderStage = (agents: AgentView[], dockControl?: ReactNode, turnOn?: () =
 
 const pressEscape = (init: KeyboardEventInit = {}) =>
   act(() => {
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, ...init }));
+    document.body.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true, ...init })
+    );
   });
 
 beforeEach(() => {
@@ -206,11 +208,23 @@ describe('OrchestratorStage', () => {
     await pressEscape({ isComposing: true });
     expect(query('orchestrator-peek-drawer')).not.toBeNull();
     act(() => {
-      const handled = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+      const handled = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
       handled.preventDefault();
-      window.dispatchEvent(handled);
+      document.body.dispatchEvent(handled);
     });
     expect(query('orchestrator-peek-drawer')).not.toBeNull();
+  });
+
+  it('claims the Escape that closes the drawer, so the docked conversation stays open', async () => {
+    await renderStage(FIXTURE);
+    await act(async () => el('orchestrator-needs-you-pill').click());
+    const reachedWindow: boolean[] = [];
+    const onWindow = (event: KeyboardEvent) => reachedWindow.push(event.defaultPrevented);
+    window.addEventListener('keydown', onWindow);
+    await pressEscape();
+    window.removeEventListener('keydown', onWindow);
+    expect(query('orchestrator-peek-drawer')).toBeNull();
+    expect(reachedWindow).toEqual([true]);
   });
 
   it('opens the drawer when a table row is clicked', async () => {

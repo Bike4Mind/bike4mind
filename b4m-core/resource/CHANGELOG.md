@@ -1,5 +1,19 @@
 # @bike4mind/resource
 
+## 3.1.0
+
+### Minor Changes
+
+- [#6222](https://github.com/Bike4Mind/bike4mind/pull/6222) [`fdb4208`](https://github.com/Bike4Mind/bike4mind/commit/fdb42085c50439ab35a52cbe965d67a5a8a5f6eb) Thanks [@onoya](https://github.com/onoya)! - build shadow-only behavioral evidence for account assessments
+
+- [#6331](https://github.com/Bike4Mind/bike4mind/pull/6331) [`1744e05`](https://github.com/Bike4Mind/bike4mind/commit/1744e051620c28c303b93e69146a392add416abc) Thanks [@poysama](https://github.com/poysama)! - add alarm categories and a cost alarm Slack channel
+
+- [#6370](https://github.com/Bike4Mind/bike4mind/pull/6370) [`f2f54a1`](https://github.com/Bike4Mind/bike4mind/commit/f2f54a120ec107d87e9e21e1f7026e7235b0547a) Thanks [@poysama](https://github.com/poysama)! - rebuild the security dashboard around an incident view
+
+- [#6397](https://github.com/Bike4Mind/bike4mind/pull/6397) [`f8525a6`](https://github.com/Bike4Mind/bike4mind/commit/f8525a657eb827ea30da2a7245430adcfb46ca0e) Thanks [@onoya](https://github.com/onoya)! - add Sign in with Apple
+
+- [#6447](https://github.com/Bike4Mind/bike4mind/pull/6447) [`9062016`](https://github.com/Bike4Mind/bike4mind/commit/9062016db6efbd76191cf5066c71825ac240df38) Thanks [@cgtorniado](https://github.com/cgtorniado)! - self-serve account deletion with step-up, lockdown and 14-day grace
+
 ## 3.0.0
 
 ### Major Changes

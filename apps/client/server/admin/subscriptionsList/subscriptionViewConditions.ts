@@ -25,9 +25,12 @@ export function cancelCondition(cancel: NonNullable<AdminSubscriptionsFilter['ca
 
 /**
  * The built-in views' conditions. Must stay in sync with the views table in
- * docs/admin-subscriptions-spec.md section 5.1 and the list page's view definitions.
+ * docs/admin-subscriptions-spec.md section 5.1 and the list page's view definitions. Mismatched is not
+ * here: its rows are the open BillingMismatch findings, resolved to ids in listAdminSubscriptions.ts.
  */
-export function viewConditions(now: Date): Record<keyof AdminSubscriptionsSummary['views'], Condition> {
+export function viewConditions(
+  now: Date
+): Record<Exclude<keyof AdminSubscriptionsSummary['views'], 'mismatched'>, Condition> {
   return {
     paying: { source: SubscriptionSource.Stripe, status: { $in: ['active', 'past_due'] } },
     pastDue: { status: { $in: DELINQUENT } },

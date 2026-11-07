@@ -47,6 +47,15 @@ describe('describeAuditEntry', () => {
     );
   });
 
+  it('words the account-deletion actions instead of "Changed deletion"', () => {
+    expect(describeAuditEntry(makeAuditEntry({ action: 'user.deletion.scheduled' }))).toBe(
+      'Scheduled account deletion'
+    );
+    expect(describeAuditEntry(makeAuditEntry({ action: 'user.deletion.cancelled' }))).toBe(
+      'Cancelled scheduled deletion'
+    );
+  });
+
   it('uses a fixed sentence for known actions and flags denied ones', () => {
     expect(describeAuditEntry(makeAuditEntry({ action: 'user.mfa.reset' }))).toBe('Reset two-factor authentication');
     expect(describeAuditEntry(makeAuditEntry({ action: 'user.credits.denied', summary: 'over the cap' }))).toBe(

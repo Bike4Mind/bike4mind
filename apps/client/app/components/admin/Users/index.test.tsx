@@ -266,7 +266,7 @@ describe('UsersTab', () => {
     renderTab();
     await screen.findByTestId('admin-users-row-u1');
 
-    expect(screen.getByTestId('admin-filter-verdict').textContent).toBe('Verdict:\u00a0Legit');
+    expect(screen.getByTestId('admin-filter-verdict').textContent).toBe('Verdict:\u00a0Real');
     expect(screen.getByTestId('admin-filter-funnelStep').textContent).toBe('Funnel:\u00a0First AI use, did not return');
     expect(screen.getByTestId('admin-filter-activeWindow').textContent).toBe(
       'Active:\u00a02026-10-01 \u2013 2026-10-07 UTC'

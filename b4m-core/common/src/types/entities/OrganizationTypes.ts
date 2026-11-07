@@ -124,6 +124,9 @@ export interface IOrganizationRepository
    */
   findByStripeCustomerId(stripeCustomerId: string): Promise<IOrganizationDocument | null>;
 
+  /** Seat counts keyed by Stripe customer id, in one query. */
+  findSeatsByStripeCustomerIds(stripeCustomerIds: string[]): Promise<Map<string, number>>;
+
   /**
    * Atomically add `bytes` (negative to refund) to the org's storage counter, floored at 0.
    * Same contract as IUserRepository.incrementCurrentStorage.

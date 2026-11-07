@@ -3,20 +3,27 @@ import {
   adminSettingsRepository,
   creditLotRepository,
   creditTransactionRepository,
+  organizationRepository,
+  paymentAttemptRepository,
   userRepository,
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { signupProtection } from '@server/auth/signupProtection';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { alertFraudBlock } from '@server/billing/fraudBlockAlert';
+import { reopenSettledPaymentApproval } from '@server/security/riskReviewAutoApproval';
 
 type ForfeitLogger = { info: (message: string, meta?: Record<string, unknown>) => void };
 
 /**
- * Cancels the account's held payment signup unlock after a dispute, refund or early fraud warning.
+ * Records the dispute, refund or early fraud warning on the account (paymentRiskEventAt, which keeps
+ * it out of automatic risk review approval), cancels its held payment signup unlock, and reopens a
+ * risk review approved on settled payment evidence (riskReviewAutoApproval.ts).
  * Throws on failure so the webhook is retried; a replay is a no-op.
  */
 export async function forfeitSignupUnlock(userId: string, cause: SignupUnlockForfeitCause, logger: ForfeitLogger) {
+  // Written before the reopen below, so an approval racing this event is either refused by the write filter or reopened.
+  await userRepository.recordPaymentRiskEvent(userId, new Date());
   const result = await userService.forfeitPaymentUnlock(userId, cause, {
     db: {
       users: userRepository,
@@ -34,29 +41,38 @@ export async function forfeitSignupUnlock(userId: string, cause: SignupUnlockFor
       details: [`*Cause:* payment ${cause.replace(/_/g, ' ')}`],
     });
   }
+  if (await reopenSettledPaymentApproval(userId, cause)) {
+    logger.info(`Settled-payment risk review approval reopened after a payment ${cause}`, { userId });
+  }
   return result;
 }
 
-type ChargeRef = {
-  customer?: string | { id: string } | null;
-  payment_intent?: string | { id: string } | null;
-};
+type StripeRef = string | { id: string } | null | undefined;
+type ChargeRef = { customer?: StripeRef; payment_intent?: StripeRef };
 
-/** The individual account billed under a Stripe customer; organization customers have no signup grant. */
-async function findUserByStripeCustomer(customer: ChargeRef['customer']) {
-  const customerId = typeof customer === 'string' ? customer : customer?.id;
-  return customerId ? userRepository.findByStripeCustomerId(customerId) : null;
-}
+const refId = (ref: StripeRef) => (typeof ref === 'string' ? ref : ref?.id);
 
-/** The user a credit pack purchase row credited, for a charge whose customer resolves to no user. */
-async function findCreditPackBuyerId(paymentIntent: ChargeRef['payment_intent']) {
-  const paymentIntentId = typeof paymentIntent === 'string' ? paymentIntent : paymentIntent?.id;
-  const purchase = paymentIntentId ? await creditTransactionRepository.findByPaymentIntentId(paymentIntentId) : null;
+/** The user a credit pack purchase row credited; an organization's purchase has no individual buyer. */
+async function findCreditPackBuyerId(paymentIntentId: string) {
+  const purchase = await creditTransactionRepository.findByPaymentIntentId(paymentIntentId);
   return purchase?.ownerType === CreditHolderType.User && purchase.ownerId ? String(purchase.ownerId) : null;
 }
 
+/**
+ * The individual account billed for a charge: by Stripe customer, else, when the customer resolves to
+ * no user, the account that started its payment intent, else the buyer of the credit pack it paid for.
+ * An organization's charge has no individual payer, so it never falls back to the member who started it.
+ */
 async function findChargePayerId(charge: ChargeRef) {
-  return (await findUserByStripeCustomer(charge.customer))?.id ?? (await findCreditPackBuyerId(charge.payment_intent));
+  const customerId = refId(charge.customer);
+  const byCustomer = customerId ? await userRepository.findByStripeCustomerId(customerId) : null;
+  if (byCustomer) return byCustomer.id;
+  if (customerId && (await organizationRepository.findByStripeCustomerId(customerId))) return null;
+  const paymentIntentId = refId(charge.payment_intent);
+  if (!paymentIntentId) return null;
+  const attemptUserId = await paymentAttemptRepository.findUserId(paymentIntentId);
+  const attemptUser = attemptUserId ? await userRepository.findById(attemptUserId) : null;
+  return attemptUser?.id ?? (await findCreditPackBuyerId(paymentIntentId));
 }
 
 /**

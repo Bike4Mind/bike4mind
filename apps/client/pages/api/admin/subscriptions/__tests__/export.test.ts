@@ -22,6 +22,7 @@ vi.mock('@server/admin/subscriptionsList/listAdminSubscriptions', () => ({
   adminSubscriptionsExportPage: (...args: unknown[]) => mockPage(...args),
   adminSubscriptionsMatch: (...args: unknown[]) => mockMatch(...args),
   OWNER_SEARCH_LIMIT: 500,
+  MISMATCH_ID_LIMIT: 5000,
 }));
 vi.mock('@client/app/utils/adminSubscriptionsFilter', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/utils/adminSubscriptionsFilter')>()),
@@ -207,6 +208,17 @@ describe('GET /api/admin/subscriptions/export', () => {
 
     expect(res._getData().trim().split('\n').at(-1)).toBe(
       '# Search matched more than 500 owners; narrow it to export every match'
+    );
+  });
+
+  it('ends with a line saying so when the Mismatched view hit its cap', async () => {
+    mockMatch.mockResolvedValueOnce({ match: { status: 'x' }, searchTruncated: false, mismatchTruncated: true });
+    mockPage.mockResolvedValueOnce([makeRow(1)]);
+
+    const { res } = await call({ mismatch: 'yes' });
+
+    expect(res._getData().trim().split('\n').at(-1)).toBe(
+      '# Mismatched view covers the first 5000 subscriptions with open findings'
     );
   });
 

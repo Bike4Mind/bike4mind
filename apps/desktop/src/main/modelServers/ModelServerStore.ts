@@ -14,10 +14,12 @@ import type {
   ModelServerAccess,
   ModelServerCredentialInput,
   ModelServerKind,
+  ModelServerLaunchSettings,
   ModelServerSpecs,
 } from '@shared/modelServers';
-import { LOCAL_SERVER_NAME, specsBlank, specsProblem } from '@shared/modelServers';
+import { LOCAL_SERVER_NAME, readLaunchShape, specsBlank, specsProblem } from '@shared/modelServers';
 import type { SecretCipher, StoreFile, StoreLogger } from '../chat/mcp/McpServerStore';
+import { loopbackLaunchPort } from './loopbackPort';
 
 export { credentialHeaders, MAX_HEADER_NAME_CHARS, MAX_SECRET_CHARS };
 export type { ModelServerRecord, StoredAuth };
@@ -27,6 +29,8 @@ interface StoreDocument extends Record<string, unknown> {
   servers: StoredServer[];
   /** This computer's entered hardware, which overrides its probe. */
   localSpecs?: ModelServerSpecs;
+  /** What Desktop starts this computer's Ollama with. A saved server keeps its own under `launch`. */
+  localLaunch?: ModelServerLaunchSettings;
   /** By server id, the models that replied with reasoning, which earns them a thinking switch. */
   thinkers?: Record<string, LearnedThinker[]>;
 }
@@ -145,6 +149,7 @@ export class ModelServerStore {
       access?: ModelServerAccess;
       credential?: ModelServerCredentialInput;
       specs?: ModelServerSpecs | null;
+      launch?: ModelServerLaunchSettings;
     }
   ): Promise<ModelServerRecord> {
     return this.commit(document => {
@@ -157,10 +162,13 @@ export class ModelServerStore {
       if (specs === null) delete stored.specs;
       else if (specs) stored.specs = specs;
       if (patch.kind !== undefined) stored.kind = patch.kind;
-      if (stored.kind !== 'ollama' && stored.specs?.kvCacheType) {
+      if (stored.specs?.kvCacheType && !keepsHardwareKvCache(stored)) {
         const { kvCacheType: _dropped, ...rest } = stored.specs;
         stored.specs = rest;
       }
+      // Launch settings are per program, and another kind runs another program.
+      if (stored.kind !== current.kind) delete stored.launch;
+      if (patch.launch) setLaunch(stored, patch.launch);
       if (patch.access !== undefined) stored.access = patch.access;
       let applied: (() => void) | undefined;
       if (patch.credential) {
@@ -198,6 +206,25 @@ export class ModelServerStore {
       const checked = checkedSpecs(specs, true);
       const { localSpecs: _previous, ...rest } = document;
       return { document: checked ? { ...rest, localSpecs: checked } : rest, result: checked };
+    });
+  }
+
+  /** A saved server's launch settings; empty before the list loads or when none are saved. */
+  launchSettings(id: string): ModelServerLaunchSettings {
+    return readLaunchShape(this.document?.servers.find(server => server.id === id)?.launch);
+  }
+
+  /** What Desktop starts this computer's Ollama with; empty before the list loads. */
+  localLaunch(): ModelServerLaunchSettings {
+    return readLaunchShape(this.document?.localLaunch);
+  }
+
+  setLocalLaunch(settings: ModelServerLaunchSettings): Promise<ModelServerLaunchSettings> {
+    return this.commit(document => {
+      this.assertWritable();
+      const clean = readLaunchShape(settings);
+      const { localLaunch: _previous, ...rest } = document;
+      return { document: Object.keys(clean).length > 0 ? { ...rest, localLaunch: clean } : rest, result: clean };
     });
   }
 
@@ -311,7 +338,7 @@ export class ModelServerStore {
         // Records this version cannot read (a later kind, transport or auth) are carried through untouched.
         const all: unknown[] = Array.isArray(parsed.servers) ? parsed.servers : [];
         this.orphans = all.filter(value => !hasId(value));
-        document = { ...parsed, version: 1, servers: all.filter(hasId) };
+        document = migrateHardwareKvCache({ ...parsed, version: 1, servers: all.filter(hasId) });
         if (typeof parsed.version === 'number' && parsed.version > 1) {
           this.readOnly = true;
           this.logger.warn(
@@ -360,6 +387,52 @@ export class ModelServerStore {
   }
 }
 
+/** A remote or SSH Ollama, whose cache type Desktop cannot set, so Hardware keeps the one it runs with. */
+function keepsHardwareKvCache(server: StoredServer): boolean {
+  if (server.kind !== 'ollama') return false;
+  const { type, baseUrl } = server.transport ?? {};
+  return type !== 'http' || typeof baseUrl !== 'string' || loopbackLaunchPort(baseUrl) === null;
+}
+
+/**
+ * The Hardware form used to hold the KV cache type; for this computer and a server Desktop can start it now lives in
+ * launch settings, so a saved one moves there.
+ */
+function takeHardwareKvCache(
+  specs: unknown,
+  launch: unknown,
+  moves: boolean
+): { specs: unknown; launch: unknown } | null {
+  if (typeof specs !== 'object' || specs === null || !('kvCacheType' in specs)) return null;
+  const { kvCacheType, ...rest } = specs as Record<string, unknown>;
+  const kept = readLaunchShape(launch);
+  const type = readLaunchShape({ kvCacheType }).kvCacheType;
+  if (!moves || !type || kept.kvCacheType || kept.flashAttention === 'off') return { specs: rest, launch };
+  return { specs: rest, launch: { ...(launch as object | undefined), kvCacheType: type } };
+}
+
+function migrateHardwareKvCache(document: StoreDocument): StoreDocument {
+  const servers = document.servers.map(server => {
+    if (keepsHardwareKvCache(server)) return server;
+    const taken = takeHardwareKvCache(server.specs, server.launch, server.kind === 'ollama');
+    if (!taken) return server;
+    return { ...server, specs: taken.specs, ...(taken.launch ? { launch: taken.launch } : {}) } as StoredServer;
+  });
+  const taken = takeHardwareKvCache(document.localSpecs, document.localLaunch, true);
+  return {
+    ...document,
+    servers,
+    ...(taken ? { localSpecs: taken.specs as ModelServerSpecs } : {}),
+    ...(taken?.launch ? { localLaunch: taken.launch as ModelServerLaunchSettings } : {}),
+  };
+}
+
+function setLaunch(stored: StoredServer, settings: ModelServerLaunchSettings): void {
+  const clean = readLaunchShape(settings);
+  if (Object.keys(clean).length > 0) stored.launch = clean;
+  else delete stored.launch;
+}
+
 function sameList(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((name, index) => name === b[index]);
 }
@@ -397,5 +470,11 @@ function checkedSpecs(specs: ModelServerSpecs | null, local: boolean): ModelServ
   const problem = specsProblem(specs, local);
   if (problem) throw new Error(problem);
   const { ramGiB, gpuMemoryGiB, bandwidthGBps, unified, kvCacheType } = specs;
-  return { ramGiB, gpuMemoryGiB, bandwidthGBps, unified: !local && unified, ...(kvCacheType ? { kvCacheType } : {}) };
+  return {
+    ramGiB,
+    gpuMemoryGiB,
+    bandwidthGBps,
+    unified: !local && unified,
+    ...(!local && kvCacheType ? { kvCacheType } : {}),
+  };
 }

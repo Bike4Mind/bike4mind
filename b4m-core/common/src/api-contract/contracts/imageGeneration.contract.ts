@@ -25,7 +25,7 @@ export const imageQuestPollResult = {
     'the reason in `reply`, never a 4xx. That covers credit exhaustion (tagged `errorCode: ' +
     '"insufficient_credits"`, the same vocabulary as the synchronous 422s on the audio endpoints), a ' +
     'provider error, a reference image that is missing, not an image, or still in moderation, and the ' +
-    'combined FLUX.2 input-image limit after attachments are resolved. Check ' +
+    'combined FLUX.2 or FLUX 3 input-image limit after attachments are resolved. Check ' +
     '`type` before reading `images`; `errorCode` is absent on unclassified failures, so its absence does ' +
     'not mean success.',
   example: {
@@ -57,8 +57,9 @@ export const generateImageContract = defineEndpoint({
     "from truncation to the model's prompt limit). " +
     '`referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input ' +
     'image taken from `fabFileIds`. GPT-image accepts 15 references; FLUX.2 accepts 8 total input images ' +
-    '(4 for Klein), including images attached through `fabFileIds`. Unsupported models and an oversized ' +
-    'reference list are rejected with a 400. The combined FLUX.2 input limit is checked when the render ' +
+    '(4 for Klein) and FLUX 3 accepts 10, including images attached through `fabFileIds`. Unsupported ' +
+    'models and an oversized reference list are rejected with a 400. The combined FLUX.2 or FLUX 3 input ' +
+    'limit is checked when the render ' +
     'resolves attachments; exceeding it fails the polled quest. Which `size` values a model accepts, and whether it honours ' +
     '`background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block ' +
     'of `GET /api/v1/models`. Credits are checked when the render runs, so ' +

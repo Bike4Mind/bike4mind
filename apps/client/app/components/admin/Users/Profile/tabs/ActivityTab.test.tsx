@@ -95,7 +95,7 @@ describe('ActivityTab', () => {
 
     await screen.findByText('No activity yet');
     expect(mocks.get).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/timeline`, {
-      params: { types: 'admin,credit,key,signin,usage', limit: '30' },
+      params: { types: 'admin,credit,key,limit,moderation,payment,signin,signup,spend,usage', limit: '30' },
     });
   });
 
@@ -110,19 +110,20 @@ describe('ActivityTab', () => {
       from: '2026-10-01T00:00:00.000Z',
       to: '2026-10-07T23:59:59.999Z',
     });
-    expect(screen.getByTestId('user-timeline-filter-type-signin')).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByTestId('user-timeline-filter-type-usage')).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId('user-timeline-filter-type-security')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('user-timeline-filter-type-admin')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('user-timeline-filter-type-spend')).toHaveAttribute('aria-pressed', 'false');
   });
 
-  it('writes a source chip into the URL without a history entry and keeps the tab', async () => {
+  it('writes a category chip into the URL as its types without a history entry and keeps the tab', async () => {
     mocks.get.mockResolvedValue({ data: { entries: [], nextCursor: null } });
     renderTab();
     await screen.findByText('No activity yet');
 
-    fireEvent.click(screen.getByTestId('user-timeline-filter-type-credit'));
+    fireEvent.click(screen.getByTestId('user-timeline-filter-type-money'));
 
     expect(navigatedSearch()).toEqual({
-      search: { tab: 'activity', types: 'credit', from: undefined, to: undefined },
+      search: { tab: 'activity', types: 'credit,payment', from: undefined, to: undefined },
       replace: true,
     });
   });
@@ -160,6 +161,38 @@ describe('ActivityTab', () => {
     fireEvent.click(adminLink);
     expect(await screen.findByTestId('audit-drawer')).toBeInTheDocument();
     fireEvent.click(creditLink);
+    expect(onOpenCredits).toHaveBeenCalled();
+  });
+
+  it('shows a spend roll-up with its warning flag and opens the credits tab from it', async () => {
+    mocks.get.mockResolvedValue({
+      data: {
+        entries: [
+          {
+            type: 'spend',
+            id: 'a'.repeat(24),
+            at: '2026-10-21T10:30:00.000Z',
+            firstAt: '2026-10-21T10:00:00.000Z',
+            summary: 'Spent 2,400 credits: 14 chat messages on opus',
+            detail: 'CLI \u00b7 balance after -40',
+            credits: 2400,
+            calls: 14,
+            transactionType: 'text_generation_usage',
+            balanceAfter: -40,
+            partial: false,
+            flags: ['Negative balance'],
+            alert: true,
+          },
+        ],
+        nextCursor: null,
+      },
+    });
+    const { onOpenCredits } = renderTab();
+
+    const [row] = await screen.findAllByTestId('user-timeline-row');
+    expect(row).toHaveTextContent('Spent 2,400 credits: 14 chat messages on opus');
+    expect(within(row).getByTestId('user-timeline-row-flag')).toHaveTextContent('Negative balance');
+    fireEvent.click(within(row).getByTestId('user-timeline-row-open-btn'));
     expect(onOpenCredits).toHaveBeenCalled();
   });
 

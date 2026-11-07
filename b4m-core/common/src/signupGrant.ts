@@ -120,15 +120,7 @@ export function nonnegativeGrantCredits(value: unknown): number {
 }
 
 export type SignupGrantCreditKey =
-  | 'signupGrantInitialCredits'
-  | 'signupGrantDailyCredits'
-  | 'signupGrantDripCap'
-  | 'signupGrantInviteBonusCredits'
-  | 'signupGrantCredits'
-  | 'defaultFreeCredits'
-  | 'signupGrantActivityDailyCredits'
-  | 'signupGrantActivityMaxCredits'
-  | 'verifiedUnlockCredits';
+  'signupGrantInitialCredits' | 'signupGrantDailyCredits' | 'signupGrantDripCap' | 'signupGrantInviteBonusCredits';
 
 /** A stored credit amount, or undefined when absent, blank or invalid so the caller falls back; '0' is a value. */
 export function storedGrantCredits(key: SignupGrantCreditKey, value: unknown): number | undefined {
@@ -139,7 +131,8 @@ export function storedGrantCredits(key: SignupGrantCreditKey, value: unknown): n
   return Number.isSafeInteger(amount) && amount >= 0 ? amount : undefined;
 }
 
-export type SignupGrantDripCapSource = 'setting' | 'legacy' | 'default';
+/** 'default' means signupGrantDripCap is unset and its registry default applies. */
+export type SignupGrantDripCapSource = 'setting' | 'default';
 
 export interface SignupGrantSchedule {
   initialCredits: number;
@@ -147,22 +140,11 @@ export interface SignupGrantSchedule {
   dripCap: number;
   /** Locked at enrollment and released by a verification unlock. */
   unlockCredits: number;
-  /** Nothing is locked, so a referral invite pays whole as the pre-staging flat grant did. */
+  /** A stored cap of 0: nothing is locked, so a referral invite pays whole as the pre-staging flat grant did. */
   paysFlat: boolean;
   inviteBonusCredits: number;
   dripCapSource: SignupGrantDripCapSource;
 }
-
-/**
- * The pre-schedule on/off switches. `staged` matters while signupGrantInitialCredits or signupGrantDripCap
- * is unset (an unset cap with staging off keeps the flat grant); `activity` while signupGrantDailyCredits is unset.
- */
-export interface SignupGrantLegacyToggles {
-  staged: boolean;
-  activity: boolean;
-}
-
-export const isStoredToggleOn = (value: unknown) => value === true || value === 'true';
 
 /** The drip may still pay: the grant is mid-drip, or a drip completed it and a raised cap can reopen it. A forfeited grant never pays. */
 export function signupGrantDripOpen(grant: Pick<SignupGrant, 'stage' | 'unlockedBy' | 'unlockForfeited'>): boolean {
@@ -171,57 +153,24 @@ export function signupGrantDripOpen(grant: Pick<SignupGrant, 'stage' | 'unlocked
 }
 
 /**
- * Resolves the schedule from stored values, including the retired toggles. Only the migrations in
- * packages/scripts/migrate/migrations (20260921237400_seed-signup-grant-schedule.ts and
- * 20260921237450_pin-signup-grant-initial-and-cap.ts) read it directly; runtime goes through
- * runtimeSignupGrantSchedule below.
- */
-export function signupGrantScheduleFromValues(
-  read: (key: SignupGrantCreditKey) => number | undefined,
-  toggles: SignupGrantLegacyToggles
-): SignupGrantSchedule {
-  const cap = read('signupGrantDripCap');
-  // An absent legacy row reads as its registry default (unlock 0, activity max 9000), as the pre-schedule
-  // payout did; the drip was bounded by both because it could not pass the enrolled unlock.
-  const verifiedUnlock = read('verifiedUnlockCredits') ?? settingsMap.verifiedUnlockCredits.defaultValue ?? 0;
-  const activityMax = read('signupGrantActivityMaxCredits');
-  // Unset schedule keys with staging off keep the flat grant: nothing locked, no drip.
-  const legacyCap = !toggles.staged
-    ? 0
-    : Math.min(activityMax ?? settingsMap.signupGrantActivityMaxCredits.defaultValue ?? 0, verifiedUnlock);
-  const dripCap = cap ?? legacyCap;
-  const dripCapSource: SignupGrantDripCapSource =
-    cap !== undefined ? 'setting' : toggles.staged && activityMax === undefined ? 'default' : 'legacy';
-  return {
-    initialCredits:
-      read('signupGrantInitialCredits') ??
-      (toggles.staged ? read('signupGrantCredits') : undefined) ??
-      read('defaultFreeCredits') ??
-      0,
-    dailyCredits:
-      read('signupGrantDailyCredits') ?? (toggles.activity ? read('signupGrantActivityDailyCredits') : 0) ?? 0,
-    dripCap,
-    // Without a stored cap, verification releases verifiedUnlockCredits as before, even where a 0 activity max stops the drip.
-    unlockCredits: cap !== undefined || !toggles.staged ? dripCap : verifiedUnlock,
-    paysFlat: cap !== undefined ? cap === 0 : !toggles.staged,
-    inviteBonusCredits: read('signupGrantInviteBonusCredits') ?? 0,
-    dripCapSource,
-  };
-}
-
-/**
- * The schedule as runtime reads it. defaultFreeCredits and stagedSignupGrantEnabled are retired: the seed
- * migration above pinned their effect into the schedule keys, so they never size a payout here. Shared by
- * resolveSignupGrantSchedule and the client mirror (useSignupGrantSchedule.ts) so both read the same keys.
+ * The schedule from the four schedule keys. Shared by resolveSignupGrantSchedule and the client mirror
+ * (useSignupGrantSchedule.ts) so both read the same keys.
  */
 export function runtimeSignupGrantSchedule(
-  read: (key: SignupGrantCreditKey) => number | undefined,
-  activity: boolean
+  read: (key: SignupGrantCreditKey) => number | undefined
 ): SignupGrantSchedule {
-  return signupGrantScheduleFromValues(key => (key === 'defaultFreeCredits' ? undefined : read(key)), {
-    staged: true,
-    activity,
-  });
+  const cap = read('signupGrantDripCap');
+  const dripCap = cap ?? settingsMap.signupGrantDripCap.defaultValue ?? 0;
+  return {
+    initialCredits: read('signupGrantInitialCredits') ?? 0,
+    dailyCredits: read('signupGrantDailyCredits') ?? 0,
+    dripCap,
+    unlockCredits: dripCap,
+    // An unset cap drips nothing but still locks an invite's remainder, as the empty pre-schedule config did.
+    paysFlat: cap === 0,
+    inviteBonusCredits: read('signupGrantInviteBonusCredits') ?? 0,
+    dripCapSource: cap === undefined ? 'default' : 'setting',
+  };
 }
 
 const SCHEDULE_KEYS: SignupGrantCreditKey[] = [
@@ -229,32 +178,24 @@ const SCHEDULE_KEYS: SignupGrantCreditKey[] = [
   'signupGrantDailyCredits',
   'signupGrantDripCap',
   'signupGrantInviteBonusCredits',
-  'signupGrantCredits',
-  'signupGrantActivityDailyCredits',
-  'signupGrantActivityMaxCredits',
-  'verifiedUnlockCredits',
 ];
 
 type ScheduleSettingsReader = Pick<IAdminSettingsRepository, 'findBySettingName'> &
   Partial<Pick<IAdminSettingsRepository, 'findBySettingNames'>>;
 
-/** The new schedule keys win; while one is unset its pre-schedule key still applies. One batched read when available. */
+/** One batched read when available. */
 export async function resolveSignupGrantSchedule(adminSettings: ScheduleSettingsReader): Promise<SignupGrantSchedule> {
-  const toggleKeys = ['signupGrantActivityEnabled'] as const;
   const values = new Map<string, unknown>();
   if (adminSettings.findBySettingNames) {
-    for (const row of await adminSettings.findBySettingNames([...SCHEDULE_KEYS, ...toggleKeys])) {
+    for (const row of await adminSettings.findBySettingNames(SCHEDULE_KEYS)) {
       values.set(row.settingName, row.settingValue);
     }
   } else {
-    for (const key of [...SCHEDULE_KEYS, ...toggleKeys]) {
+    for (const key of SCHEDULE_KEYS) {
       values.set(key, (await adminSettings.findBySettingName(key))?.settingValue);
     }
   }
-  return runtimeSignupGrantSchedule(
-    key => storedGrantCredits(key, values.get(key)),
-    isStoredToggleOn(values.get('signupGrantActivityEnabled'))
-  );
+  return runtimeSignupGrantSchedule(key => storedGrantCredits(key, values.get(key)));
 }
 
 export async function resolveSignupGrantSettings(adminSettings: ScheduleSettingsReader) {
@@ -269,7 +210,8 @@ export async function resolveSignupGrantSettings(adminSettings: ScheduleSettings
  * `totalCredits` sets the enrolled entitlement (tranche first, remainder locked) instead of the signup settings.
  * It is a floor, not a ceiling: the drip and verification unlocks still grow the pool to the live drip cap
  * (signupGrantUnlockCredits, the drip branch in stagedSignupGrant.ts), so an invitee gets the larger of
- * `totalCredits` and the open-signup schedule. signupGrantInviteBonusCredits is the on-top invite bonus
+ * `totalCredits` and the open-signup unlock pool; with a drip cap of 0 the grant pays `totalCredits` as
+ * given, even below the open-signup initial credits. signupGrantInviteBonusCredits is the on-top invite bonus
  * (payInviteBonus).
  */
 export async function newSignupGrant(adminSettings: ScheduleSettingsReader, totalCredits?: number) {

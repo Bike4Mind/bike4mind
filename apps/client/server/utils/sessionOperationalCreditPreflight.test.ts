@@ -420,6 +420,44 @@ describe('checkSessionOperationalCredits', () => {
       expect(mockGetOperationsModel).not.toHaveBeenCalled();
     });
 
+    describe('with a caller-supplied model', () => {
+      const FREE_MODEL = {
+        id: 'llama3',
+        freeToRun: true,
+        pricing: { 128000: { input: 0, output: 0 }, 2000000: { input: 0, output: 0 } },
+      };
+
+      it('allows a broke holder when the supplied model is freeToRun, without resolving the operations model', async () => {
+        brokeHolder();
+        const resolveModelInfo = vi.fn().mockResolvedValue(FREE_MODEL);
+
+        await expect(preflight({ resolveModelInfo })).resolves.toEqual({ allowed: true });
+        expect(resolveModelInfo).toHaveBeenCalledTimes(1);
+        expect(mockGetOperationsModel).not.toHaveBeenCalled();
+      });
+
+      it('keeps the refusal when the supplied model is priced', async () => {
+        brokeHolder();
+        const resolveModelInfo = vi
+          .fn()
+          .mockResolvedValue({ id: 'gpt-4o', pricing: { 128000: { input: 2, output: 8 } } });
+
+        await expect(preflight({ resolveModelInfo })).resolves.toMatchObject({ allowed: false });
+        expect(mockGetOperationsModel).not.toHaveBeenCalled();
+      });
+
+      it('keeps the refusal when resolving the supplied model throws', async () => {
+        brokeHolder();
+        const resolveModelInfo = vi.fn().mockRejectedValue(new Error('model lookup failed'));
+        const logger = { warn: vi.fn(), info: vi.fn() };
+
+        await expect(preflight({ resolveModelInfo, logger: logger as never })).resolves.toMatchObject({
+          allowed: false,
+        });
+        expect(logger.warn).toHaveBeenCalled();
+      });
+    });
+
     it('waives the per-member cap refusal too, not just the pool refusal', async () => {
       billingOn();
       mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0, organizationId: ORG_ID });

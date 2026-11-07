@@ -30,6 +30,7 @@ import { researchTaskJobs } from '@server/utils/researchTasks';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { assertOwnerCanAfford, createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { isTerminalCreditRefusal, type IUserDocument } from '@bike4mind/common';
+import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
 
 /**
  * The operations text model with every completion reserved and settled against the task owner's
@@ -249,8 +250,8 @@ const processDiscoveredLinks = async (parameters: { id: string; userId: string }
       }
     );
   } catch (err) {
-    // A credit refusal is not transient: fail the task instead of letting SQS redeliver it.
-    if (!isTerminalCreditRefusal(err)) throw err;
+    // A credit or AI-access refusal is not transient: fail the task instead of letting SQS redeliver it.
+    if (!isTerminalCreditRefusal(err) && !isAiAccessRefusal(err)) throw err;
     await researchTaskRepository.update({
       id: researchTaskId,
       status: ResearchTaskStatus.FAILED,
@@ -341,7 +342,7 @@ const deepResearchIntoQuestJob = async (
   try {
     llm = await meteredOperationsLlm(user as IUserDocument, logger);
   } catch (err) {
-    if (!isTerminalCreditRefusal(err)) throw err;
+    if (!isTerminalCreditRefusal(err) && !isAiAccessRefusal(err)) throw err;
     await settleFailed(err instanceof Error ? err.message : 'Not enough credits');
     return;
   }

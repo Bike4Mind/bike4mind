@@ -27,21 +27,24 @@ const listRoute = nextRouteForContract(listProjectSessionsContract, {
   rateLimit: perUserRateLimit('GET /api/v1/projects/[id]/sessions'),
 }).get(async (req, res) => {
   const { limit, cursor } = req.validatedQuery;
-  const afterId = cursor === undefined ? undefined : decodeCursor(cursor, CURSOR_SCOPE);
+
+  // Same reach as GET /api/v1/projects/{id}; answers 404 for anything the caller cannot read.
+  const project = await getReadableProject(req.user.id, req.validatedParams.id);
+
+  // Scoped to the project, so a cursor minted while paging one project is a 422 on another.
+  const cursorScope = `${CURSOR_SCOPE}.${project.id}`;
+  const afterId = cursor === undefined ? undefined : decodeCursor(cursor, cursorScope);
   // A cursor carries the last id this endpoint served, so anything else was not minted here.
   if (afterId !== undefined && !isValidObjectId(afterId)) {
     throw new UnprocessableEntityError('Invalid cursor');
   }
-
-  // Same reach as GET /api/v1/projects/{id}; answers 404 for anything the caller cannot read.
-  const project = await getReadableProject(req.user.id, req.validatedParams.id);
 
   const page = await sessionRepository.findPageByIds(project.sessionIds, { afterId, limit });
   const lastId = page.data.at(-1)?.id;
 
   return res.json({
     data: page.data.map(toPublicSession),
-    next_cursor: page.hasMore && lastId ? encodeCursor(CURSOR_SCOPE, String(lastId)) : null,
+    next_cursor: page.hasMore && lastId ? encodeCursor(cursorScope, String(lastId)) : null,
   });
 });
 

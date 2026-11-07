@@ -34,3 +34,6 @@ c7409f4982b9755328db189ba463980cf2ac71bf:scripts/test-security-alerts-local.mjs:
 baac43b29c16d0f9547d2db6ab8c152d827c1fb2:apps/client/public/help-content/features/system-secrets-management.md:bike4mind-mongodb-uri:52
 baac43b29c16d0f9547d2db6ab8c152d827c1fb2:apps/client/public/help-content/features/system-secrets-management.md:bike4mind-mongodb-uri:123
 51716ceb5a7fa32844f6f4fda65018a26c656486:packages/scripts/API_USAGE_MONITORING_TEST_GUIDE.md:bike4mind-mongodb-uri:151
+
+# Drill-only disposable Mongo URI built from a generated password (fixed at the branch tip; earlier commit still carries the shape)
+d9fecaa85059ce8bfb4b37495e42f06505a0b48a:scripts/verify-compose-backup-restore.py:bike4mind-mongodb-uri:79

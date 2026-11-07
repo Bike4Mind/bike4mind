@@ -141,7 +141,10 @@ const deps: Pick<
   'createOllamaBackend' | 'createOpenAICompatibleBackend' | 'createMultiBackend' | 'loadModelServers'
 > = {
   createOllamaBackend: (host, options) =>
-    new OllamaBackend(host, silent, { fetch: options?.fetch as typeof globalThis.fetch | undefined }),
+    new OllamaBackend(host, silent, {
+      fetch: options?.fetch as typeof globalThis.fetch | undefined,
+      requestSettings: options?.requestSettings,
+    }),
   createOpenAICompatibleBackend: options => new OpenAICompatibleBackend({ ...options, logger: silent }),
   createMultiBackend: (server, serverModels, routes, defaultModel) =>
     new MultiLlmBackend(server, serverModels, routes, defaultModel),
@@ -490,6 +493,31 @@ describe('attachLocalModels with saved model servers', () => {
     expect(await chat(attached.llm, 'local:srv-s1:qwen-small')).toBe('Hello.');
     expect(plain.requests.filter(request => request.path === '/api/chat')).toHaveLength(1);
     expect(saved.requests).toHaveLength(1);
+  });
+
+  it("applies Desktop's settings to a saved Ollama server's model under its server id, and not to another host", async () => {
+    const fake = await ollama(TOKEN);
+    const plain = await ollama();
+    await writeServers([lockedRecord(fake)]);
+    const settings = path.join(dir, 'model-settings.json');
+    const entry = { context: { mode: 'fixed', tokens: 4096 }, keepAlive: 1800 };
+    await writeFile(
+      settings,
+      JSON.stringify({ models: { 'local:srv-o1:tiny:1b': entry, 'local:ollama:tiny:1b': { keepAlive: -1 } } })
+    );
+    vi.stubEnv('B4M_DESKTOP_MODEL_SETTINGS', settings);
+    const attached = await attach(
+      { defaultModel: 'local:srv-o1:tiny:1b', modelServerCredentials: { o1: { secret: TOKEN } } },
+      { servers: 'all', ollamaHost: plain.baseUrl }
+    );
+    expect(attached.models.find(model => String(model.id) === 'local:srv-o1:tiny:1b')?.contextWindow).toBe(4096);
+    expect(await chat(attached.llm, 'local:srv-o1:tiny:1b')).toBe('Hi.');
+    expect(await chat(attached.llm, 'tiny:1b')).toBe('Hi.');
+    const body = (server: FakeServer) =>
+      JSON.parse(server.requests.find(request => request.path === '/api/chat')?.body ?? '{}');
+    expect(body(fake)).toMatchObject({ keep_alive: 1800, options: { num_ctx: 4096 } });
+    expect(body(plain)).not.toHaveProperty('keep_alive');
+    expect(body(plain).options.num_ctx).toBe(8192);
   });
 
   it('headless with a hosted default reads no model servers', async () => {

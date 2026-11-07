@@ -1,5 +1,8 @@
+import { createReadStream } from 'node:fs';
+import { Readable } from 'node:stream';
 import { z } from 'zod';
 import { archFromModelInfo, positiveInt, tensorStatsFromTensors } from './arch';
+import { storageError } from './fileLock';
 import {
   LocalRuntimeError,
   ModelNotFoundError,
@@ -31,6 +34,8 @@ import type {
   ModelCapabilities,
   ModelInspection,
   ModelContents,
+  ModelImportRuntime,
+  OllamaCreateRequest,
   PullOptions,
   RuntimeHealth,
 } from './types';
@@ -42,6 +47,8 @@ export const OLLAMA_SHOW_CONCURRENCY = 4;
 /** Digest verification of a large blob can be silent for minutes. */
 export const DEFAULT_PULL_IDLE_TIMEOUT_MS = 5 * 60_000;
 const MAX_TIMER_MS = 2 ** 31 - 1;
+const DEFAULT_UPLOAD_IDLE_TIMEOUT_MS = 2 * 60_000;
+const UPLOAD_PROGRESS_INTERVAL_MS = 250;
 
 export interface OllamaRuntimeOptions {
   baseUrl?: string;
@@ -223,12 +230,19 @@ class ProgressCallbackError {
   constructor(readonly error: unknown) {}
 }
 
+const BLOB_DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+
+function blobPath(digest: string, runtimeId: string): string {
+  if (!BLOB_DIGEST_RE.test(digest)) throw new LocalRuntimeError('Invalid blob digest', runtimeId);
+  return `/api/blobs/${digest}`;
+}
+
 /** Ollama stores an untagged name as `<name>:latest`. */
 function withDefaultTag(model: string): string {
   return /:[^/]+$/.test(model) ? model : `${model}:latest`;
 }
 
-export class OllamaRuntime implements LocalRuntime {
+export class OllamaRuntime implements LocalRuntime, ModelImportRuntime {
   readonly kind = 'ollama' as const;
   readonly id: string;
   readonly baseUrl: string;
@@ -379,6 +393,105 @@ export class OllamaRuntime implements LocalRuntime {
       throw connectionError(this.client, '/api/pull', error, { signal: opts.signal });
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  async hasBlob(digest: string, options: { signal?: AbortSignal } = {}): Promise<boolean> {
+    const path = blobPath(digest, this.id);
+    try {
+      await send(this.client, path, { method: 'HEAD', signal: options.signal, timeoutMs: this.requestTimeoutMs });
+      return true;
+    } catch (error) {
+      if (error instanceof RuntimeHttpError && error.status === 404) return false;
+      throw error;
+    }
+  }
+
+  async uploadBlob(
+    digest: string,
+    path: string,
+    options: { signal?: AbortSignal; onProgress?: (sentBytes: number) => void; idleTimeoutMs?: number } = {}
+  ): Promise<void> {
+    const route = blobPath(digest, this.id);
+    const idleMs = Math.min(options.idleTimeoutMs ?? DEFAULT_UPLOAD_IDLE_TIMEOUT_MS, MAX_TIMER_MS);
+    // After the last byte Ollama hashes the blob, which stays silent for minutes on a large part.
+    const hashMs = Math.min(options.idleTimeoutMs ?? DEFAULT_PULL_IDLE_TIMEOUT_MS, MAX_TIMER_MS);
+    const idle = new AbortController();
+    const idleError = new LocalRuntimeError(
+      `${this.id} stopped taking ${route} for ${Math.round(idleMs / 1000)}s`,
+      this.id
+    );
+    let timer: NodeJS.Timeout | undefined;
+    const arm = (ms: number) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => idle.abort(idleError), ms);
+    };
+    let sent = 0;
+    let lastReport = 0;
+    const source = createReadStream(path);
+    let readError: unknown;
+    source.on('error', error => (readError ??= error));
+    const counted = (Readable.toWeb(source) as ReadableStream<Uint8Array>).pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        transform: (chunk, controller) => {
+          sent += chunk.byteLength;
+          arm(idleMs);
+          const now = Date.now();
+          if (now - lastReport >= UPLOAD_PROGRESS_INTERVAL_MS) {
+            lastReport = now;
+            options.onProgress?.(sent);
+          }
+          controller.enqueue(chunk);
+        },
+        flush: () => {
+          arm(hashMs);
+          options.onProgress?.(sent);
+        },
+      })
+    );
+    arm(idleMs);
+    try {
+      const response = await send(this.client, route, {
+        method: 'POST',
+        stream: counted,
+        signal: options.signal ? AbortSignal.any([options.signal, idle.signal]) : idle.signal,
+      });
+      await response.body?.cancel().catch(() => undefined);
+    } catch (error) {
+      if (readError !== undefined && !options.signal?.aborted) throw storageError(this.id, path, readError, 'read');
+      if (idle.signal.aborted && !options.signal?.aborted) throw idleError;
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      source.destroy();
+    }
+  }
+
+  /** Streams `/api/create`; resolves on its `success` line. */
+  async create(request: OllamaCreateRequest, options: { signal?: AbortSignal } = {}): Promise<void> {
+    try {
+      const response = await send(this.client, '/api/create', {
+        method: 'POST',
+        body: { ...request, stream: true },
+        signal: options.signal,
+      });
+      if (!response.body) throw new RuntimeProtocolError(`${this.id} /api/create returned no body`, this.id);
+      let succeeded = false;
+      for await (const line of readLines(response.body)) {
+        const frame = parseJson(this.client, '/api/create', this.redact(line, response), pullFrameSchema);
+        if (frame.error)
+          throw new LocalRuntimeError(`${this.id} could not create ${request.model}: ${frame.error}`, this.id);
+        if (frame.status === 'success') succeeded = true;
+      }
+      options.signal?.throwIfAborted();
+      if (!succeeded)
+        throw new RuntimeProtocolError(`${this.id} create of ${request.model} ended before it finished`, this.id);
+    } catch (error) {
+      if (error instanceof RuntimeHttpError && error.detail)
+        throw new LocalRuntimeError(`${this.id} could not create ${request.model}: ${error.detail}`, this.id, {
+          cause: error,
+        });
+      throw connectionError(this.client, '/api/create', error, { signal: options.signal });
     }
   }
 

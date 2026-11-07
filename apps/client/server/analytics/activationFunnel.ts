@@ -13,7 +13,7 @@ import {
 } from '@bike4mind/server-utils/lib/subscriptions/types';
 import type { UserFunnelStep } from '@client/app/utils/adminUsersFilter';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
-import { currentStaffRegex, isCountedUser, type UserFlags } from './signupCohort';
+import { isActiveEligible, loadCountingContext, USER_FLAG_FIELDS, type UserFlags } from './signupCohort';
 
 /**
  * The activation funnel of docs/admin-analytics-spec.md 4.5. The users list's funnelStep filter resolves
@@ -159,8 +159,9 @@ async function loadPaymentTimes(batch: CohortMember[], deadlineMs: number): Prom
 }
 
 /**
- * Ids of the counted users created in [start, end), old enough to judge at `now`, whose furthest funnel
- * step is `step`. A window holding more than FUNNEL_COHORT_MAX signups is refused.
+ * Ids of the active-eligible users (counted, not banned or AI-held, like the rollup) created in [start, end),
+ * old enough to judge at `now`, whose furthest funnel step is `step`. A window holding more than
+ * FUNNEL_COHORT_MAX signups is refused.
  */
 export async function funnelStepUserIds(
   { start, end, step }: { start: Date; end: Date; step: UserFunnelStep },
@@ -168,7 +169,7 @@ export async function funnelStepUserIds(
 ): Promise<string[]> {
   const judgeableUntil = new Date(now.getTime() - ACTIVATION_MIN_AGE_MS);
   const users = await User.find({ createdAt: { $gte: start, $lt: end, $lte: judgeableUntil } })
-    .select('_id email createdAt isAdmin isSystem isSynthetic')
+    .select(USER_FLAG_FIELDS)
     .hint({ createdAt: 1 })
     .limit(FUNNEL_COHORT_MAX + 1)
     .maxTimeMS(deadlineMs)
@@ -178,9 +179,9 @@ export async function funnelStepUserIds(
       `More than ${FUNNEL_COHORT_MAX.toLocaleString('en-US')} signups in this window. Narrow the created range.`
     );
   }
-  const staffRegex = currentStaffRegex();
+  const ctx = await loadCountingContext();
   const cohort: CohortMember[] = users
-    .filter(user => isCountedUser(user, staffRegex))
+    .filter(user => isActiveEligible(user, ctx))
     .map(user => ({ id: String(user._id), signupAt: new Date(user.createdAt) }));
   // A strict funnel: payment only separates came back from paid.
   const needsPayments = step === 'cameBack' || step === 'paid';

@@ -79,6 +79,23 @@ marker. Other reasons are left for an admin. Admin Confirm and Release write str
 `signup_domain_hold.confirmed` / `signup_domain_hold.released` entries, and a Release that overrides an automated
 confirmation names the policy it overrode.
 
+After the rule, the same job runs the advisory assessment of pending `young-domain` holds
+(`apps/client/server/security/signupDomainHoldAssessment`) while **Advisory Assessment of Young-Domain Holds** is on
+(default off). For each hold without a current verdict it asks one Decisions question (`abuse`, `legitimate` or
+`insufficient_evidence`) over a summary of counts and flags only: domain age, mail provider class, whether
+`https://<domain>/` answers with real content (derived in code; the page itself is never sent), signup count and
+timing, and how many distinct networks, ASNs and countries the accounts came from. No email, IP, domain name or site
+text reaches the model. It only ever confirms: an `abuse` verdict at or above `minConfirmConfidence` (default 0.9)
+confirms the hold exactly like the rule (strict system audit entry, "Auto-confirmed by the advisory assessment").
+Every other outcome, including refusals and provider failures, leaves the hold pending with the verdict shown on the
+row; failures retry up to three times, an hour apart, and a domain gets at most three provider calls a day whatever was
+stored. An overloaded or unconfigured provider, a spent budget or a reached call cap ends the run without storing
+anything; a hold whose facts take over 20 seconds to gather is stored as a failed attempt (`summary timeout`). Each judged hold is also recorded
+on the Detections page under the `signupDomainHold` detector so verdicts can be graded; verdicts that would not have
+confirmed are listed there but left out of precision, and the abuse assessment never re-judges them. Calls use the platform key under their own budget, call cap
+and concurrency (**Model and Limits**: no model and a zero budget by default, so nothing is called until an operator
+sets both). Admin Confirm and Release keep the stored verdict as history.
+
 ## Disposable lists and domain intelligence
 
 A daily job (`apps/workers/src/cron/disposableDomainRefresh.ts`) refreshes four upstream disposable-domain lists into MongoDB: the curated `disposable-email-domains/disposable-email-domains` list, `7c/fakefilter`, the UserCheck `tompec/disposable-email-domains` list (`tompec`), and the `disposable/disposable-email-domains` aggregate. A source that fails, returns nothing, or shrinks below half of its last good size keeps its previous entries. Per-source counts, last success and last error appear in **Admin > Signup Domain Holds**; the `disposableDomainRefreshFailures` alarm fires after two failing days. If an upstream genuinely shrinks by half, the floor refuses it every day; delete that source's `disposabledomainsources` document to accept the next snapshot.

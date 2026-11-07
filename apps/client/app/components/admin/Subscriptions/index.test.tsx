@@ -85,7 +85,9 @@ const compedRow = row({
 
 const SUMMARY: AdminSubscriptionsSummary = {
   total: 3,
-  views: { paying: 2, pastDue: 1, comped: 1, churned: 0 },
+  views: { paying: 2, pastDue: 1, comped: 1, churned: 0, mismatched: 0 },
+  mismatches: { open: 0, orphanStripe: 0, lastSeenAt: null, orphans: [] },
+  mismatchTruncated: false,
   mrr: { currency: 'usd', amount: 1_234_567, unpriced: 2, otherCurrency: 1 },
   pastDueMrr: { currency: 'usd', amount: 1900, unpriced: 0, otherCurrency: 0 },
   searchTruncated: false,
@@ -99,6 +101,7 @@ const listResponse = (): AdminSubscriptionsListResponse => ({
   page: 1,
   totalPages: listRows.length > 0 ? 1 : 0,
   searchTruncated: false,
+  mismatchTruncated: false,
 });
 
 const renderTab = (client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) => {
@@ -278,6 +281,54 @@ describe('AdminSubscriptions', () => {
     renderTab();
     expect(await screen.findByTestId('admin-subscriptions-new-s1')).toBeTruthy();
     expect(screen.queryByTestId('admin-subscriptions-new-s2')).toBeNull();
+  });
+
+  it('shows a banner for open mismatches that opens the Mismatched view, with orphan links to Stripe', async () => {
+    const mismatchSummary: AdminSubscriptionsSummary = {
+      ...SUMMARY,
+      views: { ...SUMMARY.views, mismatched: 2 },
+      mismatches: {
+        open: 2,
+        orphanStripe: 1,
+        lastSeenAt: '2026-10-01T06:30:00.000Z',
+        orphans: [
+          {
+            stripeSubscriptionId: 'sub_orphan',
+            ownerType: null,
+            ownerId: null,
+            stripeStatus: 'active',
+            firstSeenAt: '2026-10-01T06:30:00.000Z',
+          },
+        ],
+      },
+    };
+    apiGet.mockImplementation(async (url: string) => ({
+      data: url === SUMMARY_PATH ? mismatchSummary : listResponse(),
+    }));
+    renderTab();
+
+    fireEvent.click(await screen.findByTestId('subscriptions-mismatch-review-btn'));
+
+    await waitFor(() => expect(lastListParams()).toEqual(expect.objectContaining({ mismatch: 'yes' })));
+    expect(screen.queryByTestId('subscriptions-mismatch-banner')).toBeNull();
+    expect(screen.getByTestId('subscriptions-orphan-sub_orphan').getAttribute('href')).toBe(
+      'https://dashboard.stripe.com/subscriptions/sub_orphan'
+    );
+  });
+
+  it('warns when the Mismatched view is capped', async () => {
+    apiGet.mockImplementation(async (url: string) => ({
+      data: url === SUMMARY_PATH ? SUMMARY : { ...listResponse(), mismatchTruncated: true },
+    }));
+    renderTab();
+
+    expect(await screen.findByTestId('admin-subscriptions-mismatch-truncated')).toBeTruthy();
+  });
+
+  it('shows no mismatch banner when nothing is open', async () => {
+    renderTab();
+    await screen.findByTestId('admin-subscriptions-row-s1');
+    expect(screen.queryByTestId('subscriptions-mismatch-banner')).toBeNull();
   });
 
   const trendPoint = (date: string, mrr: number) => ({
@@ -522,7 +573,9 @@ describe('subscription summary failures', () => {
 
 describe('subscription CSV export', () => {
   it('downloads the filtered export and warns about both server truncation markers', async () => {
-    const blob = new NodeBlob(['id\nsub_1\n# Truncated at 10000 rows\n# Search matched more than 500 accounts\n']);
+    const blob = new NodeBlob([
+      'id\nsub_1\n# Truncated at 10000 rows\n# Search matched more than 500 accounts\n# Mismatched view covers the first 500 subscriptions\n',
+    ]);
     apiGet.mockImplementation(async (url: string) => {
       if (url.endsWith('/export'))
         return { data: blob, headers: { 'content-disposition': 'attachment; filename="filtered.csv"' } };
@@ -536,7 +589,10 @@ describe('subscription CSV export', () => {
       params: { status: ['active', 'past_due'], source: 'stripe' },
       responseType: 'blob',
     });
-    expect(notifications.warning).toHaveBeenCalledTimes(2);
+    expect(notifications.warning).toHaveBeenCalledTimes(3);
+    expect(notifications.warning).toHaveBeenCalledWith(
+      'The Mismatched view is capped, so the export is missing some subscriptions.'
+    );
   });
 
   it('reports an export failure and leaves the button available for retry', async () => {

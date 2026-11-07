@@ -194,4 +194,56 @@ describe('buildSpendAlertMessage', () => {
     expect(out).toContain('peak $55.00');
     expect(out).not.toContain('list price');
   });
+
+  it('prints the list price per 1,000 credits on open and resolve cards', () => {
+    const resolved = { ...baseAlert, resolvedAt: new Date('2026-10-30T10:30:00Z') };
+
+    expect(json(build({ creditUsd: 0.0012 }))).toContain('approx. at list price, $1.20 per 1,000 credits');
+    expect(json(build({ kind: 'resolve', alert: resolved, creditUsd: 0.0012 }))).toContain(
+      'approx. at list price, $1.20 per 1,000 credits'
+    );
+  });
+
+  it('lists the folded API keys in an escaped Via API keys field', () => {
+    const alert = { ...baseAlert, context: { ...baseAlert.context, viaKeys: ['ci-key', 'a&b'] } };
+    const out = json(build({ alert }));
+
+    expect(out).toContain('*Via API keys*');
+    expect(out).toContain('ci-key, a&amp;b');
+    expect(json(build())).not.toContain('Via API keys');
+  });
+
+  it('keeps a key name on one line and bounds its length', () => {
+    const long = 'x'.repeat(80);
+    const alert = { ...baseAlert, context: { ...baseAlert.context, viaKeys: ['first\nsecond', long] } };
+    const out = json(build({ alert }));
+
+    expect(out).toContain('first second');
+    expect(out).toContain(`${'x'.repeat(60)}...`);
+    expect(out).not.toContain(long);
+  });
+
+  it.each(['x', '&'])('bounds the complete folded-key field after escaping %s names', character => {
+    const alert = {
+      ...baseAlert,
+      context: { ...baseAlert.context, viaKeys: Array.from({ length: 100 }, () => character.repeat(80)) },
+    };
+    const message = build({ alert });
+    const fields = message.attachments
+      ?.flatMap(attachment => attachment.blocks)
+      .flatMap(block => {
+        if (typeof block !== 'object' || block === null || !('fields' in block) || !Array.isArray(block.fields))
+          return [];
+        return block.fields.flatMap((field: unknown) => {
+          if (typeof field !== 'object' || field === null || !('text' in field) || typeof field.text !== 'string')
+            return [];
+          return [field.text];
+        });
+      });
+    const keyField = fields?.find(field => field.startsWith('*Via API keys*'));
+    expect(keyField).toBeDefined();
+    expect(keyField?.length).toBeLessThanOrEqual(2000);
+    expect(keyField).toMatch(/, \+\d+ more$/);
+    expect(keyField).not.toMatch(/&(?:a|am|amp)?(?:,|$)/);
+  });
 });

@@ -105,6 +105,20 @@ describe('shadowDetectionRepository', () => {
     expect(confirmed.data.map(item => item.id)).toEqual([older]);
   });
 
+  it('counts open detections for a user, leaving out those judged legitimate', async () => {
+    await shadowDetectionRepository.record(detection({ userIds: ['u1', 'u2'] }));
+    await grade(await shadowDetectionRepository.record(detection({ userIds: ['u1'] })), 0, 'confirmed_abuse');
+    await grade(await shadowDetectionRepository.record(detection({ userIds: ['u1'] })), 0, 'legitimate_human');
+    await ShadowDetectionModel.updateOne(
+      { _id: await shadowDetectionRepository.record(detection({ userIds: ['u1'] })) },
+      { $set: { verdict: 'legitimate_automation' } }
+    );
+
+    expect(await shadowDetectionRepository.countOpenForUser('u1')).toBe(2);
+    expect(await shadowDetectionRepository.countOpenForUser('u2')).toBe(1);
+    expect(await shadowDetectionRepository.countOpenForUser('u3')).toBe(0);
+  });
+
   it('adds a verdict and bumps the revision', async () => {
     const id = await shadowDetectionRepository.record(detection());
 
@@ -161,6 +175,7 @@ describe('shadowDetectionRepository', () => {
         detector: 'signupNetworkBurst',
         policyVersion: 2,
         recorded: 1,
+        noAction: 0,
         confirmedAbuse: 0,
         legitimateHuman: 0,
         legitimateAutomation: 0,
@@ -170,12 +185,94 @@ describe('shadowDetectionRepository', () => {
         detector: 'signupNetworkBurst',
         policyVersion: 1,
         recorded: 3,
+        noAction: 0,
         confirmedAbuse: 1,
         legitimateHuman: 1,
         legitimateAutomation: 0,
         insufficientEvidence: 0,
       },
     ]);
+  });
+
+  it('counts would-not-act records as recorded but keeps their verdicts out of precision', async () => {
+    const [acted, notActed] = await Promise.all([
+      shadowDetectionRepository.record(detection({ detector: 'signupDomainHold', wouldAction: 'confirmHold' })),
+      shadowDetectionRepository.record(detection({ detector: 'signupDomainHold', wouldAction: 'none' })),
+      shadowDetectionRepository.record(detection({ detector: 'signupDomainHold', wouldAction: 'none' })),
+    ]);
+    await grade(acted, 0, 'confirmed_abuse');
+    await grade(notActed, 0, 'legitimate_human');
+
+    await expect(shadowDetectionRepository.summarize()).resolves.toEqual([
+      {
+        detector: 'signupDomainHold',
+        policyVersion: 1,
+        recorded: 3,
+        noAction: 2,
+        confirmedAbuse: 1,
+        legitimateHuman: 0,
+        legitimateAutomation: 0,
+        insufficientEvidence: 0,
+      },
+    ]);
+    const listed = await shadowDetectionRepository.list({ detector: 'signupDomainHold', limit: 10 });
+    expect(listed.data).toHaveLength(3);
+  });
+
+  it('excludes detectors in the unreviewed query so they never take a slot from the limit', async () => {
+    const since = new Date('2026-09-01T00:00:00Z');
+    const older = await shadowDetectionRepository.record(detection({ detectedAt: new Date('2026-10-01T00:00:00Z') }));
+    await Promise.all(
+      [2, 3, 4].map(day =>
+        shadowDetectionRepository.record(
+          detection({
+            detector: 'signupDomainHold',
+            wouldAction: 'none',
+            detectedAt: new Date(`2026-10-0${day}T00:00:00Z`),
+          })
+        )
+      )
+    );
+
+    const unfiltered = await shadowDetectionRepository.listUnreviewedSince(since, 1);
+    expect(unfiltered[0]?.detector).toBe('signupDomainHold');
+
+    const filtered = await shadowDetectionRepository.listUnreviewedSince(since, 1, {
+      excludeDetectors: ['signupDomainHold'],
+    });
+    expect(filtered.map(item => item.id)).toEqual([older]);
+  });
+
+  it('finds detections naming any of the users, newest first, up to the limit', async () => {
+    const older = await shadowDetectionRepository.record(
+      detection({ userIds: ['u1', 'u2'], detectedAt: new Date('2026-10-01T00:00:00Z') })
+    );
+    const newer = await shadowDetectionRepository.record(
+      detection({ userIds: ['u3'], detectedAt: new Date('2026-10-02T00:00:00Z') })
+    );
+    await shadowDetectionRepository.record(detection({ userIds: ['u9'] }));
+
+    const found = await shadowDetectionRepository.findForUsers(['u2', 'u3'], 10);
+
+    expect(found).toEqual([
+      { id: newer, detector: 'signupNetworkBurst', userIds: ['u3'], detectedAt: new Date('2026-10-02T00:00:00Z') },
+      {
+        id: older,
+        detector: 'signupNetworkBurst',
+        userIds: ['u2'],
+        detectedAt: new Date('2026-10-01T00:00:00Z'),
+      },
+    ]);
+    await expect(shadowDetectionRepository.findForUsers(['u2', 'u3'], 1)).resolves.toHaveLength(1);
+    await expect(shadowDetectionRepository.findForUsers([], 10)).resolves.toEqual([]);
+  });
+
+  it('returns only the requested accounts of a detection that names others', async () => {
+    const id = await shadowDetectionRepository.record(detection({ userIds: ['u1', 'u2', 'u3', 'u4'] }));
+
+    const found = await shadowDetectionRepository.findForUsers(['u2', 'u4', 'u8'], 10);
+
+    expect(found.map(item => ({ id: item.id, userIds: item.userIds }))).toEqual([{ id, userIds: ['u2', 'u4'] }]);
   });
 
   it('declares the retention TTL on detectedAt', async () => {

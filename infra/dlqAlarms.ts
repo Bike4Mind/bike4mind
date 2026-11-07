@@ -88,6 +88,7 @@ import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
+import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
@@ -653,6 +654,15 @@ if (isMonitoredStage) {
       displayName: 'Revenue Snapshot',
       application: 'Billing',
       queue: revenueSnapshotDeadLetter.queue,
+    });
+  }
+
+  if (subscriptionReconciliationDeadLetter) {
+    createDlqAlarms({
+      label: 'subscription-reconciliation',
+      displayName: 'Subscription Reconciliation',
+      application: 'Billing',
+      queue: subscriptionReconciliationDeadLetter.queue,
     });
   }
 
