@@ -1,3 +1,4 @@
+import { OrchestrationSummary } from './OrchestrationSummary';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
@@ -1981,6 +1982,16 @@ export function ChatShell({
             {showExampleQuests && (
               <Box sx={contentColumnSx}>
                 <ExampleQuestStrip onPick={pickExampleQuest} />
+              </Box>
+            )}
+
+            {delegating && conversation.session?.orchestrationPolicy && (
+              <Box sx={{ ...contentColumnSx, pb: 1 }}>
+                <OrchestrationSummary
+                  root={conversation.session.orchestrationPolicy}
+                  planner={conversation.session.model}
+                  models={catalog.models}
+                />
               </Box>
             )}
 

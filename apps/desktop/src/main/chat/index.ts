@@ -1,3 +1,4 @@
+import { registerOrchestrationIpc } from './orchestrationIpc';
 import { randomUUID } from 'node:crypto';
 import { copyFile, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
@@ -891,6 +892,7 @@ export function registerChat(
     service.setSessionPinned(sessionId, pinned)
   );
   registerSessionOrchestrateIpc(ipcMain, service);
+  registerOrchestrationIpc(ipcMain, service);
   // Validated here rather than trusted, for the same reason the folder grant goes through a
   // native picker: this is the only door to the approval mode, so an unrecognised value must
   // not reach the store and land as something looser than the user asked for.
