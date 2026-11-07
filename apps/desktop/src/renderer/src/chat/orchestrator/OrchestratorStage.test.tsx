@@ -21,9 +21,7 @@ const onViewChange = vi.fn();
 const actions = { open: vi.fn(), stop: vi.fn(), archive: vi.fn() };
 const themed = createThemedMount();
 
-const onTurnOn = vi.fn();
-
-const renderStage = (agents: AgentView[], dockControl?: ReactNode, turnOn?: () => void) =>
+const renderStage = (agents: AgentView[], dockControl?: ReactNode) =>
   themed.render(
     <OrchestratorStage
       agents={agents}
@@ -32,7 +30,6 @@ const renderStage = (agents: AgentView[], dockControl?: ReactNode, turnOn?: () =
       actions={actions}
       introPlaying={false}
       dockControl={dockControl}
-      onTurnOn={turnOn}
     />
   );
 
@@ -113,16 +110,6 @@ describe('OrchestratorStage', () => {
       );
       expect(query('orchestrator-tavern')).toBeNull();
     });
-  });
-
-  it('offers to turn Orchestrate on from the empty stage while it is off', async () => {
-    await renderStage([], undefined, onTurnOn);
-    expect(el('orchestrator-empty-state').textContent).toContain('Orchestrate is off');
-    act(() => el('orchestrator-turn-on-btn').click());
-    expect(onTurnOn).toHaveBeenCalledTimes(1);
-
-    await renderStage([]);
-    expect(query('orchestrator-turn-on-btn')).toBeNull();
   });
 
   it('leaves the summary strip blank on an empty stage', async () => {
