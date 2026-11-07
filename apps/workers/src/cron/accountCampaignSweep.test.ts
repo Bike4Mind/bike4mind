@@ -1,13 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { loadCampaignScanAccounts, findSignupFingerprintClusters, recordCampaignGroup, getSettingsMap } = vi.hoisted(
-  () => ({
-    loadCampaignScanAccounts: vi.fn(),
-    findSignupFingerprintClusters: vi.fn(),
-    recordCampaignGroup: vi.fn(),
-    getSettingsMap: vi.fn(),
-  })
-);
+const {
+  loadCampaignScanAccounts,
+  findSignupFingerprintClusters,
+  recordCampaignGroup,
+  getSettingsMap,
+  sweepDeviceLinks,
+} = vi.hoisted(() => ({
+  sweepDeviceLinks: vi.fn(),
+  loadCampaignScanAccounts: vi.fn(),
+  findSignupFingerprintClusters: vi.fn(),
+  recordCampaignGroup: vi.fn(),
+  getSettingsMap: vi.fn(),
+}));
 
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 vi.mock('@bike4mind/database', () => ({
@@ -15,12 +20,18 @@ vi.mock('@bike4mind/database', () => ({
   connectDB: vi.fn(async () => undefined),
   findSignupFingerprintClusters,
   loadCampaignScanAccounts,
+  loadRecentDeviceLinkAccounts: vi.fn(),
   // No userRepository: the sweep has no way to rescore, hold or change an account.
   shadowDetectionRepository: { recordCampaignGroup },
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   getSettingsMap,
+}));
+vi.mock('@server/security/autoContainment/deviceLink', () => ({
+  sweepDeviceLinks,
+  liveDeviceLinkDeps: () => ({}),
+  DeviceLinkAssessError: class DeviceLinkAssessError extends Error {},
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://%STAGE%' } }));
 
@@ -62,6 +73,7 @@ beforeEach(() => {
   findSignupFingerprintClusters.mockResolvedValue([]);
   recordCampaignGroup.mockResolvedValue('created');
   getSettingsMap.mockResolvedValue({});
+  sweepDeviceLinks.mockResolvedValue({ status: 'done', failed: 0, assessFailed: 0 });
 });
 
 describe('toCampaignAccount', () => {
@@ -133,6 +145,26 @@ describe('handler', () => {
     await handler({}, context);
 
     expect(recordCampaignGroup).toHaveBeenCalledTimes(1);
+    expect(sweepDeviceLinks).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails the invocation when a device-link detection failed to record', async () => {
+    sweepDeviceLinks.mockResolvedValue({ status: 'done', failed: 2 });
+
+    await expect(handler({}, context)).rejects.toThrow('Device-link sweep failed to record 2 account(s)');
+  });
+
+  it('fails the invocation when a device-link detection was recorded but failed to assess', async () => {
+    sweepDeviceLinks.mockResolvedValue({ status: 'done', failed: 0, assessFailed: 3 });
+
+    await expect(handler({}, context)).rejects.toThrow('Device-link sweep recorded but failed to assess 3 account(s)');
+  });
+
+  it('fails the invocation when the device-link pass cannot read, after campaign groups are recorded', async () => {
+    sweepDeviceLinks.mockRejectedValue(new Error('read down'));
+
+    await expect(handler({}, context)).rejects.toThrow('read down');
+    expect(recordCampaignGroup).toHaveBeenCalledTimes(1);
   });
 
   it('fails the invocation after the run when a group failed to record', async () => {
@@ -148,5 +180,6 @@ describe('handler', () => {
 
     expect(loadCampaignScanAccounts).not.toHaveBeenCalled();
     expect(recordCampaignGroup).not.toHaveBeenCalled();
+    expect(sweepDeviceLinks).not.toHaveBeenCalled();
   });
 });

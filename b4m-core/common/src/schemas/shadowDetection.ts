@@ -17,6 +17,10 @@ export const SHADOW_DETECTORS = [
   /** A new account that signed up from the same IP as a blocked account, close in time. */
   'signupIpLinkedToBlocked',
   'signupDomainHold',
+  /** A new account used from the same uncommon device as a banned account, with a corroborating signal. */
+  'deviceLinkedToBlocked',
+  /** A fresh account that ran the scripted grant-drain sequence (usage pattern signals). */
+  'scriptedGrantDrain',
 ] as const;
 export type ShadowDetector = (typeof SHADOW_DETECTORS)[number];
 

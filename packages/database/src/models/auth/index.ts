@@ -15,6 +15,7 @@ export * from './IdentityProviderModel';
 export * from './networkMetaFields';
 export * from './signupFingerprintClusters';
 export * from './campaignScanAccounts';
+export * from './deviceLinkAccounts';
 export * from './SignupTraceModel';
 export * from './OAuthAuthorizationCodeModel';
 export * from './OAuthClientModel';
