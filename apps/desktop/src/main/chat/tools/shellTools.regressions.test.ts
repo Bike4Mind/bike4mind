@@ -257,6 +257,12 @@ describe('commands main ran unasked', () => {
     ["find . -name node_modules -type d -prune -exec rm -rf '{}' +", '', unasked],
     ["git diff --name-only | grep '\\.ts$' | xargs wc -l", '', unasked],
     ["grep 'a$' src/a.ts", '', unasked],
+    ["git status  # what's staged", '', unasked],
+    ["# Check what's changed\ngit status", '', unasked],
+    ["git log --oneline -5 # don't page", '', unasked],
+    ['git diff --name-only src | xargs wc -l', '', unasked],
+    ['git diff --name-only src/ | xargs wc -l', '', unasked],
+    ["find src -name '*.ts' 2>/dev/null | xargs cat", '', unasked],
     ['git ls-files | grep -v x | xargs wc -l', '', unasked],
     ["find src -name '*.ts' | head -5 | xargs sed -i s/a/b/", '', unasked],
     ['git branch --merged | grep -v main | xargs git branch -d', '', unasked],
@@ -321,6 +327,7 @@ describe('commands main ran unasked', () => {
     ['find . -depth -prune -type f -exec sed -i s/a/b/ {} +', ''],
     ['rg -l hooks | grep json | xargs sed -i s/a/b/', ''],
     ['git diff --name-only main...side | xargs sed -i s/a/b/', 'mrepo'],
+    ['find . -maxdepth 1 -type d | xargs -I{} time -o {}/settings.json du -sh {}', ''],
   ])('asks before %s (in proj/%s) rewrites settings', async (command, folder) => {
     expect(await judge(command, folder)).toMatchObject(asks);
   });
@@ -331,6 +338,13 @@ describe('commands main ran unasked', () => {
     // A fed word may be a docker option, and podman's options after the subcommand can run a program.
     'echo --cidfile=FILE | xargs docker rm',
     'podman ps -q | xargs podman stop',
+    'pgrep node | xargs -I{} time -o {}/x kill {}',
+    // The lister's stderr reaches xargs too.
+    'rg -l foo |& xargs sed -i s/a/b/',
+    'rg -l foo 2>&1 | xargs sed -i s/a/b/',
+    '2>&1 rg -l foo | xargs sed -i s/a/b/',
+    'echo "main --force" | xargs git branch -d',
+    'pgrep --list-full node | xargs docker stop',
   ])('asks for %s, which main ran unasked', async command => {
     expect(await judge(command)).toMatchObject(asks);
   });
@@ -338,6 +352,7 @@ describe('commands main ran unasked', () => {
   it.each([
     "grep $'a' src/a.ts",
     "grep 'a$' src/a.ts; echo $'b'",
+    'echo "$(cat $\'a\')"',
     // Read as quotes, the heredoc bodies would pair up around the `$'`.
     "cat <<A\nit's\nA\necho $'b'\ncat <<B\nit's\nB",
   ])('asks for %s, which may hold an ANSI-C quote', async command => {
