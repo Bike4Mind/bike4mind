@@ -9,6 +9,10 @@ import type { SxProps } from '@mui/joy/styles/types';
  */
 export const CONTENT_MAX_WIDTH = 760;
 
+/** Space reserved beside the shared reading column for a docked session panel. */
+export const SESSION_PANEL_SPACE_VAR = '--b4m-session-panel-space';
+export const COLUMN_LAYOUT_TRANSITION = '180ms ease-out';
+
 /**
  * The chat window's root: exactly the viewport, never scrolled as a whole (enforced by viewport.css).
  * `clip` rather than `hidden`, which is still a scroll container that a `scrollIntoView` could shift with no scrollbar.
@@ -51,10 +55,14 @@ export const COLUMN_PADDING = COLUMN_PADDING_UNITS * 8;
  * off the line the rest are on.
  */
 export const contentColumnSx: SxProps = {
-  width: '100%',
+  width: `calc(100% - var(${SESSION_PANEL_SPACE_VAR}, 0px))`,
   maxWidth: CONTENT_MAX_WIDTH,
   mx: 'auto',
+  position: 'relative',
+  left: `calc(var(${SESSION_PANEL_SPACE_VAR}, 0px) / -2)`,
   px: COLUMN_PADDING_UNITS,
+  transition: `width ${COLUMN_LAYOUT_TRANSITION}, left ${COLUMN_LAYOUT_TRANSITION}`,
+  '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
 };
 
 /**

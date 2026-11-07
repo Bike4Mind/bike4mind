@@ -2,8 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONTENT_MAX_WIDTH } from './layout';
 import {
-  SESSION_PANEL_INSET,
-  SESSION_PANEL_WIDTH,
+  SESSION_PANEL_SPACE,
   panelFitsBesideThread,
   readCollapsedSections,
   readSessionPanelOpen,
@@ -15,8 +14,7 @@ beforeEach(() => window.localStorage.clear());
 afterEach(() => vi.restoreAllMocks());
 
 describe('panelFitsBesideThread', () => {
-  // Free on the right is half the pane beyond the column, plus the column's 24px padding.
-  const threshold = CONTENT_MAX_WIDTH + 2 * (SESSION_PANEL_WIDTH + 2 * SESSION_PANEL_INSET - 24);
+  const threshold = CONTENT_MAX_WIDTH + SESSION_PANEL_SPACE;
 
   it('docks once the card fits beside the reading column', () => {
     expect(panelFitsBesideThread(threshold)).toBe(true);

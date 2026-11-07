@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { COLUMN_PADDING, CONTENT_MAX_WIDTH } from './layout';
+import { CONTENT_MAX_WIDTH } from './layout';
 
 /**
  * The session panel's sections, in the order they are drawn. Adding one is a new id here and a
@@ -10,19 +10,18 @@ export type SessionPanelSectionId = (typeof SESSION_PANEL_SECTIONS)[number];
 
 /** The docked card's width, in px. */
 export const SESSION_PANEL_WIDTH = 280;
-/** Gap between the card and the edges of the thread it floats over, in px. */
+/** Gap between the card and the edges of its reserved space, in px. */
 export const SESSION_PANEL_INSET = 12;
+export const SESSION_PANEL_SPACE = SESSION_PANEL_WIDTH + 2 * SESSION_PANEL_INSET;
 
 /**
  * Whether the docked card fits beside the reading column without covering any of its text.
  *
- * The column is centred and capped at CONTENT_MAX_WIDTH, so what is free on its right is half of
- * whatever the pane has beyond that, plus the column's own padding. Below this the card folds into
- * its header button and opens as a popover instead.
+ * Reserve a rail beside a full reading column. Below this the card folds into its header button
+ * and opens as a popover instead.
  */
 export function panelFitsBesideThread(columnWidth: number): boolean {
-  const freeOnRight = (columnWidth - CONTENT_MAX_WIDTH) / 2 + COLUMN_PADDING;
-  return freeOnRight >= SESSION_PANEL_WIDTH + 2 * SESSION_PANEL_INSET;
+  return columnWidth >= CONTENT_MAX_WIDTH + SESSION_PANEL_SPACE;
 }
 
 /**

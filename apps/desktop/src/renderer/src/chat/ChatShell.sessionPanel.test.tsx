@@ -14,6 +14,8 @@ import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
+import { SESSION_PANEL_SPACE_VAR } from './layout';
+import { SESSION_PANEL_SPACE } from './sessionPanelState';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -210,8 +212,8 @@ function deferSend() {
 }
 
 describe('the session panel in the shell', () => {
-  it('docks over the thread of a Code session with a folder, holding the chips the composer used to', async () => {
-    paneWidth(1600);
+  it('reserves a rail beside the thread of a Code session with a folder', async () => {
+    paneWidth(1100);
     transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
     await open('bound');
 
@@ -219,6 +221,10 @@ describe('the session panel in the shell', () => {
     expect(get('chat-toggle-session-panel-btn').getAttribute('aria-expanded')).toBe('true');
     expect(get('session-panel').contains(find('session-chips-panel'))).toBe(true);
     expect(find('session-chips-row')).toBeNull();
+    expect(getComputedStyle(get('chat-conversation-column')).getPropertyValue(SESSION_PANEL_SPACE_VAR)).toBe(
+      `${SESSION_PANEL_SPACE}px`
+    );
+    expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe(`${SESSION_PANEL_SPACE}px`);
   });
 
   it('hides from the header button and remembers it', async () => {
@@ -230,6 +236,16 @@ describe('the session panel in the shell', () => {
     expect(find('session-panel')).toBeNull();
     expect(get('chat-toggle-session-panel-btn').getAttribute('aria-expanded')).toBe('false');
     expect(window.localStorage.getItem('b4m.sessionPanel.open')).toBe('0');
+    expect(getComputedStyle(get('chat-conversation-column')).getPropertyValue(SESSION_PANEL_SPACE_VAR)).toBe('0px');
+    expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe('0px');
+
+    const thread = get('chat-thread');
+    const composer = get('chat-composer-input');
+    await act(async () => get('chat-toggle-session-panel-btn').click());
+    expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe(`${SESSION_PANEL_SPACE}px`);
+    expect(get('chat-thread')).toBe(thread);
+    expect(get('chat-composer-input')).toBe(composer);
+    await act(async () => get('chat-toggle-session-panel-btn').click());
 
     act(() => root?.unmount());
     host?.remove();
@@ -245,6 +261,8 @@ describe('the session panel in the shell', () => {
 
     await act(async () => get('chat-toggle-session-panel-btn').click());
     expect(get('session-panel').dataset.variant).toBe('popover');
+    expect(getComputedStyle(get('chat-conversation-column')).getPropertyValue(SESSION_PANEL_SPACE_VAR)).toBe('0px');
+    expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe('0px');
 
     await act(async () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
     expect(find('session-panel')).toBeNull();
