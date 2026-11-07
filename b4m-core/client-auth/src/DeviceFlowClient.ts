@@ -36,7 +36,11 @@ export interface DeviceFlowClientOptions {
    * app are separate registrations), so this is an input rather than a constant.
    */
   clientId: string;
+  /** Bound on the token refresh request, in ms. A refresh that times out is unknown, not rejected. */
+  refreshTimeoutMs?: number;
 }
+
+export const DEFAULT_REFRESH_TIMEOUT_MS = 25_000;
 
 /**
  * OAuth 2.0 Device Authorization Flow client
@@ -45,9 +49,11 @@ export interface DeviceFlowClientOptions {
 export class DeviceFlowClient {
   private apiClient: AxiosInstance;
   private readonly clientId: string;
+  private readonly refreshTimeoutMs: number;
 
   constructor(options: DeviceFlowClientOptions) {
     this.clientId = options.clientId;
+    this.refreshTimeoutMs = options.refreshTimeoutMs ?? DEFAULT_REFRESH_TIMEOUT_MS;
     this.apiClient = axios.create({
       baseURL: options.baseUrl,
       headers: {
@@ -60,10 +66,12 @@ export class DeviceFlowClient {
    * Initiate device authorization flow
    * Returns device code, user code, and verification URL
    */
-  async initiateDeviceFlow(): Promise<DeviceFlowResponse> {
-    const response = await this.apiClient.post<DeviceFlowResponse>('/api/oauth/device/initiate', {
-      client_id: this.clientId,
-    });
+  async initiateDeviceFlow(signal?: AbortSignal): Promise<DeviceFlowResponse> {
+    const response = await this.apiClient.post<DeviceFlowResponse>(
+      '/api/oauth/device/initiate',
+      { client_id: this.clientId },
+      { signal }
+    );
 
     return response.data;
   }
@@ -72,7 +80,7 @@ export class DeviceFlowClient {
    * Poll for access token
    * Returns token response if approved, or throws error with status
    */
-  async pollForToken(deviceCode: string): Promise<TokenResponse> {
+  async pollForToken(deviceCode: string, signal?: AbortSignal): Promise<TokenResponse> {
     try {
       const response = await this.apiClient.post<TokenResponse | TokenError>(
         '/api/oauth/device/token',
@@ -83,6 +91,7 @@ export class DeviceFlowClient {
         },
         {
           validateStatus: () => true, // Don't throw on any status code
+          signal,
         }
       );
 
@@ -108,7 +117,8 @@ export class DeviceFlowClient {
   async waitForAuthorization(
     deviceCode: string,
     interval: number,
-    onStatus?: (status: string) => void
+    onStatus?: (status: string) => void,
+    signal?: AbortSignal
   ): Promise<TokenResponse> {
     let pollInterval = interval * 1000; // Convert to milliseconds
     const maxInterval = 30000; // Max 30 seconds
@@ -117,20 +127,22 @@ export class DeviceFlowClient {
     onStatus?.('Waiting for user authorization...');
 
     // Wait before first poll (respects server's interval)
-    await this.sleep(pollInterval);
+    await this.sleep(pollInterval, signal);
 
     while (true) {
+      signal?.throwIfAborted();
       try {
-        const token = await this.pollForToken(deviceCode);
+        const token = await this.pollForToken(deviceCode, signal);
         return token;
       } catch (error) {
+        signal?.throwIfAborted();
         if (error instanceof Error) {
           const errorMessage = error.message;
 
           if (errorMessage === 'authorization_pending') {
             // Still waiting for user approval
             onStatus?.('Waiting for user authorization...');
-            await this.sleep(pollInterval);
+            await this.sleep(pollInterval, signal);
             continue;
           }
 
@@ -138,7 +150,7 @@ export class DeviceFlowClient {
             // Server asked us to slow down
             pollInterval = Math.min(pollInterval + 5000, maxInterval);
             onStatus?.('Slowing down polling...');
-            await this.sleep(pollInterval);
+            await this.sleep(pollInterval, signal);
             continue;
           }
 
@@ -163,11 +175,16 @@ export class DeviceFlowClient {
    * Refresh an expired access token
    */
   async refreshToken(refreshToken: string): Promise<RefreshTokenResponse> {
-    const response = await this.apiClient.post<RefreshTokenResponse>('/api/oauth/refresh', {
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-      client_id: this.clientId,
-    });
+    const response = await this.apiClient.post<RefreshTokenResponse>(
+      '/api/oauth/refresh',
+      {
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        client_id: this.clientId,
+      },
+      // `timeout` alone resets on every byte; the signal bounds the whole exchange, inside the 30s lock stale limit.
+      { timeout: this.refreshTimeoutMs, signal: AbortSignal.timeout(this.refreshTimeoutMs) }
+    );
 
     return response.data;
   }
@@ -175,7 +192,21 @@ export class DeviceFlowClient {
   /**
    * Sleep for specified milliseconds
    */
-  private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  private sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(signal.reason);
+        return;
+      }
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(signal?.reason);
+      };
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
   }
 }

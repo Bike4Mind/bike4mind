@@ -169,7 +169,7 @@ describe('ConfigStore.switchApiEnvironment', () => {
   describe('URL key normalization', () => {
     it('treats trailing-slash and case variants as the same environment', async () => {
       // Manually configure with a trailing-slash custom URL.
-      await store.update({ apiConfig: { customUrl: 'https://custom.example.com/' } });
+      await store.setCustomApiUrl('https://custom.example.com/');
       const tokens = makeTokens('custom-user');
       await store.setAuthTokens(tokens);
 

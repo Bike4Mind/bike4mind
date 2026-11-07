@@ -49,6 +49,37 @@ describe('DeviceFlowClient client_id', () => {
   });
 });
 
+describe('DeviceFlowClient.refreshToken', () => {
+  async function refreshTimeout(
+    options: ConstructorParameters<typeof DeviceFlowClient>[0]
+  ): Promise<number | undefined> {
+    let timeout: number | undefined;
+    axios.defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      timeout = config.timeout;
+      return Promise.resolve({ data: {}, status: 200, statusText: 'OK', headers: {}, config } as AxiosResponse);
+    }) as AxiosAdapter;
+    await new DeviceFlowClient(options).refreshToken('rt');
+    return timeout;
+  }
+
+  it('bounds the refresh request, by default and when configured', async () => {
+    expect(await refreshTimeout(BASE)).toBe(25_000);
+    expect(await refreshTimeout({ ...BASE, refreshTimeoutMs: 5_000 })).toBe(5_000);
+  });
+
+  it('aborts a refresh that keeps trickling bytes once the whole exchange passes the bound', async () => {
+    let signal: AbortSignal | undefined;
+    axios.defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      new Promise((_resolve, reject) => {
+        signal = config.signal as AbortSignal | undefined;
+        signal?.addEventListener('abort', () => reject(new Error('aborted')));
+      })) as AxiosAdapter;
+
+    await expect(new DeviceFlowClient({ ...BASE, refreshTimeoutMs: 50 }).refreshToken('rt')).rejects.toThrow();
+    expect(signal?.aborted).toBe(true);
+  });
+});
+
 describe('DeviceFlowClient.pollForToken', () => {
   it('surfaces an OAuth error payload as an Error carrying the error code', async () => {
     respondWith({ error: 'authorization_pending', error_description: 'pending' });
@@ -80,5 +111,27 @@ describe('DeviceFlowClient.waitForAuthorization', () => {
     await expect(new DeviceFlowClient(BASE).waitForAuthorization('dc', 0)).resolves.toMatchObject({
       access_token: 'at',
     });
+  });
+
+  it('stops polling as soon as the signal aborts', async () => {
+    respondWith({ error: 'authorization_pending', error_description: 'pending' });
+    const abort = new AbortController();
+
+    const waiting = new DeviceFlowClient(BASE).waitForAuthorization('dc', 60, undefined, abort.signal);
+    abort.abort(new Error('cancelled'));
+
+    await expect(waiting).rejects.toThrow('cancelled');
+    expect(sentBodies).toEqual([]);
+  });
+
+  it('does not poll at all with an already-aborted signal', async () => {
+    respondWith({ access_token: 'at', refresh_token: 'rt', token_type: 'Bearer', expires_in: 3600 });
+    const abort = new AbortController();
+    abort.abort(new Error('cancelled'));
+
+    await expect(new DeviceFlowClient(BASE).waitForAuthorization('dc', 0, undefined, abort.signal)).rejects.toThrow(
+      'cancelled'
+    );
+    expect(sentBodies).toEqual([]);
   });
 });

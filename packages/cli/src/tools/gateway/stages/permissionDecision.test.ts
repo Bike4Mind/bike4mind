@@ -172,4 +172,22 @@ describe('applyPromptResponse', () => {
     await applyPromptResponse('file_read', {}, 'allow-always', permissionManager, configStore);
     expect(configStore.trustTool).toHaveBeenCalledWith('file_read');
   });
+
+  it('on allow-always, prints a failed save and still allows the tool for the session', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const permissionManager = new PermissionManager(new ToolCatalog());
+    const configStore = {
+      getProjectConfigDir: () => null,
+      trustTool: vi.fn().mockRejectedValue(new Error('Could not save settings: config.json failed validation')),
+    };
+
+    await expect(
+      applyPromptResponse('file_read', {}, 'allow-always', permissionManager, configStore)
+    ).resolves.toBeUndefined();
+
+    expect(warn).toHaveBeenCalledWith(
+      'Trusted file_read for this session only; could not save it: Could not save settings: config.json failed validation'
+    );
+    expect(permissionManager.needsPermission('file_read')).toBe(false);
+  });
 });

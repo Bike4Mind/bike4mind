@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text, useInput } from 'ink';
 import SelectInput from 'ink-select-input';
 import TextInput from 'ink-text-input';
 import { getDefaultApiUrl, LOCAL_DEV_URL, parseApiUrl } from '../utils/apiUrl.js';
@@ -29,13 +29,23 @@ type MenuValue = 'prod' | 'dev' | 'custom';
 
 interface EnvironmentPickerProps {
   onSelect: (choice: EnvChoice) => void;
+  /** When given, Esc leaves the picker without choosing. */
+  onCancel?: () => void;
   defaultUrl?: string;
 }
 
-export function EnvironmentPicker({ onSelect, defaultUrl = getDefaultApiUrl() }: EnvironmentPickerProps) {
+export function EnvironmentPicker({ onSelect, onCancel, defaultUrl = getDefaultApiUrl() }: EnvironmentPickerProps) {
   const [phase, setPhase] = useState<'menu' | 'custom'>('menu');
   const [customValue, setCustomValue] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const cancelHint = onCancel ? 'Esc to cancel' : 'Ctrl+C to cancel';
+
+  useInput(
+    (_input, key) => {
+      if (key.escape) onCancel?.();
+    },
+    { isActive: onCancel !== undefined }
+  );
 
   const items: { label: string; value: MenuValue }[] = [
     ...(defaultUrl ? [{ label: `Hosted (${hostOf(defaultUrl)})`, value: 'prod' as const }] : []),
@@ -88,7 +98,7 @@ export function EnvironmentPicker({ onSelect, defaultUrl = getDefaultApiUrl() }:
           </Box>
         )}
         <Box marginTop={1}>
-          <Text dimColor>Enter to confirm, Ctrl+C to cancel</Text>
+          <Text dimColor>Enter to confirm, {cancelHint}</Text>
         </Box>
       </Box>
     );
@@ -115,7 +125,9 @@ export function EnvironmentPicker({ onSelect, defaultUrl = getDefaultApiUrl() }:
       />
 
       <Box marginTop={1}>
-        <Text dimColor>Use ↑↓ arrows to navigate, Enter to select, Ctrl+C to cancel</Text>
+        <Text dimColor>
+          Use {String.fromCodePoint(0x2191, 0x2193)} arrows to navigate, Enter to select, {cancelHint}
+        </Text>
       </Box>
     </Box>
   );

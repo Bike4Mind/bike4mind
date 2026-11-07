@@ -18,7 +18,13 @@ import {
 import { loadModelServers } from '../models/modelServers.js';
 import { MultiLlmBackend } from '../llm/MultiLlmBackend.js';
 import { createMockConfig } from '../test-utils/mocks.js';
-import { attachLocalModels, type AttachLocalModelsOptions, type BuildLlmBackendDeps } from './buildLlmBackend.js';
+import {
+  attachLocalModels,
+  buildLlmBackend,
+  type AttachLocalModelsOptions,
+  type BuildLlmBackendDeps,
+} from './buildLlmBackend.js';
+import { NoLocalModelsError, SignedOutCloudBackend, signedOutDefaultReplacedMessage } from './signedOutLocal.js';
 
 const TOKEN = 'tok-5e4d3c2b1a0f9e8d7c6b';
 const silent = { debug() {}, info() {}, warn() {}, error() {} } as never;
@@ -530,5 +536,71 @@ describe('attachLocalModels with saved model servers', () => {
     );
     expect(load).not.toHaveBeenCalled();
     expect(attached.models).toEqual([hosted]);
+  });
+});
+
+describe('attachLocalModels with saved model servers while signed out', () => {
+  const signedOut = (opts: Partial<AttachLocalModelsOptions> = {}) =>
+    attach(
+      { defaultModel: 'claude-opus-4' },
+      { servers: 'all', signedOut: true, ...opts },
+      new SignedOutCloudBackend('claude-opus-4') as never
+    );
+
+  it('waits for the other saved servers at startup and lists the ones that answer', async () => {
+    const fake = await vllm();
+    const port = await closedPort();
+    await writeServers([vllmRecord('s1', 'vllm', fake), downRecord('o2', 'gone', port)]);
+
+    const attached = await signedOut();
+
+    expect(attached.servers).toEqual([{ name: 'vllm', modelCount: 2 }]);
+    expect(attached.models.map(model => model.id)).toEqual(VLLM_IDS);
+    expect(await chat(attached.llm, 'local:srv-s1:qwen-small')).toBe('Hello.');
+  });
+
+  it('stops waiting on a saved server that never answers, then says no local model was found', async () => {
+    const stalled = await silentServer();
+    await writeServers([record({ id: 'o1', name: 'gpu-box', transport: { type: 'http', baseUrl: stalled.baseUrl } })]);
+    const started = performance.now();
+
+    const failure = signedOut({ listingTimeoutMs: 300 });
+
+    await expect(failure).rejects.toBeInstanceOf(NoLocalModelsError);
+    await expect(failure).rejects.toThrow('No local model found. Start Ollama');
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+
+  it('says at startup why the saved local default is not used when its saved server is down', async () => {
+    const plain = await ollama();
+    await writeServers([downRecord('o2', 'gone', await closedPort())]);
+    const startupLog: string[] = [];
+
+    const result = await buildLlmBackend(
+      {
+        config: createMockConfig({ defaultModel: 'claude-opus-4', localDefaultModel: 'local:srv-o2:qwen' }),
+        apiClient: { signedOut: true } as never,
+        tokenGetter: async () => null,
+        startupLog,
+        ollamaHost: plain.baseUrl,
+      },
+      {
+        ...deps,
+        connectWebSocket: vi.fn(),
+        clearWebSocketToolExecutor: vi.fn(),
+        createServerBackend: vi.fn(),
+        detectOllama: vi.fn(async () => null),
+      }
+    );
+
+    expect(result.modelInfo.id).toBe('tiny:1b');
+    expect(startupLog).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /^The saved local default qwen is on the model server gone, which could not be reached or listed: .+\. Fix that and try again, or pick another model with: b4m models use <name>\.$/
+        ),
+        signedOutDefaultReplacedMessage('claude-opus-4', 'tiny:1b'),
+      ])
+    );
   });
 });

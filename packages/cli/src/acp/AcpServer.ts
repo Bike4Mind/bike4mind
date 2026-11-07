@@ -35,6 +35,12 @@ import { ToolCatalog, type PermissionPromptKind } from '../tools/gateway/index.j
 import { logger } from '../utils/Logger';
 
 import { buildLlmBackend } from '../bootstrap/buildLlmBackend.js';
+import {
+  NoLocalModelsError,
+  SIGN_IN_EXPIRED_HEADLESS,
+  signInUncheckedHeadlessMessage,
+} from '../bootstrap/signedOutLocal.js';
+import { checkSavedSignIn } from '../auth/savedSignIn.js';
 import { buildSandbox } from '../bootstrap/buildSandbox.js';
 import { buildSupportingStores } from '../bootstrap/buildSupportingStores.js';
 import { buildAgent } from '../bootstrap/buildAgent.js';
@@ -540,29 +546,38 @@ export class AcpServer {
     this.configStore.warnPendingMcpApprovals();
     await this.loadCustomCommands();
 
-    const authTokens = await this.configStore.getAuthTokens();
-    if (!authTokens) {
-      throw RequestError.authRequired(undefined, 'Not authenticated. Run `b4m /login` first.');
-    }
-    if (new Date(authTokens.expiresAt) <= new Date()) {
-      await this.configStore.clearAuthTokens();
-      throw RequestError.authRequired(undefined, 'Authentication expired. Run `b4m /login` again.');
-    }
+    const signIn = await checkSavedSignIn(this.configStore, rejected =>
+      new ApiClient(requireApiUrl(config.apiConfig), this.configStore).refreshSession(rejected)
+    );
+    // stdout carries the protocol; stderr is what an ACP client shows in its agent log.
+    if (signIn.status === 'expired') process.stderr.write(`${SIGN_IN_EXPIRED_HEADLESS}\n`);
+    if (signIn.status === 'unchecked') process.stderr.write(`${signInUncheckedHeadlessMessage(signIn.reason)}\n`);
 
-    const apiBaseURL = requireApiUrl(config.apiConfig);
-    const apiClient = new ApiClient(apiBaseURL, this.configStore);
+    // Signed out, the stack runs on local models only and sends nothing to Bike4Mind.
+    const apiClient =
+      signIn.status === 'signed-in'
+        ? new ApiClient(requireApiUrl(config.apiConfig), this.configStore)
+        : ApiClient.whileSignedOut(this.configStore);
     const tokenGetter = async () => (await this.configStore.getAuthTokens())?.accessToken ?? null;
 
-    await this.mergeRemoteSkills(config, apiClient);
+    if (!apiClient.signedOut) await this.mergeRemoteSkills(config, apiClient);
 
     const startupLog: string[] = [];
     // All saved servers attach: fallback models and pinned subagent models may live on a non-default one.
-    const { llm, wsManager, models, modelInfo } = await buildLlmBackend({
-      config,
-      apiClient,
-      tokenGetter,
-      startupLog,
-    });
+    let built: Awaited<ReturnType<typeof buildLlmBackend>>;
+    try {
+      built = await buildLlmBackend({
+        config,
+        apiClient,
+        tokenGetter,
+        startupLog,
+        ...(apiClient.signedOut && { detectOllama: true }),
+      });
+    } catch (error) {
+      if (error instanceof NoLocalModelsError) throw RequestError.authRequired(undefined, error.message);
+      throw error;
+    }
+    const { llm, wsManager, models, modelInfo } = built;
 
     const permissionManager = new PermissionManager(
       new ToolCatalog(),

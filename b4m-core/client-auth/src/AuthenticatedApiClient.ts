@@ -313,18 +313,31 @@ export class AuthenticatedApiClient {
    */
   refreshSession(rejectedAccessToken?: string): Promise<AuthTokens> {
     if (!this.inFlightRefresh) {
-      this.inFlightRefresh = this.exchangeRefreshToken(rejectedAccessToken).finally(() => {
+      this.inFlightRefresh = this.lockedExchange(rejectedAccessToken).finally(() => {
         this.inFlightRefresh = null;
       });
     }
     return this.inFlightRefresh;
   }
 
-  private async exchangeRefreshToken(rejectedAccessToken: string | undefined): Promise<AuthTokens> {
+  private async lockedExchange(rejectedAccessToken: string | undefined): Promise<AuthTokens> {
+    const store = this.tokenStore;
+    if (!store.withRefreshLock) return this.exchangeRefreshToken(rejectedAccessToken, undefined);
+    const seen = await this.readStoredTokens();
+    return store.withRefreshLock(() => this.exchangeRefreshToken(rejectedAccessToken, seen?.refreshToken));
+  }
+
+  /** `seenRefreshToken`: the refresh token stored before waiting on the refresh lock, if one was taken. */
+  private async exchangeRefreshToken(
+    rejectedAccessToken: string | undefined,
+    seenRefreshToken: string | undefined
+  ): Promise<AuthTokens> {
     const presented = await this.readStoredTokens();
     if (!presented) throw new NotAuthenticatedError(this.reauthMessages.notLoggedIn);
 
-    if (rejectedAccessToken !== undefined && presented.accessToken !== rejectedAccessToken && !isExpired(presented)) {
+    const rotatedWhileWaiting = seenRefreshToken !== undefined && presented.refreshToken !== seenRefreshToken;
+    const rejectedWasReplaced = rejectedAccessToken !== undefined && presented.accessToken !== rejectedAccessToken;
+    if ((rotatedWhileWaiting || rejectedWasReplaced) && !isExpired(presented)) {
       this.logger.debug('AUTH: Stored tokens were already refreshed elsewhere, adopting them');
       return presented;
     }
@@ -344,7 +357,18 @@ export class AuthenticatedApiClient {
         this.logger.warn('AUTH: Refresh rejected for a token already replaced in storage; keeping the newer one');
         return current;
       }
-      if (current) await this.clearStoredTokens(`refresh token rejected by the server (HTTP ${status})`);
+      if (current) {
+        const reason = `refresh token rejected by the server (HTTP ${status})`;
+        this.logger.warn(`AUTH: Clearing stored tokens: ${reason}`);
+        const cleared = await this.tokenStore.clearAuthTokens(presented.refreshToken);
+        if (cleared === false) {
+          // Storage moved on between the read above and the clear: keep whatever it holds now.
+          const now = await this.readStoredTokens();
+          if (now) return now;
+        } else {
+          this.onTokensCleared?.(reason);
+        }
+      }
       throw new SessionRevokedError(this.reauthMessages.refreshFailed);
     }
     this.logger.debug('AUTH: Token refresh successful');
@@ -368,18 +392,17 @@ export class AuthenticatedApiClient {
       expiresAt: new Date(Date.now() + response.expires_in * 1000).toISOString(),
       userId: presented.userId,
     };
-    await this.tokenStore.setAuthTokens(next);
+    // The check above and this save are separate calls; the store re-checks so a logout in between stands.
+    if ((await this.tokenStore.setAuthTokens(next, presented.refreshToken)) === false) {
+      const now = await this.readStoredTokens();
+      if (!now) throw new NotAuthenticatedError(this.reauthMessages.notLoggedIn);
+      return now;
+    }
     return next;
   }
 
   private readStoredTokens(): Promise<AuthTokens | null> {
     return this.tokenStore.reloadAuthTokens ? this.tokenStore.reloadAuthTokens() : this.tokenStore.getAuthTokens();
-  }
-
-  private async clearStoredTokens(reason: string): Promise<void> {
-    this.logger.warn(`AUTH: Clearing stored tokens: ${reason}`);
-    await this.tokenStore.clearAuthTokens();
-    this.onTokensCleared?.(reason);
   }
 
   /**

@@ -1,6 +1,7 @@
 import { realpathSync } from 'fs';
 import path from 'path';
 import { getProcessHooks } from '../../../utils/processHooks.js';
+import { logger } from '../../../utils/Logger.js';
 import type { ApiClient } from '../../../auth/ApiClient.js';
 import type { CheckpointStore } from '../../../storage/CheckpointStore.js';
 import type { SandboxOrchestrator } from '../../../sandbox/SandboxOrchestrator.js';
@@ -11,6 +12,7 @@ import { runSandboxed } from './sandboxEscalation.js';
 import type { PermissionManager } from '../../../utils/PermissionManager.js';
 import { executeWithFuzzyConfirmation } from './fuzzyEdit.js';
 import { checkpointBeforeWrite } from './checkpoint.js';
+import { SESSION_ENDED_MESSAGE } from '../sessionCancellation.js';
 
 export type ExecutionInput = {
   toolName: string;
@@ -30,6 +32,7 @@ export type ExecutionInput = {
   sandboxOrchestrator?: SandboxOrchestrator;
   allowedDirectories?: string[];
   checkpointStore?: CheckpointStore | null;
+  isCancelled?: () => boolean;
 };
 
 /**
@@ -42,7 +45,14 @@ export async function executeAndRecord(input: ExecutionInput): Promise<string> {
   await checkpointBeforeWrite(input.checkpointStore, toolName, descriptor, rawArgs);
   const attempt = async (args: ToolArgs): Promise<string> => {
     try {
-      return await executeWithFuzzyConfirmation(toolName, args, apiClient, originalFn, showPermissionPrompt);
+      return await executeWithFuzzyConfirmation(
+        toolName,
+        args,
+        apiClient,
+        originalFn,
+        showPermissionPrompt,
+        input.isCancelled
+      );
     } catch (err) {
       // grep_search / glob_files re-throw path-validation errors instead
       // of returning them as a string. Normalize a denial to a string so
@@ -74,8 +84,10 @@ export async function executeAndRecord(input: ExecutionInput): Promise<string> {
     input.configStore,
     apiClient,
     originalFn,
-    showPermissionPrompt
+    showPermissionPrompt,
+    input.isCancelled
   );
+  if (input.isCancelled?.()) return SESSION_ENDED_MESSAGE;
   notifyFileChanged(input.agentContext, writePathOf(descriptor, execArgs), result);
   // Process-hook (host action_required signal): a tool finished - clear the
   // block sentinel (matcher "*").
@@ -142,8 +154,10 @@ async function retryPathAccessDenial(
   configStore: any,
   apiClient: ApiClient,
   originalFn: (args: unknown) => Promise<string>,
-  showPermissionPrompt: ShowKindedPermissionPrompt
+  showPermissionPrompt: ShowKindedPermissionPrompt,
+  isCancelled?: () => boolean
 ): Promise<string> {
+  if (isCancelled?.()) return SESSION_ENDED_MESSAGE;
   if (!allowedDirectories || !isPathAccessDenial(result)) return result;
 
   const grantDir = deriveGrantDirectory(toolName, args);
@@ -172,6 +186,7 @@ async function retryPathAccessDenial(
   // deny-by-default rather than inheriting the tool's policy verdict (a policy
   // allowing `file_read` must not silently widen scope to any directory).
   const response = await showPermissionPrompt(toolName, args, preview, 'directory-grant');
+  if (isCancelled?.()) return SESSION_ENDED_MESSAGE;
   if (response.action === 'deny') return result;
 
   // Grant into the live allow-list the core tool context reads on each call.
@@ -185,8 +200,11 @@ async function retryPathAccessDenial(
   if (response.action === 'allow-always') {
     try {
       await configStore.addDirectory(resolvedGrantDir);
-    } catch {
+    } catch (error) {
       // Best-effort persistence - the session grant above is already applied.
+      logger.warn(
+        `Allowed ${resolvedGrantDir} for this session only; could not save it: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
   }
 
@@ -196,7 +214,7 @@ async function retryPathAccessDenial(
   // bypass. A failure here (including another denial for a different path) is
   // returned as-is - no recursion, no loop.
   try {
-    return await executeWithFuzzyConfirmation(toolName, args, apiClient, originalFn, showPermissionPrompt);
+    return await executeWithFuzzyConfirmation(toolName, args, apiClient, originalFn, showPermissionPrompt, isCancelled);
   } catch (err) {
     return err instanceof Error ? err.message : String(err);
   } finally {

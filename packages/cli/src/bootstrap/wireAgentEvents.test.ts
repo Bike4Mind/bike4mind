@@ -18,6 +18,7 @@ vi.mock('../features/bridgePresence/index.js', () => ({
   bridgePresence: { emitEvent: vi.fn() },
 }));
 
+import { bridgePresence } from '../features/bridgePresence/index.js';
 import { wireAgentEvents } from './wireAgentEvents.js';
 
 function createFakeAgent() {
@@ -36,6 +37,7 @@ function createFakeOrchestrator() {
 }
 
 describe('wireAgentEvents', () => {
+  let current: boolean;
   let agent: ReturnType<typeof createFakeAgent>;
   let orchestrator: ReturnType<typeof createFakeOrchestrator>;
 
@@ -50,11 +52,13 @@ describe('wireAgentEvents', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    current = true;
     agent = createFakeAgent();
     orchestrator = createFakeOrchestrator();
     wireAgentEvents({
       agent: agent as never,
       orchestrator: orchestrator as never,
+      isCurrent: () => current,
     });
   });
 
@@ -203,5 +207,29 @@ describe('wireAgentEvents', () => {
     const subagent = createFakeSubagent(999, 9);
     getAfterRun()(subagent, 'explore');
     expect(storeState.removeLiveSubagentUsage).not.toHaveBeenCalled();
+  });
+
+  it('ignores late main and subagent events after a session is retired', () => {
+    const subagent = createFakeSubagent(100, 1);
+    getBeforeRun()(subagent, 'explore');
+    const beforeRun = getBeforeRun();
+    const mainHandlers = [...agent.on.mock.calls];
+    const subagentHandlers = [...subagent.on.mock.calls];
+    current = false;
+    storeState.pendingMessages = [{ id: 'new-session', role: 'assistant', content: 'new reply' }];
+    vi.clearAllMocks();
+    for (const [event, handler] of [...mainHandlers, ...subagentHandlers]) {
+      const payload =
+        event === 'text_delta'
+          ? { delta: 'old text', iteration: 1 }
+          : { type: event, content: 'old output', metadata: { toolName: 'file_read' } };
+      (handler as (value: unknown) => void)(payload);
+    }
+    expect(storeState.pendingMessages).toEqual([{ id: 'new-session', role: 'assistant', content: 'new reply' }]);
+    expect(storeState.updatePendingMessage).not.toHaveBeenCalled();
+    expect(storeState.updateLiveSubagentUsage).not.toHaveBeenCalled();
+    expect(bridgePresence.emitEvent).not.toHaveBeenCalled();
+    beforeRun(createFakeSubagent(), 'explore');
+    expect(storeState.updateLiveSubagentUsage).not.toHaveBeenCalled();
   });
 });

@@ -2,11 +2,12 @@ import { promises as fs, existsSync } from 'fs';
 import { createHash } from 'node:crypto';
 import path from 'path';
 import { homedir } from 'os';
+import { isDeepStrictEqual } from 'node:util';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { ChatModels } from '@bike4mind/common';
-import { isAuthTokenValid, swapActiveEnvAuth } from '@bike4mind/client-auth';
-import type { CliConfig, GlobalConfigPatch, ProjectConfig, ProjectLocalConfig } from './types';
+import { isAuthTokenValid, normalizeEnvKey, swapActiveEnvAuth } from '@bike4mind/client-auth';
+import type { AuthTokens, CliConfig, GlobalConfigPatch, ProjectConfig, ProjectLocalConfig } from './types';
 import { getDefaultApiUrl, LOCAL_DEV_URL, getEnvironmentName } from '../utils/apiUrl';
 import {
   DEFAULT_SANDBOX_CONFIG,
@@ -19,6 +20,7 @@ import { canTrustTool } from '../tools/gateway/toolPolicy.js';
 import { PROJECT_CONTEXT_FILES } from '../utils/contextLoader';
 import { escapeTerminalControlChars, sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 import { logger } from '../utils/Logger';
+import { withLockDir, type HeldLock } from './lockDir';
 
 /**
  * Zod schema for sandbox filesystem configuration
@@ -402,6 +404,161 @@ const ProjectLocalConfigSchema = z.object({
  * permanently unrepresentable, even though the /config select still offers it.
  */
 const LEGACY_PINNED_MAX_TOKENS = 4096;
+
+/** Rewrites the old environment-based API config in place to the current simple form. */
+function migrateApiConfig(raw: { apiConfig?: unknown }): void {
+  const old = raw.apiConfig;
+  if (typeof old !== 'object' || old === null || !('environment' in old)) return;
+  const { environment, customUrl } = old as { environment: unknown; customUrl?: unknown };
+  // A custom URL is kept for self-hosted instances; every other environment becomes the build-time default service.
+  raw.apiConfig = environment === 'custom' && customUrl ? { customUrl } : {};
+}
+
+/** The one-time upgrade of a file not yet at CONFIG_SCHEMA_VERSION, in place. */
+function upgradeConfig(raw: { preferences?: unknown; version?: unknown }): void {
+  // Clear the legacy pinned output budget. Every config written before maxTokens
+  // became optional carries this exact value from the old DEFAULT_CONFIG, not from
+  // a user decision - and leaving it pinned keeps starving adaptive reasoning models
+  // on machines that have merely *run* an older CLI. Only the untouched legacy value
+  // is cleared, so a budget the user actually chose (any other number) survives.
+  const preferences = raw.preferences as { maxTokens?: unknown } | null | undefined;
+  if (typeof preferences === 'object' && preferences?.maxTokens === LEGACY_PINNED_MAX_TOKENS) {
+    delete preferences.maxTokens;
+  }
+  raw.version = CONFIG_SCHEMA_VERSION;
+}
+
+/** A refresh lock whose heartbeat stopped this long ago (ms) is abandoned. */
+export const REFRESH_LOCK_STALE_MS = 30_000;
+export const REFRESH_LOCK_WAIT_MS = 40_000;
+const REFRESH_LOCK_POLL_MS = 100;
+/** The config write lock is held only from a read of the file to its rename. */
+const CONFIG_LOCK_STALE_MS = 10_000;
+const CONFIG_LOCK_WAIT_MS = 15_000;
+const CONFIG_LOCK_POLL_MS = 10;
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** A change that would replace a list or map in the file with a value of another shape, dropping what it holds. */
+class ShapeMismatchError extends Error {
+  /** Keys from the top of the config down to the value that differs in shape. */
+  readonly path: string[] = [];
+}
+
+/** A save refused over a file that failed validation; `key` names the top-level setting that caused it, if one did. */
+class RefusedSaveError extends Error {
+  constructor(
+    message: string,
+    readonly key?: string
+  ) {
+    super(message);
+  }
+}
+
+const shapeOf = (value: unknown) => (Array.isArray(value) ? 'array' : isJsonObject(value) ? 'object' : 'scalar');
+const hasOwnKey = (value: object, key: string) => Object.prototype.hasOwnProperty.call(value, key);
+const ownValue = (value: Record<string, unknown>, key: string) => (hasOwnKey(value, key) ? value[key] : undefined);
+
+/**
+ * Applies what changed from `base` to `next` onto `target`, a value as the file holds it, and keeps everything else
+ * in `target`: keys set or removed in objects, items added or removed in arrays, any other value replaced. Throws
+ * ShapeMismatchError rather than replace a `target` of another shape when either is a list or map.
+ */
+function applyChanges(
+  target: unknown,
+  base: unknown,
+  next: unknown,
+  explicit: Record<string, unknown> | boolean = false
+): unknown {
+  if (explicit === false && isDeepStrictEqual(base, next)) return target;
+  // An empty map or list filled in where there was none is not a change.
+  const empty = (isJsonObject(next) && Object.keys(next).length === 0) || (Array.isArray(next) && next.length === 0);
+  if (base === undefined && target === undefined && empty) return undefined;
+  if (target !== undefined && shapeOf(target) !== shapeOf(next)) throw new ShapeMismatchError();
+  if (explicit === true) return next;
+  if (isJsonObject(next)) {
+    const from = isJsonObject(base) ? base : {};
+    // No prototype, so keys such as __proto__ read from the file stay plain data.
+    const out: Record<string, unknown> = Object.create(null);
+    if (isJsonObject(target)) for (const key of Object.keys(target)) out[key] = target[key];
+    const requestedKeys = isJsonObject(explicit) ? Object.keys(explicit) : [];
+    for (const key of new Set([...Object.keys(from), ...Object.keys(next), ...requestedKeys])) {
+      const nextValue = ownValue(next, key);
+      const requested = isJsonObject(explicit) && hasOwnKey(explicit, key);
+      if (nextValue === undefined) {
+        if (requested || ownValue(from, key) !== undefined) delete out[key];
+        continue;
+      }
+      let value: unknown;
+      try {
+        const intent = requested ? (isJsonObject(explicit[key]) ? explicit[key] : true) : false;
+        value = applyChanges(out[key], ownValue(from, key), nextValue, intent);
+      } catch (error) {
+        if (error instanceof ShapeMismatchError) error.path.unshift(key);
+        throw error;
+      }
+      if (value === undefined) delete out[key];
+      else out[key] = value;
+    }
+    return out;
+  }
+  if (Array.isArray(next) && Array.isArray(target)) {
+    const from = Array.isArray(base) ? base : [];
+    const has = (list: unknown[], item: unknown) => list.some(entry => isDeepStrictEqual(entry, item));
+    const kept = target.filter(item => has(next, item) || !has(from, item));
+    return [...kept, ...next.filter(item => !has(from, item) && !has(kept, item))];
+  }
+  return next;
+}
+
+/** Sets `server` in the file's mcpServers, array or name-keyed map, replacing any entry with its name. */
+function upsertRawMcpServer(raw: Record<string, unknown>, server: CliConfig['mcpServers'][0]): boolean {
+  const servers = raw.mcpServers;
+  if (servers === undefined) {
+    raw.mcpServers = [server];
+  } else if (Array.isArray(servers)) {
+    raw.mcpServers = [...servers.filter(entry => !(isJsonObject(entry) && entry.name === server.name)), server];
+  } else if (isJsonObject(servers)) {
+    const { name, ...entry } = server;
+    Object.defineProperty(servers, name, { value: entry, enumerable: true, configurable: true, writable: true });
+  } else {
+    throw new ShapeMismatchError();
+  }
+  return true;
+}
+
+/** Removes the server named `name` from the file's mcpServers, array or name-keyed map. */
+function removeRawMcpServer(raw: Record<string, unknown>, name: string): boolean {
+  const servers = raw.mcpServers;
+  if (Array.isArray(servers)) {
+    const kept = servers.filter(entry => !(isJsonObject(entry) && entry.name === name));
+    raw.mcpServers = kept;
+    return kept.length !== servers.length;
+  }
+  if (isJsonObject(servers) && hasOwnKey(servers, name)) {
+    delete servers[name];
+    return true;
+  }
+  return false;
+}
+
+/** Drops the items `drop` matches from the file's list at `key`; a value that is not a list is left alone. */
+function removeRawListItems(raw: Record<string, unknown>, key: string, drop: (item: unknown) => boolean): boolean {
+  const list = raw[key];
+  if (!Array.isArray(list)) return false;
+  const kept = list.filter(item => !drop(item));
+  raw[key] = kept;
+  return kept.length !== list.length;
+}
+
+/** The sign-in and backend fields as written to the file; read from it, each may be in any shape. */
+interface DiskAuthFields {
+  auth: unknown;
+  authByEnv: unknown;
+  apiConfig: unknown;
+}
 
 /**
  * Schema version of the on-disk config, and the marker that makes the migrations in
@@ -867,6 +1024,14 @@ export class ConfigStore {
    * effective config used for reads during the session.
    */
   private globalConfig: CliConfig | null = null;
+  private serial: Promise<unknown> = Promise.resolve();
+  /** The config write lock while this store holds it; checked right before each rename onto the file. */
+  private configLock: HeldLock | null = null;
+  /**
+   * Set when the global snapshot is DEFAULT_CONFIG standing in for a file that failed validation: the snapshot as of
+   * the last load or save, so a save writes only what changed since onto the file's own JSON.
+   */
+  private fallbackBase: CliConfig | null = null;
   /** Canonicalized (realpath'd) discovered project root, or null. */
   private projectRealPath: string | null = null;
   /** Whether the discovered project root is in the global `trustedProjects`. */
@@ -910,6 +1075,7 @@ export class ConfigStore {
     try {
       // Load global config
       let globalConfig: CliConfig;
+      let globalFailedValidation = false;
 
       try {
         // Check file permissions for security
@@ -927,42 +1093,28 @@ export class ConfigStore {
         }
 
         const data = await fs.readFile(this.configPath, 'utf-8');
-        const rawConfig = JSON.parse(data);
-
-        // Auto-migrate old environment-based API config to new simple format
-        if (rawConfig.apiConfig && 'environment' in rawConfig.apiConfig) {
-          const oldApiConfig = rawConfig.apiConfig as { environment: string; customUrl?: string };
-
-          // Migrate to new format
-          if (oldApiConfig.environment === 'custom' && oldApiConfig.customUrl) {
-            // Keep custom URL for self-hosted instances
-            rawConfig.apiConfig = { customUrl: oldApiConfig.customUrl };
-          } else {
-            // All other environments (production/staging/preview/local) become the default service
-            rawConfig.apiConfig = {}; // No customUrl = use the build-time default service
-          }
+        let rawConfig;
+        try {
+          rawConfig = JSON.parse(data);
+        } catch {
+          // The parser's message can quote the file's bytes, which may include a saved token.
+          throw new Error(`Could not load ${this.configPath}: it is not valid JSON.`);
         }
+
+        migrateApiConfig(rawConfig);
 
         // One-time upgrade pass, gated on the version stamp so each step runs against a
         // given file exactly once and is then written back at the current version. Without
         // the stamp a value-keyed step is not a migration at all but a standing rule, and
         // the user can never hold the value it rewrites.
         if (rawConfig.version !== CONFIG_SCHEMA_VERSION) {
-          // Clear the legacy pinned output budget. Every config written before maxTokens
-          // became optional carries this exact value from the old DEFAULT_CONFIG, not from
-          // a user decision - and leaving it pinned keeps starving adaptive reasoning models
-          // on machines that have merely *run* an older CLI. Only the untouched legacy value
-          // is cleared, so a budget the user actually chose (any other number) survives.
-          if (rawConfig.preferences?.maxTokens === LEGACY_PINNED_MAX_TOKENS) {
-            delete rawConfig.preferences.maxTokens;
-          }
-          rawConfig.version = CONFIG_SCHEMA_VERSION;
+          upgradeConfig(rawConfig);
 
           // A failed write (read-only home, etc.) is non-fatal: the in-memory result of this
           // pass still applies to the current session and the stamp simply stays behind, so
           // the migration retries on the next launch rather than being silently skipped.
           try {
-            await this.writeConfigFile(JSON.stringify(rawConfig, null, 2));
+            rawConfig = (await this.writeUpgradedConfig()) ?? rawConfig;
           } catch {
             // Intentionally ignored - see above.
           }
@@ -1005,6 +1157,7 @@ export class ConfigStore {
         } else if (error instanceof z.ZodError) {
           console.error('Global config validation error:', error.issues);
           console.error('Using default configuration');
+          globalFailedValidation = true;
           // structuredClone, not a spread: a shallow spread would share
           // DEFAULT_CONFIG's mutable arrays (trustedTools/trustedProjects/...),
           // so a later trustTool()/trustProject() would mutate the module
@@ -1019,6 +1172,7 @@ export class ConfigStore {
       // ONLY from here, never from the merged effective config, so repo layers
       // can't be laundered into ~/.bike4mind/config.json.
       this.globalConfig = globalConfig;
+      this.fallbackBase = globalFailedValidation ? structuredClone(globalConfig) : null;
 
       // Reset per-load project state, then discover + realpath the project root.
       this.projectConfigDir = null;
@@ -1234,14 +1388,15 @@ export class ConfigStore {
     if (!g.trustedProjects) g.trustedProjects = [];
     if (!g.trustedProjects.includes(target)) g.trustedProjects.push(target);
 
-    // Trusting the current root: load its layers so the re-merge in save() picks
-    // them up. B4M_NO_PROJECT_CONFIG still forces project config off entirely.
+    await this.save();
+
+    // Trusting the current root loads its layers, only once the trust is saved. B4M_NO_PROJECT_CONFIG still forces
+    // project config off entirely.
     if (target === this.projectRealPath && this.projectConfigDir && process.env.B4M_NO_PROJECT_CONFIG !== '1') {
       this.projectTrusted = true;
       await this.loadProjectLayers();
+      this.config = await this.computeMerged();
     }
-
-    await this.save();
     return true;
   }
 
@@ -1255,9 +1410,11 @@ export class ConfigStore {
     const target = root ? await safeRealpath(root) : this.projectRealPath;
     if (!target) return;
 
-    const g = this.globalConfig!;
-    g.trustedProjects = (g.trustedProjects || []).filter(p => p !== target);
-    if (g.trustedMcpDefinitions) delete g.trustedMcpDefinitions[target];
+    const untrust = (config: CliConfig) => {
+      config.trustedProjects = (config.trustedProjects || []).filter(p => p !== target);
+      if (config.trustedMcpDefinitions) delete config.trustedMcpDefinitions[target];
+    };
+    untrust(this.globalConfig!);
 
     if (target === this.projectRealPath) {
       this.projectTrusted = false;
@@ -1266,6 +1423,14 @@ export class ConfigStore {
       this.rawMcpJsonServers = null;
     }
 
+    const revoked = await this.patchInFallback(untrust, raw => {
+      const dropped = removeRawListItems(raw, 'trustedProjects', p => p === target);
+      const definitions = raw.trustedMcpDefinitions;
+      if (!isJsonObject(definitions) || !hasOwnKey(definitions, target)) return dropped;
+      delete definitions[target];
+      return true;
+    });
+    if (revoked) return;
     await this.save();
   }
 
@@ -1275,19 +1440,17 @@ export class ConfigStore {
    * interactive session vs `b4m plugin add`) don't clobber each other's keys.
    */
   private async readDiskFeatures(): Promise<Record<string, boolean>> {
-    try {
-      const raw = JSON.parse(await fs.readFile(this.configPath, 'utf-8')) as {
-        features?: Record<string, unknown>;
-      };
-      // Return only boolean entries so callers that write this back (e.g.
-      // switchApiEnvironment) or merge over it can't reintroduce a bogus value.
-      return Object.fromEntries(Object.entries(raw.features ?? {}).filter(([, v]) => typeof v === 'boolean')) as Record<
-        string,
-        boolean
-      >;
-    } catch {
-      return {};
-    }
+    // A file that could not be read throws: read as empty, the merge would drop every feature key.
+    const text = await this.readConfigText();
+    const raw = text === null ? null : this.parseConfigText(text);
+    const features = raw?.features;
+    if (!isJsonObject(features)) return {};
+    // Return only boolean entries so callers that write this back (e.g.
+    // switchApiEnvironment) or merge over it can't reintroduce a bogus value.
+    return Object.fromEntries(Object.entries(features).filter(([, v]) => typeof v === 'boolean')) as Record<
+      string,
+      boolean
+    >;
   }
 
   /**
@@ -1333,15 +1496,9 @@ export class ConfigStore {
     snapshot: CliConfig,
     patch: GlobalConfigPatch | undefined
   ): Promise<CliConfig> {
-    let disk: Record<string, unknown>;
-    try {
-      const parsed: unknown = JSON.parse(await fs.readFile(this.configPath, 'utf-8'));
-      const result = z.record(z.string(), z.unknown()).safeParse(parsed);
-      if (!result.success) return next;
-      disk = result.data;
-    } catch {
-      return next;
-    }
+    const text = await this.readConfigText();
+    const disk = text === null ? null : this.parseConfigText(text);
+    if (!disk) return next;
     // A patch naming a key sets it; a whole config spread back (it carries `version`) only sets what it changed.
     const wholeConfig = patch !== undefined && Object.prototype.hasOwnProperty.call(patch, 'version');
     const changed = (key: 'defaultModel' | 'ollamaHost' | 'localDefaultModel') =>
@@ -1391,7 +1548,7 @@ export class ConfigStore {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return {};
       throw error;
     }
-    const raw: unknown = JSON.parse(text);
+    const raw = this.parseConfigText(text);
     const parsed = z.object({ modelServerCredentials: CliConfigSchema.shape.modelServerCredentials }).safeParse(raw);
     if (!parsed.success) throw new Error(`${this.configPath} has malformed model server credentials.`);
     return parsed.data.modelServerCredentials ?? {};
@@ -1404,11 +1561,32 @@ export class ConfigStore {
     const temp = `${target}.${process.pid}.${uuidv4()}.tmp`;
     try {
       await fs.writeFile(temp, contents, { encoding: 'utf-8', mode: 0o600 });
+      if (!this.configLock) throw new Error(`Refusing to write ${this.configPath} without holding its write lock`);
+      await this.configLock.assertHeld();
       await fs.rename(temp, target);
     } catch (error) {
       await fs.rm(temp, { force: true });
       throw error;
     }
+  }
+
+  /**
+   * Writes the upgraded file under the config write lock, from a fresh read so a save another process made since
+   * load() read the file is kept. Returns what it wrote, or null when the file is gone or not a JSON object.
+   */
+  private async writeUpgradedConfig(): Promise<Record<string, unknown> | null> {
+    return this.withConfigWriteLock(async () => {
+      const text = await this.readConfigText();
+      const raw = text === null ? null : this.parseConfigText(text);
+      if (!raw) return null;
+      migrateApiConfig(raw);
+      if (raw.version !== CONFIG_SCHEMA_VERSION) {
+        upgradeConfig(raw);
+        // A file this build cannot validate is left as it is; load() then runs on defaults without saving over it.
+        if (CliConfigSchema.safeParse(raw).success) await this.writeConfigFile(JSON.stringify(raw, null, 2));
+      }
+      return raw;
+    });
   }
 
   /** Reloads from the file so the write below carries what other processes saved (a refreshed sign-in token). */
@@ -1420,29 +1598,176 @@ export class ConfigStore {
 
   /** Read-modify-write against the file, so a login in another terminal is not undone. */
   async setModelServerCredential(serverId: string, secret: string): Promise<void> {
-    await this.reloadFromDisk();
-    const current = await this.readModelServerCredentialsStrict();
-    await this.save({ modelServerCredentials: { ...current, [serverId]: { secret } } });
+    await this.updateModelServerCredentials(current => ({ ...current, [serverId]: { secret } }));
   }
 
   async clearModelServerCredential(serverId: string): Promise<void> {
-    await this.reloadFromDisk();
-    const { [serverId]: removed, ...rest } = await this.readModelServerCredentialsStrict();
-    void removed;
-    await this.save({ modelServerCredentials: rest });
+    await this.load();
+    const clear = (config: CliConfig) => {
+      const saved = config.modelServerCredentials;
+      if (!saved || !hasOwnKey(saved, serverId)) return;
+      const { [serverId]: dropped, ...kept } = saved;
+      void dropped;
+      config.modelServerCredentials = kept;
+    };
+    if (this.fallbackBase) clear(this.globalConfig!);
+    const clearInFile = (raw: Record<string, unknown>) => {
+      const credentials = raw.modelServerCredentials;
+      if (!isJsonObject(credentials) || !hasOwnKey(credentials, serverId)) return false;
+      delete credentials[serverId];
+      return true;
+    };
+    if (await this.patchInFallback(clear, clearInFile)) return;
+    await this.updateModelServerCredentials(current => {
+      const { [serverId]: removed, ...rest } = current;
+      void removed;
+      return rest;
+    });
+  }
+
+  private async updateModelServerCredentials(
+    change: (current: Record<string, { secret: string }>) => Record<string, { secret: string }>
+  ): Promise<void> {
+    // Reloaded inside exclusive(), so no other write in this store sees the config emptied mid-reload.
+    await this.lockedWrite(
+      async () => {
+        const next = change(await this.readModelServerCredentialsStrict());
+        await this.writeGlobal({ modelServerCredentials: next });
+      },
+      () => this.reloadFromDisk()
+    );
   }
 
   /**
    * Save configuration to disk
    */
-  async save(config?: GlobalConfigPatch, opts?: { clearFeatures?: boolean }): Promise<void> {
+  async save(config?: GlobalConfigPatch): Promise<void> {
+    await this.exclusive(() => this.persistGlobal(config));
+  }
+
+  /** Serializes this store's reads and writes of the config file, so one never interleaves with another. */
+  private exclusive<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.serial.then(work, work);
+    this.serial = run.catch(() => undefined);
+    return run;
+  }
+
+  /**
+   * Runs a read-modify-write of the config file under exclusive() and then the config write lock. Lock order
+   * everywhere: the refresh lock, then exclusive(), then the config write lock. Loading (which may reset and write)
+   * happens before the write lock is taken, since that lock is not reentrant.
+   */
+  private lockedWrite<T>(work: () => Promise<T>, prepare?: () => Promise<void>): Promise<T> {
+    return this.exclusive(async () => {
+      if (prepare) await prepare();
+      if (!this.globalConfig) await this.load();
+      await this.init();
+      return this.withConfigWriteLock(work);
+    });
+  }
+
+  private withConfigWriteLock<T>(work: () => Promise<T>): Promise<T> {
+    return withLockDir(
+      path.join(path.dirname(this.configPath), 'config.json.lock'),
+      async held => {
+        this.configLock = held;
+        try {
+          return await work();
+        } finally {
+          this.configLock = null;
+        }
+      },
+      {
+        waitMs: CONFIG_LOCK_WAIT_MS,
+        staleMs: CONFIG_LOCK_STALE_MS,
+        pollMs: CONFIG_LOCK_POLL_MS,
+        heldMessage: 'Another b4m process is still saving settings',
+      }
+    );
+  }
+
+  /**
+   * The sign-in and backend fields as the file holds them now; another process may have signed in or switched
+   * since this store loaded. No file, or JSON that is not an object, means none are set. A file that cannot be read
+   * or parsed rejects, so a save never writes this store's copy over a sign-in it failed to read. A field in an
+   * unexpected shape is returned as found, so a write carries it through unchanged.
+   */
+  private async diskAuthFields(): Promise<DiskAuthFields> {
+    const text = await this.readConfigText();
+    const disk = text === null ? null : this.parseConfigText(text);
+    return { auth: disk?.auth, authByEnv: disk?.authByEnv, apiConfig: disk?.apiConfig };
+  }
+
+  /**
+   * Writes the global layer. The sign-in and backend fields are written as the file holds them, so a stale or
+   * signed-out process cannot undo another's sign-in; only `authFields` writers (a backend change, a reset) set them.
+   */
+  private async persistGlobal(
+    config?: GlobalConfigPatch,
+    opts?: { clearFeatures?: boolean; authFields?: DiskAuthFields }
+  ): Promise<void> {
     await this.init();
 
     // Ensure the global snapshot exists (first save on a fresh store).
     if (!this.globalConfig) {
       await this.load();
     }
+    await this.withConfigWriteLock(() => this.writeGlobal(config, opts));
+  }
+
+  /** persistGlobal's read-modify-write of the file; the caller holds the config write lock. */
+  private async writeGlobal(
+    config?: GlobalConfigPatch,
+    opts?: { clearFeatures?: boolean; authFields?: DiskAuthFields }
+  ): Promise<void> {
+    const fallbackBase = this.fallbackBase;
+    let staged = fallbackBase ? structuredClone(this.globalConfig!) : null;
+    try {
+      await this.writeGlobalLayer(config, opts, snapshot => {
+        if (fallbackBase) staged = structuredClone(snapshot);
+      });
+    } catch (error) {
+      // A change that did not reach a file that failed validation is dropped, so later saves do not carry it again.
+      if (fallbackBase && staged && this.fallbackBase === fallbackBase) {
+        await this.rollBackTo(fallbackBase, staged, error instanceof RefusedSaveError ? error.key : undefined);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Undoes what a failed write staged: each top-level key (only `onlyKey` when the refusal named one) that differs
+   * from `base` and still holds the value the write tried to save. A key another caller changed since is theirs and
+   * is left alone, as are the sign-in and backend fields, which writers patch into the file directly.
+   */
+  private async rollBackTo(base: CliConfig, staged: CliConfig, onlyKey?: string): Promise<void> {
+    const current = this.globalConfig as unknown as Record<string, unknown> | null;
+    if (!current) return;
+    const from = base as unknown as Record<string, unknown>;
+    const tried = staged as unknown as Record<string, unknown>;
+    for (const key of new Set([...Object.keys(from), ...Object.keys(current)])) {
+      if (key === 'auth' || key === 'authByEnv' || key === 'apiConfig') continue;
+      if (onlyKey !== undefined && key !== onlyKey) continue;
+      const now = ownValue(current, key);
+      if (isDeepStrictEqual(ownValue(from, key), now) || !isDeepStrictEqual(ownValue(tried, key), now)) continue;
+      if (ownValue(from, key) === undefined) delete current[key];
+      else current[key] = structuredClone(from[key]);
+    }
+    try {
+      this.config = await this.computeMerged();
+    } catch {
+      // The merged view is rebuilt on the next successful save.
+    }
+  }
+
+  private async writeGlobalLayer(
+    config: GlobalConfigPatch | undefined,
+    opts: { clearFeatures?: boolean; authFields?: DiskAuthFields } | undefined,
+    onStaged: (snapshot: CliConfig) => void
+  ): Promise<void> {
     const global = this.globalConfig!;
+    const authFields = opts?.authFields ?? (this.fallbackBase ? undefined : await this.diskAuthFields());
+    let explicitPatch: Record<string, unknown> | undefined;
 
     if (config) {
       // The security-critical, repo-launderable fields never flow through a
@@ -1457,6 +1782,9 @@ export class ConfigStore {
       // is what /model and /config edit): callers must pass user-changed values,
       // not the merged rest - see buildGlobalConfigPatch.
       const {
+        auth,
+        authByEnv,
+        apiConfig,
         mcpServers,
         trustedTools,
         additionalDirectories,
@@ -1466,6 +1794,9 @@ export class ConfigStore {
         sandbox,
         ...rest
       } = config as Partial<CliConfig>;
+      void auth;
+      void authByEnv;
+      void apiConfig;
       void mcpServers;
       void trustedTools;
       void additionalDirectories;
@@ -1473,11 +1804,19 @@ export class ConfigStore {
       void trustedMcpDefinitions;
       void tools;
       void sandbox;
+      if (!hasOwnKey(rest, 'version')) {
+        explicitPatch = { ...rest };
+        // These two fields are merged, so an absent object does not request their replacement.
+        if (!config.preferences) delete explicitPatch.preferences;
+        if (!config.toolApiKeys) delete explicitPatch.toolApiKeys;
+      }
 
       this.globalConfig = {
         ...global,
         ...rest,
-        auth: 'auth' in config ? config.auth : global.auth,
+        auth: global.auth,
+        authByEnv: global.authByEnv,
+        apiConfig: global.apiConfig,
         preferences: {
           ...global.preferences,
           ...(config.preferences || {}),
@@ -1500,13 +1839,23 @@ export class ConfigStore {
       // this is a reset, which intentionally wipes the feature map.
       this.globalConfig = { ...global, features: opts?.clearFeatures ? {} : await this.readDiskFeatures() };
     }
+    // Memory already holds the patch, so a failed read below must still roll it back.
+    if (this.fallbackBase) onStaged(structuredClone(this.globalConfig));
     if (!opts?.clearFeatures) {
       this.globalConfig = await this.mergeModelFields(this.globalConfig, global, config);
     }
+    // Over a file that failed validation the base must match what was written, so a change made while this write is
+    // in flight stays out of it and is saved by its own write.
+    const staged = this.fallbackBase ? structuredClone(this.globalConfig) : this.globalConfig;
+    onStaged(staged);
+    const contents = this.fallbackBase
+      ? await this.mergeOverInvalidConfig(this.fallbackBase, staged, opts?.authFields, explicitPatch)
+      : { ...this.globalConfig, ...authFields };
 
     try {
       // Persist ONLY the global layer, never the merged effective config.
-      await this.writeConfigFile(JSON.stringify(this.globalConfig, null, 2));
+      await this.writeConfigFile(JSON.stringify(contents, null, 2));
+      if (this.fallbackBase) this.fallbackBase = staged;
 
       // Set secure permissions (0600 - only owner can read/write)
       // This protects auth tokens and API keys from other users
@@ -1521,19 +1870,106 @@ export class ConfigStore {
   }
 
   /**
+   * The file contents for a save while the snapshot stands in for a file that failed validation: the file's own
+   * JSON, unknown and invalid keys included, with only what this process changed since `base` applied, so none of
+   * the defaults behind the snapshot reach the file. The caller holds the config write lock.
+   */
+  private async mergeOverInvalidConfig(
+    base: CliConfig,
+    next: CliConfig,
+    authFields: DiskAuthFields | undefined,
+    explicitPatch: Record<string, unknown> | undefined
+  ): Promise<Record<string, unknown>> {
+    let text: string | null;
+    let raw: Record<string, unknown> | null = null;
+    try {
+      text = await this.readConfigText();
+      if (text !== null) raw = this.parseConfigText(text);
+    } catch {
+      text = '';
+    }
+    if (text === null) {
+      // The file is gone, so there is nothing left to keep.
+      this.fallbackBase = null;
+      return { ...next, ...(authFields ?? (await this.diskAuthFields())) };
+    }
+    if (!raw) throw this.invalidConfigError();
+    const { auth: _baseAuth, authByEnv: _baseByEnv, apiConfig: _baseApi, ...from } = base;
+    const { auth: _auth, authByEnv: _byEnv, apiConfig: _api, ...to } = next;
+    // As JSON, so an in-memory item with an undefined key matches the same item read from the file.
+    const asJson = (value: unknown): unknown => JSON.parse(JSON.stringify(value));
+    let merged: Record<string, unknown>;
+    try {
+      // Narrow patches express user intent even when the chosen value equals a fallback default.
+      // Whole-config saves still persist only their differences from the snapshot.
+      merged = applyChanges(raw, asJson(from), asJson(to), explicitPatch ?? false) as Record<string, unknown>;
+    } catch (error) {
+      if (error instanceof ShapeMismatchError) throw this.invalidConfigError(error.path[0]);
+      throw error;
+    }
+    if (authFields) {
+      for (const key of ['auth', 'authByEnv', 'apiConfig'] as const) {
+        if (authFields[key] === undefined) delete merged[key];
+        else merged[key] = authFields[key];
+      }
+    }
+    return merged;
+  }
+
+  private invalidConfigError(key?: string): Error {
+    return new RefusedSaveError(
+      `Could not save settings: ${this.configPath} failed validation, so it was left unchanged. Fix the file, or remove it to start over.`,
+      key
+    );
+  }
+
+  /**
+   * While the snapshot stands in for a file that failed validation, applies `mutate` to the file's own JSON in place
+   * of a save, then `change` (the same change, idempotent) to the snapshot and its base so a later save does not
+   * apply it again. Returns false when not in that state or when there is no file, for the caller to save as usual.
+   */
+  private async patchInFallback(
+    change: (config: CliConfig) => void,
+    mutate: (raw: Record<string, unknown>) => boolean
+  ): Promise<boolean> {
+    if (!this.fallbackBase) return false;
+    try {
+      return await this.exclusive(async () => {
+        const patched = await this.withConfigWriteLock(() =>
+          this.patchConfigText(mutate, () => this.invalidConfigError())
+        );
+        if (!patched) return false;
+        // Only this change goes into the base, so other changes still pending in memory are saved by their own writes.
+        if (this.fallbackBase) change(this.fallbackBase);
+        if (this.globalConfig) change(this.globalConfig);
+        this.config = await this.computeMerged();
+        return true;
+      });
+    } catch (error) {
+      if (error instanceof ShapeMismatchError) throw this.invalidConfigError();
+      throw error;
+    }
+  }
+
+  /**
    * Reset configuration to defaults
    */
   async reset(): Promise<CliConfig> {
     // structuredClone so reset never shares DEFAULT_CONFIG's mutable arrays.
     this.globalConfig = { ...structuredClone(DEFAULT_CONFIG), userId: uuidv4() };
+    this.fallbackBase = null;
     this.projectTrusted = false;
     this.rawProjectConfig = null;
     this.rawProjectLocalConfig = null;
     this.rawMcpJsonServers = null;
     // clearFeatures: a reset must wipe the on-disk feature map too, not inherit it
     // via save()'s concurrent-writer disk-merge (reached e.g. from load()'s
-    // corrupt-config recovery path).
-    await this.save(undefined, { clearFeatures: true });
+    // corrupt-config recovery path). Not serialized: load() calls this, and a serialized write may call load().
+    const g = this.globalConfig;
+    await this.persistGlobal(undefined, {
+      clearFeatures: true,
+      authFields: { auth: g.auth, authByEnv: g.authByEnv, apiConfig: g.apiConfig },
+    });
     return this.config!;
   }
 
@@ -1571,10 +2007,12 @@ export class ConfigStore {
    */
   async addMcpServer(server: CliConfig['mcpServers'][0]): Promise<void> {
     await this.load();
-    const g = this.globalConfig!;
     // Remove existing server with same name, then add (operates on GLOBAL only).
-    g.mcpServers = g.mcpServers.filter(s => s.name !== server.name);
-    g.mcpServers.push(server);
+    const upsert = (config: CliConfig) => {
+      config.mcpServers = [...config.mcpServers.filter(s => s.name !== server.name), structuredClone(server)];
+    };
+    upsert(this.globalConfig!);
+    if (await this.patchInFallback(upsert, raw => upsertRawMcpServer(raw, server))) return;
     await this.save();
   }
 
@@ -1583,8 +2021,11 @@ export class ConfigStore {
    */
   async removeMcpServer(name: string): Promise<void> {
     await this.load();
-    const g = this.globalConfig!;
-    g.mcpServers = g.mcpServers.filter(s => s.name !== name);
+    const remove = (config: CliConfig) => {
+      config.mcpServers = config.mcpServers.filter(s => s.name !== name);
+    };
+    remove(this.globalConfig!);
+    if (await this.patchInFallback(remove, raw => removeRawMcpServer(raw, name))) return;
     await this.save();
   }
 
@@ -1623,7 +2064,12 @@ export class ConfigStore {
     await this.load();
     const g = this.globalConfig!;
     if (g.trustedTools) {
-      g.trustedTools = g.trustedTools.filter(t => t !== toolName);
+      const untrust = (config: CliConfig) => {
+        config.trustedTools = (config.trustedTools || []).filter(t => t !== toolName);
+      };
+      untrust(g);
+      const revoke = (raw: Record<string, unknown>) => removeRawListItems(raw, 'trustedTools', t => t === toolName);
+      if (await this.patchInFallback(untrust, revoke)) return;
       await this.save();
     }
   }
@@ -1641,7 +2087,12 @@ export class ConfigStore {
    */
   async clearTrustedTools(): Promise<void> {
     await this.load();
-    this.globalConfig!.trustedTools = [];
+    const clear = (config: CliConfig) => {
+      config.trustedTools = [];
+    };
+    clear(this.globalConfig!);
+    const revokeAll = (raw: Record<string, unknown>) => removeRawListItems(raw, 'trustedTools', () => true);
+    if (await this.patchInFallback(clear, revokeAll)) return;
     await this.save();
   }
 
@@ -1659,26 +2110,161 @@ export class ConfigStore {
   }
 
   /**
-   * Set authentication tokens
+   * Save the sign-in for this process's backend, leaving the rest of the file as another process may have left it.
+   * With `expectedRefreshToken`, saves only while the saved sign-in still holds that token; resolves whether it saved.
    */
-  async setAuthTokens(tokens: {
-    accessToken: string;
-    refreshToken: string;
-    expiresAt: string;
-    userId: string;
-  }): Promise<void> {
-    await this.load();
-    this.globalConfig!.auth = tokens;
-    await this.save();
+  async setAuthTokens(tokens: AuthTokens, expectedRefreshToken?: string): Promise<boolean> {
+    return this.saveAuthSlot(tokens, expectedRefreshToken);
   }
 
   /**
-   * Clear authentication tokens (logout)
+   * Clear the sign-in for this process's backend (logout), leaving other backends' sign-ins alone. With
+   * `expectedRefreshToken`, clears only while the saved sign-in still holds that token, so a newer one is kept.
+   * Resolves whether it cleared.
    */
-  async clearAuthTokens(): Promise<void> {
+  async clearAuthTokens(expectedRefreshToken?: string): Promise<boolean> {
+    return this.saveAuthSlot(undefined, expectedRefreshToken);
+  }
+
+  /**
+   * Write only this process's sign-in slot into the file as it is now: `auth` when the file's active backend
+   * is this process's, otherwise `authByEnv[<this backend>]`. Another process's backend switch and sign-in survive.
+   */
+  private async saveAuthSlot(tokens: AuthTokens | undefined, expectedRefreshToken?: string): Promise<boolean> {
     await this.load();
-    this.globalConfig!.auth = undefined;
-    await this.save();
+    return this.lockedWrite(() => this.writeAuthSlot(tokens, expectedRefreshToken));
+  }
+
+  private async writeAuthSlot(tokens: AuthTokens | undefined, expectedRefreshToken?: string): Promise<boolean> {
+    const text = await this.readConfigText();
+    if (text === null) {
+      if (expectedRefreshToken !== undefined) return false;
+      const g = this.globalConfig!;
+      await this.writeGlobal(undefined, {
+        authFields: { auth: tokens, authByEnv: g.authByEnv, apiConfig: g.apiConfig },
+      });
+      this.globalConfig!.auth = tokens;
+      if (this.config) this.config.auth = tokens;
+      return true;
+    }
+    const file = this.parseConfigText(text);
+    if (!file) throw new Error(`Could not save the sign-in to ${this.configPath}: it does not hold a JSON object`);
+    const myKey = this.envKey();
+    const mySlotInAuth = this.fileEnvKey(file) === myKey;
+    const byEnv: Record<string, unknown> =
+      typeof file.authByEnv === 'object' && file.authByEnv !== null && !Array.isArray(file.authByEnv)
+        ? { ...file.authByEnv }
+        : {};
+    if (expectedRefreshToken !== undefined) {
+      const held: unknown = mySlotInAuth
+        ? file.auth
+        : Object.prototype.hasOwnProperty.call(byEnv, myKey)
+          ? byEnv[myKey]
+          : undefined;
+      const heldRefresh =
+        typeof held === 'object' && held !== null ? (held as { refreshToken?: unknown }).refreshToken : undefined;
+      if (heldRefresh !== expectedRefreshToken) return false;
+    }
+    if (mySlotInAuth) {
+      if (tokens) file.auth = tokens;
+      else delete file.auth;
+    } else {
+      if (tokens) byEnv[myKey] = tokens;
+      else delete byEnv[myKey];
+      file.authByEnv = byEnv;
+    }
+    await this.writeConfigFile(JSON.stringify(file, null, 2));
+    this.globalConfig!.auth = tokens;
+    if (this.config) this.config.auth = tokens;
+    return true;
+  }
+
+  private envKey(): string {
+    return normalizeEnvKey(this.globalConfig!.apiConfig?.customUrl || getDefaultApiUrl());
+  }
+
+  private fileEnvKey(file: Record<string, unknown>): string {
+    const apiConfig = file.apiConfig as { customUrl?: unknown } | undefined;
+    const url =
+      typeof apiConfig?.customUrl === 'string' && apiConfig.customUrl ? apiConfig.customUrl : getDefaultApiUrl();
+    return normalizeEnvKey(url);
+  }
+
+  /** The config file's text, or null when there is none. Errors name the file and the error code only. */
+  private async readConfigText(): Promise<string | null> {
+    try {
+      return await fs.readFile(this.configPath, 'utf-8');
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') return null;
+      throw new Error(`Could not read ${this.configPath}: ${code ?? 'read failed'}`);
+    }
+  }
+
+  /** The parsed config file, or null when it is not an object. Never echoes the file's bytes in an error. */
+  private parseConfigText(text: string): Record<string, unknown> | null {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch (error) {
+      const position = error instanceof Error ? /position (\d+)/.exec(error.message)?.[1] : undefined;
+      throw new Error(
+        `Could not read ${this.configPath}: not valid JSON${position ? ` (at position ${position})` : ''}`
+      );
+    }
+    return typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+  }
+
+  /**
+   * The saved sign-in as the file holds it now, which another b4m process may have refreshed or cleared since
+   * this store loaded; later reads return it too. The token refresh reads through this before it saves or clears.
+   */
+  async reloadAuthTokens(): Promise<AuthTokens | null> {
+    await this.load();
+    return this.exclusive(async () => {
+      if (!this.globalConfig) await this.load();
+      const text = await this.readConfigText();
+      const auth = text === null ? undefined : this.authForEnv(text, this.envKey());
+      this.globalConfig!.auth = auth;
+      if (this.config) this.config.auth = auth;
+      return auth ?? null;
+    });
+  }
+
+  /**
+   * Run `work` holding the sign-in refresh lock shared by every b4m process using this config
+   * directory. Waits at most `waitMs`, then rejects without running `work`. Rejects after `work` when another
+   * process took the lock over meanwhile; a refresh guards its own save with a compare-and-set.
+   */
+  async withRefreshLock<T>(work: () => Promise<T>, waitMs = REFRESH_LOCK_WAIT_MS): Promise<T> {
+    return withLockDir(path.join(path.dirname(this.configPath), 'auth-refresh.lock'), () => work(), {
+      waitMs,
+      staleMs: REFRESH_LOCK_STALE_MS,
+      pollMs: REFRESH_LOCK_POLL_MS,
+      heldMessage: 'Another b4m process is still refreshing the sign-in',
+    });
+  }
+
+  /** The sign-in `text` (the config file) holds for the environment keyed `envKey`, without echoing its bytes in errors. */
+  private authForEnv(text: string, envKey: string): AuthTokens | undefined {
+    const file = this.parseConfigText(text);
+    if (!file) return undefined;
+    let candidate: unknown;
+    if (this.fileEnvKey(file) === envKey) {
+      candidate = file.auth;
+    } else if (
+      typeof file.authByEnv === 'object' &&
+      file.authByEnv !== null &&
+      Object.prototype.hasOwnProperty.call(file.authByEnv, envKey)
+    ) {
+      candidate = (file.authByEnv as Record<string, unknown>)[envKey];
+    }
+    if (candidate === undefined) return undefined;
+    const parsed = AuthTokensSchema.safeParse(candidate);
+    if (!parsed.success) {
+      throw new Error(`Could not read the saved sign-in from ${this.configPath}: it is not in the expected shape`);
+    }
+    return parsed.data;
   }
 
   /**
@@ -1706,19 +2292,99 @@ export class ConfigStore {
    * Pass null to reset to the build-time default service.
    */
   async setCustomApiUrl(url: string | null): Promise<void> {
+    await this.writeCustomApiUrl(url, false);
+  }
+
+  /**
+   * Points the CLI at `url` (null: the build-time default service) and drops the active sign-in, which belongs to
+   * the old origin, in the same write, so a failure never leaves the old backend's tokens next to the new URL.
+   */
+  async setCustomApiUrlSignedOut(url: string | null): Promise<void> {
+    await this.writeCustomApiUrl(url, true);
+  }
+
+  private async writeCustomApiUrl(url: string | null, signOut: boolean): Promise<void> {
     await this.load();
-    // Reset to the build-time default service (null) or set a self-hosted URL.
-    this.globalConfig!.apiConfig = url === null ? { endpointChosen: true } : { customUrl: url, endpointChosen: true };
-    await this.save();
+    await this.lockedWrite(async () => {
+      const apiConfig = url === null ? { endpointChosen: true } : { customUrl: url, endpointChosen: true };
+      const disk = await this.diskAuthFields();
+      await this.writeGlobal(undefined, {
+        authFields: { ...disk, apiConfig, ...(signOut ? { auth: undefined } : {}) },
+      });
+      // writeGlobal replaced the snapshot object; update the new one only now the file holds the change.
+      const g = this.globalConfig!;
+      g.apiConfig = apiConfig;
+      if (signOut) g.auth = undefined;
+      this.config = await this.computeMerged();
+    });
   }
 
   /** Record that a backend was chosen, so the first-run picker is not shown again. */
   async markEndpointChosen(): Promise<void> {
     await this.load();
-    const g = this.globalConfig!;
-    if (g.apiConfig?.endpointChosen) return;
-    g.apiConfig = { ...g.apiConfig, endpointChosen: true };
-    await this.save();
+    if (this.globalConfig!.apiConfig?.endpointChosen) return;
+    await this.lockedWrite(async () => {
+      // Patched in the raw file, so it also lands on a config this build cannot validate (startup calls this).
+      const patched = await this.patchConfigText(raw => {
+        const onDisk = isJsonObject(raw.apiConfig) ? raw.apiConfig : {};
+        if (onDisk.endpointChosen === true) return false;
+        raw.apiConfig = { ...onDisk, endpointChosen: true };
+        return true;
+      });
+      if (!patched) {
+        await this.writeGlobal(undefined, {
+          authFields: { auth: undefined, authByEnv: undefined, apiConfig: { endpointChosen: true } },
+        });
+      }
+      const g = this.globalConfig!;
+      g.apiConfig = { ...g.apiConfig, endpointChosen: true };
+      if (this.config) this.config.apiConfig = g.apiConfig;
+    });
+  }
+
+  /**
+   * Saves the launch auto-update choice by setting only `preferences.autoUpdate` in the raw file, without load()'s
+   * schema pass, so a config this build cannot validate (one written by a newer b4m) keeps every other key. Rejects
+   * when the file cannot be read or does not hold a JSON object.
+   */
+  async saveAutoUpdatePreference(value: boolean): Promise<void> {
+    await this.init();
+    const patched = await this.exclusive(() =>
+      this.withConfigWriteLock(() =>
+        this.patchConfigText(raw => {
+          const preferences = raw.preferences ?? {};
+          if (!isJsonObject(preferences)) {
+            throw new Error(
+              `Could not save the auto-update choice: preferences in ${this.configPath} is not an object`
+            );
+          }
+          raw.preferences = { ...preferences, autoUpdate: value };
+          return true;
+        })
+      )
+    );
+    if (!patched) {
+      await this.save({ preferences: { autoUpdate: value } });
+      return;
+    }
+    if (this.globalConfig) this.globalConfig.preferences.autoUpdate = value;
+    if (this.config) this.config.preferences.autoUpdate = value;
+  }
+
+  /**
+   * Applies `mutate` to the config file's raw JSON and writes it back when `mutate` returns true. The caller holds
+   * the config write lock. Returns false when there is no file; rejects when it cannot be read or is not an object.
+   */
+  private async patchConfigText(
+    mutate: (raw: Record<string, unknown>) => boolean,
+    notAnObject = () => new Error(`Could not update ${this.configPath}: it does not hold a JSON object`)
+  ): Promise<boolean> {
+    const text = await this.readConfigText();
+    if (text === null) return false;
+    const raw = this.parseConfigText(text);
+    if (!raw) throw notAnObject();
+    if (mutate(raw)) await this.writeConfigFile(JSON.stringify(raw, null, 2));
+    return true;
   }
 
   /**
@@ -1739,10 +2405,6 @@ export class ConfigStore {
     target: 'dev' | 'prod' | { customUrl: string }
   ): Promise<{ url: string; envName: string; changed: boolean; authenticated: boolean }> {
     await this.load();
-    const g = this.globalConfig!;
-
-    const prevUrl = g.apiConfig?.customUrl || getDefaultApiUrl();
-
     let newUrl: string;
     let newApiConfig: CliConfig['apiConfig'];
     if (target === 'prod') {
@@ -1757,26 +2419,38 @@ export class ConfigStore {
     }
     const envName = getEnvironmentName(newApiConfig);
 
-    const swap = swapActiveEnvAuth(g, prevUrl, newUrl);
-
-    // No-op when already pointed at the requested environment - leave auth alone.
-    if (!swap.changed) {
-      if (!g.apiConfig?.endpointChosen) {
-        g.apiConfig = newApiConfig;
-        await this.save();
+    return this.lockedWrite(async () => {
+      const g = this.globalConfig!;
+      const wasHere = normalizeEnvKey(g.apiConfig?.customUrl || getDefaultApiUrl()) === normalizeEnvKey(newUrl);
+      // The swap starts from the file, which another process may have switched or signed in since this one loaded.
+      const disk = await this.diskAuthFields();
+      const auth = AuthTokensSchema.optional().safeParse(disk.auth);
+      const authByEnv = z.record(z.string(), AuthTokensSchema).optional().safeParse(disk.authByEnv);
+      if (!auth.success || !authByEnv.success) {
+        throw new Error(
+          `Could not switch backend: the saved sign-in in ${this.configPath} is not in the expected shape`
+        );
       }
-      return { url: newUrl, envName, changed: false, authenticated: isAuthTokenValid(g.auth) };
-    }
-
-    g.apiConfig = newApiConfig;
-    g.authByEnv = swap.authByEnv;
-    g.auth = swap.auth; // undefined -> user will be prompted to /login
-
-    // No-arg save() persists these global mutations and refreshes features from
-    // disk, so a concurrent `b4m plugin add` isn't reverted by this switch.
-    await this.save();
-
-    return { url: newUrl, envName, changed: true, authenticated: isAuthTokenValid(swap.auth) };
+      const onDisk = ApiConfigSchema.optional().safeParse(disk.apiConfig);
+      const diskApi = onDisk.success ? onDisk.data : undefined;
+      const swap = swapActiveEnvAuth(
+        { auth: auth.data, authByEnv: authByEnv.data },
+        diskApi?.customUrl || getDefaultApiUrl(),
+        newUrl
+      );
+      const apiConfig = swap.changed || !diskApi?.endpointChosen ? newApiConfig : diskApi;
+      const nextAuthByEnv = swap.changed ? swap.authByEnv : authByEnv.data;
+      if (swap.changed || !diskApi?.endpointChosen) {
+        await this.writeGlobal(undefined, { authFields: { auth: swap.auth, authByEnv: nextAuthByEnv, apiConfig } });
+      }
+      // Memory follows only once the file holds the switch; writeGlobal replaced the snapshot object.
+      const next = this.globalConfig!;
+      next.apiConfig = apiConfig;
+      next.authByEnv = nextAuthByEnv;
+      next.auth = swap.auth; // undefined -> user will be prompted to /login
+      this.config = await this.computeMerged();
+      return { url: newUrl, envName, changed: !wasHere, authenticated: isAuthTokenValid(swap.auth) };
+    });
   }
 
   /**
@@ -1929,7 +2603,15 @@ export class ConfigStore {
     if (g.additionalDirectories) {
       // Resolve to absolute path for comparison
       const resolvedPath = path.resolve(dirPath);
-      g.additionalDirectories = g.additionalDirectories.filter(d => path.resolve(d) !== resolvedPath);
+      const remove = (config: CliConfig) => {
+        config.additionalDirectories = (config.additionalDirectories || []).filter(
+          d => path.resolve(d) !== resolvedPath
+        );
+      };
+      remove(g);
+      const removed = (d: unknown) => typeof d === 'string' && path.resolve(d) === resolvedPath;
+      const revoke = (raw: Record<string, unknown>) => removeRawListItems(raw, 'additionalDirectories', removed);
+      if (await this.patchInFallback(remove, revoke)) return;
       await this.save();
     }
   }

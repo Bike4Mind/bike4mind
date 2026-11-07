@@ -86,6 +86,10 @@ esac
 }
 
 
+# Ubuntu 26 provides GNU coreutils with prefixed executable names.
+STUBS['gnutimeout'] = STUBS['timeout']
+
+
 class ChromiumActionTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -185,6 +189,19 @@ class ChromiumActionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertTrue(calls[-1].startswith('node -e '), calls)
 
+    def test_prefers_gnu_timeout_when_available(self):
+        (self.root / 'bin' / 'timeout').write_text('#!/bin/bash\nexit 99\n')
+        result, _ = self.run_step('Download Chromium')
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_falls_back_to_timeout_on_older_runners(self):
+        (self.root / 'bin' / 'gnutimeout').unlink()
+        (self.root / 'bin' / 'bash').symlink_to(shutil.which('bash'))
+        self.environment['PATH'] = str(self.root / 'bin')
+        result, calls = self.run_step('Download Chromium')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls[0], 'timeout --signal=KILL 5m npx playwright install chromium')
+
     def test_download_uses_hard_deadline_and_propagates_failure(self):
         for status in (0, 1, 124, 137):
             with self.subTest(status=status):
@@ -220,10 +237,11 @@ def live_state_after(pid, grace=5.0):
 class TimeoutProcessGroupTests(unittest.TestCase):
     def test_action_deadlines_kill_term_resistant_child(self):
         # Keep the action's actual option order, shortening only its durations.
+        timeout_command = re.escape('"$(command -v gnutimeout || command -v timeout)"')
         commands = (
-            ('Download Chromium', r'timeout (.+?) npx playwright install chromium'),
-            ('Install Chromium system dependencies', r'timeout (.+?) npx playwright install-deps chromium'),
-            ('Install Chromium system dependencies', r'timeout (.+?) dpkg --configure -a'),
+            ('Download Chromium', timeout_command + r' (.+?) npx playwright install chromium'),
+            ('Install Chromium system dependencies', timeout_command + r' (.+?) npx playwright install-deps chromium'),
+            ('Install Chromium system dependencies', timeout_command + r' (.+?) dpkg --configure -a'),
         )
         for step, pattern in commands:
             with self.subTest(step=step, pattern=pattern):
@@ -238,7 +256,7 @@ class TimeoutProcessGroupTests(unittest.TestCase):
                         pid_tmp = shlex.quote(f'{pid_file}.tmp')
                         child = f'trap "" TERM; echo $$ > {pid_tmp}; mv {pid_tmp} {shlex.quote(str(pid_file))}; exec sleep 20'
                         process = subprocess.Popen(
-                            ['timeout', *options, 'bash', '-c', parent_script, 'bash', 'sh', '-c', child],
+                            [shutil.which('gnutimeout') or shutil.which('timeout'), *options, 'bash', '-c', parent_script, 'bash', 'sh', '-c', child],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
                         )
                         try:

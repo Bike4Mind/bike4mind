@@ -325,7 +325,8 @@ export async function generateCliTools(
   allowedDirectories?: string[],
   /** Ceiling interaction mode for a spawned subagent (see wrapToolWithPermission).
    *  Omitted for the main agent, which follows the live store mode. */
-  interactionModeOverride?: InteractionMode
+  interactionModeOverride?: InteractionMode,
+  isCancelled?: () => boolean
 ): Promise<{ tools: ICompletionOptionTools[]; agentContext: AgentContext }> {
   // Wire the ask_user_question callback into the tool's module-level setter
   if (showUserQuestion) {
@@ -385,16 +386,16 @@ export async function generateCliTools(
     'math_evaluate',
     'current_datetime',
     'prompt_enhancement',
-    // Server-side tools (executed via /api/ai/v1/tools Lambda)
-    'weather_info',
-    'web_search',
-    'web_fetch',
   ];
+  // Server-side tools (executed via /api/ai/v1/tools Lambda) need a signed-in account.
+  if (!apiClient.signedOut) enabledB4mToolNames.push('weather_info', 'web_search', 'web_fetch');
   // Apply the caller's restriction before probing: a denied tool should not add network work.
   const normalizedAllowed = toolFilter?.allowedTools?.map(normalizeToolName);
   const normalizedDenied = toolFilter?.deniedTools?.map(normalizeToolName);
   const allowsDecide =
-    !normalizedDenied?.includes('decide') && (!normalizedAllowed?.length || normalizedAllowed.includes('decide'));
+    !apiClient.signedOut &&
+    !normalizedDenied?.includes('decide') &&
+    (!normalizedAllowed?.length || normalizedAllowed.includes('decide'));
   if (allowsDecide && (await hasDecisionModels(apiClient))) enabledB4mToolNames.push('decide');
 
   // Filter the CLI-safe shared tools to only CLI-enabled ones, then merge with all
@@ -457,6 +458,7 @@ export async function generateCliTools(
     allowedDirectories: liveAllowedDirectories,
     interactionModeOverride,
     checkpointStore,
+    isCancelled,
   };
   let tools = wrapTools(Object.values(toolsMap), wrapDeps);
 

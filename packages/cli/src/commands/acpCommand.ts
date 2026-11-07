@@ -15,6 +15,7 @@
 import { Readable } from 'node:stream';
 import { ndJsonStream } from '../acp/acpSdk.js';
 import { AcpServer } from '../acp/AcpServer.js';
+import { settleSignInRefresh } from '../auth/savedSignIn.js';
 import { buildAcpApp } from '../acp/app.js';
 import { logger } from '../utils/Logger';
 
@@ -87,4 +88,5 @@ export async function handleAcpCommand(options: AcpOptions): Promise<void> {
 
   await connection.closed;
   await server.close();
+  await settleSignInRefresh();
 }
