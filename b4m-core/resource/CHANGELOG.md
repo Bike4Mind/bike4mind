@@ -1,5 +1,11 @@
 # @bike4mind/resource
 
+## 3.1.1
+
+### Patch Changes
+
+- [#6542](https://github.com/Bike4Mind/bike4mind/pull/6542) [`9703168`](https://github.com/Bike4Mind/bike4mind/commit/970316866b1ab28a5af964f7f22c7e74c8e102fc) Thanks [@jjmarfa](https://github.com/jjmarfa)! - route What's New release notes and highlights through one queue consumer
+
 ## 3.1.0
 
 ### Minor Changes

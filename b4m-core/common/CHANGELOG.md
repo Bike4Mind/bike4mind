@@ -1,5 +1,59 @@
 # @bike4mind/common
 
+## 23.0.0
+
+### Major Changes
+
+- [#6667](https://github.com/Bike4Mind/bike4mind/pull/6667) [`a547b1c`](https://github.com/Bike4Mind/bike4mind/commit/a547b1cc28ac0ff56623398edfc78e87d8353b1f) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - remove the retired signup grant settings
+
+### Minor Changes
+
+- [#5621](https://github.com/Bike4Mind/bike4mind/pull/5621) [`4d955d7`](https://github.com/Bike4Mind/bike4mind/commit/4d955d7832b4305cb61a9fe68b117c2c25c94ea5) Thanks [@dea0030](https://github.com/dea0030)! - publish project file and session routes as v1 contracts
+
+- [#6470](https://github.com/Bike4Mind/bike4mind/pull/6470) [`0ea43de`](https://github.com/Bike4Mind/bike4mind/commit/0ea43de690b53fc33e899d15680e2a71a8105534) Thanks [@onoya](https://github.com/onoya)! - auto-approve signup risk reviews on settled payment evidence
+
+- [#6474](https://github.com/Bike4Mind/bike4mind/pull/6474) [`062a35b`](https://github.com/Bike4Mind/bike4mind/commit/062a35b8f26cda4a7d93fb400c6f554c92a36086) Thanks [@onoya](https://github.com/onoya)! - show advisory model verdicts on the signup risk review queue
+
+- [#6483](https://github.com/Bike4Mind/bike4mind/pull/6483) [`64b8a24`](https://github.com/Bike4Mind/bike4mind/commit/64b8a2438564d6f9a63058b70a2fc1b4e7bf5b92) Thanks [@onoya](https://github.com/onoya)! - advisory assessment for young-domain signup holds (confirm only)
+
+- [#6530](https://github.com/Bike4Mind/bike4mind/pull/6530) [`40ae029`](https://github.com/Bike4Mind/bike4mind/commit/40ae029482ccc5eed4cccb2c42711a1eddee48c2) Thanks [@cgtorniado](https://github.com/cgtorniado)! - store Stripe webhook events and show a billing timeline
+
+- [#6545](https://github.com/Bike4Mind/bike4mind/pull/6545) [`ab3a4d0`](https://github.com/Bike4Mind/bike4mind/commit/ab3a4d090ab0ce48ea08486a6ad7e476b49abb37) Thanks [@jjmarfa](https://github.com/jjmarfa)! - nightly Stripe reconciliation with a Mismatched view and Sync from Stripe
+
+- [#6552](https://github.com/Bike4Mind/bike4mind/pull/6552) [`119aa7c`](https://github.com/Bike4Mind/bike4mind/commit/119aa7c34e6a05febc7a9949988ff186359f8610) Thanks [@jjmarfa](https://github.com/jjmarfa)! - count active users and real signups per product definitions
+
+- [#6603](https://github.com/Bike4Mind/bike4mind/pull/6603) [`e15d34c`](https://github.com/Bike4Mind/bike4mind/commit/e15d34ca05f7945fb78122880b978013ee694d20) Thanks [@dea0030](https://github.com/dea0030)! - flag Spend tab accounts over cost, error-rate and latency limits
+
+- [#6635](https://github.com/Bike4Mind/bike4mind/pull/6635) [`d3e5716`](https://github.com/Bike4Mind/bike4mind/commit/d3e5716518d29cde4d46f0ce122984c12b662365) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - add Pending section to Invite Center
+
+- [#6639](https://github.com/Bike4Mind/bike4mind/pull/6639) [`8f0cb30`](https://github.com/Bike4Mind/bike4mind/commit/8f0cb3051eb6832415f039ae07c93b85ddbb26f4) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - require a second admin to approve high-impact admin actions
+
+- [#6640](https://github.com/Bike4Mind/bike4mind/pull/6640) [`219e981`](https://github.com/Bike4Mind/bike4mind/commit/219e98184cbe5843127733b9636976b7ca5a0b0c) Thanks [@jjmarfa](https://github.com/jjmarfa)! - schedule and cancel account deletion on a user's request
+
+- [#6642](https://github.com/Bike4Mind/bike4mind/pull/6642) [`aa2512b`](https://github.com/Bike4Mind/bike4mind/commit/aa2512b34ff9300ef02144a84b56b17b95bfabd5) Thanks [@onoya](https://github.com/onoya)! - add the FLUX 3 Image and FLUX 3 Image Klein models
+
+- [#6661](https://github.com/Bike4Mind/bike4mind/pull/6661) [`8319827`](https://github.com/Bike4Mind/bike4mind/commit/8319827c781df4138e527f2eef682a98b946654a) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - record model self-reported iteration confidence
+
+- [#6673](https://github.com/Bike4Mind/bike4mind/pull/6673) [`a802353`](https://github.com/Bike4Mind/bike4mind/commit/a8023533b19b8bcf899e2765cd8fa58164f37e74) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - add v1 artifact version-create, search and types routes
+
+- [#6678](https://github.com/Bike4Mind/bike4mind/pull/6678) [`4e9cedb`](https://github.com/Bike4Mind/bike4mind/commit/4e9cedb6f20a34b951ebe135181c988d66f80969) Thanks [@onoya](https://github.com/onoya)! - record waitlist signup network and flag payload-like names
+
+- [#6680](https://github.com/Bike4Mind/bike4mind/pull/6680) [`d57ed75`](https://github.com/Bike4Mind/bike4mind/commit/d57ed751086e69bb09665515a4efa248146fb5a2) Thanks [@rexendy](https://github.com/rexendy)! - show a retirement banner on the legacy plan views
+
+- [#6682](https://github.com/Bike4Mind/bike4mind/pull/6682) [`dbf9bd6`](https://github.com/Bike4Mind/bike4mind/commit/dbf9bd66981eda46793dd6d5f6298060b94cc6cd) Thanks [@onoya](https://github.com/onoya)! - record which clients each user uses and hide the desktop promo for desktop users
+
+- [#6729](https://github.com/Bike4Mind/bike4mind/pull/6729) [`04d66c2`](https://github.com/Bike4Mind/bike4mind/commit/04d66c2509bf34a69892b63da3823143f7109a0f) Thanks [@poysama](https://github.com/poysama)! - warn tier and admin override for young-account spend
+
+### Patch Changes
+
+- [#6542](https://github.com/Bike4Mind/bike4mind/pull/6542) [`9703168`](https://github.com/Bike4Mind/bike4mind/commit/970316866b1ab28a5af964f7f22c7e74c8e102fc) Thanks [@jjmarfa](https://github.com/jjmarfa)! - route What's New release notes and highlights through one queue consumer
+
+- [#6643](https://github.com/Bike4Mind/bike4mind/pull/6643) [`129b955`](https://github.com/Bike4Mind/bike4mind/commit/129b955bd299e32738db21f90b0f143101a7f683) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - flag answers that follow a low-confidence iteration
+
+- [#6681](https://github.com/Bike4Mind/bike4mind/pull/6681) [`0324b66`](https://github.com/Bike4Mind/bike4mind/commit/0324b6615b1518f4836a413dcfbff9cb9f3cb666) Thanks [@onoya](https://github.com/onoya)! - save chat images to Files with their generation request and lineage
+
+- [#6685](https://github.com/Bike4Mind/bike4mind/pull/6685) [`0f1f7cc`](https://github.com/Bike4Mind/bike4mind/commit/0f1f7cc3bf121ab9ea1263e6b4541b3b4d25d725) Thanks [@onoya](https://github.com/onoya)! - stream only broadcast-safe admin settings over subscriptions
+
 ## 22.0.0
 
 ### Major Changes

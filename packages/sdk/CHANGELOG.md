@@ -1,5 +1,17 @@
 # @bike4mind/sdk
 
+## 1.7.0
+
+### Minor Changes
+
+- [#5621](https://github.com/Bike4Mind/bike4mind/pull/5621) [`4d955d7`](https://github.com/Bike4Mind/bike4mind/commit/4d955d7832b4305cb61a9fe68b117c2c25c94ea5) Thanks [@dea0030](https://github.com/dea0030)! - publish project file and session routes as v1 contracts
+
+- [#6642](https://github.com/Bike4Mind/bike4mind/pull/6642) [`aa2512b`](https://github.com/Bike4Mind/bike4mind/commit/aa2512b34ff9300ef02144a84b56b17b95bfabd5) Thanks [@onoya](https://github.com/onoya)! - add the FLUX 3 Image and FLUX 3 Image Klein models
+
+- [#6673](https://github.com/Bike4Mind/bike4mind/pull/6673) [`a802353`](https://github.com/Bike4Mind/bike4mind/commit/a8023533b19b8bcf899e2765cd8fa58164f37e74) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - add v1 artifact version-create, search and types routes
+
+- [#6682](https://github.com/Bike4Mind/bike4mind/pull/6682) [`dbf9bd6`](https://github.com/Bike4Mind/bike4mind/commit/dbf9bd66981eda46793dd6d5f6298060b94cc6cd) Thanks [@onoya](https://github.com/onoya)! - record which clients each user uses and hide the desktop promo for desktop users
+
 ## 1.6.0
 
 ### Minor Changes
