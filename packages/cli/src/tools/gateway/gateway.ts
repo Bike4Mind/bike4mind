@@ -9,7 +9,8 @@ import { commandTextOf } from './toolPolicy.js';
 import { buildPromptPreview } from './stages/preview.js';
 import { executeAndRecord } from './stages/execution.js';
 
-export const SESSION_ENDED_MESSAGE = 'Not run: the session this call belonged to has ended.';
+import { SESSION_ENDED_MESSAGE } from './sessionCancellation.js';
+export { SESSION_ENDED_MESSAGE } from './sessionCancellation.js';
 
 /**
  * The args handed to execution, minus any gateSnapshot or confirmedFuzzyHash. Only the
@@ -81,6 +82,7 @@ export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapT
           sandboxOrchestrator: deps.sandboxOrchestrator,
           allowedDirectories,
           checkpointStore: deps.checkpointStore,
+          isCancelled: deps.isCancelled,
         });
 
       try {
@@ -125,6 +127,7 @@ export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapT
         // An answer arriving after the session ended must neither record trust nor run the tool.
         if (deps.isCancelled?.()) return SESSION_ENDED_MESSAGE;
         await applyPromptResponse(toolName, args, response.action, permissionManager, deps.configStore);
+        if (deps.isCancelled?.()) return SESSION_ENDED_MESSAGE;
         return await run();
       } finally {
         cleanupSandboxFiles(sandboxCleanupPaths);

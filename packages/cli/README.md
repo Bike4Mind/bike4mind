@@ -67,7 +67,31 @@ pnpm rebuild
 b4m
 ```
 
-The CLI will prompt you to authenticate with your Bike4Mind account on first run.
+When you are signed out, the CLI starts on a local model from Ollama or a model server saved in Desktop. With no local model available, it offers Bike4Mind sign-in.
+
+### Chat without signing in
+
+Start Ollama and pull a model, then open the CLI:
+
+```bash
+ollama serve
+# In another terminal:
+ollama pull qwen3.5
+b4m
+```
+
+The signed-out session lists only local models. Run `/login` to use Bike4Mind cloud models; finish or stop the current reply with Esc before signing in. From a local session, cancelling sign-in returns you to that session.
+
+For headless prompts, save a local default first:
+
+```bash
+b4m models use qwen3.5
+b4m -p "say hello" </dev/null
+```
+
+A signed-out headless run uses the selected local model or your saved local default. With a cloud default and no saved local default, it exits with an error instead of choosing an arbitrary model. ACP sessions also support local models while signed out.
+
+If no local model is found, start Ollama, pull a model, or check the saved model server's address and credentials. A server login hint uses `b4m models servers login <name>`. An expired Bike4Mind sign-in is refreshed at startup; a temporary refresh failure keeps the saved sign-in and uses local models for that run, so restart the CLI to retry.
 
 ### CLI Flags
 
@@ -305,7 +329,7 @@ Configuration is stored in `~/.bike4mind/config.json`
 
 ### Authentication
 
-The CLI uses OAuth to authenticate with your Bike4Mind account. On first run, you'll be prompted to log in through the device authorization flow:
+Bike4Mind cloud models use OAuth authentication. You can chat with local models while signed out; run `/login` when you want to use your Bike4Mind account:
 
 1. Run `b4m` or use the `/login` command
 2. Visit the verification URL shown in the terminal

@@ -33,6 +33,87 @@ afterEach(async () => {
 const readJson = async () => JSON.parse(await readFile(configPath, 'utf-8')) as Record<string, unknown>;
 
 describe('saving over a config this build cannot validate', () => {
+  it.each([
+    ['temperature', 0.2, 0.7],
+    ['autoSave', false, true],
+    ['postEditDiagnostics', true, false],
+  ] as const)('persists an explicit default value for %s', async (key, saved, requested) => {
+    await writeFile(configPath, JSON.stringify({ preferences: { theme: 'sepia', [key]: saved } }), {
+      mode: 0o600,
+    });
+
+    await new ConfigStore(configPath).save({ preferences: { [key]: requested } });
+
+    expect(await readJson()).toEqual({ preferences: { theme: 'sepia', [key]: requested } });
+  });
+
+  it('persists an explicitly chosen model equal to the fallback default', async () => {
+    await writeFile(configPath, JSON.stringify({ defaultModel: 'another-model', newerSetting: true }), {
+      mode: 0o600,
+    });
+    const store = new ConfigStore(configPath);
+    const config = await store.load();
+
+    await store.save({ defaultModel: config.defaultModel });
+
+    expect(await readJson()).toEqual({ defaultModel: config.defaultModel, newerSetting: true });
+  });
+
+  it('keeps unchanged fallback defaults out of a whole-config save', async () => {
+    const saved = {
+      preferences: { theme: 'sepia', temperature: 0.2, autoSave: false, postEditDiagnostics: true },
+      newerSetting: true,
+    };
+    await writeFile(configPath, JSON.stringify(saved), { mode: 0o600 });
+    const store = new ConfigStore(configPath);
+    const config = await store.load();
+
+    await store.save({ ...config, defaultModel: 'chosen-model' });
+
+    expect(await readJson()).toEqual({ ...saved, defaultModel: 'chosen-model' });
+  });
+
+  it('clears an explicitly removed optional setting absent from the fallback defaults', async () => {
+    await writeFile(configPath, JSON.stringify({ localDefaultModel: 'old-model', newerSetting: true }), {
+      mode: 0o600,
+    });
+
+    await new ConfigStore(configPath).save({ localDefaultModel: undefined });
+
+    expect(await readJson()).toEqual({ newerSetting: true });
+  });
+
+  it('refuses an explicit default that would replace an object with a scalar', async () => {
+    const saved = { preferences: { theme: 'sepia', temperature: { future: 0.2 } } };
+    await writeFile(configPath, JSON.stringify(saved), { mode: 0o600 });
+
+    await expect(new ConfigStore(configPath).save({ preferences: { temperature: 0.7 } })).rejects.toThrow(
+      `${configPath} failed validation`
+    );
+
+    expect(await readJson()).toEqual(saved);
+  });
+
+  it('keeps sign-in and backend fields out of explicit generic save intent', async () => {
+    const saved = {
+      auth: signIn,
+      authByEnv: { 'https://saved.example.com': signIn },
+      apiConfig: { customUrl: 'https://saved.example.com' },
+      preferences: { theme: 'sepia', temperature: 0.2 },
+    };
+    await writeFile(configPath, JSON.stringify(saved), { mode: 0o600 });
+    const patch = {
+      auth: { ...signIn, refreshToken: 'replacement' },
+      authByEnv: {},
+      apiConfig: {},
+      preferences: { temperature: 0.7 },
+    };
+
+    await new ConfigStore(configPath).save(patch);
+
+    expect(await readJson()).toEqual({ ...saved, preferences: { theme: 'sepia', temperature: 0.7 } });
+  });
+
   it('keeps a partial config and adds only the model a /model save chose', async () => {
     await writeFile(configPath, JSON.stringify({ auth: signIn }), { mode: 0o600 });
     const store = new ConfigStore(configPath);

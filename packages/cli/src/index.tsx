@@ -997,13 +997,6 @@ function CliApp() {
         silentLogger,
         isCancelled: sessionEnded,
         ...sessionBackgroundCallbacks(() => !sessionEnded()),
-        onSubagentUsage: usage => {
-          useCliStore.getState().recordSubagentUsage({
-            agentName: usage.agentName,
-            tokens: usage.totalTokens,
-            credits: usage.totalCredits,
-          });
-        },
       });
 
       // Create agent_delegate tool (with background support)
@@ -1088,7 +1081,7 @@ function CliApp() {
             subagentOrchestrator: orchestrator,
             sessionId: newSession.id,
             // Gate skill lifecycle hook shell commands through permission.
-            permission: { permissionManager, promptFn },
+            permission: { permissionManager, promptFn, isCancelled: sessionEnded },
             // Confine skill @file refs to the workspace (plus granted dirs).
             allowedDirectories: additionalDirectories,
           })
@@ -1233,7 +1226,7 @@ function CliApp() {
 
       // Wire the agent's step events to the UI store and tavern transcript,
       // and mirror them onto delegated subagents via the orchestrator callbacks.
-      wireAgentEvents({ agent, orchestrator });
+      wireAgentEvents({ agent, orchestrator, isCurrent: () => !sessionEnded() });
 
       setState((prev: CliState) => ({
         ...prev,

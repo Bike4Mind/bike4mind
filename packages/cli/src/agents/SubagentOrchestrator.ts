@@ -372,6 +372,7 @@ export class SubagentOrchestrator {
         permission: {
           permissionManager: this.deps.permissionManager,
           promptFn: this.deps.showPermissionPrompt,
+          isCancelled: this.deps.isCancelled,
         },
         // Confine skill @file refs to the workspace (plus granted dirs).
         allowedDirectories: this.deps.additionalDirectories,
@@ -403,6 +404,7 @@ export class SubagentOrchestrator {
       permission: {
         permissionManager: this.deps.permissionManager,
         promptFn: this.deps.showPermissionPrompt,
+        isCancelled: this.deps.isCancelled,
       },
     };
 
@@ -427,6 +429,12 @@ export class SubagentOrchestrator {
     // Link agent context
     updatedContext.currentAgent = agent;
 
+    const assertSessionActive = () => {
+      abortSignal?.throwIfAborted();
+      if (this.deps.isCancelled?.()) throw new DOMException('Parent session ended', 'AbortError');
+    };
+    assertSessionActive();
+
     // Invoke beforeRunCallback to allow caller to subscribe to events
     if (this.beforeRunCallback) {
       this.beforeRunCallback(agent, agentName);
@@ -439,6 +447,7 @@ export class SubagentOrchestrator {
       const { result: agentResult, attempts } = await withRetry(
         () =>
           agent.run(task, {
+            signal: abortSignal,
             maxIterations,
             parallelExecution: this.deps.enableParallelToolExecution === true,
             isReadOnlyTool: toolName => this.deps.permissionManager.catalog.isReadOnly(toolName),
@@ -459,6 +468,7 @@ export class SubagentOrchestrator {
       if (attempts > 0) {
         this.deps.logger.info(`[${agentName}] Recovered after ${attempts} retry attempt${attempts === 1 ? '' : 's'}`);
       }
+      assertSessionActive();
       result = agentResult;
     } catch (error) {
       if (error instanceof HookBlockedError) {

@@ -61,6 +61,7 @@ async function executeCommandHook(
     context.cwd,
     perm
   );
+  if (perm.isCancelled?.()) return { decision: 'deny', reason: 'Parent session ended' };
   if (!decision.allowed) {
     return { decision: 'deny', reason: decision.reason || 'Hook command denied' };
   }

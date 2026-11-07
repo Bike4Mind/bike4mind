@@ -1,4 +1,5 @@
 import type { GroupCompletionCallback, JobStatusCallback } from '../agents/BackgroundAgentManager.js';
+import type { SubagentUsageCallback } from '../agents/SubagentOrchestrator.js';
 import { useCliStore } from '../store/index.js';
 
 /**
@@ -8,8 +9,17 @@ import { useCliStore } from '../store/index.js';
 export function sessionBackgroundCallbacks(isCurrent: () => boolean): {
   onBackgroundStatusChange: JobStatusCallback;
   onGroupCompletion: GroupCompletionCallback;
+  onSubagentUsage: SubagentUsageCallback;
 } {
   return {
+    onSubagentUsage: usage => {
+      if (!isCurrent()) return;
+      useCliStore.getState().recordSubagentUsage({
+        agentName: usage.agentName,
+        tokens: usage.totalTokens,
+        credits: usage.totalCredits,
+      });
+    },
     onBackgroundStatusChange: job => {
       if (isCurrent()) useCliStore.getState().upsertBackgroundAgent(job);
     },

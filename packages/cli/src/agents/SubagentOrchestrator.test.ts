@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { ReActAgent } from '@bike4mind/agents';
 import type { ICompletionBackend, CompletionInfo, ICompletionOptions } from '@bike4mind/llm-adapters';
 import type { IMessage } from '@bike4mind/common';
 import { SubagentOrchestrator, type OrchestratorDependencies, type SpawnAgentOptions } from './SubagentOrchestrator.js';
@@ -144,7 +145,11 @@ function inlineAgent(): SpawnAgentOptions['agentDefinition'] {
   };
 }
 
-function createRunnableOrchestrator(historyStore: AgentHistoryStore, llm: ICompletionBackend): SubagentOrchestrator {
+function createRunnableOrchestrator(
+  historyStore: AgentHistoryStore,
+  llm: ICompletionBackend,
+  isCancelled?: () => boolean
+): SubagentOrchestrator {
   const deps = {
     userId: 'test-user',
     llm,
@@ -155,6 +160,7 @@ function createRunnableOrchestrator(historyStore: AgentHistoryStore, llm: ICompl
     apiClient: {},
     agentStore: { getAgent: () => undefined, getAgentNames: () => [] },
     historyStore,
+    isCancelled,
   } as unknown as OrchestratorDependencies;
   return new SubagentOrchestrator(deps);
 }
@@ -316,12 +322,14 @@ describe('SubagentOrchestrator sandbox parity (criterion 4)', () => {
       isCancelled,
     } as unknown as OrchestratorDependencies;
 
-    await new SubagentOrchestrator(deps).delegateToAgent({
-      task: 'do the thing',
-      agentName: 'tester',
-      parentSessionId: 'session-1',
-      agentDefinition: inlineAgent(),
-    });
+    await expect(
+      new SubagentOrchestrator(deps).delegateToAgent({
+        task: 'do the thing',
+        agentName: 'tester',
+        parentSessionId: 'session-1',
+        agentDefinition: inlineAgent(),
+      })
+    ).rejects.toMatchObject({ name: 'AbortError' });
 
     const calls = vi.mocked(generateCliTools).mock.calls;
     expect(calls[calls.length - 1][14]).toBe(isCancelled);
@@ -522,5 +530,90 @@ describe('SubagentOrchestrator hook-permission wiring', () => {
 
     expect(buildSkillsPromptSection).toHaveBeenCalledTimes(1);
     expect(vi.mocked(buildSkillsPromptSection).mock.calls[0][0]).toBe(reachable);
+  });
+});
+
+describe('SubagentOrchestrator cancellation', () => {
+  it('aborts an in-flight completion when its background job is cancelled', async () => {
+    const controller = new AbortController();
+    const complete = vi.fn<ICompletionBackend['complete']>(async (_model, _messages, options) => {
+      await new Promise<never>((_resolve, reject) => {
+        options.abortSignal?.addEventListener('abort', () => reject(new Error('completion aborted')), { once: true });
+      });
+    });
+    const backend = { ...createOneShotLlm('unused'), complete };
+    const orchestrator = createRunnableOrchestrator(new AgentHistoryStore(), backend);
+    const running = orchestrator.delegateToAgent({
+      task: 'wait for a reply',
+      agentName: 'tester',
+      parentSessionId: 'session-1',
+      agentDefinition: inlineAgent(),
+      abortSignal: controller.signal,
+    });
+    await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce());
+    const settled = running.catch(error => error as unknown);
+    controller.abort();
+    await settled;
+    expect(complete.mock.calls[0][2].abortSignal?.aborted).toBe(true);
+    expect(complete).toHaveBeenCalledOnce();
+  });
+
+  it.each(['aborted', 'retired'] as const)(
+    'does not run Stop hooks or save history after a normally resolved %s run',
+    async reason => {
+      const controller = new AbortController();
+      let retired = false;
+      const history = new AgentHistoryStore();
+      const orchestrator = createRunnableOrchestrator(history, createOneShotLlm('done'), () => retired);
+      const originalRun = ReActAgent.prototype.run;
+      const run = vi.spyOn(ReActAgent.prototype, 'run').mockImplementation(async function (
+        this: ReActAgent,
+        task,
+        options
+      ) {
+        const result = await originalRun.call(this, task, options);
+        if (reason === 'aborted') controller.abort();
+        else retired = true;
+        return result;
+      });
+      vi.mocked(runShellCommand).mockClear();
+      try {
+        await expect(
+          orchestrator.delegateToAgent({
+            task: 'finish just as the session ends',
+            agentName: 'tester',
+            parentSessionId: 'session-1',
+            resumeId: 'retired-run',
+            agentDefinition: {
+              ...inlineAgent()!,
+              hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo old-session' }] }] },
+            },
+            abortSignal: controller.signal,
+          })
+        ).rejects.toMatchObject({ name: 'AbortError' });
+        expect(runShellCommand).not.toHaveBeenCalled();
+        expect(history.has('retired-run')).toBe(false);
+      } finally {
+        run.mockRestore();
+      }
+    }
+  );
+
+  it('does not start a model request after asynchronous setup discovers a retired session', async () => {
+    const complete = vi.fn(createOneShotLlm('done').complete);
+    const orchestrator = createRunnableOrchestrator(
+      new AgentHistoryStore(),
+      { ...createOneShotLlm('done'), complete },
+      () => true
+    );
+    await expect(
+      orchestrator.delegateToAgent({
+        task: 'never start',
+        agentName: 'tester',
+        parentSessionId: 'session-1',
+        agentDefinition: inlineAgent(),
+      })
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(complete).not.toHaveBeenCalled();
   });
 });

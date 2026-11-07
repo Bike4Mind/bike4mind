@@ -466,26 +466,35 @@ const ownValue = (value: Record<string, unknown>, key: string) => (hasOwnKey(val
  * in `target`: keys set or removed in objects, items added or removed in arrays, any other value replaced. Throws
  * ShapeMismatchError rather than replace a `target` of another shape when either is a list or map.
  */
-function applyChanges(target: unknown, base: unknown, next: unknown): unknown {
-  if (isDeepStrictEqual(base, next)) return target;
+function applyChanges(
+  target: unknown,
+  base: unknown,
+  next: unknown,
+  explicit: Record<string, unknown> | boolean = false
+): unknown {
+  if (explicit === false && isDeepStrictEqual(base, next)) return target;
   // An empty map or list filled in where there was none is not a change.
   const empty = (isJsonObject(next) && Object.keys(next).length === 0) || (Array.isArray(next) && next.length === 0);
   if (base === undefined && target === undefined && empty) return undefined;
   if (target !== undefined && shapeOf(target) !== shapeOf(next)) throw new ShapeMismatchError();
+  if (explicit === true) return next;
   if (isJsonObject(next)) {
     const from = isJsonObject(base) ? base : {};
     // No prototype, so keys such as __proto__ read from the file stay plain data.
     const out: Record<string, unknown> = Object.create(null);
     if (isJsonObject(target)) for (const key of Object.keys(target)) out[key] = target[key];
-    for (const key of new Set([...Object.keys(from), ...Object.keys(next)])) {
+    const requestedKeys = isJsonObject(explicit) ? Object.keys(explicit) : [];
+    for (const key of new Set([...Object.keys(from), ...Object.keys(next), ...requestedKeys])) {
       const nextValue = ownValue(next, key);
+      const requested = isJsonObject(explicit) && hasOwnKey(explicit, key);
       if (nextValue === undefined) {
-        if (ownValue(from, key) !== undefined) delete out[key];
+        if (requested || ownValue(from, key) !== undefined) delete out[key];
         continue;
       }
       let value: unknown;
       try {
-        value = applyChanges(out[key], ownValue(from, key), nextValue);
+        const intent = requested ? (isJsonObject(explicit[key]) ? explicit[key] : true) : false;
+        value = applyChanges(out[key], ownValue(from, key), nextValue, intent);
       } catch (error) {
         if (error instanceof ShapeMismatchError) error.path.unshift(key);
         throw error;
@@ -1758,6 +1767,7 @@ export class ConfigStore {
   ): Promise<void> {
     const global = this.globalConfig!;
     const authFields = opts?.authFields ?? (this.fallbackBase ? undefined : await this.diskAuthFields());
+    let explicitPatch: Record<string, unknown> | undefined;
 
     if (config) {
       // The security-critical, repo-launderable fields never flow through a
@@ -1772,6 +1782,9 @@ export class ConfigStore {
       // is what /model and /config edit): callers must pass user-changed values,
       // not the merged rest - see buildGlobalConfigPatch.
       const {
+        auth,
+        authByEnv,
+        apiConfig,
         mcpServers,
         trustedTools,
         additionalDirectories,
@@ -1781,6 +1794,9 @@ export class ConfigStore {
         sandbox,
         ...rest
       } = config as Partial<CliConfig>;
+      void auth;
+      void authByEnv;
+      void apiConfig;
       void mcpServers;
       void trustedTools;
       void additionalDirectories;
@@ -1788,6 +1804,12 @@ export class ConfigStore {
       void trustedMcpDefinitions;
       void tools;
       void sandbox;
+      if (!hasOwnKey(rest, 'version')) {
+        explicitPatch = { ...rest };
+        // These two fields are merged, so an absent object does not request their replacement.
+        if (!config.preferences) delete explicitPatch.preferences;
+        if (!config.toolApiKeys) delete explicitPatch.toolApiKeys;
+      }
 
       this.globalConfig = {
         ...global,
@@ -1827,7 +1849,7 @@ export class ConfigStore {
     const staged = this.fallbackBase ? structuredClone(this.globalConfig) : this.globalConfig;
     onStaged(staged);
     const contents = this.fallbackBase
-      ? await this.mergeOverInvalidConfig(this.fallbackBase, staged, opts?.authFields)
+      ? await this.mergeOverInvalidConfig(this.fallbackBase, staged, opts?.authFields, explicitPatch)
       : { ...this.globalConfig, ...authFields };
 
     try {
@@ -1855,7 +1877,8 @@ export class ConfigStore {
   private async mergeOverInvalidConfig(
     base: CliConfig,
     next: CliConfig,
-    authFields: DiskAuthFields | undefined
+    authFields: DiskAuthFields | undefined,
+    explicitPatch: Record<string, unknown> | undefined
   ): Promise<Record<string, unknown>> {
     let text: string | null;
     let raw: Record<string, unknown> | null = null;
@@ -1877,7 +1900,9 @@ export class ConfigStore {
     const asJson = (value: unknown): unknown => JSON.parse(JSON.stringify(value));
     let merged: Record<string, unknown>;
     try {
-      merged = applyChanges(raw, asJson(from), asJson(to)) as Record<string, unknown>;
+      // Narrow patches express user intent even when the chosen value equals a fallback default.
+      // Whole-config saves still persist only their differences from the snapshot.
+      merged = applyChanges(raw, asJson(from), asJson(to), explicitPatch ?? false) as Record<string, unknown>;
     } catch (error) {
       if (error instanceof ShapeMismatchError) throw this.invalidConfigError(error.path[0]);
       throw error;

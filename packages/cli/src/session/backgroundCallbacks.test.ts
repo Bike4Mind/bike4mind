@@ -104,3 +104,21 @@ describe('forgetBackgroundCompletions', () => {
     expect(useCliStore.getState().completedGroupNotifications).toEqual([]);
   });
 });
+
+describe('released subagent usage', () => {
+  it('records totals only in the session that started the run', () => {
+    const recordUsage = vi.spyOn(useCliStore.getState(), 'recordSubagentUsage');
+    let current = true;
+    const callbacks = sessionBackgroundCallbacks(() => current);
+    const usage = { agentName: 'explore', totalTokens: 100, totalCredits: 2 };
+    try {
+      callbacks.onSubagentUsage(usage);
+      expect(recordUsage).toHaveBeenCalledWith({ agentName: 'explore', tokens: 100, credits: 2 });
+      current = false;
+      callbacks.onSubagentUsage(usage);
+      expect(recordUsage).toHaveBeenCalledTimes(1);
+    } finally {
+      recordUsage.mockRestore();
+    }
+  });
+});

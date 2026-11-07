@@ -99,14 +99,21 @@ export async function executeWithFuzzyConfirmation(
   args: ToolArgs,
   apiClient: ApiClient,
   originalFn: (args: unknown) => Promise<string>,
-  showPermissionPrompt: ShowPermissionPrompt
+  showPermissionPrompt: ShowPermissionPrompt,
+  isCancelled?: () => boolean
 ): Promise<string> {
   try {
-    return await executeSanitized(toolName, args, apiClient, originalFn);
+    return await executeSanitized(toolName, args, apiClient, originalFn, isCancelled);
   } catch (err) {
     if (!isFuzzyEditConfirmationRequired(err)) throw err;
     const response = await showPermissionPrompt(toolName, args, prependFuzzyEditBanner(err.diffPreview));
     if (response.action === 'deny') throw new PermissionDeniedError(toolName, args);
-    return executeSanitized(toolName, { ...args, confirmedFuzzyHash: err.contentHash }, apiClient, originalFn);
+    return executeSanitized(
+      toolName,
+      { ...args, confirmedFuzzyHash: err.contentHash },
+      apiClient,
+      originalFn,
+      isCancelled
+    );
   }
 }
