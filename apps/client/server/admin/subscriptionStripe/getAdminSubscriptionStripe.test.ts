@@ -140,7 +140,7 @@ describe('getAdminSubscriptionStripe', () => {
     mocks.list.mockReturnValue(
       pages([
         invoice('in_1'),
-        invoice('in_2', { status: 'open', amount_paid: 0 }),
+        invoice('in_2', { status: 'open', amount_paid: 500 }),
         invoice('in_3', { currency: 'eur', amount_paid: 4000 }),
       ])
     );
@@ -182,6 +182,13 @@ describe('getAdminSubscriptionStripe', () => {
     );
     mocks.createPreview.mockClear();
     mocks.retrieve.mockResolvedValue({ ...stripeSub, cancel_at_period_end: true });
+    expect(await getAdminSubscriptionStripe(ID, { fresh: true })).toMatchObject({ upcoming: null });
+    expect(mocks.createPreview).not.toHaveBeenCalled();
+  });
+
+  it('skips the upcoming preview for a canceled subscription', async () => {
+    mocks.createPreview.mockClear();
+    mocks.retrieve.mockResolvedValue({ ...stripeSub, status: 'canceled' });
     expect(await getAdminSubscriptionStripe(ID, { fresh: true })).toMatchObject({ upcoming: null });
     expect(mocks.createPreview).not.toHaveBeenCalled();
   });

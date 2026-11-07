@@ -33,6 +33,7 @@ const lifetimePaidTile = (detail: AdminSubscriptionDetail, stripe: AdminSubscrip
   if (!data?.stripeConfigured || data.kind !== 'stripe') return { value: '-', comparison: undefined };
   const [first, ...others] = data.lifetimePaid;
   const note = [
+    first ? 'Before refunds' : null,
     others.length > 0 ? `+${others.length} other ${others.length === 1 ? 'currency' : 'currencies'}` : null,
     data.invoicesTruncated ? `Latest ${MAX_INVOICES} invoices` : null,
     !first ? 'No paid invoices' : null,

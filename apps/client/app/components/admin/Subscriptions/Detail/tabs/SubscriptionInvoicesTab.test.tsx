@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { AdminStripeInvoice } from '@client/app/utils/adminSubscriptionStripe';
 import { SubscriptionInvoicesTab } from './SubscriptionInvoicesTab';
+import { STRIPE_STALE_MESSAGE } from '../stripeSections';
 import {
   STRIPE_ROW,
   SubscriptionTestWrapper,
@@ -98,6 +99,19 @@ describe('SubscriptionInvoicesTab', () => {
   it('explains a comp has no invoices', () => {
     renderTab(buildStripeState({ data: undefined }), true);
     expect(screen.getByTestId('subscription-invoices-empty')).toHaveTextContent('Comped plans have no Stripe invoices');
+  });
+
+  it.each([true, false])('keeps invoices visible when isError is %s', isError => {
+    const refetchFresh = vi.fn();
+    renderTab(buildStripeState({ data: buildStripeData({ invoices: [invoice({})] }), isError, refetchFresh }));
+    expect(screen.getByTestId('subscription-invoices-row')).toHaveTextContent('N-0001');
+    if (isError) {
+      expect(screen.getByTestId('subscription-invoices-stale')).toHaveTextContent(STRIPE_STALE_MESSAGE);
+      fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+      expect(refetchFresh).toHaveBeenCalledOnce();
+    } else {
+      expect(screen.queryByTestId('subscription-invoices-stale')).not.toBeInTheDocument();
+    }
   });
 
   it('shows the Stripe error with Try again', () => {

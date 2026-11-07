@@ -9,6 +9,7 @@ import { SELF_HOST_DOCS_URL } from '../../shared/selfHostDocs';
 export type StripeData = Extract<AdminSubscriptionStripe, { kind: 'stripe' }>;
 
 export const STRIPE_ERROR_MESSAGE = 'Stripe request failed. The rest of this page is from our records.';
+export const STRIPE_STALE_MESSAGE = 'Stripe refresh failed. Showing the last data we loaded.';
 
 const INVOICE_STATUS_TONES: Record<string, AdminStatusTone> = {
   paid: 'good',
@@ -29,7 +30,17 @@ export const StripeSection: React.FC<{
   children: (data: StripeData) => ReactNode;
 }> = ({ stripe, testIdPrefix, children }) => {
   const { data } = stripe;
-  if (data?.stripeConfigured && data.kind === 'stripe') return <>{children(data)}</>;
+  if (data?.stripeConfigured && data.kind === 'stripe') {
+    if (!stripe.isError) return <>{children(data)}</>;
+    return (
+      <Stack gap={1}>
+        <Box data-testid={`${testIdPrefix}-stale`}>
+          <ErrorState message={STRIPE_STALE_MESSAGE} onRetry={stripe.refetchFresh} retrying={stripe.isFetching} />
+        </Box>
+        {children(data)}
+      </Stack>
+    );
+  }
   if (!data && stripe.isLoading) {
     return (
       <Stack gap={1} sx={{ p: 2 }} aria-busy="true" data-testid={`${testIdPrefix}-loading`}>

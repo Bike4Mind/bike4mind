@@ -83,10 +83,13 @@ const readStripe = async (id: string, fresh: boolean): Promise<AdminSubscription
     })
   ).data;
 
-const refetchStripeFresh = (queryClient: QueryClient, id: string) =>
+const refetchStripeFresh = (queryClient: QueryClient, id: string) => {
+  const queryKey = adminSubscriptionStripeKey(id);
   void queryClient
-    .fetchQuery({ queryKey: adminSubscriptionStripeKey(id), queryFn: () => readStripe(id, true), staleTime: 0 })
+    .cancelQueries({ queryKey })
+    .then(() => queryClient.fetchQuery({ queryKey, queryFn: () => readStripe(id, true), staleTime: 0 }))
     .catch(() => {});
+};
 
 /** What the Stripe sections of the detail page need from the live read. */
 export type AdminSubscriptionStripeState = {

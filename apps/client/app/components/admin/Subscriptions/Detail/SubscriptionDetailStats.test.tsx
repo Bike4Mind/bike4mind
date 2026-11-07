@@ -31,6 +31,7 @@ describe('SubscriptionDetailStats Lifetime paid', () => {
       buildStripeState({ data: buildStripeData({ lifetimePaid: [{ amount: 24000, currency: 'usd' }] }) })
     );
     expect(tile).toHaveTextContent('$240.00');
+    expect(tile).toHaveTextContent('Before refunds');
   });
 
   it('notes other currencies and a truncated history', () => {
@@ -45,7 +46,7 @@ describe('SubscriptionDetailStats Lifetime paid', () => {
         }),
       })
     );
-    expect(tile).toHaveTextContent('+1 other currency, Latest 300 invoices');
+    expect(tile).toHaveTextContent('Before refunds, +1 other currency, Latest 300 invoices');
   });
 
   it('says No paid invoices when the read succeeded with nothing paid', () => {
