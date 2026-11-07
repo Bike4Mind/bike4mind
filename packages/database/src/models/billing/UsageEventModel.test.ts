@@ -261,6 +261,48 @@ describe('UsageEventRepository', () => {
     });
   });
 
+  describe('spendProfileByUsers', () => {
+    const since = new Date('2026-10-01T00:00:00Z');
+    const backdate = (requestId: string, createdAt: Date) =>
+      UsageEvent.collection.updateOne({ requestId }, { $set: { createdAt } });
+
+    it('sums spend per model, counts written-off credits, and finds the first spend', async () => {
+      await record({ requestId: 'a1', userId: 'u1', model: 'm-big', creditsCharged: 40 });
+      await record({ requestId: 'a2', userId: 'u1', model: 'm-big', creditsCharged: 10, writtenOffCredits: 5 });
+      await record({ requestId: 'a3', userId: 'u1', model: 'm-small', creditsCharged: 3 });
+      await record({ requestId: 'a4', userId: 'u1', model: 'm-small', creditsCharged: 0 });
+      await record({ requestId: 'a5', userId: 'u1', model: 'm-old', creditsCharged: 99 });
+      await record({ requestId: 'a6', userId: 'other', creditsCharged: 7 });
+      await backdate('a1', new Date('2026-10-05T00:00:00Z'));
+      await backdate('a2', new Date('2026-10-03T00:00:00Z'));
+      await backdate('a3', new Date('2026-10-04T00:00:00Z'));
+      await backdate('a4', new Date('2026-10-02T00:00:00Z'));
+      await backdate('a5', new Date('2026-09-30T00:00:00Z'));
+
+      const profiles = await usageEventRepository.spendProfileByUsers(['u1', 'nobody'], since);
+
+      expect(Object.keys(profiles)).toEqual(['u1']);
+      expect(profiles.u1.firstSpendAt).toEqual(new Date('2026-10-03T00:00:00Z'));
+      expect(profiles.u1.totalCredits).toBe(58);
+      expect(profiles.u1.byModel).toEqual([
+        { model: 'm-big', credits: 55, events: 2 },
+        { model: 'm-small', credits: 3, events: 1 },
+      ]);
+    });
+
+    it('keeps the largest models up to the cap', async () => {
+      await record({ requestId: 'b1', userId: 'u1', model: 'm1', creditsCharged: 1 });
+      await record({ requestId: 'b2', userId: 'u1', model: 'm2', creditsCharged: 2 });
+      await record({ requestId: 'b3', userId: 'u1', model: 'm3', creditsCharged: 3 });
+      const profiles = await usageEventRepository.spendProfileByUsers(['u1'], since, 2);
+      expect(profiles.u1.byModel.map(m => m.model)).toEqual(['m3', 'm2']);
+    });
+
+    it('reads nothing for an empty id list', async () => {
+      expect(await usageEventRepository.spendProfileByUsers([], since)).toEqual({});
+    });
+  });
+
   describe('monthlyCogsByProvider', () => {
     it('sums cost and token quantities per provider per month, newest first', async () => {
       await record({ inputTokens: 1000, outputTokens: 500, cachedInputTokens: 200 });

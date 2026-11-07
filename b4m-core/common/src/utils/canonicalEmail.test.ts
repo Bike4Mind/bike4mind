@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalizeEmail } from './canonicalEmail';
+import { canonicalizeEmail, mailboxAliasesOf } from './canonicalEmail';
 
 describe('canonicalizeEmail', () => {
   it.each([
@@ -50,4 +50,26 @@ describe('canonicalizeEmail', () => {
       expect(canonicalizeEmail(input)).toBeNull();
     }
   );
+});
+
+describe('mailboxAliasesOf', () => {
+  it('lists the Gmail domains and ignores dots', () => {
+    expect(mailboxAliasesOf('John.Smith+x@googlemail.com')).toEqual({
+      local: 'johnsmith',
+      domains: ['gmail.com', 'googlemail.com'],
+      ignoreDots: true,
+    });
+  });
+
+  it('lists every domain that folds into the canonical one, keeping dots', () => {
+    expect(mailboxAliasesOf('a.b@me.com')).toEqual({
+      local: 'a.b',
+      domains: ['icloud.com', 'me.com', 'mac.com'],
+      ignoreDots: false,
+    });
+  });
+
+  it('is null when the address is unusable', () => {
+    expect(mailboxAliasesOf('nope')).toBeNull();
+  });
 });

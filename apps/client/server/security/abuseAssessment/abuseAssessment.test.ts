@@ -1,5 +1,7 @@
 import {
   ABUSE_ASSESSMENT_MAX_ATTEMPTS,
+  ABUSE_ASSESSMENT_REASON_KEYS,
+  type AbuseAssessmentReasonKey,
   AbuseAssessmentConfigSchema,
   type AbuseAssessmentItem,
   SELF_ASSESSED_SHADOW_DETECTORS,
@@ -52,6 +54,8 @@ vi.mock('@bike4mind/database', async importActual => ({
     releaseLease: vi.fn(async () => undefined),
   },
 }));
+// Account profiles have their own suite (accountProfile.test.ts).
+vi.mock('./accountProfile', () => ({ loadAccountProfiles: async () => new Map() }));
 vi.mock('@server/billing/reserveRequestCredits', () => ({ reserveRequestCredits: mocks.reserveRequestCredits }));
 vi.mock('@bike4mind/server-utils/decisions/providers', () => ({
   getDecisionProviderRegistry: () => ({
@@ -64,7 +68,14 @@ vi.mock('@bike4mind/server-utils/decisions/providers', () => ({
   resolveCallableDecisionProviders: vi.fn(),
 }));
 
-import { assessShadowDetection, replayAbuseAssessments, sweepAbuseAssessments } from './abuseAssessment';
+import {
+  ABUSE_ASSESSMENT_REASON_QUESTIONS,
+  assessShadowDetection,
+  readReasons,
+  replayAbuseAssessments,
+  summarizeDetection,
+  sweepAbuseAssessments,
+} from './abuseAssessment';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
 const DETECTION_ID = '65f000000000000000000001';
@@ -85,9 +96,16 @@ const detection: ShadowDetectionItem = {
   revision: 0,
 };
 
-const answer = (probabilities: Record<string, number>) => ({
+// The reason questions follow the judgment, one predicate per ABUSE_ASSESSMENT_REASON_KEYS entry.
+const reasonAnswers = (byKey: Partial<Record<AbuseAssessmentReasonKey, number>> = {}) =>
+  ABUSE_ASSESSMENT_REASON_KEYS.map(key => ({ type: 'predicate', probability: byKey[key] ?? 0.1 }));
+
+const answer = (
+  probabilities: Record<string, number>,
+  reasons: Partial<Record<AbuseAssessmentReasonKey, number>> = {}
+) => ({
   model: 'gpt-6-luna',
-  answers: [{ type: 'choice', probabilities }],
+  answers: [{ type: 'choice', probabilities }, ...reasonAnswers(reasons)],
   usage: { inputTokens: 900, outputTokens: 5 },
 });
 
@@ -112,7 +130,67 @@ beforeEach(() => {
   mocks.save.mockImplementation(async ({ cacheKey: _cacheKey, ...item }) => ({ id: 'aa1', attempts: 1, ...item }));
 });
 
+describe('readReasons', () => {
+  const predicates = (byKey: Partial<Record<AbuseAssessmentReasonKey, number>>) =>
+    ABUSE_ASSESSMENT_REASON_KEYS.map(key => ({
+      type: 'predicate' as const,
+      name: key,
+      probability: byKey[key] ?? 0.2,
+    }));
+
+  it('keeps the three strongest reasons the model leans toward, strongest first', () => {
+    expect(
+      readReasons(
+        predicates({
+          anonymizedNetwork: 0.91,
+          generatedLookingEmail: 0.6,
+          rushedOnboarding: 0.83,
+          linkedAccounts: 0.7,
+          ordinaryUse: 0.59,
+        })
+      )
+    ).toEqual([
+      { key: 'anonymizedNetwork', probability: 0.91 },
+      { key: 'rushedOnboarding', probability: 0.83 },
+      { key: 'linkedAccounts', probability: 0.7 },
+    ]);
+  });
+
+  it('keeps nothing when no factor clears the bar, and skips unusable answers', () => {
+    expect(readReasons(predicates({}))).toEqual([]);
+    expect(readReasons([{ type: 'refusal', name: 'x' }, undefined])).toEqual([]);
+  });
+});
+
 describe('assessShadowDetection', () => {
+  it('asks the reason questions in the same call and stores the strongest as fixed keys', async () => {
+    mocks.providerDecide.mockResolvedValue(
+      answer(
+        { abuse: 0.7, legitimate_automation: 0.1, insufficient_evidence: 0.2 },
+        { signupBurst: 0.88, anonymizedNetwork: 0.75 }
+      )
+    );
+    await run();
+    expect(mocks.providerDecide).toHaveBeenCalledTimes(1);
+    expect(mocks.providerDecide.mock.calls[0][0].questions).toHaveLength(1 + ABUSE_ASSESSMENT_REASON_QUESTIONS.length);
+    expect(mocks.save.mock.calls[0][0]).toMatchObject({
+      policyVersion: 2,
+      reasons: [
+        { key: 'signupBurst', probability: 0.88 },
+        { key: 'anonymizedNetwork', probability: 0.75 },
+      ],
+    });
+  });
+
+  it('stores no reasons with an unknown result', async () => {
+    mocks.providerDecide.mockResolvedValue({
+      ...answer({}),
+      answers: [{ type: 'refusal' }, ...reasonAnswers({ signupBurst: 0.9 })],
+    });
+    await run();
+    expect(mocks.save.mock.calls[0][0]).toMatchObject({ result: 'unknown', reasons: [] });
+  });
+
   it('records a typed judgment with its versions, paid by the platform and not the assessed user', async () => {
     const outcome = await run();
 
@@ -126,8 +204,8 @@ describe('assessShadowDetection', () => {
       detectionId: DETECTION_ID,
       result: 'abuse',
       failure: null,
-      policyVersion: 1,
-      evidenceVersion: 1,
+      policyVersion: 2,
+      evidenceVersion: 2,
       modelVersion: 'gpt-6-luna',
       trigger: 'admin',
       requestedBy: 'admin-1',
@@ -246,7 +324,11 @@ describe('assessShadowDetection', () => {
         mocks.providerDecide.mockRejectedValue(new DecisionProviderError('rejected_key', 'bad key', { status: 401 })),
     ],
     ['malformed_response', () => mocks.providerDecide.mockResolvedValue(answer({ abuse: 0.9, made_up: 0.9 }))],
-    ['refused', () => mocks.providerDecide.mockResolvedValue({ ...answer({}), answers: [{ type: 'refusal' }] })],
+    [
+      'refused',
+      () =>
+        mocks.providerDecide.mockResolvedValue({ ...answer({}), answers: [{ type: 'refusal' }, ...reasonAnswers()] }),
+    ],
   ])('stores unknown with %s, never a judgment', async (failure, arrange) => {
     arrange();
     expect(await run()).toMatchObject({ status: 'assessed', item: { result: 'unknown', failure, probabilities: [] } });
@@ -415,5 +497,40 @@ describe('replayAbuseAssessments', () => {
       rows: [expect.objectContaining({ exampleId: DETECTION_ID, label: 'confirmed_abuse', result: 'abuse' })],
     });
     expect(mocks.save).not.toHaveBeenCalled();
+  });
+});
+
+describe('summarizeDetection', () => {
+  const profile = {
+    signupMethod: 'email' as const,
+    signupNetwork: { asnKnown: true, hosting: false, datacenter: false, anonymousIp: false, ja4Present: false },
+    email: null,
+    minutesToTwoFactor: null,
+    minutesToFirstSpend: null,
+    spend: null,
+    linkedAccounts: null,
+  };
+  const summaries = [{ id: '65f0000000000000000000a1', createdAt: new Date('2026-11-01T10:00:00Z'), summary: null }];
+
+  it('attaches each loaded profile to its account', async () => {
+    mocks.findSummaries.mockResolvedValue(summaries);
+    const summary = await summarizeDetection(detection, logger, {
+      loadAccountProfiles: async () => new Map([['65f0000000000000000000a1', profile]]),
+    });
+    expect(summary.accounts[0].profile).toEqual(profile);
+  });
+
+  it('assesses without profiles, and warns, when the profile load fails', async () => {
+    mocks.findSummaries.mockResolvedValue(summaries);
+    const summary = await summarizeDetection(detection, logger, {
+      loadAccountProfiles: async () => {
+        throw new Error('timeout');
+      },
+    });
+    expect(summary.accounts[0].profile).toBeNull();
+    expect((logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
+      expect.stringContaining('account profiles failed'),
+      expect.objectContaining({ detectionId: DETECTION_ID, errorName: 'Error' })
+    );
   });
 });

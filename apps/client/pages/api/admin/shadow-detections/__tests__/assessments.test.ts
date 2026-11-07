@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import {
+  ABUSE_ASSESSMENT_EVIDENCE_VERSION,
   ApiKeyScope,
-  RISK_EVIDENCE_VERSION,
   type AbuseAssessmentItem,
   type ShadowDetectionItem,
 } from '@bike4mind/common';
@@ -81,13 +81,14 @@ const assessment = (overrides: Partial<AbuseAssessmentItem> = {}): AbuseAssessme
   result: 'abuse',
   probabilities: [{ value: 'abuse', probability: 0.9 }],
   confidence: 0.9,
+  reasons: [],
   model: 'test-decisions',
   modelVersion: null,
   policyVersion: 1,
-  evidenceVersion: RISK_EVIDENCE_VERSION,
+  evidenceVersion: ABUSE_ASSESSMENT_EVIDENCE_VERSION,
   evidenceHash: 'hash',
   featureSummary: {
-    evidenceVersion: RISK_EVIDENCE_VERSION,
+    evidenceVersion: ABUSE_ASSESSMENT_EVIDENCE_VERSION,
     detection: {
       detector: 'signupNetworkBurst',
       detectorPolicyVersion: 1,
