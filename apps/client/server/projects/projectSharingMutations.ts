@@ -141,13 +141,13 @@ export async function setProjectSystemPrompt(ctx: Ctx, projectId: string, fileId
   );
 }
 
-export interface CreateProjectInviteInput {
+export type CreateProjectInviteInput = {
   permissions: Permission[];
   recipients?: string[];
   description?: string;
   expiresAt?: Date;
   available?: number;
-}
+};
 
 /**
  * Creates a project invite and notifies its recipients. Returns the sharer view of the invite (see
@@ -158,6 +158,8 @@ export async function createProjectInvite(ctx: Ctx, projectId: string, input: Cr
   // An id that is not an ObjectId names no project, so answer the 404 here rather than letting the
   // lookup cast and raise a CastError.
   if (!isValidObjectId(projectId)) throw new NotFoundError('Project not found');
+  const shareableProject = await projectRepository.shareable.findShareAccessById(user, projectId);
+  if (!shareableProject) throw new NotFoundError('Project not found');
 
   const { expiresAt, ...rest } = input;
   const budget = await reserveInviteSendBudget(user.id, rest.recipients, { chargeTypedAddresses: true });

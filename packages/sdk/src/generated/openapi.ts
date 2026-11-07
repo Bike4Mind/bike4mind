@@ -1455,7 +1455,7 @@ export interface paths {
     put?: never;
     /**
      * Invite people to a project
-     * @description Creates an invite to a project you can share and emails each recipient a link. With no recipients it creates a share link that names nobody. The response carries the link once. Recipient email is sent in the background, so a mail failure does not fail the invite. Unknown body fields are rejected.
+     * @description Creates an invite to a project you can share and emails each recipient a link. At least one recipient is required. The response carries the link once. Recipient email is sent in the background, so a mail failure does not fail the invite. Unknown body fields are rejected.
      */
     post: operations['createProjectInvite'];
     delete?: never;
@@ -7133,7 +7133,7 @@ export interface components {
       expires_at: string | null;
       /** @description ISO 8601 timestamp. */
       created_at: string | null;
-      /** @description The share link. It is a bearer secret: anyone holding it can accept while uses remain. It is returned only here, never by the list. */
+      /** @description The invitation link. Named recipients can accept while uses remain. It is returned only here, never by the list. */
       link: string;
     };
     /**
@@ -7150,8 +7150,8 @@ export interface components {
     createProjectInviteRequest: {
       /** @description What an invitee gets on the project. */
       permissions: ('read' | 'create' | 'update' | 'delete' | 'share')[];
-      /** @description Email addresses, usernames or user ids to invite. Each is emailed a link. Omit it, or send an empty list, for a share link that names nobody. */
-      recipients?: string[];
+      /** @description At least one email address, username or user id to invite. Each resolved recipient is emailed a link. */
+      recipients: string[];
       /** @description A message included in the invite email. */
       description?: string;
       /**
