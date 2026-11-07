@@ -15,7 +15,7 @@ import {
   type FakeVllm,
   type Handler,
 } from '@bike4mind/local-models/testing';
-import { loadModelServers } from '../models/modelServers.js';
+import { loadModelServers, type SshFetchFor } from '../models/modelServers.js';
 import { MultiLlmBackend } from '../llm/MultiLlmBackend.js';
 import { createMockConfig } from '../test-utils/mocks.js';
 import {
@@ -457,6 +457,50 @@ describe('attachLocalModels with saved model servers', () => {
     }
     expect(performance.now() - started).toBeLessThan(2_000);
     await vi.waitFor(() => expect(stalled.open()).toBe(0));
+  });
+
+  it('starts no ssh request after the startup deadline that the deadline has not ended', async () => {
+    await writeServers([
+      record({ id: 'o1', name: 'gpu', transport: { type: 'ssh', destination: 'me@gpu', port: 11434 } }),
+    ]);
+    let pastDeadline = false;
+    const requests: { path: string; signal: AbortSignal | undefined; pastDeadline: boolean }[] = [];
+    const sshFetchFor: SshFetchFor = () => async (input, init) => {
+      const url = new URL(input);
+      requests.push({ path: url.pathname, signal: init?.signal ?? undefined, pastDeadline });
+      init?.signal?.throwIfAborted();
+      if (url.pathname === '/api/version') return Response.json({ version: '0.12.0' });
+      const signal = init?.signal;
+      if (!signal) throw new Error('a request no deadline can end');
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    };
+    let listed = false;
+    const attaching = attachLocalModels(
+      serverBackend() as never,
+      createMockConfig({ defaultModel: 'local:srv-o1:tiny:1b' }),
+      { servers: 'all', defaultServerTimeoutMs: 200, onNotice: text => notices.push(text) },
+      {
+        ...deps,
+        sshFetchFor,
+        createOllamaBackend: (host, options) =>
+          ({
+            currentModel: '',
+            getModelInfo: async () => {
+              await vi.waitFor(() => expect(pastDeadline).toBe(true));
+              await options?.fetch?.(`${host}/api/tags`).catch(() => undefined);
+              listed = true;
+              return [];
+            },
+          }) as never,
+      }
+    );
+    await expect(attaching).rejects.toThrow('Cannot chat with tiny:1b on gpu');
+    pastDeadline = true;
+    await vi.waitFor(() => expect(listed).toBe(true));
+    expect(requests.filter(request => request.pastDeadline).map(request => request.path)).toEqual(['/api/tags']);
+    expect(requests.every(request => request.signal?.aborted === true)).toBe(true);
   });
 
   it('gives the default model server longer than the others to answer', async () => {

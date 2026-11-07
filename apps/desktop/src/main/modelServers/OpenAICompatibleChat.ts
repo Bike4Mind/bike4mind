@@ -228,7 +228,7 @@ export function modelIdentity(model: InstalledModel): string | undefined {
 
 /**
  * A conversation's sampling overrides as the product's body fields. vLLM spells the repeat penalty
- * `repetition_penalty`; an unknown product gets only the OpenAI fields.
+ * `repetition_penalty`; an unknown product, or llama-swap, which fronts servers of any kind, gets only the OpenAI fields.
  */
 function samplingFields(
   product: OpenAICompatibleProduct | null,
@@ -239,7 +239,7 @@ function samplingFields(
   if (generation.temperature !== undefined) fields.temperature = generation.temperature;
   if (generation.topP !== undefined) fields.top_p = generation.topP;
   if (generation.presencePenalty !== undefined) fields.presence_penalty = generation.presencePenalty;
-  if (product === null) return fields;
+  if (product === null || product === 'llama-swap') return fields;
   if (generation.topK !== undefined) fields.top_k = generation.topK;
   if (generation.repeatPenalty !== undefined)
     fields[product === 'vllm' ? 'repetition_penalty' : 'repeat_penalty'] = generation.repeatPenalty;

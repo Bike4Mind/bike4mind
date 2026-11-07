@@ -1,3 +1,4 @@
+import { productFromOwner } from '../openaiCompatible';
 import type { FetchLike, OpenAICompatibleProduct } from '../types';
 import { describeFailure, errorCode } from './failure';
 import type { ModelServerKind } from './modelServerFile';
@@ -19,27 +20,29 @@ export interface ProbeOutcome {
 }
 
 const PROBE_TIMEOUT_MS = 5_000;
-const OWNER_PRODUCT: Record<string, OpenAICompatibleProduct> = { llamacpp: 'llama-server', vllm: 'vllm' };
 
-/** Identifies the server by what it answers, never by port, and times the answer. `timeoutMs` applies per request. */
+/**
+ * Identifies the server by what it answers, never by port, and times the answer. `timeoutMs` applies per request;
+ * null leaves each request's limit to `fetch`.
+ */
 export async function probeServer(
   fetch: FetchLike,
   baseUrl: string,
   label: string,
   now: () => number,
   expected?: ModelServerKind,
-  timeoutMs = PROBE_TIMEOUT_MS
+  timeoutMs: number | null = PROBE_TIMEOUT_MS
 ): Promise<ProbeOutcome> {
   const get = async (path: string) => {
     const started = now();
     try {
-      const signal = AbortSignal.timeout(timeoutMs);
-      const response = await fetch(`${baseUrl}${path}`, { signal });
+      const signal = timeoutMs === null ? undefined : AbortSignal.timeout(timeoutMs);
+      const response = await fetch(`${baseUrl}${path}`, signal ? { signal } : {});
       const latencyMs = Math.round(now() - started);
       // A body that stalls past the deadline is no answer, not an answer of the wrong kind.
       const body: unknown = response.ok
         ? await response.json().catch((error: unknown) => {
-            if (signal.aborted) throw error;
+            if (signal?.aborted) throw error;
             return null;
           })
         : (await response.body?.cancel(), null);
@@ -72,10 +75,7 @@ export async function probeServer(
   }
   const data = (models?.body as { data?: unknown } | null)?.data;
   if (models && models.status === 200 && Array.isArray(data)) {
-    const owner = data
-      .map(entry => (entry as { owned_by?: unknown } | null)?.owned_by)
-      .find(value => typeof value === 'string' && value in OWNER_PRODUCT) as string | undefined;
-    const product = owner ? OWNER_PRODUCT[owner] : null;
+    const product = productFromOwner(data);
     return {
       kind: 'openai-compatible',
       product,

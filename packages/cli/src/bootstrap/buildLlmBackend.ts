@@ -28,6 +28,7 @@ import {
   serverFetch,
   type CliModelServer,
   type LoadedModelServers,
+  type SshFetchFor,
 } from '../models/modelServers.js';
 import { setWebSocketToolExecutor } from '../llm/ToolRouter';
 import { WebSocketConnectionManager } from '../ws/WebSocketConnectionManager';
@@ -135,6 +136,8 @@ export interface BuildLlmBackendDeps {
   ) => MultiLlmBackend;
   /** Desktop's saved model servers; defaults to reading Desktop's file. */
   loadModelServers?: () => Promise<LoadedModelServers>;
+  /** The SSH forward to a saved server on another machine; defaults to the system ssh. */
+  sshFetchFor?: SshFetchFor;
   /** The base URL of a healthy Ollama on the default loopback address, or null. Must stop when `signal` aborts. */
   detectOllama: (signal: AbortSignal) => Promise<string | null>;
 }
@@ -383,7 +386,7 @@ export interface AttachLocalModelsOptions {
 
 type LocalModelsDeps = Pick<
   BuildLlmBackendDeps,
-  'createOllamaBackend' | 'createOpenAICompatibleBackend' | 'createMultiBackend' | 'loadModelServers'
+  'createOllamaBackend' | 'createOpenAICompatibleBackend' | 'createMultiBackend' | 'loadModelServers' | 'sshFetchFor'
 >;
 
 /**
@@ -432,13 +435,14 @@ async function attachServer(
   const secret = config.modelServerCredentials?.[server.id]?.secret;
   if (needsCredential(server, secret))
     throw new Error(`${clean(server.name)} needs credentials. Run: ${loginHint(server)}`);
-  const base = serverFetch(server, secret);
+  const base = serverFetch(server, secret, deps.sshFetchFor);
   const startup = new AbortController();
-  let attaching = true;
+  // Set only on success: after the deadline, attach() still runs and its requests must stay aborted.
+  let attached = false;
   const fetch: FetchLike = (input, init = {}) =>
-    attaching
-      ? base(input, { ...init, signal: init.signal ? AbortSignal.any([init.signal, startup.signal]) : startup.signal })
-      : base(input, init);
+    attached
+      ? base(input, init)
+      : base(input, { ...init, signal: init.signal ? AbortSignal.any([init.signal, startup.signal]) : startup.signal });
   const attach = async (): Promise<LlmRoute> => {
     const target = await resolveServerTarget(server, secret, fetch, timeoutMs);
     const baseUrl = target.runtime.baseUrl;
@@ -465,11 +469,9 @@ async function attachServer(
     });
     return { backend, models: await backend.getModelInfo() };
   };
-  try {
-    return await withDeadline(attach(), timeoutMs, startup);
-  } finally {
-    attaching = false;
-  }
+  const route = await withDeadline(attach(), timeoutMs, startup);
+  attached = true;
+  return route;
 }
 
 type Settled = { route: LlmRoute; error: null } | { route: null; error: string };
