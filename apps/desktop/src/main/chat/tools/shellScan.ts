@@ -2502,7 +2502,8 @@ function pipedFrom(node: Node): Node | null {
   if (producer?.type === 'redirected_statement') {
     const body = producer.childForFieldName('body');
     redirects.push(...producer.namedChildren.filter((child): child is Node => child !== null && child.id !== body?.id));
-    producer = body ?? undefined;
+    // tree-sitter hangs the redirect of `a | b 2>x` on the pipeline `a | b`; bash gives it to `b` alone.
+    producer = (body?.type === 'pipeline' ? body.lastNamedChild : body) ?? undefined;
   }
   if (producer?.type !== 'command') return null;
   redirects.push(...producer.namedChildren.filter((child): child is Node => !!child?.type.endsWith('redirect')));
@@ -2517,10 +2518,15 @@ function stderrToFile(redirect: Node): boolean {
   const descriptor = redirect.children.find(child => child?.type === 'file_descriptor')?.text;
   const targets = redirect.childrenForFieldName('destination');
   const target = targets.length === 1 ? targets[0] : null;
-  if (redirect.type !== 'file_redirect' || descriptor !== '2' || target?.type !== 'word') return false;
-  if (!['>', '>>'].includes(redirectOperator(redirect) ?? '') || !/^[\w./+-]+$/.test(target.text)) return false;
-  const path = posix.normalize(target.text);
-  return path === '/dev/null' || (!/^\/(dev|proc)(\/|$)/.test(path) && !path.split('/').includes('..'));
+  if (redirect.type !== 'file_redirect' || descriptor !== '2') return false;
+  // A quoted target counts as its value when nothing in it expands.
+  const quotable = target && ['word', 'string', 'raw_string'].includes(target.type);
+  const value = quotable ? fixedWords([target.text])?.[0] : undefined;
+  if (value === undefined || !['>', '>>'].includes(redirectOperator(redirect) ?? '')) return false;
+  // Checked before normalizing, which would fold `link/..` into a path the link does not lead to.
+  if (!/^[\w./+-]+$/.test(value) || value.split('/').includes('..')) return false;
+  const path = posix.normalize(value);
+  return path === '/dev/null' || !/^\/(dev|proc)(\/|$)/.test(path);
 }
 
 /** The words of the command an xargs among the leading wrappers runs, past its own options; none without one. */
@@ -2958,13 +2964,12 @@ function diffLists(args: readonly string[]): Listing | null {
   const revisions: string[] = [];
   const pathspecs: string[] = [];
   for (const arg of args) {
-    if (paths) {
-      if (arg.startsWith(':')) return null;
-      pathspecs.push(arg);
-    } else if (arg === '--') paths = true;
+    if (paths) pathspecs.push(arg);
+    else if (arg === '--') paths = true;
     else if (arg === '--name-only') names = true;
     else if (arg === '--cached' || arg === '--staged') cached = true;
-    else if (/^(-z|--no-renames|--diff-filter=[A-Za-z]*)$/.test(arg)) continue;
+    // A bare `--relative` prints names from the folder git runs in, which the listing check requires be the top.
+    else if (/^(-z|--no-renames|--relative|--diff-filter=[A-Za-z]*)$/.test(arg)) continue;
     else if (arg.startsWith('-')) return null;
     else revisions.push(arg);
   }
