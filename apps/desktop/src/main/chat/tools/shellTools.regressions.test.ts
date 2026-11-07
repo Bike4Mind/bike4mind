@@ -33,6 +33,7 @@ const PROGRAMS = [
   'rm',
   'pgrep',
   'docker',
+  'head',
 ];
 
 /** Commands that ran unasked on main and must still run as the mode allows, in a repository with a large node_modules. */
@@ -128,10 +129,25 @@ describe('commands main ran unasked', () => {
     const drepo = await repository('drepo', { 'docs/secret': 's', 'src/b.ts': 'b' });
     await rm(join(drepo, 'docs'), { recursive: true });
     await symlink(userData, join(drepo, 'docs'));
-    // brepo tracks `w/q .claude/settings.json`, which xargs splits into `w/q` and its own `.claude/settings.json`.
-    const brepo = await repository('brepo', { 'w/q .claude/settings.json': '{"hooks": {}}', 'src/b.ts': 'b' });
+    // brepo tracks `w/q .claude/settings.json`, which xargs splits into `w/q` and its own `.claude/settings.json`,
+    // and `w3/zX.claude/settings.jsonX`, which `xargs -d X` splits the same way.
+    const brepo = await repository('brepo', {
+      'w/q .claude/settings.json': '{"hooks": {}}',
+      'w3/zX.claude/settings.jsonX': 'a',
+      'src/b.ts': 'b',
+    });
     await mkdir(join(brepo, '.claude'));
     await writeFile(join(brepo, '.claude', 'settings.json'), '{}');
+    // erepo has such a name changed in the work tree; mrepo changes its settings on a side branch.
+    const erepo = await repository('erepo', { 'w/q .claude/settings.json': 'a', 'src/b.ts': 'b' });
+    await mkdir(join(erepo, '.claude'));
+    await writeFile(join(erepo, '.claude', 'settings.json'), '{}');
+    await writeFile(join(erepo, 'w', 'q .claude', 'settings.json'), 'b');
+    const mrepo = await repository('mrepo', { '.claude/settings.json': '{}', 'src/b.ts': 'b' });
+    git(mrepo, 'checkout', '-qb', 'side');
+    await writeFile(join(mrepo, '.claude', 'settings.json'), '{"x": 1}');
+    git(mrepo, 'commit', '-qam', 'side');
+    git(mrepo, 'checkout', '-q', 'main');
     // prepo is a treeless partial clone whose missing trees would come from a host through core.sshCommand.
     git(proj, 'config', 'uploadpack.allowFilter', 'true');
     execFileSync('git', ['clone', '-q', '--filter=tree:0', '--no-checkout', `file://${proj}`, join(proj, 'prepo')]);
@@ -233,6 +249,19 @@ describe('commands main ran unasked', () => {
     ['pgrep node | xargs kill', '', unasked],
     ['docker ps -q | xargs docker stop', '', unasked],
     ['git branch --merged | xargs git branch -d', '', unasked],
+    ["find src -name '*.ts' | xargs -d '\\n' sed -i s/a/b/", '', unasked],
+    ['git diff --name-only -- src | xargs wc -l', 'srepo', unasked],
+    ['git ls-files src | xargs -I{} wc -l {}', '', unasked],
+    ["find src -name '*.ts' | xargs -I{} sed -i s/a/b/ {}", '', unasked],
+    ['docker ps -q | xargs -I{} docker stop {}', '', unasked],
+    ["find . -name node_modules -type d -prune -exec rm -rf '{}' +", '', unasked],
+    ["git diff --name-only | grep '\\.ts$' | xargs wc -l", '', unasked],
+    ["grep 'a$' src/a.ts", '', unasked],
+    ['git ls-files | grep -v x | xargs wc -l', '', unasked],
+    ["find src -name '*.ts' | head -5 | xargs sed -i s/a/b/", '', unasked],
+    ['git branch --merged | grep -v main | xargs git branch -d', '', unasked],
+    ['git diff --name-only main...other | xargs sed -i s/a/b/', '', unasked],
+    ['git diff --name-only main..other | xargs sed -i s/a/b/', '', unasked],
     ['git ls-files -z w | xargs -0 sed -i s/a/b/', 'brepo', unasked],
     ['rg -l0 hooks w | xargs -0 sed -i s/a/b/', 'brepo', unasked],
     ["find w -name '*.json' -print0 | xargs -0 sed -i s/a/b/", 'brepo', unasked],
@@ -283,8 +312,36 @@ describe('commands main ran unasked', () => {
     ["find w -name '*.json' | xargs sed -i s/a/b/", 'brepo'],
     ['rg -l hooks w | xargs sed -i s/a/b/', 'brepo'],
     ['grep -rl hooks w | xargs sed -i s/a/b/', 'brepo'],
+    ["find w3 -name 'settings*' | xargs -d X sed -i s/a/b/", 'brepo'],
+    ["find w3 -name 'settings*' | xargs -d '\\x58' sed -i s/a/b/", 'brepo'],
+    ['git ls-files w3 | xargs -d X sed -i s/a/b/', 'brepo'],
+    ['rg -l a w3 | xargs --delimiter=X sed -i s/a/b/', 'brepo'],
+    ['git diff --name-only | xargs sed -i s/a/b/', 'erepo'],
+    ['find . -depth -prune -type f | xargs sed -i s/a/b/', ''],
+    ['find . -depth -prune -type f -exec sed -i s/a/b/ {} +', ''],
+    ['rg -l hooks | grep json | xargs sed -i s/a/b/', ''],
+    ['git diff --name-only main...side | xargs sed -i s/a/b/', 'mrepo'],
   ])('asks before %s (in proj/%s) rewrites settings', async (command, folder) => {
     expect(await judge(command, folder)).toMatchObject(asks);
+  });
+
+  it.each([
+    // A replace string inside a larger word names a path no lister prints.
+    "find src -name '*.ts' | xargs -I{} cp {} {}.bak",
+    // A fed word may be a docker option, and podman's options after the subcommand can run a program.
+    'echo --cidfile=FILE | xargs docker rm',
+    'podman ps -q | xargs podman stop',
+  ])('asks for %s, which main ran unasked', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each([
+    "grep $'a' src/a.ts",
+    "grep 'a$' src/a.ts; echo $'b'",
+    // Read as quotes, the heredoc bodies would pair up around the `$'`.
+    "cat <<A\nit's\nA\necho $'b'\ncat <<B\nit's\nB",
+  ])('asks for %s, which may hold an ANSI-C quote', async command => {
+    expect(await judge(command)).toMatchObject(asks);
   });
 
   it.each([
