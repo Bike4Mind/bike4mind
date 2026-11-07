@@ -1,4 +1,12 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  hashKey,
+  type QueryClient,
+  type QueryKey,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import type {
@@ -9,6 +17,7 @@ import type {
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
+import type { AdminSubscriptionStripe } from '@client/app/utils/adminSubscriptionStripe';
 import type {
   AdminCompChange,
   AdminCompChangeResponse,
@@ -41,8 +50,11 @@ export const adminSubscriptionDetailKey = (id: string) => ['admin', 'subscriptio
 export const adminSubscriptionAdminLogKey = (id: string) => [...adminSubscriptionDetailKey(id), 'admin-log'] as const;
 export const adminSubscriptionTimelineKey = (id: string, kind: SubscriptionTimelineKind | undefined) =>
   [...adminSubscriptionDetailKey(id), 'timeline', kind ?? 'all'] as const;
+const adminSubscriptionStripeKey = (id: string) => [...adminSubscriptionDetailKey(id), 'stripe'] as const;
 const adminSubscriptionByStripeIdKey = (stripeSubscriptionId: string) =>
   ['admin', 'subscriptions', 'by-stripe', stripeSubscriptionId] as const;
+
+const isQueryKeyEqual = (a: QueryKey, b: QueryKey) => hashKey(a) === hashKey(b);
 
 const subscriptionPath = (id: string) => `/api/admin/subscriptions/${encodeURIComponent(id)}`;
 
@@ -54,6 +66,60 @@ export const useAdminSubscriptionDetail = (id: string) =>
     enabled: isSubscriptionObjectId(id),
     retry: retryUnlessNotFound,
   });
+
+const STRIPE_STALE_MS = 60_000;
+
+// A missing record will not appear on retry, and a server or Stripe failure (502, gateway 504) already has a
+// Try again button; retrying it would only add load to a degraded Stripe.
+const retryStripeRead = (failureCount: number, error: unknown) =>
+  !isNotFoundError(error) &&
+  !(isAxiosError(error) && (error.response?.status ?? 0) >= 500) &&
+  failureCount < MAX_RETRIES;
+
+const readStripe = async (id: string, fresh: boolean): Promise<AdminSubscriptionStripe> =>
+  (
+    await api.get<AdminSubscriptionStripe>(`${subscriptionPath(id)}/stripe`, {
+      params: fresh ? { fresh: 1 } : undefined,
+    })
+  ).data;
+
+const refetchStripeFresh = (queryClient: QueryClient, id: string) =>
+  void queryClient
+    .fetchQuery({ queryKey: adminSubscriptionStripeKey(id), queryFn: () => readStripe(id, true), staleTime: 0 })
+    .catch(() => {});
+
+/** What the Stripe sections of the detail page need from the live read. */
+export type AdminSubscriptionStripeState = {
+  data: AdminSubscriptionStripe | undefined;
+  isLoading: boolean;
+  isError: boolean;
+  isFetching: boolean;
+  /** Try again: skips the server's 60 s cache. */
+  refetchFresh: () => void;
+};
+
+/** The live Stripe read for one subscription; failing here never affects the detail query. */
+export const useAdminSubscriptionStripe = (
+  id: string,
+  { enabled }: { enabled: boolean }
+): AdminSubscriptionStripeState => {
+  const queryClient = useQueryClient();
+  const queryKey = adminSubscriptionStripeKey(id);
+  const query = useQuery({
+    queryKey,
+    queryFn: () => readStripe(id, false),
+    enabled: enabled && isSubscriptionObjectId(id),
+    staleTime: STRIPE_STALE_MS,
+    retry: retryStripeRead,
+  });
+  return {
+    data: query.data,
+    isLoading: query.isLoading,
+    isError: query.isError,
+    isFetching: query.isFetching,
+    refetchFresh: () => refetchStripeFresh(queryClient, id),
+  };
+};
 
 /** Resolves a Stripe subscription id (`sub_...`) to the Mongo id the detail page is keyed on. */
 export const useAdminSubscriptionIdByStripeId = (stripeSubscriptionId: string) =>
@@ -186,8 +252,15 @@ const useAdminStripeWrite = (id: string, path: 'cancel' | 'resume') => {
       queryClient.setQueryData<AdminSubscriptionDetail>(adminSubscriptionDetailKey(id), current =>
         current ? { ...current, subscription, stripe } : current
       );
-      void queryClient.invalidateQueries({ queryKey: ['admin', 'subscriptions'] });
+      // The Stripe read is excluded and refetched with fresh=1, since the server's 60 s cache would still
+      // show the pre-write state (e.g. an upcoming invoice on a subscription just set to cancel).
+      const stripeKey = adminSubscriptionStripeKey(id);
+      void queryClient.invalidateQueries({
+        queryKey: ['admin', 'subscriptions'],
+        predicate: query => !isQueryKeyEqual(query.queryKey, stripeKey),
+      });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'user-subscriptions'] });
+      if (queryClient.getQueryState(stripeKey)) refetchStripeFresh(queryClient, id);
     },
     // A 409 carries the server's plain-language message ("This subscription changed. Review and try again.").
     // Refetch so the retry reviews the current state instead of resending the stale token.

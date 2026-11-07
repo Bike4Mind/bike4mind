@@ -28,6 +28,7 @@ import {
   type DataColumn,
 } from '../shared';
 import { adminFocus } from '../shared/adminStyles';
+import { SELF_HOST_DOCS_URL } from '../shared/selfHostDocs';
 import { subscriptionsColumns } from '../Subscriptions/subscriptionsColumns';
 import { MrrDefinitionHelp, atRiskNote, mrrExclusionNote } from '../Subscriptions/subscriptionsMrr';
 import type { SubscriptionsBuiltInView } from '../Subscriptions/subscriptionsListViews';
@@ -50,8 +51,6 @@ import {
 import { formatLongDay, formatShare, formatTrendDay, signedMoney, trendTakeaway } from './revenueFormat';
 import { subscriptionsViewSearch } from './revenueLinks';
 import { useAdminRevenue } from './useAdminRevenue';
-
-const SELF_HOST_DOCS_URL = 'https://docs.bike4mind.com/self-host#2-configure-your-environment';
 
 const RANGE_OPTIONS: readonly { value: RevenueRange; label: string }[] = [
   { value: '30d', label: '30 days' },

@@ -10,8 +10,9 @@ import {
 } from './adminSubscriptionDetail';
 
 const apiPost = vi.fn();
+const apiGet = vi.fn();
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { post: (...args: unknown[]) => apiPost(...args), get: vi.fn() },
+  api: { post: (...args: unknown[]) => apiPost(...args), get: (...args: unknown[]) => apiGet(...args) },
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -42,6 +43,7 @@ describe.each([
 ])('use admin subscription %s', (path, hook) => {
   beforeEach(() => {
     apiPost.mockReset();
+    apiGet.mockReset();
   });
 
   it('posts the body to its own endpoint and writes the response into the cached detail', async () => {
@@ -54,7 +56,21 @@ describe.each([
     const cached = queryClient.getQueryData<AdminSubscriptionDetail>(adminSubscriptionDetailKey(ID));
     expect(cached?.stripe).toEqual(NEW_STRIPE);
     expect(cached?.subscription).toEqual(NEW_SUBSCRIPTION);
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'subscriptions'] });
+    expect(invalidate).toHaveBeenCalledWith(expect.objectContaining({ queryKey: ['admin', 'subscriptions'] }));
+  });
+
+  it('refetches a cached Stripe read past the server cache instead of plainly invalidating it', async () => {
+    apiPost.mockResolvedValue({ data: { subscription: NEW_SUBSCRIPTION, stripe: NEW_STRIPE } });
+    apiGet.mockResolvedValue({ data: { stripeConfigured: true, kind: 'comp' } });
+    const { result, queryClient } = setup(hook);
+    const stripeKey = [...adminSubscriptionDetailKey(ID), 'stripe'];
+    queryClient.setQueryData(stripeKey, { stripeConfigured: true, kind: 'missing' });
+
+    await result.current.mutateAsync(body);
+
+    await waitFor(() => expect(queryClient.getQueryData(stripeKey)).toEqual({ stripeConfigured: true, kind: 'comp' }));
+    expect(apiGet).toHaveBeenCalledTimes(1);
+    expect(apiGet).toHaveBeenCalledWith(`/api/admin/subscriptions/${ID}/stripe`, { params: { fresh: 1 } });
   });
 
   it('rejects on error and refetches the detail so a retry reviews fresh state', async () => {
