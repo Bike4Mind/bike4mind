@@ -19,6 +19,7 @@ import {
   ABUSE_ASSESSMENT_JUDGMENTS,
   AbuseAssessmentConfigSchema,
   ABUSE_ASSESSMENT_MAX_ATTEMPTS,
+  ABUSE_ASSESSMENT_MAX_ACCOUNTS,
   ABUSE_ASSESSMENT_POLICY_VERSION,
   ABUSE_ASSESSMENT_SKIP_REASONS,
   RISK_EVIDENCE_VERSION,
@@ -67,6 +68,7 @@ import {
   rolloutBucket,
   type AssessedAccountSource,
 } from './featureSummary';
+import { collectRequestActivity } from './requestActivity';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Namespaces this feature's budget, call cap and concurrency in the shared platform policy.
@@ -100,6 +102,10 @@ export const ABUSE_ASSESSMENT_QUESTION: DecisionQuestion = {
     'accounts share it. Shared infrastructure, a fingerprint, or matching setup steps can also describe',
     'legitimate users; coordination alone does not establish abuse. Ignored relationships are not positive',
     'evidence, and transitive membership alone does not justify action. Truncated evidence is incomplete.',
+    'Request evidence covers only retained API-key logs, not all traffic. Some early authentication or',
+    'scope refusals and other API surfaces are absent. Zero recorded admin requests or refusals does not',
+    "prove none were attempted. A successful identity check reads the caller's own account and is not",
+    'an admin request or proof of abuse. Failed request evidence is unknown. Server errors can be platform faults.',
   ].join(' '),
   choices: [
     { value: 'abuse', description: 'Several independent signals point to coordinated abuse.' },
@@ -224,7 +230,14 @@ export async function summarizeDetection(
   logger: Logger,
   deps: AbuseAssessmentDeps = {}
 ): Promise<AbuseAssessmentFeatureSummary> {
-  const accounts: AssessedAccountSource[] = await userRepository.findRiskEvidenceSummaries(detection.userIds);
+  const stored: AssessedAccountSource[] = await userRepository.findRiskEvidenceSummaries(detection.userIds);
+  const byId = new Map(stored.map(account => [account.id, account]));
+  const accounts: AssessedAccountSource[] = await Promise.all(
+    detection.userIds.slice(0, ABUSE_ASSESSMENT_MAX_ACCOUNTS).map(async id => ({
+      ...(byId.get(id) ?? { id, createdAt: null, summary: null }),
+      requests: await collectRequestActivity(id, logger),
+    }))
+  );
   const refs = buildFeatureSummary({ detection, accounts, group: null }).accounts.map(account => account.ref);
   let group: AbuseAssessmentGroupEvidence | null = null;
   if (deps.groupEvidence) {
