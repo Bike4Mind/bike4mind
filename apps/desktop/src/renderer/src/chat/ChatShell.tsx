@@ -47,7 +47,13 @@ import { ComposerOllamaNotice } from '../models/OllamaNotRunning';
 import { useModelServers } from '../models/useModelHub';
 import { CubeIcon, GlobeIcon, PanelRightIcon, PhoneIcon, SearchIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
-import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
+import {
+  chatShellRootSx,
+  COLUMN_LAYOUT_TRANSITION,
+  columnStackSx,
+  contentColumnSx,
+  SESSION_PANEL_SPACE_VAR,
+} from './layout';
 import { ModelPicker } from './ModelPicker';
 import { modelSwitchCredits } from './modelSwitchCost';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
@@ -57,7 +63,7 @@ import { CacheExpiryNote } from './CacheExpiryNote';
 import { ContextRing } from './ContextRing';
 import { GrantedFolderChips, SessionChips } from './SessionChips';
 import { SESSION_PANEL_ID, SessionPanel } from './SessionPanel';
-import { panelFitsBesideThread, useElementWidth, useSessionPanelPrefs } from './sessionPanelState';
+import { panelFitsBesideThread, SESSION_PANEL_SPACE, useElementWidth, useSessionPanelPrefs } from './sessionPanelState';
 import { createPullRequestPrompt } from './changesBarModel';
 import { useWorkspaceChanges } from './useWorkspaceChanges';
 import { openInSessionBrowser } from './prLinks';
@@ -799,6 +805,7 @@ export function ChatShell({
     !opening && !initialCodeSetup && conversation.session?.mode === 'code' ? conversation.session.project : undefined;
   const panelDocked = threadRegionWidth === null || panelFitsBesideThread(threadRegionWidth);
   const panelShown = !!panelProject && (panelDocked ? panelPrefs.open : panelPopoverOpen);
+  const panelSpace = panelShown && panelDocked ? SESSION_PANEL_SPACE : 0;
   const bindingErrorHidden =
     !!panelProject && !!conversation.project.error && (!panelShown || panelPrefs.collapsed.has('environment'));
   const { toggleOpen: togglePanelOpen } = panelPrefs;
@@ -1454,7 +1461,11 @@ export function ChatShell({
           onOpenSkillMarket={openSkillMarket}
         />
       ) : (
-        <Stack ref={conversationColumn} sx={{ flex: 1, minWidth: 0, ...columnStackSx }}>
+        <Stack
+          ref={conversationColumn}
+          data-testid="chat-conversation-column"
+          sx={{ flex: 1, minWidth: 0, ...columnStackSx, [SESSION_PANEL_SPACE_VAR]: `${panelSpace}px` }}
+        >
           <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
             <Box sx={{ ...contentColumnSx, py: 1.25, display: 'flex', alignItems: 'center', gap: 1 }}>
               <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -1629,7 +1640,20 @@ export function ChatShell({
           >
             {/* One tree for both surfaces, so entering or leaving orchestrate, or toggling the dock,
                 never remounts the thread and loses the reader's place in it. */}
-            <Box sx={{ position: 'relative', display: 'flex', flex: 1, minHeight: 0 }}>
+            <Box
+              data-testid="chat-thread-region"
+              sx={{
+                position: 'relative',
+                display: 'flex',
+                flex: 1,
+                minHeight: 0,
+                pr: `${panelSpace}px`,
+                // The row reserves the rail once, including for the orchestrator's narrower dock.
+                [SESSION_PANEL_SPACE_VAR]: '0px',
+                transition: `padding-right ${COLUMN_LAYOUT_TRANSITION}`,
+                '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
+              }}
+            >
               {orchestratorShown && (
                 <OrchestratorSurface
                   // Keyed so a switch between orchestrating parents resets selection and sort, and never reuses sprites.
