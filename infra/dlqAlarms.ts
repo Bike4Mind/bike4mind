@@ -70,6 +70,7 @@ import {
   sessionEnrichmentDeadLetter,
   billingEventsDeadLetter,
   emailEventsDeadLetter,
+  pushEventsDeadLetter,
   notebookEventsDeadLetter,
   completionEventsDeadLetter,
 } from './eventBus';
@@ -718,6 +719,12 @@ if (isMonitoredStage) {
     displayName: 'Email Events',
     application: 'Email',
     queue: emailEventsDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'push-events',
+    displayName: 'Push Events',
+    application: 'Notifications',
+    queue: pushEventsDeadLetter.queue,
   });
   createDlqAlarms({
     label: 'notebook-events',

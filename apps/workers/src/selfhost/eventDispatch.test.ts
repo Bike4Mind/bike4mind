@@ -7,6 +7,7 @@ const handlers = vi.hoisted(() => ({
   sessionContextSummarization: vi.fn(),
   sessionTagging: vi.fn(),
   notebookCuration: vi.fn(),
+  sendPush: vi.fn(),
 }));
 
 vi.mock('@workers/events/createMemento', () => ({ handler: handlers.createMemento }));
@@ -16,6 +17,7 @@ vi.mock('@workers/events/sessionContextSummarization', () => ({ handler: handler
 vi.mock('@workers/events/sessionTagging', () => ({ handler: handlers.sessionTagging }));
 
 vi.mock('@workers/events/notebookCuration', () => ({ handler: handlers.notebookCuration }));
+vi.mock('@workers/events/sendPush', () => ({ handler: handlers.sendPush }));
 
 const { requestRiskEvidenceRefresh } = vi.hoisted(() => ({ requestRiskEvidenceRefresh: vi.fn() }));
 vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh }));
@@ -36,6 +38,7 @@ describe('dispatchSelfHostEvent', () => {
     ['session.context_summarize', 'sessionContextSummarization'],
     ['session.tag', 'sessionTagging'],
     ['notebook.curation.start', 'notebookCuration'],
+    ['notification.push', 'sendPush'],
   ] as const)('routes %s to the matching handler with an EventBridge-shaped event', async (detailType, key) => {
     const detail = { sessionId: 's1' };
     await dispatchSelfHostEvent(detailType, detail);

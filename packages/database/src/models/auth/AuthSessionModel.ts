@@ -73,6 +73,18 @@ class AuthSessionRepository extends BaseRepository<IAuthSessionDocument> impleme
     return this.findOne({ sid });
   }
 
+  /** The subset of `sids` that are unrevoked and unexpired, in one query. */
+  async findLiveSids(sids: readonly string[]): Promise<Set<string>> {
+    if (sids.length === 0) return new Set();
+    const rows = await AuthSessionModel.find(
+      { sid: { $in: [...sids] }, revokedAt: null, expiresAt: { $gt: new Date() } },
+      { sid: 1, _id: 0 }
+    )
+      .lean<Array<{ sid: string }>>()
+      .exec();
+    return new Set(rows.map(row => row.sid));
+  }
+
   async findActiveByUserId(userId: string): Promise<IAuthSessionDocument[]> {
     return AuthSessionModel.find({
       userId,

@@ -9,6 +9,7 @@ import {
   ContextTelemetrySchema,
   ContextTelemetryAlertsSchema,
   PERSISTED_SESSION_SUMMARY_TRIGGERS,
+  PushNotificationEventSchema,
   SRE_ANALYSIS_COMPLETED_EVENT,
   type SreFixRequest,
 } from '@bike4mind/common';
@@ -130,6 +131,15 @@ export const EmailEvents = {
         .optional(),
     })
   ),
+};
+
+/**
+ * Push to a user's first-party native clients. Publish through publishPushNotification
+ * (./pushNotifications.ts), which never throws into the host path; the consumer is
+ * apps/workers/src/events/sendPush.ts.
+ */
+export const NotificationEvents = {
+  Push: event('notification.push', PushNotificationEventSchema),
 };
 
 export const StripeEvents = {
