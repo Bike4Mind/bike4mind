@@ -584,16 +584,19 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           </MenuButton>
           <Menu
             // On phones the sidebar spans the viewport, so a right-side menu opens off-screen;
-            // drop it below the row there instead.
+            // drop it below the row there instead, flipping above when the row sits low.
             placement={isMobile ? 'bottom-start' : 'right-start'}
             modifiers={[
               { name: 'offset', options: { offset: isMobile ? [0, 4] : [0, 18] } },
+              { name: 'flip', options: { padding: 8 } },
               { name: 'preventOverflow', options: { padding: 8 } },
             ]}
             sx={menuTheme => ({
               ...menuSurfaceSx(menuTheme, '12px'),
               ...menuItemListSx(menuTheme, { gap: '2px', radius: '12px' }),
               minWidth: 220,
+              // flip picks the roomier side, which is at least ~half the viewport; past that, scroll.
+              ...(isMobile && { maxHeight: '45dvh' }),
               // Portals to body, so it has to clear the sidebar's own floating layers.
               zIndex: 10001,
             })}
