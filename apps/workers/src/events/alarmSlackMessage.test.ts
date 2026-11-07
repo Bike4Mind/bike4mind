@@ -814,3 +814,70 @@ describe('fallback text', () => {
     expect(message?.text).toContain('&lt;!channel&gt; &amp; &lt;odd&gt;');
   });
 });
+
+describe('new-account API key triage', () => {
+  const census: CloudWatchAlarmPayload = {
+    ...sample,
+    AlarmName: 'bike4mind-production-NewAccountApiKeys',
+    NewStateReason:
+      'Threshold Crossed: 2 datapoints [9.0 (02/01/26 00:05:00), 8.0 (01/01/26 23:05:00)] were greater than or equal to the threshold (8.0).',
+    StateChangeTime: '2026-01-02T01:06:00Z',
+  };
+
+  it('takes an operator to the live advisory, campaign evidence and broad key discovery', () => {
+    const message = formatAlarmSlackMessage(census, 'production', {
+      appUrl: 'https://app.example.com/',
+      mention: 'S012345',
+    });
+    expect(buttons(message)).toEqual([
+      expect.objectContaining({ label: 'Open in CloudWatch' }),
+      { label: 'AI-flagged accounts', url: 'https://app.example.com/admin?tab=users&aiVerdict=abuse' },
+      { label: 'Campaign evidence', url: 'https://app.example.com/admin?tab=shadow-detections' },
+      { label: 'Accounts with API keys', url: 'https://app.example.com/admin?tab=users&keys=yes' },
+    ]);
+    expect(JSON.stringify(message)).not.toContain('signedUp=hour');
+    expect(topBlocks(message)[0].text?.text).toContain('<!subteam^S012345>');
+    expect(contextOf(message)).toContain('level page  |  category abuse');
+  });
+
+  it('reports supplied evaluation timestamps across midnight without claiming continuous breach duration', () => {
+    const message = formatAlarmSlackMessage(census, 'production');
+    expect(fieldsOf(message)).toEqual([
+      '*Measured*\n9 API keys',
+      '*Threshold*\n8',
+      '*CloudWatch evaluation window*\n2026-01-02T00:05:00.000Z to 2026-01-02T01:05:00.000Z (end exclusive)',
+      '*Earliest breaching datapoint shown*\n2026-01-01T23:05:00.000Z',
+    ]);
+    expect(sectionText(message, 'What happened')).toContain('9 API keys in the latest breaching CloudWatch datapoint');
+    expect(sectionText(message, 'Scope and freshness')).toContain('not the census creation interval');
+    expect(JSON.stringify(message)).not.toContain('Breaching since');
+  });
+
+  it('distinguishes advisory scope, coordination, harmful activity and human ownership', () => {
+    const message = formatAlarmSlackMessage(census, 'production');
+    expect(sectionText(message, 'Why it matters')).toContain('not confirmed harmful use');
+    expect(sectionText(message, 'Scope and freshness')).toContain('not matched to this metric');
+    expect(sectionText(message, 'Scope and freshness')).toContain('last 24h');
+    expect(sectionText(message, 'Scope and freshness')).toContain('uncalibrated');
+    expect(sectionText(message, 'What to do')).toContain('available request outcomes, credits and ledger');
+    expect(sectionText(message, 'Ownership and escalation')).toContain('owner and next review time');
+    expect(sectionText(message, 'Ownership and escalation')).toContain('does not close the investigation');
+    expect(buttons(message).map(button => button.label)).toEqual(['Open in CloudWatch']);
+  });
+
+  it('keeps raw and missing metric reasons usable without inventing a census window', () => {
+    for (const reason of ['No datapoints were received', 'Unrecognized provider reason']) {
+      const message = formatAlarmSlackMessage({ ...census, NewStateReason: reason }, 'production');
+      expect(message).not.toBeNull();
+      expect(fieldsOf(message).join(' ')).not.toContain('CloudWatch evaluation window');
+      expect(sectionText(message, 'Scope and freshness')).toContain('live queue');
+    }
+  });
+
+  it('does not repeat investigation instructions or mentions on metric recovery', () => {
+    const message = formatAlarmSlackMessage({ ...census, NewStateValue: 'OK', OldStateValue: 'ALARM' }, 'production');
+    expect(message?.text).toContain('Resolved:');
+    expect(buttons(message)).toEqual([]);
+    expect(sectionText(message, 'Ownership and escalation')).toBeUndefined();
+  });
+});
