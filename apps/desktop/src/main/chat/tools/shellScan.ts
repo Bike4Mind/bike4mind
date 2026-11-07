@@ -2805,7 +2805,7 @@ function listsNames(raw: readonly string[], script: string): Listing | null {
   }
   if (program === 'grep' || program === 'egrep' || program === 'fgrep') return grepLists(args);
   if (program === 'rg') return rgLists(args, containedCommand(raw), script);
-  if (program === 'git' && args[0] === 'diff') return diffLists(args.slice(1), raw.slice(2));
+  if (program === 'git' && args[0] === 'diff') return diffLists(raw.slice(2));
   if (program === 'git' && args[0] === 'grep') return gitGrepLists(args.slice(1));
   if (program === 'git' && args[0] === 'ls-files') {
     const operands: string[] = [];
@@ -2970,18 +2970,24 @@ function shellExpands(raw: string): boolean {
 
 /**
  * `git diff --name-only [--cached|--staged] [rev [rev]] [-- pathspec...]`, which prints the paths that differ from
- * the top of the work tree; each `A..B` reads as its two ends. `raw` is each of `args` as written.
+ * the top of the work tree; each `A..B` reads as its two ends. `raw` holds its words as written, read here as the
+ * values bash passes to git.
  */
-function diffLists(args: readonly string[], raw: readonly string[]): Listing | null {
+function diffLists(raw: readonly string[]): Listing | null {
+  // The words bash expands one into may be options, revisions or pathspec magic.
+  if (raw.some(word => shellExpands(word))) return null;
+  const args = raw.map(word =>
+    wordPieces(word)
+      .map(piece => ('char' in piece ? piece.char : ''))
+      .join('')
+  );
   let names = false;
   let cached = false;
   let paths = false;
   const revisions: string[] = [];
   const pathspecs: string[] = [];
-  for (const [index, arg] of args.entries()) {
+  for (const arg of args) {
     if (paths) pathspecs.push(arg);
-    // Before `--`, the words bash expands one into may be revisions or options.
-    else if (shellExpands(raw[index] ?? '')) return null;
     else if (arg === '--') paths = true;
     else if (arg === '--name-only') names = true;
     else if (arg === '--cached' || arg === '--staged') cached = true;

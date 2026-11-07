@@ -156,6 +156,17 @@ describe('commands main ran unasked', () => {
     for (const name of ['^^!', '^^-1', 'HEAD^!', 'HEAD^-+1', 'HEAD^- 1', ':/first', ':/fir*']) {
       await writeFile(join(hrepo, name), '');
     }
+    // Files named as some words are written, which bash passes to git as other values.
+    for (const name of ["HEAD''~1", 'HEAD\\~1', 'HEAD~1:']) await writeFile(join(hrepo, name), '');
+    await mkdir(join(srepo, '\\--output=.claude'));
+    for (const name of ['\\*', ':\\!src', ':\\(exclude\\)src', '\\--output=.claude/settings.json']) {
+      await writeFile(join(srepo, name), '');
+    }
+    // urepo is a clone two commits deep whose main tracks origin/main.
+    const orepo = await repository('orepo', { '.claude/settings.json': '{}', 'src/b.ts': 'b' });
+    await writeFile(join(orepo, 'src', 'b.ts'), 'b2');
+    git(orepo, 'commit', '-qam', 'second');
+    git(proj, 'clone', '-q', orepo, join(proj, 'urepo'));
     // wrepo has the same history, with `HEAD^!` its only top-level name a bare `*` expands to.
     const wrepo = await repository('wrepo', { '.claude/settings.json': '{}' });
     await writeFile(join(wrepo, '.claude', 'settings.json'), '{"x": 1}');
@@ -306,6 +317,12 @@ describe('commands main ran unasked', () => {
     ["rg -l foo 2>'/dev/null' | xargs cat", '', unasked],
     ['rg -l foo | grep -v zz 2>/dev/null | xargs sed -i s/a/b/', '', unasked],
     ['git ls-files | grep -v x 2>/dev/null | head -5 | xargs wc -l', '', unasked],
+    ['git diff --name-only HEAD~1 | xargs sed -i s/a/b/', 'urepo', unasked],
+    ['git diff --name-only @{u} | xargs sed -i s/a/b/', 'urepo', unasked],
+    ['git diff --name-only main..HEAD | xargs sed -i s/a/b/', 'urepo', unasked],
+    ['git diff --name-only origin/main...HEAD | xargs sed -i s/a/b/', 'urepo', unasked],
+    ['git diff --name-only @{u} -- src | xargs sed -i s/a/b/', 'urepo', unasked],
+    ['git diff --name-only origin/main...HEAD -- src | xargs sed -i s/a/b/', 'urepo', unasked],
     ['cat .claude/agents/x.md', '', unaskedNamingClaude],
     ['ls -la .claude/', '', unaskedNamingClaude],
     ['grep -r hooks .claude', '', unaskedNamingClaude],
@@ -394,6 +411,22 @@ describe('commands main ran unasked', () => {
     ["git diff --name-only ':/fir*' | xargs sed -i s/a/b/", 'hrepo'],
     // bash expands `*` to `HEAD^!` before git reads it.
     ['git diff --name-only * | xargs sed -i s/a/b/', 'wrepo'],
+    // bash passes each to git as its value, not as written.
+    ['git diff --name-only -- :\\!src | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- :\\^src | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- :\\(exclude\\)src | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only :\\!src | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only :\\(exclude\\)src | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- \\* | xargs sed -i s/a/b/', 'srepo'],
+    ["git diff --name-only -- ':!'src | xargs sed -i s/a/b/", 'srepo'],
+    ['git diff --name-only -- ":(exclude)"src | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- * | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only \\* | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only \\--output=.claude/settings.json | xargs sed -i s/a/b/', 'srepo'],
+    ["git diff --name-only HEAD''~1 | xargs sed -i s/a/b/", 'hrepo'],
+    ['git diff --name-only HEAD\\~1 | xargs sed -i s/a/b/', 'hrepo'],
+    // git reads `HEAD~1:./` as the top tree of HEAD~1, though a file `HEAD~1:` exists.
+    ['git diff --name-only HEAD~1:./ | xargs sed -i s/a/b/', 'hrepo'],
     ['rg -l hooks 2>"/dev/null" | xargs sed -i s/a/b/', ''],
     ['rg -l hooks | grep -v zz 2>/dev/null | xargs sed -i s/a/b/', ''],
   ])('asks before %s (in proj/%s) rewrites settings', async (command, folder) => {
