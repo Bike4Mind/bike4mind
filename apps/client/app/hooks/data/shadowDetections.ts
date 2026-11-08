@@ -1,6 +1,7 @@
 import {
   abuseAssessmentStoredItemSchema,
   completionSequenceEvidenceSchema,
+  completionSynchronyEvidenceSchema,
   accountCampaignGroupSchema,
   accountCampaignMemberSchema,
   shadowDetectionItemSchema,
@@ -30,6 +31,9 @@ export type CampaignGroupRow = z.infer<typeof campaignGroupRowSchema>;
 /** A detection as it arrives over JSON: the dates are ISO strings. */
 export const shadowDetectionRowSchema = shadowDetectionItemSchema.extend({
   detectedAt: z.string(),
+  completionSynchrony: completionSynchronyEvidenceSchema
+    .extend({ firstObservedAt: z.string(), lastObservedAt: z.string(), scannedAt: z.string() })
+    .optional(),
   completionSequence: completionSequenceEvidenceSchema
     .extend({ firstObservedAt: z.string(), lastObservedAt: z.string() })
     .optional(),

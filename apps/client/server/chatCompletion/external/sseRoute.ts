@@ -1,3 +1,4 @@
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, type ApiCompletionOutcome } from '@bike4mind/common';
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
 import { actorScopeForKey } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
@@ -252,6 +253,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       heartbeat = setInterval(() => write(SSE_KEEPALIVE), HEARTBEAT_INTERVAL_MS);
     };
 
+    let completionOutcome: ApiCompletionOutcome = 'unknown';
     let body: z.infer<typeof CompletionRequestSchema> | undefined;
     let userId: string | undefined;
     let apiKeyInfo: ApiKeyInfo | undefined;
@@ -295,13 +297,14 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       if (authResult.method === 'apiKey') {
         apiKeyInfo = authResult.apiKeyInfo;
         // Register before admission so authenticated rejections count as requests too.
-        logApiKeyUsageOnResponse({
+        await logApiKeyUsageOnResponse({
           req,
           res,
           apiKey: apiKeyInfo,
           endpoint: COMPLETIONS_ENDPOINT,
           source,
           startTime,
+          completion: { requestId, requestedModel: body.model, outcome: () => completionOutcome },
           logger,
           track,
         });
@@ -403,6 +406,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         },
       });
 
+      completionOutcome = 'completed';
       // Close the stream and log success analytics.
       write(SSE_DONE_SIGNAL);
       end();
@@ -431,6 +435,12 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       });
     } catch (error) {
       const jsonError = toJsonError(error, requestId);
+      completionOutcome =
+        jsonError.body.errorCode === DAILY_FREE_LIMIT_REACHED_ERROR_CODE
+          ? 'daily_cap_rejected'
+          : jsonError.status < 500
+            ? 'rejected'
+            : 'failed';
       // Budget exhaustion is expected, not an operator fault, whoever chose the budget (same policy as
       // /api/chat); emitProcessingFailed already skips it via isOperatorFault. Only a positive
       // max_tokens counts as the caller's: resolveOutputMaxTokens discards the rest.

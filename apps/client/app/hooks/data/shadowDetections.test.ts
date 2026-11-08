@@ -56,6 +56,33 @@ const submit = async () => {
 };
 
 describe('useShadowDetectionVerdict', () => {
+  it('recovers a stale synchronized observation including serialized scan timestamps', async () => {
+    const current = row({
+      detector: 'completionSynchrony',
+      revision: 2,
+      completionSynchrony: {
+        source: 'api_key_request_starts',
+        windowHours: 24,
+        eventsScanned: 9,
+        legacyRows: 0,
+        scanTruncated: false,
+        bursts: 3,
+        synchronizedModelSwitches: 1,
+        distinctRequestedModels: 2,
+        maxStartSkewMilliseconds: 400,
+        completedRequests: 6,
+        dailyCapRejectedRequests: 3,
+        otherRejectedRequests: 0,
+        interruptedOrUnknownRequests: 0,
+        scannedAt: '2026-01-01T12:00:00Z',
+        firstObservedAt: '2026-01-01T11:50:00Z',
+        lastObservedAt: '2026-01-01T11:59:00Z',
+      },
+    });
+    post.mockRejectedValue(httpError(409, { error: 'Evidence refreshed', item: current }));
+    expect(await submit()).toEqual({ status: 'conflict', item: current, message: 'Evidence refreshed' });
+  });
+
   it('recovers a stale verdict with serialized sequence evidence', async () => {
     const current = row({
       detector: 'completionSequence',

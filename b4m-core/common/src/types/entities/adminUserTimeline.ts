@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { apiCompletionObservationSchema } from '../../schemas/completionSynchrony';
 import type { AuditEntry } from './AdminAuditLogTypes';
 import type { IActiveSessionDto } from './AuthSessionTypes';
 
@@ -71,6 +72,7 @@ export type UserTimelineAuditEntry = UserTimelineEntryBase & {
 export type UserTimelineUsageEntry = UserTimelineEntryBase & { type: 'usage'; notebookId: string };
 
 export const AdminApiRequestSchema = z.object({
+  completionObservation: apiCompletionObservationSchema.optional(),
   keyId: z.string(),
   method: z.string(),
   endpoint: z.string(),

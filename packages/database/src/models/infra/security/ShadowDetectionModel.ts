@@ -10,6 +10,10 @@ import {
   SHADOW_DETECTION_PAYMENT_OUTCOMES,
   type AccountCampaignGroup,
   completionSequenceEvidenceSchema,
+  completionSynchronyEvidenceSchema,
+  type CompletionSynchronyEvidence,
+  REVIEW_ONLY_COMPLETION_DETECTORS,
+  isReviewOnlyCompletionDetector,
   type CompletionSequenceEvidence,
   SHADOW_DETECTION_VERDICTS,
   SHADOW_DETECTORS,
@@ -43,6 +47,7 @@ export interface IShadowDetectionDocument extends Document {
   windowMinutes: number | null;
   group: AccountCampaignGroup | null;
   completionSequence?: CompletionSequenceEvidence;
+  completionSynchrony?: CompletionSynchronyEvidence;
   payment: ShadowDetectionPayment | null;
   detectedAt: Date;
   verdict: ShadowDetectionVerdict | null;
@@ -114,6 +119,7 @@ export const ShadowDetectionSchema = new Schema<IShadowDetectionDocument>(
     // nested evidence lists are read whole and never queried field by field.
     group: { type: Schema.Types.Mixed, default: null },
     completionSequence: { type: Schema.Types.Mixed, default: undefined },
+    completionSynchrony: { type: Schema.Types.Mixed, default: undefined },
     payment: { type: PaymentSchema, default: null },
     detectedAt: { type: Date, required: true },
     verdict: { type: String, enum: [...SHADOW_DETECTION_VERDICTS, null], default: null },
@@ -250,6 +256,9 @@ const toItem = (doc: LeanShadowDetection): ShadowDetectionItem => {
     })),
     windowMinutes: doc.windowMinutes ?? null,
     group: doc.group ?? null,
+    ...(doc.completionSynchrony
+      ? { completionSynchrony: completionSynchronyEvidenceSchema.parse(doc.completionSynchrony) }
+      : {}),
     ...(parsed.success ? { completionSequence: parsed.data } : {}),
     // Records written before payment evidence existed carry no field at all.
     payment: doc.payment
@@ -278,50 +287,69 @@ const toItem = (doc: LeanShadowDetection): ShadowDetectionItem => {
 };
 
 class ShadowDetectionRepository {
-  /** One observation per ordered cohort and UTC activity day; reviewed records stay immutable. */
   async recordCompletionSequence(input: RecordShadowDetectionInput): Promise<'created' | 'updated' | 'unchanged'> {
-    if (input.detector !== 'completionSequence' || input.wouldAction !== 'none')
+    if (input.detector !== 'completionSequence') throw new Error('Expected completionSequence');
+    return this.recordCompletionObservation(input);
+  }
+
+  async recordCompletionSynchrony(input: RecordShadowDetectionInput): Promise<'created' | 'updated' | 'unchanged'> {
+    if (input.detector !== 'completionSynchrony') throw new Error('Expected completionSynchrony');
+    return this.recordCompletionObservation(input);
+  }
+
+  /** One observation per cohort and UTC activity day; reviewed records stay immutable. */
+  private async recordCompletionObservation(
+    input: RecordShadowDetectionInput
+  ): Promise<'created' | 'updated' | 'unchanged'> {
+    if (!isReviewOnlyCompletionDetector(input.detector) || input.wouldAction !== 'none')
       throw new Error('Sequence observations must be review-only');
-    const sequence = completionSequenceEvidenceSchema.parse(input.completionSequence);
+    const field = input.detector === 'completionSequence' ? 'completionSequence' : 'completionSynchrony';
+    const sequence =
+      field === 'completionSequence'
+        ? completionSequenceEvidenceSchema.parse(input.completionSequence)
+        : completionSynchronyEvidenceSchema.parse(input.completionSynchrony);
     if (input.userIds.length < 3 || input.userIds.length > 10 || new Set(input.userIds).size !== input.userIds.length)
       throw new Error('Invalid sequence membership');
+    const userIds = field === 'completionSynchrony' ? [...input.userIds].sort() : input.userIds;
     const day = sequence.lastObservedAt.toISOString().slice(0, 10);
     // The unique _id makes retries/concurrent sweeps idempotent without a lazily-built secondary index.
     const id = new Types.ObjectId(
       createHash('sha256')
-        .update(JSON.stringify(['completionSequence', input.policyVersion, day, input.userIds]))
+        .update(JSON.stringify([input.detector, input.policyVersion, day, userIds]))
         .digest('hex')
         .slice(0, 24)
     );
     const membersAvailable = async () =>
       (await User.countDocuments({
-        _id: { $in: input.userIds },
+        _id: { $in: userIds },
         deletedAt: null,
         'deletion.purgeStartedAt': null,
-      }).maxTimeMS(5_000)) === input.userIds.length;
+      }).maxTimeMS(5_000)) === userIds.length;
     const reconcileMembers = async () => {
       if (await membersAvailable()) return true;
-      await ShadowDetectionModel.deleteOne({ _id: id, detector: 'completionSequence' });
+      await ShadowDetectionModel.deleteOne({ _id: id, detector: input.detector });
       return false;
     };
     if (!(await reconcileMembers())) return 'unchanged';
     const created = await ShadowDetectionModel.updateOne(
       { _id: id },
       {
-        $setOnInsert: { ...input, createdAt: input.detectedAt, updatedAt: input.detectedAt },
+        $setOnInsert: { ...input, userIds, createdAt: input.detectedAt, updatedAt: input.detectedAt },
       },
       { upsert: true, timestamps: false }
     );
     if (created.upsertedCount > 0) return (await reconcileMembers()) ? 'created' : 'unchanged';
+    const freshness =
+      'scannedAt' in sequence
+        ? { 'completionSynchrony.scannedAt': { $lt: sequence.scannedAt } }
+        : {
+            'completionSequence.lastObservedAt': { $lt: sequence.lastObservedAt },
+            'completionSequence.rounds': { $lte: sequence.rounds },
+          };
     const updated = await ShadowDetectionModel.updateOne(
+      { _id: id, verdict: null, ...freshness },
       {
-        _id: id,
-        verdict: null,
-        'completionSequence.lastObservedAt': { $lt: sequence.lastObservedAt },
-        'completionSequence.rounds': { $lte: sequence.rounds },
-      },
-      {
-        $set: { completionSequence: sequence, summary: input.summary, signals: input.signals },
+        $set: { [field]: sequence, summary: input.summary, signals: input.signals },
         $inc: { revision: 1 },
       }
     );
@@ -418,7 +446,10 @@ class ShadowDetectionRepository {
    */
   async removeUser(userId: string): Promise<number> {
     // This observation is about an exact ordering; removing a participant invalidates the whole observation.
-    const sequences = await ShadowDetectionModel.deleteMany({ detector: 'completionSequence', userIds: userId });
+    const sequences = await ShadowDetectionModel.deleteMany({
+      detector: { $in: [...REVIEW_ONLY_COMPLETION_DETECTORS] },
+      userIds: userId,
+    });
     const touched = await ShadowDetectionModel.find({ userIds: userId }).lean<LeanShadowDetection[]>();
     const deleteIds: Types.ObjectId[] = [];
     let deletedCampaigns = sequences.deletedCount;
@@ -471,7 +502,7 @@ class ShadowDetectionRepository {
     return ShadowDetectionModel.countDocuments({
       userIds: userId,
       // Coordination observations must not change automatic risk-review decisions.
-      detector: { $ne: 'completionSequence' },
+      detector: { $nin: [...REVIEW_ONLY_COMPLETION_DETECTORS] },
       verdict: { $nin: ['legitimate_human', 'legitimate_automation'] },
     }).exec();
   }

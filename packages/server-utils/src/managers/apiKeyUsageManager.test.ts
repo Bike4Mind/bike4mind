@@ -1,8 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CreditHolderType } from '@bike4mind/common';
 
-const { createMock } = vi.hoisted(() => ({ createMock: vi.fn() }));
-vi.mock('@bike4mind/database/auth', () => ({ apiKeyUsageLogRepository: { create: createMock } }));
+const { createMock, beginMock, finishMock } = vi.hoisted(() => ({
+  createMock: vi.fn(),
+  beginMock: vi.fn(),
+  finishMock: vi.fn(),
+}));
+vi.mock('@bike4mind/database/auth', () => ({
+  apiKeyUsageLogRepository: {
+    create: createMock,
+    beginCompletionObservation: beginMock,
+    finishCompletionObservation: finishMock,
+  },
+}));
 
 import { ApiKeyUsageManager } from './apiKeyUsageManager';
 
@@ -20,6 +30,37 @@ describe('ApiKeyUsageManager.logUsage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     createMock.mockResolvedValue({ id: 'log-1' });
+  });
+
+  it('persists a start then updates the same terminal row without creating a duplicate', async () => {
+    beginMock.mockResolvedValue('start-id');
+    const completionObservation = {
+      requestId: 'synthetic-request',
+      requestedModel: 'model-alpha',
+      startedAt: '2026-01-01T12:00:00Z',
+      outcome: 'unknown' as const,
+    };
+    expect(
+      await ApiKeyUsageManager.beginCompletionUsage({
+        ...baseParams,
+        source: 'api',
+        ownerType: CreditHolderType.User,
+        completionObservation,
+      })
+    ).toBe('start-id');
+    await ApiKeyUsageManager.logUsage({
+      ...baseParams,
+      source: 'api',
+      ownerType: CreditHolderType.User,
+      completionObservation: { ...completionObservation, outcome: 'completed' },
+      existingLogId: 'start-id',
+    });
+    expect(finishMock).toHaveBeenCalledWith(
+      'start-id',
+      'user-1',
+      expect.objectContaining({ completionObservation: expect.objectContaining({ outcome: 'completed' }) })
+    );
+    expect(createMock).not.toHaveBeenCalled();
   });
 
   it('persists source and ownerType on the usage log row', async () => {

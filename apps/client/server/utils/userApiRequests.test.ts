@@ -47,13 +47,38 @@ describe('user API requests', () => {
     expect(mocks.sort).toHaveBeenCalledWith({ timestamp: -1, _id: -1 });
     expect(mocks.limit).toHaveBeenCalledWith(31);
     expect(mocks.maxTimeMS).toHaveBeenCalledWith(15_000);
-    expect(mocks.select).toHaveBeenCalledWith('_id timestamp keyId method endpoint statusCode responseTime ipAddress');
+    expect(mocks.select).toHaveBeenCalledWith(
+      '_id timestamp keyId method endpoint statusCode responseTime ipAddress completionObservation'
+    );
   });
 
   it('keeps all-key reads user scoped and propagates failed reads', async () => {
     expect(apiRequestFilter('u', { limit: 5, range: {} })).toEqual({ $and: [{ userId: 'u' }] });
     mocks.lean.mockRejectedValue(new Error('read failed'));
     await expect(readApiRequests('u', { limit: 5, range: {} })).rejects.toThrow('read failed');
+  });
+
+  it('keeps completion outcome separate from HTTP transport status', () => {
+    const entry = apiRequestToEntry({
+      _id: new Types.ObjectId(),
+      timestamp: new Date(),
+      keyId: 'key',
+      method: 'POST',
+      endpoint: '/api/ai/v1/completions',
+      statusCode: 200,
+      responseTime: 50,
+      ipAddress: '203.0.113.1',
+      completionObservation: {
+        requestId: 'synthetic-request',
+        requestedModel: 'model-alpha',
+        startedAt: '2026-01-01T12:00:00Z',
+        outcome: 'failed',
+      },
+    });
+    expect(entry.request.statusCode).toBe(200);
+    expect(entry.request.completionObservation?.outcome).toBe('failed');
+    expect(entry.alert).toBe(true);
+    expect(entry.detail).toContain('Failed / Requested: model-alpha');
   });
 
   it('uses the actual response result and strips legacy query and fragment values', () => {

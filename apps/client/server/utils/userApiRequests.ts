@@ -1,6 +1,11 @@
 import { Types } from 'mongoose';
 import { ApiKeyUsageLog } from '@bike4mind/database';
-import { AdminApiRequestSchema, type AuditLogCursor, type UserTimelineApiRequestEntry } from '@bike4mind/common';
+import {
+  API_COMPLETION_OUTCOME_LABELS,
+  AdminApiRequestSchema,
+  type AuditLogCursor,
+  type UserTimelineApiRequestEntry,
+} from '@bike4mind/common';
 
 export type ApiRequestPageOptions = {
   limit: number;
@@ -18,6 +23,7 @@ export type ApiRequestRow = {
   statusCode: number;
   responseTime: number;
   ipAddress: string;
+  completionObservation?: import('@bike4mind/common').ApiCompletionObservation;
 };
 
 export const apiRequestFilter = (userId: string, page: ApiRequestPageOptions) => ({
@@ -40,7 +46,7 @@ export const apiRequestFilter = (userId: string, page: ApiRequestPageOptions) =>
 
 export const readApiRequests = (userId: string, page: ApiRequestPageOptions): Promise<ApiRequestRow[]> =>
   ApiKeyUsageLog.find(apiRequestFilter(userId, page))
-    .select('_id timestamp keyId method endpoint statusCode responseTime ipAddress')
+    .select('_id timestamp keyId method endpoint statusCode responseTime ipAddress completionObservation')
     .sort({ timestamp: -1, _id: -1 })
     .limit(page.limit + 1)
     .maxTimeMS(15_000)
@@ -48,6 +54,7 @@ export const readApiRequests = (userId: string, page: ApiRequestPageOptions): Pr
 
 export function apiRequestToEntry(row: ApiRequestRow): UserTimelineApiRequestEntry {
   const request = AdminApiRequestSchema.parse({
+    completionObservation: row.completionObservation,
     keyId: row.keyId,
     method: row.method,
     endpoint: row.endpoint.split(/[?#]/, 1)[0],
@@ -59,9 +66,11 @@ export function apiRequestToEntry(row: ApiRequestRow): UserTimelineApiRequestEnt
     type: 'api_request',
     id: row._id.toString(),
     at: row.timestamp,
-    summary: `${request.method} ${request.endpoint} - ${request.statusCode}`,
-    detail: `${request.responseTimeMs} ms \u00b7 ${request.ip} \u00b7 Key ${request.keyId}`,
-    alert: request.statusCode >= 400,
+    summary: `${request.method} ${request.endpoint} - ${request.statusCode === 0 ? 'No response recorded' : request.statusCode}`,
+    detail: `${request.completionObservation ? `${API_COMPLETION_OUTCOME_LABELS[request.completionObservation.outcome]} / Requested: ${request.completionObservation.requestedModel} / Request ${request.completionObservation.requestId} / ` : ''}${request.responseTimeMs} ms \u00b7 ${request.ip} \u00b7 Key ${request.keyId}`,
+    alert:
+      request.statusCode >= 400 ||
+      ['failed', 'rejected', 'interrupted'].includes(request.completionObservation?.outcome ?? ''),
     request,
   };
 }

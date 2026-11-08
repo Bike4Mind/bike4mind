@@ -29,6 +29,24 @@ The Users tab is the primary interface for administering user accounts on the Bi
 
 The view, filters, sort, grouping, page, and page size are kept in the URL, so reloading the page or sharing the link restores the same list. The search text is not put in the URL, because it often holds an email address.
 
+### Coordinated API completions
+
+The Detections filter **Coordinated API completions** surfaces repeated ordered groups in retained successful API-completion settlements. The hourly observation job reads the preceding 24 hours, with bounded results and processing. It can discover accounts outside an existing flagged group. The evidence explains the number of participants, repeated rounds, and incomplete coverage when a cap is reached.
+
+Start with **Review evidence**, open each participant's Activity, and use **Watch** for follow-up. Repeated ordering supports coordination; team schedulers can produce it too. Settlement order is not request start order, and this source does not cover failed requests or all API routes. The observation alone does not establish abuse or a shared operator. These detections cannot trigger automatic containment or change automatic risk-review approval. Human review remains available.
+
+The same ordered group updates its unreviewed observation within a UTC activity day. Reviewed observations remain unchanged; a later activity day can produce a new observation. Use a watch to keep the exact group accessible across observations.
+
+### Synchronized API calls
+
+Choose **Synchronized API calls** in Detections to review accounts with repeated closely timed API-key requests and shared requested-model changes. The scan searches the platform's retained request metadata rather than starting only from existing flagged accounts. Repeated subsets can be found even when unrelated requests overlap. These observations support coordination, not proof of a shared person, matching prompts or misuse; legitimate team schedulers can look similar.
+
+Open **Review evidence** to see participant counts, matched bursts, requested-model switches, completed calls, daily-cap refusals and unknown or interrupted outcomes. Cohort spending is a snapshot for the scan's 24-hour API-completion window, separate from requests in matched bursts. Grant-funded credits include rewards and other grants; missing attribution remains unknown. Capped spending and unavailable data are explicit.
+
+In a profile's **API keys > Recent API requests**, you can inspect the correlation id, requested model and completion outcome for newly captured requests. HTTP transport status is separate from completion outcome: HTTP 200 does not prove a successful stream. **No response recorded** means the request start was captured without a terminal response; it does not establish an active request or a failure. Older records show **Not captured** for missing completion metadata.
+
+Use **Watch campaign** for follow-up. If your review supports stopping additional grants, **Review blocking future grants** opens the existing manual dry run for the exact selected accounts. The preview and an audit reason are required before confirmation. This blocks further signup grants and pauses queued rewards; already-paid credits and account access remain unchanged. Watching, grading or AI assessment does not perform this action automatically.
+
 ## Search
 
 The search box at the top of the Users tab finds users by name, username, email, or user ID. Search is debounced to avoid excessive API calls while typing, and it returns to page 1. Press `/` anywhere in the admin panel to focus it.
@@ -405,11 +423,3 @@ The export includes all matching users, not just the current page, up to 15,000 
 - [Email Verification](./email-verification.md) - Managing email verification status
 - [User Migration](./user-migration.md) - Bulk user migration
 - [Analytics](./analytics.md) - User activity analytics
-
-### Coordinated API completions
-
-The Detections filter **Coordinated API completions** surfaces repeated ordered groups in retained successful API-completion settlements. The hourly observation job reads the preceding 24 hours, with bounded results and processing. It can discover accounts outside an existing flagged group. The evidence explains the number of participants, repeated rounds, and incomplete coverage when a cap is reached.
-
-Start with **Review evidence**, open each participant's Activity, and use **Watch** for follow-up. Repeated ordering supports coordination; team schedulers can produce it too. Settlement order is not request start order, and this source does not cover failed requests or all API routes. The observation alone does not establish abuse or a shared operator. These detections cannot trigger automatic containment or change automatic risk-review approval. Human review remains available.
-
-The same ordered group updates its unreviewed observation within a UTC activity day. Reviewed observations remain unchanged; a later activity day can produce a new observation. Use a watch to keep the exact group accessible across observations.

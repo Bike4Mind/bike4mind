@@ -131,7 +131,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
         apiKeyInfo = await verifyApiKey(headers);
         userId = apiKeyInfo.userId;
         logger.info('[CLI_WS_HTTP] Authenticated via API key', { keyId: apiKeyInfo.keyId });
-        logApiKeyUsageOnResponse({
+        await logApiKeyUsageOnResponse({
           req,
           res,
           apiKey: apiKeyInfo,

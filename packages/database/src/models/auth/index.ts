@@ -45,3 +45,7 @@ export * from './SignupGrantBudgetModel';
 export * from './SignupGrantReleaseBatchModel';
 export * from './signupGrantPending';
 export * from './completionSequenceEvents';
+
+export * from './completionSynchronyEvents';
+
+export * from './completionCohortExposure';

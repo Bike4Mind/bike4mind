@@ -1,5 +1,6 @@
 import {
   ADMIN_ACTION_REASON_MAX_LENGTH,
+  isReviewOnlyCompletionDetector,
   type AbuseAssessmentItem,
   type AutoContainmentConfig,
   type ShadowDetectionItem,
@@ -36,7 +37,7 @@ export function decideContainment(input: {
 }): ContainmentDecision {
   const { assessment, detection, config } = input;
   if (config.mode === 'off') return { kind: 'skip', why: 'mode_off' };
-  if (detection.detector === 'completionSequence') return { kind: 'skip', why: 'review_only_detector' };
+  if (isReviewOnlyCompletionDetector(detection.detector)) return { kind: 'skip', why: 'review_only_detector' };
   if (assessment.result !== 'abuse') return { kind: 'skip', why: 'not_abuse' };
   if ((assessment.confidence ?? 0) < config.minConfidence) return { kind: 'skip', why: 'below_confidence' };
   if (!CONTAINMENT_ACTIONS.has(detection.wouldAction)) return { kind: 'skip', why: 'not_a_containment_detection' };

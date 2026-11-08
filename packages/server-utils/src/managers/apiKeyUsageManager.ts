@@ -1,5 +1,10 @@
 import { apiKeyUsageLogRepository } from '@bike4mind/database/auth';
-import type { ApiKeyBillingOwnerType, ApiKeyCompletionSource, IUserApiKeyBaseline } from '@bike4mind/common';
+import type {
+  ApiCompletionObservation,
+  ApiKeyBillingOwnerType,
+  ApiKeyCompletionSource,
+  IUserApiKeyBaseline,
+} from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
 export interface LogApiKeyUsageParams {
@@ -12,6 +17,8 @@ export interface LogApiKeyUsageParams {
   statusCode: number;
   source: ApiKeyCompletionSource;
   ownerType: ApiKeyBillingOwnerType;
+  completionObservation?: ApiCompletionObservation;
+  existingLogId?: string;
   logger?: Logger;
 }
 
@@ -20,12 +27,45 @@ export interface LogApiKeyUsageParams {
  * All operations are user-scoped for security
  */
 export class ApiKeyUsageManager {
+  static async beginCompletionUsage(params: LogApiKeyUsageParams): Promise<string | null> {
+    const { keyId, userId, ipAddress, endpoint, method, source, ownerType, completionObservation, logger } = params;
+    try {
+      return await apiKeyUsageLogRepository.beginCompletionObservation({
+        keyId,
+        userId,
+        ipAddress,
+        endpoint,
+        method,
+        source,
+        ownerType,
+        completionObservation,
+      });
+    } catch (error) {
+      logger?.warn('Completion request start metadata could not be recorded', {
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+      return null;
+    }
+  }
+
   /**
    * Log API key usage to the database
    * This is called after each API request authenticated with an API key
    */
   static async logUsage(params: LogApiKeyUsageParams): Promise<void> {
-    const { keyId, userId, ipAddress, endpoint, method, responseTime, statusCode, source, ownerType, logger } = params;
+    const {
+      keyId,
+      userId,
+      ipAddress,
+      endpoint,
+      method,
+      responseTime,
+      statusCode,
+      source,
+      ownerType,
+      completionObservation,
+      logger,
+    } = params;
 
     try {
       logger?.debug('Logging API key usage', {
@@ -37,6 +77,14 @@ export class ApiKeyUsageManager {
         statusCode,
       });
 
+      if (params.existingLogId) {
+        await apiKeyUsageLogRepository.finishCompletionObservation(params.existingLogId, userId, {
+          statusCode,
+          responseTime,
+          completionObservation,
+        });
+        return;
+      }
       const logEntry = await apiKeyUsageLogRepository.create({
         keyId,
         userId, // User-scoped
@@ -48,6 +96,7 @@ export class ApiKeyUsageManager {
         statusCode,
         source,
         ownerType,
+        ...(completionObservation ? { completionObservation } : {}),
       });
 
       logger?.debug('API key usage logged successfully', {

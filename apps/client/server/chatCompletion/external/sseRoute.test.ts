@@ -11,6 +11,11 @@ import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailur
 
 // Real @bike4mind/common (pure SSE helpers + the published stream-event schema, which
 // these tests parse frames against). Only the seams below are mocked.
+const mockApiUsage = vi.hoisted(() => ({
+  beginCompletionUsage: vi.fn(async () => 'log-id'),
+  logUsage: vi.fn(async () => undefined),
+}));
+vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({ ApiKeyUsageManager: mockApiUsage }));
 const mockLoggerError = vi.hoisted(() => vi.fn());
 const mockLoggerWarn = vi.hoisted(() => vi.fn());
 const mockCheckFreeTierDailySpendCap = vi.hoisted(() => vi.fn());
@@ -340,6 +345,45 @@ describe('JWT rate limiting', () => {
     expect(res.headers.get('retry-after')).toBe('3600');
     expect(body.errorCode).toBe(DAILY_FREE_LIMIT_REACHED_ERROR_CODE);
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+});
+
+describe('API-key completion outcome evidence', () => {
+  it('records a daily-cap refusal without starting provider work', async () => {
+    mockCheckFreeTierDailySpendCap.mockRejectedValueOnce(
+      new TooManyRequestsError('Daily free usage limit reached.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+    const res = await post();
+    await expectJsonError(res, 429);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockApiUsage.beginCompletionUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ completionObservation: expect.objectContaining({ outcome: 'unknown' }) })
+    );
+    expect(mockApiUsage.logUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        statusCode: 429,
+        existingLogId: 'log-id',
+        completionObservation: expect.objectContaining({ outcome: 'daily_cap_rejected' }),
+      })
+    );
+  });
+  it('records a failed in-band stream separately from its HTTP 200 response', async () => {
+    mockExecuteCompletion.mockImplementationOnce(async (params: ExecuteParams) => {
+      await params.onReady?.();
+      throw new Error('Synthetic provider fault');
+    });
+    const res = await post();
+    expect(res.status).toBe(200);
+    await res.text();
+    expect(mockApiUsage.logUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        statusCode: 200,
+        completionObservation: expect.objectContaining({ outcome: 'failed' }),
+      })
+    );
   });
 });
 

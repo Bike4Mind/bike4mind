@@ -1,3 +1,4 @@
+import { ReviewGroupGrantsButton } from './shared/ReviewGroupGrantsButton';
 import React, { useState } from 'react';
 import { Alert, Box, Button, FormControl, FormLabel, Radio, RadioGroup, Stack, Tooltip, Typography } from '@mui/joy';
 import { Link } from '@tanstack/react-router';
@@ -490,6 +491,53 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({ row, now, onClose, onRowC
         </Stack>
       </Stack>
       <DialogActors row={row} now={now} />
+      {row.completionSynchrony && (
+        <Alert color="neutral" data-testid="completion-synchrony-observation">
+          <Stack gap={0.5}>
+            <Typography level="title-sm">Repeated synchronized API calls - review only</Typography>
+            <Typography level="body-xs">
+              Evidence scan: {formatUtc(new Date(row.completionSynchrony.scannedAt))}
+            </Typography>
+            <Typography level="body-sm">
+              {row.userIds.length} accounts appeared in {row.completionSynchrony.bursts} repeated request-start bursts,
+              within {row.completionSynchrony.maxStartSkewMilliseconds} ms, with{' '}
+              {row.completionSynchrony.synchronizedModelSwitches} shared requested-model switches.
+            </Typography>
+            <Typography level="body-sm">
+              Matched bursts: {row.completionSynchrony.completedRequests} completed requests;{' '}
+              {row.completionSynchrony.dailyCapRejectedRequests} stopped by daily free-tier caps;{' '}
+              {row.completionSynchrony.otherRejectedRequests} other rejected or failed requests;{' '}
+              {row.completionSynchrony.interruptedOrUnknownRequests} interrupted or unknown outcomes.
+            </Typography>
+            {row.completionSynchrony.creditExposure && (
+              <Typography level="body-sm">
+                Cohort API spend in the 24-hour scan window: {row.completionSynchrony.creditExposure.creditsCharged}{' '}
+                credits charged; {row.completionSynchrony.creditExposure.grantFundedCredits} grant-funded;{' '}
+                {row.completionSynchrony.creditExposure.unknownFundingCredits} with unknown funding. Grants include
+                rewards and do not establish signup-credit abuse.
+                {row.completionSynchrony.creditExposure.scanTruncated && ' Spend coverage was capped.'}
+              </Typography>
+            )}
+            {!row.completionSynchrony.creditExposure && (
+              <Typography level="body-sm">Cohort spending evidence is unavailable in this observation.</Typography>
+            )}
+            <Typography level="body-sm">
+              This supports coordination, not proof of one operator or credit misuse. Team schedulers can look the same.
+              No automatic containment is applied.
+            </Typography>
+            {(row.completionSynchrony.scanTruncated || row.completionSynchrony.legacyRows > 0) && (
+              <Typography level="body-sm">
+                Coverage is incomplete: the scan was capped or older rows lack request-start metadata.
+              </Typography>
+            )}
+          </Stack>
+        </Alert>
+      )}
+      {(row.detector === 'accountCampaign' ||
+        row.detector === 'completionSynchrony' ||
+        row.detector === 'completionSequence') && (
+        <ReviewGroupGrantsButton userIds={row.userIds} incomplete={row.group?.truncated} />
+      )}
       {row.completionSequence && (
         <Alert color="neutral" data-testid="completion-sequence-observation">
           {row.userIds.length} accounts repeated the same recorded completion settlement order across{' '}
@@ -499,7 +547,9 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({ row, now, onClose, onRowC
           {row.completionSequence.scanTruncated && ' The source scan was capped; coverage is incomplete.'}
         </Alert>
       )}
-      {(row.detector === 'accountCampaign' || row.detector === 'completionSequence') && (
+      {(row.detector === 'accountCampaign' ||
+        row.detector === 'completionSequence' ||
+        row.detector === 'completionSynchrony') && (
         <WatchAccountsButton
           userIds={row.userIds}
           sourceDetectionId={row.id}
@@ -627,7 +677,9 @@ export const ShadowDetectionsTab: React.FC = () => {
       >
         {row.verdict ? 'View review' : 'Review evidence'}
       </Button>
-      {(row.detector === 'accountCampaign' || row.detector === 'completionSequence') && (
+      {(row.detector === 'accountCampaign' ||
+        row.detector === 'completionSequence' ||
+        row.detector === 'completionSynchrony') && (
         <WatchAccountsButton
           userIds={row.userIds}
           sourceDetectionId={row.id}

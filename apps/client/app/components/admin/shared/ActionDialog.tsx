@@ -109,6 +109,8 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
+    // Portaled child dialogs must not also submit an enclosing admin command.
+    event.stopPropagation();
     void handleConfirm();
   };
 

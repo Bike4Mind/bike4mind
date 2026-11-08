@@ -25,6 +25,7 @@ import {
   type AbuseAssessmentRequestActivity,
   abuseAssessmentRequestActivitySchema,
   completionSequenceEvidenceSchema,
+  completionSynchronyEvidenceSchema,
   type DecisionModelId,
   type RiskEvidenceFacts,
   type RiskEvidenceSummary,
@@ -95,6 +96,45 @@ const projectAccount = (
     ...(source?.requests ? { requests: abuseAssessmentRequestActivitySchema.parse(source.requests) } : {}),
   };
 };
+
+function projectCompletionSynchrony(detection: ShadowDetectionItem, kept: AbuseAssessmentAccount[]) {
+  if (detection.detector !== 'completionSynchrony') return undefined;
+  const parsed = completionSynchronyEvidenceSchema.safeParse(detection.completionSynchrony);
+  if (!parsed.success)
+    return { status: 'incomplete' as const, reviewOnly: true as const, reason: 'source_missing' as const };
+  if (kept.length !== detection.userIds.length || kept.length < 3)
+    return { status: 'incomplete' as const, reviewOnly: true as const, reason: 'members_omitted' as const };
+  const value = parsed.data;
+  return {
+    status: 'observed' as const,
+    reviewOnly: true as const,
+    memberRefs: kept.map(account => account.ref),
+    source: value.source,
+    windowHours: value.windowHours,
+    eventsScanned: value.eventsScanned,
+    legacyRows: value.legacyRows,
+    scanTruncated: value.scanTruncated,
+    bursts: value.bursts,
+    synchronizedModelSwitches: value.synchronizedModelSwitches,
+    distinctRequestedModels: value.distinctRequestedModels,
+    maxStartSkewMilliseconds: value.maxStartSkewMilliseconds,
+    completedRequests: value.completedRequests,
+    dailyCapRejectedRequests: value.dailyCapRejectedRequests,
+    otherRejectedRequests: value.otherRejectedRequests,
+    interruptedOrUnknownRequests: value.interruptedOrUnknownRequests,
+    ...(value.creditExposure
+      ? {
+          creditExposure: {
+            scope: value.creditExposure.scope,
+            creditsCharged: value.creditExposure.creditsCharged,
+            grantFundedCredits: value.creditExposure.grantFundedCredits,
+            unknownFundingCredits: value.creditExposure.unknownFundingCredits,
+            scanTruncated: value.creditExposure.scanTruncated,
+          },
+        }
+      : {}),
+  };
+}
 
 function projectCompletionSequence(detection: ShadowDetectionItem, kept: AbuseAssessmentAccount[]) {
   if (detection.detector !== 'completionSequence') return undefined;
@@ -199,6 +239,7 @@ export function buildFeatureSummary({
       },
       accounts: kept,
       completionSequence: projectCompletionSequence(detection, kept),
+      completionSynchrony: projectCompletionSynchrony(detection, kept),
       accountsOmitted: detection.userIds.length - kept.length,
       group: group
         ? { ...group, memberRefs: group.memberRefs.filter(ref => kept.some(account => account.ref === ref)) }
