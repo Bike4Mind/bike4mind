@@ -1,3 +1,9 @@
+import {
+  type BoundEmbeddingModel,
+  type EmbeddingRuntime,
+  bindEmbeddingModel,
+  embedOne,
+} from '../embeddingProviders/runtime';
 import { stripToolOutputMarker } from '../artifactParser';
 import { assemblyTokenBuffer, MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION } from './contextBudget';
 import {
@@ -31,14 +37,7 @@ import {
   MIN_REPLY_CHOICES,
   visibleReplyText,
 } from '@bike4mind/common';
-import {
-  BaseStorage,
-  EmbeddingFactory,
-  EmbeddingService,
-  detectURLs,
-  fetchAndParseURL,
-  hasURLs,
-} from '@bike4mind/fab-pipeline';
+import { BaseStorage, detectURLs, fetchAndParseURL, hasURLs } from '@bike4mind/fab-pipeline';
 import { getSettingsValue } from '../settings';
 import { Logger } from '@bike4mind/observability';
 import { ensureToolPairingIntegrity, isConverseBedrockModel } from '@bike4mind/llm-adapters';
@@ -501,11 +500,11 @@ function replayableToolCalls(functionCalls: RecordedFunctionCall[] | undefined):
  * Chunks large text and returns averaged embedding vector
  */
 export async function generateSafeEmbedding(
-  embeddingService: EmbeddingService,
+  embeddingService: BoundEmbeddingModel,
   text: string,
   logger: Logger
 ): Promise<number[]> {
-  const modelInfo = embeddingService.getModelInfo();
+  const modelInfo = { contextWindow: embeddingService.maxInputTokens };
   const maxTokens = Math.min(modelInfo.contextWindow - 100, EMBEDDING_TOKEN_LIMITS.MAX_EMBEDDING_TOKENS);
 
   const estimatedTokens = estimateTokenLength(text);
@@ -518,8 +517,8 @@ export async function generateSafeEmbedding(
   });
 
   if (estimatedTokens <= maxTokens) {
-    logger.info(`Using embedder ${embeddingService.getModelInfo().model} `);
-    return await embeddingService.generateEmbedding(text);
+    logger.info(`Using embedder ${embeddingService.model} `);
+    return await embedOne(embeddingService, text);
   }
 
   // Text is too large - chunk it and average the embeddings
@@ -541,7 +540,7 @@ export async function generateSafeEmbedding(
   const chunkEmbeddings: number[][] = [];
   for (let i = 0; i < chunks.length; i++) {
     try {
-      const embedding = await embeddingService.generateEmbedding(chunks[i]);
+      const embedding = await embedOne(embeddingService, chunks[i]);
       chunkEmbeddings.push(embedding);
       logger.debug(`Generated embedding for chunk ${i + 1}/${chunks.length}`);
     } catch (error) {
@@ -1545,7 +1544,7 @@ async function noticeOversizedCanvas(
 }
 
 export async function processFabFilesServer(
-  embeddingFactory: EmbeddingFactory,
+  embeddingFactory: EmbeddingRuntime,
   fabFiles: IFabFileDocument[],
   userPrompt: string,
   /**
@@ -1632,7 +1631,7 @@ export async function processFabFilesServer(
   // Memoize the user prompt vectorization for each embedding model
   const embeddingStartTime = Date.now();
   const userVectorPrompt: { [embeddingModel: string]: number[] } = {};
-  const selectedEmbeddingModel = embeddingFactory.getDefaultEmbeddingModel();
+  const selectedEmbeddingModel = embeddingFactory.defaultModel;
 
   // Embedding the query powers semantic chunk selection over vectorized files, but it is an
   // OPTIMIZATION, not a prerequisite for answering. A failure here - provider down, key revoked or
@@ -1642,7 +1641,7 @@ export async function processFabFilesServer(
   // raw-content path below, so the attachment still reaches the model.
   try {
     userVectorPrompt[selectedEmbeddingModel] = await generateSafeEmbedding(
-      embeddingFactory.createEmbeddingService(selectedEmbeddingModel),
+      bindEmbeddingModel(embeddingFactory, selectedEmbeddingModel),
       userPrompt,
       logger
     );

@@ -28,6 +28,8 @@ Bike4Mind exposes two API surfaces - pick the one that fits your use case:
 
 ## API Sections
 
+- [Embeddings](./embeddings.md) - Discover models and create text vectors
+
 - [**Authentication & Authorization**](./auth) - JWT tokens, permissions, and security
 - [**Core API Reference**](./reference) - Complete endpoint documentation
 - [**Agent System**](./agents) - AI agent management and interaction

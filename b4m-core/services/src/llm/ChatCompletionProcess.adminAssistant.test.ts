@@ -84,10 +84,6 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   ClientMessageSender: vi.fn().mockImplementation(function () {
     return { send: vi.fn(), close: vi.fn() };
   }),
-  EmbeddingFactory: vi.fn().mockImplementation(function () {
-    return { embed: vi.fn() };
-  }),
-  getProviderFromModel: vi.fn().mockReturnValue('openai'),
   getSettingsByNames: vi.fn().mockResolvedValue({}),
 }));
 vi.mock('../apiKeyService', () => ({

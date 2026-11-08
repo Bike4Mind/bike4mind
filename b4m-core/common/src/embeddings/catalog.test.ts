@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { SupportedEmbeddingModelSchema, VoyageAIEmbeddingModel } from '../schemas/embedding';
+import { ApiEmbeddingModelSchema, VoyageAIEmbeddingModel } from '../schemas/embedding';
 import { EMBEDDING_MODEL_CATALOG, EMBEDDING_MODEL_IDS, servableEmbeddingDimensions } from './catalog';
 
 describe('EMBEDDING_MODEL_CATALOG', () => {
   it('declares only supported model ids (the Record type forces every one to be present)', () => {
     for (const id of EMBEDDING_MODEL_IDS) {
-      expect(SupportedEmbeddingModelSchema.safeParse(id).success).toBe(true);
+      expect(ApiEmbeddingModelSchema.safeParse(id).success).toBe(true);
     }
   });
 
@@ -23,8 +23,8 @@ describe('EMBEDDING_MODEL_CATALOG', () => {
 
   it.each(EMBEDDING_MODEL_IDS)('%s is declared discrete only if its provider forwards outputDimension', id => {
     const { dimensions, provider } = EMBEDDING_MODEL_CATALOG[id];
-    // Only fab-pipeline VoyageAIEmbeddingService forwards a width; any other provider would silently serve native.
-    if (dimensions.kind === 'discrete') expect(provider).toBe('voyage');
+    // Voyage and Cohere forward discrete widths to their providers.
+    if (dimensions.kind === 'discrete') expect(['voyage', 'bedrock']).toContain(provider);
   });
 });
 
