@@ -828,6 +828,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     '75ebb60c42949289eaa820ed09809f498c8859e5b8b0f7035e463913926d561d',
     'Inspects the hosted cloud account or dispatches hosted CI; not applicable to a portable deployment.'
   ),
+  gap(
+    'schedule:infra/cron.ts:completionSequenceSweep',
+    'afd282ecb4669d8158a19fd9cb3a8f2fd9d43f4ffa5e5a7b632b79aa15ed2cc2'
+  ),
   wired(
     'schedule:infra/cron.ts:creditHoldSweep',
     'bc1661185b11bb9dcdd5ef519bf44716500ce9de4e669b5123025dad85086c84',
