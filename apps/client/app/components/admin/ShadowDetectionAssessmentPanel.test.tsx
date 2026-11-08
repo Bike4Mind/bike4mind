@@ -60,6 +60,43 @@ describe('ShadowDetectionAssessmentPanel', () => {
     hooks.useRequestAbuseAssessment.mockReturnValue({ mutateAsync, isPending: false, error: null });
   });
 
+  it('explains ordered completion evidence, limited coverage and review-only handling', () => {
+    hooks.useAbuseAssessments.mockReturnValue({
+      data: [
+        makeItem({
+          featureSummary: {
+            accounts: [],
+            completionSequence: {
+              status: 'observed',
+              reviewOnly: true,
+              source: 'completion_usage_ledger',
+              windowHours: 24,
+              eventsScanned: 40,
+              scanTruncated: true,
+              rounds: 2,
+              memberRefs: ['acct_1', 'acct_2', 'acct_3'],
+              minRequestsPerRound: 3,
+              maxRequestsPerRound: 6,
+              maxRoundSpanSeconds: 20,
+              minGapSeconds: 60,
+              maxGapSeconds: 60,
+            },
+          },
+        }),
+      ],
+      isPending: false,
+      error: null,
+    });
+    renderPanel();
+    const explanation = screen.getByTestId('assessment-completion-sequence').textContent;
+    expect(explanation).toContain('3 summarized accounts');
+    expect(explanation).toContain('2 rounds');
+    expect(explanation).toContain('not proof of abuse');
+    expect(explanation).toContain('cannot trigger automated containment');
+    expect(explanation).toContain('settlement order is not request start order');
+    expect(explanation).toContain('reached a cap');
+  });
+
   it('renders the latest result and its probabilities', () => {
     renderPanel();
     expect(screen.getByTestId('shadow-detection-assessment-result').textContent).toContain('Abuse');

@@ -17,7 +17,7 @@ In **Risk evidence**, **Observed** means the source returned data. It is not a s
 
 In Admin > Detections, start with **Review evidence**. Inspect the linked accounts and their Activity before recording a judgment. A suggested response describes the detector's recommendation; recording a review does not apply that response to account access.
 
-If you need more time, choose **Watch these accounts** and give the watch a name and reason. The watch saves the exact group you selected. You can find open watches on the admin dashboard and in Detections even after the AI advisory expires, changes verdict, or is reviewed. Incomplete groups cannot be saved as a watch; open an individual detection with a complete group instead.
+If you need more time, choose **Watch these accounts** and give the watch a name and reason. The watch saves the exact group you selected. You can find open watches on the admin dashboard and in Detections even after the AI advisory expires, changes verdict, or is reviewed. Groups with omitted participants cannot be saved as a watch; open an individual detection with a complete group instead. A capped activity scan can still be watched when its selected participant list is complete.
 
 Open a watch to see its owner, current account status and credits, profile and Activity links, and the last manual check. Choose **Refresh account data** to reload the details, **Mark checked** after reviewing activity, or **Assign to me** to take ownership. Close the watch when monitoring is complete; the Closed list lets you reopen it later.
 
@@ -407,3 +407,11 @@ The export includes all matching users, not just the current page, up to 15,000 
 - [User Migration](./user-migration.md) - Bulk user migration
 - [Delegated Admin Permissions](./delegated-permissions.md) - Permission model for delegated admins
 - [Analytics](./analytics.md) - User activity analytics
+
+### Coordinated API completions
+
+The Detections filter **Coordinated API completions** surfaces repeated ordered groups in retained successful API-completion settlements. The hourly observation job reads the preceding 24 hours, with bounded results and processing. It can discover accounts outside an existing flagged group. The evidence explains the number of participants, repeated rounds, and incomplete coverage when a cap is reached.
+
+Start with **Review evidence**, open each participant's Activity, and use **Watch** for follow-up. Repeated ordering supports coordination; team schedulers can produce it too. Settlement order is not request start order, and this source does not cover failed requests or all API routes. The observation alone does not establish abuse or a shared operator. These detections cannot trigger automatic containment or change automatic risk-review approval. Human review remains available.
+
+The same ordered group updates its unreviewed observation within a UTC activity day. Reviewed observations remain unchanged; a later activity day can produce a new observation. Use a watch to keep the exact group accessible across observations.

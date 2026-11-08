@@ -56,6 +56,29 @@ const submit = async () => {
 };
 
 describe('useShadowDetectionVerdict', () => {
+  it('recovers a stale verdict with serialized sequence evidence', async () => {
+    const current = row({
+      detector: 'completionSequence',
+      revision: 1,
+      completionSequence: {
+        source: 'completion_usage_ledger',
+        windowHours: 24,
+        eventsScanned: 6,
+        scanTruncated: false,
+        rounds: 2,
+        minRequestsPerRound: 3,
+        maxRequestsPerRound: 3,
+        maxRoundSpanSeconds: 10,
+        minGapSeconds: 60,
+        maxGapSeconds: 60,
+        firstObservedAt: '2026-01-01T12:00:00Z',
+        lastObservedAt: '2026-01-01T12:02:00Z',
+      },
+    });
+    post.mockRejectedValue(httpError(409, { error: 'Evidence changed', item: current }));
+    expect(await submit()).toEqual({ status: 'conflict', item: current, message: 'Evidence changed' });
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });

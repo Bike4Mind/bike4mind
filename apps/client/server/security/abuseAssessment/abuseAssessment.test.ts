@@ -152,6 +152,15 @@ describe('assessShadowDetection', () => {
     expect(mocks.addVerdict).not.toHaveBeenCalled();
   });
 
+  it('requires independent misuse evidence and does not treat prior AI guesses as training labels', async () => {
+    await run();
+    const question = JSON.stringify(mocks.providerDecide.mock.calls[0][0]);
+    expect(question).toContain('Legitimate schedulers');
+    expect(question).toContain('not proven request start order');
+    expect(question).toContain('Require independent evidence of misuse');
+    expect(question).toContain('Never treat the detector name or an earlier AI guess as a ground-truth label');
+  });
+
   it('sends only the pseudonymous summary to the provider', async () => {
     await run();
     const wire = JSON.stringify(mocks.providerDecide.mock.calls[0][0].input);

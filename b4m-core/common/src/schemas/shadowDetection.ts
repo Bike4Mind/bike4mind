@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { accountCampaignGroupSchema } from './accountCampaign';
+import { completionSequenceEvidenceSchema } from './completionSequence';
 
 /**
  * Shadow detections: what an abuse detector WOULD have done to an actor, recorded next to its alert
@@ -12,6 +13,7 @@ import { accountCampaignGroupSchema } from './accountCampaign';
 export const SHADOW_DETECTORS = [
   'signupNetworkBurst',
   'accountCampaign',
+  'completionSequence',
   'youngAccountSpend',
   'paymentRisk',
   /** A new account that signed up from the same IP as a blocked account, close in time. */
@@ -118,6 +120,8 @@ export const shadowDetectionItemSchema = z.object({
   windowMinutes: z.number().nullable(),
   /** The linked-account evidence of an accountCampaign detection; null for single-actor detectors. */
   group: accountCampaignGroupSchema.nullable(),
+  /** Optional for older records. Participants follow userIds order. Observation only. */
+  completionSequence: completionSequenceEvidenceSchema.optional(),
   /** The screened payment of a paymentRisk detection; null for detectors that do not watch payments. */
   payment: shadowDetectionPaymentSchema.nullable(),
   detectedAt: z.date(),

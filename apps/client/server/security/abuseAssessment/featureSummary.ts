@@ -24,6 +24,7 @@ import {
   type AbuseAssessmentGroupEvidence,
   type AbuseAssessmentRequestActivity,
   abuseAssessmentRequestActivitySchema,
+  completionSequenceEvidenceSchema,
   type DecisionModelId,
   type RiskEvidenceFacts,
   type RiskEvidenceSummary,
@@ -94,6 +95,35 @@ const projectAccount = (
     ...(source?.requests ? { requests: abuseAssessmentRequestActivitySchema.parse(source.requests) } : {}),
   };
 };
+
+function projectCompletionSequence(detection: ShadowDetectionItem, kept: AbuseAssessmentAccount[]) {
+  if (detection.detector !== 'completionSequence') return undefined;
+  const source = completionSequenceEvidenceSchema.safeParse(detection.completionSequence);
+  if (!source.success)
+    return { status: 'incomplete' as const, reviewOnly: true as const, reason: 'source_missing' as const };
+  if (kept.length !== detection.userIds.length || kept.length < 3)
+    return {
+      status: 'incomplete' as const,
+      reviewOnly: true as const,
+      reason: 'members_omitted' as const,
+    };
+  const sequence = source.data;
+  return {
+    status: 'observed' as const,
+    reviewOnly: true as const,
+    memberRefs: kept.map(account => account.ref),
+    source: sequence.source,
+    windowHours: sequence.windowHours,
+    eventsScanned: sequence.eventsScanned,
+    scanTruncated: sequence.scanTruncated,
+    rounds: sequence.rounds,
+    minRequestsPerRound: sequence.minRequestsPerRound,
+    maxRequestsPerRound: sequence.maxRequestsPerRound,
+    maxRoundSpanSeconds: sequence.maxRoundSpanSeconds,
+    minGapSeconds: sequence.minGapSeconds,
+    maxGapSeconds: sequence.maxGapSeconds,
+  };
+}
 
 export const accountRef = (index: number) => `acct_${index + 1}`;
 
@@ -168,6 +198,7 @@ export function buildFeatureSummary({
           })),
       },
       accounts: kept,
+      completionSequence: projectCompletionSequence(detection, kept),
       accountsOmitted: detection.userIds.length - kept.length,
       group: group
         ? { ...group, memberRefs: group.memberRefs.filter(ref => kept.some(account => account.ref === ref)) }
