@@ -17,6 +17,7 @@ export function ollamaRate(frame: {
   prompt_eval_count?: unknown;
   prompt_eval_duration?: unknown;
   load_duration?: unknown;
+  total_duration?: unknown;
 }): ChatTokenRate | undefined {
   const evalTokens = count(frame.eval_count);
   const evalNs = duration(frame.eval_duration);
@@ -24,11 +25,13 @@ export function ollamaRate(frame: {
   const promptTokens = count(frame.prompt_eval_count);
   const promptNs = duration(frame.prompt_eval_duration);
   const loadNs = duration(frame.load_duration);
+  const totalNs = duration(frame.total_duration);
   return {
     evalTokens,
     evalMs: evalNs / NS_PER_MS,
     ...(promptTokens !== undefined && promptNs !== undefined ? { promptTokens, promptMs: promptNs / NS_PER_MS } : {}),
     ...(loadNs !== undefined ? { loadMs: loadNs / NS_PER_MS } : {}),
+    ...(totalNs !== undefined ? { totalMs: totalNs / NS_PER_MS } : {}),
   };
 }
 
@@ -41,12 +44,14 @@ export function llamaServerRate(timings: unknown): ChatTokenRate | undefined {
   if (evalTokens === undefined || evalMs === undefined) return undefined;
   const promptTokens = count(raw.prompt_n);
   const promptMs = duration(raw.prompt_ms);
+  const cachedPromptTokens = count(raw.cache_n);
   const draftTokens = count(raw.draft_n);
   const draftAccepted = count(raw.draft_n_accepted);
   return {
     evalTokens,
     evalMs,
     ...(promptTokens !== undefined && promptMs !== undefined ? { promptTokens, promptMs } : {}),
+    ...(cachedPromptTokens !== undefined ? { cachedPromptTokens } : {}),
     ...(draftTokens !== undefined && draftTokens > 0 && draftAccepted !== undefined
       ? { draftTokens, draftAccepted }
       : {}),
@@ -88,6 +93,8 @@ const RATE_FIELDS = [
   'promptTokens',
   'promptMs',
   'loadMs',
+  'totalMs',
+  'cachedPromptTokens',
   'draftTokens',
   'draftAccepted',
 ] as const satisfies readonly (keyof ChatTokenRate)[];

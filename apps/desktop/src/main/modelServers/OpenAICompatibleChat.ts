@@ -20,6 +20,7 @@ import {
   parseLocalModelId,
   type ChatModelOption,
   type ChatTokenRate,
+  type ChatUsage,
   type ContextNoticeKind,
 } from '@shared/chat';
 import { isChatCapable } from '@shared/models';
@@ -169,7 +170,13 @@ interface StreamChunk {
     };
     finish_reason?: unknown;
   }[];
-  usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } | null;
+  usage?: {
+    prompt_tokens?: unknown;
+    completion_tokens?: unknown;
+    /** vLLM sends this only with `--enable-prompt-tokens-details`. */
+    prompt_tokens_details?: { cached_tokens?: unknown } | null;
+    completion_tokens_details?: { reasoning_tokens?: unknown } | null;
+  } | null;
   /** llama-server only. */
   timings?: unknown;
   error?: { message?: unknown } | unknown;
@@ -803,7 +810,8 @@ export class OpenAICompatibleChat implements LocalChat {
   ) {
     const calls = new Map<number, { id?: string; name: string; arguments: string }>();
     let stopReason: string | undefined;
-    let usage: { inputTokens?: number; outputTokens?: number } | undefined;
+    let usage: Pick<ChatUsage, 'inputTokens' | 'outputTokens' | 'reasoningTokens' | 'cachedPromptTokens'> | undefined;
+    let cachedTokens: number | undefined;
     let reported: ChatTokenRate | undefined;
     // Stamped per network read, so deltas buffered into one read count as one arrival.
     let readAt = 0;
@@ -864,10 +872,13 @@ export class OpenAICompatibleChat implements LocalChat {
         if (chunk.usage) {
           const inputTokens = tokenCount(chunk.usage.prompt_tokens);
           const outputTokens = tokenCount(chunk.usage.completion_tokens);
+          const reasoningTokens = tokenCount(chunk.usage.completion_tokens_details?.reasoning_tokens);
           usage = {
             ...(inputTokens !== undefined ? { inputTokens } : {}),
             ...(outputTokens !== undefined ? { outputTokens } : {}),
+            ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
           };
+          cachedTokens = tokenCount(chunk.usage.prompt_tokens_details?.cached_tokens) ?? cachedTokens;
         }
         reported = llamaServerRate(chunk.timings) ?? reported;
       },
@@ -892,6 +903,9 @@ export class OpenAICompatibleChat implements LocalChat {
       .map(call => ({ name: call.name, arguments: call.arguments || '{}', ...(call.id ? { id: call.id } : {}) }));
     if (tools.length > 0) onEvent({ type: 'tool_use', tools });
     const rate = reported ?? estimatedRate(usage?.outputTokens, timing);
+    // Kept apart from the rate, which a short reply has none of; llama-server's timings count it first.
+    if (cachedTokens !== undefined && rate?.cachedPromptTokens === undefined)
+      usage = { ...usage, cachedPromptTokens: cachedTokens };
     onEvent({
       type: 'content',
       stopReason: stopReason ?? 'stop',

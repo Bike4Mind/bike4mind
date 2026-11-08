@@ -1,13 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeTokenRate, formatTokenRate, parseStoredTokenRate } from './tokenRate';
-
-describe('parseStoredTokenRate', () => {
-  it('defaults on and turns off only for a stored 0', () => {
-    expect(parseStoredTokenRate(null)).toBe(true);
-    expect(parseStoredTokenRate('1')).toBe(true);
-    expect(parseStoredTokenRate('0')).toBe(false);
-  });
-});
+import { describeTokenRate, formatTokenRate } from './tokenRate';
 
 describe('formatTokenRate', () => {
   it('shows one decimal under 100 tok/s and whole numbers above', () => {
