@@ -10,7 +10,7 @@ import {
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
 const mocks = vi.hoisted(() => ({ audit: vi.fn() }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mocks.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mocks.audit }));
 import { campaignWatchDetail, changeCampaignWatch, createCampaignWatch, listCampaignWatches } from './campaignWatches';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
