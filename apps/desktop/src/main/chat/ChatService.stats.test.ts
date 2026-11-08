@@ -126,10 +126,13 @@ describe('ChatService reply stats', () => {
       totalMs: expect.any(Number),
       modelMs: expect.any(Number),
       toolMs: 0,
+      outputMs: expect.any(Number),
       firstTokenMs: expect.any(Number),
     });
     expect(reply!.stats!.totalMs).toBeGreaterThanOrEqual(reply!.stats!.modelMs);
     expect(reply!.stats!.modelMs).toBeGreaterThanOrEqual(15);
+    expect(reply!.stats!.outputMs).toBeGreaterThanOrEqual(15);
+    expect(reply!.stats!.outputMs).toBeLessThanOrEqual(reply!.stats!.modelMs);
     expect(end).toMatchObject({ type: 'done', stats: reply?.stats });
   });
 
@@ -146,6 +149,33 @@ describe('ChatService reply stats', () => {
     const stats = reply!.stats!;
     expect(stats.totalMs - stats.modelMs).toBeLessThan(100);
     expect(stats.firstTokenMs).toBeLessThanOrEqual(stats.modelMs);
+  });
+
+  it("times a round from its request, so this app's own work before it is no server wait", async () => {
+    const PRE_SEND_MS = 300;
+    type Clear = (...args: unknown[]) => Promise<void>;
+    const proto = ChatService.prototype as unknown as { clearStaleResults: Clear };
+    const clear = proto.clearStaleResults;
+    vi.spyOn(proto, 'clearStaleResults').mockImplementation(async function (this: unknown, ...args: unknown[]) {
+      await pause(PRE_SEND_MS);
+      return clear.apply(this, args);
+    });
+    localStream.mockImplementation(async (_request, emit) => {
+      emit({ type: 'content', text: 'Hello' });
+      emit({
+        type: 'content',
+        stopReason: 'end_turn',
+        usage: { inputTokens: 40, outputTokens: 1 },
+        rate: { evalTokens: 1, evalMs: 1, loadReported: false },
+      });
+    });
+    const id = await session(LOCAL.id);
+    await services[0].send(id, 'hi');
+    await settled();
+
+    const stats = (await store.get(id))?.messages.find(message => message.role === 'assistant')?.stats;
+    expect(stats?.modelMs).toBeLessThan(PRE_SEND_MS);
+    expect(stats?.totalMs).toBeLessThan(PRE_SEND_MS);
   });
 
   it('times hosted thinking from the markers around it', async () => {

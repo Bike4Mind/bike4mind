@@ -79,7 +79,7 @@ describe('the cost on a reply', () => {
   });
 
   describe('on a self-hosted model reply', () => {
-    const usage = { inputTokens: 300, outputTokens: 48, rate: { evalTokens: 48, evalMs: 2000, loadMs: 1200 } };
+    const usage = { inputTokens: 300, outputTokens: 48, rate: { evalTokens: 48, evalMs: 2000, loadMs: 40 } };
 
     it('shows the generation rate where credits would be, with details in the title', () => {
       render([message('m1', { usage })]);
@@ -88,8 +88,65 @@ describe('the cost on a reply', () => {
       expect(row?.textContent).toBe('24.0 tok/s');
       expect(row?.querySelector('[data-testid="chat-message-stat-speed"]')).not.toBeNull();
       expect(row?.getAttribute('title')).toBe(
-        '300 new input, 48 output\nTotal tokens: 48 (thinking and any sub-agents included)\nSpeed: 24.0 tok/s\nLoad time: 1.2s'
+        '300 new input, 48 output\nTotal tokens: 48 (thinking and any sub-agents included)\nSpeed: 24.0 tok/s'
       );
+    });
+
+    it('names a cold model load apart from the total, which leaves it out', () => {
+      render([
+        message('m1', {
+          usage: { outputTokens: 40, rate: { evalTokens: 40, evalMs: 1250, promptMs: 500, loadMs: 28_000 } },
+          stats: { totalMs: 34_000, modelMs: 34_000, toolMs: 0, loadMs: 28_000, outputMs: 5200, firstTokenMs: 28_800 },
+        }),
+      ]);
+
+      expect(costs()[0]?.textContent).toBe('32.0 tok/s \xb7 6.0s total + 28.0s model load');
+      expect(costs()[0]?.getAttribute('title')).toContain('Total time: 6.0s (leaves out 28.0s of model load)');
+    });
+
+    it('lists a model load like any other stat where the total is unticked in Settings', () => {
+      act(() => setReplyStatShown('total', false));
+      render([
+        message('m1', {
+          usage: { outputTokens: 40, rate: { evalTokens: 40, evalMs: 1250, promptMs: 500, loadMs: 28_000 } },
+          stats: { totalMs: 34_000, modelMs: 34_000, toolMs: 0, loadMs: 28_000, outputMs: 5200, firstTokenMs: 28_800 },
+        }),
+      ]);
+
+      expect(costs()[0]?.textContent).toBe('32.0 tok/s \xb7 28.0s model load');
+    });
+
+    it('names a wait worked out from llama-server timings as a server wait, in the footer and the title', () => {
+      render([
+        message('m1', {
+          usage: { outputTokens: 40, rate: { evalTokens: 40, evalMs: 1250, promptMs: 500 } },
+          stats: {
+            totalMs: 34_000,
+            modelMs: 34_000,
+            toolMs: 0,
+            loadMs: 28_000,
+            outputMs: 5200,
+            firstTokenMs: 28_800,
+            derived: ['loadMs'],
+          },
+        }),
+      ]);
+
+      expect(costs()[0]?.textContent).toBe('32.0 tok/s \xb7 34.0s total \xb7 28.0s server wait included');
+      expect(costs()[0]?.getAttribute('title')).toContain('Total time: 34.0s (includes 28.0s of server wait)');
+      expect(costs()[0]?.getAttribute('title')).toContain('Server wait: 28.0s (load, queue or connection)');
+    });
+
+    it('takes the load out of a reply stored before loads were kept, from what the server reported', () => {
+      render([
+        message('m1', {
+          usage: { outputTokens: 40, rate: { evalTokens: 40, evalMs: 1250, promptMs: 500, loadMs: 28_000 } },
+          stats: { totalMs: 34_000, modelMs: 34_000, toolMs: 0, firstTokenMs: 28_800 },
+        }),
+      ]);
+
+      expect(costs()[0]?.textContent).toBe('32.0 tok/s \xb7 6.0s total + 28.0s model load');
+      expect(costs()[0]?.getAttribute('title')).toContain('Model load: 28.0s');
     });
 
     it('leaves out a stat unticked in Settings, keeps it in the title, and shows nothing with no other', () => {
@@ -120,7 +177,8 @@ describe('the cost on a reply', () => {
     ]);
 
     expect(costs()[0]?.textContent).toBe('~50.0 tok/s \xb7 10.0s total \xb7 ~1.5s thinking \xb7 12 credits');
-    expect(costs()[0]?.getAttribute('title')).toContain('Thinking share: ~15%');
+    // Thinking timed from the wait before the first output takes in prompt processing: no share from it.
+    expect(costs()[0]?.getAttribute('title')).not.toContain('Thinking share');
   });
 
   it('leaves the user, relay and system turns alone', () => {

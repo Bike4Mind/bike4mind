@@ -1,4 +1,10 @@
-import type { ChatMessage, ChatReplyStats, ChatUsage, ModelPhase } from '@shared/chat';
+import {
+  REPLY_STATS_SIGNIFICANT_WAIT_MS,
+  type ChatMessage,
+  type ChatReplyStats,
+  type ChatUsage,
+  type ModelPhase,
+} from '@shared/chat';
 import { formatElapsed, formatTokens, type TurnProgress } from './statusLine';
 import { formatTokenRate, untimedOutputNote } from './tokenRate';
 
@@ -32,31 +38,55 @@ interface ReplyStatText {
 
 export const REPLY_STAT_TEXT: Record<ReplyStatId, ReplyStatText> = {
   thinking: { label: 'Thinking time', setting: 'Thinking time' },
-  total: { label: 'Total time', setting: 'Total time, tools and approvals included' },
-  thinkingShare: { label: 'Thinking share', setting: "Share of the model's time spent thinking" },
+  total: {
+    label: 'Total time',
+    setting: 'Total time, tools and approvals included, a model load the server reported left out',
+  },
+  thinkingShare: {
+    label: 'Thinking share',
+    setting: 'Share spent thinking: of the output tokens where they were counted, else of the generation time',
+  },
   thinkingTokens: { label: 'Thinking tokens', setting: 'Thinking tokens' },
   tokens: { label: 'Total tokens', setting: 'Total tokens generated, thinking and sub-agents included' },
   speed: { label: 'Speed', setting: 'Tokens per second, sub-agents left out' },
   cacheShare: { label: 'Cache read', setting: 'Share of the prompt read from cache' },
   promptSpeed: { label: 'Prompt speed', setting: 'Prompt processing speed' },
   firstToken: { label: 'First token', setting: 'Time to first token' },
-  load: { label: 'Load time', setting: 'Model load time' },
+  load: {
+    label: 'Model load',
+    setting: "Model load, or a self-hosted server's wait before it started, when long enough to matter",
+  },
   draft: { label: 'Draft accepted', setting: 'Share of draft tokens accepted' },
 };
+
+/** A load the server reported, or a wait worked out from its timings, which can be any of these. */
+const LOAD_KINDS = {
+  load: { label: 'Model load', note: undefined },
+  wait: { label: 'Server wait', note: 'load, queue or connection' },
+} as const;
 
 /**
  * The few stats the hover footer names, in its order and words; the rest are in its title. Each
  * names its unit or its kind, so no two figures on the line can be read as the same thing.
  */
-export const FOOTER_STATS: readonly (readonly [ReplyStatId, (value: string) => string])[] = [
+export const FOOTER_STATS: readonly (readonly [ReplyStatId, (value: string, label: string) => string])[] = [
   ['speed', value => value],
   ['total', value => `${value} total`],
+  // A server wait is part of the total, a reported load is not; see replyStats.
+  ['load', (value, label) => `${value} ${label.toLowerCase()}${label === LOAD_KINDS.wait.label ? ' included' : ''}`],
   ['thinking', value => `${value} thinking`],
 ];
+
+/** The footer's join before a stat: a reported load reads as added to the total it follows. */
+export function footerSeparator(previous: ReplyStatId | undefined, id: ReplyStatId, label: string): string {
+  return previous === 'total' && id === 'load' && label === LOAD_KINDS.load.label ? ' + ' : ' \xb7 ';
+}
 
 /** One stat ready to draw. */
 export interface ReplyStat {
   id: ReplyStatId;
+  /** In place of REPLY_STAT_TEXT's label, where the figure's basis changes from reply to reply. */
+  label?: string;
   /** Formatted, with a leading ~ on an estimate. */
   value: string;
   /** What the estimate rests on; absent on a measured or reported value. */
@@ -93,15 +123,46 @@ export function formatShare(share: number): string {
   return percent === 0 && share > 0 ? '<1%' : `${percent}%`;
 }
 
+const finite = (value: number | undefined): value is number => value !== undefined && Number.isFinite(value);
+
 /**
- * Thinking over the time spent waiting on the model, 0 to 1, so tools and approvals do not dilute
- * it; null when the reply did not think or the model took no time.
+ * Thinking over output tokens where counted, else thinking over generation time (no tools, load or
+ * prompt); null with no thinking, or a thinking time estimated from the wait, which holds the prompt.
  */
-export function thinkingShare(stats: ChatReplyStats | undefined): number | null {
-  if (!stats || stats.reasoningMs === undefined) return null;
-  const { reasoningMs, modelMs } = stats;
-  if (!Number.isFinite(reasoningMs) || !Number.isFinite(modelMs) || modelMs <= 0) return null;
-  return Math.min(1, Math.max(0, reasoningMs / modelMs));
+export function thinkingShare({
+  stats,
+  usage,
+}: ReplyStatsSource): { share: number; basis: 'tokens' | 'time'; estimated: boolean } | null {
+  const counted = usage?.reasoningTokens;
+  const reasoningTokens = counted ?? stats?.reasoningTokens;
+  const outputTokens = usage?.outputTokens;
+  const thought = (finite(reasoningTokens) && reasoningTokens > 0) || stats?.reasoningMs !== undefined;
+  if (!thought) return null;
+  if (finite(reasoningTokens) && finite(outputTokens) && outputTokens > 0) {
+    const estimated = counted === undefined && !!stats?.derived?.includes('reasoningTokens');
+    return { share: Math.min(1, Math.max(0, reasoningTokens / outputTokens)), basis: 'tokens', estimated };
+  }
+  const { reasoningMs, outputMs } = stats ?? {};
+  if (!finite(reasoningMs) || !finite(outputMs) || outputMs <= 0) return null;
+  if (stats?.derived?.includes('reasoningMs')) return null;
+  return { share: Math.min(1, Math.max(0, reasoningMs / outputMs)), basis: 'time', estimated: false };
+}
+
+/** Stats stored before main kept loads, which it did together with outputMs, or as 0 where outputMs is unknown. */
+function storedBeforeLoads(stats: ChatReplyStats): boolean {
+  return stats.loadMs === undefined && stats.outputMs === undefined && stats.modelMs > 0;
+}
+
+/**
+ * The load or wait main counted, a derived one as a wait; on a reply stored before that, the reported
+ * load, only where no tool ran, so it was one request's. Null where under REPLY_STATS_SIGNIFICANT_WAIT_MS.
+ */
+export function replyLoad({ stats, usage }: ReplyStatsSource): { ms: number; kind: 'load' | 'wait' } | null {
+  if (!stats) return null;
+  const old = storedBeforeLoads(stats);
+  const ms = old ? (stats.toolMs === 0 ? usage?.rate?.loadMs : undefined) : stats.loadMs;
+  if (!finite(ms) || ms < REPLY_STATS_SIGNIFICANT_WAIT_MS) return null;
+  return { ms, kind: !old && stats.derived?.includes('loadMs') ? 'wait' : 'load' };
 }
 
 /**
@@ -148,20 +209,48 @@ export function cacheReadShare(usage: ChatUsage | null | undefined): number | nu
   return whole > 0 ? read / whole : null;
 }
 
-function stat(id: ReplyStatId, value: string | null, estimate?: string | false, note?: string): ReplyStat | null {
+function stat(
+  id: ReplyStatId,
+  value: string | null,
+  estimate?: string | false,
+  note?: string,
+  label?: string
+): ReplyStat | null {
   if (value === null) return null;
   return {
     id,
+    ...(label ? { label } : {}),
     value: estimate ? `~${value}` : value,
     ...(estimate ? { estimate } : {}),
     ...(note ? { note } : {}),
   };
 }
 
+/** What a reply's total takes in beyond its model's own work, or leaves out; undefined with nothing to say. */
+function totalNote(stats: ChatReplyStats, load: ReturnType<typeof replyLoad>): string | undefined {
+  const includes: string[] = [];
+  if (finite(stats.toolMs) && stats.toolMs > 0) {
+    includes.push(`${formatDuration(stats.toolMs)} running tools and waiting for approval`);
+  }
+  // With no load from the server, a long first token may hide one: name the wait, never split it.
+  if (!load && finite(stats.firstTokenMs) && stats.firstTokenMs >= REPLY_STATS_SIGNIFICANT_WAIT_MS) {
+    includes.push(`${formatDuration(stats.firstTokenMs)} waiting for the first token`);
+  }
+  if (load?.kind === 'wait') includes.push(`${formatDuration(load.ms)} of server wait`);
+  if (stats.loadPartial) includes.push('any load or wait in a run before Continue, which did not record it');
+  const parts = [
+    ...(includes.length > 0 ? [`includes ${includes.join(', and ')}`] : []),
+    ...(load?.kind === 'load' ? [`leaves out ${formatDuration(load.ms)} of model load`] : []),
+  ];
+  return parts.length > 0 ? parts.join('; ') : undefined;
+}
+
 /**
  * Every stat the source has a value for, in REPLY_STATS order. `live` formats durations in whole
  * seconds, to tick with the status line's clock, and leaves out the total and the speed, which
  * that line shows while the turn runs, and the share, whose model time is not known until the end.
+ * A model load or server wait long enough to matter gets its own row; only a load the server
+ * reported is left out of the total, as a derived wait can be a connection on every request.
  */
 export function replyStats(source: ReplyStatsSource, { live = false }: { live?: boolean } = {}): ReplyStat[] {
   const { stats, usage } = source;
@@ -169,8 +258,15 @@ export function replyStats(source: ReplyStatsSource, { live = false }: { live?: 
   const format = live ? formatElapsed : formatDuration;
   const duration = (ms: number | undefined) => (ms !== undefined && Number.isFinite(ms) ? format(ms) : null);
   const thinkingEstimate = derived.has('reasoningMs') && ESTIMATES.thinking;
-  const share = live ? null : thinkingShare(stats);
+  const share = live ? null : thinkingShare(source);
   const generation = live ? null : generationRate(source);
+  const load = replyLoad(source);
+  const loadNotes = [
+    load && LOAD_KINDS[load.kind].note,
+    stats?.loadPartial && 'not counting a run before Continue, which did not record it',
+  ].filter((part): part is string => !!part);
+  const { firstTokenMs, firstTokenLoadMs } = stats ?? {};
+  const loadKind = LOAD_KINDS[derived.has('loadMs') ? 'wait' : 'load'];
   const cached = cacheReadShare(usage);
   const rate = usage?.rate;
   // The server's count first: while a continued reply runs it covers every run, and the stored
@@ -181,13 +277,19 @@ export function replyStats(source: ReplyStatsSource, { live = false }: { live?: 
     thinking: stat('thinking', duration(stats?.reasoningMs), thinkingEstimate),
     total: stat(
       'total',
-      stats && !live ? duration(stats.totalMs) : null,
+      stats && !live && finite(stats.totalMs)
+        ? duration(Math.max(0, stats.totalMs - (load?.kind === 'load' ? load.ms : 0)))
+        : null,
       false,
-      stats && Number.isFinite(stats.toolMs) && stats.toolMs > 0
-        ? `includes ${formatDuration(stats.toolMs)} running tools and waiting for approval`
-        : undefined
+      stats && !live ? totalNote(stats, load) : undefined
     ),
-    thinkingShare: stat('thinkingShare', share !== null ? formatShare(share) : null, thinkingEstimate),
+    thinkingShare: stat(
+      'thinkingShare',
+      share && formatShare(share.share),
+      share?.estimated && ESTIMATES.thinkingTokens,
+      undefined,
+      share ? `Thinking (${share.basis})` : undefined
+    ),
     thinkingTokens: stat(
       'thinkingTokens',
       reasoningTokens !== undefined ? formatTokens(reasoningTokens) : null,
@@ -214,11 +316,15 @@ export function replyStats(source: ReplyStatsSource, { live = false }: { live?: 
     ),
     firstToken: stat(
       'firstToken',
-      stats?.firstTokenMs !== undefined && Number.isFinite(stats.firstTokenMs)
-        ? formatDuration(stats.firstTokenMs)
-        : null
+      finite(firstTokenMs) ? formatDuration(firstTokenMs) : null,
+      false,
+      finite(firstTokenLoadMs) && firstTokenLoadMs >= REPLY_STATS_SIGNIFICANT_WAIT_MS
+        ? `includes ${formatDuration(firstTokenLoadMs)} of ${loadKind.label.toLowerCase()}`
+        : undefined
     ),
-    load: stat('load', rate?.loadMs !== undefined && Number.isFinite(rate.loadMs) ? formatDuration(rate.loadMs) : null),
+    load:
+      load &&
+      stat('load', formatDuration(load.ms), false, loadNotes.join('; ') || undefined, LOAD_KINDS[load.kind].label),
     draft: stat(
       'draft',
       rate?.draftTokens && rate.draftAccepted !== undefined
@@ -242,13 +348,17 @@ export function statDetail(row: ReplyStat): string | null {
   return parts.length > 0 ? parts.join('; ') : null;
 }
 
+export function statLabel(row: ReplyStat): string {
+  return row.label ?? REPLY_STAT_TEXT[row.id].label;
+}
+
 /** One line per stat, label first, with what each estimate rests on; for a native title. */
 export function describeReplyStats(rows: readonly ReplyStat[]): string | null {
   if (rows.length === 0) return null;
   return rows
     .map(row => {
       const detail = statDetail(row);
-      return `${REPLY_STAT_TEXT[row.id].label}: ${row.value}${detail ? ` (${detail})` : ''}`;
+      return `${statLabel(row)}: ${row.value}${detail ? ` (${detail})` : ''}`;
     })
     .join('\n');
 }
@@ -258,7 +368,7 @@ export function speakReplyStats(rows: readonly ReplyStat[], credits: string | nu
   const parts = rows.map(row => {
     const detail = statDetail(row);
     const value = row.value.startsWith('~') ? `about ${row.value.slice(1)}` : row.value;
-    return `${REPLY_STAT_TEXT[row.id].label} ${value}${detail ? `, ${detail}` : ''}`;
+    return `${statLabel(row)} ${value}${detail ? `, ${detail}` : ''}`;
   });
   if (credits) parts.push(`Cost ${credits}`);
   return `${parts.join('; ')}.`;

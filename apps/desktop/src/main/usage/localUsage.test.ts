@@ -42,6 +42,19 @@ describe('sessionUsageBuckets', () => {
     expect(result[1]).toMatchObject({ replies: 1, outputTokens: 5 });
   });
 
+  it('pins existing behavior: a cold model load stays out of the generation and prompt times', () => {
+    const result = buckets([
+      reply('2026-11-02T15:05:00.000Z', {
+        outputTokens: 40,
+        rate: { evalTokens: 40, evalMs: 1250, promptTokens: 900, promptMs: 500, loadMs: 28_000, totalMs: 29_800 },
+      }),
+    ]);
+    expect(result[0]).toMatchObject({ evalTokens: 40, evalMs: 1250, promptTokens: 900, promptMs: 500, loadMs: 28_000 });
+    const { totals, byModel } = localUsageWindow(result, 'last-24-hours', NOW, NAMES);
+    expect(totals.evalTokens / (totals.evalMs / 1000)).toBe(32);
+    expect(byModel[0]).toMatchObject({ evalTokens: 40, evalMs: 1250 });
+  });
+
   it('prefers the reply model stamp over the session model', () => {
     const result = buckets(
       [

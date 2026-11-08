@@ -89,9 +89,9 @@ describe('railFitsBesideThread', () => {
 });
 
 describe('parseReplyStatsPrefs', () => {
-  const offByDefault = ['promptSpeed', 'firstToken', 'load', 'draft'];
+  const offByDefault = ['promptSpeed', 'firstToken', 'draft'];
 
-  it('starts with the rail on, and every stat shown but the server timings and the first token', () => {
+  it('starts with the rail on, and every stat shown but the server timings and the first token, model load included', () => {
     const prefs = parseReplyStatsPrefs(null, null, null);
     expect(prefs.rail).toBe(true);
     expect([...prefs.hidden]).toEqual(offByDefault);
@@ -128,7 +128,7 @@ describe('the stored prefs', () => {
     expect(JSON.parse(stored ?? 'null')).toEqual({ total: false, firstToken: true });
     expect(parseReplyStatsPrefs(window.localStorage.getItem('b4m.chat.replyStats.rail'), stored, null)).toEqual({
       rail: false,
-      hidden: new Set(['total', 'promptSpeed', 'load', 'draft']),
+      hidden: new Set(['total', 'promptSpeed', 'draft']),
     });
   });
 
@@ -140,7 +140,7 @@ describe('the stored prefs', () => {
       '9 of 11 stats, under each reply on hover'
     );
     expect(replyStatsSummary(parseReplyStatsPrefs(null, null, null))).toBe(
-      '7 of 11 stats, beside the conversation when the window is wide enough'
+      '8 of 11 stats, beside the conversation when the window is wide enough'
     );
   });
 });

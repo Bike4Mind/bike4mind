@@ -34,14 +34,10 @@ const LEGACY_RATE_KEY = 'b4m.chat.showTokenRate';
 
 /**
  * Off until ticked: a self-hosted server's own timings and the wait for the first token. Each is
- * a row on every reply, and a rail longer than the turns beside it spaces those turns out.
+ * a row on every reply, and a rail longer than the turns beside it spaces those turns out. Model
+ * load stays on: it is a row only on a reply that waited for one, and the total leaves it out.
  */
-export const REPLY_STATS_OFF_BY_DEFAULT: ReadonlySet<ReplyStatId> = new Set([
-  'promptSpeed',
-  'firstToken',
-  'load',
-  'draft',
-]);
+export const REPLY_STATS_OFF_BY_DEFAULT: ReadonlySet<ReplyStatId> = new Set(['promptSpeed', 'firstToken', 'draft']);
 
 export interface ReplyStatsPrefs {
   /** The rail beside the conversation, wherever it fits. */

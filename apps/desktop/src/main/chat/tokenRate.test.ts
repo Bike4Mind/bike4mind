@@ -11,13 +11,21 @@ describe('ollamaRate', () => {
         prompt_eval_duration: 1_500_000_000,
         load_duration: 2_250_000_000,
       })
-    ).toEqual({ evalTokens: 240, evalMs: 10_000, promptTokens: 1200, promptMs: 1500, loadMs: 2250 });
+    ).toEqual({
+      evalTokens: 240,
+      evalMs: 10_000,
+      promptTokens: 1200,
+      promptMs: 1500,
+      loadMs: 2250,
+      loadReported: true,
+    });
   });
 
   it("keeps the server's whole-request time", () => {
     expect(ollamaRate({ eval_count: 10, eval_duration: 500_000_000, total_duration: 3_200_000_000 })).toEqual({
       evalTokens: 10,
       evalMs: 500,
+      loadReported: true,
       totalMs: 3200,
     });
   });
@@ -26,6 +34,15 @@ describe('ollamaRate', () => {
     expect(ollamaRate({ eval_count: 10, eval_duration: 500_000_000, prompt_eval_count: 5 })).toEqual({
       evalTokens: 10,
       evalMs: 500,
+      loadReported: true,
+    });
+  });
+
+  it('says the server reported its load even when the load was zero and so left out', () => {
+    expect(ollamaRate({ eval_count: 10, eval_duration: 500_000_000, load_duration: 0 })).toEqual({
+      evalTokens: 10,
+      evalMs: 500,
+      loadReported: true,
     });
   });
 
@@ -51,16 +68,24 @@ describe('llamaServerRate', () => {
         predicted_ms: 5000,
         predicted_per_second: 24,
       })
-    ).toEqual({ evalTokens: 120, evalMs: 5000, promptTokens: 300, promptMs: 400 });
+    ).toEqual({ evalTokens: 120, evalMs: 5000, loadReported: false, promptTokens: 300, promptMs: 400 });
   });
 
   it('reads the prompt tokens served from the cache, a full miss included', () => {
     expect(
       llamaServerRate({ cache_n: 2400, prompt_n: 100, prompt_ms: 200, predicted_n: 50, predicted_ms: 1000 })
-    ).toEqual({ evalTokens: 50, evalMs: 1000, promptTokens: 100, promptMs: 200, cachedPromptTokens: 2400 });
+    ).toEqual({
+      evalTokens: 50,
+      evalMs: 1000,
+      loadReported: false,
+      promptTokens: 100,
+      promptMs: 200,
+      cachedPromptTokens: 2400,
+    });
     expect(llamaServerRate({ cache_n: 0, predicted_n: 50, predicted_ms: 1000 })).toEqual({
       evalTokens: 50,
       evalMs: 1000,
+      loadReported: false,
       cachedPromptTokens: 0,
     });
   });
@@ -69,6 +94,7 @@ describe('llamaServerRate', () => {
     expect(llamaServerRate({ predicted_n: 120, predicted_ms: 5000, draft_n: 90, draft_n_accepted: 44 })).toEqual({
       evalTokens: 120,
       evalMs: 5000,
+      loadReported: false,
       draftTokens: 90,
       draftAccepted: 44,
     });
@@ -78,6 +104,7 @@ describe('llamaServerRate', () => {
     expect(llamaServerRate({ predicted_n: 5, predicted_ms: 100, draft_n: 0, draft_n_accepted: 0 })).toEqual({
       evalTokens: 5,
       evalMs: 100,
+      loadReported: false,
     });
   });
 
@@ -168,6 +195,17 @@ describe('addTokenRate', () => {
       estimated: true,
       untimedTokens: 5,
     });
+  });
+
+  it('says the load was reported where any request reported one, and keeps an unstamped sum unstamped', () => {
+    const ollama = { evalTokens: 10, evalMs: 100, loadReported: true };
+    const llama = { evalTokens: 10, evalMs: 100, loadReported: false };
+    const stored = { evalTokens: 10, evalMs: 100 };
+    expect(addTokenRate(stored, ollama)?.loadReported).toBe(true);
+    expect(addTokenRate(llama, ollama)?.loadReported).toBe(true);
+    expect(addTokenRate(stored, llama)?.loadReported).toBe(false);
+    expect(addTokenRate(llama, llama)?.loadReported).toBe(false);
+    expect(addTokenRate(stored, stored)).not.toHaveProperty('loadReported');
   });
 
   it('keeps absent as absent', () => {
