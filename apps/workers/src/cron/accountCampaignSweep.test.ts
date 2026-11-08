@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 
 const {
   loadCampaignScanAccounts,
@@ -152,6 +153,21 @@ describe('handler', () => {
     sweepDeviceLinks.mockResolvedValue({ status: 'done', failed: 2 });
 
     await expect(handler({}, context)).rejects.toThrow('Device-link sweep failed to record 2 account(s)');
+  });
+
+  it('warns without failing when the device-link sweep stops with skipped accounts', async () => {
+    sweepDeviceLinks.mockResolvedValue({ status: 'stopped', skipped: 3, failed: 0, assessFailed: 0 });
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+    try {
+      await expect(handler({}, context)).resolves.toBeUndefined();
+
+      expect(warn).toHaveBeenCalledExactlyOnceWith('Device-link sweep stopped before recording all linked accounts', {
+        skipped: 3,
+      });
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('fails the invocation when a device-link detection was recorded but failed to assess', async () => {
