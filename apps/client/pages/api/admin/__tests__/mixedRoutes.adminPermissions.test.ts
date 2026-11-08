@@ -34,6 +34,25 @@ const cases: AdminPermissionCase[] = [
   },
   { file: '../saved-views/[id]', method: 'PATCH', permission: 'settings:manage', allowedMethods: ['PATCH', 'DELETE'] },
   { file: '../saved-views/[id]', method: 'DELETE', permission: 'settings:manage', allowedMethods: ['PATCH', 'DELETE'] },
+  { file: '../embedding-limits', method: 'GET', permission: 'settings:manage', allowedMethods: ['GET'] },
+  { file: '../system-health', method: 'GET', permission: 'settings:manage', allowedMethods: ['GET'] },
+  { file: '../liveops-triage-env', method: 'GET', permission: 'settings:manage', allowedMethods: ['GET'] },
+  { file: '../system-secrets/tier1-status', method: 'GET', permission: 'settings:manage', allowedMethods: ['GET'] },
+  { file: '../system-secrets/index', method: 'GET', permission: 'settings:manage', allowedMethods: ['GET', 'POST'] },
+  { file: '../system-secrets/[id]', method: 'GET', permission: 'settings:manage', allowedMethods: ['GET', 'DELETE'] },
+  {
+    file: '../agent-ops-settings',
+    method: 'GET',
+    permission: 'settings:manage',
+    allowedMethods: ['GET', 'PUT', 'POST'],
+  },
+  {
+    file: '../whats-new-highlights-config',
+    method: 'GET',
+    permission: 'settings:manage',
+    allowedMethods: ['GET', 'PUT'],
+  },
+  { file: '../release-notes/config', method: 'GET', permission: 'settings:manage', allowedMethods: ['GET', 'PUT'] },
 ];
 
 describeAdminPermissionCases(cases, state, file => import(/* @vite-ignore */ file));
