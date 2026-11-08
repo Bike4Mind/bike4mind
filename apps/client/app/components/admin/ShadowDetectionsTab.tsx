@@ -1,5 +1,5 @@
 import { ReviewGroupGrantsButton } from './shared/ReviewGroupGrantsButton';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -782,14 +782,21 @@ const DialogActors: React.FC<{ row: ShadowDetectionRow; now: number; context: De
 // Fields where a digit is text, not a shortcut; radios and checkboxes still take the 1-4 keys.
 const TEXT_ENTRY_SELECTOR =
   'textarea, input:not([type="radio"]):not([type="checkbox"]), select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"]';
+const DIALOG_SELECTOR = '[role="dialog"], [role="alertdialog"]';
 
 /** Keys 1-4 pick the verdicts in SHADOW_DETECTION_VERDICTS order while a verdict dialog is open. */
-const useVerdictShortcuts = (onPick: (verdict: ShadowDetectionVerdict) => void) => {
+const useVerdictShortcuts = (
+  onPick: (verdict: ShadowDetectionVerdict) => void,
+  anchorRef: React.RefObject<HTMLElement | null>
+) => {
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat || event.isComposing) return;
       if (event.altKey || event.metaKey || event.ctrlKey) return;
       if (event.target instanceof Element && event.target.closest(TEXT_ENTRY_SELECTOR)) return;
+      const targetDialog = event.target instanceof Element ? event.target.closest(DIALOG_SELECTOR) : null;
+      const ownDialog = anchorRef.current?.closest(DIALOG_SELECTOR) ?? null;
+      if (targetDialog && targetDialog !== ownDialog) return;
       const option = /^[1-9]$/.test(event.key) ? SHADOW_DETECTION_VERDICTS[Number(event.key) - 1] : undefined;
       if (!option) return;
       event.preventDefault();
@@ -797,7 +804,7 @@ const useVerdictShortcuts = (onPick: (verdict: ShadowDetectionVerdict) => void) 
     };
     document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
-  }, [onPick]);
+  }, [onPick, anchorRef]);
 };
 
 /** Grading changes no account; this points the reviewer at where the account itself is acted on. */
@@ -827,9 +834,10 @@ const VerdictPicker: React.FC<{
   value: ShadowDetectionVerdict | null;
   onChange: (verdict: ShadowDetectionVerdict) => void;
 }> = ({ value, onChange }) => {
-  useVerdictShortcuts(onChange);
+  const anchorRef = useRef<HTMLDivElement>(null);
+  useVerdictShortcuts(onChange, anchorRef);
   return (
-    <FormControl>
+    <FormControl ref={anchorRef}>
       <FormLabel>Verdict</FormLabel>
       <RadioGroup
         name="shadow-detection-verdict"
@@ -930,6 +938,16 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
   const pending = single.isPending || bulk.isPending;
   const error = forRow(failureChoice) ?? single.error ?? bulk.error;
 
+  const refreshRelatedSnapshot = (result: ShadowDetectionBulkVerdictResult) => {
+    const done = new Set([...result.updated.map(item => item.id), ...result.notFound]);
+    const fresh = new Map(result.conflicts.map(item => [item.id, item]));
+    setRelatedSnapshot(prev =>
+      prev.rowId !== row.id
+        ? prev
+        : { rowId: row.id, rows: prev.rows.filter(item => !done.has(item.id)).map(item => fresh.get(item.id) ?? item) }
+    );
+  };
+
   /** Records the verdict; the ids it graded, or null when this row conflicted and must be re-read. */
   const record = async (reason: string): Promise<string[] | null> => {
     if (!verdict) return null;
@@ -953,12 +971,14 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
     onBulkResult(result);
     if (result.failed?.includes(row.id)) {
       setFailureChoice({ rowId: row.id, value: result.failureMessage ?? 'Could not record this verdict. Try again.' });
+      refreshRelatedSnapshot(result);
       return null;
     }
     const ownConflict = result.conflicts.find(item => item.id === row.id);
     if (ownConflict) {
       onRowChange(ownConflict);
       setConflictChoice({ rowId: row.id, value: CONFLICT_FALLBACK_MESSAGE });
+      refreshRelatedSnapshot(result);
       return null;
     }
     return result.updated.map(item => item.id);
