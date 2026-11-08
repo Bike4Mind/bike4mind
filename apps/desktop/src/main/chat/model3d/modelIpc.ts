@@ -1,6 +1,6 @@
 import { realpath, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron';
+import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { isModelExportFormat, type ModelBuildReport, siblingGlbPath } from '@shared/model3d';
 import { stampModelPaneGlb } from './glbMarker';
@@ -89,6 +89,34 @@ function windowOf(event: IpcMainInvokeEvent): BrowserWindow | null {
   return BrowserWindow.fromWebContents(event.sender);
 }
 
+/** Recordings in flight per renderer. */
+const recordingCounts = new Map<WebContents, number>();
+const watchedSenders = new WeakSet<WebContents>();
+
+/**
+ * A backgrounded window's timers fire about once a second, which would draw a clip in slow motion,
+ * so throttling is off while any recording runs. It is a count, not a flag: the pane's Record and
+ * the agent's off-screen model_record can overlap in one window, and the first to finish must not
+ * re-enable throttling under the other. A reload or a closed window ends its recordings, so either
+ * one resets the count.
+ */
+export function setRecording(sender: WebContents, active: boolean): void {
+  if (!watchedSenders.has(sender)) {
+    watchedSenders.add(sender);
+    const reset = (): void => {
+      if (!recordingCounts.delete(sender) || sender.isDestroyed()) return;
+      sender.setBackgroundThrottling(true);
+    };
+    // did-navigate fires for a main-frame load or reload, not for in-page (hash) navigation.
+    sender.on('did-navigate', reset);
+    sender.once('destroyed', reset);
+  }
+  const count = Math.max(0, (recordingCounts.get(sender) ?? 0) + (active ? 1 : -1));
+  if (count > 0) recordingCounts.set(sender, count);
+  else recordingCounts.delete(sender);
+  sender.setBackgroundThrottling(count === 0);
+}
+
 /**
  * Renderer -> main handlers for the model pane. Every write lands where ModelLiveView allows
  * (the open model's sibling GLB, its params) or where the user chose in a save dialog.
@@ -147,9 +175,8 @@ export function modelIpcHandlers(view: ModelLiveView): void {
     return picked.filePath;
   });
 
-  // A backgrounded window's timers fire about once a second, which would draw the clip in slow motion.
   ipcMain.handle(IPC_CHANNELS.modelSetRecording, (event, active: unknown) => {
-    if (typeof active === 'boolean') event.sender.setBackgroundThrottling(!active);
+    if (typeof active === 'boolean') setRecording(event.sender, active);
   });
 
   ipcMain.on(IPC_CHANNELS.modelCaptureResult, (_event, value: unknown) => {

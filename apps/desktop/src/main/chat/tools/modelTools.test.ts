@@ -225,6 +225,28 @@ describe('model_record', () => {
     await expect(modelRecord.run({ path: 'chest.model.js' }, context)).rejects.toThrow(/switched to another file/);
     expect(existsSync(join(root, 'chest-turntable.webm'))).toBe(false);
   });
+
+  it('refuses to record when the clip would land in a protected folder', async () => {
+    const { root, view, context } = setup();
+    mkdirSync(join(root, 'vault'));
+    writeFileSync(join(root, 'vault', 'lamp.glb'), 'glTF');
+    const guarded = { ...context, protectedPaths: [join(root, 'vault')] };
+    await expect(modelRecord.run({ path: 'vault/lamp.glb' }, guarded)).rejects.toThrow(/protected/);
+    expect(view.recordTurntable).not.toHaveBeenCalled();
+    expect(existsSync(join(root, 'vault', 'lamp-turntable.webm'))).toBe(false);
+  });
+
+  it('saves nothing when the folder became protected during the recording', async () => {
+    const { root, view, context } = setup();
+    const protectedPaths: string[] = [];
+    const guarded = { ...context, protectedPaths };
+    view.recordTurntable.mockImplementationOnce(async () => {
+      protectedPaths.push(root);
+      return new Uint8Array([1]);
+    });
+    await expect(modelRecord.run({ path: 'chest.model.js' }, guarded)).rejects.toThrow(/protected/);
+    expect(existsSync(join(root, 'chest-turntable.webm'))).toBe(false);
+  });
 });
 
 describe('turntablePath', () => {

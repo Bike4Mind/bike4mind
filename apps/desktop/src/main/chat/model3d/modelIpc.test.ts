@@ -1,6 +1,8 @@
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { EventEmitter } from 'node:events';
+import type { WebContents } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('node:fs/promises', async importOriginal => {
@@ -10,7 +12,7 @@ vi.mock('node:fs/promises', async importOriginal => {
 vi.mock('electron', () => ({ BrowserWindow: {}, dialog: {}, ipcMain: {} }));
 
 const { writeFile: writeFileSpy } = await import('node:fs/promises');
-const { writeExport, parseBuildReport } = await import('./modelIpc');
+const { writeExport, parseBuildReport, setRecording } = await import('./modelIpc');
 const { isModelPaneGlb } = await import('./glbMarker');
 
 function glb(): Uint8Array {
@@ -96,5 +98,55 @@ describe('parseBuildReport', () => {
 
   it('drops a report without a generation', () => {
     expect(parseBuildReport({ ok: true })).toBeNull();
+  });
+});
+
+describe('setRecording', () => {
+  function fakeSender() {
+    const emitter = new EventEmitter();
+    const sender = Object.assign(emitter, {
+      destroyed: false,
+      isDestroyed: () => sender.destroyed,
+      setBackgroundThrottling: vi.fn(),
+    });
+    return { sender, contents: sender as unknown as WebContents };
+  }
+
+  it('keeps throttling off until the last overlapping recording ends', () => {
+    const { sender, contents } = fakeSender();
+    setRecording(contents, true);
+    setRecording(contents, true);
+    setRecording(contents, false);
+    expect(sender.setBackgroundThrottling).toHaveBeenLastCalledWith(false);
+    setRecording(contents, false);
+    expect(sender.setBackgroundThrottling).toHaveBeenLastCalledWith(true);
+  });
+
+  it('never counts below zero, so a stray stop cannot strand the next recording', () => {
+    const { sender, contents } = fakeSender();
+    setRecording(contents, false);
+    setRecording(contents, true);
+    expect(sender.setBackgroundThrottling).toHaveBeenLastCalledWith(false);
+    setRecording(contents, false);
+    expect(sender.setBackgroundThrottling).toHaveBeenLastCalledWith(true);
+  });
+
+  it('restores throttling when the renderer reloads mid-recording', () => {
+    const { sender, contents } = fakeSender();
+    setRecording(contents, true);
+    sender.emit('did-navigate');
+    expect(sender.setBackgroundThrottling).toHaveBeenLastCalledWith(true);
+    setRecording(contents, true);
+    setRecording(contents, false);
+    expect(sender.setBackgroundThrottling).toHaveBeenLastCalledWith(true);
+  });
+
+  it('does not touch a destroyed renderer', () => {
+    const { sender, contents } = fakeSender();
+    setRecording(contents, true);
+    sender.setBackgroundThrottling.mockClear();
+    sender.destroyed = true;
+    sender.emit('destroyed');
+    expect(sender.setBackgroundThrottling).not.toHaveBeenCalled();
   });
 });

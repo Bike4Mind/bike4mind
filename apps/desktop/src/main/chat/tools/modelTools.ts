@@ -13,9 +13,9 @@ import {
   modelKindFor,
   siblingGlbPath,
 } from '@shared/model3d';
-import { resolveWithinRoots } from './paths';
+import { realpathNearest, resolveWithinRoots } from './paths';
 import { showImage } from './toolImages';
-import { resolveWritablePath } from './writeTools';
+import { resolveWritablePath, withPathLock } from './writeTools';
 import { requireString, type ModelContext, type ToolContext, type ToolDefinition } from './types';
 
 /**
@@ -271,11 +271,16 @@ export const modelRecord: ToolDefinition = {
     const { report, path } = await openAndBuild(model, requested, context);
     if (!report.ok) return formatModelSummary(report);
     const name = path.split(/[\\/]/).pop() ?? 'model';
+    const planned = turntablePath(path, lighting);
+    // An opened .glb/.stl, or an already-open model, never passed the sibling-GLB check in
+    // openAndBuild, so the clip's folder is proven writable here, before an 8-90 s render.
+    await resolveWritablePath(planned, context);
     context.report?.label(`Recording ${name}`);
     const clip = await model.view.recordTurntable(lighting);
     assertStillOpen(model, path);
-    const target = turntablePath(path, lighting);
-    await writeFile(target, clip);
+    // Re-resolved after the render: a root can be revoked, or the folder swapped for a symlink, meanwhile.
+    const target = await resolveWritablePath(planned, context);
+    await withPathLock(await realpathNearest(target), () => writeFile(target, clip));
     context.report?.label(`Recorded ${name}`);
     return `Saved a ${lighting} turntable of ${name} to ${target} (${(clip.length / 1e6).toFixed(1)} MB, 8 s, 1920x1080 WebM).`;
   },
