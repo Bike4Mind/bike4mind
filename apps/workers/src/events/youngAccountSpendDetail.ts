@@ -27,8 +27,8 @@ const QUERY_DEADLINE_MS = 25_000;
  * before the state change may be missing from the first read. One re-read after this pause catches up.
  */
 const CATCH_UP_DELAY_MS = 10_000;
-/** The re-read only starts when it can finish inside this, keeping clear of the relay's 60-second timeout. */
-const SECTION_BUDGET_MS = 50_000;
+/** The re-read only starts when it can finish inside this, leaving the relay's 60-second timeout room for StopQuery cleanup, the mention read and the Slack post. */
+const SECTION_BUDGET_MS = 40_000;
 /** Half a cent: the query sums the same lines the metric does, so only rounding may separate them. */
 const COVERAGE_TOLERANCE_USD = 0.005;
 /** Slack caps a section's text at 3000 characters. */

@@ -350,6 +350,15 @@ describe('youngAccountSpendSection', () => {
     expect(warn).toHaveBeenCalledWith('[youngAccountSpendDetail] catch-up lookup failed; retaining the first result');
   });
 
+  it('re-reads when the first read leaves room inside the budget', async () => {
+    const fetch = vi.fn(async () => ({ spenders: aggregateSpenders(partialRows), truncated: false }));
+    const clock = [0, 5_000];
+    const sleep = vi.fn(async () => {});
+    await youngAccountSpendSection(hourly, { logGroups, fetch, sleep, now: () => clock.shift() ?? 0 });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(10_000);
+  });
+
   it('skips the re-read when it could not finish inside the relay budget', async () => {
     const fetch = vi.fn(async () => ({ spenders: aggregateSpenders(partialRows), truncated: false }));
     const clock = [0, 20_000];
