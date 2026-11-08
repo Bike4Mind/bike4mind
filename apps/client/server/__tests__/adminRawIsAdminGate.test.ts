@@ -89,6 +89,8 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'users/[userId]/timeline.ts',
   'users/[userId]/unlock-signup-grant.ts',
   'users/[userId]/unverify-email.ts',
+  // Receipts require full admin access, matching the credit ledger and summary routes.
+  'users/[userId]/usage-receipt.ts',
   'users/[userId]/user-api-keys.ts',
   'users/[userId]/verify-email.ts',
   'users/bulk/execute.ts',
