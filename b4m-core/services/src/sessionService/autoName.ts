@@ -27,7 +27,8 @@ interface AutoNameAdapters {
     sessions: ISessionRepository;
     quests: IChatHistoryItemRepository;
     /** Resolves attachment names into the input. Optional: without it, attachments are left out. */
-    files?: Pick<IFabFileRepository, 'find'>;
+    files?: Pick<IFabFileRepository, 'findAccessibleInIds'>;
+    fileAccess?: { userId: string; userGroups?: string[] };
   };
   createCompletion: (prompt: string) => Promise<string>;
   logger: Logger;
@@ -55,7 +56,7 @@ export async function autoName(
     return session;
   }
 
-  const fileNames = await resolveAttachmentNames(recentHistory, db.files, logger);
+  const fileNames = await resolveAttachmentNames(recentHistory, db.files, db.fileAccess, logger);
 
   const content = recentHistory
     .map(quest => {
@@ -103,13 +104,14 @@ ${content}`;
 
 async function resolveAttachmentNames(
   quests: { fabFileIds?: string[] }[],
-  files: Pick<IFabFileRepository, 'find'> | undefined,
+  files: Pick<IFabFileRepository, 'findAccessibleInIds'> | undefined,
+  fileAccess: AutoNameAdapters['db']['fileAccess'],
   logger: Logger
 ): Promise<Map<string, string>> {
   const ids = [...new Set(quests.flatMap(quest => quest.fabFileIds ?? []))];
-  if (!files || ids.length === 0) return new Map();
+  if (!files || !fileAccess || ids.length === 0) return new Map();
   try {
-    const found = await files.find({ _id: { $in: ids } });
+    const found = await files.findAccessibleInIds(ids, fileAccess);
     return new Map(found.map(file => [file.id, file.fileName]));
   } catch (error) {
     // The title can still come from the prompts; a failed lookup only drops the names.

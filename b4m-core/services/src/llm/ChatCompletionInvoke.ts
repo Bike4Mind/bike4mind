@@ -47,6 +47,7 @@ export class ChatCompletionInvoke {
   private modelInfoCache: ModelInfo[] | null = null;
   private modelConfigurationsCache: LLMModelConfig[] | null = null;
   private questStartParams: z.infer<typeof QuestStartBodySchema> | null = null;
+  private turnStartAutoNameDispatched = false;
   private invokeLambda?: (params: z.infer<typeof QuestStartBodySchema>) => Promise<void>;
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private autoNameSession: IChatCompletionServiceOptions['autoNameSession'];
@@ -54,6 +55,10 @@ export class ChatCompletionInvoke {
   public prefetchedSession: ISessionDocument | null = null;
   /** Organization fetched during invoke; exposed for the wait=true path to avoid a re-fetch in process. */
   public prefetchedOrganization: IOrganizationDocument | null = null;
+
+  public get autoNameDispatched(): boolean {
+    return this.turnStartAutoNameDispatched;
+  }
 
   constructor(options: IChatCompletionServiceOptions) {
     this.db = options.db;
@@ -512,6 +517,7 @@ export class ChatCompletionInvoke {
         messageFileIds,
         enabled: Boolean(autoNameNotebookSetting),
       });
+      this.turnStartAutoNameDispatched = autoNameDispatched;
 
       this.questStartParams = QuestStartBodySchema.parse({
         userId,

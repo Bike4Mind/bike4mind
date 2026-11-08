@@ -74,6 +74,7 @@ export const handler = withEventContext(async (event, logger) => {
           sessions: sessionRepository,
           quests: questRepository,
           files: fabFileRepository,
+          fileAccess: { userId: user.id, userGroups: user.groups ?? undefined },
         },
         createCompletion: async (prompt: string) => {
           let result = '';

@@ -97,6 +97,7 @@ describe('ChatCompletionInvoke turn-start auto-naming', () => {
     expect(autoNameSession).toHaveBeenCalledWith(SESSION, expect.anything());
     expect(calls).toEqual(['autoName', 'dispatch']);
     expect(dispatchedBody(invokeLambda).autoNameDispatched).toBe(true);
+    expect(invoke.autoNameDispatched).toBe(true);
   });
 
   it('publishes for a notebook still carrying its surface placeholder', async () => {
@@ -119,6 +120,7 @@ describe('ChatCompletionInvoke turn-start auto-naming', () => {
 
     expect(autoNameSession).not.toHaveBeenCalled();
     expect(dispatchedBody(invokeLambda).autoNameDispatched).toBeUndefined();
+    expect(invoke.autoNameDispatched).toBe(false);
   });
 
   it('does not publish for a low-signal prompt, leaving a later turn to name it', async () => {
@@ -128,6 +130,7 @@ describe('ChatCompletionInvoke turn-start auto-naming', () => {
 
     expect(autoNameSession).not.toHaveBeenCalled();
     expect(dispatchedBody(invokeLambda).autoNameDispatched).toBeUndefined();
+    expect(invoke.autoNameDispatched).toBe(false);
   });
 
   it('publishes for a short prompt that carries an attachment', async () => {
@@ -155,6 +158,7 @@ describe('ChatCompletionInvoke turn-start auto-naming', () => {
 
     expect(invokeLambda).toHaveBeenCalledTimes(1);
     expect(dispatchedBody(invokeLambda).autoNameDispatched).toBeUndefined();
+    expect(invoke.autoNameDispatched).toBe(false);
     expect(quest?.type).toBe('message');
     expect(questsUpdate).not.toHaveBeenCalled();
   });

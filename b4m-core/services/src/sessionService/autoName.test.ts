@@ -94,14 +94,17 @@ describe('autoName write-time re-check', () => {
 });
 
 describe('autoName input', () => {
-  const makeAdapters = (history: Record<string, unknown>[], files?: { find: ReturnType<typeof vi.fn> }) => ({
+  const makeAdapters = (
+    history: Record<string, unknown>[],
+    files?: { findAccessibleInIds: ReturnType<typeof vi.fn> }
+  ) => ({
     db: {
       sessions: {
         findById: vi.fn().mockResolvedValue({ id: 's1' }),
         update: vi.fn(),
       },
       quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(history) },
-      ...(files ? { files } : {}),
+      ...(files ? { files, fileAccess: { userId: 'user-1', userGroups: ['group-1'] } } : {}),
     },
     createCompletion: vi.fn().mockResolvedValue('Title'),
     logger: { info: vi.fn(), warn: vi.fn() },
@@ -120,17 +123,30 @@ describe('autoName input', () => {
   });
 
   it('lists the attachment names of each turn', async () => {
-    const files = { find: vi.fn().mockResolvedValue([{ id: 'f1', fileName: 'q3-forecast.xlsx' }]) };
+    const files = { findAccessibleInIds: vi.fn().mockResolvedValue([{ id: 'f1', fileName: 'q3-forecast.xlsx' }]) };
     const adapters = makeAdapters([{ prompt: 'summarize', reply: null, fabFileIds: ['f1'] }], files);
 
     await autoName({ sessionId: 's1' }, adapters as never);
 
-    expect(files.find).toHaveBeenCalledWith({ _id: { $in: ['f1'] } });
+    expect(files.findAccessibleInIds).toHaveBeenCalledWith(['f1'], { userId: 'user-1', userGroups: ['group-1'] });
     expect(sentPrompt(adapters)).toContain('Request: summarize\nAttachments: q3-forecast.xlsx');
   });
 
+  it('omits attachment names for files not returned by the accessible lookup', async () => {
+    const files = { findAccessibleInIds: vi.fn().mockResolvedValue([{ id: 'f1', fileName: 'forecast.xlsx' }]) };
+    const adapters = makeAdapters([{ prompt: 'summarize', reply: null, fabFileIds: ['f1', 'f2'] }], files);
+
+    await autoName({ sessionId: 's1' }, adapters as never);
+
+    expect(files.findAccessibleInIds).toHaveBeenCalledWith(['f1', 'f2'], {
+      userId: 'user-1',
+      userGroups: ['group-1'],
+    });
+    expect(sentPrompt(adapters)).toMatch(/Request: summarize\nAttachments: forecast\.xlsx$/);
+  });
+
   it('still names when the attachment lookup fails', async () => {
-    const files = { find: vi.fn().mockRejectedValue(new Error('db down')) };
+    const files = { findAccessibleInIds: vi.fn().mockRejectedValue(new Error('db down')) };
     const adapters = makeAdapters([{ prompt: 'summarize', reply: null, fabFileIds: ['f1'] }], files);
 
     await autoName({ sessionId: 's1' }, adapters as never);
