@@ -1129,7 +1129,6 @@ export function registerChat(
     }
     await service.deleteSession(sessionId, removeWorktree === true);
     await pullRequests.forget(sessionId);
-    modelViews.forget(sessionId);
   });
   registerSidebarIpc(ipcMain, sidebarSections, sessionId =>
     store.get(sessionId).then(

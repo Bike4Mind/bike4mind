@@ -76,6 +76,7 @@ globalThis.ResizeObserver ??= class {
 
 function engine(overrides: Partial<ModelEngine> = {}): ModelEngine {
   return {
+    sessionId: 'chat-a',
     state: EMPTY_MODEL_STATE,
     status: 'idle',
     error: null,
@@ -301,7 +302,7 @@ describe('ModelPane', () => {
     await act(async () => byTestId('model-pane-record-btn')?.click());
     expect(byTestId('model-pane-viewport')?.dataset.clip).toBe('');
     expect(handle.recordTurntable).toHaveBeenCalledWith(joints, expect.any(Function));
-    expect(saveRecording).toHaveBeenCalledWith(new Uint8Array([1, 2, 3]));
+    expect(saveRecording).toHaveBeenCalledWith('chat-a', new Uint8Array([1, 2, 3]));
     expect(byTestId('model-pane-note')?.textContent).toBe('Saved chest-turntable.webm');
   });
 

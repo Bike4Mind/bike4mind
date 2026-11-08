@@ -21,6 +21,7 @@ import {
   summarizeParts,
 } from './modelScene';
 import { renderTurntable } from './turntable';
+import { captureFromFreshBuild } from './useModelBackgroundBuilds';
 
 export type ModelBuildStatus = 'idle' | 'building' | 'ok' | 'error';
 
@@ -31,6 +32,7 @@ export type ModelBuildStatus = 'idle' | 'building' | 'ok' | 'error';
 type BuildPurpose = 'file' | 'preview' | 'print';
 
 export type ModelEngine = {
+  sessionId: string | null;
   state: ModelViewState;
   status: ModelBuildStatus;
   error: { message: string; line?: number } | null;
@@ -51,7 +53,7 @@ export type ModelEngine = {
   commitParam(key: string, value: number): Promise<void>;
   exportFile(format: 'glb' | 'stl'): Promise<string | null>;
   /** Saves a recorded turntable clip beside this conversation's model; null when cancelled. */
-  saveRecording(bytes: Uint8Array): Promise<string | null>;
+  saveRecording(sessionId: string | null, bytes: Uint8Array): Promise<string | null>;
   openFile(): Promise<void>;
 };
 
@@ -94,6 +96,7 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
   }
   const posedPath = useRef<string | null>(null);
   const engine = useRef<ModelEngineFrame | null>(null);
+  const captureEngine = useRef<ModelEngineFrame | null>(null);
   const fileBuild = useRef<Promise<ModelBuildOutcome | null> | null>(null);
   const previewFrame = useRef<number | null>(null);
   const darkRef = useRef(dark);
@@ -110,6 +113,8 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
     () => () => {
       engine.current?.dispose();
       engine.current = null;
+      captureEngine.current?.dispose();
+      captureEngine.current = null;
       if (previewFrame.current !== null) cancelAnimationFrame(previewFrame.current);
     },
     []
@@ -252,7 +257,8 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
         if (session !== sessionRef.current) return;
         const current = objectRef.current;
         if (!current) {
-          window.b4m.model.captureResult({ id, error: 'The model pane has nothing to show yet.' });
+          captureEngine.current ??= new ModelEngineFrame();
+          void captureFromFreshBuild(captureEngine.current, request, darkRef.current);
           return;
         }
         const rendered =
@@ -317,10 +323,9 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
     [build]
   );
 
-  const saveRecording = useCallback(async (bytes: Uint8Array) => {
-    const session = sessionRef.current;
-    if (session === null) return null;
-    return window.b4m.model.saveExport(session, { format: 'webm', bytes });
+  const saveRecording = useCallback(async (sessionId: string | null, bytes: Uint8Array) => {
+    if (sessionId === null) return null;
+    return window.b4m.model.saveExport(sessionId, { format: 'webm', bytes });
   }, []);
 
   const openFile = useCallback(async () => {
@@ -330,6 +335,7 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
   const setJointAngles = useCallback((angles: Record<string, number>) => setJointAnglesState(angles), []);
 
   return {
+    sessionId,
     state,
     status,
     error,

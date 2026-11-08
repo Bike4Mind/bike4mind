@@ -55,7 +55,11 @@ async function buildAndReport(engine: ModelEngineFrame, sessionId: string, state
 }
 
 /** Main sends a capture only after this window reported the current generation, so a fresh build matches it. */
-async function capture(engine: ModelEngineFrame, request: ModelCaptureRequestEvent, dark: boolean): Promise<void> {
+export async function captureFromFreshBuild(
+  engine: ModelEngineFrame,
+  request: ModelCaptureRequestEvent,
+  dark: boolean
+): Promise<void> {
   const { sessionId, id } = request;
   try {
     const state = await window.b4m.model.getState(sessionId);
@@ -115,7 +119,7 @@ export function useModelBackgroundBuilds(activeSessionId: string | null, dark: b
       if (sessionId !== activeRef.current) enqueue(sessionId, state);
     });
     const offCapture = window.b4m.model.onCaptureRequest(request => {
-      if (request.sessionId !== activeRef.current) run(() => capture(engine, request, darkRef.current));
+      if (request.sessionId !== activeRef.current) run(() => captureFromFreshBuild(engine, request, darkRef.current));
     });
     return () => {
       disposed = true;

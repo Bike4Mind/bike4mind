@@ -50,11 +50,13 @@ describe('ChatService model pane', () => {
   let streams: PassThrough[];
   let root: string;
   let views: Map<string, FakeView>;
+  let forgetModel: Mock<(sessionId: string) => void>;
   let forModel: Mock<(sessionId: string) => ModelViewPort>;
 
   beforeEach(async () => {
     root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-modelpane-')));
     views = new Map();
+    forgetModel = vi.fn();
     forModel = vi.fn((sessionId: string) => {
       const existing = views.get(sessionId);
       if (existing) return existing;
@@ -80,7 +82,7 @@ describe('ChatService model pane', () => {
       access: { list: async () => [root] } as unknown as AccessStore,
       media: new MediaStore(await mkdtemp(join(tmpdir(), 'b4m-modelpane-media-'))),
       models: { list: async () => ({ models }), cached: () => [] } as unknown as ModelCatalog,
-      model: { for: forModel },
+      model: { for: forModel, forget: forgetModel },
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () =>
         ({
@@ -102,6 +104,12 @@ describe('ChatService model pane', () => {
     if (!created.ok) throw new Error(created.error);
     return created.session.id;
   }
+
+  it('forgets the model view when deleting a session', async () => {
+    const sessionId = await codeSession();
+    await service.deleteSession(sessionId);
+    expect(forgetModel).toHaveBeenCalledExactlyOnceWith(sessionId);
+  });
 
   it('runs a turn model tools against the calling conversation view only', async () => {
     const sessionA = await codeSession();

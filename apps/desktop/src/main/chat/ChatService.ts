@@ -545,7 +545,7 @@ export interface ChatServiceDeps {
    * Each conversation's 3D model pane (main/chat/model3d/ModelLiveViews.ts): a turn's model tools get
    * only their own session's view. Absent in tests that do not exercise it.
    */
-  model?: { for(sessionId: string): ModelViewPort };
+  model?: { for(sessionId: string): ModelViewPort; forget?(sessionId: string): void };
   simulator?: {
     driver: SimulatorDriver;
     view: { attach(udid: string): Promise<unknown>; detach(): void; attachedUdid(): string | undefined };
@@ -1961,6 +1961,7 @@ export class ChatService {
     // Video polling stops first, so a download landing afterwards cannot recreate the folder.
     this.deps.videoJobs?.forgetSession(sessionId);
     await this.deps.media?.forgetSession(sessionId);
+    this.deps.model?.forget?.(sessionId);
     // Read before the delete: its parent's running turn drops this worktree from its roots (agentWorktrees).
     const parentId = (await this.deps.store.get(sessionId))?.origin?.parentSessionId;
     if (deleteStoredSession) await this.deps.store.delete(sessionId);

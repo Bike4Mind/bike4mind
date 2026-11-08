@@ -13,7 +13,7 @@ vi.mock('./modelScene', () => ({
   loadAsset: vi.fn(),
   openPose: () => ({}),
   partsToStl: () => new Uint8Array([2]),
-  renderContactSheet: vi.fn(),
+  renderContactSheet: vi.fn(async () => new Uint8Array([9])),
   summarizeObject: vi.fn(),
   summarizeParts: () => ({ parts: ['body'], size: [1, 1, 1], units: 'mm', triangles: 0, params: {} }),
 }));
@@ -205,6 +205,43 @@ describe('useModelEngine', () => {
     await flush();
     expect(engine.state.path).toBe(STATE.path);
     expect(window.b4m.model.getState).toHaveBeenLastCalledWith('chat-a');
+  });
+
+  it('captures the active conversation from a separate build before its pane object is ready', async () => {
+    const { frame, requests } = await mountWithEngine();
+    expect(engine.object).toBeNull();
+    vi.mocked(window.b4m.model.getState).mockClear();
+
+    act(() => {
+      for (const listener of captureListeners)
+        listener({ sessionId: 'chat-a', id: 'shot', views: ['front'], pose: 'rest' });
+    });
+    await flush();
+    expect(window.b4m.model.getState).toHaveBeenCalledExactlyOnceWith('chat-a');
+    const captureFrame = [...document.querySelectorAll<HTMLIFrameElement>('[data-testid="model-engine-frame"]')].find(
+      candidate => candidate !== frame
+    );
+    if (!captureFrame?.contentWindow) throw new Error('the capture frame was not mounted');
+    const captureRequests: BuildRequest[] = [];
+    vi.spyOn(captureFrame.contentWindow, 'postMessage').mockImplementation((data: unknown) => {
+      captureRequests.push(data as BuildRequest);
+    });
+    reply(captureFrame, { type: 'engine-ready' });
+    await flush();
+    expect(captureRequests).toEqual([expect.objectContaining({ type: 'build', id: 1 })]);
+    reply(captureFrame, { type: 'built', id: 1, outcome: BUILT });
+    await flush();
+    expect(window.b4m.model.captureResult).toHaveBeenCalledExactlyOnceWith({
+      id: 'shot',
+      bytes: new Uint8Array([9]),
+    });
+    expect(engine.object).toBeNull();
+    expect(requests).toHaveLength(1);
+
+    reply(frame, { type: 'built', id: 1, outcome: BUILT });
+    await flush();
+    expect(engine.object).not.toBeNull();
+    expect(model.reportBuild).toHaveBeenCalledWith('chat-a', expect.objectContaining({ ok: true }));
   });
 
   it("leaves another conversation's screenshot request to the background builder", async () => {
