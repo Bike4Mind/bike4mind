@@ -595,8 +595,8 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
               ...menuSurfaceSx(menuTheme, '12px'),
               ...menuItemListSx(menuTheme, { gap: '2px', radius: '12px' }),
               minWidth: 220,
-              // flip picks the roomier side, which is at least ~half the viewport; past that, scroll.
-              ...(isMobile && { maxHeight: '45dvh' }),
+              // Half the viewport less the row and gaps, so the roomier flip side always fits; past that, scroll.
+              ...(isMobile && { maxHeight: 'calc(50dvh - 32px)' }),
               // Portals to body, so it has to clear the sidebar's own floating layers.
               zIndex: 10001,
             })}
