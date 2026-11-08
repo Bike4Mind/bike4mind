@@ -1808,6 +1808,9 @@ export class ChatService {
           }
           if (current.state.status === 'canceled' && action.kind !== 'cancel')
             throw new Error('This task was canceled.');
+          if (action.kind === 'cancel') return { ...current, state: next.state };
+          if (current.attempts.at(-1)?.id !== task.attempts.at(-1)?.id)
+            throw new Error('A newer task attempt has started. Reload agent details.');
           return next;
         },
         scope,
@@ -1819,7 +1822,7 @@ export class ChatService {
         if (!child.origin) throw new Error('Task lineage is missing.');
         await this.deps.store.updateWorkerTask(
           sessionId,
-          current => ({ ...current, state: { status: 'running' } }),
+          current => (current.state.status === 'canceled' ? current : { ...current, state: { status: 'running' } }),
           scope
         );
         if (this.deps.store.scopeKey() !== scope) throw new Error('Account changed before the task could start.');
@@ -1829,10 +1832,13 @@ export class ChatService {
           this.spawnWatch.delete(sessionId);
           await this.deps.store.updateWorkerTask(
             sessionId,
-            current => ({
-              ...current,
-              state: { status: 'blocked', reason: sent.error, evidence: ['No new model attempt started.'] },
-            }),
+            current =>
+              current.state.status === 'canceled'
+                ? current
+                : {
+                    ...current,
+                    state: { status: 'blocked', reason: sent.error, evidence: ['No new model attempt started.'] },
+                  },
             scope
           );
           throw new Error(sent.error);
@@ -6028,10 +6034,14 @@ export class ChatService {
       const pending = this.deps.queue?.list(child.id) ?? [];
       const retained = !!stored.workerTask || pending.some(message => !message.automatic);
       if (stored.workerTask)
-        await this.deps.store.updateWorkerTask(child.id, task => ({
-          ...task,
-          state: { status: 'blocked', reason, evidence: ['Startup failed before paid execution.'] },
-        }));
+        await this.deps.store.updateWorkerTask(child.id, task =>
+          task.state.status === 'canceled'
+            ? task
+            : {
+                ...task,
+                state: { status: 'blocked', reason, evidence: ['Startup failed before paid execution.'] },
+              }
+        );
       if (retained) {
         // Accepted input belongs to the user. Keep its session and attachment bytes rather
         // than treating an automatic startup failure as a deliberate conversation deletion.

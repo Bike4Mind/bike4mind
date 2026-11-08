@@ -451,7 +451,12 @@ export class SessionStore implements SessionWritesStore {
     try {
       return rolePolicySchema.parse(JSON.parse(await readFile(join(directory, '.role-policy'), 'utf8')));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return inheritancePolicy();
+      if (
+        (error as NodeJS.ErrnoException).code === 'ENOENT' ||
+        error instanceof SyntaxError ||
+        error instanceof z.ZodError
+      )
+        return inheritancePolicy();
       throw error;
     }
   }
@@ -520,7 +525,10 @@ export class SessionStore implements SessionWritesStore {
       id,
       session => {
         if (!session.workerTask) return null;
-        session.workerTask = workerTaskSchema.parse(change(session.workerTask));
+        const changed = change(session.workerTask);
+        const attempts =
+          changed.attempts.length > 32 ? [changed.attempts[0], ...changed.attempts.slice(-31)] : changed.attempts;
+        session.workerTask = workerTaskSchema.parse({ ...changed, attempts });
         if (model && session.workerSelection) {
           session.model = model;
           session.workerSelection = { ...session.workerSelection, effectiveModel: model, source: 'escalation' };
@@ -1314,6 +1322,9 @@ export class SessionStore implements SessionWritesStore {
     const importOrigin = normalizeImportOrigin(parsed.importOrigin);
     const suggestions = normalizeSuggestions(parsed.spawnSuggestions);
     const generation = normalizeGeneration(parsed.generation);
+    const orchestrationPolicy = rootPolicySchema.safeParse(parsed.orchestrationPolicy);
+    const workerSelection = modelSelectionSchema.safeParse(parsed.workerSelection);
+    const workerTask = workerTaskSchema.safeParse(parsed.workerTask);
     // Absolute only: a relative entry would resolve against wherever the app was launched from.
     const grantedDirectories = Array.isArray(parsed.grantedDirectories)
       ? parsed.grantedDirectories.filter((entry): entry is string => typeof entry === 'string' && isAbsolute(entry))
@@ -1349,11 +1360,9 @@ export class SessionStore implements SessionWritesStore {
         : {}),
       ...(parsed.archived ? { archived: true } : {}),
       ...(parsed.historyEnabled ? { historyEnabled: true } : {}),
-      ...(parsed.orchestrationPolicy
-        ? { orchestrationPolicy: rootPolicySchema.parse(parsed.orchestrationPolicy) }
-        : {}),
-      ...(parsed.workerSelection ? { workerSelection: modelSelectionSchema.parse(parsed.workerSelection) } : {}),
-      ...(parsed.workerTask ? { workerTask: workerTaskSchema.parse(parsed.workerTask) } : {}),
+      ...(orchestrationPolicy.success ? { orchestrationPolicy: orchestrationPolicy.data } : {}),
+      ...(workerSelection.success ? { workerSelection: workerSelection.data } : {}),
+      ...(workerTask.success ? { workerTask: workerTask.data } : {}),
       ...(origin ? { origin } : {}),
       ...(importOrigin ? { importOrigin } : {}),
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
