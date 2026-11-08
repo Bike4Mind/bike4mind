@@ -376,6 +376,25 @@ describe('evidenceHash', () => {
     expect(hashFor({ logins: 2 })).not.toBe(hashFor({ logins: 3 }));
   });
 
+  it('invalidates cached evidence when account profiles change without dropping request evidence', () => {
+    const withProfile = (minutesToTwoFactor: number) =>
+      buildFeatureSummary({
+        detection: detection(),
+        accounts: accounts().map(account => ({
+          ...account,
+          profile: account.profile ? { ...account.profile, minutesToTwoFactor } : null,
+          requests: { status: 'failed' as const },
+        })),
+        group: null,
+      });
+    const before = withProfile(4);
+    const after = withProfile(30);
+    expect(after.accounts[0].requests).toEqual({ status: 'failed' });
+    expect(after.accounts[0].profile?.minutesToTwoFactor).toBe(30);
+    expect(evidenceHash(before)).not.toBe(evidenceHash(after));
+    expect(abuseAssessmentFeatureSummarySchema.safeParse(after).success).toBe(true);
+  });
+
   it('keys the cache on detection, evidence and model', () => {
     const hash = hashFor({});
     expect(assessmentCacheKey('a', hash, 'jev-latest')).not.toBe(assessmentCacheKey('a', hash, 'gpt-6-luna'));

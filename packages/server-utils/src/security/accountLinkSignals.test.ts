@@ -3,7 +3,7 @@ import { emailPatternSignals, groupLinkedAccounts, sharedLinkKinds } from './acc
 
 describe('emailPatternSignals', () => {
   it('reads a plus-addressed webmail address with a random-looking tag', () => {
-    expect(emailPatternSignals('jordan+x7k2q9@outlook.com')).toEqual({
+    expect(emailPatternSignals('jordan+x7k2q9r8@outlook.com')).toEqual({
       plusAddressed: true,
       randomLookingPlusTag: true,
       generatedLocalPart: false,
@@ -22,6 +22,18 @@ describe('emailPatternSignals', () => {
       generatedLocalPart: false,
       consumerMailDomain: false,
     });
+  });
+
+  it.each([
+    ['jordan+x7k2q9r8@example.test', false, false],
+    ['jordan+x7k2q9@outlook.com', true, false],
+    ['jordan+work2024@outlook.com', true, false],
+    ['jordan+shopping@gmail.com', true, false],
+    ['jordan+usafnzdxsh@googlemail.com', true, true],
+    ['jordan+@gmail.com', false, false],
+    ['jordan+x7k2q9r8@me.com', true, true],
+  ])('uses canonical plus-tag semantics for %s', (email, plusAddressed, randomLookingPlusTag) => {
+    expect(emailPatternSignals(email)).toMatchObject({ plusAddressed, randomLookingPlusTag });
   });
 
   it('flags a hex-counter local part, ignoring the tag', () => {

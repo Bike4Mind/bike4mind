@@ -1,13 +1,15 @@
 import {
   canonicalizeEmail,
   emailDomainOf,
+  plusAddressTagOf,
+  isRandomLookingTag,
   personalEmailProviders,
   regionalPersonalEmailProviders,
 } from '@bike4mind/common';
 import { userService } from '@bike4mind/services';
 
 /**
- * Traits that tie two accounts to one operator, and the email shape signals behind them. Shared by
+ * Shared account traits and email-shape signals for review; none establishes common ownership alone. Shared by
  * the signup network burst detector (apps/client/server/auth/signupNetworkAlerts.ts), the
  * young-account spend detector (apps/workers/src/cron/youngAccountSpendShadowDetections.ts) and the
  * advisory abuse assessment's account profile (apps/client/server/security/abuseAssessment).
@@ -58,14 +60,12 @@ export const isConsumerMailDomain = (domain: string): boolean =>
 
 export type EmailPatternSignals = {
   plusAddressed: boolean;
-  /** The `+tag` mixes letters and digits over 6+ characters, as a script's counter or nonce does. */
+  /** Uses the shared provider-aware plus-tag heuristic; a soft context signal only. */
   randomLookingPlusTag: boolean;
   /** The local part (tag aside) is a name with a hex counter, as signupRiskScore reads it. */
   generatedLocalPart: boolean;
   consumerMailDomain: boolean;
 };
-
-const RANDOM_TAG = /^(?=.*\d)(?=.*[a-z])[a-z0-9]{6,}$/i;
 
 export function emailPatternSignals(email: string | null): EmailPatternSignals | null {
   if (!email) return null;
@@ -75,11 +75,11 @@ export function emailPatternSignals(email: string | null): EmailPatternSignals |
   if (at <= 0 || !domain) return null;
   const local = normalized.slice(0, at);
   const plus = local.indexOf('+');
-  const tag = plus > 0 ? local.slice(plus + 1) : '';
+  const tag = plusAddressTagOf(normalized);
   const base = plus > 0 ? local.slice(0, plus) : local;
   return {
-    plusAddressed: plus > 0,
-    randomLookingPlusTag: RANDOM_TAG.test(tag),
+    plusAddressed: tag !== null,
+    randomLookingPlusTag: tag !== null && isRandomLookingTag(tag),
     generatedLocalPart: userService.looksGeneratedLocalPart(`${base}@${domain}`),
     consumerMailDomain: isConsumerMailDomain(domain),
   };

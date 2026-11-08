@@ -1,5 +1,6 @@
 import {
   ABUSE_ASSESSMENT_MAX_ATTEMPTS,
+  ABUSE_ASSESSMENT_MAX_ACCOUNTS,
   ABUSE_ASSESSMENT_POLICY_VERSION,
   ABUSE_ASSESSMENT_EVIDENCE_VERSION,
   ABUSE_ASSESSMENT_REASON_KEYS,
@@ -536,10 +537,28 @@ describe('summarizeDetection', () => {
 
   it('attaches each loaded profile to its account', async () => {
     mocks.findSummaries.mockResolvedValue(summaries);
-    const summary = await summarizeDetection(detection, logger, {
-      loadAccountProfiles: async () => new Map([['65f0000000000000000000a1', profile]]),
-    });
+    const loadProfiles = vi.fn(async () => new Map([['65f0000000000000000000a1', profile]]));
+    const summary = await summarizeDetection(detection, logger, { loadAccountProfiles: loadProfiles });
+    expect(loadProfiles).toHaveBeenCalledWith(detection.userIds);
+    expect(collectRequestActivity).toHaveBeenCalledWith(detection.userIds[0], logger);
     expect(summary.accounts[0].profile).toEqual(profile);
+    expect(summary.accounts[0].requests).toEqual({ status: 'failed' });
+  });
+
+  it('bounds both profile and request reads to the accounts retained in the provider summary', async () => {
+    const userIds = Array.from({ length: ABUSE_ASSESSMENT_MAX_ACCOUNTS + 1 }, (_, index) =>
+      (0x65f0000000000000000000a0n + BigInt(index)).toString(16)
+    );
+    const loadProfiles = vi.fn(async () => new Map());
+    const summary = await summarizeDetection({ ...detection, userIds }, logger, {
+      loadAccountProfiles: loadProfiles,
+    });
+    const keptIds = userIds.slice(0, ABUSE_ASSESSMENT_MAX_ACCOUNTS);
+    expect(loadProfiles).toHaveBeenCalledWith(keptIds);
+    expect(mocks.findSummaries).toHaveBeenCalledWith(keptIds);
+    expect(collectRequestActivity).toHaveBeenCalledTimes(ABUSE_ASSESSMENT_MAX_ACCOUNTS);
+    expect(collectRequestActivity).not.toHaveBeenCalledWith(userIds.at(-1), logger);
+    expect(summary.accounts).toHaveLength(ABUSE_ASSESSMENT_MAX_ACCOUNTS);
   });
 
   it('assesses without profiles, and warns, when the profile load fails', async () => {
@@ -550,6 +569,7 @@ describe('summarizeDetection', () => {
       },
     });
     expect(summary.accounts[0].profile).toBeNull();
+    expect(summary.accounts[0].requests).toEqual({ status: 'failed' });
     expect((logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
       expect.stringContaining('account profiles failed'),
       expect.objectContaining({ detectionId: DETECTION_ID, errorName: 'Error' })
