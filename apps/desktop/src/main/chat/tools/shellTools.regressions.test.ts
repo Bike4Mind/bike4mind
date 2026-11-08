@@ -499,6 +499,11 @@ describe('commands main ran unasked', () => {
     ['git diff --name-only -- src/.*. | xargs sed -i s/a/b/', 'srepo'],
     // bash re-reads the `\` the range makes, passing git `.claude`.
     ['git diff --name-only -- .cl{a..Z..5}aude | xargs sed -i s/a/b/', 'srepo'],
+    // bash 3.2 leaves a stepped sequence as written, so git gets a bracket class holding `.`.
+    ["git diff --name-only -- '['{1..1..1}']c*/s*' | xargs sed -i s/a/b/", 'srepo'],
+    // bash 3.2 drops the padding, passing git the wider `*0*`.
+    ["git diff --name-only -- '*'{00..0}'*' | xargs sed -i s/a/b/", 'srepo'],
+    ['git diff --name-only x{1..1} -- | xargs sed -i s/a/b/', 'srepo'],
     ['shopt -s nullglob; git diff --name-only -- src/*.ts | xargs sed -i s/a/b/', 'srepo'],
     ['rg -l hooks 2>"/dev/null" | xargs sed -i s/a/b/', ''],
     ['rg -l hooks | grep -v zz 2>/dev/null | xargs sed -i s/a/b/', ''],
@@ -708,8 +713,9 @@ describe('commands main ran unasked', () => {
     }
   });
 
-  // Planted only for their own row, as no walk of the project could read past them.
-  it.each([
+  // Planted only for their own row, as no walk of the project could read past them. APFS refuses a name that is not
+  // UTF-8 (EILSEQ), so macOS cannot plant one.
+  it.skipIf(process.platform === 'darwin').each([
     // `:!<ff>x` is not UTF-8; bash passes its child as `:!<ff>x/a`, an exclude.
     [
       'a folder whose name is not UTF-8',

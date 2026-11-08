@@ -539,9 +539,10 @@ const BRACE_PIECES = 1024;
 
 /**
  * The words a `{a..e}` or `{1..9..2}` sequence makes, null when it is no sequence, or 'many' past the limit or when
- * the scan cannot tell them.
+ * the scan cannot tell them. With `portable`, a step or zero padding is 'many': bash 3.2 (macOS `/bin/bash`) leaves
+ * `{1..9..2}` as written and drops the padding of `{01..3}`, so only plain sequences mean the same in every bash.
  */
-function braceSequence(inner: readonly WordPiece[]): WordPiece[][] | null | 'many' {
+function braceSequence(inner: readonly WordPiece[], portable: boolean): WordPiece[][] | null | 'many' {
   if (!inner.every(piece => 'char' in piece && piece.active)) return null;
   const text = inner.map(piece => ('char' in piece ? piece.char : '')).join('');
   const numeric = /^(-?\d+)\.\.(-?\d+)(?:\.\.(-?\d+))?$/.exec(text);
@@ -558,6 +559,7 @@ function braceSequence(inner: readonly WordPiece[]): WordPiece[][] | null | 'man
   const count = Math.floor(Math.abs(to - from) / step) + 1;
   if (count > BRACE_LIMIT) return 'many';
   const padded = numeric && (/^-?0\d/.test(match[1] as string) || /^-?0\d/.test(match[2] as string));
+  if (portable && (padded || match[3] !== undefined)) return 'many';
   const size = padded ? Math.max((match[1] as string).length, (match[2] as string).length) : 0;
   const words: WordPiece[][] = [];
   for (let index = 0; index < count; index++) {
@@ -569,8 +571,11 @@ function braceSequence(inner: readonly WordPiece[]): WordPiece[][] | null | 'man
   return words;
 }
 
-/** Bash's brace expansion, which runs before every other: null when it makes more than BRACE_LIMIT words. */
-function expandBraces(pieces: readonly WordPiece[]): WordPiece[][] | null {
+/**
+ * Bash's brace expansion, which runs before every other: null when it makes more than BRACE_LIMIT words, or with
+ * `portable` when it holds a sequence bash versions expand differently (see braceSequence).
+ */
+function expandBraces(pieces: readonly WordPiece[], portable = false): WordPiece[][] | null {
   if (pieces.length > BRACE_PIECES && pieces.some(piece => isActive(piece, '{'))) return null;
   for (let open = 0; open < pieces.length; open++) {
     if (!isActive(pieces[open], '{')) continue;
@@ -587,12 +592,12 @@ function expandBraces(pieces: readonly WordPiece[]): WordPiece[][] | null {
     const options =
       commas.length > 0
         ? bounds.slice(1).map((end, index) => pieces.slice((bounds[index] as number) + 1, end))
-        : braceSequence(pieces.slice(open + 1, close));
+        : braceSequence(pieces.slice(open + 1, close), portable);
     if (options === null) continue;
     if (options === 'many') return null;
     const words: WordPiece[][] = [];
     for (const option of options) {
-      const expanded = expandBraces([...pieces.slice(0, open), ...option, ...pieces.slice(close + 1)]);
+      const expanded = expandBraces([...pieces.slice(0, open), ...option, ...pieces.slice(close + 1)], portable);
       if (expanded === null) return null;
       words.push(...expanded);
       if (words.length > BRACE_LIMIT) return null;
@@ -2966,7 +2971,10 @@ function grepLists(args: readonly string[]): Listing | null {
 function shellExpands(raw: string): boolean {
   const pieces = wordPieces(raw);
   const live = pieces.some(piece => !('char' in piece) || (piece.active && '*?['.includes(piece.char)));
-  return live || expandsTilde(pieces) || expandBraces(pieces)?.length !== 1;
+  if (live || expandsTilde(pieces)) return true;
+  // A sequence such as `{1..1}` makes one word, but not the word as written.
+  const words = expandBraces(pieces, true);
+  return words?.length !== 1 || textOf(words[0] as WordPiece[]) !== textOf(pieces);
 }
 
 const expandsTilde = (pieces: readonly WordPiece[]): boolean =>
@@ -2984,7 +2992,7 @@ const textOf = (pieces: readonly WordPiece[]): string =>
 function pathspecValues(raw: string): { text: string; glob: boolean }[] | null {
   const pieces = wordPieces(raw);
   if (pieces.some(piece => !('char' in piece))) return null;
-  const words = expandBraces(pieces);
+  const words = expandBraces(pieces, true);
   if (words === null) return null;
   const values: { text: string; glob: boolean }[] = [];
   for (const word of words) {
