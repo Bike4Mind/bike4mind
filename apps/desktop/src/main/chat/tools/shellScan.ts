@@ -2308,11 +2308,20 @@ function feeder(node: Node): { producer: Node | null; filtered: boolean } {
 
 /** Each word's value when none expands (no expansion, glob, brace or tilde), else null. */
 function fixedWords(raw: readonly string[]): string[] | null {
-  const values: string[] = [];
-  for (const word of raw) {
+  return everyWord(raw, word => {
     const pieces = wordPieces(word);
     if (pieces.some(piece => !('char' in piece) || (piece.active && '*?[{~'.includes(piece.char)))) return null;
-    values.push(pieces.map(piece => ('char' in piece ? piece.char : '')).join(''));
+    return pieces.map(piece => ('char' in piece ? piece.char : '')).join('');
+  });
+}
+
+/** Each word as `read` reads it, or null when it reads any as null. */
+function everyWord(raw: readonly string[], read: (word: string) => string | null): string[] | null {
+  const values: string[] = [];
+  for (const word of raw) {
+    const value = read(word);
+    if (value === null) return null;
+    values.push(value);
   }
   return values;
 }
@@ -2328,19 +2337,31 @@ function bashOption(word: string): string | null {
   }
   const expanded = expandBraces(pieces);
   if (expanded === null) return null;
-  const option = expanded.some(([first]) => first !== undefined && 'char' in first && first.char === '-');
+  // An expansion that may be empty (`${X:+}--pre=f`, `$(true)-c`) leaves the dash after it to start the word.
+  const option = expanded.some(variant => {
+    const first = variant.find(piece => 'char' in piece);
+    return first !== undefined && 'char' in first && first.char === '-';
+  });
   return option ? null : wordValue(word);
 }
 
-/** The text bash passes before a word's first expansion, unquoted glob, brace or tilde, and whether an expansion ends it. */
+/**
+ * The text bash passes before a word's first expansion, unquoted glob, brace or tilde, and whether an expansion ends
+ * it. Leading expansions are skipped, since each may be empty: `${X:+}--pre=f` reads as `--pre=f`.
+ */
 function literalHead(word: string): { head: string; expansion: boolean } {
   let head = '';
+  let leading = false;
   for (const piece of wordPieces(word)) {
-    if (!('char' in piece)) return { head, expansion: true };
+    if (!('char' in piece)) {
+      if (head !== '') return { head, expansion: true };
+      leading = true;
+      continue;
+    }
     if (piece.active && '*?[{~'.includes(piece.char)) break;
     head += piece.char;
   }
-  return { head, expansion: false };
+  return { head, expansion: leading && head === '' };
 }
 
 /**
@@ -2402,24 +2423,12 @@ function optionStandIn(word: string, valued: string): string | null {
 
 /** Each word as `optionStandIn` reads it, or null when any is an open option. */
 function optionStandIns(raw: readonly string[], valued: string): string[] | null {
-  const values: string[] = [];
-  for (const word of raw) {
-    const value = optionStandIn(word, valued);
-    if (value === null) return null;
-    values.push(value);
-  }
-  return values;
+  return everyWord(raw, word => optionStandIn(word, valued));
 }
 
 /** Each word as `bashOption` reads it, or null when any may make or change an option. */
 function bashOptions(raw: readonly string[]): string[] | null {
-  const values: string[] = [];
-  for (const word of raw) {
-    const value = bashOption(word);
-    if (value === null) return null;
-    values.push(value);
-  }
-  return values;
+  return everyWord(raw, bashOption);
 }
 
 /** Values a line filter's options are read with: whole-line flags, and options that take a value. */
@@ -4040,7 +4049,7 @@ function untrackableCommand(raw: readonly string[]): boolean {
   const name = basename(word);
   const words = raw.slice(at + 1);
   const args = words.map(arg => bashOption(arg) ?? wordValue(arg));
-  const filesFrom = (arg: string): boolean => /^--files0?-from(=|$)/.test(arg);
+  const filesFrom = (arg: string): boolean => listsFiles(name, arg);
   // An open name counts only where the program has such an option, so `echo "--- $f"` stays readable.
   const listNames = FILES_FROM_PROGRAMS.has(name) ? ['--files-from', '--files0-from'] : [];
   if (words.some(arg => mayPassOption(arg, '', filesFrom, listNames, false))) return true;
@@ -4066,6 +4075,18 @@ function untrackableCommand(raw: readonly string[]): boolean {
 
 /** Programs with a `--files-from` or `--files0-from` option, which reads their operands from a file. */
 const FILES_FROM_PROGRAMS = new Set(['tar', 'bsdtar', 'rsync', 'du', 'wc', 'sort']);
+
+/**
+ * Whether an option word of `program` names a file its operands are read from. getopt_long takes any unique prefix
+ * (`--files-fr=list`), and an ambiguous one fails, so any prefix counts but tar's own `--file`. Elsewhere, and in
+ * rsync, whose popt has no prefixes, only the full name counts, so `rg --files` stays readable.
+ */
+function listsFiles(program: string, arg: string): boolean {
+  const long = /^--([^=]+)/.exec(arg)?.[1];
+  if (long === undefined) return false;
+  if (!FILES_FROM_PROGRAMS.has(program) || program === 'rsync') return /^files0?-from$/.test(long);
+  return long !== 'file' && ['files-from', 'files0-from'].some(name => name.startsWith(long));
+}
 
 /** tar's long options that run a program; getopt_long also takes any unique prefix of one. */
 const TAR_PROGRAM_OPTIONS = [
@@ -4098,6 +4119,8 @@ function gitConfigRunsProgram(raw: readonly string[]): boolean {
     const word = raw[at] as string;
     const arg = optionStandIn(word, 'Cc');
     if (arg === null) return true;
+    // `${X:+}-c` may pass `-c` alone, so where its value ends is open.
+    if (bashOption(word) === null && fixedOption(word, 'Cc')?.value === null) return true;
     if (!arg.startsWith('-')) return false;
     const valued = arg === '-c' || arg === '--config-env';
     const glued = /^--config-env=(.*)$/s.exec(arg)?.[1];

@@ -418,6 +418,13 @@ describe('commands main ran unasked', () => {
     'find src -f{print,} .claude/settings.json',
     'find src -fl$X .claude/settings.json',
     'find src -fprin? .claude/settings.json',
+    'tar --files-fr=list -cf out.tgz',
+    'tar --files=list -cf out.tgz',
+    'tar -c --files list -f out.tgz',
+    'wc --files0-f=list',
+    'wc --f=list',
+    'sort --fil=list',
+    'du --f=list',
   ])('asks for %s, an option word read as bash passes it', async command => {
     expect(await judge(command, 'grepo')).toMatchObject(asks);
   });
@@ -437,6 +444,15 @@ describe('commands main ran unasked', () => {
     'tar --fi* -cf out.tar',
     'rg --$X ./x foo',
     'rsync --$X ./x src/ dst/',
+    'rg ${X:+}--pre=./x foo',
+    'git ${X:+}-c core.fsmonitor=x status',
+    'git $(true)-c core.fsmonitor=x status',
+    'git ${X:+}--config-env=core.fsmonitor=HOME status',
+    'sort ${X:+}-o .claude/settings.json src/b.ts',
+    'sort $(true)--output=.claude/settings.json src/b.ts',
+    'iconv -t utf8 ${X:+}-o .claude/settings.json src/b.ts',
+    'X=; rg ${X}--pre=./x foo',
+    'uniq -$X src/b.ts .claude/settings.json',
   ])('asks for %s, an option whose name bash may still change', async command => {
     expect(await judge(command, 'grepo')).toMatchObject(asks);
   });
@@ -469,6 +485,9 @@ describe('commands main ran unasked', () => {
     'git log --$X',
     'ls --c*',
     'npx prettier --{check,write} src',
+    'rg --files',
+    'rg $pattern-foo src',
+    'rsync -a --force src/ dst/',
   ])('runs %s unasked, an option bash cannot change to another', async command => {
     expect(await judge(command, 'grepo')).toMatchObject({ auto: true, full: true });
   });
