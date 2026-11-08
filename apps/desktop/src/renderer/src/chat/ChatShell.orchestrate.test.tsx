@@ -122,6 +122,7 @@ let listed: ChatSessionSummary[] = SESSIONS;
 let statusSnapshot: ChatSessionStatusEvent[] = [];
 let statusListener: ((event: ChatSessionStatusEvent) => void) | null = null;
 let parentMessages: ChatMessage[] = [];
+let codeMessages: ChatMessage[] = [];
 let attentionOpen: ((event: AttentionOpenEvent) => void) | null = null;
 let sessionsChanged: (() => void) | null = null;
 let catalogModels: ChatModelOption[] = [];
@@ -141,6 +142,7 @@ beforeEach(() => {
   statusSnapshot = [];
   statusListener = null;
   parentMessages = [];
+  codeMessages = [];
   attentionOpen = null;
   sessionsChanged = null;
   Element.prototype.scrollIntoView = () => undefined;
@@ -163,7 +165,7 @@ beforeEach(() => {
         getSession: async (id: string) =>
           ({
             ...(listed.find(session => session.id === id) ?? PARENT),
-            messages: id === PARENT.id ? parentMessages : [],
+            messages: id === PARENT.id ? parentMessages : id === CODE.id ? codeMessages : [],
           }) as unknown as ChatSession,
         setSessionOrchestrate,
         inspectProject: async () => ({ currentBranch: 'main', branches: [] }),
@@ -406,6 +408,14 @@ describe('orchestrate mode in the chat shell', () => {
 
     await act(async () => el('composer-orchestrate-toggle').click());
     expect(setSessionOrchestrate).toHaveBeenLastCalledWith(CODE.id, false);
+    expect(query('orchestrate-example-quests')).toBeNull();
+  });
+
+  it('does not offer example quests on an orchestrating session that already has a transcript', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    codeMessages = [{ id: 'm1', role: 'user', content: 'Earlier question', createdAt: '2026-10-01T00:00:00.000Z' }];
+    listed = [...SESSIONS, { ...CODE, orchestrate: true } as ChatSessionSummary];
+    await openParent(CODE.title, 'code');
     expect(query('orchestrate-example-quests')).toBeNull();
   });
 

@@ -714,7 +714,7 @@ export function ChatShell({
     if (staleAgentsSurface) setOrchestratorSurface('chat');
   }, [staleAgentsSurface, setOrchestratorSurface]);
   const showExampleQuests =
-    orchestrateCapable && delegating && !hasAgents && !turnOpen && conversation.messages.length === 0;
+    !opening && orchestrateCapable && delegating && !hasAgents && !turnOpen && conversation.messages.length === 0;
 
   // Derived during render, not in an effect: TavernView only plays its intro if introPlaying is
   // already true when it mounts, which is the same commit that enters orchestrate mode.
