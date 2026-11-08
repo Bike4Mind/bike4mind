@@ -505,6 +505,15 @@ describe('attachLocalModels with saved model servers', () => {
     expect(requests.every(request => request.signal?.aborted === true)).toBe(true);
   });
 
+  it('says why when the default is on a saved SSH server whose port cannot be used', async () => {
+    await writeServers([
+      record({ id: 'o1', name: 'gpu', transport: { type: 'ssh', destination: 'me@gpu', port: 'x' } }),
+    ]);
+    await expect(attach({ defaultModel: 'local:srv-o1:tiny:1b' }, { servers: 'default' })).rejects.toThrow(
+      'Cannot chat with tiny:1b on gpu: gpu cannot be used: Its saved SSH port is not a number from 1 to 65535. Remove it in Desktop and add it again.'
+    );
+  });
+
   it('ends the ssh requests still running when attaching fails before the deadline', async () => {
     await writeServers([
       record({ id: 'o1', name: 'gpu', transport: { type: 'ssh', destination: 'me@gpu', port: 11434 } }),

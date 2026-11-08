@@ -351,6 +351,45 @@ describe('b4m models servers', () => {
     expect(output()).not.toContain(TOKEN);
   });
 
+  it('lists an SSH server saved with a port or destination it cannot use, says why, and never runs ssh for it', async () => {
+    const ollama = await plainOllama();
+    open.push(ollama);
+    await writeServers([
+      record({ id: 'sss', name: 'lab', transport: { type: 'ssh', destination: 'me@lab' } }),
+      record({ id: 'bad', name: 'typo', transport: { type: 'ssh', destination: 'me@lab', port: 99999 } }),
+      record({ id: 'opt', name: 'hostile', transport: { type: 'ssh', destination: '-oProxyCommand=x', port: 22 } }),
+    ]);
+    const ssh = fakeSsh({ 11434: ollama.baseUrl });
+    const why = 'Remove it in Desktop and add it again.';
+    expect(await run('servers', {}, deps({ ssh }))).toBe(0);
+    expect(output()).toMatch(/lab\s+Ollama\s+ssh me@lab\s+Manage\s+none\s+online/);
+    expect(output()).toMatch(
+      new RegExp(
+        `typo\\s+Ollama\\s+ssh me@lab\\s+Manage\\s+none\\s+Its saved SSH port is not a number from 1 to 65535\\. ${why}`
+      )
+    );
+    expect(output()).toMatch(/hostile\s+Ollama\s+unusable address\s+Manage\s+none\s+Its saved SSH destination is not/);
+    expect(output()).not.toContain('ProxyCommand');
+    expect(ssh.forwards.every(forward => forward.port === 11434)).toBe(true);
+
+    lines.length = 0;
+    await run('servers', { 'output-format': 'json' }, deps({ ssh }));
+    const parsed = JSON.parse(output()) as {
+      servers: { name: string; address: string; status: { state: string; text: string } }[];
+    };
+    expect(parsed.servers.map(server => [server.name, server.address, server.status.state])).toEqual([
+      ['lab', 'ssh me@lab', 'online'],
+      ['typo', 'ssh me@lab', 'refused'],
+      ['hostile', 'unusable address', 'refused'],
+    ]);
+    expect(parsed.servers[1].status.text).toBe(`Its saved SSH port is not a number from 1 to 65535. ${why}`);
+
+    lines.length = 0;
+    await expect(run('ls', { server: 'typo' }, deps({ ssh }))).rejects.toThrow(
+      `typo cannot be used: Its saved SSH port is not a number from 1 to 65535. ${why}`
+    );
+  });
+
   it('names the port to check when an SSH server is not running', async () => {
     await writeServers([
       record({ id: 'sss', name: 'lab', transport: { type: 'ssh', destination: 'me@lab', port: 9001 } }),

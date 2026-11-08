@@ -31,6 +31,7 @@ import {
   needsCredential,
   resolveServerTarget,
   serverFetch,
+  unusableReason,
   type CliModelServer,
   type LoadedModelServers,
   type SshFetchFor,
@@ -520,6 +521,8 @@ async function attachServers(
   const warnings: string[] = [];
   const owner = wanted ? loaded.servers.find(server => server.id === wanted.serverId) : undefined;
   if (wanted && !owner) {
+    const unusable = loaded.unusable?.find(server => server.id === wanted.serverId);
+    if (unusable) throw defaultUnusable(wanted.model, unusable.name, unusableReason(unusable));
     throw new Error(
       `The default model ${clean(wanted.model)} is on a model server that is not saved in Desktop any more` +
         (loaded.problem ? ` (${loaded.problem})` : '') +
