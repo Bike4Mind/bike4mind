@@ -231,6 +231,7 @@ async function runFullPipeline(
   await processService.process({
     body: {
       ...invokeBody,
+      ...(invokeService.autoNameDispatched ? { autoNameDispatched: true } : {}),
       questId: quest.id,
       userId: sessionCtx.userId,
       // From the verified token, never the request body. process() reads the tool context's auth

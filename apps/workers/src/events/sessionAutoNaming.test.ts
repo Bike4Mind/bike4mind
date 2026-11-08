@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   autoName: vi.fn(),
   recordUsage: vi.fn(),
   payerCanFund: vi.fn(),
+  findAccessibleInIds: vi.fn(),
 }));
 
 vi.mock('@workers/utils/eventContext', () => ({ withEventContext: (handler: unknown) => handler }));
@@ -18,6 +19,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: mocks.findUser },
   sessionRepository: {},
   questRepository: {},
+  fabFileRepository: { findAccessibleInIds: mocks.findAccessibleInIds },
 }));
 vi.mock('@bike4mind/services', () => ({ sessionService: { autoName: mocks.autoName } }));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
@@ -58,10 +60,19 @@ describe('session auto-naming AI access', () => {
   );
 
   it('uses the event actor when specified and resumes work after approval', async () => {
-    mocks.findUser.mockResolvedValue({ id: 'actor-1', riskScore: { reviewState: 'approved' } });
+    mocks.findUser.mockResolvedValue({ id: 'actor-1', groups: ['group-1'], riskScore: { reviewState: 'approved' } });
     await run('actor-1');
     expect(mocks.findUser).toHaveBeenCalledWith('actor-1');
     expect(mocks.autoName).toHaveBeenCalledTimes(1);
+    expect(mocks.autoName).toHaveBeenCalledWith(
+      { sessionId: 'session-1' },
+      expect.objectContaining({
+        db: expect.objectContaining({
+          files: { findAccessibleInIds: mocks.findAccessibleInIds },
+          fileAccess: { userId: 'actor-1', userGroups: ['group-1'] },
+        }),
+      })
+    );
     expect(mocks.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'actor-1' }));
   });
 

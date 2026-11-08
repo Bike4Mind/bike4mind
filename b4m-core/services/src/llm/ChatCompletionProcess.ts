@@ -2331,6 +2331,11 @@ export class ChatCompletionProcess {
 
     let optimizedFeatureList = getOptimizedFeatures(queryComplexity as QueryComplexityType);
 
+    // Invoke already published AutoName at turn start; a second event from here would race it.
+    if (parsedBody.autoNameDispatched) {
+      optimizedFeatureList = optimizedFeatureList.filter(feature => feature !== 'autoNameSession');
+    }
+
     // Honor explicit user enablement BEFORE any complexity-based optimizations.
     // When a user explicitly enables QuestMaster (toggle or New Quest flow) they want a
     // quest; user intent takes precedence over automatic optimization.

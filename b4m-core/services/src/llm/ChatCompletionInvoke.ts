@@ -3,6 +3,8 @@ import {
   type AuthOrigin,
   canUpdateShareable,
   ChatCompletionInvokeParamsSchema,
+  hasAutoNamePlaceholderName,
+  isLowSignalNamingPrompt,
   isPromptMetaModelType,
   isSupportedEmbeddingModel,
   IOrganizationDocument,
@@ -45,12 +47,18 @@ export class ChatCompletionInvoke {
   private modelInfoCache: ModelInfo[] | null = null;
   private modelConfigurationsCache: LLMModelConfig[] | null = null;
   private questStartParams: z.infer<typeof QuestStartBodySchema> | null = null;
+  private turnStartAutoNameDispatched = false;
   private invokeLambda?: (params: z.infer<typeof QuestStartBodySchema>) => Promise<void>;
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
+  private autoNameSession: IChatCompletionServiceOptions['autoNameSession'];
   /** Session fetched during invoke; exposed for the wait=true path to avoid a re-fetch in process. */
   public prefetchedSession: ISessionDocument | null = null;
   /** Organization fetched during invoke; exposed for the wait=true path to avoid a re-fetch in process. */
   public prefetchedOrganization: IOrganizationDocument | null = null;
+
+  public get autoNameDispatched(): boolean {
+    return this.turnStartAutoNameDispatched;
+  }
 
   constructor(options: IChatCompletionServiceOptions) {
     this.db = options.db;
@@ -58,6 +66,7 @@ export class ChatCompletionInvoke {
     this.user = options.user;
     this.invokeLambda = options.invokeLambda;
     this.getEntitlements = options.getEntitlements;
+    this.autoNameSession = options.autoNameSession;
   }
 
   /**
@@ -350,93 +359,100 @@ export class ChatCompletionInvoke {
     }
 
     // Parallelize independent operations: quest ops + admin settings + session update
-    const [quest, defaultEmbeddingModel, modelConfigurations, enforceCredits, freeTierAllowedModels] =
-      await Promise.all([
-        // Quest creation/update
-        questId
-          ? this.db.quests.findById(questId).then(async q => {
-              if (!q) {
-                this.logger.warn(
-                  `Quest not found for questId: ${questId}. Quest may have been deleted before the quest was started.`
-                );
-                throw new NotFoundError('Quest not found');
-              }
-              // Bind the retry to the caller's target session. `sessionId` was resolved through an
-              // access-scoped lookup upstream (getOrCreateSession), so refusing a quest that belongs
-              // to a different session stops a caller retrying/overwriting another user's quest by id.
-              // Throw rather than returning null: a bare null flowed to `if (!quest) return` and made
-              // the invoke a silent no-op (a 200 with no quest on the media routes). The same generic
-              // NotFound as the missing-quest case keeps the refusal from leaking whether the quest
-              // exists in a session the caller cannot see.
-              if (q.sessionId !== sessionId) {
-                this.logger.warn(`Quest ${questId} does not belong to session ${sessionId}; refusing retry.`);
-                throw new NotFoundError('Quest not found');
-              }
-              // Retry path: clear prior replies and images.
-              q.type = 'message';
-              q.reply = null;
-              q.replies = [];
-              q.questMasterReply = null;
-              q.fallbackInfo = null;
-              q.images = [];
-              q.prompt = message;
-              q.fabFileIds = messageFileIds || []; // ONLY message files
-              q.timestamp = now;
-              q.status = 'running';
-              q.promptMeta = promptMeta;
-              q.agentIds = session.agentIds || [];
-              // Clear a stale classifier from a prior failed attempt - otherwise a retry that
-              // succeeds (or fails for a different, uncoded reason) still reports the old code.
-              // Two clears, both needed: this one is what the caller sees, because the function
-              // returns this local `q` and not the update's result. It does NOT reach the database
-              // (a `$set` of `undefined` is dropped), which is what the `unset` option below is for.
-              // `null` is not an option: ChatAckSchema types errorCode as an optional enum and rejects null.
-              q.errorCode = undefined;
-              q.turnTiming = undefined;
-              await this.db.quests.update(
-                {
-                  id: q.id,
-                  type: q.type,
-                  reply: q.reply,
-                  replies: q.replies,
-                  questMasterReply: q.questMasterReply,
-                  fallbackInfo: q.fallbackInfo,
-                  images: q.images,
-                  prompt: q.prompt,
-                  fabFileIds: q.fabFileIds,
-                  timestamp: q.timestamp,
-                  status: q.status,
-                  promptMeta: q.promptMeta,
-                  agentIds: q.agentIds,
-                },
-                { unset: ['errorCode', 'turnTiming'] }
+    const [
+      quest,
+      defaultEmbeddingModel,
+      modelConfigurations,
+      enforceCredits,
+      freeTierAllowedModels,
+      autoNameNotebookSetting,
+    ] = await Promise.all([
+      // Quest creation/update
+      questId
+        ? this.db.quests.findById(questId).then(async q => {
+            if (!q) {
+              this.logger.warn(
+                `Quest not found for questId: ${questId}. Quest may have been deleted before the quest was started.`
               );
-              return q;
-            })
-          : this.db.quests.create({
-              sessionId,
-              prompt: message,
-              fabFileIds: messageFileIds || [], // ONLY message files
-              type: 'message' as const,
-              timestamp: now,
-              replies: [],
-              status: 'running',
-              promptMeta,
-              agentIds: session.agentIds || [],
-              // Session-bound by the guard above, so the chain a correction claims to extend is
-              // always one the caller can actually see.
-              correctsQuestId,
-            }),
+              throw new NotFoundError('Quest not found');
+            }
+            // Bind the retry to the caller's target session. `sessionId` was resolved through an
+            // access-scoped lookup upstream (getOrCreateSession), so refusing a quest that belongs
+            // to a different session stops a caller retrying/overwriting another user's quest by id.
+            // Throw rather than returning null: a bare null flowed to `if (!quest) return` and made
+            // the invoke a silent no-op (a 200 with no quest on the media routes). The same generic
+            // NotFound as the missing-quest case keeps the refusal from leaking whether the quest
+            // exists in a session the caller cannot see.
+            if (q.sessionId !== sessionId) {
+              this.logger.warn(`Quest ${questId} does not belong to session ${sessionId}; refusing retry.`);
+              throw new NotFoundError('Quest not found');
+            }
+            // Retry path: clear prior replies and images.
+            q.type = 'message';
+            q.reply = null;
+            q.replies = [];
+            q.questMasterReply = null;
+            q.fallbackInfo = null;
+            q.images = [];
+            q.prompt = message;
+            q.fabFileIds = messageFileIds || []; // ONLY message files
+            q.timestamp = now;
+            q.status = 'running';
+            q.promptMeta = promptMeta;
+            q.agentIds = session.agentIds || [];
+            // Clear a stale classifier from a prior failed attempt - otherwise a retry that
+            // succeeds (or fails for a different, uncoded reason) still reports the old code.
+            // Two clears, both needed: this one is what the caller sees, because the function
+            // returns this local `q` and not the update's result. It does NOT reach the database
+            // (a `$set` of `undefined` is dropped), which is what the `unset` option below is for.
+            // `null` is not an option: ChatAckSchema types errorCode as an optional enum and rejects null.
+            q.errorCode = undefined;
+            q.turnTiming = undefined;
+            await this.db.quests.update(
+              {
+                id: q.id,
+                type: q.type,
+                reply: q.reply,
+                replies: q.replies,
+                questMasterReply: q.questMasterReply,
+                fallbackInfo: q.fallbackInfo,
+                images: q.images,
+                prompt: q.prompt,
+                fabFileIds: q.fabFileIds,
+                timestamp: q.timestamp,
+                status: q.status,
+                promptMeta: q.promptMeta,
+                agentIds: q.agentIds,
+              },
+              { unset: ['errorCode', 'turnTiming'] }
+            );
+            return q;
+          })
+        : this.db.quests.create({
+            sessionId,
+            prompt: message,
+            fabFileIds: messageFileIds || [], // ONLY message files
+            type: 'message' as const,
+            timestamp: now,
+            replies: [],
+            status: 'running',
+            promptMeta,
+            agentIds: session.agentIds || [],
+            // Session-bound by the guard above, so the chain a correction claims to extend is
+            // always one the caller can actually see.
+            correctsQuestId,
+          }),
 
-        // Admin settings fetches
-        this.db.adminSettings.getSettingsValue('defaultEmbeddingModel'),
-        this.modelConfigurationsCache || this.getModelConfigurations(),
-        this.db.adminSettings.getSettingsValue('enforceCredits'),
-        loadFreeTierAllowedModels(this.db.adminSettings),
+      // Admin settings fetches
+      this.db.adminSettings.getSettingsValue('defaultEmbeddingModel'),
+      this.modelConfigurationsCache || this.getModelConfigurations(),
+      this.db.adminSettings.getSettingsValue('enforceCredits'),
+      loadFreeTierAllowedModels(this.db.adminSettings),
+      this.db.adminSettings.getSettingsValue('AutoNameNotebook'),
 
-        // Session update (fire-and-forget but ensure completion)
-        sessionUpdatePromise,
-      ]);
+      // Session update (fire-and-forget but ensure completion)
+      sessionUpdatePromise,
+    ]);
 
     if (!this.modelConfigurationsCache && modelConfigurations) {
       this.modelConfigurationsCache = modelConfigurations;
@@ -494,6 +510,15 @@ export class ChatCompletionInvoke {
 
       this.logger.info(`🚀🚀🚀🚀🚀🚀🚀 [RapidReply] Query complexity: ${queryComplexity}`);
 
+      // After admission, so a refused turn never names the notebook.
+      const autoNameDispatched = await this.dispatchTurnStartAutoName({
+        session,
+        message,
+        messageFileIds,
+        enabled: Boolean(autoNameNotebookSetting),
+      });
+      this.turnStartAutoNameDispatched = autoNameDispatched;
+
       this.questStartParams = QuestStartBodySchema.parse({
         userId,
         questId: quest.id,
@@ -541,6 +566,7 @@ export class ChatCompletionInvoke {
         allowedAgents,
         enableSlackTools,
         timezone,
+        ...(autoNameDispatched ? { autoNameDispatched } : {}),
       });
 
       if (this.invokeLambda && this.questStartParams) {
@@ -580,6 +606,38 @@ export class ChatCompletionInvoke {
       });
     }
     return quest;
+  }
+
+  /**
+   * Names a new notebook from its prompt as the turn starts, instead of after the reply. Awaited:
+   * a fire-and-forget publish from a Lambda only leaves when the frozen container is next reused.
+   * Returns whether the AutoName event went out; when it did not, the after-reply
+   * AutoNameSessionFeature stays the fallback. Mirrors the worker's guards (sessionAutoNaming.ts):
+   * a notebook that is already named, or that no longer carries a placeholder name, is left alone.
+   * A low-signal prompt ("Hello") is skipped so it does not become a "Greeting" title; the next
+   * turn with substance names it.
+   */
+  private async dispatchTurnStartAutoName({
+    session,
+    message,
+    messageFileIds,
+    enabled,
+  }: {
+    session: ISessionDocument;
+    message: string;
+    messageFileIds: string[];
+    enabled: boolean;
+  }): Promise<boolean> {
+    if (!enabled || session.isAutoNamed || !hasAutoNamePlaceholderName(session)) return false;
+    if (isLowSignalNamingPrompt(message, messageFileIds.length)) return false;
+    try {
+      await this.autoNameSession(session.id, this.logger);
+      return true;
+    } catch (error) {
+      // Naming is not worth failing the turn over; the after-reply fallback still runs.
+      this.logger.warn(`Turn-start auto-naming publish failed for session ${session.id}`, error);
+      return false;
+    }
   }
 
   private getModelConfigurations = (): Promise<LLMModelConfig[]> => loadModelConfigurations(this.db.adminSettings);
