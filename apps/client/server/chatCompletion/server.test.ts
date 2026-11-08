@@ -65,8 +65,11 @@ vi.mock('@bike4mind/database', () => ({
 // callback without a real model call.
 const mockExecuteCompletion = vi.hoisted(() => vi.fn());
 const mockLogApiKeyUsage = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+// Completion requests persist a start row before execution; the finish write updates that row.
+const USAGE_LOG_ID = 'usage-log-1';
+const mockBeginCompletionUsage = vi.hoisted(() => vi.fn().mockResolvedValue('usage-log-1'));
 vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
-  ApiKeyUsageManager: { logUsage: mockLogApiKeyUsage },
+  ApiKeyUsageManager: { logUsage: mockLogApiKeyUsage, beginCompletionUsage: mockBeginCompletionUsage },
 }));
 
 // Replace the production schema (25+ fields) with a minimal one so the test can drive the
@@ -583,7 +586,10 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
       source: 'api',
       ownerType: CreditHolderType.User,
       logger: expect.any(Object),
+      existingLogId: USAGE_LOG_ID,
+      completionObservation: expect.objectContaining({ requestedModel: 'claude-test', outcome: 'completed' }),
     });
+    expect(mockBeginCompletionUsage).toHaveBeenCalledTimes(1);
   });
 
   it('counts an authenticated rate-limited request with its final status and billing owner', async () => {
