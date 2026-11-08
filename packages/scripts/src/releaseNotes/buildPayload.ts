@@ -5,7 +5,7 @@ import { resolveCommitSha, type GitHubCommit, type GitHubRelease, type PRSummary
 
 export const PRODUCTION_TAG = /^v\d+\.\d+\.\d+\.\d+$/;
 export const EXCERPT_CHARS = 500;
-// Bound author notes before they enter the audience triage and editorial prompts.
+// Bound author notes before they enter the audience triage prompt.
 export const CUSTOMER_NOTE_CHARS = 600;
 // SQS caps a message at 256 KiB; leave headroom for attributes and encoding.
 export const MAX_PAYLOAD_BYTES = 240_000;

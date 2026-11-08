@@ -310,6 +310,7 @@ describe('triageReleaseNotes / writeReleaseNotes', () => {
       'triage unavailable'
     );
     expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete.mock.calls[0][0]).toContain('You triage merged pull requests');
   });
 
   it('skips editorial when every author note is excluded', async () => {
