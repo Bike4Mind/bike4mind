@@ -510,7 +510,7 @@ describe('attachLocalModels with saved model servers', () => {
       record({ id: 'o1', name: 'gpu', transport: { type: 'ssh', destination: 'me@gpu', port: 'x' } }),
     ]);
     await expect(attach({ defaultModel: 'local:srv-o1:tiny:1b' }, { servers: 'default' })).rejects.toThrow(
-      'Cannot chat with tiny:1b on gpu: gpu cannot be used: Its saved SSH port is not a number from 1 to 65535. Remove it in Desktop and add it again.'
+      'Cannot chat with tiny:1b on gpu: Its saved SSH port is not a number from 1 to 65535. Remove it in Desktop and add it again.'
     );
   });
 
