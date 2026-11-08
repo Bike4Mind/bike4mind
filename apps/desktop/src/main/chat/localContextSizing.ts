@@ -81,7 +81,8 @@ export class HardwareProbe {
         return profile;
       },
       () => {
-        if (this.pending !== pending) return null;
+        // Superseded: hand a caller still awaiting this probe the newer one rather than a null that reads as failed.
+        if (this.pending !== pending) return this.pending ?? previous ?? null;
         if (previous) return previous;
         this.retryAt = this.now() + RETRY_AFTER_MS;
         return (this.result = null);

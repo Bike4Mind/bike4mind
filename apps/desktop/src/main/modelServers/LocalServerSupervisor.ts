@@ -27,7 +27,7 @@ export interface ServerHandle {
   readonly exited: Promise<{ code: number | null; signal: NodeJS.Signals | null; stopped: boolean }>;
   /** llama-server only: the per-process key every request needs. */
   readonly apiKey?: string;
-  /** Why it runs other than expected (a GPU build that found no GPU), shown as the server's problem while it runs. */
+  /** Why it runs other than expected (a GPU build that found no GPU), shown while it runs (see `warning`). */
   readonly warning?: string;
   log(): string[];
   stop(): Promise<unknown>;
@@ -196,6 +196,12 @@ export class LocalServerSupervisor {
     return this.problems.get(id) ?? null;
   }
 
+  /** Why the server Desktop runs for `id` is not where expected (a GPU build that found no GPU); null once it stops. */
+  warning(id: string): string | null {
+    const handle = this.slots.get(id)?.handle;
+    return handle?.running && handle.warning ? handle.warning : null;
+  }
+
   /** The Authorization header for a llama-server Desktop runs; null for any other server. */
   headers(id: string): Record<string, string> | null {
     const handle = this.slots.get(id)?.handle;
@@ -227,10 +233,7 @@ export class LocalServerSupervisor {
         throw controller.signal.reason;
       }
       slot.handle = handle;
-      if (handle.warning) {
-        this.problems.set(id, handle.warning);
-        this.deps.logger.warn(`MODEL SERVERS: ${handle.warning}`);
-      }
+      if (handle.warning) this.deps.logger.warn(`MODEL SERVERS: ${handle.warning}`);
       this.watch(id, slot, handle);
       await this.remember(id, slot, handle);
     } catch (error) {
@@ -265,7 +268,6 @@ export class LocalServerSupervisor {
       }
     }
     if (this.slots.get(id) === slot) this.slots.delete(id);
-    if (handle.warning && this.problems.get(id) === handle.warning) this.problems.delete(id);
     await this.forget(id);
     this.deps.changed(id);
   }

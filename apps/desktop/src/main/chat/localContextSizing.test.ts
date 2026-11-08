@@ -189,6 +189,23 @@ describe('HardwareProbe', () => {
     expect(await first).toBe(machine);
     expect(hardware.known()).toBe(newer);
   });
+
+  it('gives a caller of a superseded probe that fails the newer result, not null', async () => {
+    let failFirst: (error: Error) => void = () => undefined;
+    const newer = { ...machine, totalMemoryBytes: 1 };
+    const probe = vi
+      .fn<(options: HardwareProbeOptions) => Promise<HardwareProfile>>()
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => (failFirst = reject)))
+      .mockResolvedValue(newer);
+    const hardware = new HardwareProbe(probe);
+    const first = hardware.probed();
+    hardware.forget();
+    const second = hardware.probed();
+    failFirst(new Error('probe failed'));
+    expect(await first).toBe(newer);
+    expect(await second).toBe(newer);
+    expect(hardware.known()).toBe(newer);
+  });
 });
 
 describe('localLlamaServer', () => {

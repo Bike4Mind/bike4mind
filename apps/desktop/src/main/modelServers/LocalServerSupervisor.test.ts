@@ -65,9 +65,11 @@ describe('LocalServerSupervisor', () => {
     const { instance, warn } = supervisor(async () => child);
     await instance.start('r', { runtime: 'llama-server', port: 8090, settings: { modelsDir: '/m' } });
     expect(instance.owned('r')).not.toBeNull();
-    expect(instance.problem('r')).toBe(warning);
+    expect(instance.warning('r')).toBe(warning);
+    expect(instance.problem('r')).toBeNull();
     expect(warn).toHaveBeenCalledWith(`MODEL SERVERS: ${warning}`);
     await instance.stop('r');
+    expect(instance.warning('r')).toBeNull();
     expect(instance.problem('r')).toBeNull();
   });
 
