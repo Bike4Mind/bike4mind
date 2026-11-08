@@ -42,7 +42,15 @@ describe('GET /api/admin/shadow-detections/ai-advisory', () => {
   });
 
   it('returns the advisory summary uncached', async () => {
-    const summary = { since: SINCE, advisories: [], networks: [], mailDomains: [], truncated: false };
+    const summary = {
+      since: SINCE,
+      advisories: [],
+      networks: [],
+      mailDomains: [],
+      linkedAccounts: [],
+      linkedAccountsStatus: 'complete',
+      truncated: false,
+    };
     h.listAiAbuseAdvisories.mockResolvedValue(summary);
     const { req, res } = createMocks({ method: 'GET' });
 

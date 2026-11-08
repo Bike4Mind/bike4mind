@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { legacyUserLinkRedirect, parseUserProfileSearch } from './userProfileSearch';
+import { legacyUserLinkRedirect, parseUserProfileSearch, userProfileTabSearch } from './userProfileSearch';
 
 describe('parseUserProfileSearch', () => {
   it.each(['activity', 'credits', 'keys', 'signins', 'admin'] as const)('keeps a deep link to the %s tab', tab => {
@@ -15,6 +15,25 @@ describe('parseUserProfileSearch', () => {
 
   it.each(['nonsense', 'Activity', '', 3])('drops the unknown tab %j rather than opening an empty panel', tab => {
     expect(routeSearch({ tab }).tab).toBeUndefined();
+  });
+
+  it('preserves valid classification context and rejects malformed range or timestamp values', () => {
+    expect(parseUserProfileSearch({ signupRange: '30d', signupAsOf: '2026-11-01T12:00:00.000Z' })).toMatchObject({
+      signupRange: '30d',
+      signupAsOf: '2026-11-01T12:00:00.000Z',
+    });
+    expect(routeSearch({ signupRange: 'nonsense', signupAsOf: 'not-a-date' })).toMatchObject({
+      signupRange: undefined,
+      signupAsOf: undefined,
+    });
+  });
+
+  it('retains classification context across profile tabs while dropping Activity filters on Overview', () => {
+    const context = { signupRange: '30d' as const, signupAsOf: '2026-11-01T12:00:00.000Z', signupTzOffset: 480 };
+    const signins = userProfileTabSearch(context, 'signins');
+    const overview = userProfileTabSearch({ ...signins, from: '2026-11-01' }, 'overview');
+    expect(signins).toMatchObject({ ...context, tab: 'signins' });
+    expect(overview).toMatchObject({ ...context, tab: undefined, from: undefined });
   });
 });
 

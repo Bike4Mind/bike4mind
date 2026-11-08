@@ -14,6 +14,9 @@ vi.mock('../../../Subscriptions/SubscriptionSummaryList', () => ({ SubscriptionS
 vi.mock('../RiskEvidenceCard', () => ({
   RiskEvidenceCard: ({ userId }: { userId: string }) => <div data-testid="risk-evidence-card-stub">{userId}</div>,
 }));
+vi.mock('../SignupClassificationCard', () => ({
+  SignupClassificationCard: () => <div data-testid="signup-classification-stub" />,
+}));
 vi.mock('../actions/useAdminUserUpdate', () => ({ useAdminUserUpdate: () => vi.fn() }));
 
 import { OverviewTab } from './OverviewTab';

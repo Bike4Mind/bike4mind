@@ -9,6 +9,12 @@ tags: [admin, users, management]
 
 ## Reviewing detections and watching accounts
 
+The AI advisory also lists **linked accounts to review** separately from accounts with an AI abuse judgment. These candidates share an exact signup or login IP with a flagged account in the recent observation window. Each entry links to the account and explains which signup or login observation matched. Connections are one hop only, common addresses are discounted, and coverage warnings appear when a scan is capped or fails. A connection does not give the candidate its neighbour's AI verdict or probability.
+
+In a user's Overview, **Signup classification** explains the Users table's **Suspected** label. It shows the matched signal names, plain-language explanations, classification rule, evaluation time and selected signup-chart window. Use the range selector to match the Users chart you are investigating. This is the chart's current heuristic classification, not a historical saved verdict or the AI advisory. Missing classification and incomplete scans are shown explicitly.
+
+In **Risk evidence**, **Observed** means the source returned data. It is not a safe-account judgment. In Sign-ins, matching JA4 values are described as TLS fingerprint matches; they do not prove the same device or operator.
+
 In Admin > Detections, start with **Review evidence**. Inspect the linked accounts and their Activity before recording a judgment. A suggested response describes the detector's recommendation; recording a review does not apply that response to account access.
 
 If you need more time, choose **Watch these accounts** and give the watch a name and reason. The watch saves the exact group you selected. You can find open watches on the admin dashboard and in Detections even after the AI advisory expires, changes verdict, or is reviewed. Incomplete groups cannot be saved as a watch; open an individual detection with a complete group instead.
