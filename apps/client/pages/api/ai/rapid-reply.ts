@@ -15,7 +15,7 @@ import { ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
 import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
 import { resolveRapidModel } from '@server/rapidReply/resolveRapidModel';
 import { assertSessionAccess } from '@bike4mind/server-utils/utils/sessionAccess';
-import { ChatModels, NotFoundError, getQuestErrorCode } from '@bike4mind/common';
+import { ChatModels, NotFoundError, isTerminalCreditRefusal } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { z } from 'zod';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
@@ -294,9 +294,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
       });
     } catch (error) {
       // Best-effort like every other refusal here: the chat proceeds without the ack.
-      if (getQuestErrorCode(error) === 'insufficient_credits') {
-        req.logger.info('[RapidReply] Insufficient credits, skipping');
-        return res.json({ success: false, reason: 'insufficient_credits' });
+      if (isTerminalCreditRefusal(error)) {
+        const reason = (error as { additionalInfo: { errorCode: string } }).additionalInfo.errorCode;
+        req.logger.info(`[RapidReply] Credit refusal (${reason}), skipping`);
+        return res.json({ success: false, reason });
       }
 
       // Deliberately error-severity: everything routinely-degradable (no mapping, a sunset or

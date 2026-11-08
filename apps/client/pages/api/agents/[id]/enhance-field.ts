@@ -9,7 +9,7 @@ import { agentRepository } from '@bike4mind/database';
 import { NotFoundError, ForbiddenError, BadRequestError } from '@bike4mind/utils';
 import { enhanceAgentField } from '@server/agents/authoring/enhanceAgentField';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
-import { HTTPError } from '@bike4mind/common';
+import { HTTPError, isTerminalCreditRefusal } from '@bike4mind/common';
 
 interface EnhanceFieldRequest {
   fieldName: string;
@@ -66,7 +66,7 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
         message: 'Field enhanced successfully',
       });
     } catch (error) {
-      req.logger.error('Error enhancing field:', error);
+      if (!isTerminalCreditRefusal(error)) req.logger.error('Error enhancing field:', error);
 
       // Re-throw known error types to let baseApi handle them with correct status codes
       if (

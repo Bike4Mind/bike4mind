@@ -7,7 +7,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ForbiddenError } from '@bike4mind/utils';
-import { insufficientCreditsError, usdToCredits } from '@bike4mind/common';
+import {
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  TooManyRequestsError,
+  insufficientCreditsError,
+  usdToCredits,
+} from '@bike4mind/common';
 import { computeImageUsdCostPerImage } from '@bike4mind/services/imageCost';
 
 const m = vi.hoisted(() => ({
@@ -67,9 +72,11 @@ vi.mock('axios', () => ({
 
 const { default: handler } = await import('@pages/api/blog/generate-featured-image');
 
+const testLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
 async function call(imageModel = 'gpt-image-1') {
   const { req, res } = createMocks({ method: 'POST', body: { imagePrompt: 'a bicycle at dawn', imageModel } });
-  Object.assign(req, { user: { id: 'u1' }, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
+  Object.assign(req, { user: { id: 'u1' }, logger: testLogger });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
   await (handler as any)(req, res);
   return res;
@@ -90,6 +97,18 @@ describe('POST /api/blog/generate-featured-image metering', () => {
 
     await expect(call()).rejects.toMatchObject({ statusCode: 422 });
     expect(m.generate).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the free-tier daily cap as its 429 without logging an error', async () => {
+    m.hold.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+
+    await expect(call()).rejects.toMatchObject({ statusCode: 429 });
+    expect(testLogger.error).not.toHaveBeenCalled();
   });
 
   it('refuses a model admission rejects before reserving or calling the provider', async () => {
