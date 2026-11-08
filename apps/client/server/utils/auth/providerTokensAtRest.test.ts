@@ -12,6 +12,7 @@ describe('sealProviderTokens', () => {
 
     expect(sealed.encrypted).toBe(true);
     expect(isEncrypted(sealed.accessToken ?? '')).toBe(true);
+    expect(isEncrypted(sealed.refreshToken ?? '')).toBe(true);
     expect(decryptAtRest(sealed.accessToken ?? '')).toBe('access-plain');
     expect(decryptAtRest(sealed.refreshToken ?? '')).toBe('refresh-plain');
   });

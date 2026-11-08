@@ -71,6 +71,27 @@ describe('encrypt OAuth provider tokens', () => {
     expect(decryptAtRest(credentials.accessToken ?? '')).toBe('gho_plain');
   });
 
+  it('seals plaintext provider tokens already flagged as encrypted', async () => {
+    await users().insertOne({
+      email: 'flagged@example.com',
+      authProviders: [
+        {
+          strategy: 'apple',
+          id: 'a-keyless',
+          accessToken: 'apple-access',
+          refreshToken: 'apple-refresh',
+          encrypted: true,
+        },
+      ],
+    });
+
+    await migration.up();
+
+    const [apple] = await providersOf('flagged@example.com');
+    expect(isEncrypted(apple.accessToken ?? '')).toBe(true);
+    expect(isEncrypted(apple.refreshToken ?? '')).toBe(true);
+  });
+
   it('leaves already-sealed entries and token-less providers untouched', async () => {
     const sealed = encryptAtRest('apple-refresh');
     await users().insertOne({

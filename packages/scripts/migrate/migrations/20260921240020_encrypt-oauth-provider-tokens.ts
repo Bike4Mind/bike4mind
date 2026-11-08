@@ -2,7 +2,13 @@ import { User } from '@bike4mind/database';
 import { encryptAtRest, isEncrypted, isSecretsAtRestConfigured } from '@bike4mind/utils/security';
 import { type MigrationFile } from './index';
 
-type StoredTokens = { strategy?: string; accessToken?: unknown; refreshToken?: unknown; encrypted?: unknown };
+type StoredTokens = {
+  id?: unknown;
+  strategy?: string;
+  accessToken?: unknown;
+  refreshToken?: unknown;
+  encrypted?: unknown;
+};
 type UserTokenRow = { _id: unknown; authProviders?: StoredTokens[]; oauthCredentials?: StoredTokens | null };
 
 const TOKEN_FIELDS = ['accessToken', 'refreshToken'] as const;
@@ -48,8 +54,8 @@ const migration: MigrationFile = {
     const cursor = User.collection.find(
       {
         $or: [
-          { authProviders: { $elemMatch: { encrypted: { $ne: true }, $or: plaintextTokenFilter('') } } },
-          { 'oauthCredentials.encrypted': { $ne: true }, $or: plaintextTokenFilter('oauthCredentials.') },
+          { authProviders: { $elemMatch: { $or: plaintextTokenFilter('') } } },
+          { $or: plaintextTokenFilter('oauthCredentials.') },
         ],
       },
       { projection: { authProviders: 1, oauthCredentials: 1 } }
@@ -65,7 +71,10 @@ const migration: MigrationFile = {
         const tokens = plaintextTokens(provider);
         if (!provider.strategy || Object.keys(tokens).length === 0) continue;
         const set: Record<string, unknown> = { 'authProviders.$[p].encrypted': true };
-        const match: Record<string, unknown> = { 'p.strategy': provider.strategy };
+        const match: Record<string, unknown> = {
+          'p.strategy': provider.strategy,
+          ...(provider.id ? { 'p.id': provider.id } : {}),
+        };
         for (const [field, value] of Object.entries(tokens)) {
           set[`authProviders.$[p].${field}`] = encryptAtRest(value as string);
           match[`p.${field}`] = value;
