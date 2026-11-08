@@ -12,7 +12,7 @@ import {
 } from '@bike4mind/common';
 import { CampaignWatchModel, User, withTransaction } from '@bike4mind/database';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 export const WATCH_PAGE_SIZE = 25;
 const MAX_TIME_MS = 10_000;
