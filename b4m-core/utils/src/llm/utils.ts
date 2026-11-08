@@ -403,13 +403,13 @@ function researchModeReplyText(results: IChatHistoryItem['researchModeResults'])
  * The turn's non-thinking reply slots, in order. Slots follow the provider's content blocks, so a
  * turn that called tools holds the pre-tool preamble first and the final answer in a later slot.
  */
-function historyReplySlots(item: Pick<IChatHistoryItem, 'replies'>): string[] {
+export function historyReplySlots(item: Pick<IChatHistoryItem, 'replies'>): string[] {
   const slots = (item.replies ?? []).filter((r: string) => !r.trim().startsWith('<think>'));
   // A lone slot passes through untouched so single-slot turns replay exactly as they always have.
   return slots.length > 1 ? slots.filter(r => r.trim()) : slots;
 }
 
-const REPLY_SLOT_SEPARATOR = '\n\n';
+export const REPLY_SLOT_SEPARATOR = '\n\n';
 
 /** The turn's text answer for history: every non-thinking reply slot, else its Research Mode answers. */
 function historyTextReply(item: Pick<IChatHistoryItem, 'replies' | 'researchModeResults'>): string {
