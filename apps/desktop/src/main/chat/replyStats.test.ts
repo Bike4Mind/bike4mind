@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatReplyStats } from '@shared/chat';
-import { buildReplyStats, roundGeneration, roundThinking, type StatsRound } from './replyStats';
+import { buildReplyStats, roundGeneration, roundLoad, roundThinking, type StatsRound } from './replyStats';
 
 const round = (timing: StatsRound['timing'], extra: Partial<StatsRound> = {}): StatsRound => ({
   timing,
@@ -328,7 +328,7 @@ describe('buildReplyStats', () => {
         usage: { inputTokens: 10, outputTokens: 200 },
         local: false,
       })
-    ).toEqual({ totalMs: 2_900, modelMs: 2_800, toolMs: 0, firstTokenMs: 500 });
+    ).toEqual({ totalMs: 2_900, modelMs: 2_800, toolMs: 0, outputMs: 2_300, firstTokenMs: 500 });
   });
 
   it('sums a tool reply over its rounds and takes the first token from the first round that had one', () => {
@@ -350,6 +350,7 @@ describe('buildReplyStats', () => {
       totalMs: 9_900,
       modelMs: 5_700,
       toolMs: 4_000,
+      outputMs: 4_700,
       firstTokenMs: 300,
       reasoningMs: 1_000,
       reasoningTokens: 120,
@@ -400,6 +401,7 @@ describe('buildReplyStats', () => {
       totalMs: 3_000,
       modelMs: 3_000,
       toolMs: 0,
+      outputMs: 2_700,
       firstTokenMs: 300,
       reasoningMs: 2_000,
       reasoningTokens: 80,
@@ -471,6 +473,7 @@ describe('buildReplyStats', () => {
       totalMs: 69_900,
       modelMs: 28_900,
       toolMs: 40_000,
+      loadMs: 0,
       firstTokenMs: 500,
       reasoningMs: 4_000,
       reasoningTokens: 50,
@@ -509,5 +512,226 @@ describe('buildReplyStats', () => {
     });
     expect(stats.reasoningTokens).toBe(120);
     expect(stats.derived).toBeUndefined();
+  });
+
+  it('adds a continued run to the earlier generation time, and keeps none when the earlier run had none kept', () => {
+    const next = round({ startedAt: 50_000, firstTokenAt: 50_400, firstTextAt: 50_400, endedAt: 52_400 });
+    const run = { endedAt: 52_400, rounds: [next], toolMs: 0, local: false };
+    expect(
+      buildReplyStats({ ...run, earlier: { totalMs: 5_000, modelMs: 5_000, toolMs: 0, outputMs: 3_000 } }).outputMs
+    ).toBe(5_000);
+    expect(
+      buildReplyStats({ ...run, earlier: { totalMs: 5_000, modelMs: 5_000, toolMs: 0 } }).outputMs
+    ).toBeUndefined();
+    expect(buildReplyStats({ ...run, earlier: { totalMs: 0, modelMs: 0, toolMs: 0 } }).outputMs).toBe(2_000);
+  });
+});
+
+describe('roundLoad', () => {
+  const timed = (rate: NonNullable<StatsRound['usage']>['rate'], endedAt = 31_300) =>
+    round({ startedAt: 0, firstTokenAt: 28_600, endedAt }, { usage: { outputTokens: 40, rate } });
+
+  it("takes Ollama's reported load as it is, warm or cold", () => {
+    expect(roundLoad(timed({ evalTokens: 40, evalMs: 2_600, promptMs: 500, loadMs: 28_000 }))).toEqual({
+      ms: 28_000,
+      derived: false,
+    });
+    expect(roundLoad(timed({ evalTokens: 40, evalMs: 2_600, loadMs: 40 }, 3_200))).toEqual({ ms: 40, derived: false });
+  });
+
+  it("derives llama-server's from the request's time outside its prompt and generation timings", () => {
+    const llama = { evalTokens: 40, evalMs: 2_600, loadReported: false };
+    expect(roundLoad(timed({ ...llama, promptMs: 500 }))).toEqual({ ms: 28_200, derived: true });
+    expect(roundLoad(timed(llama))).toEqual({ ms: 28_700, derived: true });
+    expect(roundLoad(timed({ ...llama, promptMs: 500 }, 3_200))).toEqual({ ms: 100, derived: true });
+    expect(roundLoad(timed({ ...llama, promptMs: 500 }, 3_100))).toBeNull();
+  });
+
+  it('derives no wait for a server that reports its load, or for timings that do not say', () => {
+    // Ollama leaves out a zero load_duration: its wall time beyond the timings is no load.
+    expect(roundLoad(timed({ evalTokens: 40, evalMs: 2_600, promptMs: 500, loadReported: true }))).toBeNull();
+    expect(roundLoad(timed({ evalTokens: 40, evalMs: 2_600, promptMs: 500 }))).toBeNull();
+  });
+
+  it('names no load for a stream this app timed, or a round no server timed', () => {
+    expect(roundLoad(timed({ evalTokens: 39, evalMs: 2_600, estimated: true }))).toBeNull();
+    expect(roundLoad(timed({ evalTokens: 40, evalMs: Number.NaN, loadMs: 28_000 }))).toBeNull();
+    expect(roundLoad(round({ startedAt: 0, firstTokenAt: 28_600, endedAt: 31_300 }))).toBeNull();
+  });
+});
+
+describe('a cold-loaded self-hosted reply', () => {
+  const coldRound = (rate: NonNullable<StatsRound['usage']>['rate']) =>
+    round(
+      {
+        startedAt: 0,
+        firstTokenAt: 28_600,
+        firstReasoningAt: 28_600,
+        lastReasoningAt: 29_900,
+        firstTextAt: 30_000,
+        endedAt: 31_300,
+      },
+      { reasoningFrames: 30, reasoning: 'Short.', usage: { outputTokens: 40, rate } }
+    );
+  const build = (rate: NonNullable<StatsRound['usage']>['rate']) =>
+    buildReplyStats({
+      endedAt: 31_300,
+      rounds: [coldRound(rate)],
+      toolMs: 0,
+      usage: { outputTokens: 40, rate },
+      local: true,
+    });
+
+  it("keeps Ollama's load apart from the generation the thinking share is measured against", () => {
+    expect(build({ evalTokens: 40, evalMs: 2_600, promptTokens: 900, promptMs: 500, loadMs: 28_000 })).toEqual({
+      totalMs: 31_300,
+      modelMs: 31_300,
+      toolMs: 0,
+      loadMs: 28_000,
+      outputMs: 2_700,
+      firstTokenMs: 28_600,
+      firstTokenLoadMs: 28_000,
+      reasoningMs: 1_300,
+      reasoningTokens: 30,
+      derived: ['reasoningTokens'],
+    });
+  });
+
+  it("marks the load it worked out from llama-server's timings", () => {
+    expect(
+      build({ evalTokens: 40, evalMs: 2_600, promptTokens: 900, promptMs: 500, loadReported: false })
+    ).toMatchObject({
+      loadMs: 28_200,
+      outputMs: 2_700,
+      derived: ['loadMs', 'reasoningTokens'],
+    });
+  });
+
+  it('leaves the load and prompt time out of a thinking time estimated from the wait', () => {
+    const stats = buildReplyStats({
+      endedAt: 31_000,
+      rounds: [
+        round(
+          { startedAt: 0, firstTokenAt: 30_000, firstTextAt: 30_000, endedAt: 31_000 },
+          {
+            usage: {
+              outputTokens: 40,
+              reasoningTokens: 20,
+              rate: { evalTokens: 40, evalMs: 900, promptMs: 500, loadMs: 28_000 },
+            },
+          }
+        ),
+      ],
+      toolMs: 0,
+      usage: { outputTokens: 40, reasoningTokens: 20 },
+      local: true,
+    });
+    expect(stats).toMatchObject({ reasoningMs: 1_500, loadMs: 28_000, derived: ['reasoningMs'] });
+  });
+});
+
+describe('the load of a reply of several requests', () => {
+  type Rate = NonNullable<StatsRound['usage']>['rate'];
+  // Each request takes `wallMs`, of which llama-server timed 100ms of prompt and 2s of generation.
+  const request = (startedAt: number, wallMs: number, rate: Partial<NonNullable<Rate>> = {}): StatsRound => {
+    const endedAt = startedAt + wallMs;
+    const timings = { evalTokens: 40, evalMs: 2_000, promptMs: 100, loadReported: false, ...rate };
+    return round(
+      { startedAt, firstTokenAt: endedAt - 2_000, firstTextAt: endedAt - 2_000, endedAt },
+      { usage: { outputTokens: 40, rate: timings } }
+    );
+  };
+  const ollama = (startedAt: number, wallMs: number, loadMs?: number) =>
+    request(startedAt, wallMs, { loadReported: true, ...(loadMs !== undefined ? { loadMs } : {}) });
+  const build = (rounds: StatsRound[], extra: Partial<Parameters<typeof buildReplyStats>[0]> = {}) =>
+    buildReplyStats({ endedAt: rounds.at(-1)?.timing.endedAt ?? 0, rounds, toolMs: 0, local: true, ...extra });
+
+  it('counts no wait for warm requests, however many add up', () => {
+    const warm = Array.from({ length: 8 }, (_, i) => request(i * 5_000, 3_000));
+    const stats = build(warm);
+    expect(stats.loadMs).toBeUndefined();
+    expect(stats.firstTokenLoadMs).toBeUndefined();
+    expect(stats.derived).toBeUndefined();
+    const warmOllama = Array.from({ length: 8 }, (_, i) => ollama(i * 5_000, 3_000, 800));
+    expect(build(warmOllama).loadMs).toBeUndefined();
+  });
+
+  it('counts a cold request among warm ones, and times the first token against its own', () => {
+    const rounds = [request(0, 30_000), ...Array.from({ length: 4 }, (_, i) => request(40_000 + i * 5_000, 3_000))];
+    expect(build(rounds)).toMatchObject({ loadMs: 27_900, firstTokenLoadMs: 27_900, derived: ['loadMs'] });
+    const reloaded = [ollama(0, 30_000, 27_000), ollama(40_000, 13_000, 10_000)];
+    expect(build(reloaded)).toMatchObject({ loadMs: 37_000, firstTokenLoadMs: 27_000 });
+    const lateLoad = [ollama(0, 3_000), ollama(10_000, 13_000, 10_000)];
+    expect(build(lateLoad)).toMatchObject({ loadMs: 10_000 });
+    expect(build(lateLoad).firstTokenLoadMs).toBeUndefined();
+    expect(build(lateLoad).derived).toBeUndefined();
+  });
+
+  it('carries a continued reply load from the earlier run, or from its reported rate where none was stored', () => {
+    const next = [ollama(100_000, 3_000, 40)];
+    const kept = { totalMs: 34_000, modelMs: 34_000, toolMs: 0, outputMs: 3_000 };
+    const loaded = { ...kept, loadMs: 28_000, firstTokenMs: 29_000, firstTokenLoadMs: 28_000 };
+    expect(build(next, { earlier: loaded })).toMatchObject({ loadMs: 28_000, firstTokenLoadMs: 28_000 });
+    expect(build(next, { earlier: kept }).loadMs).toBeUndefined();
+    const before = { totalMs: 34_000, modelMs: 34_000, toolMs: 0 };
+    const usage = { outputTokens: 80, rate: { evalTokens: 80, evalMs: 4_000, loadMs: 28_040, loadReported: true } };
+    expect(build(next, { earlier: before, usage })).toMatchObject({ loadMs: 28_000 });
+    expect(build(next, { earlier: before, usage }).loadPartial).toBeUndefined();
+    // Stored before the stamp: a reported load still reads as one.
+    const { loadReported: _, ...unstamped } = usage.rate;
+    expect(build(next, { earlier: before, usage: { ...usage, rate: unstamped } }).loadMs).toBe(28_000);
+  });
+
+  it("holds an earlier run's summed load to the per-request rule, as unknown where it ran tools", () => {
+    const next = [ollama(100_000, 3_000, 40)];
+    const rate = (loadMs: number) => ({ outputTokens: 80, rate: { evalTokens: 80, evalMs: 4_000, loadMs } });
+    const noTools = { totalMs: 34_000, modelMs: 34_000, toolMs: 0 };
+    const tools = { ...noTools, toolMs: 5_000 };
+    // Thirty warm requests at 50ms: no one of them reached the rule's second.
+    expect(build(next, { earlier: tools, usage: rate(1_540) })).toMatchObject({ loadPartial: true });
+    expect(build(next, { earlier: tools, usage: rate(1_540) }).loadMs).toBe(0);
+    expect(build(next, { earlier: tools, usage: rate(940) }).loadPartial).toBeUndefined();
+    expect(build(next, { earlier: noTools, usage: rate(940) }).loadMs).toBe(0);
+    // One cold request: the whole sum is its load.
+    expect(build(next, { earlier: noTools, usage: rate(28_040) })).toMatchObject({ loadMs: 28_000 });
+  });
+
+  it("keeps this run's wait when an earlier run timed by llama-server was stored without its own", () => {
+    const next = [request(100_000, 30_000)];
+    const usage = { outputTokens: 80, rate: { evalTokens: 80, evalMs: 4_000, promptMs: 200, loadReported: false } };
+    const earlier = { totalMs: 34_000, modelMs: 34_000, toolMs: 0 };
+    const stats = build(next, { earlier, usage });
+    expect(stats).toMatchObject({ loadMs: 27_900, loadPartial: true, derived: ['loadMs'] });
+    expect(build([request(100_000, 3_000)], { earlier, usage })).toMatchObject({ loadPartial: true });
+    expect(build([request(100_000, 3_000)], { earlier, usage }).loadMs).toBe(0);
+    const { loadReported: _, ...unstamped } = usage.rate;
+    expect(build(next, { earlier, usage: { ...usage, rate: unstamped } })).toMatchObject({ loadPartial: true });
+    expect(build(next, { earlier, usage: { outputTokens: 80 } })).toMatchObject({ loadMs: 27_900 });
+    expect(build(next, { earlier, usage: { outputTokens: 80 } }).loadPartial).toBeUndefined();
+    // Carried to a further Continue.
+    expect(build([request(200_000, 3_000)], { earlier: stats, usage })).toMatchObject({
+      loadMs: 27_900,
+      loadPartial: true,
+    });
+  });
+
+  it('knows an earlier Ollama run stored without its load had none where the server reported none', () => {
+    const next = [ollama(100_000, 3_000)];
+    const earlier = { totalMs: 34_000, modelMs: 34_000, toolMs: 0 };
+    const usage = { outputTokens: 80, rate: { evalTokens: 80, evalMs: 4_000, loadReported: true } };
+    const stats = build(next, { earlier, usage });
+    expect(stats.loadMs).toBe(0);
+    expect(stats.loadPartial).toBeUndefined();
+  });
+
+  it('stores a zero load on a Continue of a reply stored without one, so it never reads as stored before loads', () => {
+    // Two warm requests, 700ms and 500ms: neither counted, though their sum passes the rule's second.
+    const next = [ollama(100_000, 3_000, 500)];
+    const earlier = { totalMs: 34_000, modelMs: 34_000, toolMs: 0 };
+    const usage = { outputTokens: 80, rate: { evalTokens: 80, evalMs: 4_000, loadMs: 1_200, loadReported: true } };
+    const stats = build(next, { earlier, usage });
+    expect(stats.outputMs).toBeUndefined();
+    expect(stats.loadMs).toBe(0);
+    expect(build([ollama(200_000, 3_000, 500)], { earlier: stats, usage }).loadMs).toBe(0);
   });
 });

@@ -1210,6 +1210,8 @@ export interface ChatTokenRate {
   promptMs?: number;
   /** Time spent loading the model into memory before the request ran. */
   loadMs?: number;
+  /** True where the server reports its load (Ollama): no loadMs is none. False for llama-server, which never does. */
+  loadReported?: boolean;
   /** The server's own time for the whole request, load and prompt included. */
   totalMs?: number;
   /** Prompt tokens the server reused from its cache instead of evaluating; not part of `promptTokens`. */
@@ -1223,8 +1225,11 @@ export interface ChatTokenRate {
   untimedTokens?: number;
 }
 
+/** A model load or server wait at least this long is named apart from the reply's own time, in ms. */
+export const REPLY_STATS_SIGNIFICANT_WAIT_MS = 1000;
+
 /** A ChatReplyStats figure that is an estimate rather than a measurement or a server's report. */
-export type ChatReplyStatsEstimate = 'reasoningMs' | 'reasoningTokens';
+export type ChatReplyStatsEstimate = 'reasoningMs' | 'reasoningTokens' | 'loadMs';
 
 /**
  * One reply's timing, measured by this app on every backend, in ms. Kept on the message rather
@@ -1240,6 +1245,17 @@ export interface ChatReplyStats {
   modelMs: number;
   /** Running tools between requests, approval waits included. */
   toolMs: number;
+  /** Of modelMs, each self-hosted request's load or wait of at least REPLY_STATS_SIGNIFICANT_WAIT_MS; see roundLoad. */
+  loadMs?: number;
+  /** loadMs leaves out a run before Continue, which was stored without its load. */
+  loadPartial?: true;
+  /** Of firstTokenMs, the counted load or wait of the request it was measured on. */
+  firstTokenLoadMs?: number;
+  /**
+   * Of modelMs, from each request's first delta to its end: generation, with load, queueing and
+   * prompt processing left out. The thinking share's time base.
+   */
+  outputMs?: number;
   /** From the first request that streamed anything to its first delta. */
   firstTokenMs?: number;
   /** Thinking, summed over the requests that thought. */

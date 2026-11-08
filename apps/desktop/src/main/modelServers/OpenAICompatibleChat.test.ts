@@ -113,7 +113,15 @@ describe('OpenAICompatibleChat', () => {
       type: 'content',
       stopReason: 'stop',
       usage: { inputTokens: 12, outputTokens: 3 },
-      rate: { evalTokens: 3, evalMs: 120, promptTokens: 12, promptMs: 30, draftTokens: 4, draftAccepted: 2 },
+      rate: {
+        evalTokens: 3,
+        evalMs: 120,
+        loadReported: false,
+        promptTokens: 12,
+        promptMs: 30,
+        draftTokens: 4,
+        draftAccepted: 2,
+      },
     });
   });
 
@@ -133,7 +141,14 @@ describe('OpenAICompatibleChat', () => {
       type: 'content',
       stopReason: 'stop',
       usage: { inputTokens: 2500, outputTokens: 3 },
-      rate: { evalTokens: 3, evalMs: 120, promptTokens: 100, promptMs: 50, cachedPromptTokens: 2400 },
+      rate: {
+        evalTokens: 3,
+        evalMs: 120,
+        loadReported: false,
+        promptTokens: 100,
+        promptMs: 50,
+        cachedPromptTokens: 2400,
+      },
     });
   });
 

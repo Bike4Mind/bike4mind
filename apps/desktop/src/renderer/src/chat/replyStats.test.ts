@@ -7,6 +7,7 @@ import {
   formatShare,
   generationRate,
   liveReplyStats,
+  replyLoad,
   replyStats,
   speakReplyStats,
   thinkingShare,
@@ -17,26 +18,107 @@ import type { TurnProgress } from './statusLine';
 const base: ChatReplyStats = { totalMs: 20_000, modelMs: 20_000, toolMs: 0 };
 
 describe('thinkingShare', () => {
-  it("is thinking time over the model's time, not diluted by tools and approvals", () => {
-    expect(thinkingShare({ ...base, reasoningMs: 5000 })).toBe(0.25);
-    expect(thinkingShare({ totalMs: 60_000, modelMs: 10_000, toolMs: 50_000, reasoningMs: 5000 })).toBe(0.5);
+  it("is the server's thinking count over the output tokens when it sent one, whatever the times say", () => {
+    expect(
+      thinkingShare({
+        stats: { ...base, reasoningMs: 9000, outputMs: 10_000, reasoningTokens: 100 },
+        usage: { outputTokens: 400, reasoningTokens: 100 },
+      })
+    ).toEqual({ share: 0.25, basis: 'tokens', estimated: false });
   });
 
-  it('is absent for a reply that did not think, or where the model took no time', () => {
-    expect(thinkingShare(base)).toBeNull();
-    expect(thinkingShare({ ...base, modelMs: 0, reasoningMs: 10 })).toBeNull();
-    expect(thinkingShare(undefined)).toBeNull();
+  it('counts a self-hosted reply by its thinking frames, as an estimate', () => {
+    expect(
+      thinkingShare({
+        stats: { ...base, reasoningMs: 2000, outputMs: 3000, reasoningTokens: 30, derived: ['reasoningTokens'] },
+        usage: { outputTokens: 40 },
+      })
+    ).toEqual({ share: 0.75, basis: 'tokens', estimated: true });
   });
 
-  it('is absent when either time is missing or not finite', () => {
-    expect(thinkingShare({ ...base, reasoningMs: Number.NaN })).toBeNull();
-    expect(thinkingShare({ ...base, modelMs: Number.NaN, reasoningMs: 10 })).toBeNull();
-    expect(thinkingShare({ ...base, reasoningMs: Infinity })).toBeNull();
-    expect(thinkingShare({ ...base, modelMs: Infinity, reasoningMs: 10 })).toBeNull();
+  it('is thinking time over generation time when nothing counted the thinking, leaving out load and prefill', () => {
+    const coldLoad: ChatReplyStats = {
+      totalMs: 34_000,
+      modelMs: 34_000,
+      toolMs: 0,
+      loadMs: 28_000,
+      firstTokenMs: 29_000,
+      outputMs: 5000,
+      reasoningMs: 2000,
+    };
+    expect(thinkingShare({ stats: coldLoad, usage: { outputTokens: 40 } })).toEqual({
+      share: 0.4,
+      basis: 'time',
+      estimated: false,
+    });
+    expect(thinkingShare({ stats: { ...base, outputMs: 10_000, reasoningMs: 5000 } })?.share).toBe(0.5);
+  });
+
+  it('has no time share when the thinking time is itself the wait before the first output', () => {
+    expect(
+      thinkingShare({ stats: { ...base, outputMs: 10_000, reasoningMs: 5000, derived: ['reasoningMs'] } })
+    ).toBeNull();
+    expect(
+      thinkingShare({
+        stats: { ...base, outputMs: 10_000, reasoningMs: 5000, derived: ['reasoningMs'] },
+        usage: { outputTokens: 1000, reasoningTokens: 600 },
+      })
+    ).toEqual({ share: 0.6, basis: 'tokens', estimated: false });
+  });
+
+  it('is absent for a reply that did not think, or with no generation time or output to measure against', () => {
+    expect(thinkingShare({ stats: base })).toBeNull();
+    expect(thinkingShare({ stats: base, usage: { outputTokens: 100, reasoningTokens: 0 } })).toBeNull();
+    expect(thinkingShare({ stats: { ...base, outputMs: 0, reasoningMs: 10 } })).toBeNull();
+    expect(thinkingShare({ stats: { ...base, reasoningMs: 10 } })).toBeNull();
+    expect(thinkingShare({ stats: { ...base, outputMs: 1000 }, usage: { reasoningTokens: 50 } })).toBeNull();
+    expect(thinkingShare({})).toBeNull();
+  });
+
+  it('is absent when a time or count is not finite', () => {
+    expect(thinkingShare({ stats: { ...base, outputMs: 1000, reasoningMs: Number.NaN } })).toBeNull();
+    expect(thinkingShare({ stats: { ...base, outputMs: Number.NaN, reasoningMs: 10 } })).toBeNull();
+    expect(thinkingShare({ stats: { ...base, outputMs: 1000, reasoningMs: Infinity } })).toBeNull();
+    expect(thinkingShare({ stats: { ...base, outputMs: Infinity, reasoningMs: 10 } })).toBeNull();
+    expect(
+      thinkingShare({ stats: { ...base, outputMs: 1000, reasoningMs: 500 }, usage: { outputTokens: Number.NaN } })
+        ?.basis
+    ).toBe('time');
   });
 
   it('never claims more than the whole', () => {
-    expect(thinkingShare({ ...base, reasoningMs: 30_000 })).toBe(1);
+    expect(thinkingShare({ stats: { ...base, outputMs: 1000, reasoningMs: 30_000 } })?.share).toBe(1);
+    expect(thinkingShare({ usage: { outputTokens: 10, reasoningTokens: 50 } })?.share).toBe(1);
+  });
+});
+
+describe('replyLoad', () => {
+  it("takes main's counted load, else the server's reported one, once it is long enough to name", () => {
+    const reported = { rate: { evalTokens: 40, evalMs: 1300, loadMs: 5000 } };
+    expect(replyLoad({ stats: { ...base, loadMs: 28_000 } })).toEqual({ ms: 28_000, kind: 'load' });
+    expect(replyLoad({ stats: base, usage: reported })).toEqual({ ms: 5000, kind: 'load' });
+    expect(replyLoad({ stats: { ...base, loadMs: 40 } })).toBeNull();
+    expect(replyLoad({ stats: { ...base, loadMs: Infinity } })).toBeNull();
+    expect(replyLoad({ stats: base })).toBeNull();
+    // Stored with outputMs, so a missing loadMs is none, whatever the server reported.
+    expect(replyLoad({ stats: { ...base, outputMs: 4_000 }, usage: reported })).toBeNull();
+    // A Continue of an old reply stores loadMs 0 with no outputMs: the summed load is not one request's.
+    expect(replyLoad({ stats: { ...base, loadMs: 0 }, usage: reported })).toBeNull();
+  });
+
+  it("holds an old reply's summed load to the per-request rule: only a reply that ran no tools was one request", () => {
+    const warm = { rate: { evalTokens: 600, evalMs: 20_000, loadMs: 1_500 } };
+    expect(replyLoad({ stats: { ...base, toolMs: 4_000 }, usage: warm })).toBeNull();
+    expect(replyLoad({ stats: base, usage: warm })).toEqual({ ms: 1_500, kind: 'load' });
+    expect(replyLoad({ stats: base, usage: { rate: { evalTokens: 600, evalMs: 20_000, loadMs: 900 } } })).toBeNull();
+    expect(replyLoad({ usage: warm })).toBeNull();
+  });
+
+  it('names a wait main worked out as a server wait, not a model load', () => {
+    expect(replyLoad({ stats: { ...base, loadMs: 28_000, derived: ['loadMs'] } })).toEqual({
+      ms: 28_000,
+      kind: 'wait',
+    });
   });
 });
 
@@ -181,7 +263,9 @@ describe('replyStats', () => {
     const rows = replyStats({
       stats: {
         ...base,
-        firstTokenMs: 400,
+        loadMs: 1200,
+        outputMs: 18_200,
+        firstTokenMs: 1600,
         reasoningMs: 5000,
         reasoningTokens: 120,
         derived: ['reasoningTokens'],
@@ -195,24 +279,159 @@ describe('replyStats', () => {
 
     expect(rows.map(row => [row.id, row.value])).toEqual([
       ['thinking', '5.0s'],
-      ['total', '20.0s'],
-      ['thinkingShare', '25%'],
+      ['total', '18.8s'],
+      ['thinkingShare', '~25%'],
       ['thinkingTokens', '~120'],
       ['tokens', '480'],
       ['speed', '25.3 tok/s'],
       ['promptSpeed', '3000 tok/s'],
-      ['firstToken', '400ms'],
+      ['firstToken', '1.6s'],
       ['load', '1.2s'],
     ]);
     expect(rows.find(row => row.id === 'thinkingTokens')?.estimate).toMatch(/thinking frames/);
+    expect(rows.find(row => row.id === 'thinkingShare')?.label).toBe('Thinking (tokens)');
     expect(rows.find(row => row.id === 'speed')?.estimate).toBeUndefined();
   });
 
-  it('marks thinking time and its share as estimates when main derived them', () => {
-    const rows = replyStats({ stats: { ...base, reasoningMs: 2000, derived: ['reasoningMs'] } });
+  it('marks thinking time as an estimate when main derived it, and then shows no time share', () => {
+    const rows = replyStats({ stats: { ...base, outputMs: 15_000, reasoningMs: 2000, derived: ['reasoningMs'] } });
 
     expect(rows.find(row => row.id === 'thinking')?.value).toBe('~2.0s');
-    expect(rows.find(row => row.id === 'thinkingShare')?.value).toBe('~10%');
+    expect(rows.find(row => row.id === 'thinkingShare')).toBeUndefined();
+  });
+
+  it('shares out the thinking of a reply whose server counted it by tokens, and says so', () => {
+    const rows = replyStats({
+      stats: { ...base, reasoningMs: 9000, outputMs: 10_000 },
+      usage: { outputTokens: 400, reasoningTokens: 100 },
+    });
+
+    expect(rows.find(row => row.id === 'thinkingShare')).toMatchObject({ value: '25%', label: 'Thinking (tokens)' });
+  });
+
+  it('shares out the thinking of a reply with no thinking count by generation time, and says so', () => {
+    const rows = replyStats({
+      stats: { ...base, modelMs: 20_000, firstTokenMs: 12_000, outputMs: 8_000, reasoningMs: 2_000 },
+      usage: { outputTokens: 300 },
+    });
+
+    expect(rows.find(row => row.id === 'thinkingShare')).toMatchObject({ value: '25%', label: 'Thinking (time)' });
+  });
+
+  it('reads a cold-loaded self-hosted reply as its own time plus a named model load', () => {
+    const rows = replyStats({
+      stats: {
+        totalMs: 34_000,
+        modelMs: 34_000,
+        toolMs: 0,
+        loadMs: 28_000,
+        outputMs: 5_200,
+        firstTokenMs: 28_800,
+        firstTokenLoadMs: 28_000,
+        reasoningMs: 1_300,
+      },
+      usage: { outputTokens: 40, rate: { evalTokens: 40, evalMs: 1_250, promptMs: 500, loadMs: 28_000 } },
+    });
+    const row = (id: string) => rows.find(candidate => candidate.id === id);
+
+    expect(row('total')?.value).toBe('6.0s');
+    expect(row('total')?.note).toBe('leaves out 28.0s of model load');
+    expect(row('load')).toEqual({ id: 'load', label: 'Model load', value: '28.0s' });
+    expect(row('speed')?.value).toBe('32.0 tok/s');
+    expect(row('thinkingShare')).toMatchObject({ value: '25%', label: 'Thinking (time)' });
+    expect(row('firstToken')?.note).toBe('includes 28.0s of model load');
+    expect(describeReplyStats(rows)).toContain('Thinking (time): 25%');
+  });
+
+  it('reads a cold reply stored before loads were kept from the load its server reported', () => {
+    const rows = replyStats({
+      stats: { totalMs: 34_000, modelMs: 34_000, toolMs: 0, firstTokenMs: 28_800 },
+      usage: { outputTokens: 40, rate: { evalTokens: 40, evalMs: 1_250, promptMs: 500, loadMs: 28_000 } },
+    });
+    const row = (id: string) => rows.find(candidate => candidate.id === id);
+
+    expect(row('total')).toMatchObject({ value: '6.0s', note: 'leaves out 28.0s of model load' });
+    expect(row('load')).toEqual({ id: 'load', label: 'Model load', value: '28.0s' });
+  });
+
+  it('notes on the first token only the load of the request it was timed on', () => {
+    const stats = { ...base, outputMs: 4_000, loadMs: 38_000, firstTokenMs: 28_800 };
+    const firstToken = (extra: Partial<ChatReplyStats>) =>
+      replyStats({ stats: { ...stats, ...extra } }).find(row => row.id === 'firstToken');
+    expect(firstToken({ firstTokenLoadMs: 28_000 })?.note).toBe('includes 28.0s of model load');
+    expect(firstToken({})?.note).toBeUndefined();
+  });
+
+  it("names a wait main worked out from llama-server's timings as a server wait, and none on a warm reply", () => {
+    const derived = replyStats({
+      stats: { ...base, loadMs: 9_000, firstTokenMs: 9_500, firstTokenLoadMs: 9_000, derived: ['loadMs'] },
+    });
+    expect(derived.find(row => row.id === 'load')).toEqual({
+      id: 'load',
+      label: 'Server wait',
+      value: '9.0s',
+      note: 'load, queue or connection',
+    });
+    expect(describeReplyStats(derived)).toContain('Server wait: 9.0s (load, queue or connection)');
+    // Derived, it can be a connection on every request: kept in the total, not taken out of it.
+    expect(derived.find(row => row.id === 'total')).toMatchObject({
+      value: '20.0s',
+      note: 'includes 9.0s of server wait',
+    });
+    expect(derived.find(row => row.id === 'firstToken')?.note).toBe('includes 9.0s of server wait');
+
+    const warm = replyStats({
+      stats: { ...base, loadMs: 40, firstTokenMs: 300 },
+      usage: { outputTokens: 400, rate: { evalTokens: 400, evalMs: 19_000, loadMs: 40 } },
+    });
+    expect(warm.find(row => row.id === 'load')).toBeUndefined();
+    expect(warm.find(row => row.id === 'total')).toMatchObject({ value: '20.0s' });
+    expect(warm.find(row => row.id === 'total')?.note).toBeUndefined();
+  });
+
+  it('keeps a long wait the server did not break down in the total, named as the wait for the first token', () => {
+    const rows = replyStats({
+      stats: { totalMs: 34_000, modelMs: 34_000, toolMs: 2_000, firstTokenMs: 27_000, outputMs: 5_000 },
+      usage: { outputTokens: 40, rate: { evalTokens: 39, evalMs: 1_200, estimated: true, untimedTokens: 1 } },
+    });
+
+    expect(rows.find(row => row.id === 'total')).toMatchObject({
+      value: '34.0s',
+      note: 'includes 2.0s running tools and waiting for approval, and 27.0s waiting for the first token',
+    });
+    expect(rows.find(row => row.id === 'load')).toBeUndefined();
+  });
+
+  it('says only the part of a load or wait a run before Continue did not record is unknown', () => {
+    const unrecorded = 'any load or wait in a run before Continue, which did not record it';
+    const none = replyStats({ stats: { ...base, outputMs: 4_000, loadPartial: true, firstTokenMs: 400 } });
+    expect(none.find(row => row.id === 'total')).toMatchObject({ value: '20.0s', note: `includes ${unrecorded}` });
+    expect(none.find(row => row.id === 'load')).toBeUndefined();
+
+    const wait = replyStats({
+      stats: { ...base, outputMs: 4_000, loadMs: 9_000, loadPartial: true, firstTokenMs: 400, derived: ['loadMs'] },
+    });
+    expect(wait.find(row => row.id === 'total')).toMatchObject({
+      value: '20.0s',
+      note: `includes 9.0s of server wait, and ${unrecorded}`,
+    });
+    expect(wait.find(row => row.id === 'load')).toMatchObject({
+      label: 'Server wait',
+      value: '9.0s',
+      note: 'load, queue or connection; not counting a run before Continue, which did not record it',
+    });
+
+    const load = replyStats({
+      stats: { ...base, outputMs: 4_000, loadMs: 9_000, loadPartial: true, firstTokenMs: 400 },
+    });
+    expect(load.find(row => row.id === 'total')).toMatchObject({
+      value: '11.0s',
+      note: `includes ${unrecorded}; leaves out 9.0s of model load`,
+    });
+    expect(load.find(row => row.id === 'load')).toMatchObject({
+      label: 'Model load',
+      note: 'not counting a run before Continue, which did not record it',
+    });
   });
 
   it('marks a hosted speed as timed by the app', () => {

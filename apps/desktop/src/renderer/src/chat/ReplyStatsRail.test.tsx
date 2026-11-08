@@ -34,6 +34,7 @@ const stats: ChatReplyStats = {
   totalMs: 12_000,
   modelMs: 12_000,
   toolMs: 0,
+  outputMs: 12_000,
   firstTokenMs: 800,
   reasoningMs: 3000,
   generation: { tokens: 299, ms: 11_200 },

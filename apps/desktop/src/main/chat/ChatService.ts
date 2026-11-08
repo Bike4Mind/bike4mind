@@ -4029,22 +4029,6 @@ export class ChatService {
         let turnSettled: ChatSettledCharge | undefined;
         let turnReasoning = '';
         const splitThinking = createThinkFilter();
-        const timer = startRoundTimer();
-        const append = ({ text: visible, reasoning }: ThinkSplit): void => {
-          if (reasoning) {
-            turnReasoning += reasoning;
-            this.emit({ type: 'reasoning', sessionId, messageId: replyId, text: reasoning });
-          }
-          if (!visible) return;
-          if (visible.trim()) timer.text();
-          // Every round streams into the SAME message, so without a break here the last
-          // sentence of one round runs into the first word of the next. On the emitted text
-          // only: the wire keeps its own round structure and needs no filler.
-          const text = turnText.length === 0 ? paragraphBreak(content) + visible : visible;
-          content += text;
-          turnText += visible;
-          this.emit({ type: 'delta', sessionId, messageId: replyId, text });
-        };
 
         await this.clearStaleResults(session, toolCalls, produced, wire, replyId);
 
@@ -4064,6 +4048,24 @@ export class ChatService {
             })),
           });
         }
+
+        // Started as the request goes out, so this app's own work above is no server wait.
+        const timer = startRoundTimer();
+        const append = ({ text: visible, reasoning }: ThinkSplit): void => {
+          if (reasoning) {
+            turnReasoning += reasoning;
+            this.emit({ type: 'reasoning', sessionId, messageId: replyId, text: reasoning });
+          }
+          if (!visible) return;
+          if (visible.trim()) timer.text();
+          // Every round streams into the SAME message, so without a break here the last
+          // sentence of one round runs into the first word of the next. On the emitted text
+          // only: the wire keeps its own round structure and needs no filler.
+          const text = turnText.length === 0 ? paragraphBreak(content) + visible : visible;
+          content += text;
+          turnText += visible;
+          this.emit({ type: 'delta', sessionId, messageId: replyId, text });
+        };
 
         const probe = this.deps.turnTiming ? createRoundProbe(roundIndex === 0 ? turnStartedAt : undefined) : undefined;
         const setPhase = createPhaseTracker(phase =>

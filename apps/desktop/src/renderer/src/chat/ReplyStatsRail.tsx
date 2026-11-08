@@ -8,9 +8,9 @@ import {
   liveReplyStats,
   messageStats,
   replyStats,
-  REPLY_STAT_TEXT,
   speakReplyStats,
   statDetail,
+  statLabel,
   type ReplyStat,
   type ReplyStatId,
 } from './replyStats';
@@ -231,7 +231,7 @@ function RailCell({ message, turn, span }: RailProps) {
           {shown.map(row => (
             <RailRow
               key={row.id}
-              label={REPLY_STAT_TEXT[row.id].label}
+              label={statLabel(row)}
               value={row.value}
               detail={statDetail(row)}
               testId={`chat-reply-stat-${row.id}`}

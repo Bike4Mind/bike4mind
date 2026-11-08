@@ -968,7 +968,15 @@ describe('OllamaLocal', () => {
         type: 'content',
         stopReason: 'end_turn',
         usage: { inputTokens: 30, outputTokens: 48 },
-        rate: { evalTokens: 48, evalMs: 2000, promptTokens: 30, promptMs: 60, loadMs: 1200, totalMs: 3300 },
+        rate: {
+          evalTokens: 48,
+          evalMs: 2000,
+          promptTokens: 30,
+          promptMs: 60,
+          loadMs: 1200,
+          loadReported: true,
+          totalMs: 3300,
+        },
       },
     ]);
   });

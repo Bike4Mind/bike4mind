@@ -31,7 +31,7 @@ import { callsIn, roundsOf } from './replyRounds';
 import { skillChipColor, skillSourceLabel } from './skillMenu';
 import { useShowDollarCosts } from './costDisplay';
 import { describeReplyCost, formatCreditsSpent, type TurnProgress } from './statusLine';
-import { describeReplyStats, FOOTER_STATS, messageStats } from './replyStats';
+import { describeReplyStats, FOOTER_STATS, footerSeparator, messageStats, statLabel } from './replyStats';
 import { useReplyStatsPrefs } from './replyStatsPrefs';
 import { railGroupId, ReplyStatsRail, turnGridSx, useRailDrawn } from './ReplyStatsRail';
 import { clampWindow, extendWindow, initialWindow, WINDOW_STEP, type ThreadWindow } from './threadWindow';
@@ -246,8 +246,9 @@ const REPLY_COST_CLASS = 'b4m-reply-cost';
  * not zero - a turn that failed, and every reply stored before this was captured, would otherwise
  * claim to have been free.
  *
- * Where the stats rail is off or does not fit, the reply's stats are here instead: speed, total and
- * thinking time on the line where ticked in Settings, then the credits, and all of them in the title.
+ * Where the stats rail is off or does not fit, the reply's stats are here instead: speed, total, a
+ * long model load and thinking time on the line where ticked in Settings, then the credits, and all
+ * of them in the title.
  */
 function ReplyCost({ message }: { message: ChatMessage }) {
   const showDollars = useShowDollarCosts();
@@ -256,19 +257,24 @@ function ReplyCost({ message }: { message: ChatMessage }) {
   const rows = messageStats(message);
   const named = FOOTER_STATS.flatMap(([id, name]) => {
     const row = hidden.has(id) ? undefined : rows.find(candidate => candidate.id === id);
-    return row ? [{ id, text: name(row.value) }] : [];
+    if (!row) return [];
+    const label = statLabel(row);
+    return [{ id, label, text: name(row.value, label) }];
   });
   if (!credits && named.length === 0) return null;
   const details = [describeReplyCost(message.usage, showDollars), describeReplyStats(rows)].filter(
     (line): line is string => line !== null
   );
   const parts = [
-    ...named.map(({ id, text }) => (
-      <span key={id} data-testid={`chat-message-stat-${id}`}>
-        {text}
-      </span>
-    )),
-    ...(credits ? [<span key="credits">{credits}</span>] : []),
+    ...named.map(({ id, label, text }, index) => ({
+      join: footerSeparator(named[index - 1]?.id, id, label),
+      node: (
+        <span key={id} data-testid={`chat-message-stat-${id}`}>
+          {text}
+        </span>
+      ),
+    })),
+    ...(credits ? [{ join: ' \xb7 ', node: <span key="credits">{credits}</span> }] : []),
   ];
 
   return (
@@ -292,7 +298,7 @@ function ReplyCost({ message }: { message: ChatMessage }) {
       }}
       data-testid="chat-message-cost"
     >
-      {parts.flatMap((part, index) => (index === 0 ? [part] : [' \xb7 ', part]))}
+      {parts.flatMap(({ join, node }, index) => (index === 0 ? [node] : [join, node]))}
     </Typography>
   );
 }

@@ -31,6 +31,7 @@ export function ollamaRate(frame: {
     evalMs: evalNs / NS_PER_MS,
     ...(promptTokens !== undefined && promptNs !== undefined ? { promptTokens, promptMs: promptNs / NS_PER_MS } : {}),
     ...(loadNs !== undefined ? { loadMs: loadNs / NS_PER_MS } : {}),
+    loadReported: true,
     ...(totalNs !== undefined ? { totalMs: totalNs / NS_PER_MS } : {}),
   };
 }
@@ -50,6 +51,7 @@ export function llamaServerRate(timings: unknown): ChatTokenRate | undefined {
   return {
     evalTokens,
     evalMs,
+    loadReported: false,
     ...(promptTokens !== undefined && promptMs !== undefined ? { promptTokens, promptMs } : {}),
     ...(cachedPromptTokens !== undefined ? { cachedPromptTokens } : {}),
     ...(draftTokens !== undefined && draftTokens > 0 && draftAccepted !== undefined
@@ -116,5 +118,7 @@ export function addTokenRate(
     if (total[key] !== undefined || next[key] !== undefined) sum[key] = (total[key] ?? 0) + (next[key] ?? 0);
   }
   if (total.estimated || next.estimated) sum.estimated = true;
+  if (total.loadReported !== undefined || next.loadReported !== undefined)
+    sum.loadReported = total.loadReported === true || next.loadReported === true;
   return sum;
 }
