@@ -758,6 +758,8 @@ export interface ChatMessage {
    */
   requestId?: string;
   settled?: ChatSettledCharge;
+  /** How long the reply took and how much of it was thinking, on every assistant reply; absent on older ones. */
+  stats?: ChatReplyStats;
   /** When the reply's last request refreshed the server's prompt cache, and for how long; see ChatPromptCacheStamp. */
   promptCache?: ChatPromptCacheStamp;
   contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
@@ -1179,6 +1181,15 @@ export interface ChatUsage {
   cacheReadInputTokens?: number;
   /** Input written to the prompt cache this request, billed above the input rate. */
   cacheCreationInputTokens?: number;
+  /** The part of cacheCreationInputTokens written with the 1-hour TTL. */
+  cacheWrite1hInputTokens?: number;
+  /** Thinking tokens the server reported; part of outputTokens, not on top of it. */
+  reasoningTokens?: number;
+  /**
+   * Of inputTokens, what a self-hosted server served from its prompt cache, from the usage details.
+   * Unset where llama-server's timings already put it in `rate.cachedPromptTokens`.
+   */
+  cachedPromptTokens?: number;
   /** Credits the server charged for these requests. */
   creditsUsed?: number;
   usdCost?: number;
@@ -1199,11 +1210,48 @@ export interface ChatTokenRate {
   promptMs?: number;
   /** Time spent loading the model into memory before the request ran. */
   loadMs?: number;
+  /** The server's own time for the whole request, load and prompt included. */
+  totalMs?: number;
+  /** Prompt tokens the server reused from its cache instead of evaluating; not part of `promptTokens`. */
+  cachedPromptTokens?: number;
   /** Speculative decoding: tokens the draft proposed and how many the model accepted. */
   draftTokens?: number;
   draftAccepted?: number;
   /** Timed by this app from the first streamed token to the last, because the server reported no timings. */
   estimated?: boolean;
+}
+
+/** A ChatReplyStats figure that is an estimate rather than a measurement or a server's report. */
+export type ChatReplyStatsEstimate = 'reasoningMs' | 'reasoningTokens';
+
+/**
+ * One reply's timing, measured by this app on every backend, in ms. Kept on the message rather
+ * than its rounds, because a plain reply stores no rounds.
+ */
+export interface ChatReplyStats {
+  /**
+   * Wall time from the reply's first request to its end, tools and approval waits included; on a
+   * continued reply, the pause before Continue is left out.
+   */
+  totalMs: number;
+  /** Waiting on the model, summed over the reply's requests. */
+  modelMs: number;
+  /** Running tools between requests, approval waits included. */
+  toolMs: number;
+  /** From the first request that streamed anything to its first delta. */
+  firstTokenMs?: number;
+  /** Thinking, summed over the requests that thought. */
+  reasoningMs?: number;
+  /** Thinking tokens: the server's count, else on a self-hosted model the readable thinking frames. */
+  reasoningTokens?: number;
+  /**
+   * A hosted reply's output tokens over the time spent generating them, summed over the requests
+   * where that time can be told apart from latency; see roundGeneration. A self-hosted reply's speed
+   * is its usage's rate.
+   */
+  generation?: { tokens: number; ms: number };
+  /** The figures above that are estimates; the thread marks them approximate. */
+  derived?: ChatReplyStatsEstimate[];
 }
 
 /**
@@ -1544,6 +1592,7 @@ export type ChatStreamEvent =
       promptCache?: ChatPromptCacheStamp;
       /** See ChatMessage.questComplete. */
       questComplete?: true;
+      stats?: ChatReplyStats;
     }
   | {
       type: 'error';
@@ -1552,6 +1601,8 @@ export type ChatStreamEvent =
       message: string;
       stopReason?: string;
       contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
+      /** What was measured before it failed; absent when the reply was already stored whole. */
+      stats?: ChatReplyStats;
     }
   | {
       type: 'background-output';
@@ -2050,6 +2101,11 @@ export interface ChatRoundTiming {
   startedAt: number;
   /** The first streamed delta of any kind; absent when the stream produced nothing. */
   firstTokenAt?: number;
+  /** The first and last thinking frames, readable or a bare marker around omitted thinking. */
+  firstReasoningAt?: number;
+  lastReasoningAt?: number;
+  /** The first delta with visible text. */
+  firstTextAt?: number;
   endedAt: number;
 }
 
