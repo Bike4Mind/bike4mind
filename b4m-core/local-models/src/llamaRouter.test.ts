@@ -123,6 +123,21 @@ describe('startLlamaRouter', () => {
     });
   });
 
+  it('passes the fit target to a build with --fit and validates it', async () => {
+    const record = join(root, 'record-fit.json');
+    const server = await start({ fitTargetMiB: 1536 }, { FAKE_LLAMA_RECORD: record });
+    try {
+      const { args } = await recorded(record);
+      expect(args.slice(args.indexOf('--fit-target'), args.indexOf('--fit-target') + 2)).toEqual([
+        '--fit-target',
+        '1536',
+      ]);
+    } finally {
+      await server.stop();
+    }
+    await expect(start({ fitTargetMiB: -1 })).rejects.toThrow('fitTargetMiB must be a non-negative integer');
+  });
+
   it('checks the folder, port and models-max before spawning', async () => {
     await expect(start({ modelsDir: join(root, 'absent') })).rejects.toThrow('is not a folder');
     await expect(start({ port: 70_000 })).rejects.toThrow(LocalRuntimeError);
@@ -142,10 +157,12 @@ describe('LlamaServerRuntime.startRouter', () => {
       onLog: model => logs.push(model),
     });
     const port = await freePort();
-    const router = await runtime.startRouter({ port, flashAttention: 'on' });
+    const router = await runtime.startRouter({ port, flashAttention: 'on', fitTargetMiB: 1536 });
     try {
       const { args } = await recorded(record);
       expect(args.slice(args.indexOf('-fa'), args.indexOf('-fa') + 2)).toEqual(['-fa', 'on']);
+      // b7000 predates --fit.
+      expect(args).not.toContain('--fit-target');
       expect(args[args.indexOf('--models-dir') + 1]).toBe(modelsDir);
       expect(router.port).toBe(port);
       expect(logs.length).toBeGreaterThan(0);

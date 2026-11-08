@@ -1,5 +1,12 @@
 /** Context sizing and history fitting for local Ollama chat requests. */
-import { estimateFit, isCpuOnly, type FitInput, type HardwareProfile, type ModelArch } from '@bike4mind/common';
+import {
+  estimateFit,
+  isCpuOnly,
+  ollamaHardware,
+  type FitInput,
+  type HardwareProfile,
+  type ModelArch,
+} from '@bike4mind/common';
 import { OUTPUT_RESERVE_TOKENS, replyRoom } from '@bike4mind/local-models/servers';
 import { estimateTextTokens } from '@shared/contextLimit';
 import { LOCAL_CONTEXT_SIZES, type ModelContextSetting } from '@shared/localContextSetting';
@@ -91,7 +98,7 @@ function fitInput({
   // process; num_parallel above 1 still makes the real footprint larger.
   return {
     model: { arch, weightsBytes: weightsBytes - mmprojBytes, mmprojBytes },
-    hardware,
+    hardware: ollamaHardware(hardware),
     mode: 'chat',
     runtime: {
       kind: 'ollama',

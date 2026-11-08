@@ -67,7 +67,8 @@ import { registerGenerationIpc } from './generationIpc';
 import { modelSettingsChanged, registerModelSettingsIpc } from './modelSettingsIpc';
 import { ModelSettingsStore } from './ModelSettingsStore';
 import { registerLocalContextIpc } from './localContextIpc';
-import { localContextSizing, localHardware } from './localContextSizing';
+import { localContextSizing, localHardware, localLlamaServer } from './localContextSizing';
+import { findOnPath, resolveUserPath } from './tools/userPath';
 import { SidebarSectionStore } from './SidebarSectionStore';
 import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerSessionExportIpc } from './sessionExportIpc';
@@ -509,7 +510,6 @@ export function registerChat(
     logger,
   });
   const localContext = new LocalContextPreference(join(userData, 'local-context.json'));
-  void localHardware.profile();
   const localSizing = localContextSizing({
     setting: () => localContext.read(),
     pinnedProjectors: () => hooks.pinnedProjectors?.() ?? new Map(),
@@ -538,6 +538,8 @@ export function registerChat(
     readOllamaEnv: url => readHostOllamaEnv(url),
     launchers: hostLaunchers({
       unifiedMemory: async () => (await localHardware.profile())?.memoryKind === 'unified',
+      // The probe itself: hardware entered in Settings carries no vendor.
+      gpuVendor: async () => (await localHardware.probed())?.gpuVendor ?? null,
     }),
     ownedServers: privateFile(join(userData, 'local-servers.json')),
     ownedCipher: safeStorage,
@@ -548,7 +550,17 @@ export function registerChat(
     },
   });
   localHardware.setOverride(probed => withEnteredSpecs(probed, modelServers.specs(LOCAL_SERVER_ID)));
-  void modelServers.start().catch(error => logger.warn(`MODEL SERVERS: could not load: ${String(error)}`));
+  const serversLoaded = modelServers
+    .start()
+    .catch(error => logger.warn(`MODEL SERVERS: could not load: ${String(error)}`));
+  localHardware.setLlamaServer(
+    localLlamaServer({
+      views: () => serversLoaded.then(() => modelServers.views()),
+      onPath: async () => findOnPath('llama-server', await resolveUserPath()),
+    })
+  );
+  modelServers.onServerSaved(() => localHardware.relistLlamaServer());
+  void localHardware.profile();
   const local = new LocalModels(
     new OllamaLocal((url, init) => net.fetch(url, init), localSizing, undefined, loadSettings),
     modelServers,

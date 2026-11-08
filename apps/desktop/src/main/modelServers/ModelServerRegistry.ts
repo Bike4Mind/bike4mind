@@ -1090,7 +1090,7 @@ export class ModelServerRegistry {
           ? null
           : owner === 'other' && target.port !== null && this.launchStates.get(id)?.portHeld
             ? portHeldMessage(target.port)
-            : (this.supervisor.problem(id) ?? settingsProblem),
+            : (this.supervisor.problem(id) ?? settingsProblem ?? this.supervisor.warning(id)),
       ...(missingOllama ? { programMissing: missingOllama } : {}),
       // At the cap no new look can start, so stop waiting and let the Models screen offer Install.
       ...(missingOllama === undefined &&
