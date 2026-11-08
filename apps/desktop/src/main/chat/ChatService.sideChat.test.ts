@@ -85,12 +85,16 @@ describe('ChatService.startSideChat', () => {
     expect(post).not.toHaveBeenCalled();
   });
 
-  it.each(['full', 'auto'] as const)('starts with auto approval for a parent with %s approval', async approvalMode => {
+  it.each([
+    ['full', 'auto'],
+    ['auto', 'auto'],
+    ['ask', 'ask'],
+  ] as const)('gives a parent with %s approval a side chat with %s approval', async (approvalMode, expected) => {
     const parent = await chatParent(approvalMode);
     const result = await service.startSideChat({ sessionId: parent.id, selection: 'monoid' });
     if (!result.ok) throw new Error(result.error);
-    expect(result.session.approvalMode).toBe('auto');
-    expect((await store.get(result.session.id))?.approvalMode).toBe('auto');
+    expect(result.session.approvalMode).toBe(expected);
+    expect((await store.get(result.session.id))?.approvalMode).toBe(expected);
   });
 
   it("shares a Code parent's checkout rather than cutting a worktree", async () => {
