@@ -52,7 +52,8 @@ const handler = adminApi({
           await recordAdminActionFromRequest(req, {
             action: 'security.detection.reviewed',
             target: { kind: 'system', id: item.id, displayName: `Shadow detection ${item.id}` },
-            summary: `graded a ${item.detector} detection as ${verdict} (bulk, ${items.length} selected)`,
+            // No count: the client splits a large selection into batches, so a request size is not what the admin selected.
+            summary: `graded a ${item.detector} detection as ${verdict} (bulk)`,
             reason,
             details: auditDetails(item),
           });
