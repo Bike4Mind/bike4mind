@@ -88,6 +88,31 @@ export function isSafetyRefusalError(error: Error): boolean {
   return error.message.toLowerCase().includes(SAFETY_REFUSAL_MESSAGE);
 }
 
+const OPENAI_POLICY_REFUSAL_CODES = new Set(['cyber_policy', 'content_policy_violation', 'content_filter']);
+
+function hasPolicyRefusalCode(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || !('code' in value)) return false;
+  return typeof value.code === 'string' && OPENAI_POLICY_REFUSAL_CODES.has(value.code);
+}
+
+export function isOpenAiPolicyRefusalError(error: Error): boolean {
+  if (hasPolicyRefusalCode(error)) return true;
+  if ('error' in error && hasPolicyRefusalCode(error.error)) return true;
+  if (isAxiosError<unknown>(error)) {
+    const body = error.response?.data;
+    if (typeof body === 'object' && body !== null && 'error' in body && hasPolicyRefusalCode(body.error)) return true;
+  }
+  return /\bcyber_policy\b/.test(error.message);
+}
+
+/** Expected provider outcomes that should not page the error alert channel. */
+export function isExpectedCompletionError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (isLlmTimeoutError(error) || isSafetyRefusalError(error) || isOpenAiPolicyRefusalError(error))
+  );
+}
+
 // Provider account spend/credit exhaustion: the operator's key is out of budget, so every model on
 // that backend fails the same way until someone raises the limit. Anthropic returns these as a 400
 // invalid_request_error, OpenAI as a 429 insufficient_quota.

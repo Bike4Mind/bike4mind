@@ -1,3 +1,4 @@
+import { RefusedFetchTargetError } from './errors';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Controls what the mocked Firecrawl scrapeUrl returns for each test.
@@ -42,7 +43,7 @@ import { NoExtractableContentError, plainFetchScrape } from './plainFetch';
 const mockCreateApp = vi.mocked(createFirecrawlApp);
 const mockPlainFetch = vi.mocked(plainFetchScrape);
 import type { ToolContext } from '../../base/types';
-import type { CitableSource } from '@bike4mind/common';
+import { isExpectedToolError, type CitableSource } from '@bike4mind/common';
 import { aggregateWebFetchContentTelemetry } from '../../../../telemetry';
 
 const CAP = 50_000;
@@ -928,5 +929,37 @@ describe('validateWebFetchResult', () => {
     const { result } = await runTool();
 
     expect(validateWebFetchResult(result)).toBeUndefined();
+  });
+});
+
+describe('web_fetch expected upstream failures', () => {
+  it.each([
+    new FirecrawlError('Upstream scraper failure', 500),
+    new RefusedFetchTargetError('Refusing to fetch target'),
+  ])('still fails the tool call, as an expected error without error logging: %s', async error => {
+    scrapeUrl.mockRejectedValueOnce(error);
+    const context = makeContext(vi.fn(async () => {}));
+    const call = webFetchTool.implementation(context, {}).toolFn({ url: 'https://example.com/doc' });
+    const thrown = await call.then(
+      () => undefined,
+      (reason: unknown) => reason
+    );
+    expect(isExpectedToolError(thrown)).toBe(true);
+    expect((thrown as Error).message).toBe(error.message);
+    expect(context.logger.warn).toHaveBeenCalledTimes(error instanceof RefusedFetchTargetError ? 0 : 1);
+    expect(context.logger.error).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    new FirecrawlError('Upstream redirect loop', 500),
+    new RefusedFetchTargetError('Refusing to fetch https://example.com/abort'),
+  ])('keeps the friendly result when the message matches a network pattern: %s', async error => {
+    scrapeUrl.mockRejectedValueOnce(error);
+    const context = makeContext(vi.fn(async () => {}));
+
+    const result = await webFetchTool.implementation(context, {}).toolFn({ url: 'https://example.com/doc' });
+
+    expect(result).toContain('The page could not be reached');
+    expect(context.logger.error).not.toHaveBeenCalled();
   });
 });

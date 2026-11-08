@@ -1,3 +1,4 @@
+import { ExpectedToolError } from '@bike4mind/common';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { verifyImageUrlSignature } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
@@ -878,6 +879,7 @@ describe('webSearchTool - hedged backup and cache', () => {
   // while the SearXNG backup, started at the hedge delay, also hangs to its timeout.
   it('fails by 20.5s when both providers hang, inside the organic budget', async () => {
     vi.useFakeTimers();
+    const errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
     configure('serpapi');
     stubProviders({ serpOrganic: ['hang', 'hang'], searxng: 'hang' });
 
@@ -892,7 +894,11 @@ describe('webSearchTool - hedged backup and cache', () => {
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(String(await pending)).toMatch(/serpapi: Web search timed out.*searxng: Web search timed out/);
+    const failure = await pending;
+    expect(failure).toBeInstanceOf(ExpectedToolError);
+    expect(String(failure)).toMatch(/serpapi: Web search timed out.*searxng: Web search timed out/);
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 
   // Error-level logs page the production alert channel, so only a failure the caller cannot recover

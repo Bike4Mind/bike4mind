@@ -256,6 +256,15 @@ describe('ChatCompletion /process', () => {
     await post(VALID_BODY, { authorization: AUTH });
 
     await vi.waitFor(() => expect(mockEmitMetrics).toHaveBeenCalledTimes(1));
+    const logger = mockProcessQuest.mock.calls[0][1] as {
+      error: ReturnType<typeof vi.fn>;
+      warn: ReturnType<typeof vi.fn>;
+    };
+    expect(logger.error).toHaveBeenCalledWith('Quest processing failed', expect.objectContaining({ error: 'boom' }));
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      'Quest processing ended with an expected provider error',
+      expect.anything()
+    );
     expect(mockCategorizeToolError).toHaveBeenCalledWith('boom');
     expect(mockEmitMetrics).toHaveBeenCalledWith(QUESTS_NAMESPACE, [
       expect.objectContaining({
@@ -277,6 +286,29 @@ describe('ChatCompletion /process', () => {
         dimensions: { Stage: 'test', Surface: '/process' },
       }),
     ]);
+  });
+
+  it.each([
+    new Error('Anthropic safety classifier refusal'),
+    Object.assign(new Error('Policy refused'), { code: 'cyber_policy' }),
+  ])('settles expected provider refusals without duplicate alerting', async refusal => {
+    mockProcessQuest.mockRejectedValueOnce(refusal);
+    const response = await post(VALID_BODY, { authorization: AUTH });
+    expect(response.status).toBe(202);
+    await vi.waitFor(() => expect(mockQuestSettleIfUnfinished).toHaveBeenCalledTimes(1));
+    const logger = mockProcessQuest.mock.calls[0][1] as {
+      error: ReturnType<typeof vi.fn>;
+      warn: ReturnType<typeof vi.fn>;
+    };
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith('Quest processing ended with an expected provider error', {
+      error: refusal.message,
+    });
+    expect(mockEmitMetrics).not.toHaveBeenCalled();
+    expect(mockQuestSettleIfUnfinished).toHaveBeenCalledWith(
+      'q1',
+      expect.objectContaining({ status: 'stopped', type: 'error' })
+    );
   });
 
   it('still settles the quest and emits the metric when it is a non-Error throw', async () => {
