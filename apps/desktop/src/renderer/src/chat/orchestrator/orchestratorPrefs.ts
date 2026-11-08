@@ -9,6 +9,8 @@ const DOCK_OPEN_KEY = 'b4m.orchestrator.dockOpen';
 const DOCK_WIDTH_KEY = 'b4m.orchestrator.dockWidth';
 const INTRO_SEEN_KEY = 'b4m.orchestrator.introSeen';
 const FINALE_SEEN_KEY = 'b4m.orchestrator.finaleSeen.';
+const AMBIENT_KEY = 'b4m.orchestrator.ambient';
+const AMBIENT_HINT_SEEN_KEY = 'b4m.orchestrator.ambientHintSeen';
 
 /** Storage can be blocked or full; every preference then just falls back to its default. */
 function readItem(key: string): string | null {
@@ -115,4 +117,21 @@ export function readFinaleSeen(sessionId: string): string | null {
 
 export function writeFinaleSeen(sessionId: string, run: string): void {
   writeItem(FINALE_SEEN_KEY + sessionId, run);
+}
+
+/** The Tavern's chrome settling out when idle; on unless turned off. */
+export function readAmbient(): boolean {
+  return readItem(AMBIENT_KEY) !== '0';
+}
+
+export function writeAmbient(on: boolean): void {
+  writeItem(AMBIENT_KEY, on ? '1' : '0');
+}
+
+export function readAmbientHintSeen(): boolean {
+  return readItem(AMBIENT_HINT_SEEN_KEY) === '1';
+}
+
+export function writeAmbientHintSeen(): void {
+  writeItem(AMBIENT_HINT_SEEN_KEY, '1');
 }

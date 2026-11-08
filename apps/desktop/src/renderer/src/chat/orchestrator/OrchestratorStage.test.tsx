@@ -253,6 +253,91 @@ describe('OrchestratorStage', () => {
     expect(query('dock-probe')).not.toBeNull();
   });
 
+  describe('settled (the ambient Tavern)', () => {
+    const wake = vi.fn();
+    const renderSettled = (agents: AgentView[], settled = true, parentStatus?: 'needs-action') =>
+      themed.render(
+        <OrchestratorStage
+          agents={agents}
+          parent={parentStatus ? { status: parentStatus } : undefined}
+          view="tavern"
+          onViewChange={onViewChange}
+          actions={actions}
+          introPlaying={false}
+          onParentFocus={onParentFocus}
+          dockControl={<button data-testid="fake-dock-control" />}
+          ambient={{ settled, wake, on: true, onToggle: vi.fn() }}
+        />
+      );
+    const onParentFocus = vi.fn();
+
+    it('thins the header to a status line', async () => {
+      await renderSettled([agentFixture('w', 'working')]);
+      expect(el('orchestrator-ambient-status').textContent).toContain('1 agent');
+      expect(query('orchestrator-view-menu-btn')).toBeNull();
+      expect(query('fake-dock-control')).toBeNull();
+
+      await renderSettled([agentFixture('w', 'working')], false);
+      expect(query('orchestrator-ambient-status')).toBeNull();
+      expect(query('orchestrator-view-menu-btn')).not.toBeNull();
+    });
+
+    it('slides in only the request of an agent that needs you, answerable in place', async () => {
+      const chat = {
+        getSession: vi.fn().mockResolvedValue({
+          messages: [
+            {
+              id: 'm0',
+              role: 'assistant',
+              content: '',
+              toolCalls: [
+                {
+                  id: 'c1',
+                  name: 'bash_execute',
+                  input: { command: 'rm -rf build' },
+                  status: 'awaiting-approval',
+                  approvalId: 'ap-1',
+                  approvalDetail: 'rm -rf build',
+                },
+              ],
+            },
+          ],
+        }),
+        respondToApproval: vi.fn().mockResolvedValue(undefined),
+        onQueueChanged: vi.fn(() => () => undefined),
+      };
+      (window as unknown as { b4m: unknown }).b4m = { chat };
+      await renderSettled([agentFixture('n', 'needs-you'), agentFixture('w', 'working')]);
+      const card = el('orchestrator-needs-you-card');
+      expect(card.hasAttribute('data-ambient-quiet')).toBe(true);
+      expect(card.textContent).toContain('rm -rf build');
+
+      await act(async () => el('chat-tool-approve-once').click());
+      expect(chat.respondToApproval).toHaveBeenCalledWith('ap-1', { decision: 'once' });
+      expect(wake).not.toHaveBeenCalled();
+    });
+
+    it("opens the asking agent's drawer, waking the chrome", async () => {
+      await renderSettled([agentFixture('n', 'needs-you')]);
+      act(() => el('orchestrator-needs-you-open-btn').click());
+      expect(wake).toHaveBeenCalledTimes(1);
+      expect(query('orchestrator-peek-drawer')).not.toBeNull();
+    });
+
+    it('points at the conversation when the Innkeeper himself is waiting', async () => {
+      await renderSettled([agentFixture('w', 'working')], true, 'needs-action');
+      expect(el('orchestrator-needs-you-card').textContent).toContain('The Innkeeper needs you');
+      act(() => el('orchestrator-needs-you-open-btn').click());
+      expect(onParentFocus).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows no card while awake: the header pill already says it', async () => {
+      await renderSettled([agentFixture('n', 'needs-you')], false);
+      expect(query('orchestrator-needs-you-card')).toBeNull();
+      expect(query('orchestrator-needs-you-pill')).not.toBeNull();
+    });
+  });
+
   describe('the finale', () => {
     const onReadReport = vi.fn();
     const REPORT = { id: 'summary-1', createdAt: '2026-10-01T00:10:00.000Z' };
