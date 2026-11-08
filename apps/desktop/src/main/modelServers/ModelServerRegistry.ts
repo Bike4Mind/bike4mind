@@ -87,6 +87,7 @@ import {
   normalizeServerName,
   type ModelServerRecord,
   type ModelServerStore,
+  type UnusableServerRecord,
 } from './ModelServerStore';
 import { observedFlashAttention, observedKvCacheType, observedLaunchVars, observedPrefill } from './observedOllama';
 import { OpenAICompatibleChat } from './OpenAICompatibleChat';
@@ -247,6 +248,7 @@ const UNKNOWN_HEALTH: ModelServerHealth = {
  */
 export class ModelServerRegistry {
   private readonly entries = new Map<string, Entry>();
+  private readonly unusable = new Map<string, UnusableServerRecord>();
   private localHealth: ModelServerHealth = { ...UNKNOWN_HEALTH };
   private localSpecs: ModelServerSpecs | null = null;
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -311,7 +313,11 @@ export class ModelServerRegistry {
       specs: this.localSpecs,
       launch: this.launchView(LOCAL_SERVER_ID),
     };
-    return [local, ...[...this.entries.values()].map(entry => this.view(entry))];
+    return [
+      local,
+      ...[...this.entries.values()].map(entry => this.view(entry)),
+      ...[...this.unusable.values()].map(record => this.unusableView(record)),
+    ];
   }
 
   /** Hardware entered in Settings for a server or this computer; null before the list loads. */
@@ -640,6 +646,8 @@ export class ModelServerRegistry {
       this.emit();
       return this.views();
     }
+    const unusable = this.unusable.get(id);
+    if (unusable) throw new Error(unusableProblem(unusable));
     const entry = this.entries.get(id);
     if (!entry) throw new Error('That model server is no longer saved.');
     if (input.kind && input.kind !== entry.record.kind && (this.supervisor.owned(id) || this.supervisor.busy(id))) {
@@ -673,6 +681,7 @@ export class ModelServerRegistry {
     await this.supervisor.stop(id);
     await this.deps.store.remove(id);
     this.launchStates.delete(id);
+    this.unusable.delete(id);
     const entry = this.entries.get(id);
     this.entries.delete(id);
     this.deps.edited?.();
@@ -922,6 +931,8 @@ export class ModelServerRegistry {
    * registry's check, and failures update the server's health and name it, as chat's do.
    */
   hubServer(id: string): ModelHubServer | null {
+    const unusable = this.unusable.get(id);
+    if (unusable) return unusableHubServer(unusable);
     const entry = this.entries.get(id);
     if (!entry) return null;
     const { record } = entry;
@@ -1430,14 +1441,36 @@ export class ModelServerRegistry {
     };
   }
 
+  private unusableView(record: UnusableServerRecord): ModelServerView {
+    return {
+      id: record.id,
+      name: record.name,
+      local: false,
+      kind: record.kind,
+      transport: 'ssh',
+      address: record.transport.destination ?? 'unusable address',
+      access: record.access,
+      auth:
+        record.auth.type === 'header' ? { type: 'header', headerName: record.auth.name } : { type: record.auth.type },
+      credentialsPersisted: record.auth.type === 'none' || this.deps.store.credentialPersisted(),
+      credentialsMissing: false,
+      unencrypted: false,
+      health: { ...UNKNOWN_HEALTH, state: 'refused', error: unusableProblem(record) },
+      models: [],
+      specs: null,
+      launch: null,
+    };
+  }
+
   private load(): Promise<void> {
-    this.loaded ??= Promise.all([this.deps.store.list(), this.deps.store.localSpecs()])
-      .then(([records, specs]) => {
+    this.loaded ??= Promise.all([this.deps.store.list(), this.deps.store.localSpecs(), this.deps.store.unusable()])
+      .then(([records, specs, unusable]) => {
         for (const record of records) {
           if (record.transport.type === 'ssh' || parseServerAddress(record.transport.baseUrl)) {
             this.entries.set(record.id, this.build(record));
           }
         }
+        for (const record of unusable) this.unusable.set(record.id, record);
         this.localSpecs = specs;
         if (specs) this.deps.localSpecsChanged?.();
       })
@@ -1510,6 +1543,28 @@ const PRODUCT_LABELS: Record<OpenAICompatibleProduct, string> = {
 
 const SSH_OLLAMA_TOKEN =
   'Ollama takes no token over SSH: ssh signs in with your keys. Remove the token, or choose OpenAI-compatible if the server asks for one.';
+
+function unusableProblem(record: UnusableServerRecord): string {
+  return `${record.problem} Remove this server and add it again.`;
+}
+
+/** The Models screen's handle on a server that cannot be used: every call says why. */
+function unusableHubServer(record: UnusableServerRecord): ModelHubServer {
+  const refuse = () => Promise.reject(new Error(unusableProblem(record)));
+  return {
+    name: record.name,
+    management: serverManagement({ local: false, kind: record.kind, access: record.access }),
+    runtime: {
+      baseUrl: record.transport.destination ? `ssh://${record.transport.destination}` : 'unusable address',
+      health: async () => ({ ok: false, version: null, error: unusableProblem(record) }),
+      list: refuse,
+      loaded: refuse,
+      inspect: refuse,
+      pull: refuse,
+      remove: refuse,
+    },
+  };
+}
 
 /** Only undefined is no port, as in the CLI; anything else must be a port, or null. */
 function sshPortInput(value: number | string | undefined): number | null | undefined {

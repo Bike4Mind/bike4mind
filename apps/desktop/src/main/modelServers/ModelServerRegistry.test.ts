@@ -2145,6 +2145,72 @@ describe('ModelServerRegistry SSH servers', () => {
     expect(saved.servers[0].transport).toEqual({ type: 'ssh', destination: 'me@gpu' });
   });
 
+  it('shows an SSH server saved with a port or destination it cannot use as refused, and lets it be removed', async () => {
+    const file = memoryFile();
+    const saved = (id: string, name: string, transport: Record<string, unknown>) => ({
+      id,
+      name,
+      kind: 'openai-compatible',
+      transport,
+      access: 'chat',
+      auth: { type: 'bearer' },
+      secret: Buffer.from(`enc:${TOKEN}`).toString('base64'),
+      models: ['qwen'],
+      addedAt: '2026-01-01T00:00:00.000Z',
+    });
+    await file.write(
+      JSON.stringify({
+        version: 1,
+        servers: [
+          saved('a1', 'typo', { type: 'ssh', destination: 'me@gpu', port: 0 }),
+          saved('a2', 'text', { type: 'ssh', destination: 'me@gpu', port: '80 80' }),
+          saved('a3', 'hostile', { type: 'ssh', destination: '-oProxyCommand=x', port: 8080 }),
+          saved('a4', 'other', { type: 'ssh', host: 'gpu' }),
+        ],
+      })
+    );
+    const { registry: servers, sshCalls, sent } = sshSetup(file);
+    const views = await servers.views();
+    expect(views.map(view => view.name)).toEqual(['This computer', 'typo', 'text', 'hostile']);
+    const port = 'Its saved SSH port is not a number from 1 to 65535. Remove this server and add it again.';
+    expect(views[1]).toMatchObject({
+      id: 'a1',
+      kind: 'openai-compatible',
+      transport: 'ssh',
+      address: 'me@gpu',
+      access: 'chat',
+      auth: { type: 'bearer' },
+      models: [],
+      launch: null,
+      health: { state: 'refused', error: port },
+    });
+    expect(views[1].port).toBeUndefined();
+    expect(views[2].health.error).toBe(port);
+    expect(views[3]).toMatchObject({
+      address: 'unusable address',
+      health: {
+        state: 'refused',
+        error: 'Its saved SSH destination is not one ssh can be given safely. Remove this server and add it again.',
+      },
+    });
+    expect(JSON.stringify(views)).not.toContain('ProxyCommand');
+    expect(JSON.stringify(views)).not.toContain(TOKEN);
+    await servers.check();
+    await servers.check('a1');
+    expect(await servers.models()).toEqual([]);
+    const hub = servers.hubServer('a1');
+    expect(await hub?.runtime.health()).toEqual({ ok: false, version: null, error: port });
+    await expect(hub?.runtime.list()).rejects.toThrow(port);
+    await expect(servers.update('a1', { name: 'fixed' })).rejects.toThrow(port);
+    expect(sshCalls).toEqual([]);
+    expect(sent).toEqual([]);
+
+    const left = await servers.remove('a1');
+    expect(left.map(view => view.name)).toEqual(['This computer', 'text', 'hostile']);
+    const stored = JSON.parse((await file.read()) as string) as { servers: { id: string }[] };
+    expect(stored.servers.map(server => server.id)).toEqual(['a2', 'a3', 'a4']);
+  });
+
   it('refuses a destination starting with "-" before running ssh', async () => {
     const { registry: servers, sshCalls } = sshSetup();
     const result = await servers.probe({ address: '-oProxyCommand=touch /tmp/x', transport: 'ssh', credential: none });
