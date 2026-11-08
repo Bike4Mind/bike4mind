@@ -1082,6 +1082,7 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
           slotProps={{ input: { 'data-testid': 'shadow-detection-apply-related-checkbox' } }}
         />
       )}
+      <AbuseNextStep userIds={row.userIds} />
       <SignalList row={row} />
       {!SELF_ASSESSED_SHADOW_DETECTORS.includes(row.detector) && (
         <ShadowDetectionAssessmentPanel detectionId={row.id} enabled />

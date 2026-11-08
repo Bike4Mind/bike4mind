@@ -358,12 +358,10 @@ describe('ShadowDetectionsTab', () => {
     expect(signals.textContent).not.toContain('n/a');
   });
 
-  it('opens the verdict dialog from a row click and labels the icon action', async () => {
+  it('opens the verdict dialog from a row click and labels the review action', async () => {
     m.useShadowDetections.mockReturnValue(queryResult(list({ data: [detection()] })));
     renderTab();
-    expect(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`).getAttribute('aria-label')).toBe(
-      'Record verdict'
-    );
+    expect(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`)).toHaveTextContent('Review evidence');
     fireEvent.click(within(screen.getByTestId(`shadow-detection-row-${DETECTION_ID}`)).getByText(detection().summary));
     expect(await screen.findByTestId('shadow-detection-signals')).toBeTruthy();
   });
