@@ -780,20 +780,39 @@ describe('the ssh config read', () => {
     await vi.waitFor(() => expect(trackedChildCount()).toBe(before));
   });
 
-  it('is read once and kept for the next request when the first request is aborted while it runs', async () => {
-    const ssh = fakeSsh(await ollama(), { configDelayMs: 100 });
-    const fetch = createSshFetch(
+  const linux = (ssh: ReturnType<typeof fakeSsh>) =>
+    createSshFetch(
       { destination: 'me@gpu', label: 'gpu' },
       { spawn: ssh.spawn, platform: 'linux', home: '/home/me', makeDir: async () => undefined }
     );
+
+  it('is ended when the only request waiting on it is aborted, and read again for the next request', async () => {
+    const ssh = fakeSsh(await ollama(), { configDelayMs: 100 });
+    const fetch = linux(ssh);
     await expect(fetch(`${SSH_OLLAMA_URL}/api/version`, { signal: AbortSignal.timeout(20) })).rejects.toThrow();
     expect(ssh.spawned.map(call => call.args[0])).toEqual(['-G']);
+    expect(ssh.children[0].kill).toHaveBeenCalledWith('SIGKILL');
+    expect(await (await fetch(`${SSH_OLLAMA_URL}/api/version`)).json()).toEqual({ version: '0.12.0' });
+    expect(ssh.spawned.map(call => call.args[0])).toEqual(['-G', '-G', '-o']);
+    expect(ssh.spawned.find(call => call.args.includes('-W'))?.args).toContain('ControlPath=~/.ssh/b4m/%C');
+  });
+
+  it.each([
+    ['with no signal', undefined],
+    ['with a signal', () => AbortSignal.timeout(5_000)],
+  ])('keeps running for a request still waiting %s when another is aborted, and is read once', async (_, signal) => {
+    const ssh = fakeSsh(await ollama(), { configDelayMs: 100 });
+    const fetch = linux(ssh);
+    const kept = fetch(`${SSH_OLLAMA_URL}/api/version`, { signal: signal?.() });
+    await expect(fetch(`${SSH_OLLAMA_URL}/api/version`, { signal: AbortSignal.timeout(20) })).rejects.toThrow();
+    expect(ssh.children[0].kill).not.toHaveBeenCalled();
+    expect(await (await kept).json()).toEqual({ version: '0.12.0' });
     expect(await (await fetch(`${SSH_OLLAMA_URL}/api/version`)).json()).toEqual({ version: '0.12.0' });
     expect(ssh.spawned.filter(call => call.args[0] === '-G')).toHaveLength(1);
     expect(ssh.spawned.find(call => call.args.includes('-W'))?.args).toContain('ControlPath=~/.ssh/b4m/%C');
   });
 
-  describe.skipIf(process.platform === 'win32')('when it runs past its limit', () => {
+  describe.skipIf(process.platform === 'win32')('with a grandchild that holds its output open', () => {
     let dir: string;
     const alive = (pid: number) => {
       try {
@@ -811,7 +830,8 @@ describe('the ssh config read', () => {
       await rm(dir, { recursive: true, force: true });
     });
 
-    it('ends a grandchild that holds its output open, and closes the pipes', async () => {
+    /** Starts one request whose ssh -G leaves a `sleep` grandchild running, and waits for that grandchild. */
+    async function start(signal?: AbortSignal) {
       dir = await mkdtemp(path.join(os.tmpdir(), 'b4m-ssh-g-'));
       const command = path.join(dir, 'ssh');
       // As a `Match exec` command that outlives ssh: a background child holding ssh's stdout and stderr.
@@ -826,12 +846,11 @@ describe('the ssh config read', () => {
         children.push(child);
         return child;
       };
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const fetch = createSshFetch(
         { destination: 'me@gpu', label: 'gpu' },
         { command, spawn, platform: 'linux', home: '/home/me', makeDir: async () => undefined }
       );
-      const response = fetch(`${SSH_OLLAMA_URL}/api/version`);
+      const response = fetch(`${SSH_OLLAMA_URL}/api/version`, { signal });
       response.catch(() => undefined);
       const pidFile = path.join(dir, 'grandchild.pid');
       const grandchild = await vi.waitFor(
@@ -842,12 +861,38 @@ describe('the ssh config read', () => {
         },
         { timeout: 5_000 }
       );
+      return { response, grandchild, children };
+    }
+
+    it('ends the grandchild and closes the pipes once its limit passes', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const { response, grandchild, children } = await start();
       await vi.advanceTimersByTimeAsync(CONFIG_TIMEOUT_MS);
       vi.useRealTimers();
       await expect(response).rejects.toThrow();
       await vi.waitFor(() => expect(alive(grandchild)).toBe(false), { timeout: 5_000 });
       expect(children[0].stdout?.destroyed).toBe(true);
       expect(children[0].stderr?.destroyed).toBe(true);
+    });
+
+    it('ends the grandchild when the only request waiting on it is aborted', async () => {
+      const controller = new AbortController();
+      const { response, grandchild, children } = await start(controller.signal);
+      controller.abort(new DOMException('Cancelled', 'AbortError'));
+      await expect(response).rejects.toThrow('Cancelled');
+      await vi.waitFor(() => expect(alive(grandchild)).toBe(false), { timeout: 2_000 });
+      expect(children.map(child => child.spawnargs[1])).toEqual(['-G']);
+    });
+
+    it('ends the grandchild when this process exits, and stops listening once ssh -G is done', async () => {
+      const before = new Set(process.listeners('exit'));
+      const { response, grandchild } = await start();
+      const added = process.listeners('exit').filter(listener => !before.has(listener));
+      expect(added).toHaveLength(1);
+      added[0].call(process, 0);
+      await vi.waitFor(() => expect(alive(grandchild)).toBe(false), { timeout: 2_000 });
+      await expect(response).rejects.toThrow();
+      expect(process.listeners('exit')).not.toContain(added[0]);
     });
   });
 });
