@@ -157,6 +157,11 @@ describe('getAdminViewSummaryForLLM', () => {
     // "domain holds" is in the label; "disposable email" is not, though "email" is.
     expect(holdsLine).not.toMatch(/also:.*domain holds/);
     expect(holdsLine).toContain('disposable email');
+    const rateLimitsLine = getAdminViewSummaryForLLM()
+      .split('\n')
+      .find(line => line.startsWith('- admin.rate_limits:'));
+    // "rate limit" is a substring of the label "Rate limits" but not a whole word in it.
+    expect(rateLimitsLine).toContain('(also: rate limit, ');
   });
 
   it('names AI advisories on every tab that shows them', () => {

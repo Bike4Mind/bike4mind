@@ -341,7 +341,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
       'Check configuration and connectivity: test email, database and OAuth providers, probe integrations, override circuit breakers',
     navigationType: 'tab',
     target: '29', // AdminTab.SystemHealth
-    keywords: ['health', 'uptime', 'monitoring', 'performance', 'status'],
+    keywords: ['health', 'monitoring', 'performance', 'status'],
     requiresAdmin: true,
   },
   {
