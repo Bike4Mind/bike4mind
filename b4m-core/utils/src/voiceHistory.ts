@@ -34,6 +34,22 @@ function formatMessage(role: 'user' | 'assistant', content: string, maxChars: nu
 }
 
 /**
+ * Joins a turn's reply slots within maxChars. Over budget, the last slot (the final answer) is kept
+ * whole and only the earlier narration is cut, so a long tool preamble cannot crowd the answer out.
+ */
+function fitReplySlots(slots: string[], maxChars: number): string {
+  const joined = stripToolOutputMarker(slots.join(REPLY_SLOT_SEPARATOR)).trim();
+  if (joined.length <= maxChars || slots.length < 2) return joined;
+
+  const answer = stripToolOutputMarker(slots[slots.length - 1]).trim();
+  const leadBudget = maxChars - answer.length - REPLY_SLOT_SEPARATOR.length;
+  if (leadBudget <= 3) return answer;
+
+  const lead = stripToolOutputMarker(slots.slice(0, -1).join(REPLY_SLOT_SEPARATOR)).trim();
+  return truncateText(lead, leadBudget) + REPLY_SLOT_SEPARATOR + answer;
+}
+
+/**
  * Format conversation history for Voice session instructions.
  *
  * Strategy:
@@ -74,9 +90,9 @@ export function formatVoiceHistory(
     }
 
     // A tool turn's first slot is only its pre-tool preamble, so every non-thinking slot is kept.
-    const reply = Array.isArray(item.replies) ? historyReplySlots(item).join(REPLY_SLOT_SEPARATOR) : '';
+    const reply = Array.isArray(item.replies) ? fitReplySlots(historyReplySlots(item), maxCharsPerMessage) : '';
     if (reply) {
-      lines.push(formatMessage('assistant', stripToolOutputMarker(reply), maxCharsPerMessage));
+      lines.push(formatMessage('assistant', reply, maxCharsPerMessage));
     }
   }
 

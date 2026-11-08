@@ -204,4 +204,25 @@ describe('formatVoiceHistory - multi-slot replies', () => {
     expect(result).not.toContain('<think>');
     expect(result).toContain('Assistant: Looking it up.\n\nFound it.\n');
   });
+
+  it('keeps the final answer whole when the preamble overflows the per-message budget', () => {
+    const preamble = Array.from({ length: 6 }, (_, i) => `Checking source ${i} for the latest figures.`);
+    const result = formatVoiceHistory(
+      [{ id: 't', prompt: 'Q', replies: [...preamble, 'The answer is 42.'] }] as unknown as IChatHistoryItemDocument[],
+      { maxCharsPerMessage: 120 }
+    );
+    const reply = result.slice(result.indexOf('Assistant: ') + 'Assistant: '.length, result.indexOf('\n\nUse this'));
+    expect(reply).toMatch(/^Checking source 0[\s\S]*\.\.\.\n\nThe answer is 42\.$/);
+    expect(reply.length).toBe(120);
+  });
+
+  it('keeps the head of an over-budget answer and drops the preamble', () => {
+    const answer = 'A'.repeat(200);
+    const result = formatVoiceHistory(
+      [{ id: 't', prompt: 'Q', replies: ['Let me check.', answer] }] as unknown as IChatHistoryItemDocument[],
+      { maxCharsPerMessage: 100 }
+    );
+    expect(result).toContain(`Assistant: ${'A'.repeat(97)}...`);
+    expect(result).not.toContain('Let me check.');
+  });
 });
