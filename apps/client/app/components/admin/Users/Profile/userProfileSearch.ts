@@ -5,7 +5,7 @@
 
 import { parseActivitySearch, type ActivitySearch } from './activitySearch';
 import { z } from 'zod';
-import { SIGNUP_TIMESERIES_RANGES, type SignupTimeseriesRange } from '@client/app/utils/signupSignals';
+import { SIGNUP_TIMESERIES_RANGES, type SignupTimeseriesRange } from '@bike4mind/server-utils/app/utils/signupSignals';
 
 export const USER_PROFILE_TABS = ['overview', 'activity', 'credits', 'keys', 'signins', 'admin'] as const;
 
