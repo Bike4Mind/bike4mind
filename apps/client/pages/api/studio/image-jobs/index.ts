@@ -7,7 +7,7 @@
  * model cannot honour answers 422 with every why-not reason, so Studio can show them next to the fields.
  */
 import { z } from 'zod';
-import type { IGenerationJobDocumentOf } from '@bike4mind/common';
+import type { GenerationJobErrorCode, IGenerationJobDocumentOf } from '@bike4mind/common';
 import { createImageJobs, type CreateImageJobsResult } from '@bike4mind/services/imageJobs';
 import { requireStudioFeature } from '@bike4mind/server-utils/middlewares/studioFeatureFlag';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -35,13 +35,27 @@ const ListQuerySchema = z.strictObject({
 
 type ImageJob = IGenerationJobDocumentOf<'image'>;
 
+// Fixed text per code: a stored job.error.message can carry provider wording, which never leaves the server.
+const PUBLIC_ERROR_MESSAGES: Record<GenerationJobErrorCode, string> = {
+  content_blocked: 'The image was declined under the content policy.',
+  provider_timeout: 'The provider did not finish the image in time.',
+  provider_error: 'The provider failed to generate the image.',
+  orphaned_submit: 'The image could not be completed.',
+  region_unavailable: 'This model is not available in your region.',
+  output_too_large: 'The generated image exceeded the maximum size.',
+  input_image_not_found: 'An input image could not be found.',
+  enqueue_failed: 'The image could not be started.',
+  cancelled: 'The generation was cancelled.',
+  account_blocked: 'This account cannot generate images.',
+};
+
 /** The fields Studio reads; credit holds, provider errors and lease state stay server-side. */
 const toStudioImageJob = (job: ImageJob) => ({
   id: job.id,
   groupId: job.payload.groupId ?? null,
   state: job.state,
   request: job.payload.request,
-  error: job.error ? { code: job.error.code, message: job.error.message } : null,
+  error: job.error ? { code: job.error.code, message: PUBLIC_ERROR_MESSAGES[job.error.code] } : null,
   output: job.payload.output
     ? {
         fileId: job.payload.output.fileId ?? null,
@@ -78,8 +92,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
           request: body.data.request,
           count: body.data.count,
           source: 'studio',
-          // Scoped like the media routes' keys, so one user's key never collides with another's.
-          ...(idempotencyKey && { idempotencyKey: `studio:${req.user.id}:${idempotencyKey}` }),
+          // Scoped by surface, kind and user, so a key never collides across users or other Studio job kinds.
+          ...(idempotencyKey && { idempotencyKey: `studio:image:${req.user.id}:${idempotencyKey}` }),
         },
         getCreateImageJobsDeps()
       );

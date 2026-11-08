@@ -131,7 +131,7 @@ describe('/api/studio/image-jobs', () => {
       expect(mocks.createImageJobs).not.toHaveBeenCalled();
     });
 
-    it('creates jobs for the caller and billing org, scoping the idempotency key to the user', async () => {
+    it('creates jobs for the caller and billing org, scoping the idempotency key to the kind and user', async () => {
       mocks.createImageJobs.mockResolvedValue({ ok: true, created: true, groupId: 'group-1', jobs: [jobDoc('j1')] });
       const { status, body } = await call({
         method: 'POST',
@@ -145,7 +145,7 @@ describe('/api/studio/image-jobs', () => {
           request: REQUEST,
           count: 2,
           source: 'studio',
-          idempotencyKey: 'studio:user-1:k1',
+          idempotencyKey: 'studio:image:user-1:k1',
         },
         DEPS
       );
@@ -157,14 +157,23 @@ describe('/api/studio/image-jobs', () => {
         groupId: 'group-1',
         state: 'succeeded',
         request: REQUEST,
-        error: { code: 'provider_error', message: 'boom' },
+        error: { code: 'provider_error', message: 'The provider failed to generate the image.' },
         output: { fileId: 'file-1', contentType: 'image/png', bytes: 123 },
         createdAt: createdAt.toISOString(),
       });
       const serialized = JSON.stringify(body);
-      for (const leaked of ['creditHold', 'attempts', 'leaseOwner', 'providerDetail', 's3Key']) {
+      for (const leaked of ['creditHold', 'attempts', 'leaseOwner', 'providerDetail', 's3Key', 'boom']) {
         expect(serialized).not.toContain(leaked);
       }
+    });
+
+    it('checks AI access for the caller and creates nothing when it is refused', async () => {
+      mocks.assertAiAccessAllowed.mockImplementationOnce(() => {
+        throw new Error('AI access refused');
+      });
+      await expect(call({ method: 'POST', body: { count: 1, request: REQUEST } })).rejects.toThrow('AI access refused');
+      expect(mocks.assertAiAccessAllowed).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }));
+      expect(mocks.createImageJobs).not.toHaveBeenCalled();
     });
 
     it('omits the idempotency key when the header is absent', async () => {
