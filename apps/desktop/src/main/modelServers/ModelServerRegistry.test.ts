@@ -3,7 +3,7 @@ import type { FetchLike } from '@bike4mind/local-models';
 import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
 import { ServerCredentialsError, ServerUnreachableError } from './errors';
 import type { ChatModelOption } from '@shared/chat';
-import type { ModelServerProbeInput, ModelServerProbeResult } from '@shared/modelServers';
+import type { ModelServerProbeInput, ModelServerProbeResult, ModelServerUpdateInput } from '@shared/modelServers';
 import {
   foundServers,
   LISTED_FRESH_MS,
@@ -2228,7 +2228,16 @@ describe('ModelServerRegistry SSH servers', () => {
     const hub = servers.hubServer('a1');
     expect(await hub?.runtime.health()).toEqual({ ok: false, version: null, error: port });
     await expect(hub?.runtime.list()).rejects.toThrow(port);
-    await expect(servers.update('a1', { name: 'fixed' })).rejects.toThrow(port);
+    const patches: ModelServerUpdateInput[] = [
+      { name: 'fixed' },
+      { kind: 'ollama' },
+      { access: 'manage' },
+      { credential: { type: 'none' } },
+      { specs: null },
+      { launch: { flashAttention: 'on' } },
+      { launch: { kvCacheType: 'q8_0' }, kind: 'ollama' },
+    ];
+    for (const patch of patches) await expect(servers.update('a1', patch)).rejects.toThrow(port);
     expect(sshCalls).toEqual([]);
     expect(sent).toEqual([]);
 

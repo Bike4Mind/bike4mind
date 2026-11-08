@@ -638,6 +638,8 @@ export class ModelServerRegistry {
 
   async update(id: string, input: ModelServerUpdateInput): Promise<ModelServerView[]> {
     await this.load();
+    const unusable = this.unusable.get(id);
+    if (unusable) throw new Error(unusableProblem(unusable));
     if (input.launch) this.assertLaunchable(id, input.launch, input.kind);
     if (id === LOCAL_SERVER_ID) {
       if (input.specs === undefined && input.launch === undefined)
@@ -651,8 +653,6 @@ export class ModelServerRegistry {
       this.emit();
       return this.views();
     }
-    const unusable = this.unusable.get(id);
-    if (unusable) throw new Error(unusableProblem(unusable));
     const entry = this.entries.get(id);
     if (!entry) throw new Error('That model server is no longer saved.');
     if (input.kind && input.kind !== entry.record.kind && (this.supervisor.owned(id) || this.supervisor.busy(id))) {
