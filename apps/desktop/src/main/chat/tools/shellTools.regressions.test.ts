@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +15,17 @@ vi.mock('./userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./userPath')>()),
   resolveUserPath: vi.fn(async () => process.env.PATH ?? ''),
 }));
+
+/** Whether the temp folder tells `a` from `A`; macOS and Windows fold case by default. */
+const tmpKeepsCase = ((): boolean => {
+  const probe = mkdtempSync(join(tmpdir(), 'b4m-case-'));
+  try {
+    writeFileSync(join(probe, 'a'), '');
+    return !existsSync(join(probe, 'A'));
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
 
 const PROGRAMS = [
   'cat',
@@ -793,8 +805,8 @@ describe('commands main ran unasked', () => {
   });
 
   // krepo tracks a link in a folder named `:(top)d`, now pointing at the app's data, and has an untracked `DD`
-  // holding a link to the same file beside an untracked `dd`.
-  it.each([
+  // holding a link to the same file beside an untracked `dd`. `DD` cannot sit beside `dd` where case folds.
+  it.for([
     ['GIT_LITERAL_PATHSPECS', "git diff --name-only -- ':(top)d' | xargs cat", asks],
     ['GIT_ICASE_PATHSPECS', 'git ls-files -o dd | xargs cat', asks],
     ['nothing', "GIT_LITERAL_PATHSPECS=1 git diff --name-only -- ':(top)d' | xargs cat", asks],
@@ -802,43 +814,50 @@ describe('commands main ran unasked', () => {
     ['nothing', 'GIT_ICASE_PATHSPECS=1 git grep -l --untracked x -- dd | xargs cat', asks],
     ['nothing', "git diff --name-only -- ':(top)d' | xargs cat", { auto: true, full: true }],
     ['nothing', 'git ls-files -o dd | xargs cat', { auto: true, full: true }],
-  ])('with %s set decides %s by the links git then prints', async (variable, command, expected) => {
-    const krepo = join(proj, 'krepo');
-    const vault = join(userData, 'vault.json');
-    const git = (...args: string[]): void => {
-      execFileSync('git', ['-C', krepo, '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', ...args], {
-        env: {
-          ...process.env,
-          GIT_AUTHOR_NAME: 't',
-          GIT_AUTHOR_EMAIL: 't@t',
-          GIT_COMMITTER_NAME: 't',
-          GIT_COMMITTER_EMAIL: 't@t',
-        },
-      });
-    };
-    await mkdir(krepo);
-    if (variable !== 'nothing') vi.stubEnv(variable, '1');
-    try {
-      await writeFile(vault, '{}');
-      await writeFile(join(krepo, 'a'), 'a');
-      await mkdir(join(krepo, ':(top)d'));
-      await symlink('../a', join(krepo, ':(top)d', 'lk'));
-      git('init', '-q', '-b', 'main');
-      git('add', '-A');
-      git('commit', '-qm', 'first');
-      await rm(join(krepo, ':(top)d', 'lk'));
-      await symlink(vault, join(krepo, ':(top)d', 'lk'));
-      await mkdir(join(krepo, 'dd'));
-      await writeFile(join(krepo, 'dd', 'x'), 'x');
-      await mkdir(join(krepo, 'DD'));
-      await symlink(vault, join(krepo, 'DD', 'lk'));
-      expect(await judge(command, 'krepo')).toMatchObject(expected);
-    } finally {
-      if (variable !== 'nothing') vi.stubEnv(variable, undefined);
-      await rm(krepo, { recursive: true, force: true });
-      await rm(vault, { force: true });
+  ] as const)(
+    'with %s set decides %s by the links git then prints',
+    async ([variable, command, expected], { skip }) => {
+      const casePair = / dd\b/.test(command);
+      skip(casePair && !tmpKeepsCase, 'the temp folder folds case');
+      const krepo = join(proj, 'krepo');
+      const vault = join(userData, 'vault.json');
+      const git = (...args: string[]): void => {
+        execFileSync('git', ['-C', krepo, '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', ...args], {
+          env: {
+            ...process.env,
+            GIT_AUTHOR_NAME: 't',
+            GIT_AUTHOR_EMAIL: 't@t',
+            GIT_COMMITTER_NAME: 't',
+            GIT_COMMITTER_EMAIL: 't@t',
+          },
+        });
+      };
+      await mkdir(krepo);
+      if (variable !== 'nothing') vi.stubEnv(variable, '1');
+      try {
+        await writeFile(vault, '{}');
+        await writeFile(join(krepo, 'a'), 'a');
+        await mkdir(join(krepo, ':(top)d'));
+        await symlink('../a', join(krepo, ':(top)d', 'lk'));
+        git('init', '-q', '-b', 'main');
+        git('add', '-A');
+        git('commit', '-qm', 'first');
+        await rm(join(krepo, ':(top)d', 'lk'));
+        await symlink(vault, join(krepo, ':(top)d', 'lk'));
+        if (casePair) {
+          await mkdir(join(krepo, 'dd'));
+          await writeFile(join(krepo, 'dd', 'x'), 'x');
+          await mkdir(join(krepo, 'DD'));
+          await symlink(vault, join(krepo, 'DD', 'lk'));
+        }
+        expect(await judge(command, 'krepo')).toMatchObject(expected);
+      } finally {
+        if (variable !== 'nothing') vi.stubEnv(variable, undefined);
+        await rm(krepo, { recursive: true, force: true });
+        await rm(vault, { force: true });
+      }
     }
-  });
+  );
 
   it.each([
     "env sh -c 'echo x > .claude/settings.json'",
