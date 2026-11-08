@@ -2,11 +2,13 @@ import {
   archFromModelInfo,
   modelBlobsOf,
   probeHardware,
+  type HardwareProbeOptions,
   type HardwareProfile,
+  type LlamaServerLocation,
   type ModelArch,
 } from '@bike4mind/local-models';
 import type { LocalContextSetting } from '@shared/localContextSetting';
-import type { FlashAttention, QuantizedKvCacheType } from '@shared/modelServers';
+import type { FlashAttention, ModelServerView, QuantizedKvCacheType } from '@shared/modelServers';
 import { installedProjectorBytes } from '../models/projectorBytes';
 import type { LocalModelFootprint } from './localContext';
 import type { LocalContextSizing, LocalModelFacts } from './OllamaLocal';
@@ -17,15 +19,44 @@ export class HardwareProbe {
   private result: HardwareProfile | null | undefined;
   private retryAt = 0;
   private override: (probed: HardwareProfile) => HardwareProfile = probed => probed;
+  private llamaServer: HardwareProbeOptions['llamaServer'];
+  private relist = false;
 
   constructor(
-    private readonly probe: () => Promise<HardwareProfile> = () => probeHardware(),
+    private readonly probe: (options: HardwareProbeOptions) => Promise<HardwareProfile> = options =>
+      probeHardware(options),
     private readonly now: () => number = Date.now
   ) {}
 
   /** What sizing reads in place of the probe, such as hardware entered in Settings. */
   setOverride(override: (probed: HardwareProfile) => HardwareProfile): void {
     this.override = override;
+  }
+
+  /** The llama-server whose device list sizes a Linux Intel card; probes again with it. */
+  setLlamaServer(locate: NonNullable<HardwareProbeOptions['llamaServer']>): void {
+    this.llamaServer = locate;
+    this.forget();
+  }
+
+  /** Probes again on the next read, listing the llama-server's devices afresh, as after a driver or settings change. */
+  forget(): void {
+    this.pending = undefined;
+    this.result = undefined;
+    this.relist = true;
+  }
+
+  /**
+   * After a model server is saved: probes again with the llama-server's devices listed afresh on a Linux Intel card,
+   * whose VRAM only a listing gives, as the saved binary may differ. The last result stays readable until replaced.
+   */
+  relistLlamaServer(): void {
+    void this.probed().then(profile => {
+      if (profile?.platform !== 'linux' || profile.memoryKind !== 'discrete' || profile.gpuVendor !== 'intel') return;
+      this.pending = undefined;
+      this.relist = true;
+      void this.probed();
+    });
   }
 
   /** The probe with any override applied; null after a failed probe, which is tried again a minute later. */
@@ -37,14 +68,28 @@ export class HardwareProbe {
   /** What the probe found, before any override. */
   probed(): Promise<HardwareProfile | null> {
     if (this.result === null && this.now() >= this.retryAt) this.pending = undefined;
-    this.pending ??= this.probe().then(
-      profile => (this.result = profile),
+    if (this.pending) return this.pending;
+    const options: HardwareProbeOptions = {
+      ...(this.llamaServer ? { llamaServer: this.llamaServer } : {}),
+      ...(this.relist ? { llamaServerMaxAgeMs: 0 } : {}),
+    };
+    this.relist = false;
+    const previous = this.result;
+    const pending: Promise<HardwareProfile | null> = this.probe(options).then(
+      profile => {
+        if (this.pending === pending) this.result = profile;
+        return profile;
+      },
       () => {
+        // Superseded: hand a caller still awaiting this probe the newer one rather than a null that reads as failed.
+        if (this.pending !== pending) return this.pending ?? previous ?? null;
+        if (previous) return previous;
         this.retryAt = this.now() + RETRY_AFTER_MS;
         return (this.result = null);
       }
     );
-    return this.pending;
+    this.pending = pending;
+    return pending;
   }
 
   /** Undefined while the probe has not finished. */
@@ -54,6 +99,20 @@ export class HardwareProbe {
 }
 
 export const localHardware = new HardwareProbe();
+
+/** The llama-server Desktop would launch on this computer: a configured binary, else the first on the user's PATH. */
+export function localLlamaServer(deps: {
+  views(): Promise<ModelServerView[]>;
+  onPath(): Promise<string | null>;
+}): () => Promise<LlamaServerLocation | null> {
+  return async () => {
+    const launch = (await deps.views())
+      .map(view => view.launch)
+      .find(view => view?.runtime === 'llama-server' && view.owner !== 'remote' && view.settings.binaryPath);
+    const path = launch?.settings.binaryPath ?? (await deps.onPath());
+    return path ? { path } : null;
+  };
+}
 
 export interface LocalContextSizingDeps {
   setting(): Promise<LocalContextSetting>;

@@ -6,7 +6,7 @@ import {
   type SignupTimeseries,
   type SignupTimeseriesBucket,
   type SignupTimeseriesRange,
-} from '@client/app/utils/signupSignals';
+} from '@bike4mind/server-utils/app/utils/signupSignals';
 import { classifySignups, SPIKE_BASELINE_HOURS, type SignupCandidate } from './signupClassifier';
 
 /** Newest signups classified per request; older ones in range are counted but left unclassified. */

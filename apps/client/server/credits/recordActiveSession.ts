@@ -2,7 +2,7 @@ import { hasPaidSignupDrip, signupGrantDripOpen, signupGrantDripRemaining } from
 import { resolveSignupDripPeriod } from './signupDripPeriod';
 import { adminSettingsRepository, User, userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
-import { signupProtection } from '@server/auth/signupProtection';
+import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import { payActivityDripForDay, resolveRequiredActiveSeconds } from './activityUnlock';
 
 // Client interval/idle constants live in app/hooks/useSignupGrantHeartbeat.ts; MAX_CREDIT_MS must exceed its interval.

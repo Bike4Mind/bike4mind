@@ -50,7 +50,7 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: vi.fn()
 import { withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { apiKeyRateLimit } from './apiKeyRateLimit';
 import { rateLimit as rateLimitMiddleware } from './rateLimit';
-import { buildRateLimitKeys } from '@server/utils/apiKeyRateLimitCheck';
+import { buildRateLimitKeys } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 
 const KEY_ID = 'key-1';
 const DAY_MS = 86_400_000;

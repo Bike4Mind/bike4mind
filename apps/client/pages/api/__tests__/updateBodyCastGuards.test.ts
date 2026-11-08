@@ -73,8 +73,8 @@ const mcpModelWrite = (...args: unknown[]) => {
 
 // Audit writers are covered by each route's own tests; stubbed so this file does not depend on which routes record.
 // Partial mock: handlers also import pure helpers (definedKeys, parseAdminActionReason) from here.
-vi.mock('@server/utils/adminAudit', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
   recordAdminActionForActor: vi.fn().mockResolvedValue(null),
 }));

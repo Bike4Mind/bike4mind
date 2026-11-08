@@ -25,7 +25,7 @@ export type MutatingMethod = (typeof MUTATING_METHODS)[number];
  * Callee names that write an AdminAuditLog row, matched as a bare call (`recordAdminAction(...)`) or a
  * method call (`adminAuditService.recordAdminAction(...)`). Helpers that wrap these (usersBulk/*,
  * adminUserNotes, ...) need no entry: the import walk finds the writer inside them.
- * Must stay in sync with the writers in apps/client/server/utils/adminAudit.ts,
+ * Must stay in sync with the writers in packages/server-utils/src/utils/adminAudit.ts,
  * apps/client/server/utils/adminSettingsAudit.ts, apps/client/server/tools/recordModalChanges.ts and
  * b4m-core/services/src/adminAuditService/recordAdminAction.ts.
  */
@@ -326,7 +326,7 @@ export const verbKey = (method: MutatingMethod, route: string) => `${method} ${r
 const EXEMPTIONS_FILE = 'packages/scripts/src/adminAuditCoverageExemptions.ts';
 
 export const AUDIT_FIX_INSTRUCTIONS =
-  'Record the write with recordAdminActionFromRequest (apps/client/server/utils/adminAudit.ts), or ' +
+  'Record the write with recordAdminActionFromRequest (packages/server-utils/src/utils/adminAudit.ts), or ' +
   'recordAdminSettingChange for an AdminSettings write, using an action from ADMIN_AUDIT_CATALOGUE ' +
   '(b4m-core/common/src/types/entities/adminAuditCatalogue.ts; add one there if none fits). If the verb ' +
   `deliberately writes no audit row, add it to ${EXEMPTIONS_FILE} with a one-line reason.`;

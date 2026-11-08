@@ -19,7 +19,7 @@ import {
 } from '@bike4mind/server-utils/moderation/incidentReviewSweep';
 import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { createReviewerAlertDelivery } from '@server/moderation/imageModerationIncidents';
+import { createReviewerAlertDelivery } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 import { Resource } from 'sst';
 
 const logger = new Logger({ metadata: { service: 'imageModerationReviewSweep' } });

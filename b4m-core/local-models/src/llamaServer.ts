@@ -1,7 +1,7 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { access, constants, readFile, readdir, readlink, stat } from 'node:fs/promises';
+import { access, constants, readFile, readdir, readlink, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { z } from 'zod';
@@ -44,7 +44,7 @@ export const LLAMA_SERVER_TUNING_FLAGS: readonly string[] = [
 
 const RUNTIME_ID = 'llama-server';
 const LOOPBACK = '127.0.0.1';
-const VERSION_TIMEOUT_MS = 10_000;
+export const VERSION_TIMEOUT_MS = 10_000;
 const HEALTH_POLL_MS = 200;
 const HEALTH_REQUEST_TIMEOUT_MS = 1_000;
 const LOG_LINES = 200;
@@ -67,6 +67,21 @@ const UNNAMED_PORT_SETTLE_MS = 2_000;
 const MAX_GROUP_PROCESSES = 256;
 /** First release whose `-fa` takes `on`, `off` or `auto`; older builds take a bare `-fa` switch. */
 export const LLAMA_SERVER_FLASH_ATTN_VALUE_BUILD = 6325;
+/** First build with `--fit` and its per-device `--fit-target` (MiB); older builds take neither. */
+export const LLAMA_SERVER_FIT_TARGET_BUILD = 7407;
+// What the dynamic loader prints for a missing shared library: glibc, then macOS dyld.
+const MISSING_LIBRARY_RE =
+  /error while loading shared libraries: ([^:\s]+): cannot open shared object file|Library not loaded: (\S+)/;
+// STATUS_DLL_NOT_FOUND as Node reports the exit code of a process Windows could not start.
+const DLL_NOT_FOUND_CODES: readonly unknown[] = [3221225781, -1073741515];
+// oneAPI libraries a SYCL build links: SYCL, Unified Runtime, Level Zero, MKL, oneDNN, TBB, UMF, compiler runtime.
+const ONEAPI_LIBRARY_RE = /^(?:lib)?(?:sycl|ur_|ze_loader|mkl_|dnnl|svml|imf|intlc|irng|iomp5|tbb|umf)/i;
+const GPU_BACKEND_LIBRARY_RE = /^(?:lib)?ggml-(sycl|vulkan)\.(?:so|dll|dylib)$/i;
+// A device line `--list-devices` prints to stdout (common/arg.cpp): `  SYCL0: <description> (<total> MiB, <free> MiB free)`.
+const LISTED_DEVICE_RE = /^ {2}(\S+): (.+) \((\d+) MiB, (\d+) MiB free\)\s*$/;
+const MIB = 1024 * 1024;
+// A listing that failed is retried after this long (ms), so a driver installed since is seen.
+const FAILED_LISTING_RETRY_MS = 60_000;
 const UNQUANTIZED_CACHE_TYPES = new Set(['f32', 'f16', 'bf16']);
 const BATCH_FILE_RE = /\.(bat|cmd)$/i;
 
@@ -81,6 +96,8 @@ export interface LlamaServerBinary {
   version: string;
   /** The llama.cpp release number (`b11912` is 11912); at least `MIN_LLAMA_SERVER_BUILD`. */
   build: number;
+  /** A SYCL or Vulkan build that lists no GPU, which runs on the CPU: why, and what lets it use the GPU. */
+  warning?: string;
 }
 
 export interface FindLlamaServerOptions {
@@ -100,31 +117,36 @@ function assertBinaryPath(path: string): void {
 
 /**
  * Finds a llama-server of at least `MIN_LLAMA_SERVER_BUILD`: `options.path`, else the first on PATH (null when PATH
- * has none). Never downloads one; a build too old throws `LlamaServerVersionError`.
+ * has none). Never downloads one. A build too old throws `LlamaServerVersionError`; one that cannot start for a
+ * missing library throws `LlamaServerBinaryError`. On PATH, either is thrown only when no entry qualifies. A SYCL or
+ * Vulkan build that lists no GPU is returned with a `warning`.
  */
 export async function findLlamaServer(options: FindLlamaServerOptions = {}): Promise<LlamaServerBinary | null> {
   const timeoutMs = options.timeoutMs ?? VERSION_TIMEOUT_MS;
   const env = options.env ?? process.env;
   if (options.path !== undefined) {
     assertBinaryPath(options.path);
-    const found = await probeBinary(resolve(options.path), env, timeoutMs, true, options.binaryArgs);
-    return checkBuild(found as NonNullable<typeof found>);
+    const path = resolve(options.path);
+    const found = await probeBinary(path, env, timeoutMs, true, options.binaryArgs);
+    const binary = checkBuild(found as NonNullable<typeof found>);
+    return gpuBackendCheck(binary, (found as NonNullable<typeof found>).text, env, timeoutMs, options.binaryArgs);
   }
   const windows = (options.platform ?? process.platform) === 'win32';
   const dirs = (env.PATH ?? env.Path ?? '').split(windows ? ';' : ':');
-  let tooOld: LlamaServerVersionError | null = null;
+  let problem: LlamaServerVersionError | LlamaServerBinaryError | null = null;
   for (const dir of dirs) {
     // A relative entry would resolve against this process's working directory.
     if (!dir || !isAbsolute(dir)) continue;
-    const found = await probeBinary(join(dir, windows ? 'llama-server.exe' : 'llama-server'), env, timeoutMs, false);
-    if (!found) continue;
     try {
-      return checkBuild(found);
+      const found = await probeBinary(join(dir, windows ? 'llama-server.exe' : 'llama-server'), env, timeoutMs, false);
+      if (!found) continue;
+      return await gpuBackendCheck(checkBuild(found), found.text, env, timeoutMs);
     } catch (error) {
-      tooOld ??= error as LlamaServerVersionError;
+      if (!(error instanceof LlamaServerVersionError || error instanceof LlamaServerBinaryError)) throw error;
+      problem ??= error;
     }
   }
-  if (tooOld) throw tooOld;
+  if (problem) throw problem;
   return null;
 }
 
@@ -134,13 +156,265 @@ function checkBuild(found: { path: string; version: string; build: number | null
   return { path: found.path, version: found.version, build: found.build };
 }
 
+interface BinaryRun {
+  text: string;
+  stdout: string;
+  /** `killed` after a timeout; `previous` when an earlier listing of a replaced binary still runs. */
+  error: (Error & { code?: unknown; killed?: boolean; previous?: boolean }) | null;
+  /** Settles once the child has exited, which one stuck in a driver call does not do even after SIGKILL. */
+  exited: Promise<void>;
+  /** Undefined when it could not be spawned. */
+  pid: number | undefined;
+}
+
+function runBinary(path: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number): Promise<BinaryRun> {
+  return new Promise(done => {
+    const started = Date.now();
+    const timedOut = () =>
+      Object.assign(new Error(`${path} did not exit within ${timeoutMs} ms`), { killed: true as const });
+    // Filled in once spawned; a spawn that throws settles with none of it.
+    const spawned: { backstop?: ReturnType<typeof setTimeout>; exited: Promise<void>; pid?: number } = {
+      exited: Promise.resolve(),
+    };
+    let settled = false;
+    const settle = (run: Omit<BinaryRun, 'exited' | 'pid'>) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(spawned.backstop);
+      done({ ...run, exited: spawned.exited, pid: spawned.pid });
+    };
+    let child: ChildProcess;
+    try {
+      child = execFile(
+        path,
+        args,
+        { timeout: timeoutMs, windowsHide: true, env: childEnv(env, path) },
+        (error, stdout, stderr) => {
+          // A wrapper that exited 0 while a grandchild held its output is cut off by the timeout with no error.
+          const cut = !error && (child.killed || Date.now() - started >= timeoutMs);
+          settle({ text: `${stdout}\n${stderr}`, stdout: String(stdout), error: cut ? timedOut() : error });
+        }
+      );
+    } catch (error) {
+      // Spawn throws, rather than reporting, for ETXTBSY, E2BIG, EPERM and others.
+      settle({ text: '', stdout: '', error: error instanceof Error ? error : new Error(String(error)) });
+      return;
+    }
+    spawned.pid = child.pid;
+    spawned.exited = new Promise<void>(resolve => {
+      child.once('exit', () => resolve());
+      child.once('error', () => resolve());
+    });
+    // execFile's timeout sends SIGTERM and reports only once the child exits, which one that traps it, is stuck in a
+    // driver call, or leaves a grandchild holding its output never does.
+    spawned.backstop = setTimeout(() => {
+      child.kill('SIGKILL');
+      settle({ text: '', stdout: '', error: timedOut() });
+    }, timeoutMs + 1_000);
+    spawned.backstop.unref();
+  });
+}
+
+/** One GPU from `llama-server --list-devices`. */
+export interface ListedDevice {
+  /** The backend's device name, e.g. `SYCL0` or `Vulkan1`. */
+  name: string;
+  description: string;
+  totalBytes: number;
+  /** Equals `totalBytes` when the backend cannot read it (SYCL without Level Zero Sysman, Vulkan without a budget). */
+  freeBytes: number;
+}
+
+/** The device lines of `--list-devices` stdout; the CPU is never listed, and `  (none)` gives []. */
+export function parseListedDevices(stdout: string): ListedDevice[] {
+  return stdout.split(/\r?\n/).flatMap((line): ListedDevice[] => {
+    const match = LISTED_DEVICE_RE.exec(line);
+    if (!match) return [];
+    const total = Number(match[3]);
+    const free = Number(match[4]);
+    if (!Number.isSafeInteger(total * MIB) || total <= 0 || !Number.isSafeInteger(free)) return [];
+    const freeBytes = free > total ? total * MIB : free * MIB;
+    return [{ name: match[1], description: match[2].trim(), totalBytes: total * MIB, freeBytes }];
+  });
+}
+
+interface DeviceListing {
+  stamp: string;
+  /** When it started, or when the child of a run killed for its time exited. */
+  at: number;
+  run: Promise<BinaryRun>;
+  done: boolean;
+  /** A run killed for its time whose child has not exited. */
+  stuck: boolean;
+}
+
+const deviceListings = new Map<string, DeviceListing>();
+
+/**
+ * Runs `--list-devices`, or reuses a run of the same unchanged binary under the same environment that is still running
+ * or started at most `maxAgeMs` ago; one that failed or listed no device for at most `FAILED_LISTING_RETRY_MS`. A run
+ * killed for its time is reused until its child exits, so a binary stuck in a driver call keeps one process at most.
+ */
+async function listDevicesRun(
+  path: string,
+  binaryArgs: readonly string[],
+  env: NodeJS.ProcessEnv,
+  timeoutMs: number,
+  maxAgeMs: number
+): Promise<BinaryRun> {
+  const stats = await stat(path).catch(() => {
+    throw new LlamaServerBinaryError(`llama-server at ${path} is missing or not executable`, path);
+  });
+  // The environment decides what a backend finds (library paths, setvars.sh, device filters).
+  const environment = createHash('sha256')
+    .update(JSON.stringify(Object.entries(env).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))))
+    .digest('hex');
+  const key = JSON.stringify([path, environment, timeoutMs, ...binaryArgs]);
+  const stamp = `${stats.mtimeMs}:${stats.size}`;
+  const cached = deviceListings.get(key);
+  if (cached && cached.stamp === stamp && (!cached.done || cached.stuck)) return cached.run;
+  if (cached?.stuck) {
+    const { pid, exited } = await cached.run;
+    const message = `an earlier \`llama-server --list-devices\` (pid ${pid ?? 'unknown'}) of the previous binary has not exited; end it or restart the computer`;
+    return { text: '', stdout: '', error: Object.assign(new Error(message), { previous: true }), exited, pid };
+  }
+  if (cached && cached.stamp === stamp && Date.now() - cached.at <= maxAgeMs) {
+    const run = await cached.run;
+    const listed = !run.error && parseListedDevices(run.stdout).length > 0;
+    if (listed || Date.now() - cached.at <= FAILED_LISTING_RETRY_MS) return run;
+  }
+  const run = runBinary(path, [...binaryArgs, '--list-devices'], env, timeoutMs);
+  const entry: DeviceListing = { stamp, at: Date.now(), run, done: false, stuck: false };
+  const current = () => deviceListings.get(key) === entry;
+  void run.then(
+    ({ error, exited, pid }) => {
+      entry.done = true;
+      // Not spawned at all (a file being written, say): nothing ran, so the next caller tries again.
+      if (pid === undefined && current()) deviceListings.delete(key);
+      if (!error?.killed) return;
+      entry.stuck = true;
+      void exited.then(() => {
+        entry.stuck = false;
+        entry.at = Date.now();
+      });
+    },
+    () => {
+      if (current()) deviceListings.delete(key);
+    }
+  );
+  deviceListings.set(key, entry);
+  return run;
+}
+
+export interface ListLlamaServerDevicesOptions {
+  path: string;
+  /** Placed before `--list-devices`, for a binary that is a launcher. */
+  binaryArgs?: readonly string[];
+  env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  /** How old a reused listing may be (ms); by default one is kept until the binary changes. */
+  maxAgeMs?: number;
+}
+
+/**
+ * The GPUs a SYCL or Vulkan build of llama-server lists, with their memory; [] for a build with neither backend beside
+ * it, which is not run. Listing loads no model and allocates no device memory. Rejects when the binary is missing or
+ * the listing fails or times out.
+ */
+export async function listLlamaServerDevices(options: ListLlamaServerDevicesOptions): Promise<ListedDevice[]> {
+  assertBinaryPath(options.path);
+  const path = resolve(options.path);
+  const timeoutMs = options.timeoutMs ?? VERSION_TIMEOUT_MS;
+  try {
+    await access(path, constants.X_OK);
+  } catch {
+    throw new LocalRuntimeError(`llama-server at ${path} is missing or not executable`, RUNTIME_ID);
+  }
+  if ((await gpuBackends(path, '')).size === 0) return [];
+  const env = options.env ?? process.env;
+  const run = await listDevicesRun(path, options.binaryArgs ?? [], env, timeoutMs, options.maxAgeMs ?? Infinity);
+  const devices = parseListedDevices(run.stdout);
+  if (devices.length > 0 || !run.error) return devices;
+  const why = run.error.killed ? `timed out after ${timeoutMs} ms` : run.error.message.split('\n')[0];
+  throw new LocalRuntimeError(`llama-server at ${path} could not list its devices: ${why}`, RUNTIME_ID);
+}
+
+/** The GPU backends whose ggml library sits beside the binary, plus SYCL for an Intel oneAPI compiler build. */
+async function gpuBackends(path: string, versionText: string): Promise<Set<string>> {
+  // The libraries sit beside the real binary, not beside a symlink to it on PATH.
+  const real = await realpath(path).catch(() => path);
+  const files = await readdir(dirname(real)).catch((): string[] => []);
+  const backends = new Set(files.flatMap(file => GPU_BACKEND_LIBRARY_RE.exec(file)?.[1].toLowerCase() ?? []));
+  if (/^built with IntelLLVM\b/m.test(versionText)) backends.add('sycl');
+  return backends;
+}
+
+const SYCL_HELP =
+  "It needs Intel's GPU driver with Level Zero and the oneAPI runtime (on Linux, source oneAPI's setvars.sh before starting it), or use llama.cpp's Vulkan build instead.";
+
+/** The error for a binary the loader could not start for a missing library; null when the output names none. */
+export function missingLibraryError(
+  path: string,
+  text: string,
+  error: { code?: unknown } | null,
+  sycl: boolean
+): LlamaServerBinaryError | null {
+  const match = MISSING_LIBRARY_RE.exec(text);
+  const library = match ? basename(match[1] ?? match[2]) : null;
+  if (library === null && !DLL_NOT_FOUND_CODES.includes(error?.code)) return null;
+  const what = library ?? 'a DLL it needs';
+  let help = 'Install it, or use a llama.cpp build that does not need it.';
+  if ((library !== null && ONEAPI_LIBRARY_RE.test(library)) || (library === null && sycl))
+    help = `It is part of the Intel oneAPI runtime a SYCL build needs. ${SYCL_HELP}`;
+  else if (library !== null && /^(?:lib)?vulkan/i.test(library))
+    help = "Install the Vulkan loader and the GPU's Vulkan driver, or use a CPU build.";
+  return new LlamaServerBinaryError(`llama-server at ${path} cannot start: ${what} is missing. ${help}`, path);
+}
+
+/**
+ * A SYCL or Vulkan build whose backend finds no GPU still runs, silently on the CPU, so one that lists none comes back
+ * with a warning; one that cannot start for a missing library throws. A build without either backend is not checked.
+ */
+async function gpuBackendCheck(
+  binary: LlamaServerBinary,
+  versionText: string,
+  env: NodeJS.ProcessEnv,
+  timeoutMs: number,
+  binaryArgs: readonly string[] = []
+): Promise<LlamaServerBinary> {
+  const backends = await gpuBackends(binary.path, versionText);
+  if (backends.size === 0) return binary;
+  const listed = await listDevicesRun(binary.path, binaryArgs, env, timeoutMs, Infinity);
+  if (parseListedDevices(listed.stdout).length > 0) return binary;
+  const sycl = backends.has('sycl');
+  const missing = missingLibraryError(binary.path, listed.text, listed.error, sycl);
+  if (missing) throw missing;
+  const kind = [...backends].map(name => (name === 'sycl' ? 'SYCL' : 'Vulkan')).join(' and ');
+  if (listed.error?.previous)
+    return {
+      ...binary,
+      warning: `llama-server at ${binary.path} is a ${kind} build whose devices could not be listed: ${listed.error.message}.`,
+    };
+  if (listed.error?.killed)
+    return {
+      ...binary,
+      warning: `llama-server at ${binary.path} is a ${kind} build that did not list its devices within ${timeoutMs / 1000} s, so whether it can use the GPU is unknown.`,
+    };
+  const help = sycl ? SYCL_HELP : 'To use the GPU, install or update its Vulkan driver (Mesa on Linux).';
+  const why = listed.error ? ` (${listed.error.message.split('\n')[0]})` : '';
+  return {
+    ...binary,
+    warning: `llama-server at ${binary.path} is a ${kind} build but lists no GPU${why}, so it runs on the CPU. ${help}`,
+  };
+}
+
 async function probeBinary(
   path: string,
   env: NodeJS.ProcessEnv,
   timeoutMs: number,
   strict: boolean,
   binaryArgs: readonly string[] = []
-): Promise<{ path: string; version: string; build: number | null } | null> {
+): Promise<{ path: string; version: string; build: number | null; text: string } | null> {
   const fail = (reason: string) => {
     if (strict) throw new LocalRuntimeError(`llama-server at ${path} ${reason}`, RUNTIME_ID);
     return null;
@@ -150,18 +424,16 @@ async function probeBinary(
   } catch {
     return fail('is missing or not executable');
   }
-  const output = await new Promise<{ text: string; error: Error | null }>(done => {
-    execFile(
-      path,
-      [...binaryArgs, '--version'],
-      { timeout: timeoutMs, windowsHide: true, env: childEnv(env, path) },
-      (error, stdout, stderr) => done({ text: `${stdout}\n${stderr}`, error })
-    );
-  });
+  const output = await runBinary(path, [...binaryArgs, '--version'], env, timeoutMs);
   const version = /^version:\s*(.+?)\s*$/m.exec(output.text)?.[1];
-  if (!version) return fail(output.error ? `could not run: ${output.error.message}` : 'is not llama-server');
+  if (!version) {
+    const sycl = (await gpuBackends(path, '')).has('sycl');
+    const missing = missingLibraryError(path, output.text, output.error, sycl);
+    if (missing) throw missing;
+    return fail(output.error ? `could not run: ${output.error.message}` : 'is not llama-server');
+  }
   const build = /\bbuild (\d+)/.exec(version)?.[1] ?? /^(\d+) \(/.exec(version)?.[1];
-  return { path, version, build: build ? Number(build) : null };
+  return { path, version, build: build ? Number(build) : null, text: output.text };
 }
 
 /** The parent's environment without llama.cpp settings or HF tokens; older Linux zips need their own library dir. */
@@ -187,6 +459,11 @@ export interface LlamaServerTuning {
    * flash attention, so it turns it on, and `off` with one is refused.
    */
   flashAttention?: LlamaServerFlashAttention;
+  /**
+   * MiB `--fit` keeps free on each device (llama-server's default is 1024). Passed only to builds from
+   * `LLAMA_SERVER_FIT_TARGET_BUILD`; older and unnumbered builds have no `--fit` and run without it.
+   */
+  fitTargetMiB?: number;
   /** Appended last: flags from `LLAMA_SERVER_TUNING_FLAGS` only, each value as its own argument. */
   extraArgs?: readonly string[];
 }
@@ -481,9 +758,11 @@ export function assertTuning(options: LlamaServerTuning): void {
       throw new LocalRuntimeError(`llama-server takes the value of ${flag} as a separate argument`, RUNTIME_ID);
     }
   }
-  const { contextSize, threads, gpuLayers, flashAttention } = options;
+  const { contextSize, threads, gpuLayers, flashAttention, fitTargetMiB } = options;
   if (flashAttention !== undefined && !FLASH_ATTENTION_MODES.includes(flashAttention))
     throw new LocalRuntimeError(`flashAttention must be one of ${FLASH_ATTENTION_MODES.join(', ')}`, RUNTIME_ID);
+  if (fitTargetMiB !== undefined && !(Number.isInteger(fitTargetMiB) && fitTargetMiB >= 0))
+    throw new LocalRuntimeError('fitTargetMiB must be a non-negative integer', RUNTIME_ID);
   if (contextSize !== undefined && !(Number.isInteger(contextSize) && contextSize >= 0))
     throw new LocalRuntimeError('contextSize must be a non-negative integer', RUNTIME_ID);
   if (threads !== undefined && !(Number.isInteger(threads) && threads > 0))
@@ -496,7 +775,7 @@ function serverArgs(
   options: StartLlamaServerOptions,
   alias: string,
   contextSize: number,
-  flashAttention: string[]
+  buildArgs: string[]
 ): string[] {
   return [
     ...(options.binaryArgs ?? []),
@@ -517,7 +796,7 @@ function serverArgs(
     '--no-webui',
     // No network: the product never downloads a model on its own.
     '--offline',
-    ...flashAttention,
+    ...buildArgs,
     ...(options.extraArgs ?? []),
   ];
 }
@@ -666,15 +945,32 @@ const delay = (ms: number) => new Promise<void>(done => setTimeout(done, ms).unr
 type LaunchOptions = Pick<StartLlamaServerOptions, 'binaryPath' | 'binaryArgs' | 'build' | 'env' | 'signal'> &
   LlamaServerTuning;
 
-/** The `-fa` arguments; throws for `off` with a quantized V cache. Only `on` and `off` need the build. */
-async function flashAttentionFor(options: LaunchOptions): Promise<string[]> {
+/** The `--fit-target` arguments for `tuning` on llama.cpp release `build`, which is undefined when unnumbered. */
+export function fitTargetArgs(tuning: LlamaServerTuning, build: number | undefined): string[] {
+  const target = tuning.fitTargetMiB;
+  if (target === undefined || build === undefined || build < LLAMA_SERVER_FIT_TARGET_BUILD) return [];
+  return ['--fit-target', String(target)];
+}
+
+/**
+ * The `-fa` and `--fit-target` arguments; throws for `off` with a quantized V cache. Only `on`, `off` and a fit
+ * target need the build; an unnumbered build only drops the fit target.
+ */
+async function buildDependentArgs(options: LaunchOptions): Promise<string[]> {
   const flashAttention = flashAttentionArgs(options, LLAMA_SERVER_FLASH_ATTN_VALUE_BUILD);
-  if (flashAttention.length === 0) return flashAttention;
-  const build =
-    options.build ??
-    (await findLlamaServer({ path: options.binaryPath, binaryArgs: options.binaryArgs, env: options.env }))?.build;
+  if (flashAttention.length === 0 && options.fitTargetMiB === undefined) return [];
+  let build = options.build;
+  if (build === undefined) {
+    try {
+      build = (await findLlamaServer({ path: options.binaryPath, binaryArgs: options.binaryArgs, env: options.env }))
+        ?.build;
+    } catch (error) {
+      const unnumbered = error instanceof LlamaServerVersionError && error.found === null;
+      if (!unnumbered || flashAttention.length > 0) throw error;
+    }
+  }
   options.signal?.throwIfAborted();
-  return flashAttentionArgs(options, build ?? MIN_LLAMA_SERVER_BUILD);
+  return [...flashAttentionArgs(options, build ?? MIN_LLAMA_SERVER_BUILD), ...fitTargetArgs(options, build)];
 }
 
 /** Spawns llama-server with its key in the environment, in its own process group, tracked for the parent's exit. */
@@ -716,11 +1012,11 @@ export async function startLlamaServer(options: StartLlamaServerOptions): Promis
     throw storageError(RUNTIME_ID, options.modelPath, error, 'read');
   });
   if (!file?.isFile()) throw new ModelNotFoundError(RUNTIME_ID, options.modelPath);
-  const flashAttention = await flashAttentionFor(options);
+  const buildArgs = await buildDependentArgs(options);
 
   const apiKey = randomBytes(32).toString('base64url');
   const contextSize = options.contextSize ?? DEFAULT_LLAMA_SERVER_CONTEXT_SIZE;
-  const child = spawnKeyed(options, serverArgs(options, alias, contextSize, flashAttention), apiKey);
+  const child = spawnKeyed(options, serverArgs(options, alias, contextSize, buildArgs), apiKey);
   const server = new ManagedLlamaServer(
     child,
     apiKey,
@@ -827,7 +1123,10 @@ async function waitUntilReady(
   check();
 }
 
-export interface StartLlamaRouterOptions extends Pick<LlamaServerTuning, 'flashAttention' | 'extraArgs'> {
+export interface StartLlamaRouterOptions extends Pick<
+  LlamaServerTuning,
+  'flashAttention' | 'fitTargetMiB' | 'extraArgs'
+> {
   binaryPath: string;
   /** As for `startLlamaServer`. */
   binaryArgs?: readonly string[];
@@ -880,7 +1179,7 @@ export async function startLlamaRouter(options: StartLlamaRouterOptions): Promis
     throw storageError(RUNTIME_ID, options.modelsDir, error, 'read');
   });
   if (!dir?.isDirectory()) throw new LocalRuntimeError(`${options.modelsDir} is not a folder`, RUNTIME_ID);
-  const flashAttention = await flashAttentionFor(options);
+  const buildArgs = await buildDependentArgs(options);
 
   const apiKey = randomBytes(32).toString('base64url');
   const args = [
@@ -895,7 +1194,7 @@ export async function startLlamaRouter(options: StartLlamaRouterOptions): Promis
     '--jinja',
     '--no-webui',
     '--offline',
-    ...flashAttention,
+    ...buildArgs,
     ...(options.extraArgs ?? []),
   ];
   const child = spawnKeyed(options, args, apiKey);

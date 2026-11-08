@@ -1,4 +1,8 @@
-export { validateBundle, type ValidateBundleInput, type ValidateBundleResult } from './validateBundle';
+export {
+  validateBundle,
+  type ValidateBundleInput,
+  type ValidateBundleResult,
+} from '@bike4mind/server-utils/services/publish/validateBundle';
 export { resolveVisibility } from './resolveVisibility';
 export { buildListVisibilityFilter, type BuildListFilterInput } from './buildListFilter';
 export { buildListQuery, type ListQueryParams, type SortKey } from './buildListQuery';
@@ -35,7 +39,7 @@ export {
   type RenderSandboxedBundleInput,
   type RenderSandboxedBundleResult,
   type SandboxAsset,
-} from './renderSandboxedBundle';
+} from '@bike4mind/server-utils/services/publish/renderSandboxedBundle';
 export {
   collectInlineAssets,
   type CollectInlineAssetsInput,
@@ -70,7 +74,7 @@ export {
   signGateToken,
   verifyGateToken,
   GATE_TOKEN_TTL_SECONDS,
-} from './publishGateToken';
+} from '@bike4mind/server-utils/services/publish/publishGateToken';
 export {
   signDraftUploadToken,
   verifyDraftUploadToken,

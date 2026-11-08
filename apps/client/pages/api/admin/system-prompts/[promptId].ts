@@ -1,7 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { systemPromptRepository } from '@bike4mind/database';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { getDefaultSystemPrompts } from '@bike4mind/server-utils/utils/systemPrompts/defaults';
 import { z } from 'zod';
 

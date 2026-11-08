@@ -40,7 +40,7 @@ vi.mock('@workers/utils/eventContext', () => ({
   withEventContext: (fn: unknown) => fn,
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   SessionEvents: {
     Summarize: { schema: { parse: (properties: unknown) => properties } },
     Tag: { publish: h.publishTag },

@@ -22,6 +22,7 @@ import {
   SESSION_TITLE_MAX_LENGTH,
 } from '@shared/chat';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
+import { closingText, plainText, snippetOf } from '@shared/agentOutcome';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import type { ModelSettings } from '@shared/modelSettings';
@@ -107,9 +108,22 @@ import { useCreationTools } from './useCreationTools';
 import { BoardView } from './orchestrator/BoardView';
 import { OrchestratePill } from './orchestrator/OrchestratePill';
 import { OrchestrateToggle } from './orchestrator/OrchestrateToggle';
-import type { AgentActions, OrchestratorViewProps } from './orchestrator/OrchestratorStage';
+import { ambientHeld, isEditable, isPrintableKey, useAmbientSettle } from './orchestrator/ambient';
+import type {
+  AgentActions,
+  InnkeeperDesk,
+  OrchestratorViewProps,
+  StageAmbient,
+} from './orchestrator/OrchestratorStage';
 import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
-import { readIntroSeen, writeIntroSeen, writeSurface, type OrchestratorViewId } from './orchestrator/orchestratorPrefs';
+import {
+  readAmbientHintSeen,
+  readIntroSeen,
+  writeAmbientHintSeen,
+  writeIntroSeen,
+  writeSurface,
+  type OrchestratorViewId,
+} from './orchestrator/orchestratorPrefs';
 import { TableView } from './orchestrator/TableView';
 import { TavernView } from './orchestrator/tavern/TavernView';
 import { latestQuestReport } from './orchestrator/finale';
@@ -742,6 +756,77 @@ export function ChatShell({
     setDockOpen(true);
     setComposerFocus(request => request + 1);
   }, [setDockOpen]);
+
+  // The ambient Tavern: after a quiet spell the dock and composer settle out and leave the scene.
+  const [slipRequest, setSlipRequest] = useState<{ seq: number; seed: string } | undefined>(undefined);
+  const openOrderSlip = useCallback(
+    (seed: string) => setSlipRequest(previous => ({ seq: (previous?.seq ?? 0) + 1, seed })),
+    []
+  );
+  const ambient = useAmbientSettle({
+    enabled:
+      orchestratorPrefs.ambient &&
+      orchestrating &&
+      activeId !== null &&
+      orchestratorView === 'tavern' &&
+      introPhase !== 'playing',
+    // A reply streaming in is something to watch arrive, not to hide.
+    held: () => conversation.streaming || ambientHeld(document),
+    // Typing into the quiet scene starts an order to the Innkeeper with that character.
+    onSettledKey: event => {
+      if (!isPrintableKey(event) || isEditable(event.target)) return;
+      event.preventDefault();
+      openOrderSlip(event.key);
+    },
+  });
+  const [ambientHint, setAmbientHint] = useState(false);
+  useEffect(() => {
+    if (!ambient.settled) {
+      setAmbientHint(false);
+      return;
+    }
+    if (readAmbientHintSeen()) return;
+    writeAmbientHintSeen();
+    setAmbientHint(true);
+  }, [ambient.settled]);
+  const { wake: wakeAmbient } = ambient;
+  const stageAmbient = useMemo<StageAmbient>(
+    () => ({
+      settled: ambient.settled,
+      wake: wakeAmbient,
+      on: orchestratorPrefs.ambient,
+      onToggle: orchestratorPrefs.setAmbient,
+    }),
+    [ambient.settled, wakeAmbient, orchestratorPrefs.ambient, orchestratorPrefs.setAmbient]
+  );
+
+  const parentReply = useMemo(() => {
+    if (conversation.session?.id !== activeId) return undefined;
+    const message = latestReply(conversation.messages, turnOpen);
+    const snippet = message ? snippetOf(plainText(closingText(message))) : '';
+    return message && snippet ? { id: message.id, snippet } : undefined;
+  }, [conversation.session?.id, activeId, conversation.messages, turnOpen]);
+  const { send: sendToConversation } = conversation;
+  const dockVisible = orchestratorPrefs.dockOpen && !ambient.settled;
+  const innkeeperDesk = useMemo<InnkeeperDesk>(
+    () => ({
+      // Straight to the conversation, not through onSend: that one also sends whatever is attached
+      // in the composer, which the user staged for a different message.
+      send: text => void sendToConversation(text),
+      reply: parentReply,
+      onReadReply: id => {
+        wakeAmbient();
+        readParentReport(id);
+      },
+      onOpenConversation: () => {
+        wakeAmbient();
+        focusParentChat();
+      },
+      conversationHidden: !dockVisible,
+      openRequest: slipRequest,
+    }),
+    [sendToConversation, parentReply, wakeAmbient, readParentReport, focusParentChat, dockVisible, slipRequest]
+  );
   // The agent a clicked needs-you notice asked for; handed to its parent's stage once that is open.
   const [noticeFocus, setNoticeFocus] = useState<{ rootId: string; agentId: string } | null>(null);
   const openNotice = ({ sessionId, rootId }: AttentionOpenEvent) => {
@@ -1360,7 +1445,7 @@ export function ChatShell({
   );
 
   const orchestratorShown = orchestrating && activeId !== null;
-  const threadDockMode: ThreadDockMode = !orchestratorShown ? 'chat' : orchestratorPrefs.dockOpen ? 'docked' : 'hidden';
+  const threadDockMode: ThreadDockMode = !orchestratorShown ? 'chat' : dockVisible ? 'docked' : 'hidden';
 
   return (
     <Box sx={chatShellRootSx} {...drop.handlers} data-testid="chat-shell">
@@ -1651,6 +1736,8 @@ export function ChatShell({
                   onFocusAgentConsumed={clearNoticeFocus}
                   onExampleQuest={pickExampleQuest}
                   onTurnOn={orchestrateCapable && !delegating ? () => void setOrchestrate(true) : undefined}
+                  desk={innkeeperDesk}
+                  ambient={stageAmbient}
                   dockControl={
                     <Tooltip
                       size="sm"
@@ -1732,238 +1819,267 @@ export function ChatShell({
             )}
           </Box>
 
-          {!panelShown && <TodoPanel todos={plan} turnOpen={turnOpen} />}
+          {ambient.settled && (
+            <Box sx={contentColumnSx}>
+              <Box
+                data-testid="orchestrator-ambient-chip-row"
+                sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5, py: 1 }}
+              >
+                <Button
+                  size="sm"
+                  variant="soft"
+                  color="neutral"
+                  onClick={() => {
+                    wakeAmbient();
+                    openOrderSlip('');
+                  }}
+                  data-testid="orchestrator-ambient-talk-btn"
+                >
+                  Type to talk to the Innkeeper
+                </Button>
+                {ambientHint && (
+                  <Typography level="body-xs" textColor="text.tertiary" data-testid="orchestrator-ambient-hint">
+                    Move the mouse to bring the controls back
+                  </Typography>
+                )}
+              </Box>
+            </Box>
+          )}
+          {/* Hidden, never unmounted, while the Tavern is quiet: the composer keeps its draft and state. */}
+          <Box data-testid="chat-composer-region" sx={{ display: ambient.settled ? 'none' : 'contents' }}>
+            {!panelShown && <TodoPanel todos={plan} turnOpen={turnOpen} />}
 
-          {/* A compaction is a round trip the user is waiting on, with nothing streaming into the
+            {/* A compaction is a round trip the user is waiting on, with nothing streaming into the
               thread to show for it. Above the error slot, because a refusal replaces it. */}
-          {conversation.commandProgress && (
-            <Box sx={contentColumnSx}>
-              <Alert size="sm" color="neutral" variant="soft" data-testid="chat-command-progress">
-                {conversation.commandProgress}
-              </Alert>
-            </Box>
-          )}
+            {conversation.commandProgress && (
+              <Box sx={contentColumnSx}>
+                <Alert size="sm" color="neutral" variant="soft" data-testid="chat-command-progress">
+                  {conversation.commandProgress}
+                </Alert>
+              </Box>
+            )}
 
-          {conversation.sendError && (
-            <Box sx={contentColumnSx}>
-              <Alert size="sm" color="danger" variant="soft" data-testid="chat-send-error">
-                {conversation.sendError}
-              </Alert>
-            </Box>
-          )}
+            {conversation.sendError && (
+              <Box sx={contentColumnSx}>
+                <Alert size="sm" color="danger" variant="soft" data-testid="chat-send-error">
+                  {conversation.sendError}
+                </Alert>
+              </Box>
+            )}
 
-          {conversation.notice && (
-            <Box sx={contentColumnSx}>
-              <Alert
-                size="sm"
-                color="warning"
-                variant="soft"
-                sx={{ cursor: 'pointer', whiteSpace: 'pre-line' }}
-                onClick={conversation.dismissNotice}
-                data-testid="chat-notice"
-              >
-                {conversation.notice}
-              </Alert>
-            </Box>
-          )}
+            {conversation.notice && (
+              <Box sx={contentColumnSx}>
+                <Alert
+                  size="sm"
+                  color="warning"
+                  variant="soft"
+                  sx={{ cursor: 'pointer', whiteSpace: 'pre-line' }}
+                  onClick={conversation.dismissNotice}
+                  data-testid="chat-notice"
+                >
+                  {conversation.notice}
+                </Alert>
+              </Box>
+            )}
 
-          {addFolderAlert && (
-            <Box sx={contentColumnSx}>
-              <Alert
-                size="sm"
-                color={addFolderAlert.color}
-                variant="soft"
-                sx={{ cursor: 'pointer' }}
-                onClick={() => clearAddFolderAlert(activeId ?? NO_CHAT)}
-                data-testid={addFolderAlert.color === 'danger' ? 'chat-add-folder-error' : 'chat-add-folder-notice'}
-              >
-                {addFolderAlert.text}
-              </Alert>
-            </Box>
-          )}
+            {addFolderAlert && (
+              <Box sx={contentColumnSx}>
+                <Alert
+                  size="sm"
+                  color={addFolderAlert.color}
+                  variant="soft"
+                  sx={{ cursor: 'pointer' }}
+                  onClick={() => clearAddFolderAlert(activeId ?? NO_CHAT)}
+                  data-testid={addFolderAlert.color === 'danger' ? 'chat-add-folder-error' : 'chat-add-folder-notice'}
+                >
+                  {addFolderAlert.text}
+                </Alert>
+              </Box>
+            )}
 
-          {defaultsReadError && defaultsSessionId && (
-            <Box sx={contentColumnSx}>
-              <Alert
-                size="sm"
-                color="warning"
-                variant="soft"
-                sx={{ cursor: 'pointer' }}
-                onClick={() => clearDefaultsReadFailure(defaultsSessionId)}
-                data-testid="chat-model-defaults-error"
-              >
-                {defaultsReadError}
-              </Alert>
-            </Box>
-          )}
+            {defaultsReadError && defaultsSessionId && (
+              <Box sx={contentColumnSx}>
+                <Alert
+                  size="sm"
+                  color="warning"
+                  variant="soft"
+                  sx={{ cursor: 'pointer' }}
+                  onClick={() => clearDefaultsReadFailure(defaultsSessionId)}
+                  data-testid="chat-model-defaults-error"
+                >
+                  {defaultsReadError}
+                </Alert>
+              </Box>
+            )}
 
-          {codeError && (
-            <Box sx={contentColumnSx}>
-              <Alert
-                size="sm"
-                color="danger"
-                variant="soft"
-                sx={{ cursor: 'pointer' }}
-                onClick={clearCodeError}
-                data-testid="chat-code-create-error"
-              >
-                {codeError}
-              </Alert>
-            </Box>
-          )}
+            {codeError && (
+              <Box sx={contentColumnSx}>
+                <Alert
+                  size="sm"
+                  color="danger"
+                  variant="soft"
+                  sx={{ cursor: 'pointer' }}
+                  onClick={clearCodeError}
+                  data-testid="chat-code-create-error"
+                >
+                  {codeError}
+                </Alert>
+              </Box>
+            )}
 
-          <HeldRelayCard held={heldRelays.held} onResolve={heldRelays.resolve} onOpenSession={selectSession} />
+            <HeldRelayCard held={heldRelays.held} onResolve={heldRelays.resolve} onOpenSession={selectSession} />
 
-          <SpawnSuggestionTray
-            suggestions={spawnSuggestions.suggestions}
-            onStart={onStartSuggestion}
-            onDismiss={spawnSuggestions.dismiss}
-          />
+            <SpawnSuggestionTray
+              suggestions={spawnSuggestions.suggestions}
+              onStart={onStartSuggestion}
+              onDismiss={spawnSuggestions.dismiss}
+            />
 
-          {/* After first use, an unbound session or a hidden panel error still needs these controls
+            {/* After first use, an unbound session or a hidden panel error still needs these controls
             above the composer. Empty Code sessions render them in the transcript instead. */}
-          {conversation.session?.mode === 'code' &&
-            !initialCodeSetup &&
-            (!conversation.session.project || bindingErrorHidden) && (
-              <SessionChips
-                project={conversation.session.project ?? null}
-                {...(conversation.session.grantedDirectories
-                  ? { grantedDirectories: conversation.session.grantedDirectories }
-                  : {})}
-                binding={conversation.project}
-                settledTurns={conversation.settledTurns}
-                inUse={conversation.messages.length > 0}
-                preparing={conversation.preparing !== null}
+            {conversation.session?.mode === 'code' &&
+              !initialCodeSetup &&
+              (!conversation.session.project || bindingErrorHidden) && (
+                <SessionChips
+                  project={conversation.session.project ?? null}
+                  {...(conversation.session.grantedDirectories
+                    ? { grantedDirectories: conversation.session.grantedDirectories }
+                    : {})}
+                  binding={conversation.project}
+                  settledTurns={conversation.settledTurns}
+                  inUse={conversation.messages.length > 0}
+                  preparing={conversation.preparing !== null}
+                />
+              )}
+            {conversation.session && conversation.session.mode !== 'code' && (
+              <GrantedFolderChips
+                directories={conversation.session.grantedDirectories ?? []}
+                onRemove={conversation.project.removeContextDirectory}
               />
             )}
-          {conversation.session && conversation.session.mode !== 'code' && (
-            <GrantedFolderChips
-              directories={conversation.session.grantedDirectories ?? []}
-              onRemove={conversation.project.removeContextDirectory}
+
+            <CacheExpiryNote
+              stamp={promptCache}
+              model={modelOption}
+              contextTokens={composerUsage.contextTokens ?? 0}
+              ttl={cacheTtlFor(modelOption)}
+              turnOpen={turnOpen}
+              sx={contentColumnSx}
             />
-          )}
 
-          <CacheExpiryNote
-            stamp={promptCache}
-            model={modelOption}
-            contextTokens={composerUsage.contextTokens ?? 0}
-            ttl={cacheTtlFor(modelOption)}
-            turnOpen={turnOpen}
-            sx={contentColumnSx}
-          />
-
-          <Composer
-            sessionId={activeId}
-            disabled={!activeId || creatingCode}
-            disabledPlaceholder={disabledPlaceholder}
-            streaming={turnOpen}
-            attachments={draft}
-            blockedReason={blockedReason}
-            blockedAction={blockedAction}
-            blockedNotice={blockedNotice}
-            // Blocked rather than refused: a refused send has already cleared the box.
-            notReady={
-              auth?.reauthRequired && !(conversation.session && isLocalModel(conversation.session.model))
-                ? 'Sign in'
-                : unbound
-                  ? 'No folder'
+            <Composer
+              sessionId={activeId}
+              disabled={!activeId || creatingCode}
+              disabledPlaceholder={disabledPlaceholder}
+              streaming={turnOpen}
+              attachments={draft}
+              blockedReason={blockedReason}
+              blockedAction={blockedAction}
+              blockedNotice={blockedNotice}
+              // Blocked rather than refused: a refused send has already cleared the box.
+              notReady={
+                auth?.reauthRequired && !(conversation.session && isLocalModel(conversation.session.model))
+                  ? 'Sign in'
+                  : unbound
+                    ? 'No folder'
+                    : null
+              }
+              usage={composerUsage}
+              contextStatus={
+                <ContextRing
+                  tokens={composerUsage.contextSnapshot?.inputTokens ?? composerUsage.contextTokens}
+                  limit={composerUsage.contextLimit}
+                  modelId={conversation.session?.model ?? null}
+                  promptCache={promptCache}
+                  streaming={turnOpen}
+                  hasReply={hasReply}
+                />
+              }
+              placeholder={
+                conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'
+              }
+              onSend={text => void onSend(text)}
+              onStop={conversation.stop}
+              onRunCommand={(name, args) => void conversation.runCommand(name, args)}
+              onBrowseSkillMarket={() => openSkillMarket()}
+              // A Code session shares folders from its workspace controls instead. Both must say
+              // Chat: for a frame after a mode switch, the open session is still the old mode's.
+              addFolder={
+                mode === 'chat' && (conversation.session?.mode ?? 'chat') === 'chat'
+                  ? { onClick: () => void addFolder(), disabled: opening }
                   : null
-            }
-            usage={composerUsage}
-            contextStatus={
-              <ContextRing
-                tokens={composerUsage.contextSnapshot?.inputTokens ?? composerUsage.contextTokens}
-                limit={composerUsage.contextLimit}
-                modelId={conversation.session?.model ?? null}
-                promptCache={promptCache}
-                streaming={turnOpen}
-                hasReply={hasReply}
-              />
-            }
-            placeholder={
-              conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'
-            }
-            onSend={text => void onSend(text)}
-            onStop={conversation.stop}
-            onRunCommand={(name, args) => void conversation.runCommand(name, args)}
-            onBrowseSkillMarket={() => openSkillMarket()}
-            // A Code session shares folders from its workspace controls instead. Both must say
-            // Chat: for a frame after a mode switch, the open session is still the old mode's.
-            addFolder={
-              mode === 'chat' && (conversation.session?.mode ?? 'chat') === 'chat'
-                ? { onClick: () => void addFolder(), disabled: opening }
-                : null
-            }
-            sessionMode={conversation.session?.mode ?? 'chat'}
-            suggestion={nextPrompt.suggestion}
-            onSuggestionDismissed={nextPrompt.dismiss}
-            queued={conversation.queued}
-            onCancelQueued={conversation.cancelQueued}
-            onSendQueuedNow={conversation.sendQueuedNow}
-            returned={conversation.returned}
-            onReturnedConsumed={conversation.clearReturned}
-            fill={composerFill}
-            onFillConsumed={clearComposerFill}
-            focusRequest={composerFocus}
-            skills={skills}
-            mentionSessions={sessions}
-            leading={
-              <>
-                <ApprovalModePill
-                  mode={conversation.session?.approvalMode ?? 'ask'}
-                  disabled={!activeId}
-                  onSelect={mode => void conversation.setApprovalMode(mode)}
-                />
-                {orchestrateCapable && (
-                  <OrchestratePill on={delegating} disabled={!activeId} onChange={on => void setOrchestrate(on)} />
-                )}
-              </>
-            }
-            footer={
-              <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
-                <ModelPicker
-                  catalog={catalog}
-                  modelId={conversation.session?.model ?? null}
-                  disabled={!activeId}
-                  onSelect={model => void conversation.setModel(model)}
-                  noLocal={noLocal}
-                  local={localMode}
-                  onOpenModels={() => setScreen('models')}
-                  switchCredits={model =>
-                    modelSwitchCredits(model, composerUsage.contextTokens ?? 0, cacheTtlFor(model))
-                  }
-                  servers={savedServers}
-                  hasHistory={conversation.messages.length > 0}
-                  sessionId={activeId}
-                />
-                <ReasoningEffortPicker
-                  models={catalog.models}
-                  modelId={conversation.session?.model ?? null}
-                  effort={conversation.session?.reasoningEffort ?? 'default'}
-                  defaultEffort={defaultEffort}
-                  disabled={!activeId}
-                  onSelect={effort => void conversation.setReasoningEffort(effort)}
-                />
-                {/* One per chat: Mod+1-9 switches chats from inside the dialog, and its edits belong to the old one. */}
-                <GenerationSettingsPicker
-                  key={activeId ?? ''}
-                  model={modelOption}
-                  generation={conversation.session?.generation}
-                  modelDefaults={modelDefaults ?? undefined}
-                  effort={conversation.session?.reasoningEffort ?? 'default'}
-                  disabled={!activeId}
-                  onChange={conversation.setGeneration}
-                />
-                <PromptCacheTtlPicker
-                  model={modelOption}
-                  ttl={sessionCacheTtl}
-                  contextTokens={composerUsage.contextTokens ?? 0}
-                  disabled={!activeId}
-                  onSelect={ttl => void conversation.setPromptCacheTtl(ttl)}
-                />
-              </Stack>
-            }
-          />
+              }
+              sessionMode={conversation.session?.mode ?? 'chat'}
+              suggestion={nextPrompt.suggestion}
+              onSuggestionDismissed={nextPrompt.dismiss}
+              queued={conversation.queued}
+              onCancelQueued={conversation.cancelQueued}
+              onSendQueuedNow={conversation.sendQueuedNow}
+              returned={conversation.returned}
+              onReturnedConsumed={conversation.clearReturned}
+              fill={composerFill}
+              onFillConsumed={clearComposerFill}
+              focusRequest={composerFocus}
+              skills={skills}
+              mentionSessions={sessions}
+              leading={
+                <>
+                  <ApprovalModePill
+                    mode={conversation.session?.approvalMode ?? 'ask'}
+                    disabled={!activeId}
+                    onSelect={mode => void conversation.setApprovalMode(mode)}
+                  />
+                  {orchestrateCapable && (
+                    <OrchestratePill on={delegating} disabled={!activeId} onChange={on => void setOrchestrate(on)} />
+                  )}
+                </>
+              }
+              footer={
+                <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
+                  <ModelPicker
+                    catalog={catalog}
+                    modelId={conversation.session?.model ?? null}
+                    disabled={!activeId}
+                    onSelect={model => void conversation.setModel(model)}
+                    noLocal={noLocal}
+                    local={localMode}
+                    onOpenModels={() => setScreen('models')}
+                    switchCredits={model =>
+                      modelSwitchCredits(model, composerUsage.contextTokens ?? 0, cacheTtlFor(model))
+                    }
+                    servers={savedServers}
+                    hasHistory={conversation.messages.length > 0}
+                    sessionId={activeId}
+                  />
+                  <ReasoningEffortPicker
+                    models={catalog.models}
+                    modelId={conversation.session?.model ?? null}
+                    effort={conversation.session?.reasoningEffort ?? 'default'}
+                    defaultEffort={defaultEffort}
+                    disabled={!activeId}
+                    onSelect={effort => void conversation.setReasoningEffort(effort)}
+                  />
+                  {/* One per chat: Mod+1-9 switches chats from inside the dialog, and its edits belong to the old one. */}
+                  <GenerationSettingsPicker
+                    key={activeId ?? ''}
+                    model={modelOption}
+                    generation={conversation.session?.generation}
+                    modelDefaults={modelDefaults ?? undefined}
+                    effort={conversation.session?.reasoningEffort ?? 'default'}
+                    disabled={!activeId}
+                    onChange={conversation.setGeneration}
+                  />
+                  <PromptCacheTtlPicker
+                    model={modelOption}
+                    ttl={sessionCacheTtl}
+                    contextTokens={composerUsage.contextTokens ?? 0}
+                    disabled={!activeId}
+                    onSelect={ttl => void conversation.setPromptCacheTtl(ttl)}
+                  />
+                </Stack>
+              }
+            />
+          </Box>
 
           {terminalOpen && activeId && (
             <TerminalPanel

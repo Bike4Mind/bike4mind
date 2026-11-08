@@ -7,7 +7,7 @@ import {
   SIGNUP_TZ_OFFSET_MESSAGE,
   SIGNUP_VERDICTS_MAX_IDS,
   signupTzOffsetSchema,
-} from '@client/app/utils/signupSignals';
+} from '@bike4mind/server-utils/app/utils/signupSignals';
 import { getSignupVerdicts } from '@server/users/signupTimeseries';
 
 // ms. Room for clock skew between the server that answered the chart and this one.

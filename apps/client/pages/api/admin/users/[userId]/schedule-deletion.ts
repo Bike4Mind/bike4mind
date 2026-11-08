@@ -1,7 +1,7 @@
 import { BadRequestError, NotFoundError, assertCanActOnAdminTarget, canAccessAdmin } from '@bike4mind/common';
 import { userRepository } from '@bike4mind/database';
 import { adminApi } from '@server/middlewares/adminApi';
-import { denySelfAdminAction, isSelfOrImpersonator, parseAdminActionReason } from '@server/utils/adminAudit';
+import { denySelfAdminAction, isSelfOrImpersonator, parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
 import { getApprovalPolicy, requestApproval } from '@server/admin/approvals/service';
 import { ScheduleDeletionSchema, scheduleDeletionAsAdmin } from '@server/admin/scheduleDeletionAsAdmin';
 

@@ -19,6 +19,8 @@ const m = vi.hoisted(() => ({
   settle: vi.fn(),
   complete: vi.fn(),
   models: [] as { id: string; supportsTools: boolean }[],
+  substitute: vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined),
+  getLlm: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -29,7 +31,7 @@ vi.mock('@bike4mind/database', () => ({ apiKeyRepository: {}, adminSettingsRepos
 vi.mock('@bike4mind/services', () => ({ apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) } }));
 vi.mock('@bike4mind/llm-adapters', () => ({
   getAvailableModels: async () => m.models,
-  getLlmByModel: () => ({ complete: m.complete }),
+  getLlmByModel: (...args: unknown[]) => (m.getLlm(...args), { complete: m.complete }),
 }));
 vi.mock('@server/billing/meterPlatformCompletion', async () => ({
   ...(await import('@bike4mind/services/billing/completionMeter')),
@@ -41,14 +43,16 @@ vi.mock('@server/billing/meterPlatformCompletion', async () => ({
   }),
   completionRequestCeilingUsd: (...args: unknown[]) => m.ceiling(...args),
   reserveCompletionCredits: (...args: unknown[]) => m.reserve(...args),
+  resolveShadowSubstitute: (...args: unknown[]) => m.substitute(...args),
   completionUsd: (
-    _model: unknown,
+    model: { id: string },
     u: { inputTokens?: number; outputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number }
   ) =>
-    (u.inputTokens ?? 0) * 0.001 +
-    (u.outputTokens ?? 0) * 0.002 +
-    (u.cacheReadInputTokens ?? 0) * 0.0001 +
-    (u.cacheCreationInputTokens ?? 0) * 0.00125,
+    ((u.inputTokens ?? 0) * 0.001 +
+      (u.outputTokens ?? 0) * 0.002 +
+      (u.cacheReadInputTokens ?? 0) * 0.0001 +
+      (u.cacheCreationInputTokens ?? 0) * 0.00125) *
+    (model.id === 'cheap' ? 0.1 : 1),
   settleCompletion: (_reservation: unknown, _req: unknown, charge: unknown) => m.settle(charge),
 }));
 
@@ -64,6 +68,7 @@ async function call() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  m.substitute.mockResolvedValue(undefined);
   m.denied.clear();
   m.models = [
     { id: ChatModels.CLAUDE_4_6_SONNET, supportsTools: true, backend: 'anthropic' },
@@ -131,6 +136,8 @@ describe('POST /api/lattice/chat metering', () => {
       model: ChatModels.CLAUDE_4_6_SONNET,
       provider: 'anthropic',
       usd: 100 * 0.001 + 50 * 0.002,
+      costUsd: 100 * 0.001 + 50 * 0.002,
+      executed: expect.objectContaining({ id: ChatModels.CLAUDE_4_6_SONNET }),
       inputTokens: 100,
       outputTokens: 50,
     });
@@ -168,6 +175,8 @@ describe('POST /api/lattice/chat metering', () => {
       model: ChatModels.CLAUDE_4_6_SONNET,
       provider: 'anthropic',
       usd: 100 * 0.001 + 50 * 0.002,
+      costUsd: 100 * 0.001 + 50 * 0.002,
+      executed: expect.objectContaining({ id: ChatModels.CLAUDE_4_6_SONNET }),
       inputTokens: 100,
       outputTokens: 50,
     });
@@ -187,5 +196,72 @@ describe('POST /api/lattice/chat metering', () => {
     await expect(call()).rejects.toMatchObject({ statusCode: 403 });
     expect(m.reserve).not.toHaveBeenCalled();
     expect(m.complete).not.toHaveBeenCalled();
+  });
+
+  describe('for a restricted caller whose model is substituted', () => {
+    const cheap = { id: 'cheap', backend: 'openai', supportsTools: true };
+    const usd = 100 * 0.001 + 50 * 0.002;
+
+    beforeEach(() => m.substitute.mockResolvedValue(cheap));
+
+    it('runs a tool-capable substitute, bills the requested model and returns the requested id', async () => {
+      const res = await call();
+
+      expect(m.substitute).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ id: ChatModels.CLAUDE_4_6_SONNET }),
+        m.models,
+        { requireTools: true }
+      );
+      expect(m.getLlm).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ modelInfo: cheap }));
+      expect(m.complete.mock.calls[0][0]).toBe('cheap');
+      expect(m.complete.mock.calls[0][2]).toMatchObject({ modelIdentityId: ChatModels.CLAUDE_4_6_SONNET });
+      expect(m.settle).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          model: ChatModels.CLAUDE_4_6_SONNET,
+          provider: 'anthropic',
+          usd: expect.closeTo(usd, 12),
+          costUsd: expect.closeTo(usd * 0.1, 12),
+          executed: cheap,
+        })
+      );
+      expect(res._getJSONData().model).toBe(ChatModels.CLAUDE_4_6_SONNET);
+    });
+
+    it('splits credits and cost when the stream fails after reporting usage', async () => {
+      m.complete.mockImplementation(async (_model, _messages, _opts, callback) => {
+        await callback(['Partial answer'], { inputTokens: 100, outputTokens: 50 });
+        throw new Error('stream disconnected');
+      });
+
+      await expect(call()).rejects.toThrow('stream disconnected');
+
+      expect(m.settle).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          usd: expect.closeTo(usd, 12),
+          costUsd: expect.closeTo(usd * 0.1, 12),
+          executed: cheap,
+        })
+      );
+    });
+
+    it('splits credits and cost on the ceilings when no usage is reported', async () => {
+      m.ceiling.mockImplementation((model: unknown) => ((model as { id: string }).id === 'cheap' ? 0.1 : 1));
+      m.complete.mockImplementation(async (_model, _messages, _opts, cb) => {
+        await cb(['hello'], {});
+      });
+
+      await call();
+
+      expect(m.settle).toHaveBeenCalledWith(expect.objectContaining({ usd: 1, costUsd: 0.1, executed: cheap }));
+    });
+  });
+
+  it('runs the requested model with cost equal to credits when nothing is substituted', async () => {
+    const res = await call();
+
+    expect(m.complete.mock.calls[0][0]).toBe(ChatModels.CLAUDE_4_6_SONNET);
+    expect(m.complete.mock.calls[0][2]).not.toHaveProperty('modelIdentityId');
+    expect(res._getJSONData().model).toBe(ChatModels.CLAUDE_4_6_SONNET);
   });
 });

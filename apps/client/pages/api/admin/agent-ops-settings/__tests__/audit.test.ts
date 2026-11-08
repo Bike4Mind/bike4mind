@@ -52,7 +52,7 @@ vi.mock('@bike4mind/utils', () => ({
 }));
 vi.mock('@client/app/utils/agentOpsModels', () => ({ agentOpsModelRejection: vi.fn() }));
 vi.mock('@client/server/utils/modelCatalogOptions', () => ({ modelCatalogListingOptions: vi.fn() }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import settingsHandler from '../../agent-ops-settings';
 import seed from '../seed';

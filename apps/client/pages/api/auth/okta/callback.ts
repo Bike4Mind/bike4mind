@@ -137,7 +137,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     );
 
     if (!stateResult.valid) {
-      Logger.error('[Okta Callback] Invalid state token:', stateResult.reason);
+      Logger.warn('[Okta Callback] Invalid state token:', stateResult.reason);
       await authFailLogRepository.create({
         strategy: 'okta',
         ip,
@@ -155,7 +155,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     // PKCE verifier travels in a browser-bound HttpOnly cookie, not in state.
     const codeVerifier = readPkceVerifierCookie(req);
     if (!codeVerifier) {
-      Logger.error('[Okta Callback] Missing PKCE code verifier cookie');
+      Logger.warn('[Okta Callback] Missing PKCE code verifier cookie');
       return res.redirect('/login?error=invalid_state');
     }
 

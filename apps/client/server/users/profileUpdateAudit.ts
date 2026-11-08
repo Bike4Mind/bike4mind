@@ -1,7 +1,7 @@
 import type { AuditChange, AuditTarget } from '@bike4mind/common';
 import { User } from '@bike4mind/database';
 import { adminAuditService } from '@bike4mind/services';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 type AuditRequest = Parameters<typeof recordAdminActionFromRequest>[0];
 

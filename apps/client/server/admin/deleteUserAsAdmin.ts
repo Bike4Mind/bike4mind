@@ -11,9 +11,9 @@ import {
 import { z } from 'zod';
 import type { Request } from 'express';
 import { escapeHtml } from '@client/app/utils/htmlEscape';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { hardDeleteUser } from '@server/services/hardDeleteUser';
-import { isSelfOrImpersonator, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { isSelfOrImpersonator, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { subscriptionCancellationAudit } from '@server/billing/cancelAccountSubscriptions';
 import { approvalDetails } from '@server/admin/creditGrants/approval';
 

@@ -17,7 +17,7 @@ import { agentExecutionRepository, Quest } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { materializePromptMetaSession, type PromptMeta } from '@bike4mind/common';
 import { createAgentToolEchoMarker, persistedExecutionSteps } from '@bike4mind/server-utils/utils/markAgentToolEchoes';
-import { persistAgentArtifacts } from './persistAgentArtifacts';
+import { persistAgentArtifacts } from '@bike4mind/server-utils/utils/persistAgentArtifacts';
 
 export async function persistRunAsQuest(
   executionId: string,
@@ -188,7 +188,7 @@ export async function persistRunAsQuest(
     // on the event-bus module avoids a top-level dependency cycle with
     // queue-handler imports.
     try {
-      const { SessionEvents } = await import('@server/utils/eventBus');
+      const { SessionEvents } = await import('@bike4mind/server-utils/utils/eventBus');
       await Promise.all([
         SessionEvents.AutoName.publish({ sessionId: execution.sessionId, userId: execution.userId }),
         SessionEvents.Summarize.publish({

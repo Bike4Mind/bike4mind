@@ -1,6 +1,6 @@
 import type { AdminApproval } from '@bike4mind/common';
 import type { Request } from 'express';
-import { requestAuditWriter, type AdminAuditWriter } from '@server/utils/adminAudit';
+import { requestAuditWriter, type AdminAuditWriter } from '@bike4mind/server-utils/utils/adminAudit';
 
 export const approvalAuditDetails = (approval: AdminApproval) => ({
   id: approval.id,

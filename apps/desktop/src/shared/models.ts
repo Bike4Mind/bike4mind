@@ -81,12 +81,33 @@ export interface ModelFit {
 export interface MachineView {
   memoryKind: 'unified' | 'discrete' | 'cpu';
   totalMemoryBytes: number;
-  /** What ROCm can allocate on AMD unified memory; null on other unified memory and when no GPU could be measured. */
+  /**
+   * What ROCm can allocate on AMD unified memory, or the shared-memory limit of Intel integrated graphics on Windows;
+   * null on other unified memory and when no GPU could be measured.
+   */
   gpuMemoryBytes: number | null;
   gpuName: string | null;
   /** 'low' when the GPU's memory could not be measured or confirmed. */
   confidence: 'high' | 'low';
+  /** Vendor of the GPU the probe found; null without one, absent when not probed. */
+  gpuVendor?: 'nvidia' | 'amd' | 'intel' | 'apple' | null;
+  /** An Intel card on Linux of unknown memory, which a SYCL or Vulkan build of llama-server would read. */
+  vramNeedsLlamaServer?: boolean;
 }
+
+/** "an Intel GPU (NAME)", or the name alone when it already starts with "Intel", as the probe's names on Linux do. */
+export function anIntelGpu(name: string | null): string {
+  if (!name) return 'an Intel GPU';
+  return /^Intel\b/.test(name) ? `an ${name}` : `an Intel GPU (${name})`;
+}
+
+/** What makes an Intel card's memory readable on Linux, for a machine with `vramNeedsLlamaServer`. */
+export const LLAMA_SERVER_VRAM_HELP =
+  "Linux does not report an Intel card's memory. Install a llama.cpp SYCL or Vulkan build of llama-server, with its ggml-sycl or ggml-vulkan library in the same folder, or enter its path for a llama-server model server, then save it (or restart Desktop) to read it.";
+
+/** For Intel integrated graphics, which Ollama, the runtime Curated picks are rated for, does not use. */
+export const OLLAMA_SKIPS_INTEL_IGPU =
+  'Ollama does not use Intel integrated graphics, so picks and badges assume the CPU.';
 
 export interface LocalModelEntry {
   name: string;

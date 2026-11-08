@@ -10,8 +10,9 @@ export interface HardwareProfile {
   /** RAM the OS sees; a firmware VRAM carve-out is not part of it. */
   totalMemoryBytes: number;
   /**
-   * Summed across one vendor's GPUs. On AMD unified memory, what ROCm can allocate; null on Apple and NVIDIA unified
-   * memory, where the GPU shares `totalMemoryBytes`, or when unknown.
+   * Summed across one vendor's GPUs. On AMD unified memory, what ROCm can allocate; on Intel integrated graphics under
+   * Windows, the shared-memory limit; null on other unified memory, where the GPU shares `totalMemoryBytes`, or when
+   * unknown.
    */
   gpuMemoryBytes: number | null;
   gpuName: string | null;
@@ -62,6 +63,10 @@ export const FIT_CONSTANTS = {
   // Kept free per device: llama-server's 1 GiB --fit-target on a GPU, plus 1 GiB on discrete for the CUDA context,
   // the display and other GPU clients (unmeasured); on a CPU, runner memory outside its buffers (38 MiB measured).
   marginBytes: { cpu: 256 * MIB, unified: GIB, discrete: 2 * GIB },
+  // Added per Intel device, outside what --fit measures: ggml-sycl dequantizes a whole weight matrix to F16 in its
+  // uncapped pool for batched matmuls and caches it at 1.05x (ggml-sycl.cpp), 470 MiB for an 8192 x 28672 FFN. From
+  // source, not measured. Vulkan's prealloc buffers also grow outside --fit, so it applies to any Intel GPU.
+  intelPoolBytes: 512 * MIB,
   // Embedding widths per token that bound the measured Mamba2 and gated delta net loads.
   recurrentActivationWidths: 20,
   // Other recurrent kinds keep the flat figure used before measuring; MiniMax's ub x ub decay matrices fit under it.
@@ -343,18 +348,49 @@ function splitDevices(hw: HardwareProfile): number {
   return hw.memoryKind === 'discrete' && hw.gpuMemoryBytes ? Math.max(1, hw.gpuCount) : 1;
 }
 
+const intelPool = (hw: Pick<HardwareProfile, 'gpuVendor'>) =>
+  hw.gpuVendor === 'intel' ? FIT_CONSTANTS.intelPoolBytes : 0;
+
 /** The headroom a plan keeps free on this machine; see FIT_CONSTANTS.marginBytes. */
 export function fitMarginBytes(hw: HardwareProfile): number {
   const { cpuOnly } = memoryBudgets(hw);
   if (cpuOnly) return FIT_CONSTANTS.marginBytes.cpu;
-  if (hw.memoryKind === 'unified') return FIT_CONSTANTS.marginBytes.unified;
+  if (hw.memoryKind === 'unified') return FIT_CONSTANTS.marginBytes.unified + intelPool(hw);
   // Without per-device VRAM, several GPUs are planned as an even split, each keeping its own margin.
-  return FIT_CONSTANTS.marginBytes.discrete * splitDevices(hw);
+  return (FIT_CONSTANTS.marginBytes.discrete + intelPool(hw)) * splitDevices(hw);
+}
+
+/**
+ * The `--fit-target` (MiB per device) llama-server needs to keep the headroom fitMarginBytes plans; null where its
+ * 1 GiB default already does.
+ */
+export function llamaServerFitTargetMiB(hw: Pick<HardwareProfile, 'gpuVendor'>): number | null {
+  const pool = intelPool(hw);
+  return pool > 0 ? (GIB + pool) / MIB : null;
+}
+
+/**
+ * The machine as Ollama uses it. Ollama drops integrated GPUs it reaches through Vulkan unless OLLAMA_IGPU_ENABLE=1
+ * (discover/runner.go), and Intel's are Vulkan-only there, so an Intel integrated GPU is planned as CPU only.
+ */
+export function ollamaHardware(hw: HardwareProfile): HardwareProfile {
+  if (hw.gpuVendor !== 'intel' || hw.memoryKind !== 'unified') return hw;
+  return { ...hw, memoryKind: 'cpu', gpuMemoryBytes: null, gpuName: null, gpuCount: 0, gpuVendor: null };
 }
 
 /** Whether models run from system RAM on this machine: no GPU, or a discrete GPU of unknown memory. */
 export function isCpuOnly(hw: HardwareProfile): boolean {
   return memoryBudgets(hw).cpuOnly;
+}
+
+/**
+ * An Intel card on Linux of unknown memory: the kernel does not report it, and the probe reads it from a SYCL or Vulkan
+ * build of llama-server (`--list-devices`) when one is found (local-models hardware.ts).
+ */
+export function vramNeedsLlamaServer(hw: HardwareProfile): boolean {
+  return (
+    hw.platform === 'linux' && hw.memoryKind === 'discrete' && hw.gpuVendor === 'intel' && hw.gpuMemoryBytes === null
+  );
 }
 
 export function contextTarget(arch: ModelArch, mode: FitMode, contextCap?: number): number {
@@ -377,8 +413,8 @@ export interface MemoryBudgets {
 
 export function memoryBudgets(hw: HardwareProfile): MemoryBudgets {
   if (hw.memoryKind === 'unified') {
-    // AMD reports what ROCm can allocate, which a firmware carve-out keeps outside totalMemoryBytes. hardwareClass in
-    // tiers.ts classes the Curated tier by the same pool.
+    // AMD reports what ROCm can allocate, which a firmware carve-out keeps outside totalMemoryBytes; Intel on Windows
+    // its shared-memory limit. hardwareClass in tiers.ts classes the Curated tier by the same pool.
     const fraction =
       hw.totalMemoryBytes >= FIT_CONSTANTS.unifiedLargeMinBytes
         ? FIT_CONSTANTS.unifiedLargeFraction
@@ -619,7 +655,7 @@ export function estimateFit(input: FitInput): FitResult {
   if (input.context !== undefined) validateContext(input.context, arch);
   const target = contextTarget(arch, input.mode, input.contextCap);
   const floor = contextFloor(arch, input.mode, input.contextCap);
-  const planner = new Planner(input);
+  const planner = new Planner(forRuntime(input));
   const contexts = candidateContexts(target, input.mode);
   const result = search(planner, contexts, target, floor);
   if (input.context === undefined) return result;
@@ -627,6 +663,10 @@ export function estimateFit(input: FitInput): FitResult {
   const atRequested = planner.best(input.context);
   const requested = atRequested ? { ...atRequested, fits: true } : { ...planner.refused(input.context), fits: false };
   return { ...result, requested };
+}
+
+function forRuntime<T extends Omit<FitInput, 'context'>>(input: T): T {
+  return input.runtime.kind === 'ollama' ? { ...input, hardware: ollamaHardware(input.hardware) } : input;
 }
 
 function search(planner: Planner, contexts: number[], target: number, floor: number): FitResult {
@@ -675,7 +715,7 @@ function search(planner: Planner, contexts: number[], target: number, floor: num
 /** The plan at the target and every preset below it, smallest first; `fits` is false where nothing fits. */
 export function contextOptions(input: Omit<FitInput, 'context'>): Array<FitPlan & { fits: boolean }> {
   const { arch } = input.model;
-  const planner = new Planner(input);
+  const planner = new Planner(forRuntime(input));
   const target = contextTarget(arch, input.mode, input.contextCap);
   return candidateContexts(target, input.mode)
     .reverse()
@@ -705,6 +745,9 @@ export interface SizeFit {
   budgetBytes: number;
   /** Bytes past the budget, margin included; 0 when it all fits. */
   offloadBytes: number;
+  /** The headroom and RAM pool of the machine as Ollama uses it (ollamaHardware). */
+  marginBytes: number;
+  ramPoolBytes: number;
   cpuOnly: boolean;
   context: number;
 }
@@ -724,9 +767,11 @@ const sizeOnlyArch = (context: number): ModelArch => ({
 
 /**
  * A rough Ollama verdict from a download's size alone, for a model whose layer shapes are unknown: the compute
- * and margin terms on top of the file, with headroom for the context memory it cannot size.
+ * and margin terms on top of the file, with headroom for the context memory it cannot size. Planned on the machine
+ * as Ollama uses it (ollamaHardware).
  */
-export function estimateFitFromSize(sizeBytes: number, hardware: HardwareProfile, context: number): SizeFit {
+export function estimateFitFromSize(sizeBytes: number, machine: HardwareProfile, context: number): SizeFit {
+  const hardware = ollamaHardware(machine);
   const tokens = Math.max(1, Math.round(context));
   const { gpu: budgetBytes, ramPool, cpuOnly } = memoryBudgets(hardware);
   const computeBytes = computeBufferBytes(
@@ -736,9 +781,11 @@ export function estimateFitFromSize(sizeBytes: number, hardware: HardwareProfile
     { memoryKind: cpuOnly ? 'cpu' : hardware.memoryKind }
   );
   const needBytes = sizeBytes + computeBytes;
-  const plannedBytes = needBytes + fitMarginBytes(hardware);
+  const marginBytes = fitMarginBytes(hardware);
+  const plannedBytes = needBytes + marginBytes;
   const over = plannedBytes - budgetBytes;
-  const base = { needBytes, budgetBytes, offloadBytes: Math.max(0, over), cpuOnly, context: tokens };
+  const offloadBytes = Math.max(0, over);
+  const base = { needBytes, budgetBytes, offloadBytes, marginBytes, ramPoolBytes: ramPool, cpuOnly, context: tokens };
   // Only weights move to RAM in a layer split, and the context room a resident fit keeps must still be free.
   if (over > 0) {
     const roomy = over <= ramPool - budgetBytes * (1 - SIZE_HEADROOM);

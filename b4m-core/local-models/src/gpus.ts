@@ -70,13 +70,16 @@ export interface DetectedGpu {
   memoryBytes: number | null;
   /**
    * Strix Halo, which ROCm serves from its firmware carve-out (memory the OS does not see) or from GTT in the RAM the
-   * OS sees: GTT on kernels 6.10 to 6.14, and from 6.15 only when GTT is larger than the carve-out.
+   * OS sees: GTT on kernels 6.10 to 6.14, and from 6.15 only when GTT is larger than the carve-out. `system`: Intel
+   * integrated graphics, which allocate from the RAM the OS sees and leave `memoryBytes` null.
    */
-  sharedMemory?: 'carve-out' | 'gtt';
+  sharedMemory?: 'carve-out' | 'gtt' | 'system';
   /** The kernel version could not be read, so `memoryBytes` is the smaller of the carve-out and the GTT budget. */
   memoryUnconfirmed?: true;
-  /** In use now, from amdgpu's sysfs counter for the pool behind `memoryBytes`; absent when not exposed. */
+  /** In use now, from amdgpu's sysfs counter or llama-server's device list; absent when not exposed. */
   memoryUsedBytes?: number;
+  /** The PCI device id (`e223`) of a discrete Intel card, which some drivers put in the name llama-server lists. */
+  pciDeviceId?: string;
 }
 
 interface PciGpu extends DetectedGpu {
@@ -158,7 +161,10 @@ async function reachable(root: string, dir: string, driver: string): Promise<boo
 }
 
 type Classified = { gpu: PciGpu; reachable: boolean } | null | undefined;
-type GpuMemory = Pick<DetectedGpu, 'memoryBytes' | 'sharedMemory' | 'memoryUnconfirmed' | 'memoryUsedBytes'>;
+type GpuMemory = Pick<
+  DetectedGpu,
+  'memoryBytes' | 'sharedMemory' | 'memoryUnconfirmed' | 'memoryUsedBytes' | 'pciDeviceId'
+>;
 
 async function usedBytes(dir: string, file: string): Promise<Pick<DetectedGpu, 'memoryUsedBytes'>> {
   const text = await readText(join(dir, file));
@@ -259,11 +265,13 @@ async function linuxGpu(
       ...(await usedBytes(dir, 'mem_info_vram_used')),
     });
   }
+  if (driver !== 'i915' && driver !== 'xe') return null;
   // Intel integrated graphics sit on the root bus (00:02.0); discrete Arc cards hang off a PCIe port.
   const bus = parseInt(address.split(':')[1] ?? '', 16);
-  if ((driver !== 'i915' && driver !== 'xe') || bus === 0) return null;
-  // Current xe/i915 expose memory sizes through DRM ioctls, not a VRAM sysfs attribute.
-  return classified({ memoryBytes: null });
+  // Neither driver puts VRAM size or use in sysfs (memory regions are an ioctl, fdinfo is per client); see hardware.ts.
+  return classified(
+    bus === 0 ? { memoryBytes: null, sharedMemory: 'system' } : { memoryBytes: null, pciDeviceId: deviceId }
+  );
 }
 
 async function pciIdsLookup(root: string): Promise<(vendorId: string, deviceId: string) => string | null> {
@@ -310,7 +318,12 @@ export async function scanLinuxGpus(root = '/', env: Environment = process.env):
     addresses.map(address => linuxGpu(root, join(devicesDir, address), address, kfd, rule).catch(() => undefined))
   );
   if (found.includes(undefined)) return null;
-  const usable = found.filter((entry): entry is NonNullable<Classified> => entry !== null);
+  // An Intel iGPU this process cannot open is of no use to Ollama or a llama-server it starts either, so leave it
+  // out; a container may also be handed only the render node of the card beside it.
+  const usable = found.filter(
+    (entry): entry is NonNullable<Classified> =>
+      entry != null && (entry.reachable || entry.gpu.sharedMemory !== 'system')
+  );
   if (usable.some(entry => !entry.reachable)) return null;
   const gpus = usable.map(entry => entry.gpu);
   const lookup = gpus.some(gpu => !gpu.name) ? await pciIdsLookup(root) : null;
@@ -392,7 +405,10 @@ export function parseWindowsGpus(stdout: string): DetectedGpu[] | null {
     const ids = /^PCI\\VEN_([0-9A-F]{4})&DEV_([0-9A-F]{4})/i.exec(pnp);
     const vendor = ids ? VENDORS[ids[1].toLowerCase()] : undefined;
     if (disabled || !ids || !vendor) return [];
-    const name = typeof fields.name === 'string' && fields.name.trim() ? fields.name.trim() : null;
+    const name =
+      typeof fields.name === 'string' && fields.name.trim()
+        ? fields.name.trim()
+        : `${VENDOR_LABELS[vendor]} GPU [${ids[1].toLowerCase()}:${ids[2].toLowerCase()}]`;
     const adapterRam = positive(fields.adapterRam);
     const memoryBytes =
       positive(fields.memoryBytes) ?? (adapterRam !== null && adapterRam < ADAPTER_RAM_CAP ? adapterRam : null);
@@ -408,8 +424,9 @@ export function parseWindowsGpus(stdout: string): DetectedGpu[] | null {
       }
       // Pre-GCN Radeon HD parts have neither a ROCm nor a Vulkan backend.
       if (name && /\bHD\s*(?:[2-6]\d{3}|7[0-6]\d{2})\b/i.test(name)) return [];
-      return small || (name !== null && isAmdApuName(name)) ? [] : gpu;
+      return small || isAmdApuName(name) ? [] : gpu;
     }
-    return bus === 0 || (bus === null && small) ? [] : gpu;
+    // qwMemorySize on Intel integrated graphics is the small DVMT carve-out; what they use is shared system memory.
+    return bus === 0 || (bus === null && small) ? [{ vendor, name, memoryBytes: null, sharedMemory: 'system' }] : gpu;
   });
 }

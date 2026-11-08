@@ -2,6 +2,7 @@ import { executeTool } from '../../../llm/ToolRouter.js';
 import type { ApiClient } from '../../../auth/ApiClient.js';
 import { sanitizeToolOutput } from '../../../utils/toolOutputSanitizer.js';
 import type { ToolArgs } from '../gatewayTypes.js';
+import { SESSION_ENDED_MESSAGE } from '../sessionCancellation.js';
 
 /**
  * Run the tool once and redact, then cap, what it produced. Every execution in the gateway
@@ -14,8 +15,10 @@ export async function executeSanitized(
   toolName: string,
   args: ToolArgs,
   apiClient: ApiClient,
-  originalFn: (args: unknown) => Promise<string>
+  originalFn: (args: unknown) => Promise<string>,
+  isCancelled?: () => boolean
 ): Promise<string> {
+  if (isCancelled?.()) return SESSION_ENDED_MESSAGE;
   try {
     return sanitizeToolOutput(await executeTool(toolName, args, apiClient, originalFn));
   } catch (error) {

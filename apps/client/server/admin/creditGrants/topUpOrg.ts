@@ -8,7 +8,7 @@ import { NotFoundError } from '@bike4mind/utils';
 import { creditService } from '@bike4mind/services';
 import { type AdminApproval, CreditHolderType } from '@bike4mind/common';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
 import { Resource } from 'sst';
 

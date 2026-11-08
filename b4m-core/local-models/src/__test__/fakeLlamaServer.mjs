@@ -10,7 +10,9 @@
 // FAKE_LLAMA_PUBLIC_MODELS: /v1/models answers without the key, as b5501 does. FAKE_LLAMA_NO_KEY: ignore the key.
 // FAKE_LLAMA_GRANDCHILD: start a child, write its pid here. FAKE_LLAMA_PID_FILE: write this process's pid here.
 // FAKE_LLAMA_RECORD: write the argv and environment names seen to this file.
-// FAKE_LLAMA_VERSION: the `--version` text after `version: `.
+// FAKE_LLAMA_VERSION: the `--version` text after `version: `; FAKE_LLAMA_BUILT_WITH: its `built with` compiler.
+// FAKE_LLAMA_DEVICES: `|`-separated `--list-devices` lines, such as `SYCL0: Intel(R) Arc(TM) Graphics (11605 MiB,
+// 11245 MiB free)`; none by default.
 // With --models-dir it is a router: no load, /props answers role router, /v1/models lists the dir's .gguf files.
 // FAKE_LLAMA_NO_ROUTER: refuse --models-dir as a build before router mode does. FAKE_LLAMA_NOT_ROUTER: no role.
 import { spawn } from 'node:child_process';
@@ -27,7 +29,12 @@ const fail = line => process.stderr.write(`0.00.000.000 E ${line}\n`);
 
 if (args.includes('--version')) {
   const version = process.env.FAKE_LLAMA_VERSION ?? '0.7.0-dev (build 11912, commit fake)';
-  process.stderr.write(`version: ${version}\nbuilt with fake for tests\n`);
+  process.stderr.write(`version: ${version}\nbuilt with ${process.env.FAKE_LLAMA_BUILT_WITH ?? 'fake for tests'}\n`);
+  process.exit(0);
+}
+if (args.includes('--list-devices')) {
+  const devices = (process.env.FAKE_LLAMA_DEVICES ?? '').split('|').filter(Boolean);
+  process.stdout.write(`Available devices:\n${devices.map(device => `  ${device}\n`).join('')}`);
   process.exit(0);
 }
 

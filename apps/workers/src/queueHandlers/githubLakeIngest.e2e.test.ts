@@ -44,7 +44,7 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: h.upload, delete: h.storageDelete }),
 }));
-vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({ finalizeBatchIfComplete: vi.fn() }));
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeBatchProgress', () => ({ finalizeBatchIfComplete: vi.fn() }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getSettingByName: async (key: string) =>
@@ -69,7 +69,7 @@ import { dispatch } from './githubLakeIngest';
 import {
   requestGitHubLakeDisconnect,
   revokeGitHubLakeConnection,
-} from '@server/integrations/github/dataLake/githubLakeConnection';
+} from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
 
 let mongo: MongoMemoryReplSet;
 const logger = {

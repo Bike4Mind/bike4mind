@@ -46,7 +46,7 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
 vi.mock('@bike4mind/database', () => ({
   dlqReplayLogRepository: { countAttempts: h.countAttempts, logReplay: h.logReplay },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import handler from '../replay';
 

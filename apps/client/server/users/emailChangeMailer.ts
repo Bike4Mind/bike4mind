@@ -5,7 +5,7 @@ import {
   buildEmailLogoImg,
   escapeHtml,
 } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 
 export type EmailChangeMessage = { to: string; subject: string; body: string };
 

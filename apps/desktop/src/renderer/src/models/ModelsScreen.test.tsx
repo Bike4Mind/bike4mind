@@ -699,6 +699,90 @@ describe('ModelsScreen curated', () => {
       { memoryKind: 'unified', totalMemoryBytes: 62 * GIB, gpuMemoryBytes: null, gpuName: null, confidence: 'low' },
       'This computer has 62 GiB of memory, shared with its GPU. How much of it the GPU can use could not be determined.',
     ],
+    [
+      'an NVIDIA GB10 by name, with no memory figure for its GPU',
+      {
+        memoryKind: 'unified',
+        totalMemoryBytes: 128 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'NVIDIA GB10',
+        confidence: 'high',
+        gpuVendor: 'nvidia',
+      },
+      'This computer has 128 GiB of memory, shared with its GPU (NVIDIA GB10).',
+    ],
+    [
+      'Intel integrated graphics on Linux by name, sharing the RAM',
+      {
+        memoryKind: 'unified',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'Intel Lunar Lake [Intel Arc Graphics 130V / 140V]',
+        confidence: 'high',
+        gpuVendor: 'intel',
+      },
+      'This computer has 32 GiB of memory, shared with its GPU (Intel Lunar Lake [Intel Arc Graphics 130V / 140V]). Ollama does not use Intel integrated graphics, so picks and badges assume the CPU.',
+    ],
+    [
+      'Intel integrated graphics on Windows by the half of RAM it can share',
+      {
+        memoryKind: 'unified',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: 16 * GIB,
+        gpuName: 'Intel(R) Iris(R) Xe Graphics',
+        confidence: 'high',
+        gpuVendor: 'intel',
+      },
+      'This computer has 32 GiB of RAM, and its GPU (Intel(R) Iris(R) Xe Graphics) can use 16 GiB of memory. Ollama does not use Intel integrated graphics, so picks and badges assume the CPU.',
+    ],
+    [
+      'an Intel card on Linux of unknown memory, with what makes it readable',
+      {
+        memoryKind: 'discrete',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'Intel GPU [8086:e223]',
+        confidence: 'low',
+        vramNeedsLlamaServer: true,
+      },
+      "This computer has 32 GiB of RAM and an Intel GPU [8086:e223] of unknown memory, so badges assume models run on the CPU. Linux does not report an Intel card's memory. Install a llama.cpp SYCL or Vulkan build of llama-server, with its ggml-sycl or ggml-vulkan library in the same folder, or enter its path for a llama-server model server, then save it (or restart Desktop) to read it.",
+    ],
+    [
+      'a named Intel card on Linux of unknown memory',
+      {
+        memoryKind: 'discrete',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'Intel Battlemage G31 [Arc Pro B70]',
+        confidence: 'low',
+        vramNeedsLlamaServer: true,
+      },
+      'This computer has 32 GiB of RAM and an Intel Battlemage G31 [Arc Pro B70] of unknown memory, so badges',
+    ],
+    [
+      'an Intel card named without a leading Intel',
+      {
+        memoryKind: 'discrete',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'NVIDIA GeForce RTX 4090 (Intel host)',
+        confidence: 'low',
+        vramNeedsLlamaServer: true,
+      },
+      'This computer has 32 GiB of RAM and an Intel GPU (NVIDIA GeForce RTX 4090 (Intel host)) of unknown memory, so badges',
+    ],
+    [
+      'any other GPU of unknown memory as no GPU memory',
+      {
+        memoryKind: 'discrete',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'NVIDIA GPU [10de:2684]',
+        confidence: 'low',
+        vramNeedsLlamaServer: false,
+      },
+      'This computer has 32 GiB of RAM and no GPU memory was detected, so badges assume models run on the CPU.',
+    ],
   ] satisfies [string, MachineView, string][])('describes %s', async (_label, machine, text) => {
     bridge.curated.machine = machine;
     await mount(undefined, 'curated');

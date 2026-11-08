@@ -6,7 +6,7 @@ import { createMocks } from 'node-mocks-http';
  * any repo call, the id param is validated before the lookup, a missing key
  * 404s before the reset, and a success clears the counters and writes the
  * audit event. The reset primitive itself (atomicity, per-counter failure
- * isolation) is covered by server/utils/apiKeyRateLimitCheck.test.ts and
+ * isolation) is covered by packages/server-utils/src/utils/apiKeyRateLimitCheck.test.ts and
  * apiKeyRateLimitReset.e2e.test.ts - only `resetApiKeyRateLimit` is mocked
  * here; `evaluateCounterLockout`, `resolveCounterLimit`, and
  * `MANAGEMENT_RATE_LIMIT` run for real so this route's ceiling-resolution
@@ -45,8 +45,8 @@ const findById = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: { findById } }));
 
 const resetApiKeyRateLimit = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/apiKeyRateLimitCheck', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/utils/apiKeyRateLimitCheck')>();
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/apiKeyRateLimitCheck')>();
   return { ...actual, resetApiKeyRateLimit };
 });
 
@@ -64,7 +64,7 @@ const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe }));
 
 const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 
 import '@pages/api/admin/user-api-keys/[id]/reset-rate-limit';
 

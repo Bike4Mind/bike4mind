@@ -94,7 +94,7 @@ const resolveStagePriceId = (staged: StagedPriceId): string => (isTestMode ? sta
 /**
  * [DELETION-FOOTPRINT] LibreOncology Stripe price (test + live modes), $19/mo
  * recurring. Single source of truth - also consumed by the SUBSCRIPTION_PLANS row
- * in apps/client/lib/userSubscriptions/constants.ts (keep them in sync via this
+ * in packages/server-utils/src/lib/userSubscriptions/constants.ts (keep them in sync via this
  * export, not by re-typing the ids).
  *
  * Account-tied price ids are sourced per-stage from NEXT_PUBLIC_* env vars with no

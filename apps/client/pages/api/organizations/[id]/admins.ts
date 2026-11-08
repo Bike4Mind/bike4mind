@@ -7,7 +7,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { isOrgOwnerOrPlatformAdmin, orgAclRowConfersMembership } from '@bike4mind/common';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
 
 const bodySchema = z.object({ adminUserIds: z.array(z.string().min(1)).max(50) });

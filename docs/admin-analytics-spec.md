@@ -117,7 +117,7 @@ Money
 - **Active user (day D)**: a counted user with at least one `usageevents` row (any feature, `status: 'ok'`) on UTC day D. Why `UsageEvent`: it is written for every billable AI call on every surface (web, CLI, desktop, API, agent), it is indexed on `createdAt`, and it has no TTL. CounterLog is a product-event stream with free-form `userId` and is used only for feature adoption. `lastActiveAt` is socket-driven and misses API users, so it is not used.
 - **DAU / WAU / MAU (day D)**: distinct active users on D / in the 7 UTC days ending D / in the 28 UTC days ending D. 28 rather than 30 so MAU windows hold the same weekdays.
 - **Stickiness**: average DAU over the range / MAU at the range end, as a percent.
-- **Legit signup / suspected signup**: `isSuspectedSignup(classifySignups(...))` from `apps/client/server/users/signupClassifier.ts` and `apps/client/app/utils/signupSignals.ts`, including the Gmail-aware signals from #6037. Users not yet classified are "unclassified", never folded into legit.
+- **Legit signup / suspected signup**: `isSuspectedSignup(classifySignups(...))` from `apps/client/server/users/signupClassifier.ts` and `packages/server-utils/src/app/utils/signupSignals.ts`, including the Gmail-aware signals from #6037. Users not yet classified are "unclassified", never folded into legit.
 - **Time zone**: all buckets are **UTC days** and **ISO weeks starting Monday UTC** (**D3**). Every chart subtitle says "UTC". The partial current day is drawn dashed and excluded from comparisons.
 
 ---

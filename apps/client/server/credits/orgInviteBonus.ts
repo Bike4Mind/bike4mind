@@ -11,7 +11,7 @@ import {
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { signupProtection } from '@server/auth/signupProtection';
+import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import { isPayingOrganization } from '@server/entitlements/orgPaidStanding';
 
 /**

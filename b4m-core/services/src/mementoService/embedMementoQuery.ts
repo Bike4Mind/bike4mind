@@ -1,11 +1,18 @@
 import {
+  bindEmbeddingModel,
+  buildEmbeddingRegistry,
+  embedOne,
+  embeddingBackendForModel,
+  resolveEmbeddingCredentials,
+} from '@bike4mind/utils/embeddingProviders';
+import {
   IAdminSettingsRepository,
   IApiKeyRepository,
   MEMENTO_EMBEDDING_ID,
   MEMENTO_EMBEDDING_MODEL,
   toMementoVector,
 } from '@bike4mind/common';
-import { EmbeddingFactory, getProviderFromModel, getSettingsByNames, resolveEmbeddingConfig } from '@bike4mind/utils';
+import { getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 
@@ -57,10 +64,10 @@ export async function embedMementoQuery(
     { logger: options?.logger }
   );
 
-  const provider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);
-  const { config, missing } = resolveEmbeddingConfig(provider, apiKeyTable);
+  const provider = embeddingBackendForModel(MEMENTO_EMBEDDING_MODEL);
+  const { config, missing } = resolveEmbeddingCredentials(provider, apiKeyTable);
   if (missing) return none;
 
-  const embeddingService = new EmbeddingFactory(config).createEmbeddingService(MEMENTO_EMBEDDING_MODEL);
-  return { vector: toMementoVector(await embeddingService.generateEmbedding(query)), model: MEMENTO_EMBEDDING_ID };
+  const embeddingService = bindEmbeddingModel(buildEmbeddingRegistry(config), MEMENTO_EMBEDDING_MODEL);
+  return { vector: toMementoVector(await embedOne(embeddingService, query)), model: MEMENTO_EMBEDDING_ID };
 }

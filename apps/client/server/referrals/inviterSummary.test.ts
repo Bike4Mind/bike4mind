@@ -27,7 +27,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: m.getSettingsMap,
   getSettingsValue: (key: string, settings: Record<string, string>, fallback = 0) => Number(settings[key] ?? fallback),
 }));
-vi.mock('./firstAnswerReward', () => ({ REFERRAL_REWARD_REASON: 'referral_reward' }));
+vi.mock('@bike4mind/server-utils/referrals/firstAnswerReward', () => ({ REFERRAL_REWARD_REASON: 'referral_reward' }));
 
 import { CREDIT_BALANCE_EVENT_TYPES } from '@bike4mind/database';
 import { getInviterSummary } from './inviterSummary';

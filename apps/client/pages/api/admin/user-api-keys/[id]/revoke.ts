@@ -3,7 +3,7 @@ import { withTransaction } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import {
   auditKeyRef,
   endKeyRealtimeConnections,
@@ -41,7 +41,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
         target,
         summary: `revoked API key ${key.keyPrefix}`,
         reason,
-        details: { ...auditKeyRef(key), keyName: key.name },
+        details: { ...auditKeyRef(key), keyName: key.name, scopes: key.scopes },
       });
     });
     await endKeyRealtimeConnections(key.id, req.logger);

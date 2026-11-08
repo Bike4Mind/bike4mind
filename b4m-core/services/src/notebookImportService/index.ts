@@ -88,7 +88,7 @@ export interface NotebookImportAdapters {
    * where the id comes from the export rather than being minted, so it can already be taken.
    *
    * Deliberately not named `artifactExists`, which is what the same question is called in
-   * apps/client/server/utils/persistAgentArtifacts.ts - there it means "an artifacts row exists"
+   * packages/server-utils/src/utils/persistAgentArtifacts.ts - there it means "an artifacts row exists"
    * and MUST stay that narrow, because that module tells a real collision apart from a repairable
    * orphan by exactly that difference. Two ports, one name, opposite safety properties.
    */

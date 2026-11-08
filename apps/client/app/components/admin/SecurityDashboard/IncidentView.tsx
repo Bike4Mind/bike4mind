@@ -3,7 +3,10 @@ import { Alert, Box, Button, Skeleton, Stack, Typography } from '@mui/joy';
 import type { UseQueryResult } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useSecurityIncidentSignals, useSecurityIncidentState, useSignupAnomaly } from '@client/app/hooks/data/admin';
-import { SIGNUP_TIMESERIES_RANGE_LABELS, type SignupTimeseriesRange } from '@client/app/utils/signupSignals';
+import {
+  SIGNUP_TIMESERIES_RANGE_LABELS,
+  type SignupTimeseriesRange,
+} from '@bike4mind/server-utils/app/utils/signupSignals';
 import { AnalyticsTermHelp } from '../EventMetrics/components/AnalyticsTermHelp';
 import { SignupChart } from '../Signups/SignupChart';
 import { useSignupTimeseries } from '../Signups/useSignupTimeseries';

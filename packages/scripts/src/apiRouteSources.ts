@@ -20,7 +20,7 @@ import {
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 export const API_DIR = 'apps/client/pages/api';
 const OPENAPI_DOCUMENT = 'apps/client/public/openapi.json';
-const SCOPE_SOURCE_DIRS = ['b4m-core/common/src', 'apps/client/server'];
+const SCOPE_SOURCE_DIRS = ['b4m-core/common/src', 'apps/client/server', 'packages/server-utils/src'];
 const SCOPE_SOURCE_PATTERN = /(UserApiKeyTypes|Scopes)\.ts$/;
 const SOURCE_PATTERN = /\.(ts|tsx)$/;
 

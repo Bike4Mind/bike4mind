@@ -154,7 +154,11 @@ export class CancelledError extends Error {
 
 /** Settles with `promise`, or rejects with `CancelledError` as soon as `signal` aborts. */
 export function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(new CancelledError());
+  if (signal.aborted) {
+    // Nothing else awaits `promise`, so its rejection would go unhandled.
+    promise.catch(() => undefined);
+    return Promise.reject(new CancelledError());
+  }
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(new CancelledError());
     signal.addEventListener('abort', onAbort, { once: true });

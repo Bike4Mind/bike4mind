@@ -8,7 +8,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
-import { signupProtection } from '@server/auth/signupProtection';
+import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { alertFraudBlock } from '@server/billing/fraudBlockAlert';
 import { reopenSettledPaymentApproval } from '@server/security/riskReviewAutoApproval';

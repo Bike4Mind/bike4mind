@@ -8,7 +8,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { assertSessionAccess } from '@bike4mind/server-utils/utils/sessionAccess';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { Request } from 'express';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 const handler = baseApi().post<Request<unknown, unknown, unknown, { id: string }>>(
   withRequestCompletionQuota(async (req, res) => {

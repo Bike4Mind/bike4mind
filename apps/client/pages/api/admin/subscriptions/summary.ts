@@ -6,7 +6,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import {
   ADMIN_SUBSCRIPTIONS_LIST_MAX,
   AdminSubscriptionsFilterSchema,
-} from '@client/app/utils/adminSubscriptionsFilter';
+} from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { adminSubscriptionsSummary } from '@server/admin/subscriptionsList/listAdminSubscriptions';
 import qs from 'qs';
 

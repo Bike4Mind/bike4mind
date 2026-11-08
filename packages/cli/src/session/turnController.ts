@@ -85,6 +85,11 @@ export interface TurnContext {
   workflowStores: WorkflowStores;
   /** Publish the turn's abort controller so the ESC handler / tavern can cancel it. */
   setAbortController: (controller: AbortController | null) => void;
+  /**
+   * The host's session generation, which a sign-in restart advances. A turn that ends after it moved neither
+   * records its cancellation nor runs the queued input as a turn of the old session.
+   */
+  sessionGeneration?: () => number;
 }
 
 /**
@@ -110,6 +115,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
   }
 
   store.setTurnInFlight(true);
+  const generation = ctx.sessionGeneration?.();
   try {
     let next: string | null = message;
     while (next !== null) {
@@ -123,6 +129,11 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
         logger.debug(`Turn failed outside its error handling: ${error instanceof Error ? error.stack : String(error)}`);
       } finally {
         releaseSession();
+      }
+      // Queued input was typed for the session a sign-in replaced: hand it back to the input instead of running it.
+      if (ctx.sessionGeneration?.() !== generation) {
+        useCliStore.getState().restoreQueueToInput();
+        break;
       }
       const queued = useCliStore.getState().dequeueAllMessages();
       next = queued.length > 0 ? queued.join('\n\n') : null;
@@ -154,6 +165,9 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
     workflowStores,
     setAbortController,
   } = ctx;
+  const generation = ctx.sessionGeneration?.();
+  // A sign-in restart replaced the session: nothing this turn produces after that belongs in the new one.
+  const replaced = () => ctx.sessionGeneration?.() !== generation;
 
   // Read session fresh from the Zustand store, never from the caller-captured
   // context. On the message-queue drain this turn is re-entered with the same
@@ -222,6 +236,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
 
         if (compactionPrompt) {
           const result = await agent.run(compactionPrompt, { maxIterations: 1, streamText: false });
+          if (replaced()) return;
 
           // Flush decisions/blockers logged in prior turns but not yet synced
           // onto the session, so the compacted session carries current workflow
@@ -235,7 +250,9 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
             !!(process.env.B4M_SESSION_ID || process.env.B4M_RESUME_ID)
           );
 
+          if (replaced()) return;
           await logger.initialize(newSession.id);
+          if (replaced()) return;
           useCliStore.getState().setSession(newSession);
           useCliStore.getState().clearPendingMessages();
 
@@ -245,10 +262,11 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
           activeSession = newSession;
         }
       } finally {
-        useCliStore.getState().setIsThinking(false);
+        if (!replaced()) useCliStore.getState().setIsThinking(false);
       }
     }
   }
+  if (replaced()) return;
 
   // Set thinking state to show loading indicator
   useCliStore.getState().setIsThinking(true);
@@ -290,6 +308,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
       },
     };
     pendingAssistantId = pendingAssistantMessage.id;
+    if (replaced()) return;
 
     // Add user message to session.messages (already complete)
     // Use activeSession which may have been updated by auto-compact
@@ -412,6 +431,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
       },
     };
 
+    if (replaced()) return;
     // Move the pending message to session.messages (history)
     useCliStore.getState().completePendingMessage(0, finalAssistantMessage);
 
@@ -446,7 +466,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
       ?.metadata?.steps;
 
     // Clear pending messages on error
-    useCliStore.getState().clearPendingMessages();
+    if (!replaced()) useCliStore.getState().clearPendingMessages();
 
     // Handle abort (user pressed ESC)
     if (error instanceof Error && error.name === 'AbortError') {
@@ -454,7 +474,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
 
       // Add cancellation message to session
       const currentSession = useCliStore.getState().session;
-      if (currentSession) {
+      if (currentSession && !replaced()) {
         const cancelMessage: Message = {
           id: uuidv4(),
           role: 'assistant',
@@ -521,8 +541,10 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
     // the controller published via setAbortController is already null by now
     // because the ESC handler clears it eagerly.
     const wasAborted = abortController.signal.aborted;
-    setAbortController(null);
-    useCliStore.getState().setIsThinking(false);
+    if (!replaced()) {
+      setAbortController(null);
+      useCliStore.getState().setIsThinking(false);
+    }
     // Process-hook (host action_required signal): end of turn - clear any block
     // sentinel (covers a *denied* permission, which never reaches PostToolUse).
     void getProcessHooks()?.fireStop();

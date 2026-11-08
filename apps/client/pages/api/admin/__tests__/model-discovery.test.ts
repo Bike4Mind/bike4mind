@@ -55,13 +55,13 @@ vi.mock('@aws-sdk/client-lambda', () => ({
 vi.mock('sst', () => ({ Resource: resource }));
 vi.mock('@bike4mind/server-utils/modelDiscovery/scheduledRun', () => ({ runScheduledDiscovery }));
 // The real module pulls the whole discovery source registry in; only its gate matters here.
-vi.mock('@server/modelDiscovery/startupLeg', () => ({
+vi.mock('@bike4mind/server-utils/modelDiscovery/startupLeg', () => ({
   DISCOVERY_DRIVER_ENV: 'B4M_DISCOVERY_DRIVER',
   isDiscoveryDriver: () => process.env.B4M_DISCOVERY_DRIVER === 'true',
 }));
 
 const mockAudit = vi.hoisted(() => vi.fn(async () => null));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
 import handler from '../model-discovery';
 

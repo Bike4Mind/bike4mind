@@ -65,7 +65,7 @@ const ApiCookbookTab = () => {
 
   if (selectedRecipe) {
     return (
-      <Box sx={{ p: 3, height: '100%', overflow: 'auto' }}>
+      <Box sx={{ height: '100%', overflow: 'auto' }}>
         <Box
           sx={{
             display: 'flex',
@@ -95,7 +95,7 @@ const ApiCookbookTab = () => {
   }
 
   return (
-    <Box sx={{ p: 3, height: '100%', overflow: 'auto' }}>
+    <Box sx={{ height: '100%', overflow: 'auto' }}>
       <Typography level="h3" sx={{ mb: 1 }}>
         API Cookbook
       </Typography>

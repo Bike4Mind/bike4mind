@@ -8,7 +8,7 @@ import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
 import { isCancellableSubscriptionStatus } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 import { TransactionType } from '@client/lib/credits/types';
-import { SUBSCRIPTION_PLANS_GROUPED_BY_INTERVAL } from '@client/lib/userSubscriptions/constants';
+import { SUBSCRIPTION_PLANS_GROUPED_BY_INTERVAL } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { Box, Button, Card, Modal, ModalClose, ModalDialog, Tab, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo } from 'react';

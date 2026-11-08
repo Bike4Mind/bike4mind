@@ -35,6 +35,13 @@ export interface SignupGrantAssessment {
   missing: string[];
   policyVersion: string | null;
   status: 'evaluated' | 'disabled' | 'unavailable';
+  /**
+   * Signal values returned by the risk collector at grant time, keyed by signup risk signal. Under an
+   * enabled policy the band was computed from them; under a disabled policy they are shadow observations
+   * for replaying candidate policies (replaySignupRisk). Absent when no collector ran or it failed, and on
+   * assessments that predate recording.
+   */
+  signals?: Partial<Record<string, boolean | number | null>>;
 }
 
 export interface SignupGrant {

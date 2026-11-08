@@ -29,7 +29,7 @@ import {
   gitHubErrorStatus,
   gitHubRateLimitDelaySeconds,
 } from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
-import { releaseGitHubLakeConnection } from '@server/integrations/github/dataLake/githubLakeConnection';
+import { releaseGitHubLakeConnection } from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
 import { runGitHubLakeSlice } from '@workers/queueHandlers/githubLakeSlice';
 import { settleLakeIngestBatch } from '@workers/queueHandlers/lakeIngestShared';
 import { Resource } from 'sst';

@@ -82,6 +82,7 @@ export const PCI_IDS = `# Excerpt of the pci.ids database
 \t2684  AD102 [GeForce RTX 4090]
 8086  Intel Corporation
 \t56a0  DG2 [Arc A770]
+\t64a0  Lunar Lake [Intel Arc Graphics 130V / 140V]
 \ta7a0  Raptor Lake-P [Iris Xe Graphics]
 \te20b  Battlemage G21 [Arc B580]
 `;
@@ -173,6 +174,25 @@ export const intelArcA770I915: PciDeviceFixture = {
   vendor: '0x8086',
   device: '0x56a0',
   driver: 'i915',
+};
+
+/** Lunar Lake graphics, which only xe drives. */
+export const intelLunarLakeXe: PciDeviceFixture = {
+  address: '0000:00:02.0',
+  pciClass: '0x030000',
+  vendor: '0x8086',
+  device: '0x64a0',
+  driver: 'xe',
+};
+
+// A Battlemage G31 card on xe under a 7.0 kernel, as read from a live machine with its bus address changed. Its
+// device directory has nothing for VRAM size or use, and this pci.ids excerpt has no name for it.
+export const intelBattlemageG31Xe: PciDeviceFixture = {
+  address: '0000:03:00.0',
+  pciClass: '0x030000',
+  vendor: '0x8086',
+  device: '0xe223',
+  driver: 'xe',
 };
 
 export const nvidiaRtx4090: PciDeviceFixture = {
@@ -276,3 +296,19 @@ export const POWERSHELL_NVIDIA = JSON.stringify([
     status: 'OK',
   },
 ]);
+
+// `llama-server --list-devices` stdout in the format of common/arg.cpp, with figures from public llama.cpp issue logs.
+// SYCL on Linux names a G31 card by its PCI id; Vulkan (Mesa) by its model.
+export const LIST_DEVICES_SYCL_G31 =
+  'Available devices:\n  SYCL0: Intel(R) Graphics [0xe223] (32656 MiB, 32611 MiB free)\n';
+export const LIST_DEVICES_VULKAN_G31 =
+  'Available devices:\n  Vulkan0: Intel(R) Arc(TM) Pro B70 Graphics (32558 MiB, 31789 MiB free)\n';
+// A B580 beside Meteor Lake graphics; SYCL without Level Zero Sysman reports free memory as the total.
+export const LIST_DEVICES_SYCL_B580_IGPU =
+  'Available devices:\n' +
+  '  SYCL0: Intel(R) Arc(TM) B580 Graphics (12216 MiB, 12216 MiB free)\n' +
+  '  SYCL1: Intel(R) Arc(TM) Graphics (59603 MiB, 49622 MiB free)\n';
+export const LIST_DEVICES_NONE = 'Available devices:\n  (none)\n';
+// A real Arc Pro B70 (G31) under a SYCL build with oneAPI's setvars.sh sourced, which names it with no PCI id.
+export const LIST_DEVICES_SYCL_B70_NAMED =
+  'Available devices:\n  SYCL0: Intel(R) Arc(TM) Pro B70 Graphics (32656 MiB, 491 MiB free)\n';

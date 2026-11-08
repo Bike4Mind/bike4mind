@@ -11,8 +11,8 @@ import {
 } from '../../../../../packages/database/src/__test__/createMongoServer';
 
 const auditHook = vi.hoisted(() => vi.fn(async (_action: string) => undefined));
-vi.mock('@server/utils/adminAudit', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>();
   return {
     ...actual,
     recordAdminActionFromRequest: async (...parameters: Parameters<typeof actual.recordAdminActionFromRequest>) => {

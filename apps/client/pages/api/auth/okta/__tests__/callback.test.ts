@@ -123,7 +123,9 @@ vi.mock('@server/auth/networkMeta', () => ({
   recordSignupNetwork: (...a: unknown[]) => mockRecordSignupNetwork(...a),
 }));
 const mockRefreshSignupRiskScore = vi.fn().mockResolvedValue(undefined);
-vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
 vi.mock('@server/auth/signupRiskScore', () => ({
   refreshSignupRiskScore: (...a: unknown[]) => mockRefreshSignupRiskScore(...a),
 }));
@@ -965,6 +967,28 @@ describe('/api/auth/okta/callback - missing code or state log level', () => {
 
     expect(res._getRedirectUrl()).toBe('/login?error=missing_code');
     expect(Logger.warn).toHaveBeenCalledWith('[Okta Callback] Missing authorization code');
+    expect(Logger.error).not.toHaveBeenCalled();
+  });
+
+  it('logs an invalid state token at warn and records the auth failure', async () => {
+    mockVerifyState.mockReturnValue({ valid: false, reason: 'invalid', message: 'Invalid authorization state.' });
+    const { done, res } = runWith({ state: STATE, code: CODE });
+    await done;
+
+    expect(res._getRedirectUrl()).toBe('/login?error=Invalid%20authorization%20state.');
+    expect(Logger.warn).toHaveBeenCalledWith('[Okta Callback] Invalid state token:', 'invalid');
+    expect(mockAuthFailCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ strategy: 'okta', reason: 'Invalid state: Invalid authorization state.' })
+    );
+    expect(Logger.error).not.toHaveBeenCalled();
+  });
+
+  it('logs a missing PKCE verifier cookie at warn', async () => {
+    const { done, res } = runWith({ state: STATE, code: CODE });
+    await done;
+
+    expect(res._getRedirectUrl()).toBe('/login?error=invalid_state');
+    expect(Logger.warn).toHaveBeenCalledWith('[Okta Callback] Missing PKCE code verifier cookie');
     expect(Logger.error).not.toHaveBeenCalled();
   });
 });

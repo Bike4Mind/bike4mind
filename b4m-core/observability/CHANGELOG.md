@@ -1,5 +1,11 @@
 # @bike4mind/observability
 
+## 1.0.3
+
+### Patch Changes
+
+- [#6690](https://github.com/Bike4Mind/bike4mind/pull/6690) [`a212b21`](https://github.com/Bike4Mind/bike4mind/commit/a212b21fc987e8d46f33f87490d95319dfbdbecc) Thanks [@onoya](https://github.com/onoya)! - redact contact fields and credentials in server logs
+
 ## 1.0.2
 
 ### Patch Changes

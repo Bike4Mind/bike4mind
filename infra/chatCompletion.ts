@@ -10,6 +10,7 @@ import { ecsEnvSecret, ecsResourceSecrets, ecsSecretsVersion } from './ecsSecret
 import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
+import { remoteMcpHandler } from './remoteMcp';
 import { providerFederation } from './providerFederation';
 import { generationJobQueue } from './queues';
 import { cdnUrlForLambdaEnv, originVerifySecret, router, routePrefix } from './router';
@@ -72,6 +73,7 @@ const ecsSecretNames = [
   'SECRET_ENCRYPTION_KEY_PREVIOUS',
   'MEMORY_KEY_SECRET',
   'OAUTH_RSA_PRIVATE_KEY',
+  'APNS_KEY',
   'STRIPE_SECRET_KEY',
   'STRIPE_WEBHOOK_SECRET',
   'CHAT_COMPLETION_INTERNAL_SECRET',
@@ -132,6 +134,8 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     appFilesBucket,
     websocketApi,
     mcpHandler,
+    // Custom (user-supplied URL) connector calls from queued chat turns run here, outside the VPC.
+    remoteMcpHandler,
     eventBus,
     imageProcessor,
     generationJobQueue,

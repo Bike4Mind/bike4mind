@@ -18,7 +18,7 @@ import {
   FILES_READ_OR_WRITE_OR_GENERATE_SCOPES,
   FILES_READ_SCOPES,
   isBareGenerateUpload,
-} from '@server/files/fileScopes';
+} from '@bike4mind/server-utils/files/fileScopes';
 import { loadGenerateUploadFile } from '@server/files/loadGenerateUploadFile';
 import { assertGenerateUploadDeletable } from '@server/files/assertGenerateUploadDeletable';
 import { holdsApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';

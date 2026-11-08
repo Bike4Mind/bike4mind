@@ -3,7 +3,7 @@ import { Box, Button, Stack, Typography, useTheme } from '@mui/joy';
 import { Bar, BarChart, CartesianGrid, Cell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type { AnalyticsOverview, SignupBucket } from '@client/app/utils/analyticsOverview';
 import type { AdminUsersFilter } from '@client/app/utils/adminUsersFilter';
-import { SIGNUP_SIGNAL_LABELS, type SignupSignal } from '@client/app/utils/signupSignals';
+import { SIGNUP_SIGNAL_LABELS, type SignupSignal } from '@bike4mind/server-utils/app/utils/signupSignals';
 import { DataTable, InlineBar, type DataColumn } from '../shared';
 import { SIGNUP_STATUS_COLORS } from '../Signups/SignupChart';
 import { AnalyticsSection } from './AnalyticsSection';

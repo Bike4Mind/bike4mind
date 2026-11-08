@@ -11,7 +11,7 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { adminSettingsRepository, FabFile } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { isImageServeable, SupportedFabFileMimeTypes } from '@bike4mind/common';
-import { FILES_READ_SCOPES } from '@server/files/fileScopes';
+import { FILES_READ_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
 
 // The extractor turns these into plain text, so the entry is renamed to .txt. Text stored under
 // a .pdf or .docx name does not open in the app that name promises.

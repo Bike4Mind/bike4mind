@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@workers/utils/eventContext', () => ({ withEventContext: (handler: unknown) => handler }));
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   SessionEvents: { AutoName: { schema: { parse: (properties: unknown) => properties } } },
 }));
 vi.mock('@bike4mind/database', () => ({
@@ -72,6 +72,28 @@ describe('session auto-naming AI access', () => {
     expect(mocks.getOperationsModel).not.toHaveBeenCalled();
     expect(mocks.autoName).not.toHaveBeenCalled();
     expect(mocks.recordUsage).not.toHaveBeenCalled();
+  });
+
+  describe('recent-rename guard', () => {
+    const justUpdated = { id: 'session-1', userId: 'owner-1', name: 'API chat - 2026-01-01 00:00 UTC' };
+
+    it('skips a session whose real name changed in the last 10s', async () => {
+      mocks.findSession.mockResolvedValue({ ...justUpdated, updatedAt: new Date() });
+      await run();
+      expect(mocks.autoName).not.toHaveBeenCalled();
+    });
+
+    // A route-generated notebook name (POST /api/chat) is stamped as the placeholder, so a fast
+    // turn whose event lands inside the window is still named.
+    it('names a just-updated session still carrying its placeholder name', async () => {
+      mocks.findSession.mockResolvedValue({
+        ...justUpdated,
+        autoNamePlaceholder: justUpdated.name,
+        updatedAt: new Date(),
+      });
+      await run();
+      expect(mocks.autoName).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('runs no model when the account lookup fails', async () => {

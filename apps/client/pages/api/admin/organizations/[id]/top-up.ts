@@ -7,7 +7,7 @@ import { creditGrantNeedsApproval } from '@server/admin/creditGrants/gate';
 import { TopUpSchema, topUpOrg } from '@server/admin/creditGrants/topUpOrg';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { parseAdminActionReason } from '@server/utils/adminAudit';
+import { parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
 import type { Request } from 'express';
 
 interface RequestQuery {

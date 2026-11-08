@@ -13,7 +13,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 // vitest.setup.ts allows every key by default; this suite is about the real gate.
 vi.unmock('@server/utils/apiKeyAccessGate');
 // Plan price ids come from per-stage env vars, so the plan map is a fixture.
-vi.mock('@client/lib/userSubscriptions/constants', () => ({
+vi.mock('@bike4mind/server-utils/lib/userSubscriptions/constants', () => ({
   SUBSCRIPTION_PLANS: [],
   SUBSCRIPTION_PLANS_MAP: {},
   TEAM_PLAN: { priceId: 'price_team', tier: 2 },

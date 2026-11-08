@@ -5,11 +5,11 @@ import {
   type AdminSubscriptionPlan,
   type AdminSubscriptionsFilter,
   type AdminSubscriptionsSortField,
-} from '@client/app/utils/adminSubscriptionsFilter';
-import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@client/lib/userSubscriptions/constants';
-import { cancelCondition } from './subscriptionViewConditions';
+} from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
+import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
+import { cancelCondition } from '@bike4mind/server-utils/admin/subscriptionsList/subscriptionViewConditions';
 
-export { viewConditions } from './subscriptionViewConditions';
+export { viewConditions } from '@bike4mind/server-utils/admin/subscriptionsList/subscriptionViewConditions';
 
 /**
  * Pure filter, view and sort builders for the admin subscriptions list. Plain objects only, so they

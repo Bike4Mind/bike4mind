@@ -27,7 +27,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/billing/meterPlatformCompletion', () => ({ assertOwnerCanAfford: m.assertOwnerCanAfford }));
-vi.mock('@server/utils/researchTasks', () => ({ researchTaskJobs: {} }));
+vi.mock('@bike4mind/server-utils/utils/researchTasks', () => ({ researchTaskJobs: {} }));
 vi.mock('@bike4mind/services', () => ({ researchTaskService: { create: m.create, retry: m.retry } }));
 vi.mock('@bike4mind/database', () => ({
   researchTaskRepository: {},

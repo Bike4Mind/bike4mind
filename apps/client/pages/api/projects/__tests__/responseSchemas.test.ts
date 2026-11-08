@@ -37,7 +37,7 @@ vi.mock('@server/projects/projectScopes', () => ({
   PROJECTS_WRITE_SCOPES: [],
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn(async () => {}) }));
-vi.mock('@server/utils/eventBus', () => ({ SessionEvents: { Summarize: { publish: vi.fn() } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ SessionEvents: { Summarize: { publish: vi.fn() } } }));
 vi.mock('@server/utils/sessionOperationalCreditPreflight', () => ({
   filterSessionIdsByOperationalCredits: vi.fn(async () => new Set<string>()),
 }));

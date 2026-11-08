@@ -1,4 +1,10 @@
 import {
+  type EmbeddingCredential,
+  type EmbeddingRuntime,
+  buildEmbeddingRegistry,
+  resolveEmbeddingWithKeylessFallback,
+} from '@bike4mind/utils/embeddingProviders';
+import {
   type AttachmentLakeAccess,
   IChatHistoryItemDocument,
   IFabFileDocument,
@@ -78,8 +84,6 @@ import {
   buildAndSortMessages,
   calculateTotalTokenLength,
   ClientMessageSender,
-  EmbeddingFactory,
-  resolveEmbeddingWithKeylessFallback,
   fetchAndConvertFabFiles,
   fetchAndProcessPreviousMessages,
   getLlmWithFallback,
@@ -99,6 +103,7 @@ import {
   isProviderSpendLimitError,
   shouldTriggerFallback,
   isSafetyRefusalError,
+  isExpectedCompletionError,
   stripAllToolBlocks,
   usdToCredits,
   usdToCreditsStochastic,
@@ -121,7 +126,7 @@ import {
   isTruncatedStreamError,
 } from './llmErrorPredicates';
 import { TurnTimingRecorder } from './turnTiming';
-import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
+import type { FabFileNotice } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
 import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { withOllamaThinkingDefault } from './ollamaThinkingDefault';
@@ -1140,7 +1145,7 @@ export class ChatCompletionProcess {
   /**
    * The vector space this turn's CORPUS is in, and the credential (if any) that was missing when
    * that was resolved. Set once per turn at the credential-table seam in `process()`; read by
-   * KnowledgeRetrievalFeature, which must NOT re-derive either value from the EmbeddingFactory (see
+   * KnowledgeRetrievalFeature, which must NOT re-derive either value from the EmbeddingRuntime (see
    * the note at the seam for the three states an empty factory config conflates).
    *
    * Deliberately NOT "the model this turn embeds with": a caller may name an `embeddingModel` on
@@ -1290,6 +1295,7 @@ export class ChatCompletionProcess {
   private workspaceSessionSettings: IChatCompletionServiceOptions['workspaceSessionSettings'];
   private getScopeFilter: IChatCompletionServiceOptions['getScopeFilter'];
   private getMcpClient: IChatCompletionServiceOptions['getMcpClient'];
+  private customMcp: IChatCompletionServiceOptions['customMcp'];
   private statusManager: StatusManager | null = null;
   private systemFilesCache: Map<string, [string[], string[]]> | null = null;
   private abortControllers: Map<string, AbortController> | null = null;
@@ -1372,6 +1378,7 @@ export class ChatCompletionProcess {
     this.getEntitlements = options.getEntitlements;
     this.getThinkingVisibility = options.getThinkingVisibility;
     this.getMcpClient = options.getMcpClient;
+    this.customMcp = options.customMcp;
     this.features = options.features || new Map<featureNames, ChatCompletionFeature>();
     this.tokenizer = options.tokenizer;
     this.slackWebhookUrl = options.slackWebhookUrl;
@@ -3167,7 +3174,7 @@ export class ChatCompletionProcess {
       // apiKeyTable.ollama carries the Ollama base URL (self-host); no secret.
       //
       // All THREE return values are kept, and that is load-bearing. `config` alone cannot tell the
-      // downstream readers apart, because `resolveEmbeddingConfig` returns an empty config for three
+      // downstream readers apart, because `resolveEmbeddingCredentials` returns an empty config for three
       // different states: a real keyless-Bedrock substitution, an expired CALLER key, and a missing
       // Ollama base URL - and the latter two are states the resolver deliberately refuses to
       // substitute for. Any reader that re-derives "this deployment is keyless" from the factory's
@@ -3225,7 +3232,7 @@ export class ChatCompletionProcess {
           `[embeddings] no credential resolved for ${corpusEmbeddingModel}; this turn works in keyless ${corpusResolution.model} space instead`
         );
       }
-      const embeddingFactory = new EmbeddingFactory(embeddingConfig);
+      const embeddingFactory = buildEmbeddingRegistry(embeddingConfig);
 
       // Fetch previous messages. Token-bound the verbatim window to a fraction of
       // the model's context so older turns fall outside it and get folded into
@@ -3665,6 +3672,7 @@ export class ChatCompletionProcess {
         imageGenerateStorage: this.imageGenerateStorage,
         imageProcessorLambdaName: this.imageProcessorLambdaName,
         getMcpClient: this.getMcpClient,
+        customMcp: this.customMcp,
         toolCreditsMap: this.toolCreditsMap,
         toolCreditModels: this.toolCreditModels,
         subagentTelemetryData: this.subagentTelemetryData,
@@ -3675,7 +3683,7 @@ export class ChatCompletionProcess {
         toLedgerModel: id => (this.isSubstituteId(id) ? this.shadowSubstitution?.requested : undefined),
       });
 
-      const { mcpToolsByServer, serverAgentConfig } = await toolBuilder.buildMcpTools({
+      const { mcpToolsByServer, serverAgentConfig, customMcpToolNames } = await toolBuilder.buildMcpTools({
         enableMCPServer,
         requestedMcpServers: parsedBody.mcpServers,
         defaultAdminSettings,
@@ -3683,6 +3691,22 @@ export class ChatCompletionProcess {
         logger,
         processStartTime,
         quest,
+        disableUserIntegrations: userIntegrationsDisabled,
+        // Omitted on Slack turns, which withholds custom connector tools there: the Slack Confirm
+        // executor (pendingActionExecutor.ts) routes by built-in tool name only.
+        onPendingAction: parsedBody.enableSlackTools
+          ? undefined
+          : async ({ toolName, args, ...customConnector }) => {
+              // The pending action is quest-scoped but the connection is the acting user's, and only the
+              // session owner may confirm: a teammate's write could never run and would show their connector.
+              if (session.userId !== this.user.id) {
+                throw new Error('Custom connector actions that need approval can only be run by the notebook owner.');
+              }
+              // Match the built-in MCP callback: a replaced card must never identify a newer action.
+              const ts = Math.max(Date.now(), (quest.pendingAction?.ts ?? 0) + 1);
+              quest.pendingAction = { tool: toolName, params: args, ts, customConnector };
+              await saveQuest(quest);
+            },
       });
 
       // Construct per-request agent store with user-specific config (e.g., selected repositories)
@@ -4171,6 +4195,7 @@ export class ChatCompletionProcess {
         knowledgeBaseGuidance,
         userTimezone,
         mcpTools: directMcpTools,
+        hasCustomMcpTools: directMcpTools.some(tool => customMcpToolNames.has(tool.name)),
         sessionId,
         message,
         logger,
@@ -5755,6 +5780,9 @@ export class ChatCompletionProcess {
             }
             // Same gate; the real typed timeout the backend raises, so the loop takes the slow path.
             if (previewTestMarkerActive(FORCE_STREAM_STALL_TEST_MARKER)) {
+              // A typed timeout's attempt summary logs at debug, leaving the warning to whoever
+              // raised it; this one is raised here, not by a backend.
+              logger.warn(`Simulated ${currentModel.backend} stream stall (preview only)`, { model: currentModel.id });
               throw new LlmTimeoutError(
                 'stream_idle',
                 idleTimeoutSeconds * 1000,
@@ -6049,14 +6077,10 @@ export class ChatCompletionProcess {
               break;
             }
             lastError = attemptError as Error;
-            // Aborts (user cancel, client disconnect, or request/idle timeout) are
-            // benign, and output-budget exhaustion is deterministic and settled as terminal
-            // below (an error log would trip the alert) - log the raw error at warn so its stack stays out of the
-            // CloudWatch ERROR to LiveOps/Slack alerts. This bare dump was
-            // the last error-severity log on the abort path; the backends and the
-            // formatted summary below were already downgraded. Real failures still dump
-            // at error with the full stack.
-            if (
+            // Recoverable interruptions keep their stack at warn; unexpected failures page.
+            if (isExpectedCompletionError(lastError)) {
+              // Already warned by the backend or the attempt summary below.
+            } else if (
               isAbortError(lastError) ||
               isStreamIdleTimeoutError(lastError) ||
               lastError instanceof ResponsesStreamTruncatedError ||
@@ -6107,8 +6131,12 @@ export class ChatCompletionProcess {
                 });
             }
 
-            logger.warn(
-              `❌ [${Date.now() - processStartTime}ms] LLM completion failed with ${
+            const logAttempt =
+              isSafetyRefusalError(lastError) || isLlmTimeoutError(lastError)
+                ? logger.debug.bind(logger)
+                : logger.warn.bind(logger);
+            logAttempt(
+              `\u274C [${Date.now() - processStartTime}ms] LLM completion failed with ${
                 currentModel.id
               } (attempt ${fallbackAttempt}):`,
               {
@@ -7835,12 +7863,9 @@ export class ChatCompletionProcess {
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && isSlowModelTimeoutError(err)) {
-        // WARN, not error: an upstream request/idle timeout is expected and
-        // recoverable (the user gets the retry message below and the backend
-        // already emitted trend metrics). Logging at error severity re-trips the
-        // CloudWatch ERROR to LiveOps/Slack alert path that the backend WARN downgrade
-        // was meant to avoid.
-        logger.warn(`[Timeout] Quest ${questId}: ${err.message}`);
+        // Never error (it trips the CloudWatch alert); typed timeouts were already warned by the backend.
+        const logTimeout = isLlmTimeoutError(err) ? logger.debug.bind(logger) : logger.warn.bind(logger);
+        logTimeout(`[Timeout] Quest ${questId}: ${err.message}`);
         setErrorReply(SLOW_MODEL_ERROR_REPLY);
         quest.type = 'error';
         setTerminalQuestStatus(quest, 'done');
@@ -8246,7 +8271,7 @@ export class ChatCompletionProcess {
   public async fabFilesToMessages(
     fabFileIds: string[],
     quest: IChatHistoryItemDocument,
-    embeddingFactory: EmbeddingFactory,
+    embeddingFactory: EmbeddingRuntime,
     message: string,
     attachedFileTokenBudget: number,
     modelInfo: ModelInfo
@@ -8616,7 +8641,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     maxTokens: number;
     attachedFileTokenBudget: number;
     quest: IChatHistoryItemDocument;
-    embeddingFactory: EmbeddingFactory;
+    embeddingFactory: EmbeddingRuntime;
     modelInfo: ModelInfo;
     logger: Logger;
     processStartTime: number;

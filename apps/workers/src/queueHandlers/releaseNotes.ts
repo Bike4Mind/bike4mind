@@ -1,5 +1,4 @@
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { Resource } from 'sst';
 import { adminSettingsRepository, releaseNoteRepository, slackDevWorkspaceRepository } from '@bike4mind/database';
@@ -8,7 +7,6 @@ import {
   ChatModels,
   parseReleaseNotesConfig,
   type ReleaseNote,
-  ReleaseNotesJobPayloadSchema,
   type ReleaseNotesConfig,
   type ReleaseNotesJobPayload,
 } from '@bike4mind/common';
@@ -43,10 +41,6 @@ const estimateCost = (modelId: string, usage: TokenUsage): number => {
   const price = MODEL_PRICING[modelId] ?? FALLBACK_PRICING;
   return (usage.inputTokens * price.input + usage.outputTokens * price.output) / TOKENS_PER_MILLION;
 };
-
-/** Bodies from the retired What's New generation cron carry `generatedDate`; they are acked and dropped. */
-const isLegacyPayload = (body: unknown): boolean =>
-  typeof body === 'object' && body !== null && 'generatedDate' in body;
 
 async function loadConfig(logger: Logger): Promise<ReleaseNotesConfig | null> {
   const settings = await getSettingsByNames([SETTING_NAME], { adminSettings: adminSettingsRepository }, { logger });
@@ -171,7 +165,7 @@ async function generateAndStore(
   throw new Error(`[releaseNotes] headline or summary still hit the denylist after a rewrite: ${feedback.join('; ')}`);
 }
 
-async function processPayload(payload: ReleaseNotesJobPayload, logger: Logger): Promise<void> {
+export async function runReleaseNotesJob(payload: ReleaseNotesJobPayload, logger: Logger): Promise<void> {
   logger.updateMetadata({ releaseTag: payload.releaseTag });
 
   const config = await loadConfig(logger);
@@ -232,23 +226,3 @@ async function processPayload(payload: ReleaseNotesJobPayload, logger: Logger): 
     },
   ]);
 }
-
-export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
-  for (const record of event.Records) {
-    // Invalid JSON throws here on purpose: a corrupt body belongs in the DLQ, not silently acked.
-    const body: unknown = JSON.parse(record.body);
-
-    if (isLegacyPayload(body)) {
-      logger.warn('[releaseNotes] dropping legacy whatsNewGeneration payload', { messageId: record.messageId });
-      await emitModalGenerationMetrics([{ name: 'LegacyPayloadDropped', value: 1, unit: StandardUnit.Count }]);
-      continue;
-    }
-
-    const parsed = ReleaseNotesJobPayloadSchema.safeParse(body);
-    if (!parsed.success) {
-      throw new Error(`[releaseNotes] invalid job payload: ${parsed.error.message}`);
-    }
-
-    await processPayload(parsed.data, logger);
-  }
-});

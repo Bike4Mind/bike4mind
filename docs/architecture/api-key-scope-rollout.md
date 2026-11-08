@@ -118,7 +118,7 @@ or a write-only key is refused at the door before its write assert runs. Assert 
 of each handler -
 `assertDataLakeWriteScope` / `assertDataLakeShareScope`
 (`apps/client/server/dataLakes/dataLakeScopes.ts`) for data lakes,
-`assertFilesReadScope` / `assertFilesWriteScope` (`apps/client/server/files/fileScopes.ts`)
+`assertFilesReadScope` / `assertFilesWriteScope` (`packages/server-utils/src/files/fileScopes.ts`)
 for the `/api/files` doors. Build a new family's asserts on `assertApiKeyScope`
 (`packages/server-utils/src/middlewares/apiKeyScopeGate.ts`), which already follows the two rules
 an assert in this family has to follow:

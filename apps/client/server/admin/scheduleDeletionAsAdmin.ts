@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { ConflictError, ForbiddenError, NotFoundError, canAccessAdmin, type AdminApproval } from '@bike4mind/common';
 import { userRepository } from '@bike4mind/database';
 import type { Request } from 'express';
-import { isSelfOrImpersonator, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { isSelfOrImpersonator, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { scheduleAccountDeletion } from '@server/users/accountDeletion';
 import { approvalDetails } from '@server/admin/creditGrants/approval';
 

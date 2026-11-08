@@ -9,7 +9,7 @@ import { insufficientCreditsError } from '@bike4mind/common';
 vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
   assertOutboundActionAllowed: async () => undefined,
 }));
-vi.mock('@server/auth/assertAiAccessAllowed', () => ({ assertAiAccessAllowed: vi.fn() }));
+vi.mock('@bike4mind/server-utils/auth/assertAiAccessAllowed', () => ({ assertAiAccessAllowed: vi.fn() }));
 vi.mock('@server/utils/withRequestCompletionQuota', () => ({
   withRequestCompletionQuota: (fn: unknown) => fn,
 }));

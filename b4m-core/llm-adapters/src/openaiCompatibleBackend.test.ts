@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ModelBackend, type IMessage } from '@bike4mind/common';
+import { ExpectedToolError, ModelBackend, type IMessage } from '@bike4mind/common';
 import { createServerFetch, credentialRedactor, type FetchLike } from '@bike4mind/local-models/servers';
 import {
   json,
@@ -501,6 +501,34 @@ describe('OpenAICompatibleBackend tool rounds and usage', () => {
     const messages = chats(server)[1].messages as { tool_calls?: { id: string }[]; tool_call_id?: string }[];
     expect(messages.at(-1)?.tool_call_id).toBe('call_0_0');
     expect(messages.at(-2)?.tool_calls?.[0].id).toBe('call_0_0');
+  });
+
+  it.each([
+    { label: 'an expected refusal at warn', error: new ExpectedToolError('refused'), level: 'warn' as const },
+    { label: 'an unexpected failure at error', error: new Error('boom'), level: 'error' as const },
+  ])('logs $label', async ({ error, level }) => {
+    const server = await fakeServer({
+      'POST /v1/chat/completions': toolCallOnce({
+        id: 'call-1',
+        function: { name: 'get_weather', arguments: '{"city":"Paris"}' },
+      }),
+    });
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const backend = new OpenAICompatibleBackend({
+      baseUrl: server.baseUrl,
+      label: 'gpu-box',
+      product: 'vllm',
+      fetch: globalThis.fetch,
+      logger: logger as never,
+    });
+    const failing = vi.fn(async () => {
+      throw error;
+    });
+    expect((await run(backend, 'm', [weatherTool(failing)])).text).toBe('Done.');
+    expect(logger[level]).toHaveBeenCalledWith(
+      '[Tool Execution] Tool failed',
+      expect.objectContaining({ toolName: 'get_weather', error: error.message })
+    );
   });
 
   it('counts output tokens from a running total once', async () => {

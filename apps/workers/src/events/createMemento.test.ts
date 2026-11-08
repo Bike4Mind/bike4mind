@@ -1,3 +1,11 @@
+vi.mock('@bike4mind/utils/embeddingProviders', () => ({
+  buildEmbeddingRegistry: vi.fn(),
+  bindEmbeddingModel: vi.fn(),
+  embedOne: vi.fn(),
+  embeddingBackendForModel: vi.fn(),
+  resolveEmbeddingCredentials: vi.fn(),
+  resolveEmbeddingWithKeylessFallback: vi.fn(),
+}));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
@@ -8,7 +16,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@workers/utils/eventContext', () => ({ withEventContext: (handler: unknown) => handler }));
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   LLMEvents: { CompletionCompleted: { schema: { parse: (properties: unknown) => properties } } },
 }));
 vi.mock('@bike4mind/database', () => ({
@@ -17,11 +25,7 @@ vi.mock('@bike4mind/database', () => ({
   Memento: { find: vi.fn(() => ({ select: async () => [] })), create: vi.fn(), updateOne: vi.fn() },
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
-vi.mock('@bike4mind/fab-pipeline', () => ({
-  EmbeddingFactory: vi.fn(),
-  getProviderFromModel: vi.fn(),
-  resolveEmbeddingConfig: vi.fn(),
-}));
+
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
   mementoService: { findMostSimilarMemento: vi.fn() },

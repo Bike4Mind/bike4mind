@@ -1,6 +1,8 @@
-import { signupProtection } from '@server/auth/signupProtection';
+import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
 import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { grantPackageRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
@@ -36,7 +38,7 @@ import {
   isEligibleForFreeCredits,
   releaseVerifiedPendingFreeCredits,
 } from './emailVerifiedGrants';
-import { requestRiskEvidenceRefresh } from './riskEvidence';
+import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 
 const mockLoggerError = vi.fn();
 const logger = { info: vi.fn(), error: (...a: unknown[]) => mockLoggerError(...a) } as unknown as Logger;

@@ -7,7 +7,7 @@ const { mockFindOneAndUpdate, mockReportUpdateMany, mockUserFindById } = vi.hois
   mockReportUpdateMany: vi.fn(),
 }));
 const audit = vi.hoisted(() => ({ record: vi.fn(), inTransaction: [] as boolean[], txActive: false }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: audit.record,
   userAuditTarget: async (id: string) => {
     const user = await mockUserFindById(id);

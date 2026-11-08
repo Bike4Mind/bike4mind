@@ -22,7 +22,7 @@ const { mockValidate, mockFindById, mockApiKeyRateLimit } = vi.hoisted(() => ({
   mockApiKeyRateLimit: vi.fn(),
 }));
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   // extractApiKeyFromHeaders stays real - apiKeyAuth's header parsing is under test.
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockApiKeyRateLimit(...a),
@@ -30,7 +30,7 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
 
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 // Trust is not under test here; pass the key's own rate limit through.
-vi.mock('@server/utils/apiKeyTrust', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
   resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
     rateLimit: key.rateLimit,
     ownerUntrusted: false,

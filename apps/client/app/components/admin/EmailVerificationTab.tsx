@@ -579,7 +579,7 @@ const EmailVerificationTab = () => {
   };
 
   return (
-    <Sheet sx={{ px: { xs: 1, sm: 2 }, height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <Sheet sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <Box sx={{ flexShrink: 0 }}>
         {/* Search & Filter Controls */}
         <Card sx={{ px: { xs: 1, sm: 2 }, py: 1, mb: 1 }}>

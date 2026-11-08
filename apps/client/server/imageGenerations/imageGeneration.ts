@@ -22,11 +22,11 @@ import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-uti
 import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import imageLogger from '@bike4mind/server-utils/utils/imageLogger';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
-import { SessionEvents } from '@server/utils/eventBus';
+import { SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
 import type { IUserDocument } from '@bike4mind/common';
 import { Resource } from 'sst';
-import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 import { imageCreditHolds } from '@server/billing/imageCreditHolds';
 
 let _imageGeneration: ImageGenerationService | undefined;

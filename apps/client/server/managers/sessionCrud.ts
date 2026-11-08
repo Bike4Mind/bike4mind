@@ -1,4 +1,4 @@
-import defineAbilitiesFor, { Ability } from '@server/auth/ability';
+import defineAbilitiesFor, { Ability } from '@bike4mind/server-utils/auth/ability';
 import { accessibleBy } from '@casl/mongoose';
 import {
   agentRepository,

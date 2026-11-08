@@ -100,7 +100,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   withTransaction: async (fn: () => unknown) => fn(),
 }));
-vi.mock('@server/auth/ability', () => ({ default: () => ({ can: () => true }) }));
+vi.mock('@bike4mind/server-utils/auth/ability', () => ({ default: () => ({ can: () => true }) }));
 vi.mock('@bike4mind/server-utils/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
 vi.mock('@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb', () => ({ lakeMembershipAuditDb: {} }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({
@@ -116,7 +116,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   }),
   getFilesStorage: () => ({}),
 }));
-vi.mock('@server/utils/apiKeyTrust', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
   resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
     rateLimit: key.rateLimit,
     ownerUntrusted: false,
@@ -129,7 +129,7 @@ vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
   denySelfAdminAction: vi.fn(),
   isSelfOrImpersonator: vi.fn(),

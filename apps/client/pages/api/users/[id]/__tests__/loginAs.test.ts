@@ -40,8 +40,8 @@ vi.mock('@bike4mind/database', () => ({
     return result;
   },
 }));
-vi.mock('@server/utils/adminAudit', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: (...a: unknown[]) => mockRecord(...a),
   denySelfAdminAction: (...a: unknown[]) => mockDeny(...a),
 }));
@@ -59,7 +59,7 @@ vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({
 
 import { ForbiddenError, HTTPError } from '@bike4mind/common';
 import { httpErrorToResponse } from '@server/middlewares/errorHandler';
-import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@server/utils/adminAudit';
+import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@bike4mind/server-utils/utils/adminAudit';
 import handler from '../loginAs';
 
 const REASON = 'Reproducing a customer ticket';

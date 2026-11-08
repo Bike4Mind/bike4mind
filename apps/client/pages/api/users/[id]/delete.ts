@@ -2,7 +2,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository } from '@bike4mind/database';
 import { canAccessAdmin, toSafeUser, UnauthorizedError } from '@bike4mind/common';
-import { denySelfAdminAction, isSelfOrImpersonator, parseAdminActionReason } from '@server/utils/adminAudit';
+import { denySelfAdminAction, isSelfOrImpersonator, parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
 import { subscriptionCancellationResponse } from '@server/billing/cancelAccountSubscriptions';
 import { getApprovalPolicy, requestApproval } from '@server/admin/approvals/service';
 import { deleteUserAsAdmin, deletedUserTarget } from '@server/admin/deleteUserAsAdmin';

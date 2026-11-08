@@ -10,6 +10,13 @@ export type ModelKind = 'model' | 'glb' | 'stl';
 
 export type ModelUnits = 'mm' | 'm';
 
+/**
+ * Procedural surface detail a part can carry, tinted by its colour: wood grain, brushed metal,
+ * pebbled leather, natural stone, or painted wood worn through at the edges (its colour is the paint).
+ */
+export const MODEL_TEXTURES = ['wood', 'brushed', 'leather', 'stone', 'painted'] as const;
+export type ModelTexture = (typeof MODEL_TEXTURES)[number];
+
 export type ModelParam = { value: number; min: number; max: number; step: number };
 
 export type ModelPartMesh = {
@@ -43,10 +50,52 @@ export type ModelPartMesh = {
   roughness?: number;
   /** Shades curved faces smoothly (a barrel, a knob) while keeping sharp edges; absent means faceted. */
   smooth?: boolean;
+  /** 0..1: a glossy varnish layer over the base (lacquered wood, car paint). Absent means none. */
+  clearcoat?: number;
+  /** 0..1: the soft rim glow of cloth and velvet, tinted by the part's colour. Absent means none. */
+  sheen?: number;
+  /** 0..1: how much light passes through (1 for clear glass or water). Absent means opaque. */
+  transmission?: number;
+  /** Index of refraction, 1..2.333 (water 1.33, glass 1.5, diamond 2.33). Absent means 1.5. */
+  ior?: number;
+  /** With `transmission`: how thick the material is, in model units, so refraction bends light. */
+  thickness?: number;
+  /** A colour (#rrggbb) the part glows with on its own (a lamp, an LED, embers). */
+  emissive?: string;
+  /** With `emissive`: how strongly it glows, 0 or more. Absent means 1. */
+  emissiveIntensity?: number;
+  /** Procedural surface detail; the grain or brushing runs along the part's longest side. */
+  texture?: ModelTexture;
 };
+
+/** glTF's KHR_materials_ior bounds three clamps to; outside them a renderer would disagree. */
+export const MAX_IOR = 2.333;
 
 export const MODEL_MOTIONS = ['turn', 'slide'] as const;
 export type ModelMotion = (typeof MODEL_MOTIONS)[number];
+
+/**
+ * How the pane lights a model: the softbox studio, a low warm sun with long shadows, a tungsten
+ * workshop lamp, or moonlight. In the workshop and at night, glowing parts light the scene.
+ */
+export const MODEL_LIGHTINGS = ['studio', 'sunset', 'workshop', 'night'] as const;
+export type ModelLighting = (typeof MODEL_LIGHTINGS)[number];
+
+/**
+ * What main asks the pane to render for the agent, answered on the capture-result channel: a
+ * contact sheet of fixed views (the default kind), or a turntable video clip.
+ */
+export type ModelCaptureRequest =
+  | { id: string; kind?: 'sheet'; views: ModelView[]; pose: ModelPose }
+  | { id: string; kind: 'turntable'; lighting: ModelLighting };
+
+/** What the model pane saves through its export dialog: the model as GLB or STL, or a turntable video. */
+export const MODEL_EXPORT_FORMATS = ['glb', 'stl', 'webm'] as const;
+export type ModelExportFormat = (typeof MODEL_EXPORT_FORMATS)[number];
+
+export function isModelExportFormat(value: unknown): value is ModelExportFormat {
+  return (MODEL_EXPORT_FORMATS as readonly unknown[]).includes(value);
+}
 
 /** A part that moves: what the pane's joint sliders and the GLB's animation clips are made from. */
 export type ModelJoint = {
@@ -259,14 +308,30 @@ export function formatModelSummary(report: ModelBuildReport, glbPath?: string): 
 const isNumbers = (value: unknown, length: number): boolean =>
   Array.isArray(value) && value.length === length && value.every(Number.isFinite);
 
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+
+const inRange = (value: number, min: number, max: number): boolean =>
+  Number.isFinite(value) && value >= min && value <= max;
+
 function partMaterialError(part: ModelPartMesh): string | null {
-  for (const key of ['metalness', 'roughness'] as const) {
+  const name = `Part "${part.name}"`;
+  for (const key of ['metalness', 'roughness', 'clearcoat', 'sheen', 'transmission'] as const) {
     const value = part[key];
-    if (value !== undefined && !(Number.isFinite(value) && value >= 0 && value <= 1))
-      return `Part "${part.name}" has a ${key} that is not a number from 0 to 1.`;
+    if (value !== undefined && !inRange(value, 0, 1)) return `${name} has a ${key} that is not a number from 0 to 1.`;
   }
+  if (part.ior !== undefined && !inRange(part.ior, 1, MAX_IOR))
+    return `${name} has an ior that is not a number from 1 to ${MAX_IOR} (glass is 1.5).`;
+  for (const key of ['thickness', 'emissiveIntensity'] as const) {
+    const value = part[key];
+    if (value !== undefined && !inRange(value, 0, Number.MAX_VALUE))
+      return `${name} has a ${key} that is not a number of 0 or more.`;
+  }
+  if (part.emissive !== undefined && !(typeof part.emissive === 'string' && HEX_COLOR.test(part.emissive)))
+    return `${name} has an emissive that is not a #rrggbb colour.`;
   if (part.smooth !== undefined && typeof part.smooth !== 'boolean')
-    return `Part "${part.name}" has a smooth that is not true or false.`;
+    return `${name} has a smooth that is not true or false.`;
+  if (part.texture !== undefined && !(MODEL_TEXTURES as readonly unknown[]).includes(part.texture))
+    return `${name} has a texture that is not one of: ${MODEL_TEXTURES.join(', ')}.`;
   return null;
 }
 

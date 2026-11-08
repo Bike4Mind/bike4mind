@@ -71,11 +71,11 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/common')>()),
   toSafeOrganization: (org: any) => org,
 }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   parseAdminActionReason: credit.parseAdminActionReason,
   recordAdminActionFromRequest: credit.recordAdminActionFromRequest,
 }));
-vi.mock('@server/entitlements/partnerRules', () => ({ invalidatePartnerRuleCache: vi.fn() }));
+vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({ invalidatePartnerRuleCache: vi.fn() }));
 vi.mock('@bike4mind/server-utils/models/Subscription', () => ({ subscriptionRepository: {} }));
 vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({ SubscriptionOwnerType: {} }));
 

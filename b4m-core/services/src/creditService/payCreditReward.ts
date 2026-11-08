@@ -69,7 +69,7 @@ export const isRewardPartyBlocked = (party: RewardPartyFields) =>
 
 /**
  * isRewardPartyBlocked plus an admin's grant block, for the account a reward pays. Hold time
- * (apps/client/server/referrals/firstAnswerReward.ts, the gears catalog) and release time both use it, so a
+ * (packages/server-utils/src/referrals/firstAnswerReward.ts, the gears catalog) and release time both use it, so a
  * reward never pays on release what it would have refused up front. It never applies to the invited friend of a
  * referral reward, so blocking a friend cannot hold the inviter's reward in the queue.
  */

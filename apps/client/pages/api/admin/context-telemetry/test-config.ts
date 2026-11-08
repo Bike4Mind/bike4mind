@@ -6,7 +6,7 @@ import { telemetryDryRunResultRepository, adminSettingsRepository, Quest } from 
 import { z } from 'zod';
 import { ApiKeyScope, ContextTelemetryAlertsSchema, type ContextTelemetry, ALERT_THRESHOLDS } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import {
   generateTelemetryFingerprint,
   generateSemanticTelemetryFingerprint,
@@ -19,7 +19,7 @@ import {
   getFallbackPriority,
   fetchExistingTelemetryIssues,
   fetchRecentlyClosedIssues,
-} from '@server/utils/telemetryIssueCreator';
+} from '@bike4mind/server-utils/utils/telemetryIssueCreator';
 
 const requestSchema = z.object({
   useSample: z.boolean().optional(),

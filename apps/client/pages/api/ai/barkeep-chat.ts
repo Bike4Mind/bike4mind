@@ -3,7 +3,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 import { ensureTavernAccess } from '@bike4mind/server-utils/utils/errors';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { HTTPError } from '@bike4mind/common';
 import { meterCompletionBackend } from '@bike4mind/services';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';

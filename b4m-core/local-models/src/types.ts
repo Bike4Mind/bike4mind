@@ -191,4 +191,5 @@ export interface LocalRuntime {
   loaded(): Promise<LoadedModel[]>;
 }
 
-export type OpenAICompatibleProduct = 'lmstudio' | 'llama-server' | 'vllm';
+/** `llama-swap` fronts other servers, so it gets only the generic OpenAI behavior. */
+export type OpenAICompatibleProduct = 'lmstudio' | 'llama-server' | 'vllm' | 'llama-swap';

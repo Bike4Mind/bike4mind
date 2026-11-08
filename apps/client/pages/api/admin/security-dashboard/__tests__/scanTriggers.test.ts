@@ -27,7 +27,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 vi.mock('@bike4mind/database', () => ({
   securityDashboardSnapshotRepository: { findLatestByStageAndScanType: h.findLatest },
 }));

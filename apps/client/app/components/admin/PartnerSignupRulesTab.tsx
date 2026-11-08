@@ -36,7 +36,7 @@ import { toast } from 'sonner';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import type { IPartnerSignupRuleDocument } from '@bike4mind/common';
 import { KNOWN_ENTITLEMENT_KEYS } from '@bike4mind/server-utils/lib/entitlements/registry';
-import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import { SUBSCRIPTION_PLANS } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import type { SubscriptionPlanDetail } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import {
   fetchPartnerSignupRules,
@@ -263,7 +263,7 @@ export default function PartnerSignupRulesTab() {
   const isEmpty = rules.length === 0 && !isPending;
 
   return (
-    <Box sx={{ p: 2 }} data-testid="partner-signup-rules-tab">
+    <Box data-testid="partner-signup-rules-tab">
       <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 2 }} gap={2}>
         <Box>
           <Stack direction="row" alignItems="center" gap={1}>

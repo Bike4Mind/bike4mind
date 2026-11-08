@@ -32,8 +32,8 @@ import {
   getActiveSubscriptionsForUser,
   getRequestActiveSubscriptions,
   type ActiveSubscriptionsRequest,
-} from '@server/entitlements/activeSubscriptions';
-import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
+} from '@bike4mind/server-utils/entitlements/activeSubscriptions';
+import { partnerEntitlementsForEmail } from '@bike4mind/server-utils/entitlements/partnerRules';
 import { resolvePaidStanding } from '@server/entitlements/paidStanding';
 import { PAID_PLAN_ENTITLEMENT_KEY, type IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
