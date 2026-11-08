@@ -59,7 +59,7 @@ export async function loadModelServers(
   };
 }
 
-export function findModelServer(servers: CliModelServer[], name: string): CliModelServer | undefined {
+export function findModelServer<T extends { name: string }>(servers: T[], name: string): T | undefined {
   const wanted = name.trim().toLowerCase();
   return servers.find(server => server.name === name) ?? servers.find(server => server.name.toLowerCase() === wanted);
 }

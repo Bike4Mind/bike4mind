@@ -723,6 +723,31 @@ describe('b4m models servers login and logout', () => {
     expect(output()).toContain("Removed the CLI's saved credentials for gone123");
   });
 
+  it.each(['typo', 'TYPO'])(
+    'logout as %s clears the credential of an SSH server whose saved port cannot be used',
+    async name => {
+      await writeServers([
+        record({
+          id: 'bad',
+          name: 'typo',
+          kind: 'openai-compatible',
+          auth: { type: 'bearer' },
+          transport: { type: 'ssh', destination: 'me@gpu-box', port: 0 },
+        }),
+      ]);
+      await expect(
+        run('servers', { action: 'login', name, 'token-stdin': true }, deps({ stdin: TOKEN }))
+      ).rejects.toThrow('typo cannot be used');
+      secrets.bad = TOKEN;
+      expect(await run('servers', { action: 'logout', name })).toBe(0);
+      expect(secrets).toEqual({});
+      expect(output()).toContain("Removed the CLI's saved credentials for typo");
+      lines.length = 0;
+      expect(await run('servers', { action: 'logout', name })).toBe(0);
+      expect(output()).toContain('The CLI has no saved credentials for typo.');
+    }
+  );
+
   it('asks for --token-stdin when there is no terminal to prompt on', async () => {
     await lockedServer();
     await expect(run('servers', { action: 'login', name: 'locked' }, deps({ isTTY: false }))).rejects.toThrow(
