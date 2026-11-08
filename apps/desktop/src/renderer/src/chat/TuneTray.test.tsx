@@ -4,8 +4,10 @@ import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type { ChatApprovalMode, ChatModelOption, ReasoningEffortSetting } from '@shared/chat';
+import type { GenerationSettings } from '@shared/generation';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApprovalModePill } from './ApprovalModePill';
+import { GenerationSettingsPicker } from './GenerationSettingsPicker';
 import { compactModelName } from './ModelPicker';
 import { PromptCacheTtlPicker } from './PromptCacheTtlPicker';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
@@ -117,6 +119,40 @@ describe('the composer tune tray', () => {
     expect(byTestId('prompt-cache-ttl-picker-btn')?.textContent).toBe('Cache: 5m');
     // No resets in the open tray: each knob's own menu holds its default.
     expect(byTestId('effort-picker-reset-btn')).toBeNull();
+  });
+});
+
+const LOCAL: ChatModelOption = {
+  id: 'local:ollama:qwen3:8b',
+  name: 'qwen3:8b',
+  controls: { temperature: { min: 0, max: 2, step: 0.05, default: 0.6, scope: 'request' } },
+};
+
+function ParamsKnob() {
+  const [generation, setGeneration] = useState<GenerationSettings | undefined>({ temperature: 1.2 });
+  return (
+    <CssVarsProvider>
+      <TuneTray>
+        {compact => (
+          <GenerationSettingsPicker model={LOCAL} generation={generation} compact={compact} onChange={setGeneration} />
+        )}
+      </TuneTray>
+    </CssVarsProvider>
+  );
+}
+
+describe('the Params knob in the tune tray', () => {
+  it('does not reopen its panel when the tray opens after the chip was reset', () => {
+    act(() => root.render(<ParamsKnob />));
+    act(() => byTestId('generation-settings-btn')?.click());
+    const resetAll = document.querySelector<HTMLElement>('[data-testid="generation-settings-reset-all-btn"]');
+    if (!resetAll) throw new Error('The Params panel did not open');
+    act(() => resetAll.click());
+    expect(byTestId('generation-settings-btn')).toBeNull();
+
+    act(() => byTestId('composer-tune-btn')?.click());
+    expect(byTestId('generation-settings-btn')?.getAttribute('aria-expanded')).toBe('false');
+    expect(document.querySelector('[data-testid="generation-settings-menu"]')).toBeNull();
   });
 });
 

@@ -241,7 +241,12 @@ export function GenerationSettingsPicker({
   const applied = fields.filter(({ field }) => generation?.[field] !== undefined && sent[field] !== undefined).length;
   const resettable = fields.some(({ field, control }) => !control.locked && generation?.[field] !== undefined);
   const firstEditable = fields.find(({ control }) => !control.locked)?.field;
-  if (compact && applied === 0) return null;
+  if (compact && applied === 0) {
+    // The chip and the open tray's knob are one instance, so an open panel left behind here would
+    // pop back up the next time the tray opens.
+    if (place) setPlace(null);
+    return null;
+  }
 
   const save = (next: GenerationSettings) => {
     pending.current = next;
