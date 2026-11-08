@@ -170,20 +170,30 @@ export type DetectionContext = {
 
 const EMPTY_RELATED: readonly ShadowDetectionRow[] = [];
 
-/** Other unreviewed rows that name one of each row's accounts, in list order. */
+/** The one account a row names, or undefined when it names none or several. */
+const soleAccount = (row: ShadowDetectionRow): string | undefined => {
+  const accounts = new Set(row.userIds);
+  return accounts.size === 1 ? [...accounts][0] : undefined;
+};
+
+/**
+ * Other unreviewed rows about the same single account, in list order. Only rows naming exactly one
+ * account relate: a campaign row names every member, so relating through it would let one verdict
+ * grade other accounts' detections.
+ */
 export const relatedUnreviewed = (rows: readonly ShadowDetectionRow[]): Map<string, ShadowDetectionRow[]> => {
   const byUser = new Map<string, ShadowDetectionRow[]>();
   for (const row of rows) {
-    if (row.verdict) continue;
-    for (const userId of row.userIds) byUser.set(userId, [...(byUser.get(userId) ?? []), row]);
+    const userId = soleAccount(row);
+    if (row.verdict || !userId) continue;
+    byUser.set(userId, [...(byUser.get(userId) ?? []), row]);
   }
   const related = new Map<string, ShadowDetectionRow[]>();
   for (const row of rows) {
-    const others = new Map<string, ShadowDetectionRow>();
-    for (const userId of row.userIds) {
-      for (const other of byUser.get(userId) ?? []) if (other.id !== row.id) others.set(other.id, other);
-    }
-    if (others.size > 0) related.set(row.id, [...others.values()]);
+    const userId = soleAccount(row);
+    if (!userId) continue;
+    const others = (byUser.get(userId) ?? []).filter(other => other.id !== row.id);
+    if (others.length > 0) related.set(row.id, others);
   }
   return related;
 };
@@ -320,6 +330,10 @@ const AccountLine: React.FC<{
   </Stack>
 );
 
+// A truncated scan can come back with no peer ids and still mean more signups exist, so it still shows.
+const hasBurstPeers = (peers: ShadowDetectionBurstPeers | undefined): peers is ShadowDetectionBurstPeers =>
+  !!peers && (peers.userIds.length > 0 || peers.truncated);
+
 const peerCount = (peers: ShadowDetectionBurstPeers) =>
   `${peers.userIds.length.toLocaleString()}${peers.truncated ? '+' : ''}`;
 
@@ -372,12 +386,12 @@ const Actor: React.FC<{ row: ShadowDetectionRow; context: DetectionContext }> = 
         <Box>
           <StatusChip
             tone="warn"
-            label={`${(related.length + 1).toLocaleString()} open detections`}
+            label={countOf(related.length + (row.verdict ? 0 : 1), 'open detection')}
             data-testid={`shadow-detection-related-${row.id}`}
           />
         </Box>
       )}
-      {peers && peers.userIds.length > 0 && <BurstPeersSummary rowId={row.id} peers={peers} />}
+      {hasBurstPeers(peers) && <BurstPeersSummary rowId={row.id} peers={peers} />}
       {row.network && (
         <Typography level="body-xs" noWrap title={formatNetwork(row.network)} sx={muted}>
           {formatNetwork(row.network)}
@@ -740,7 +754,7 @@ const DialogActors: React.FC<{ row: ShadowDetectionRow; now: number; context: De
         </Typography>
       )}
       {row.payment && <PaymentEvidence payment={row.payment} />}
-      {peers && peers.userIds.length > 0 && (
+      {hasBurstPeers(peers) && (
         <Stack gap={0.25} data-testid="shadow-detection-dialog-burst-peers">
           <Typography level="body-xs" sx={muted}>
             Other signups from this IP in the window ({peerCount(peers)})
@@ -1200,6 +1214,10 @@ export const ShadowDetectionsTab: React.FC = () => {
       }))
     : undefined;
   const selectedRows = selection.mode === 'allMatching' ? rows : rows.filter(row => selection.ids.includes(row.id));
+  // The bar counts only selected rows still listed: a row graded one by one or filtered out stays in
+  // `selection.ids`, and counting it would arm a bulk dialog with nothing to grade.
+  const listedSelection: AdminSelection =
+    selection.mode === 'allMatching' ? selection : { mode: 'explicit', ids: selectedRows.map(row => row.id) };
 
   /** The next unreviewed row after `current` in table order, skipping the ones just graded. */
   const nextUnreviewed = (current: ShadowDetectionRow, graded: readonly string[]) => {
@@ -1440,12 +1458,19 @@ export const ShadowDetectionsTab: React.FC = () => {
       />
       <CampaignWatchesPanel />
       <BulkActionBar
-        selection={selection}
+        selection={listedSelection}
         totalMatching={rows.length}
         onSelectAllMatching={() => setSelection({ mode: 'allMatching' })}
         onClear={() => setSelection({ mode: 'explicit', ids: [] })}
       >
-        <Button size="sm" onClick={() => setBulkGrading(true)} data-testid="shadow-detection-bulk-grade-btn">
+        <Button
+          size="sm"
+          disabled={selectedRows.length === 0}
+          onClick={() => {
+            if (selectedRows.length > 0) setBulkGrading(true);
+          }}
+          data-testid="shadow-detection-bulk-grade-btn"
+        >
           Record verdict
         </Button>
       </BulkActionBar>

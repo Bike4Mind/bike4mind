@@ -47,7 +47,7 @@ vi.mock('@tanstack/react-router', () => ({
   ),
 }));
 
-import ShadowDetectionsTab, { formatPaymentAmount } from './ShadowDetectionsTab';
+import ShadowDetectionsTab, { formatPaymentAmount, relatedUnreviewed } from './ShadowDetectionsTab';
 vi.mock('./CampaignWatches/CampaignWatchesPanel', () => ({ CampaignWatchesPanel: () => null }));
 vi.mock('./CampaignWatches/WatchAccountsButton', () => ({
   WatchAccountsButton: ({ incomplete }: { incomplete?: boolean }) => (
@@ -716,6 +716,60 @@ describe('ShadowDetectionsTab', () => {
       );
       expect(m.mutateAsync).not.toHaveBeenCalled();
       await waitFor(() => expect(screen.queryByTestId('shadow-detection-verdict-dialog')).toBeNull());
+    });
+
+    it("never relates a multi-account row, so one account's verdict cannot grade another's", () => {
+      const CAMPAIGN_ID = '111111111111111111111111';
+      const campaign = detection({ id: CAMPAIGN_ID, detector: 'accountCampaign', userIds: [ACTOR, PEER], revision: 3 });
+      const related = relatedUnreviewed([burst, spend, campaign, other]);
+
+      expect(related.get(DETECTION_ID)?.map(row => row.id)).toEqual([SPEND_ID]);
+      expect(related.get(SPEND_ID)?.map(row => row.id)).toEqual([DETECTION_ID]);
+      expect(related.has(CAMPAIGN_ID)).toBe(false);
+      expect(related.has(OTHER_ID)).toBe(false);
+    });
+
+    it("hides the campaign row from an account's apply-to-all in the dialog", async () => {
+      const CAMPAIGN_ID = '111111111111111111111111';
+      const campaign = detection({ id: CAMPAIGN_ID, detector: 'accountCampaign', userIds: [ACTOR, PEER], revision: 3 });
+      m.useShadowDetections.mockReturnValue(queryResult({ ...triageList(), data: [burst, campaign, other] }));
+      renderTab();
+      expect(screen.queryByTestId(`shadow-detection-related-${DETECTION_ID}`)).toBeNull();
+      expect(screen.queryByTestId(`shadow-detection-related-${CAMPAIGN_ID}`)).toBeNull();
+
+      const dialog = await openDialog(CAMPAIGN_ID);
+      expect(within(dialog).queryByTestId('shadow-detection-apply-related-checkbox')).toBeNull();
+    });
+
+    it('counts a graded row only by the open detections beside it', () => {
+      m.useShadowDetections.mockReturnValue(
+        queryResult({ ...triageList(), data: [{ ...burst, verdict: 'legitimate_human' }, spend, other] })
+      );
+      renderTab();
+      expect(screen.getByTestId(`shadow-detection-related-${DETECTION_ID}`).textContent).toBe('1 open detection');
+    });
+
+    it('shows a truncated burst even when the scan returned no peer ids', () => {
+      m.useShadowDetections.mockReturnValue(
+        queryResult({ ...triageList(), burstPeers: [{ detectionId: DETECTION_ID, userIds: [], truncated: true }] })
+      );
+      renderTab();
+      expect(screen.getByTestId(`shadow-detection-burst-peers-${DETECTION_ID}`).textContent).toContain('0+ other');
+    });
+
+    it('drops a selected row that leaves the list from the bulk bar', () => {
+      const { rerender } = renderTab();
+      fireEvent.click(within(screen.getByTestId(`admin-table-select-${SPEND_ID}`)).getByRole('checkbox'));
+      expect(screen.getByTestId('admin-bulk-action-bar').textContent).toContain('1 selected');
+
+      m.useShadowDetections.mockReturnValue(queryResult({ ...triageList(), data: [burst, other] }));
+      rerender(
+        <CssVarsProvider theme={appTheme}>
+          <ShadowDetectionsTab />
+        </CssVarsProvider>
+      );
+      expect(screen.queryByTestId('admin-bulk-action-bar')).toBeNull();
+      expect(screen.queryByTestId('shadow-detection-bulk-verdict-dialog')).toBeNull();
     });
 
     it('grades only the open detection when the account box is cleared', async () => {
