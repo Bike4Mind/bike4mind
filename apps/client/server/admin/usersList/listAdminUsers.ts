@@ -88,7 +88,9 @@ export async function adminUsersPipeline(
       ? funnelStepUserIds({ ...cohortWindow(filter, 'funnelStep'), step: filter.funnelStep }, cohortOptions)
       : undefined,
     filter.aiVerdict
-      ? listAiAbuseAdvisories(now).then(({ advisories }) => advisories.map(advisory => advisory.userId))
+      ? listAiAbuseAdvisories(now, { includeLinkedAccounts: false }).then(({ advisories }) =>
+          advisories.map(advisory => advisory.userId)
+        )
       : undefined,
   ]);
   const match = buildAdminUsersMatch(filter, {

@@ -5,7 +5,10 @@ const h = vi.hoisted(() => ({
   listUnreviewedSince: vi.fn(),
   aggregate: vi.fn(),
   findUsers: vi.fn(),
+  findLinked: vi.fn(),
 }));
+
+vi.mock('./linkedAdvisoryAccounts', () => ({ findLinkedAdvisoryAccounts: h.findLinked }));
 
 vi.mock('@bike4mind/database', () => ({
   shadowDetectionRepository: { listUnreviewedSince: h.listUnreviewedSince },
@@ -62,6 +65,7 @@ const network = (ip: string) => ({ ip, asn: 1, asnOrg: 'Org', country: 'EG', hos
 describe('listAiAbuseAdvisories', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.findLinked.mockResolvedValue({ accounts: [], truncated: false });
     // Every queried user exists and is not suspended unless a test says otherwise.
     h.findUsers.mockImplementation(async (filter: { _id: { $in: { id: string }[] } }) =>
       filter._id.$in.map(({ id }) => ({ _id: id }))
@@ -151,7 +155,10 @@ describe('listAiAbuseAdvisories', () => {
       userIds,
     });
     const group = (entries: ReturnType<typeof evidence>[]) =>
-      ({ evidence: entries }) as unknown as ShadowDetectionItem['group'];
+      ({
+        evidence: entries,
+        members: [1, 2, 3].map(value => ({ userId: userId(value), membership: 'direct' })),
+      }) as unknown as ShadowDetectionItem['group'];
     h.listUnreviewedSince.mockResolvedValue([
       detection({
         id: detectionId(1),
@@ -173,5 +180,60 @@ describe('listAiAbuseAdvisories', () => {
     const result = await listAiAbuseAdvisories(NOW);
     expect(result.truncated).toBe(true);
     expect(h.aggregate.mock.calls[0][0][0].$match.detectionId.$in).toHaveLength(500);
+  });
+
+  it('returns discovered connections separately without inheriting an AI probability', async () => {
+    h.listUnreviewedSince.mockResolvedValue([detection({ id: detectionId(1), userIds: [userId(1)] })]);
+    h.aggregate.mockResolvedValue([judgment(detectionId(1), 'abuse', 0.9)]);
+    const linked = {
+      userId: userId(2),
+      name: 'Example account',
+      links: [{ sourceUserId: userId(1), ip: '198.51.100.10', sourceKind: 'signup', candidateKind: 'login' }],
+    };
+    h.findLinked.mockResolvedValue({ accounts: [linked], truncated: true });
+    const result = await listAiAbuseAdvisories(NOW);
+    expect(result.advisories.map(row => row.userId)).toEqual([userId(1)]);
+    expect(result.linkedAccounts).toEqual([linked]);
+    expect(result.linkedAccounts[0]).not.toHaveProperty('abuseProbability');
+    expect(result.linkedAccountsStatus).toBe('truncated');
+    expect(h.findLinked).toHaveBeenCalledWith([userId(1)], NOW);
+  });
+
+  it('does not project a campaign verdict onto transitive members', async () => {
+    h.listUnreviewedSince.mockResolvedValue([
+      detection({
+        id: detectionId(1),
+        detector: 'accountCampaign',
+        userIds: [userId(1), userId(2)],
+        group: {
+          members: [
+            { userId: userId(1), membership: 'direct' },
+            { userId: userId(2), membership: 'transitive' },
+          ],
+          evidence: [],
+        } as unknown as ShadowDetectionItem['group'],
+      }),
+    ]);
+    h.aggregate.mockResolvedValue([judgment(detectionId(1), 'abuse', 0.9)]);
+    const result = await listAiAbuseAdvisories(NOW);
+    expect(result.advisories.map(row => row.userId)).toEqual([userId(1)]);
+    expect(h.findLinked).toHaveBeenCalledWith([userId(1)], NOW);
+  });
+
+  it('retains settled advisories and reports failed coverage if candidate discovery fails', async () => {
+    h.listUnreviewedSince.mockResolvedValue([detection({ id: detectionId(1), userIds: [userId(1)] })]);
+    h.aggregate.mockResolvedValue([judgment(detectionId(1), 'abuse', 0.9)]);
+    h.findLinked.mockRejectedValue(new Error('query failed'));
+    const result = await listAiAbuseAdvisories(NOW);
+    expect(result.advisories).toHaveLength(1);
+    expect(result.linkedAccountsStatus).toBe('failed');
+  });
+
+  it('skips candidate discovery for consumers that only need the settled abuse filter', async () => {
+    h.listUnreviewedSince.mockResolvedValue([detection({ id: detectionId(1), userIds: [userId(1)] })]);
+    h.aggregate.mockResolvedValue([judgment(detectionId(1), 'abuse', 0.9)]);
+    const result = await listAiAbuseAdvisories(NOW, { includeLinkedAccounts: false });
+    expect(result.advisories).toHaveLength(1);
+    expect(h.findLinked).not.toHaveBeenCalled();
   });
 });

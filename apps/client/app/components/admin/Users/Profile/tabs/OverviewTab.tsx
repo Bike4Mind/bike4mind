@@ -16,6 +16,7 @@ import { typesOfCategories } from '../activitySearch';
 import { CATEGORY_OPTIONS } from './ActivityTab';
 import type { ProfileAction } from '../actions/profileActions';
 import { RiskEvidenceCard } from '../RiskEvidenceCard';
+import { SignupClassificationCard } from '../SignupClassificationCard';
 import { UserNotesCard } from './UserNotesCard';
 import { OrganizationsCard } from './OrganizationsCard';
 import { ClientsCard } from './ClientsCard';
@@ -254,6 +255,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onView
       <OrganizationsCard user={user} onAudit={onAudit} />
       <AccessCard user={user} onAction={onAction} />
       <ClientsCard user={user} />
+      <SignupClassificationCard key={user.id} userId={user.id} />
       <RiskEvidenceCard userId={user.id} />
       <SectionCard
         title="Subscription"

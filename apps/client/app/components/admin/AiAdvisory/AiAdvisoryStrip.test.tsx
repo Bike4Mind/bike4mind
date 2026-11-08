@@ -35,6 +35,8 @@ const summary = (overrides: Partial<AiAdvisorySummaryResponse> = {}): AiAdvisory
   advisories: [],
   networks: [],
   mailDomains: [],
+  linkedAccounts: [],
+  linkedAccountsStatus: 'complete',
   truncated: false,
   ...overrides,
 });
@@ -97,5 +99,29 @@ describe('AiAdvisoryStrip', () => {
     mocks.data = summary({ advisories: [advisory('1'.repeat(24), 'accountCampaign')], truncated: true });
     render(<AiAdvisoryStrip />, { wrapper: Wrapper });
     expect(screen.getByTestId('admin-dashboard-ai-advisory-summary')).toHaveTextContent('1+ account likely abuse');
+  });
+
+  it('shows exact-IP candidates separately with provenance links and no inherited probability', () => {
+    mocks.data = summary({
+      advisories: [advisory('1'.repeat(24), 'accountCampaign')],
+      linkedAccounts: [
+        {
+          userId: '2'.repeat(24),
+          name: 'Example candidate',
+          links: [{ sourceUserId: '1'.repeat(24), ip: '198.51.100.10', sourceKind: 'signup', candidateKind: 'login' }],
+        },
+      ],
+    });
+    render(<AiAdvisoryStrip />, { wrapper: Wrapper });
+    const section = screen.getByTestId('ai-advisory-linked-accounts');
+    expect(section).toHaveTextContent('1 linked accounts to review - not AI abuse verdicts');
+    expect(section).toHaveTextContent('login IP 198.51.100.10');
+    expect(section).toHaveTextContent('No name-only or JA4-only matches');
+    expect(screen.getByText('Example candidate')).toHaveAttribute('href', `/admin/users/${'2'.repeat(24)}`);
+    expect(screen.getByText("flagged account's signup IP")).toHaveAttribute(
+      'href',
+      `/admin/users/${'1'.repeat(24)}?tab=signins`
+    );
+    expect(screen.getByTestId('admin-dashboard-ai-advisory-summary')).toHaveTextContent('1 account likely abuse');
   });
 });

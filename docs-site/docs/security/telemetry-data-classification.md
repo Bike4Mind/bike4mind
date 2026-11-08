@@ -444,6 +444,10 @@ Every authenticated request to a `baseApi` route records which client the accoun
 | Client seen    | `clientUsage.<web, desktop, cli or api>.firstSeenAt`, `lastSeenAt` | Account lifetime; deleted with the account | Usage statistics, hiding the desktop app prompt |
 | Client version | `clientUsage.<desktop or cli>.version`, at most 32 characters   | Account lifetime; deleted with the account | Usage statistics                                |
 
+## Related advisory accounts
+
+The admin AI advisory can derive one-hop review candidates from exact signup and successful-login IP observations in the preceding seven days. It reads existing user signup metadata and AuthEvent records, returns the matching account ids, current display names, IP and observation kinds to authorized admins, and does not persist another evidence store or extend source retention. Reads are bounded and high-population addresses are discounted. The candidate scan sends no extra data to an AI provider and does not apply an abuse verdict or account action to a linked candidate. Capped and failed coverage are reported separately.
+
 ## Manual campaign watches
 
 Admins can save a fixed group of accounts for manual follow-up independently of the rolling AI advisory. A watch contains its name, member user ids, an optional source detection id, owner id, status, revision and lifecycle timestamps. It also stores a hash of the originally selected ids to avoid duplicate open watches. It does not copy account names, emails, IPs, fingerprints or request histories. Account details are read from current user records when a watch is opened.
