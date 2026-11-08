@@ -33,7 +33,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 }));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
 const { mockPublish } = vi.hoisted(() => ({ mockPublish: vi.fn() }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: mockPublish } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: mockPublish } } }));
 const { mockPolicy, mockRequestApproval } = vi.hoisted(() => ({
   mockPolicy: vi.fn(),
   mockRequestApproval: vi.fn(),

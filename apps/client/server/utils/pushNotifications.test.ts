@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({ publish: vi.fn() }));
-vi.mock('./eventBus', () => ({ NotificationEvents: { Push: { publish: h.publish } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ NotificationEvents: { Push: { publish: h.publish } } }));
 const pushDelivery = vi.hoisted(() => ({ configured: true }));
 vi.mock('@bike4mind/server-utils/utils/pushDelivery', () => ({
   isPushDeliveryConfigured: () => pushDelivery.configured,

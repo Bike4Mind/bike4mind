@@ -15,7 +15,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({ userService: { adminDeleteUser: vi.fn() } }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
 vi.mock('@server/services/hardDeleteUser', () => ({ hardDeleteUser: mocks.hardDeleteUser }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   isSelfOrImpersonator: (user: { id: string }, id: string) => user.id === id,

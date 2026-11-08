@@ -29,7 +29,7 @@ vi.mock('@workers/utils/eventContext', () => ({
   },
 }));
 
-vi.mock('@server/utils/eventBus', async () => {
+vi.mock('@bike4mind/server-utils/utils/eventBus', async () => {
   const { PushNotificationEventSchema } = await import('@bike4mind/common');
   return { NotificationEvents: { Push: { schema: PushNotificationEventSchema } } };
 });

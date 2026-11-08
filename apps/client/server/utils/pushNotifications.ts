@@ -1,7 +1,7 @@
 import { PushNotificationEventSchema, type PushNotificationEvent } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { isPushDeliveryConfigured } from '@bike4mind/server-utils/utils/pushDelivery';
-import { NotificationEvents } from './eventBus';
+import { NotificationEvents } from '@bike4mind/server-utils/utils/eventBus';
 
 export { isPushDeliveryConfigured };
 
