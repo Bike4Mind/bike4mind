@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CreditHolderType } from '@bike4mind/common';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@client/lib/userSubscriptions/constants';
 import type { ResolveScopeDeps, ScopeKey } from './resolveScope';
 import { defaultPaidScopeDeps, resolvePaidScopes, type PaidScopeDeps } from './paidScopes';
 
@@ -8,12 +9,6 @@ const queryMocks = vi.hoisted(() => ({ find: vi.fn(), select: vi.fn(), lean: vi.
 vi.mock('@bike4mind/database', () => ({ Organization: { find: queryMocks.find } }));
 vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { findActiveSubscriptionsByOwners: vi.fn() },
-}));
-
-vi.mock('@client/lib/userSubscriptions/constants', () => ({
-  SUBSCRIPTION_PLANS: [],
-  SUBSCRIPTION_PLANS_MAP: { price_paid: { priceId: 'price_paid' } },
-  TEAM_PLAN: { priceId: 'price_team' },
 }));
 
 function createDeps() {
@@ -31,7 +26,11 @@ function createDeps() {
 }
 
 const userKey = (scopeId: string): ScopeKey => ({ scopeType: 'User', scopeId });
-const subscription = (ownerId: string, priceId = 'price_paid', status = 'active') => ({ ownerId, priceId, status });
+const subscription = (ownerId: string, priceId = SUBSCRIPTION_PLANS[0].priceId, status = 'active') => ({
+  ownerId,
+  priceId,
+  status,
+});
 
 describe('resolvePaidScopes', () => {
   it('does no reads for an empty candidate set', async () => {
@@ -54,9 +53,9 @@ describe('resolvePaidScopes', () => {
       scheduledCancellation,
       grant,
       subscription('unknown', 'price_unknown'),
-      subscription('canceled', 'price_paid', 'canceled'),
-      subscription('trial', 'price_paid', 'trialing'),
-      subscription('past-due', 'price_paid', 'past_due'),
+      subscription('canceled', SUBSCRIPTION_PLANS[0].priceId, 'canceled'),
+      subscription('trial', SUBSCRIPTION_PLANS[0].priceId, 'trialing'),
+      subscription('past-due', SUBSCRIPTION_PLANS[0].priceId, 'past_due'),
     ]);
     expect(await resolvePaidScopes(ids.map(userKey), scopeDeps, paidDeps)).toEqual(
       new Set(['User:paid', 'User:grant'])
@@ -88,7 +87,7 @@ describe('resolvePaidScopes', () => {
       { id: 'org-agent', name: 'Org agent', organizationId: 'paid-org' },
     ];
     paidDeps.findActiveSubscriptionsByOwners.mockImplementation(async ownerType =>
-      ownerType === SubscriptionOwnerType.User ? [subscription('paid')] : [subscription('paid-org', 'price_team')]
+      ownerType === SubscriptionOwnerType.User ? [subscription('paid')] : [subscription('paid-org', TEAM_PLAN.priceId)]
     );
     const keys: ScopeKey[] = [
       ...['personal', 'org-free', 'org-paid', 'missing-key'].map(scopeId => ({
@@ -127,7 +126,7 @@ describe('resolvePaidScopes', () => {
       { id: 'free-team', userId: 'free-owner', users: [{ userId: 'free-member', permissions: ['read'] }] },
     ]);
     paidDeps.findActiveSubscriptionsByOwners.mockImplementation(async ownerType =>
-      ownerType === SubscriptionOwnerType.Organization ? [subscription('team', 'price_team')] : []
+      ownerType === SubscriptionOwnerType.Organization ? [subscription('team', TEAM_PLAN.priceId)] : []
     );
     const ids = [
       'owner',
