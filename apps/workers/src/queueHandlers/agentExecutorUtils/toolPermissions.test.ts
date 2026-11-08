@@ -223,6 +223,7 @@ describe('partitionApprovedPause', () => {
 describe('resumeApprovedPause', () => {
   function makeDeps(overrides: Partial<Parameters<typeof resumeApprovedPause>[1]> = {}) {
     const deps: Parameters<typeof resumeApprovedPause>[1] = {
+      answerRepeatedCall: vi.fn(),
       executeGatedToolCall: vi.fn(async () => 'ok'),
       toCheckpoint: vi.fn(() => ({ iteration: 1 })),
       updatePermissionState: vi.fn(async () => {}),
@@ -250,6 +251,7 @@ describe('resumeApprovedPause', () => {
         approvedToolCallId: approved.id,
         approvedTools: [],
         deniedTools: [],
+        guardedToolNames: new Set<string>(),
       },
       deps
     );
@@ -284,6 +286,7 @@ describe('resumeApprovedPause', () => {
         approvedToolCallId: approved.id,
         approvedTools: [],
         deniedTools: [],
+        guardedToolNames: new Set<string>(),
       },
       deps
     );
@@ -321,6 +324,7 @@ describe('resumeApprovedPause', () => {
         approvedToolCallId: first.id,
         approvedTools: ['send_slack_message'],
         deniedTools: [],
+        guardedToolNames: new Set<string>(),
       },
       deps
     );
@@ -356,6 +360,7 @@ describe('resumeApprovedPause', () => {
         approvedToolCallId: approvedCall.id,
         approvedTools: [],
         deniedTools: [],
+        guardedToolNames: new Set<string>(),
       },
       deps
     );
@@ -375,11 +380,67 @@ describe('resumeApprovedPause', () => {
     expect(gatedArg.toolCallId).toBe(secondCall.id);
     expect(withheldArg).toEqual([secondCall]);
   });
+  describe('identical custom calls in one batch', () => {
+    const guarded = new Set(['custom_write']);
+    const params = (
+      withheld: ReturnType<typeof call>[],
+      approvedToolCallId: string | undefined,
+      approvedTools: string[]
+    ) => ({
+      executionId: 'exec_dup',
+      iterationIndex: 1,
+      withheld,
+      approvedToolCallId,
+      approvedTools,
+      deniedTools: [],
+      guardedToolNames: guarded,
+    });
+
+    it('replays one of two identical withheld calls and answers the sibling without a card', async () => {
+      const a = call('custom_write', { id: 1 });
+      const b = call('custom_write', { id: 1 });
+      const deps = makeDeps();
+
+      const outcome = await resumeApprovedPause(params([a, b], a.id, []), deps);
+
+      expect(outcome).toEqual({ status: 'replayed' });
+      expect(deps.executeGatedToolCall).toHaveBeenCalledTimes(1);
+      expect(deps.answerRepeatedCall).toHaveBeenCalledTimes(1);
+      expect(deps.answerRepeatedCall).toHaveBeenCalledWith(b);
+      expect(deps.settleGatedCall).not.toHaveBeenCalled();
+    });
+
+    it('replays once when a remembered approval allows both identical calls', async () => {
+      const a = call('custom_write', { id: 1 });
+      const b = call('custom_write', { id: 1 });
+      const deps = makeDeps();
+
+      const outcome = await resumeApprovedPause(params([a, b], undefined, ['custom_write']), deps);
+
+      expect(outcome).toEqual({ status: 'replayed' });
+      expect(deps.executeGatedToolCall).toHaveBeenCalledTimes(1);
+      expect(deps.answerRepeatedCall).toHaveBeenCalledTimes(1);
+      expect(deps.answerRepeatedCall).toHaveBeenCalledWith(b);
+    });
+
+    it('leaves identical calls to a non-guarded tool alone', async () => {
+      const a = call('image_generation', { prompt: 'cat' });
+      const b = call('image_generation', { prompt: 'cat' });
+      const deps = makeDeps();
+
+      const outcome = await resumeApprovedPause(params([a, b], undefined, ['image_generation']), deps);
+
+      expect(outcome).toEqual({ status: 'replayed' });
+      expect(deps.executeGatedToolCall).toHaveBeenCalledTimes(2);
+      expect(deps.answerRepeatedCall).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('resumeApprovedPauseAndGateConfidence', () => {
   function makeDeps(overrides: Partial<Parameters<typeof resumeApprovedPauseAndGateConfidence>[1]> = {}) {
     const deps: Parameters<typeof resumeApprovedPauseAndGateConfidence>[1] = {
+      answerRepeatedCall: vi.fn(),
       executeGatedToolCall: vi.fn(async () => 'ok'),
       toCheckpoint: vi.fn(() => ({ iteration: 1 })),
       updatePermissionState: vi.fn(async () => {}),
@@ -421,6 +482,7 @@ describe('resumeApprovedPauseAndGateConfidence', () => {
         approvedToolCallId: approved.id,
         approvedTools: [],
         deniedTools: [],
+        guardedToolNames: new Set<string>(),
         confidenceGateThreshold: 0.6,
       },
       deps
@@ -450,6 +512,7 @@ describe('resumeApprovedPauseAndGateConfidence', () => {
         approvedToolCallId: approved.id,
         approvedTools: [],
         deniedTools: [],
+        guardedToolNames: new Set<string>(),
         confidenceGateThreshold: 0.6,
       },
       deps
@@ -475,6 +538,7 @@ describe('resumeApprovedPauseAndGateConfidence', () => {
         approvedToolCallId: approved.id,
         approvedTools: [],
         deniedTools: [],
+        guardedToolNames: new Set<string>(),
         confidenceGateThreshold: 0.6,
       },
       deps
@@ -497,6 +561,7 @@ describe('resumeApprovedPauseAndGateConfidence', () => {
         approvedToolCallId: approved.id,
         approvedTools: [],
         deniedTools: [],
+        guardedToolNames: new Set<string>(),
         confidenceGateThreshold: 0.6,
         confidenceOverrides: [0.9, 0.1],
       },
@@ -527,6 +592,7 @@ describe('resumeApprovedPauseAndGateConfidence', () => {
         approvedToolCallId: approved.id,
         approvedTools: [],
         deniedTools: [],
+        guardedToolNames: new Set<string>(),
         confidenceGateThreshold: 0.6,
       },
       deps

@@ -13,6 +13,10 @@ vi.mock('./customMcpAccess', () => ({
   evaluateConnectionPolicy: mocks.evaluateConnectionPolicy,
 }));
 vi.mock('@bike4mind/database', () => ({ mcpConnectionRepository: { listForUser: mocks.listForUser } }));
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  getMcpPresetHost: (id: string | undefined) => (id === 'acme-preset' ? 'mcp.acme.test' : undefined),
+}));
 vi.mock('./invokeRemoteMcp', () => ({ invokeRemoteMcp: mocks.invokeRemoteMcp }));
 
 import { customMcpToolHost, isCustomToolStillOffered } from './customMcpToolHost';
@@ -70,6 +74,21 @@ describe('customMcpToolHost.listConnections', () => {
 
     expect(offers.map(o => o.connectionId)).toEqual(['acme']);
     expect(offers[0]).toMatchObject({ slug: 'acme', displayName: 'ACME', urlHost: 'mcp.acme.test' });
+  });
+
+  it('lists a catalog connection under a presets_only policy and drops a custom one', async () => {
+    mocks.resolveCustomMcpContext.mockResolvedValue({ enabled: true, policies: [policy()] });
+    mocks.listForUser.mockResolvedValue([
+      { ...connection('catalog', 'mcp.acme.test'), presetId: 'acme-preset' },
+      connection('custom', 'mcp.other.test'),
+    ]);
+    mocks.evaluateConnectionPolicy.mockImplementation((_ctx, { urlHost, presetRemoteHost }) => ({
+      allowed: presetRemoteHost !== undefined && presetRemoteHost === urlHost,
+    }));
+
+    const offers = await customMcpToolHost.listConnections('u1');
+
+    expect(offers.map(o => o.connectionId)).toEqual(['catalog']);
   });
 
   it('forbids writes when any policy forbids them and requires approval when any policy does', async () => {

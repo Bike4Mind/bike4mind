@@ -2928,8 +2928,11 @@ async function processExecution(
           deniedTools,
           confidenceGateThreshold: orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD,
           confidenceOverrides: execution.confidenceOverrides,
+          guardedToolNames: customToolNameSet,
         },
         {
+          answerRepeatedCall: call =>
+            agent.replaceLastToolResultObservation(call.id, REPEATED_APPROVED_CALL_OBSERVATION),
           executeGatedToolCall: async call => {
             const observation = await agent.executeGatedToolCall(call);
             justReplayedCalls.push(call);

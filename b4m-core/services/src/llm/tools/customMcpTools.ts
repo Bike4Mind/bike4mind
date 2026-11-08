@@ -114,7 +114,7 @@ const attr = (value: string) => value.replace(/["<>\r\n]/g, '');
 
 function wrapUntrusted(connection: CustomConnectorPendingRef, body: string): string {
   // Both tags: a spoofed opening tag could claim another connector's provenance mid-body.
-  const safe = body.replace(/<(\/?)untrusted_tool_result/gi, '<\\$1untrusted_tool_result');
+  const safe = body.replace(/<\s*(\/?)\s*untrusted_tool_result/gi, '<\\$1untrusted_tool_result');
   return `<untrusted_tool_result connector="${attr(connection.slug)}" host="${attr(connection.urlHost)}">\n${safe}\n</untrusted_tool_result>`;
 }
 
@@ -137,6 +137,7 @@ export function generateCustomMcpTools(
       return {
         name,
         _isMcpTool: true,
+        _isCustomMcpTool: true,
         toolFn: async (rawArgs: unknown) => {
           const args = (stripServerOnlyArgs(rawArgs) ?? {}) as Record<string, unknown>;
           if (needsApproval && requestApproval) {

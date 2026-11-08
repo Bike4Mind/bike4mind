@@ -133,6 +133,7 @@ describe('ReActAgent getSystemPrompt() artifact-emission composition', () => {
 describe('ReActAgent connector output guidance', () => {
   const connectorTool = {
     _isMcpTool: true,
+    _isCustomMcpTool: true,
     toolSchema: { name: 'acme__search', description: 'Search', parameters: { type: 'object', properties: {} } },
     toolFn: vi.fn(),
   } satisfies AgentContext['tools'][number];
@@ -146,7 +147,14 @@ describe('ReActAgent connector output guidance', () => {
   );
 
   it('keeps the notice out of agents with only native tools', async () => {
-    const prompt = await captureSystemPrompt({ tools: [{ ...connectorTool, _isMcpTool: false }] });
+    const prompt = await captureSystemPrompt({
+      tools: [{ ...connectorTool, _isMcpTool: false, _isCustomMcpTool: false }],
+    });
+    expect(prompt).not.toContain(CUSTOM_MCP_DATA_NOTICE);
+  });
+
+  it('keeps the notice out of agents whose only MCP tools are built in', async () => {
+    const prompt = await captureSystemPrompt({ tools: [{ ...connectorTool, _isCustomMcpTool: undefined }] });
     expect(prompt).not.toContain(CUSTOM_MCP_DATA_NOTICE);
   });
 });

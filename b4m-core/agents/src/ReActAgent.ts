@@ -1062,7 +1062,7 @@ export class ReActAgent extends EventEmitter {
     // (ReAct tool-use) guidance below. When no persona, behavior is unchanged.
     const persona = this.context.personaPrompt?.trim();
     const personaAndBase = persona ? `${persona}\n\n${base}` : base;
-    const composed = this.context.tools.some(tool => tool._isMcpTool)
+    const composed = this.context.tools.some(tool => tool._isCustomMcpTool)
       ? `${personaAndBase}\n\n${CUSTOM_MCP_DATA_NOTICE}`
       : personaAndBase;
 
