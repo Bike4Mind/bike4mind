@@ -99,7 +99,8 @@ export const ABUSE_ASSESSMENT_QUESTION: DecisionQuestion = {
     'Campaign evidence identifies which summarized members share each relationship and how many scanned',
     'accounts share it. Shared infrastructure, a fingerprint, or matching setup steps can also describe',
     'legitimate users; coordination alone does not establish abuse. Ignored relationships are not positive',
-    'evidence, and transitive membership alone does not justify action. Truncated evidence is incomplete.',
+    'evidence. Your verdict applies to every account on the detection, transitive members included; answer abuse',
+    'only if it is justified for the whole set, not just for directly linked accounts. Truncated evidence is incomplete.',
   ].join(' '),
   choices: [
     { value: 'abuse', description: 'Several independent signals point to coordinated abuse.' },
