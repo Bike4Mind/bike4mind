@@ -12,6 +12,7 @@ import type { RateLimitFilters } from './types';
 
 const RateLimitsTab: React.FC = () => {
   const [appliedFilters, setAppliedFilters] = useState<RateLimitFilters>({});
+  const [activeTab, setActiveTab] = useState<string>('overview');
 
   const { data: snapshots, isLoading, forceRefresh } = useRateLimitMetrics(appliedFilters);
 
@@ -92,7 +93,7 @@ const RateLimitsTab: React.FC = () => {
       {isLoading ? (
         <LoadingState label="Loading rate limit data" testId="rate-limit-loading" />
       ) : (
-        <Tabs defaultValue="overview" sx={{ bgcolor: 'transparent' }}>
+        <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as string)} sx={{ bgcolor: 'transparent' }}>
           <TabList>
             <Tab value="overview">Overview</Tab>
             <Tab value="raw">Raw data</Tab>
