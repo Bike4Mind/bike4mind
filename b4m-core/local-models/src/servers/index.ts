@@ -13,6 +13,7 @@ export {
   readSpecs,
   serverManagement,
   serverRuntimeId,
+  unusableServer,
   type DesktopDirsOptions,
   type DesktopModelServers,
   type HttpTransport,
@@ -29,6 +30,7 @@ export {
   type SshTransport,
   type StoredAuth,
   type StoredServer,
+  type UnusableServerRecord,
 } from './modelServerFile';
 export {
   leastTrusted,
