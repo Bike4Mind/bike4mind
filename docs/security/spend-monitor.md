@@ -51,7 +51,9 @@ Automatic paid limits require verified email, known account and responsible-owne
 `spendMonitorPaidAccountMinAgeDays` (default 7), and a known review state that allows the policy.
 An active recognized subscription or a dated unreversed credit-purchase stamp supplies paid standing.
 A purchase stamp with an invalid or future date cannot supply automatic paid standing. Credit
-purchase standing uses the existing refund/dispute-maintained stamp, not a checkout/customer ID.
+purchase standing uses the existing purchase stamp, not a checkout/customer ID. A refund or dispute
+clears a user's stamp once no unreversed purchase backs it. An organization's stamp is not cleared
+on reversal.
 
 Pending or banned reviews, a reopened review not subsequently approved, recorded payment-risk
 events, retained Radar-blocked payments, or elevated payment-risk outcomes select standard limits.

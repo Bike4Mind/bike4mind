@@ -204,7 +204,28 @@ describe('resolveAccountContexts', () => {
   });
 
   it('rejects malformed computed facts', () => {
-    expect(AccountContextSchema.safeParse({ accountAgeDays: -1 }).success).toBe(false);
+    const valid = {
+      accountAgeDays: 1,
+      responsibleAccountAgeDays: 1,
+      emailVerified: true,
+      reviewState: 'none',
+      riskScore: null,
+      reviewReopened: false,
+      paymentRiskEvent: false,
+      hasCreditPurchase: false,
+      lastCreditPurchaseAgeDays: null,
+      payments: {
+        status: 'missing',
+        succeeded: 0,
+        failed: 0,
+        radarBlocked: 0,
+        elevatedRisk: 0,
+        latestSucceededAgeDays: null,
+      },
+      evidence: { status: 'missing', ageHours: null },
+    };
+    expect(AccountContextSchema.safeParse(valid).success).toBe(true);
+    expect(AccountContextSchema.safeParse({ ...valid, accountAgeDays: -1 }).success).toBe(false);
   });
 });
 
