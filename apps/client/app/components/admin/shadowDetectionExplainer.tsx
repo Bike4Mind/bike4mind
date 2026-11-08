@@ -92,14 +92,14 @@ export function DetectionsIntro() {
           suggested responses are not actions applied by this table.
         </Typography>
         <Typography level="body-sm">
-          Detectors run in shadow mode: each one records what it would have done to an account or network, and nothing
-          is applied.
+          In shadow mode, detectors record suggested responses without applying them. Separate account controls can act
+          when enforcement is enabled; reviewing this table does not change that configuration.
         </Typography>
         <Typography level="body-sm">
           Grade each detection to measure its detector. A verdict changes nothing on the account. Once a detector
           version has {SHADOW_DETECTION_ENFORCE_BAR.minConclusive} conclusive verdicts at{' '}
-          {percent(SHADOW_DETECTION_ENFORCE_BAR.minPrecision)} precision or better, its automatic containment can be
-          considered for enforcement.
+          {percent(SHADOW_DETECTION_ENFORCE_BAR.minPrecision)} precision or better, an eligible detector can be
+          considered for enforcement. Review-only coordination detectors cannot trigger automatic containment.
         </Typography>
         <Typography level="body-sm">
           Found real abuse? Act on the account&apos;s user page. Suspending it there with an abuse reason also grades
@@ -143,7 +143,7 @@ const TERM_HELP = {
     term: 'Enforce bar',
     description: `Guidance, not a switch: ${SHADOW_DETECTION_ENFORCE_BAR.minConclusive} conclusive verdicts at ${percent(
       SHADOW_DETECTION_ENFORCE_BAR.minPrecision
-    )} precision or better. Automatic containment moves from shadow to enforce only when an admin changes its mode in admin settings, and that mode covers every detector at once.`,
+    )} precision or better. Automatic containment moves from shadow to enforce only when an admin changes its mode in admin settings, and that mode covers eligible detectors. Review-only coordination detectors remain excluded.`,
   },
 } as const;
 

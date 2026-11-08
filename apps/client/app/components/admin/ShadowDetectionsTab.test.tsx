@@ -224,8 +224,8 @@ describe('ShadowDetectionsTab', () => {
   it('defaults to unreviewed detections and renders rows and stats', () => {
     renderTab();
 
-    expect(screen.getByTestId('detections-start-here')).toHaveTextContent('Open Review evidence');
-    expect(screen.getByTestId('detections-start-here')).toHaveTextContent('does not change account access');
+    expect(screen.getByTestId('shadow-detection-intro')).toHaveTextContent('Open Review evidence');
+    expect(screen.getByTestId('shadow-detection-intro')).toHaveTextContent('does not change account access');
     expect(screen.getByText('Suggested response')).toBeInTheDocument();
 
     expect(m.useShadowDetections).toHaveBeenCalledWith({ detector: undefined, verdict: 'unreviewed' });
@@ -968,6 +968,11 @@ describe('ShadowDetectionsTab explanations', () => {
   it('explains the page until dismissed, remembers that, and reopens on request', () => {
     const { unmount } = renderTab();
     expect(screen.getByTestId('shadow-detection-intro').textContent).toContain('shadow mode');
+    expect(screen.queryByTestId('detections-start-here')).toBeNull();
+    expect(screen.getAllByText('How this page works')).toHaveLength(1);
+    expect(screen.getByTestId('shadow-detection-intro')).toHaveTextContent('Open Review evidence');
+    expect(screen.getByTestId('shadow-detection-intro')).toHaveTextContent('watch the campaign');
+    expect(screen.getByTestId('shadow-detection-intro')).toHaveTextContent('do not enable automatic alerts');
 
     fireEvent.click(screen.getByTestId('shadow-detection-intro-dismiss-btn'));
     expect(screen.queryByTestId('shadow-detection-intro')).toBeNull();
@@ -981,7 +986,7 @@ describe('ShadowDetectionsTab explanations', () => {
     expect(window.localStorage.getItem(DETECTIONS_INTRO_DISMISSED_KEY)).toBeNull();
   });
 
-  it('defines the terms on the summary and the Would column', () => {
+  it('defines the terms on the summary and the Suggested response column', () => {
     renderTab();
     for (const term of ['policy', 'recorded', 'graded', 'precision', 'falsePositives', 'enforceBar', 'would']) {
       expect(screen.getAllByTestId(`shadow-detection-help-${term}`).length).toBeGreaterThan(0);
