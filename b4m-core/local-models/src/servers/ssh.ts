@@ -3,6 +3,7 @@ import { chmod, mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Duplex } from 'node:stream';
+import { trackChild } from '../processTree';
 import type { FetchLike } from '../types';
 import { createServerFetch, ServerTransportError } from './serverFetch';
 
@@ -468,6 +469,7 @@ export function createSshFetch(endpoint: SshEndpoint, deps: SshDeps = {}): Fetch
       } catch {
         return resolve(null);
       }
+      trackChild(child);
       let out = '';
       // A `Match exec` grandchild can outlive ssh and hold the pipes open, so end its whole group and our pipe ends.
       const timer = setTimeout(() => {

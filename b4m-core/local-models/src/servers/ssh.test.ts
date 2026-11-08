@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { trackedChildCount } from '../processTree';
 import { describeFailure } from './failure';
 import { probeServer } from './probe';
 import { redactServerResponse } from './serverFetch';
@@ -762,6 +763,23 @@ describe('createSshFetch', () => {
 });
 
 describe('the ssh config read', () => {
+  it('tracks the pending config child until it exits', async () => {
+    const ssh = fakeSsh(1, { configNeverCloses: true });
+    const before = trackedChildCount();
+    const controller = new AbortController();
+    const fetch = createSshFetch(
+      { destination: 'me@gpu', label: 'gpu' },
+      { spawn: ssh.spawn, platform: 'linux', home: '/home/me', makeDir: async () => undefined }
+    );
+    const response = fetch(`${SSH_OLLAMA_URL}/api/version`, { signal: controller.signal });
+    await vi.waitFor(() => expect(ssh.children).toHaveLength(1));
+    expect(trackedChildCount()).toBe(before + 1);
+    controller.abort();
+    await expect(response).rejects.toThrow();
+    finish(ssh.children[0], 1);
+    await vi.waitFor(() => expect(trackedChildCount()).toBe(before));
+  });
+
   it('is read once and kept for the next request when the first request is aborted while it runs', async () => {
     const ssh = fakeSsh(await ollama(), { configDelayMs: 100 });
     const fetch = createSshFetch(
