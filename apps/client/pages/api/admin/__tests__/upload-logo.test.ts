@@ -13,9 +13,14 @@ const h = vi.hoisted(() => ({
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => unknown> = [];
     const chain = Object.assign(
-      (req: unknown, res: unknown) => routes[(req as { method?: string }).method ?? 'POST']?.(req, res),
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) await middleware(req, res, () => undefined);
+        return routes[(req as { method?: string }).method ?? 'POST']?.(req, res);
+      },
       {
+        use: (fn: (typeof middlewares)[number]) => (middlewares.push(fn), chain),
         post: (fn: (req: unknown, res: unknown) => unknown) => ((routes.POST = fn), chain),
         delete: (fn: (req: unknown, res: unknown) => unknown) => ((routes.DELETE = fn), chain),
       }
@@ -139,5 +144,22 @@ describe('upload-logo admin audit', () => {
 
     expect(error?.message).toBe('audit down');
     expect(res._isEndCalled()).toBe(false);
+  });
+});
+
+describe('/api/admin/upload-logo permission gate', () => {
+  it.each(['POST', 'DELETE'] as const)('refuses %s for a user without admin access before any work', async method => {
+    const { req, res } = createMocks({
+      method,
+      body: { fileName: 'logo.png', mimeType: 'image/png', fileSize: 321 },
+    });
+    (req as Record<string, unknown>).user = { id: 'user-1', isAdmin: false };
+
+    await expect((handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res)).rejects.toThrow(
+      /missing permission/i
+    );
+    expect(h.getSignedUrl).not.toHaveBeenCalled();
+    expect(h.deleteObject).not.toHaveBeenCalled();
+    expect(h.findOneAndUpdate).not.toHaveBeenCalled();
   });
 });

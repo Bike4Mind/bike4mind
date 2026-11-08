@@ -8,8 +8,15 @@ import { ApiKeyScope, type ISpendSummary } from '@bike4mind/common';
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
-    const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
-    chain.use = () => chain;
+    const middlewares: ((req: unknown, res: unknown, next: () => void) => unknown)[] = [];
+    const chain = async (req: { method: string }, res: unknown) => {
+      for (const middleware of middlewares) await middleware(req, res, () => undefined);
+      return handlers[req.method](req, res);
+    };
+    chain.use = (middleware: (typeof middlewares)[number]) => {
+      middlewares.push(middleware);
+      return chain;
+    };
     chain.get = (fn: (typeof handlers)[string]) => {
       handlers.GET = fn;
       return chain;
@@ -93,7 +100,7 @@ describe('GET /api/admin/spend', () => {
 
   it('rejects a non-admin', async () => {
     const { run } = call({ isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow(/missing permission/i);
     expect(mockSpendSummary).not.toHaveBeenCalled();
   });
 
