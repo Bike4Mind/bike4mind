@@ -51,7 +51,7 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class BadRequestError extends Error {},
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   EmailEvents: { Send: { publish: vi.fn() } },
 }));
 
@@ -71,7 +71,7 @@ vi.mock('@server/analytics/funnel', () => ({
 vi.mock('jsonwebtoken', () => ({ default: { sign: () => 'signed-token' } }));
 
 const mockRecordAdminAction = vi.fn();
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...args: unknown[]) => {
     insideTransactionAtAudit = inTransaction;
     return mockRecordAdminAction(...args);

@@ -15,7 +15,7 @@ import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-uti
 import { grantIndividualAdminSubscription } from '@server/subscriptions/grantIndividualAdminSubscription';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
-import { isSelfOrImpersonator, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { isSelfOrImpersonator, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { dayjs } from '@bike4mind/common';
 import { z } from 'zod';
 import { Resource } from 'sst';

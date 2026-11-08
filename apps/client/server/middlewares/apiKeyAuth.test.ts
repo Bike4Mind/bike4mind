@@ -32,8 +32,10 @@ vi.mock('@bike4mind/services', async importOriginal => ({
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 vi.mock('@bike4mind/database', () => ({ User: { findById: findByIdMock } }));
-vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
-vi.mock('@server/utils/apiKeyTrust', () => ({ resolveUntrustedKeyLimits: resolveUntrustedKeyLimitsMock }));
+vi.mock('@bike4mind/server-utils/auth/ability', () => ({ default: () => ({}) }));
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: resolveUntrustedKeyLimitsMock,
+}));
 vi.mock('@server/utils/apiKeyAccessGate', () => ({
   API_KEY_ACCESS_DENIED_MESSAGE: 'API keys require an active paid subscription',
   isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,

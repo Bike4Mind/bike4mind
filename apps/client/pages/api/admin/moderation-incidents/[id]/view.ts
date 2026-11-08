@@ -4,7 +4,7 @@ import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { adminApi } from '@server/middlewares/adminApi';
 import { requireStepUp } from '@server/auth/stepUp';
 import { signIncidentImage } from '@server/moderation/incidentImageLink';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
  * One reviewer view of an image moderation incident: who and what was flagged (the user, the

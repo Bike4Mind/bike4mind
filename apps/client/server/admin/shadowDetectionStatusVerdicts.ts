@@ -1,7 +1,7 @@
 import { isAbuseSuspensionReason, type ShadowDetectionItem } from '@bike4mind/common';
 import { shadowDetectionRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import type { AdminAuditWriter } from '@server/utils/adminAudit';
+import type { AdminAuditWriter } from '@bike4mind/server-utils/utils/adminAudit';
 
 export type AccountStatusChange = {
   userId: string;

@@ -5,7 +5,7 @@ import { creditGrantNeedsApproval } from '@server/admin/creditGrants/gate';
 import { GrantOrgSchema, grantOrg, validateGrantOrg } from '@server/admin/creditGrants/grantOrg';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { parseAdminActionReason } from '@server/utils/adminAudit';
+import { parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
 import type { Request } from 'express';
 
 // requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key

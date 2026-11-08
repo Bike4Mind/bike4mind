@@ -53,7 +53,9 @@ vi.mock('@bike4mind/services', () => ({
   counterService: { incrementUserCounter },
 }));
 
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+}));
 
 import '@pages/api/admin/users/[userId]/generate-api-key';
 

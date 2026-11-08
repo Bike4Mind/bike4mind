@@ -14,7 +14,7 @@ import {
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { withEventContext } from '@workers/utils/eventContext';
-import { NotificationEvents } from '@server/utils/eventBus';
+import { NotificationEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { truncateForPush } from '@server/utils/pushNotifications';
 import {
   apnsSigningKeyError,

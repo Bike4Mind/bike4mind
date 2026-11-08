@@ -27,7 +27,7 @@ vi.mock('@bike4mind/database', () => ({
   emailJobRepository: { create: h.create, listJobs: vi.fn() },
   emailTemplateRepository: { findById: h.findTemplate },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import handler from '../index';
 

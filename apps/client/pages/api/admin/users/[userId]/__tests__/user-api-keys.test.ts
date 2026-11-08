@@ -55,7 +55,7 @@ vi.mock('@bike4mind/services', () => ({
   userApiKeyService: { listUserApiKeys: (...a: unknown[]) => mockListKeys(...a) },
 }));
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', () => ({
   getApiKeyRateLimitUsage: (...a: unknown[]) => mockGetUsage(...a),
 }));
 

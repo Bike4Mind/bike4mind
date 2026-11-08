@@ -24,7 +24,7 @@ import {
   isSameUserId,
   isSelfOrImpersonator,
   recordAdminActionFromRequest,
-} from '@server/utils/adminAudit';
+} from '@bike4mind/server-utils/utils/adminAudit';
 import { approvalAuditDetails } from './auditWriter';
 
 const HOUR_MS = 60 * 60 * 1000;

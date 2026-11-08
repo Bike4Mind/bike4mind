@@ -23,7 +23,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: { checkout: { sessions: { list: mockListSessions } } },
 }));
-vi.mock('@client/lib/userSubscriptions/utils', () => ({ getEntitlingPlanByPriceId: mockPlan }));
+vi.mock('@bike4mind/server-utils/lib/userSubscriptions/utils', () => ({ getEntitlingPlanByPriceId: mockPlan }));
 
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import {

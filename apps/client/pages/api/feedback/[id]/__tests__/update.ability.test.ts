@@ -9,7 +9,7 @@ import { AbilityBuilder, createMongoAbility } from '@casl/ability';
  * main). So this replicates ability.ts's feedback rules exactly and asserts the
  * class-vs-instance behavior directly.
  *
- * MUST STAY IN SYNC with the feedback rules in `apps/client/server/auth/ability.ts`:
+ * MUST STAY IN SYNC with the feedback rules in `packages/server-utils/src/auth/ability.ts`:
  *   allow('update', FeedbackModel, { userId: user.id });   // every user
  *   if (user.isAdmin) allow('update', FeedbackModel);       // admins, unconditional
  */

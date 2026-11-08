@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { organizationRepository } from '@bike4mind/database';
-import { setSeats } from '@server/services/organizationService';
+import { setSeats } from '@bike4mind/server-utils/services/organizationService';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { voidOpenSubscriptionInvoices } from '@bike4mind/server-utils/integrations/stripe/dunning';
@@ -32,7 +32,7 @@ const { mockEmitBillingEvent, mockSubscriptionEventUser } = vi.hoisted(() => ({
   mockEmitBillingEvent: vi.fn(),
   mockSubscriptionEventUser: vi.fn(),
 }));
-vi.mock('@server/analytics/signupEvents', () => ({ emitBillingEvent: mockEmitBillingEvent }));
+vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({ emitBillingEvent: mockEmitBillingEvent }));
 // Which transitions post, and their wording, are covered in subscriptionLifecycle.test.ts.
 const { mockPostSubscriptionChangesToSlack } = vi.hoisted(() => ({ mockPostSubscriptionChangesToSlack: vi.fn() }));
 vi.mock('@server/integrations/slack/subscriptionLifecycle', () => ({
@@ -45,7 +45,7 @@ vi.mock('@server/analytics/billingEventDetails', () => ({
   subscriptionEventUser: mockSubscriptionEventUser,
 }));
 
-vi.mock('@server/services/organizationService', () => ({
+vi.mock('@bike4mind/server-utils/services/organizationService', () => ({
   setSeats: vi.fn(),
 }));
 
@@ -59,7 +59,7 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/dunning', () => ({
   voidOpenSubscriptionInvoices: vi.fn().mockResolvedValue({ voided: [], failed: [] }),
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   StripeEvents: {
     CustomerSubscriptionUpdated: { schema: { parse: (x: unknown) => x } },
   },

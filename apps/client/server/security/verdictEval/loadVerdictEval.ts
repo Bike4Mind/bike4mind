@@ -12,7 +12,7 @@ import {
   User,
   mongoose,
 } from '@bike4mind/database';
-import type { SignupTimeseriesRange } from '@client/app/utils/signupSignals';
+import type { SignupTimeseriesRange } from '@bike4mind/server-utils/app/utils/signupSignals';
 import type { VerdictEvalReport, VerdictEvalWindowDays } from '@client/app/utils/verdictEval';
 import { signupVerdictOf } from '@server/users/signupClassifier';
 import { getSignupVerdicts } from '@server/users/signupTimeseries';

@@ -14,7 +14,7 @@ import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-uti
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { priceAffectsEntitlements } from '@server/entitlements/paidStanding';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
 import { Resource } from 'sst';
 import { randomUUID } from 'crypto';

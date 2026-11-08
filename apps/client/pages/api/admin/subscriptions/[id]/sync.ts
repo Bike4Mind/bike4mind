@@ -34,7 +34,7 @@ import {
   isSelfOrImpersonator,
   parseAdminActionReason,
   recordAdminActionFromRequest,
-} from '@server/utils/adminAudit';
+} from '@bike4mind/server-utils/utils/adminAudit';
 import { Resource } from 'sst';
 
 type StripeSubscription = Awaited<ReturnType<typeof stripe.subscriptions.retrieve>>;

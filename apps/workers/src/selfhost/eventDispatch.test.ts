@@ -20,7 +20,7 @@ vi.mock('@workers/events/notebookCuration', () => ({ handler: handlers.notebookC
 vi.mock('@workers/events/sendPush', () => ({ handler: handlers.sendPush }));
 
 const { requestRiskEvidenceRefresh } = vi.hoisted(() => ({ requestRiskEvidenceRefresh: vi.fn() }));
-vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh }));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh }));
 
 const { dispatchSelfHostEvent } = await import('./eventDispatch');
 

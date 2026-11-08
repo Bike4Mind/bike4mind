@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const publish = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish } } }));
 
 import { buildEmailChangeMailer, publishEmailChangeMessages, type EmailChangeMessage } from './emailChangeMailer';
 

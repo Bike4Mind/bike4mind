@@ -5,7 +5,7 @@ import type { AdminApproval, IUserDeletion } from '@bike4mind/common';
 const mocks = vi.hoisted(() => ({ findById: vi.fn(), schedule: vi.fn(), audit: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ userRepository: { findById: mocks.findById } }));
 vi.mock('@server/users/accountDeletion', () => ({ scheduleAccountDeletion: mocks.schedule }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   isSelfOrImpersonator: (user: { id: string }, id: string) => user.id === id,
   recordAdminActionFromRequest: mocks.audit,
 }));

@@ -38,7 +38,7 @@ import {
   FILES_WRITE_OR_RELEASE_NOTES_SCOPES,
   FILES_WRITE_SCOPES,
   isReleaseNotesOnlyUpload,
-} from '@server/files/fileScopes';
+} from '@bike4mind/server-utils/files/fileScopes';
 import { getS3Url } from '@client/app/utils/s3Url';
 import { Resource } from 'sst';
 import { persistedIsAdmin, requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';

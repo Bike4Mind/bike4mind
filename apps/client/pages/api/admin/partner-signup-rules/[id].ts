@@ -13,9 +13,9 @@ import {
   invalidatePartnerRuleCache,
   assertKnownEntitlements,
   assertKnownSubscriptionPlan,
-} from '@server/entitlements/partnerRules';
+} from '@bike4mind/server-utils/entitlements/partnerRules';
 import { assertGrantPackageExists, assertOrganizationExists } from '@server/entitlements/assertOrganizationExists';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
 
 interface RequestQuery {

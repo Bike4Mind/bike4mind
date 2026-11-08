@@ -12,7 +12,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
-import { signupProtection } from '@server/auth/signupProtection';
+import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import { resolveSignupDripPeriod, type SignupDripPeriod } from './signupDripPeriod';
 
 type DripResult = Awaited<ReturnType<typeof userService.dripSignupGrant>>;

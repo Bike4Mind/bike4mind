@@ -1,4 +1,4 @@
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import type { ModalChange } from './modalOperations';
 
 type ModalAuditAction = 'settings.modal.created' | 'settings.modal.updated' | 'settings.modal.deleted';

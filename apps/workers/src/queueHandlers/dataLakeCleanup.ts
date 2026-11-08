@@ -20,7 +20,7 @@ import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { shredPrincipalMemory } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
 import { releaseDriveConnectionForLake } from '@bike4mind/server-utils/integrations/google/drive/common';
-import { releaseGitHubLakeConnectionForLake } from '@server/integrations/github/dataLake/githubLakeConnection';
+import { releaseGitHubLakeConnectionForLake } from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
 import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { BadRequestError } from '@bike4mind/utils';

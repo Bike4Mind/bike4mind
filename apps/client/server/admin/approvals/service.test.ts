@@ -18,7 +18,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: mocks.settings,
   getSettingsValue: (_key: string, _settings: unknown, fallback: unknown) => fallback,
 }));
-vi.mock('@server/utils/adminAudit', async () => {
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async () => {
   const { ForbiddenError } = await import('@bike4mind/common');
   return {
     recordAdminActionFromRequest: mocks.record,

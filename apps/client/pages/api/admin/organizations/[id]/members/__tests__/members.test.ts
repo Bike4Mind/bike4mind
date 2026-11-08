@@ -69,8 +69,8 @@ vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: moc
 vi.mock('@server/utils/keptPersonalLakeSharesNotifier', () => ({
   reportAndNotifyKeptPersonalLakeShares: mocks.keptShares,
 }));
-vi.mock('@server/utils/adminAudit', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>();
   return {
     ...actual,
     recordAdminActionFromRequest: mocks.audit,

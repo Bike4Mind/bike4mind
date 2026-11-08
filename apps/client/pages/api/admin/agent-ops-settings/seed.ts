@@ -1,7 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@client/server/middlewares/adminApi';
 import { agentOpsSettingsRepository } from '@bike4mind/database';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const DEFAULT_META_PROMPT = `You are the **PromptCrafter**, an expert at creating rich, personality-driven system prompts for AI agents that have REAL AGENCY, PURPOSE, and MISSIONS. These are not simple chatbots - they are beings with their own burning goals, active projects, and authentic motivations.
 

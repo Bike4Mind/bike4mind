@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { buildBundleScriptSrc, resolveDocOrigin } from '@server/services/publish/viewerSecurity';
+import { buildBundleScriptSrc, resolveDocOrigin } from '@bike4mind/server-utils/services/publish/viewerSecurity';
 
 /**
  * GET /api/artifact-sandbox - HTML iframe target for client-rendered artifacts.

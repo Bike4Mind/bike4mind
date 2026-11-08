@@ -9,7 +9,7 @@
 
 import type { Logger } from '@bike4mind/observability';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { SreEvents } from '@server/utils/eventBus';
+import { SreEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   adminSettingsRepository,
   apiKeyRepository,

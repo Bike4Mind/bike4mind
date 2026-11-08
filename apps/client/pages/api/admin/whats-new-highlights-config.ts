@@ -6,7 +6,7 @@ import { AdminSettings } from '@bike4mind/database';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { validateHighlightsTemplate } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.prompt';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { diffSettingChanges } from '@server/utils/adminSettingsAudit';
 
 // Rate limiting constants

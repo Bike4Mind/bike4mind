@@ -40,16 +40,16 @@ vi.mock('@bike4mind/database', () => ({
   grantPackageRepository: { findById: findPackage },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit }));
 // Keep assertKnownEntitlements real (exercises the actual known-key validation); spy only on invalidate.
-vi.mock('@server/entitlements/partnerRules', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/entitlements/partnerRules')>()),
+vi.mock('@bike4mind/server-utils/entitlements/partnerRules', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/entitlements/partnerRules')>()),
   invalidatePartnerRuleCache,
 }));
 
 // Importing the route registers handlers.put / handlers.delete via the mocked baseApi.
 import '@pages/api/admin/partner-signup-rules/[id]';
-import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import { SUBSCRIPTION_PLANS } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 
 type ReqOverrides = { user?: unknown; body?: unknown; query?: unknown };
 function makeReqRes(method: string, over: ReqOverrides = {}) {

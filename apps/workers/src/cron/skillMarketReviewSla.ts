@@ -6,7 +6,7 @@
 import { connectDB } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { runSkillMarketReviewSla } from '@server/skillMarket/reviewSla';
+import { runSkillMarketReviewSla } from '@workers/skillMarket/reviewSla';
 import { Resource } from 'sst';
 
 const logger = new Logger({ metadata: { service: 'skillMarketReviewSla' } });

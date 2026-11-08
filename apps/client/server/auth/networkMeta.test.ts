@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ForbiddenError } from '@bike4mind/common';
-vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
 
 const guardAccount = vi.fn(async (_id: string, write: () => Promise<unknown>) => write());
 vi.mock('./withAccountNotPurging', () => ({
@@ -21,7 +23,7 @@ vi.mock('./signupNetworkAlerts', () => ({
 }));
 
 import { readNetworkMeta, recordLoginEvent, recordSignupNetwork, type NetworkRequest } from './networkMeta';
-import { requestRiskEvidenceRefresh } from './riskEvidence';
+import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 
 const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 

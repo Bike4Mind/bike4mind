@@ -15,7 +15,7 @@ import {
   isDelinquentSubscriptionStatus,
   pickDisplayedSubscription,
 } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
+import { SUBSCRIPTION_PLANS_MAP } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { CreditsSection } from './CreditsSection';
 import CreditsExplanation from './CreditsExplanation';
 import { PlansSection, PlansSectionSkeleton } from './PlansSection';

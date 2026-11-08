@@ -2,7 +2,7 @@ import { adminService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository, withTransaction, SupportAccess } from '@bike4mind/database';
-import { impersonationLifetimeMs } from '@server/auth/impersonation';
+import { impersonationLifetimeMs } from '@bike4mind/server-utils/auth/impersonation';
 import { issueSessionForRequest } from '@server/auth/issueSession';
 import { readRefreshCookie, setAdminReturnCookie, setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
@@ -15,7 +15,7 @@ import {
   isSameUserId,
   parseAdminActionReason,
   recordAdminActionFromRequest,
-} from '@server/utils/adminAudit';
+} from '@bike4mind/server-utils/utils/adminAudit';
 import { getApprovalPolicy, redeemApproval, requestApproval } from '@server/admin/approvals/service';
 import { approvalDetails } from '@server/admin/creditGrants/approval';
 

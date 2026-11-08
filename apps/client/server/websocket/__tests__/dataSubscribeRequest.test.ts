@@ -107,7 +107,7 @@ vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   ),
 }));
 
-vi.mock('../../auth/ability', () => ({
+vi.mock('@bike4mind/server-utils/auth/ability', () => ({
   default: vi.fn(),
 }));
 

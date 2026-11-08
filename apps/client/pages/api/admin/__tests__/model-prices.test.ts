@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import type { IAdminAuditLogRepository } from '@bike4mind/common';
-import type { RecordAdminActionFromRequestInput } from '@server/utils/adminAudit';
+import type { RecordAdminActionFromRequestInput } from '@bike4mind/server-utils/utils/adminAudit';
 import { adminAuditService } from '@bike4mind/services';
 
 // Middleware stripped so the handler body runs directly (same pattern as
@@ -40,7 +40,7 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 const mockAudit = vi.hoisted(() => vi.fn(async () => null));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
 import handler, {
   MANUAL_REPRICE_BAND_ERROR_CODE,

@@ -76,7 +76,7 @@ const NOT_A_REWRITE = new Set([
   'apps/client/server/utils/mailer/emailAttachments.ts',
   'apps/client/server/generationJobs/wiring.ts',
   // Posts a clip to Slack (SlackClient.uploadFile); it writes no FabFile bytes.
-  'apps/client/server/generationJobs/slackJobDelivery.ts',
+  'packages/server-utils/src/generationJobs/slackJobDelivery.ts',
   'apps/workers/src/queueHandlers/orgFeedbackSummary.ts',
   'apps/workers/src/queueHandlers/questExport.ts',
   // Stages HTML and stores published-artifact thumbnails; neither upload rewrites FabFile content.

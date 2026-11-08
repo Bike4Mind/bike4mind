@@ -9,7 +9,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
-import { claimPendingAction } from '@server/utils/pendingActionExecutor';
+import { claimPendingAction } from '@bike4mind/server-utils/utils/pendingActionExecutor';
 import { loadFabFileAttachment, resolvePendingActionTarget } from '@bike4mind/server-utils/utils/pendingActionTarget';
 import { downloadAttachmentUrl } from '@bike4mind/server-utils/utils/downloadAttachmentUrl';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
@@ -120,7 +120,7 @@ const handler = baseApi().post(async (req, res) => {
   // After the cancel branch: cancelling executes nothing, so it stays available with the flag off.
   await assertMcpServerEnabled();
 
-  // Keep in sync with executePendingAction (server/utils/pendingActionExecutor.ts), the Slack
+  // Keep in sync with executePendingAction (packages/server-utils/src/utils/pendingActionExecutor.ts), the Slack
   // executor: same routing and file loading (pendingActionTarget.ts), expiry and claim-before-invoke
   // ordering. Only this route checks the selected repositories before invoking.
   const target = resolvePendingActionTarget(pendingAction.tool, user, logger);

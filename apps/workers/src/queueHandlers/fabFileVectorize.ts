@@ -1,4 +1,3 @@
-import { getVector, getVectors } from '@server/managers/fabFileManager';
 import {
   bindEmbeddingModel,
   buildEmbeddingRegistry,
@@ -13,6 +12,7 @@ import {
   usdToCredits,
   usdToCreditsStochastic,
 } from '@bike4mind/common';
+import { getVector, getVectors } from '@bike4mind/server-utils/managers/fabFileManager';
 import {
   adminSettingsRepository,
   apiKeyRepository,
@@ -51,13 +51,13 @@ import {
 } from '@bike4mind/services';
 import { reserveRequestCredits, type CreditReservation } from '@server/billing/reserveRequestCredits';
 import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
-import { activePlanResolver } from '@server/entitlements/activeSubscriptions';
+import { activePlanResolver } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 import { getEmbeddingModelCost, provenancePayloadShape } from '@bike4mind/common';
 import {
   finalizeBatchIfComplete,
   completedBatchStatus,
   deferFailureIfRetryable,
-} from '@server/dataLakes/dataLakeBatchProgress';
+} from '@bike4mind/server-utils/dataLakes/dataLakeBatchProgress';
 import { notifySlackIndexingComplete } from '@workers/queueHandlers/notifySlackIndexingComplete';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
 import {

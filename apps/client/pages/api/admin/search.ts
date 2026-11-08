@@ -3,7 +3,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { AdminSearchQuerySchema } from '@client/app/utils/adminEntitySearch';
 import { adminApi } from '@server/middlewares/adminApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { classifyAdminQuery } from '@server/admin/search/classifyQuery';
 import { searchAdminEntities } from '@server/admin/search/searchEntities';
 

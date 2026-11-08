@@ -62,7 +62,7 @@ vi.mock('@bike4mind/voice', () => ({
   deleteElevenLabsAgent: h.deleteElevenLabsAgent,
   getElevenLabsAgent: vi.fn(),
 }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: h.audit,
   definedKeys: (data: Record<string, unknown>) => Object.keys(data).filter(key => data[key] !== undefined),
 }));

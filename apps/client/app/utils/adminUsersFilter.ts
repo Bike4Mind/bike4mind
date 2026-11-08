@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { AdminUserListItem } from './adminUserProjection';
-import type { EmailDomainGroup } from './signupAnomaly';
+import type { EmailDomainGroup } from '@bike4mind/server-utils/app/utils/signupAnomaly';
 import { USER_AI_VERDICT_FILTERS } from './aiAdvisory';
 
 /**

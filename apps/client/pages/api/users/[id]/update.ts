@@ -46,7 +46,7 @@ import {
   readAdminActionReason,
   recordAdminActionFromRequest,
   requestAuditWriter,
-} from '@server/utils/adminAudit';
+} from '@bike4mind/server-utils/utils/adminAudit';
 import { gradeDetectionsForStatusChange } from '@server/admin/shadowDetectionStatusVerdicts';
 
 const idParamSchema = z.object({ id: z.string() });

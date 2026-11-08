@@ -8,7 +8,7 @@ import {
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { PURGED_USER_DATA } from '@server/services/purgeDeletedUserData';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 
 // The copy below describes what requestAccountDeletion and cancelAccountDeletion
 // (apps/client/server/users/accountDeletion.ts) and completeAccountDeletion do - keep in sync.

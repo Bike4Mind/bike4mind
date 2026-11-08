@@ -19,7 +19,7 @@ import {
   SIGNUP_TIMESERIES_RANGES,
   type SignupTimeseriesBucket,
   type SignupTimeseriesRange,
-} from '@client/app/utils/signupSignals';
+} from '@bike4mind/server-utils/app/utils/signupSignals';
 import { adminSurface } from '../shared/adminStyles';
 import { DataTable } from '../shared/DataTable';
 import { SignupChart, type SignupChartMode } from './SignupChart';

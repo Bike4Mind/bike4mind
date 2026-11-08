@@ -33,7 +33,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 }));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
 const { mockPublish } = vi.hoisted(() => ({ mockPublish: vi.fn() }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: mockPublish } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: mockPublish } } }));
 const { mockPolicy, mockRequestApproval } = vi.hoisted(() => ({
   mockPolicy: vi.fn(),
   mockRequestApproval: vi.fn(),
@@ -54,8 +54,8 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   withTransaction: (fn: () => unknown) => mockWithTransaction(fn),
 }));
-vi.mock('@server/utils/adminAudit', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>();
   return {
     ...actual,
     recordAdminActionFromRequest: (...a: unknown[]) => mockRecord(...a),
@@ -63,7 +63,7 @@ vi.mock('@server/utils/adminAudit', async importOriginal => {
   };
 });
 const { mockEmitBillingEvent } = vi.hoisted(() => ({ mockEmitBillingEvent: vi.fn() }));
-vi.mock('@server/analytics/signupEvents', () => ({ emitBillingEvent: mockEmitBillingEvent }));
+vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({ emitBillingEvent: mockEmitBillingEvent }));
 vi.mock('@server/services/purgeDeletedUserData', () => ({
   purgeDeletedUserData: (...a: unknown[]) => mockPurge(...a),
   readUserIntegrationGrants: (...a: unknown[]) => mockReadGrants(...a),

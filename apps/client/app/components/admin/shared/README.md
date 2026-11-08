@@ -98,7 +98,7 @@ Irreversible commands add `typedConfirm`; `tone="danger"` styles only the commit
 Forms that keep their own submit button use `ReasonPicker` directly with an
 `AdminReasonDraft`, submitting `composeAdminReason(draft)` and gating on
 `isAdminReasonComplete(draft)`. Every preset must pass the shared
-`adminActionReason` rule unchanged; `server/utils/adminAudit.test.ts` pins this.
+`adminActionReason` rule unchanged; `packages/server-utils/src/utils/adminAudit.test.ts` pins this.
 
 After a write that can be reversed, call `useUndoToast()` (the provider is mounted
 in `AdminPage`). `onUndo` must perform the reverse write, which records its own

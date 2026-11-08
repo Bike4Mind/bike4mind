@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import bcrypt from 'bcryptjs';
 import { authSessionRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { buildEmailLogoImg } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { STEP_UP_WINDOW_MS } from './stepUp';
 

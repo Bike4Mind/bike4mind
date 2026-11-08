@@ -12,7 +12,7 @@ import {
 } from '@server/admin/creditGrants/grantSubscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { parseAdminActionReason } from '@server/utils/adminAudit';
+import { parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
 import type { Request } from 'express';
 
 interface RequestQuery {

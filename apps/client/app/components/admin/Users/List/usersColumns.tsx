@@ -12,7 +12,7 @@ import {
   type SignupTimeseriesRange,
   type SignupVerdict,
   type SignupVerdicts,
-} from '@client/app/utils/signupSignals';
+} from '@bike4mind/server-utils/app/utils/signupSignals';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { adminFocus } from '../../shared/adminStyles';
 import { InitialsAvatar } from '../../shared/InitialsAvatar';

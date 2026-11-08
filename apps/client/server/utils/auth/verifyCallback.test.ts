@@ -5,7 +5,9 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 // Linking an account that promotes emailVerified runs applyEmailVerifiedGrants, which rescores.
 const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
-vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
 vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
 
 const mockFindOne = vi.fn();
@@ -98,7 +100,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
 
 // The real signupDomainGrant helper runs; only its rule lookup and side-effect leaves are stubbed.
 const mockPartnerGrant = vi.fn();
-vi.mock('@server/entitlements/partnerRules', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({
   partnerSignupGrantForEmail: (...args: unknown[]) => mockPartnerGrant(...args),
 }));
 vi.mock('@server/entitlements/invalidate', () => ({ pushEntitlementInvalidation: vi.fn() }));

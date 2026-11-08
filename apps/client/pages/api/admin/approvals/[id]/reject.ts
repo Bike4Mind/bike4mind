@@ -1,7 +1,7 @@
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { stepUpGate } from '@server/auth/stepUp';
 import { adminApi } from '@server/middlewares/adminApi';
-import { parseAdminActionReason } from '@server/utils/adminAudit';
+import { parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
 import { rejectApproval } from '@server/admin/approvals/service';
 
 /** Rejects, or lets the requester withdraw, a pending request. */

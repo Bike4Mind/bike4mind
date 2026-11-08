@@ -37,7 +37,7 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   },
 }));
 vi.mock('@server/admin/search/searchEntities', () => ({ searchAdminEntities: search }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit }));
 import handler from '../search';
 
 async function call(q: unknown, user: unknown = { id: 'admin', isAdmin: true }, method = 'GET') {

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { BadRequestError, NotFoundError, assertCanActOnAdminTarget } from '@bike4mind/common';
 import { userRepository, withTransaction } from '@bike4mind/database';
 import { adminApi } from '@server/middlewares/adminApi';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const bodySchema = z.object({ isInternal: z.boolean() });
 

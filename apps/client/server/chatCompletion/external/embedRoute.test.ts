@@ -134,7 +134,9 @@ vi.mock('@server/embed/embedSessionToken', () => ({ verifyEmbedSessionToken: moc
 
 const mockGetEffectiveLLMApiKeys = vi.hoisted(() => vi.fn());
 const mockCheckApiKeyRateLimit = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({ checkApiKeyRateLimit: mockCheckApiKeyRateLimit }));
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', () => ({
+  checkApiKeyRateLimit: mockCheckApiKeyRateLimit,
+}));
 
 const mockCheckEmbedSessionRateLimit = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/embedSessionRateLimit', () => ({ checkEmbedSessionRateLimit: mockCheckEmbedSessionRateLimit }));

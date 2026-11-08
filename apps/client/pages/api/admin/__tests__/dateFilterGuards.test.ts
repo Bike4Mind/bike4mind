@@ -49,7 +49,7 @@ vi.mock('@bike4mind/database', () => ({
   SlackAuditEventType: {},
 }));
 
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
   recordAdminActionForActor: vi.fn().mockResolvedValue(null),
 }));

@@ -41,7 +41,7 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   PostToConnectionCommand: vi.fn(),
 }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://example.test' } } }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import handler from '../cleanup';
 

@@ -21,7 +21,7 @@ const countActiveByUserId = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: { countActiveByUserId } }));
 
 const resolveApiKeyTrust = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/apiKeyTrust', () => ({ resolveApiKeyTrust }));
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({ resolveApiKeyTrust }));
 
 const findIdsAdministeredBy = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({ organizationRepository: { findIdsAdministeredBy } }));

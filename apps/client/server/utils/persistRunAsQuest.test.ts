@@ -19,7 +19,7 @@ vi.mock('@bike4mind/database', () => ({
 // depend on the event bus (which pulls in sst/queue wiring).
 const autoNamePublishMock = vi.fn().mockResolvedValue(undefined);
 const summarizePublishMock = vi.fn().mockResolvedValue(undefined);
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   SessionEvents: {
     AutoName: { publish: (...args: unknown[]) => autoNamePublishMock(...args) },
     Summarize: { publish: (...args: unknown[]) => summarizePublishMock(...args) },
@@ -29,7 +29,7 @@ vi.mock('@server/utils/eventBus', () => ({
 // Artifact persistence has its own suite; stub it here so this file keeps mocking
 // only agentExecutionRepository + Quest out of @bike4mind/database.
 const persistAgentArtifactsMock = vi.fn().mockResolvedValue(undefined);
-vi.mock('./persistAgentArtifacts', () => ({
+vi.mock('@bike4mind/server-utils/utils/persistAgentArtifacts', () => ({
   persistAgentArtifacts: (...args: unknown[]) => persistAgentArtifactsMock(...args),
 }));
 

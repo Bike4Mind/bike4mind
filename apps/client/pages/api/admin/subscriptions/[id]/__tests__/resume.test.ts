@@ -66,8 +66,8 @@ vi.mock('@server/admin/subscriptionsList/listAdminSubscriptions', () => ({
 }));
 
 const mockRecordAdminAction = vi.fn();
-vi.mock('@server/utils/adminAudit', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>();
   return { ...actual, recordAdminActionFromRequest: (...a: unknown[]) => mockRecordAdminAction(...a) };
 });
 import { stripeStateToken } from '@client/app/utils/adminSubscriptionDetail';

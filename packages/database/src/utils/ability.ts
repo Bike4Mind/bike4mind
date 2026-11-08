@@ -30,7 +30,7 @@ type AllowFn = AbilityBuilder<MongoAbility>['can'];
 /**
  * The shared user/group share arm, applied to every shareable resource.
  *
- * Called from BOTH ability builders - this one and apps/client/server/auth/ability.ts - so the two
+ * Called from BOTH ability builders - this one and packages/server-utils/src/auth/ability.ts - so the two
  * cannot drift. They previously kept hand-copied duplicates, which is how a cross-entry over-grant
  * (dotted `users.userId` + `users.permissions` instead of `$elemMatch`) and a missing `Project`
  * resource each survived in one copy while the other was correct.
@@ -132,7 +132,7 @@ export function defineAbilitiesFor(user: IUserDocument | undefined) {
 
     // Additional permissions for specific resources:
     allow('export', Session, ownDocumentPermission);
-    // Mirrors the HTTP builder's FabFile export rule (apps/client/server/auth/ability.ts).
+    // Mirrors the HTTP builder's FabFile export rule (packages/server-utils/src/auth/ability.ts).
     allow('export', FabFile, ownDocumentPermission);
     allow('clone', Session, ownDocumentPermission);
 
@@ -164,7 +164,7 @@ export function defineAbilitiesFor(user: IUserDocument | undefined) {
     // to a by-class `can(action, FeedbackModel)` check, which reports true as soon as any rule for
     // the action exists - so a feedback route must authorize against the fetched document instance
     // or narrow the query with accessibleBy(). A by-class check grants every non-admin the admin
-    // view. MUST STAY IN SYNC with the feedback rules in apps/client/server/auth/ability.ts.
+    // view. MUST STAY IN SYNC with the feedback rules in packages/server-utils/src/auth/ability.ts.
     allow(Permission.read, FeedbackModel, {
       userId: user.id,
     });
@@ -192,7 +192,7 @@ export function defineAbilitiesFor(user: IUserDocument | undefined) {
     allow(Permission.read, Prompt);
 
     // Prompt-library management: admin or developer (internal-staff bypass) - the
-    // SAME rule as the HTTP ability (apps/client/server/auth/ability.ts). Both
+    // SAME rule as the HTTP ability (packages/server-utils/src/auth/ability.ts). Both
     // definitions previously gated on the literal 'Analyst' tag with no admin
     // fallback; unified 2026-07-08 so the Slack/queue paths that consume this
     // db-core ability match the HTTP path and no longer depend on a retired tag.

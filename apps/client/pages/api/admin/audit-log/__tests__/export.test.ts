@@ -33,7 +33,7 @@ vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), error: vi.
 vi.mock('@bike4mind/database', () => ({
   adminAuditLogRepository: { list: (...a: unknown[]) => mockList(...a) },
 }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...a: unknown[]) => mockRecord(...a),
 }));
 vi.mock('@server/utils/adminAuditExportStorage', () => ({

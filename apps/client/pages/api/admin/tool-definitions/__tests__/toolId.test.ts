@@ -44,7 +44,7 @@ vi.mock('@client/app/utils/toolMapping', () => ({
   TOOL_MAPPING: { web_search: { description: 'Search the web for current information.', displayName: 'Web Search' } },
   TOOL_CATEGORIES: { web_search: 'Search' },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import handler from '../[toolId]';
 

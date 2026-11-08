@@ -4,7 +4,7 @@ import { useSubscribePlan } from '@client/app/hooks/data/subscriptions';
 import { billingLandingHref } from '@client/app/utils/billingDeepLink';
 import { getErrorMessage } from '@client/app/utils/error';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
-import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
+import { SUBSCRIPTION_PLANS_MAP } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { Button, Card, LinearProgress, Stack, Typography } from '@mui/joy';
 import { useNavigate, useRouter, useSearch } from '@tanstack/react-router';
 import { useEffect } from 'react';

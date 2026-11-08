@@ -33,7 +33,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   }),
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   LLMEvents: {
     SlackCompletionStart: { schema: { parse: (v: unknown) => v } },
     CompletionCompleted: { publish: vi.fn() },
@@ -98,7 +98,7 @@ vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) 
 describe('slackQuestProcessor getStaticOptions', () => {
   it('wires the shared operational billing adapter into tool execution', async () => {
     const { getStaticOptions } = await import('./slackQuestProcessor');
-    const { operationalBillingAdapters } = await import('@server/billing/operationalBilling');
+    const { operationalBillingAdapters } = await import('@bike4mind/server-utils/billing/operationalBilling');
 
     expect(getStaticOptions().db.operationalBilling).toBe(operationalBillingAdapters);
   }, 120_000);
