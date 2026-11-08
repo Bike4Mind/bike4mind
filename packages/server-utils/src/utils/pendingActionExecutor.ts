@@ -110,6 +110,13 @@ export async function executePendingAction(
     return { success: false, message: 'This action has expired. Please start the request again.' };
   }
 
+  // Custom connector tool names can shadow built-in ones (e.g. `create_issue`), so routing one by name
+  // would run it against the built-in server. Only the web route (pages/api/mcp/confirm.ts) runs them.
+  if (pendingAction.customConnector) {
+    logger.warn('[PendingActionExecutor] Custom connector action cannot be confirmed here', { questId });
+    return { success: false, message: 'This action can only be confirmed in the Bike4Mind app.' };
+  }
+
   if (pendingAction.tool === 'share_curated_file') {
     const { fileId, userId, workspaceId, channelId } = pendingAction.params;
     if (
