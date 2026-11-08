@@ -256,6 +256,15 @@ describe('ChatCompletion /process', () => {
     await post(VALID_BODY, { authorization: AUTH });
 
     await vi.waitFor(() => expect(mockEmitMetrics).toHaveBeenCalledTimes(1));
+    const logger = mockProcessQuest.mock.calls[0][1] as {
+      error: ReturnType<typeof vi.fn>;
+      warn: ReturnType<typeof vi.fn>;
+    };
+    expect(logger.error).toHaveBeenCalledWith('Quest processing failed', expect.objectContaining({ error: 'boom' }));
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      'Quest processing ended with an expected provider error',
+      expect.anything()
+    );
     expect(mockCategorizeToolError).toHaveBeenCalledWith('boom');
     expect(mockEmitMetrics).toHaveBeenCalledWith(QUESTS_NAMESPACE, [
       expect.objectContaining({

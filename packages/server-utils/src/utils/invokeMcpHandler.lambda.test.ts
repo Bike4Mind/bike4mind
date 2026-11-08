@@ -128,7 +128,10 @@ describe('invokeMcpHandler on the deployed Lambda path', () => {
         Payload: encode({ errorMessage }),
       });
 
-      await expect(invokeMcpHandler(payload)).rejects.toThrow(`MCP handler invocation failed: ${errorMessage}`);
+      const error = await invokeMcpHandler(payload).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(ExpectedToolError);
+      expect((error as Error).message).toBe(`MCP handler invocation failed: ${errorMessage}`);
       expect(mockLocalMcpHandler).not.toHaveBeenCalled();
     }
   );
