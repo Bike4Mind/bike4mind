@@ -665,6 +665,21 @@ describe('b4m models servers login and logout', () => {
     expect(secrets).toEqual({ ccc: TOKEN });
   });
 
+  it('logout by name removes the credential of a saved server Desktop cannot use', async () => {
+    await writeServers([
+      record({
+        id: 'bad',
+        name: 'typo',
+        auth: { type: 'bearer' },
+        transport: { type: 'ssh', destination: 'me@lab', port: 0 },
+      }),
+    ]);
+    secrets.bad = TOKEN;
+    await run('servers', { action: 'logout', name: 'typo' });
+    expect(secrets).toEqual({});
+    expect(output()).toContain("Removed the CLI's saved credentials for typo");
+  });
+
   it('logout accepts the raw id of a server Desktop no longer lists', async () => {
     secrets.gone123 = TOKEN;
     await run('servers', { action: 'logout', name: 'gone123' });

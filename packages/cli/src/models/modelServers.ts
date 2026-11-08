@@ -72,9 +72,13 @@ export function unusableReason(server: UnusableServerRecord): string {
   return `${clean(server.name)} cannot be used: ${unusableStatus(server)}`;
 }
 
-export function noSuchServer(loaded: LoadedModelServers, name: string): Error {
+export function findUnusableServer(loaded: LoadedModelServers, name: string): UnusableServerRecord | undefined {
   const wanted = name.trim().toLowerCase();
-  const unusable = loaded.unusable?.find(server => server.name.toLowerCase() === wanted);
+  return loaded.unusable?.find(server => server.name.toLowerCase() === wanted);
+}
+
+export function noSuchServer(loaded: LoadedModelServers, name: string): Error {
+  const unusable = findUnusableServer(loaded, name);
   if (unusable) return new Error(unusableReason(unusable));
   const known = loaded.servers.map(server => clean(server.name)).join(', ');
   const detail = loaded.problem ?? (known ? `Saved servers: ${known}.` : 'No model servers are saved in Desktop.');
