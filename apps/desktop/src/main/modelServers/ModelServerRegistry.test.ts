@@ -2194,7 +2194,7 @@ describe('ModelServerRegistry SSH servers', () => {
     );
     const { registry: servers, sshCalls, sent } = sshSetup(file);
     const views = await servers.views();
-    expect(views.map(view => view.name)).toEqual(['This computer', 'typo', 'text', 'hostile']);
+    expect(views.map(view => view.name)).toEqual(['This computer', 'typo', 'text', 'hostile', 'other']);
     const port = 'Its saved SSH port is not a number from 1 to 65535. Remove this server and add it again.';
     expect(views[1]).toMatchObject({
       id: 'a1',
@@ -2216,6 +2216,10 @@ describe('ModelServerRegistry SSH servers', () => {
         error: 'Its saved SSH destination is not one ssh can be given safely. Remove this server and add it again.',
       },
     });
+    expect(views[4]).toMatchObject({
+      address: 'unusable address',
+      health: { state: 'refused', error: 'It has no saved SSH destination. Remove this server and add it again.' },
+    });
     expect(JSON.stringify(views)).not.toContain('ProxyCommand');
     expect(JSON.stringify(views)).not.toContain(TOKEN);
     await servers.check();
@@ -2229,7 +2233,7 @@ describe('ModelServerRegistry SSH servers', () => {
     expect(sent).toEqual([]);
 
     const left = await servers.remove('a1');
-    expect(left.map(view => view.name)).toEqual(['This computer', 'text', 'hostile']);
+    expect(left.map(view => view.name)).toEqual(['This computer', 'text', 'hostile', 'other']);
     const stored = JSON.parse((await file.read()) as string) as { servers: { id: string }[] };
     expect(stored.servers.map(server => server.id)).toEqual(['a2', 'a3', 'a4']);
   });

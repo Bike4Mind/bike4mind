@@ -358,6 +358,7 @@ describe('b4m models servers', () => {
       record({ id: 'sss', name: 'lab', transport: { type: 'ssh', destination: 'me@lab' } }),
       record({ id: 'bad', name: 'typo', transport: { type: 'ssh', destination: 'me@lab', port: 99999 } }),
       record({ id: 'opt', name: 'hostile', transport: { type: 'ssh', destination: '-oProxyCommand=x', port: 22 } }),
+      record({ id: 'nod', name: 'blank', transport: { type: 'ssh', host: 'gpu-box' } }),
     ]);
     const ssh = fakeSsh({ 11434: ollama.baseUrl });
     const why = 'Remove it in Desktop and add it again.';
@@ -369,6 +370,9 @@ describe('b4m models servers', () => {
       )
     );
     expect(output()).toMatch(/hostile\s+Ollama\s+unusable address\s+Manage\s+none\s+Its saved SSH destination is not/);
+    expect(output()).toMatch(
+      new RegExp(`blank\\s+Ollama\\s+unusable address\\s+Manage\\s+none\\s+It has no saved SSH destination\\. ${why}`)
+    );
     expect(output()).not.toContain('ProxyCommand');
     expect(ssh.forwards.every(forward => forward.port === 11434)).toBe(true);
 
@@ -381,6 +385,7 @@ describe('b4m models servers', () => {
       ['lab', 'ssh me@lab', 'online'],
       ['typo', 'ssh me@lab', 'refused'],
       ['hostile', 'unusable address', 'refused'],
+      ['blank', 'unusable address', 'refused'],
     ]);
     expect(parsed.servers[1].status.text).toBe(`Its saved SSH port is not a number from 1 to 65535. ${why}`);
 
