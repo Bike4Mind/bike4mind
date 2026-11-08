@@ -101,9 +101,11 @@ vi.mock('@bike4mind/utils', async importOriginal => {
 
 import { adminSettingsRepository } from '@bike4mind/database';
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
+import { createImageProviderRegistry } from '@bike4mind/utils/imageProviders';
 import { createMusicProviderRegistry } from '@bike4mind/utils/musicProviders';
 import { createVideoProviderRegistry } from '@bike4mind/utils/videoProviders';
 import {
+  buildImageProviders,
   buildMusicProviders,
   buildProviders,
   checkStorageFor,
@@ -425,6 +427,13 @@ describe('buildProviders', () => {
   it('builds a registry the catalog-owner check accepts', () => {
     process.env.ENABLE_TEST_VIDEO_PROVIDER = 'true';
     expect(() => createVideoProviderRegistry(buildProviders())).not.toThrow();
+  });
+});
+
+describe('buildImageProviders', () => {
+  it('registers the OpenAI and Gemini adapters, which the catalog accepts', () => {
+    expect(buildImageProviders().map(provider => provider.id)).toEqual(['openai', 'gemini']);
+    expect(() => createImageProviderRegistry(buildImageProviders())).not.toThrow();
   });
 });
 
