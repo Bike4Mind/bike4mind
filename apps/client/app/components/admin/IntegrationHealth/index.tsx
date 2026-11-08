@@ -32,7 +32,7 @@ const AdminIntegrationHealthTab: React.FC = () => {
 
   if (isLoading) {
     return (
-      <Box sx={{ p: 6 }}>
+      <Box>
         <LinearProgress />
         <Typography level="body-sm" sx={{ mt: 1, color: 'text.secondary' }}>
           Loading integration health data...
@@ -43,7 +43,7 @@ const AdminIntegrationHealthTab: React.FC = () => {
 
   if (isError) {
     return (
-      <Box sx={{ p: 6 }} data-testid="integration-health-error-state">
+      <Box data-testid="integration-health-error-state">
         <Alert color="danger" variant="soft" sx={{ mb: 2 }}>
           Failed to load integration health data: {error?.message || 'Unknown error'}
         </Alert>
@@ -56,7 +56,7 @@ const AdminIntegrationHealthTab: React.FC = () => {
 
   if (!data || data.integrations.length === 0) {
     return (
-      <Box sx={{ p: 6, textAlign: 'center' }} data-testid="integration-health-empty-state">
+      <Box sx={{ textAlign: 'center' }} data-testid="integration-health-empty-state">
         <Typography level="h4" color="neutral">
           No integration health data yet
         </Typography>
@@ -68,7 +68,7 @@ const AdminIntegrationHealthTab: React.FC = () => {
   }
 
   return (
-    <Box sx={{ p: { xs: 2, md: 6 } }}>
+    <Box>
       {probeError && (
         <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="probe-error-alert">
           Probe failed: {probeError.message || 'Unknown error'}

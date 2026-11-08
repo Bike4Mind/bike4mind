@@ -2403,7 +2403,7 @@ export default function SreAgentTab() {
   }, [rawConfig]);
 
   return (
-    <Box sx={{ p: 2 }}>
+    <Box>
       <Typography level="h4" sx={{ mb: 0.5 }}>
         SRE Agent
       </Typography>

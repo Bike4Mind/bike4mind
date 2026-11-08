@@ -191,7 +191,7 @@ function PairsSection() {
 
 export default function PreferenceArenaTab() {
   return (
-    <Box sx={{ p: { xs: 2, md: 4 } }} data-testid="preference-arena-tab">
+    <Box data-testid="preference-arena-tab">
       <Stack gap={3}>
         <AdminPageHeader
           title="Preference arena"

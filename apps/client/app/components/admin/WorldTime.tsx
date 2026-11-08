@@ -353,7 +353,7 @@ const WorldTimeTab: React.FC = () => {
   }, [cities]);
 
   return (
-    <Box sx={{ position: 'relative', minHeight: '100vh', p: 3, overflow: 'hidden' }}>
+    <Box sx={{ position: 'relative', overflow: 'hidden' }}>
       {/* Dynamic background */}
       <BackgroundGradient isDaytime={globalTimeState} />
 

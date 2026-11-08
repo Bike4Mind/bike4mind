@@ -98,7 +98,7 @@ const DocumentationTab: React.FC = () => {
   }, [searchTerm, selectedCategory, documentationData]);
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box>
       <Stack spacing={3}>
         {/* Search and Filters */}
         <Card sx={{ p: 2 }}>
