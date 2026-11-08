@@ -1292,6 +1292,12 @@ describe('ShadowDetectionsTab why explanations', () => {
     expect(attribution).toHaveTextContent('By Latest Admin');
     expect(attribution).toHaveTextContent('Latest review');
     expect(attribution).not.toHaveTextContent('Earlier review');
+    const history = screen.getByTestId('shadow-detection-history');
+    expect(
+      within(history)
+        .getAllByTestId('shadow-detection-history-source')
+        .map(entry => entry.textContent)
+    ).toEqual(['By Latest Admin', 'By Earlier Admin']);
   });
 
   it('marks a verdict recorded by a suspension as automatic', () => {

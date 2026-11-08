@@ -531,7 +531,7 @@ const VerdictHistory: React.FC<{ row: ShadowDetectionRow; now: number; reviewers
   now,
   reviewers,
 }) => {
-  const newestFirst = [...row.verdicts].sort((a, b) => b.reviewedAt.localeCompare(a.reviewedAt));
+  const newestFirst = [...row.verdicts].reverse().sort((a, b) => b.reviewedAt.localeCompare(a.reviewedAt));
   return (
     <Stack gap={0.5} data-testid="shadow-detection-history">
       <Typography level="body-xs" sx={muted}>
