@@ -23,6 +23,19 @@ describe('SaveBar', () => {
     expect(onDiscard).toHaveBeenCalledOnce();
   });
 
+  it.each(['metaKey', 'ctrlKey'])('ignores %s save shortcuts while a dialog is open', modifier => {
+    const onSave = vi.fn();
+    render(
+      <>
+        <SaveBar count={1} onSave={onSave} onDiscard={vi.fn()} />
+        <div role="dialog" />
+      </>,
+      { wrapper }
+    );
+    fireEvent.keyDown(window, { key: 's', [modifier]: true });
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   it('blocks invalid and pending saves and removes its shortcut on unmount', () => {
     const onSave = vi.fn();
     const { rerender, unmount } = render(
