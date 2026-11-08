@@ -1,4 +1,4 @@
-import type { ModelBuildReport, ModelPose, ModelView, ModelViewState } from '@shared/model3d';
+import type { ModelBuildReport, ModelLighting, ModelPose, ModelView, ModelViewState } from '@shared/model3d';
 import type { CustomCommand } from '@bike4mind/cli/skills';
 import type { VideoModel } from '@bike4mind/common';
 import type { BrowserSnapshot } from '@shared/browserPage';
@@ -338,6 +338,8 @@ export interface ModelViewPort {
   open(path: string): Promise<ModelViewState>;
   waitForBuild(): Promise<ModelBuildReport>;
   capture(views: ModelView[], pose?: ModelPose): Promise<Uint8Array>;
+  /** An 8 s turntable clip of the current model, as WebM. */
+  recordTurntable(lighting: ModelLighting): Promise<Uint8Array>;
   glbPath(): string | null;
 }
 

@@ -5,6 +5,8 @@ import { basename, dirname } from 'node:path';
 import {
   EMPTY_MODEL_STATE,
   type ModelBuildReport,
+  type ModelCaptureRequest,
+  type ModelLighting,
   type ModelPose,
   type ModelView,
   type ModelViewState,
@@ -16,7 +18,7 @@ import { realpathNearest } from '../tools/paths';
 import { withPathLock } from '../tools/writeTools';
 import { isModelPaneGlbFile, stampModelPaneGlb } from './glbMarker';
 
-export type ModelCaptureRequest = { id: string; views: ModelView[]; pose: ModelPose };
+export type { ModelCaptureRequest };
 
 export type ModelLiveViewEvents = {
   state: (state: ModelViewState) => void;
@@ -30,6 +32,8 @@ export type ModelLiveViewOptions = {
   debounceMs?: number;
   buildTimeoutMs?: number;
   captureTimeoutMs?: number;
+  /** How long a turntable clip may take to render and encode; it is drawn in real time. */
+  recordTimeoutMs?: number;
 };
 
 type Waiter = {
@@ -93,6 +97,7 @@ export class ModelLiveView {
   private readonly debounceMs: number;
   private readonly buildTimeoutMs: number;
   private readonly captureTimeoutMs: number;
+  private readonly recordTimeoutMs: number;
 
   constructor(
     private readonly events: ModelLiveViewEvents,
@@ -101,6 +106,7 @@ export class ModelLiveView {
     this.debounceMs = options.debounceMs ?? 150;
     this.buildTimeoutMs = options.buildTimeoutMs ?? 30_000;
     this.captureTimeoutMs = options.captureTimeoutMs ?? 15_000;
+    this.recordTimeoutMs = options.recordTimeoutMs ?? 90_000;
   }
 
   current(): ModelViewState {
@@ -280,7 +286,20 @@ export class ModelLiveView {
   }
 
   /** Renders in one window, after that window has reported the current generation. */
-  async capture(views: ModelView[], pose: ModelPose = 'rest'): Promise<Uint8Array> {
+  capture(views: ModelView[], pose: ModelPose = 'rest'): Promise<Uint8Array> {
+    return this.render(id => ({ id, views, pose }), this.captureTimeoutMs, 'a screenshot');
+  }
+
+  /** A turntable clip of the current model as WebM, rendered like `capture`. */
+  recordTurntable(lighting: ModelLighting): Promise<Uint8Array> {
+    return this.render(id => ({ id, kind: 'turntable', lighting }), this.recordTimeoutMs, 'the turntable video');
+  }
+
+  private async render(
+    request: (id: string) => ModelCaptureRequest,
+    timeoutMs: number,
+    what: string
+  ): Promise<Uint8Array> {
     const target = this.events.captureTarget();
     if (target === null) throw new Error('No Bike4Mind window is open to render the model.');
     if (this.reported.get(target) !== this.state.generation) await this.nextReport(target);
@@ -288,10 +307,10 @@ export class ModelLiveView {
     return new Promise<Uint8Array>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.captures.delete(id);
-        reject(new Error('The model pane did not return a screenshot in time.'));
-      }, this.captureTimeoutMs);
+        reject(new Error(`The model pane did not return ${what} in time.`));
+      }, timeoutMs);
       this.captures.set(id, { resolve, reject, timer });
-      if (!this.events.captureRequest(target, { id, views, pose })) {
+      if (!this.events.captureRequest(target, request(id))) {
         clearTimeout(timer);
         this.captures.delete(id);
         reject(new Error('No Bike4Mind window is open to render the model.'));
@@ -305,7 +324,7 @@ export class ModelLiveView {
     this.captures.delete(id);
     clearTimeout(pending.timer);
     if (result.bytes && result.bytes.length) pending.resolve(result.bytes);
-    else pending.reject(new Error(result.error || 'The model pane could not render a screenshot.'));
+    else pending.reject(new Error(result.error || 'The model pane could not render it.'));
   }
 
   dispose(): void {

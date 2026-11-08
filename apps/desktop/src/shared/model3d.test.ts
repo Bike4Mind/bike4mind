@@ -3,6 +3,7 @@ import {
   describeJoints,
   jointsOf,
   formatModelSummary,
+  isModelExportFormat,
   modelKindFor,
   partTreeError,
   siblingGlbPath,
@@ -213,8 +214,34 @@ describe('partTreeError', () => {
     [part('knob', { metalness: 1.5 }), 'metalness that is not a number from 0 to 1'],
     [part('knob', { roughness: Number.NaN }), 'roughness that is not a number from 0 to 1'],
     [part('knob', { smooth: 'yes' as unknown as boolean }), 'smooth that is not true or false'],
+    [part('knob', { clearcoat: 2 }), 'clearcoat that is not a number from 0 to 1'],
+    [part('knob', { sheen: -0.1 }), 'sheen that is not a number from 0 to 1'],
+    [part('knob', { transmission: Number.NaN }), 'transmission that is not a number from 0 to 1'],
+    [part('knob', { ior: 0.9 }), 'ior that is not a number from 1 to 2.333'],
+    [part('knob', { ior: 3 }), 'ior that is not a number from 1 to 2.333'],
+    [part('knob', { thickness: -1 }), 'thickness that is not a number of 0 or more'],
+    [
+      part('knob', { emissiveIntensity: Number.POSITIVE_INFINITY }),
+      'emissiveIntensity that is not a number of 0 or more',
+    ],
+    [part('knob', { emissive: 'orange' }), 'emissive that is not a #rrggbb colour'],
+    [part('knob', { emissive: 7 as unknown as string }), 'emissive that is not a #rrggbb colour'],
+    [part('plank', { texture: 'oak' as unknown as 'wood' }), 'texture that is not one of: wood, brushed'],
   ])('refuses a material %#', (bad, message) => {
     expect(partTreeError([bad])).toContain(message);
+  });
+
+  it('accepts glass, varnish, cloth and a glowing part', () => {
+    expect(
+      partTreeError([
+        part('glass', { transmission: 1, ior: 1.5, thickness: 2, roughness: 0.05 }),
+        part('lid', { clearcoat: 1 }),
+        part('cushion', { sheen: 0.8 }),
+        part('lamp', { emissive: '#FFAA00', emissiveIntensity: 4 }),
+        part('plank', { texture: 'wood' }),
+        part('plate', { texture: 'brushed', metalness: 1 }),
+      ])
+    ).toBeNull();
   });
 
   it('accepts a metal, smooth part', () => {
@@ -268,5 +295,12 @@ describe('describeJoints', () => {
       },
     });
     expect(text).toContain('Joints: lid: pivot (0, 1, 2), in body');
+  });
+});
+
+describe('isModelExportFormat', () => {
+  it('admits the model formats and the turntable video, nothing else', () => {
+    expect(['glb', 'stl', 'webm'].every(isModelExportFormat)).toBe(true);
+    expect(['mp4', 'GLB', '', null, 3].some(isModelExportFormat)).toBe(false);
   });
 });

@@ -86,7 +86,7 @@ describe('ModelLiveView', () => {
           return target === WINDOW;
         },
       },
-      { debounceMs: 20, buildTimeoutMs: 200, captureTimeoutMs: 100 }
+      { debounceMs: 20, buildTimeoutMs: 200, captureTimeoutMs: 100, recordTimeoutMs: 100 }
     );
   });
 
@@ -366,9 +366,28 @@ describe('ModelLiveView', () => {
     view.reportBuild({ generation: 1, ok: true }, WINDOW);
     const pending = view.capture(['front', 'iso']);
     await vi.waitFor(() => expect(captureRequests).toHaveLength(1));
-    expect(captureRequests[0].views).toEqual(['front', 'iso']);
+    expect(captureRequests[0]).toMatchObject({ views: ['front', 'iso'] });
     view.resolveCapture(captureRequests[0].id, { bytes: new Uint8Array([1, 2]) });
     await expect(pending).resolves.toEqual(new Uint8Array([1, 2]));
+  });
+
+  it('asks a window for a turntable in the given lighting and resolves with its clip', async () => {
+    await view.open(file);
+    view.reportBuild({ generation: 1, ok: true }, WINDOW);
+    const pending = view.recordTurntable('night');
+    await vi.waitFor(() => expect(captureRequests).toHaveLength(1));
+    expect(captureRequests[0]).toMatchObject({ kind: 'turntable', lighting: 'night' });
+    view.resolveCapture(captureRequests[0].id, { bytes: new Uint8Array([26, 69]) });
+    await expect(pending).resolves.toEqual(new Uint8Array([26, 69]));
+  });
+
+  it('passes on the error a window reports for a turntable', async () => {
+    await view.open(file);
+    view.reportBuild({ generation: 1, ok: true }, WINDOW);
+    const pending = view.recordTurntable('studio');
+    await vi.waitFor(() => expect(captureRequests).toHaveLength(1));
+    view.resolveCapture(captureRequests[0].id, { error: 'This app cannot record WebM video.' });
+    await expect(pending).rejects.toThrow(/cannot record WebM/);
   });
 
   it('fails a capture with no window, and on timeout', async () => {

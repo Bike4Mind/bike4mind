@@ -1,8 +1,8 @@
 import { realpath, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron';
+import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
-import { type ModelBuildReport, siblingGlbPath } from '@shared/model3d';
+import { isModelExportFormat, type ModelBuildReport, siblingGlbPath } from '@shared/model3d';
 import { stampModelPaneGlb } from './glbMarker';
 import type { ModelLiveView } from './ModelLiveView';
 
@@ -89,6 +89,34 @@ function windowOf(event: IpcMainInvokeEvent): BrowserWindow | null {
   return BrowserWindow.fromWebContents(event.sender);
 }
 
+/** Recordings in flight per renderer. */
+const recordingCounts = new Map<WebContents, number>();
+const watchedSenders = new WeakSet<WebContents>();
+
+/**
+ * A backgrounded window's timers fire about once a second, which would draw a clip in slow motion,
+ * so throttling is off while any recording runs. It is a count, not a flag: the pane's Record and
+ * the agent's off-screen model_record can overlap in one window, and the first to finish must not
+ * re-enable throttling under the other. A reload or a closed window ends its recordings, so either
+ * one resets the count.
+ */
+export function setRecording(sender: WebContents, active: boolean): void {
+  if (!watchedSenders.has(sender)) {
+    watchedSenders.add(sender);
+    const reset = (): void => {
+      if (!recordingCounts.delete(sender) || sender.isDestroyed()) return;
+      sender.setBackgroundThrottling(true);
+    };
+    // did-navigate fires for a main-frame load or reload, not for in-page (hash) navigation.
+    sender.on('did-navigate', reset);
+    sender.once('destroyed', reset);
+  }
+  const count = Math.max(0, (recordingCounts.get(sender) ?? 0) + (active ? 1 : -1));
+  if (count > 0) recordingCounts.set(sender, count);
+  else recordingCounts.delete(sender);
+  sender.setBackgroundThrottling(count === 0);
+}
+
 /**
  * Renderer -> main handlers for the model pane. Every write lands where ModelLiveView allows
  * (the open model's sibling GLB, its params) or where the user chose in a save dialog.
@@ -126,27 +154,29 @@ export function modelIpcHandlers(view: ModelLiveView): void {
   });
 
   ipcMain.handle(IPC_CHANNELS.modelSaveExport, async (event, value: unknown) => {
-    if (
-      !isRecord(value) ||
-      (value.format !== 'glb' && value.format !== 'stl') ||
-      !(value.bytes instanceof Uint8Array)
-    ) {
+    if (!isRecord(value) || !isModelExportFormat(value.format) || !(value.bytes instanceof Uint8Array)) {
       return null;
     }
     const format = value.format;
     const current = view.current().path;
     const stem = current ? basename(current).replace(/\.(model\.js|glb|stl)$/i, '') : 'model';
+    const fileName = format === 'webm' ? `${stem}-turntable.webm` : `${stem}.${format}`;
     const window = windowOf(event);
     const options: Electron.SaveDialogOptions = {
-      title: `Export ${format.toUpperCase()}`,
+      title: format === 'webm' ? 'Save turntable video' : `Export ${format.toUpperCase()}`,
       // Beside the model, where a game project keeps its assets, not wherever the last dialog was.
-      defaultPath: current ? join(dirname(current), `${stem}.${format}`) : `${stem}.${format}`,
+      defaultPath: current ? join(dirname(current), fileName) : fileName,
       filters: [{ name: format.toUpperCase(), extensions: [format] }],
     };
     const picked = await (window ? dialog.showSaveDialog(window, options) : dialog.showSaveDialog(options));
     if (picked.canceled || !picked.filePath) return null;
-    await writeExport(format, value.bytes, picked.filePath, current);
+    if (format === 'webm') await writeFile(picked.filePath, value.bytes);
+    else await writeExport(format, value.bytes, picked.filePath, current);
     return picked.filePath;
+  });
+
+  ipcMain.handle(IPC_CHANNELS.modelSetRecording, (event, active: unknown) => {
+    if (typeof active === 'boolean') setRecording(event.sender, active);
   });
 
   ipcMain.on(IPC_CHANNELS.modelCaptureResult, (_event, value: unknown) => {

@@ -58,6 +58,8 @@ export function ModelJoints({ joints, units, angles, onChange }: Props) {
           variant={playing ? 'soft' : 'plain'}
           color="neutral"
           onClick={() => setPlaying(value => !value)}
+          aria-label={playing ? 'Stop the joints' : 'Play the joints open and shut'}
+          aria-pressed={playing}
           data-testid="model-pane-joints-play-btn"
         >
           {playing ? 'Stop' : 'Play'}
@@ -87,6 +89,7 @@ export function ModelJoints({ joints, units, angles, onChange }: Props) {
                 setPlaying(false);
                 onChange({ ...angles, [name]: value });
               }}
+              getAriaValueText={value => jointReadout(joint, value, units)}
               slotProps={{ input: { 'aria-label': `${name} position` } }}
               data-testid={`model-pane-joint-${name}`}
             />

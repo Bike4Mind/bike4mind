@@ -20,6 +20,7 @@ import {
   summarizeObject,
   summarizeParts,
 } from './modelScene';
+import { renderTurntable } from './turntable';
 
 /** Must match MODEL_ENGINE_URL / MODEL_ENGINE_ORIGIN in main/chat/model3d/engineProtocol.ts. */
 const ENGINE_URL = 'b4m-model://engine/';
@@ -254,13 +255,23 @@ export function useModelEngine(dark: boolean): ModelEngine {
 
   useEffect(
     () =>
-      window.b4m.model.onCaptureRequest(({ id, views, pose }) => {
+      window.b4m.model.onCaptureRequest(request => {
+        const { id } = request;
         const current = objectRef.current;
         if (!current) {
           window.b4m.model.captureResult({ id, error: 'The model pane has nothing to show yet.' });
           return;
         }
-        renderContactSheet(current, views, darkRef.current, pose === 'open' ? openPose(current) : {})
+        const rendered =
+          request.kind === 'turntable'
+            ? renderTurntable(current, request.lighting, darkRef.current)
+            : renderContactSheet(
+                current,
+                request.views,
+                darkRef.current,
+                request.pose === 'open' ? openPose(current) : {}
+              );
+        rendered
           .then(bytes => window.b4m.model.captureResult({ id, bytes }))
           .catch(caught =>
             window.b4m.model.captureResult({ id, error: caught instanceof Error ? caught.message : String(caught) })
