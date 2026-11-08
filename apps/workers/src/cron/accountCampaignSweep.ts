@@ -159,6 +159,9 @@ export async function handler(_event: unknown, context: Context) {
       ),
   });
   logger.log('Device-link sweep finished', deviceLinks);
+  if (deviceLinks.status === 'stopped' && deviceLinks.skipped > 0) {
+    logger.warn('Device-link sweep stopped before recording all linked accounts', { skipped: deviceLinks.skipped });
+  }
 
   // Thrown after the whole run so one bad group cannot starve the rest, but the invocation still fails.
   if (report.failed > 0) throw new Error(`Account campaign sweep failed to record ${report.failed} group(s)`);
