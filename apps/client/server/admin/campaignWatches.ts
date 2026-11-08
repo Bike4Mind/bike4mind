@@ -95,6 +95,8 @@ export async function createCampaignWatch(
   const ownerId = actorId(req);
   const userIds = [...input.userIds].sort();
   const cohortKey = createHash('sha256').update(userIds.join(',')).digest('hex');
+  // autoIndex builds lazily; the open-cohort unique index must exist before two creates can race.
+  await CampaignWatchModel.init();
   try {
     const result = await withTransaction(async () => {
       const users = await User.find({ _id: { $in: userIds }, deletedAt: null })
