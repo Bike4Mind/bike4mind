@@ -18,9 +18,11 @@ vi.mock('@bike4mind/services', () => ({ organizationService: { assignUserToGroup
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
 vi.mock('@bike4mind/database/social', () => ({ groupRepository: {} }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: {} }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+}));
 
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import '@pages/api/organizations/[id]/groups/[groupId]/members/index';
 
 describe('POST /api/organizations/[id]/groups/[groupId]/members', () => {

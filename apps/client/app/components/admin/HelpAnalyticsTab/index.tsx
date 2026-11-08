@@ -170,7 +170,7 @@ const HelpAnalyticsTab: React.FC = () => {
   const overview = data?.overview;
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
         <Typography level="h3">Help Center Analytics</Typography>
         <ContextHelpButton helpId="admin/help-analytics" tooltipText="Help Analytics Help" />

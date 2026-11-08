@@ -7,6 +7,7 @@ import Input from '@mui/joy/Input';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
+import { useTheme } from '@mui/joy/styles';
 import type { AttentionOpenEvent } from '@shared/attention';
 import type { AuthState } from '@shared/auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
@@ -21,6 +22,7 @@ import {
   SESSION_TITLE_MAX_LENGTH,
 } from '@shared/chat';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
+import { closingText, plainText, snippetOf } from '@shared/agentOutcome';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import type { ModelSettings } from '@shared/modelSettings';
@@ -32,16 +34,19 @@ import { BackgroundTaskChip, BackgroundTaskPanel } from './BackgroundTaskPanel';
 import { readPanelFlag, spawnedSessions, writePanelFlag } from './backgroundTasks';
 import { BrowserPane } from './BrowserPane';
 import { SimulatorPane } from './SimulatorPane';
+import { ModelPane } from './ModelPane';
+import { useModelEngine } from './model3d/useModelEngine';
 import { useSimulatorView } from './useSimulatorView';
 import { readBrowserPaneOpen, writeBrowserPaneOpen } from './agentBrowser';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
 import type { ModelsInUse } from '../models/InstalledTab';
+import type { ComposerFill } from './composerInput';
 import { ModelsScreen } from '../models/ModelsScreen';
 import { ComposerOllamaNotice } from '../models/OllamaNotRunning';
 import { useModelServers } from '../models/useModelHub';
-import { GlobeIcon, PanelRightIcon, PhoneIcon, SearchIcon, TerminalIcon } from './icons';
+import { CubeIcon, GlobeIcon, PanelRightIcon, PhoneIcon, SearchIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
 import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
@@ -104,9 +109,22 @@ import { useCreationTools } from './useCreationTools';
 import { BoardView } from './orchestrator/BoardView';
 import { OrchestratePill } from './orchestrator/OrchestratePill';
 import { OrchestrateToggle } from './orchestrator/OrchestrateToggle';
-import type { AgentActions, OrchestratorViewProps } from './orchestrator/OrchestratorStage';
+import { ambientHeld, isEditable, isPrintableKey, useAmbientSettle } from './orchestrator/ambient';
+import type {
+  AgentActions,
+  InnkeeperDesk,
+  OrchestratorViewProps,
+  StageAmbient,
+} from './orchestrator/OrchestratorStage';
 import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
-import { readIntroSeen, writeIntroSeen, writeSurface, type OrchestratorViewId } from './orchestrator/orchestratorPrefs';
+import {
+  readAmbientHintSeen,
+  readIntroSeen,
+  writeAmbientHintSeen,
+  writeIntroSeen,
+  writeSurface,
+  type OrchestratorViewId,
+} from './orchestrator/orchestratorPrefs';
 import { TableView } from './orchestrator/TableView';
 import { TavernView } from './orchestrator/tavern/TavernView';
 import { latestQuestReport } from './orchestrator/finale';
@@ -146,6 +164,7 @@ function SessionHeader({ title, onRename }: { title: string; onRename: (title: s
         onKeyDown={event => {
           if (event.key === 'Enter') commit();
           if (event.key === 'Escape') {
+            event.preventDefault();
             setDraft(title);
             setEditing(false);
           }
@@ -351,6 +370,10 @@ export function ChatShell({
   const [browserOpen, setBrowserOpen] = useState(() => readBrowserPaneOpen());
   const simulatorView = useSimulatorView();
   const [simulatorOpen, setSimulatorOpen] = useState(false);
+  const darkMode = useTheme().palette.mode === 'dark';
+  // Mounted here rather than in the pane so builds, GLB writes and screenshots keep working while it is closed.
+  const modelEngine = useModelEngine(darkMode);
+  const [modelOpen, setModelOpen] = useState(false);
   // Per conversation rather than one flag: see terminalPanelState.ts.
   const [terminalSessions, setTerminalSessions] = useState(readTerminalOpenSessions);
   // Which conversation last asked for the keyboard to go to its terminal; see TerminalPanel.
@@ -371,9 +394,13 @@ export function ChatShell({
     conversation.session?.model
   );
   // Cleared once the composer takes it, or a composer remounted by another screen would take it again.
-  const [composerFill, setComposerFill] = useState<{ id: number; text: string } | null>(null);
+  const [composerFill, setComposerFill] = useState<ComposerFill | null>(null);
   const fillSeq = useRef(0);
   const fillComposer = useCallback((text: string) => setComposerFill({ id: ++fillSeq.current, text }), []);
+  const appendToComposer = useCallback(
+    (text: string) => setComposerFill({ id: ++fillSeq.current, text, append: true }),
+    []
+  );
   const clearComposerFill = useCallback(() => setComposerFill(null), []);
   const [composerFocus, setComposerFocus] = useState(0);
   // Only the conversation screen counts as showing one: main polls what is on screen faster.
@@ -415,6 +442,12 @@ export function ChatShell({
       return !current;
     });
   }, []);
+  // The agent opening a model (model_view) is the user asking to see it, so a new path opens the pane.
+  const modelPath = modelEngine.state.path;
+  useEffect(() => {
+    if (modelPath) setModelOpen(true);
+  }, [modelPath]);
+  const toggleModel = useCallback(() => setModelOpen(current => !current), []);
   const toggleBrowser = useCallback(() => {
     setBrowserOpen(current => {
       writeBrowserPaneOpen(!current);
@@ -615,6 +648,10 @@ export function ChatShell({
   // centered workspace form is the thing to act on, and the composer names the state in one word
   // where the reader already looks for "can I send?". Main's refusal stays as the guard.
   const unbound = conversation.session?.mode === 'code' && !conversation.session.project;
+  // Model tools exist only in Code sessions bound to a folder; an already-open model stays reachable anywhere.
+  const modelAvailable =
+    screen === 'conversation' &&
+    ((conversation.session?.mode === 'code' && !unbound) || modelEngine.state.path !== null);
 
   /**
    * Whether this conversation HAS an agent browser to show.
@@ -692,6 +729,12 @@ export function ChatShell({
   }, [introPhase, introEntry]);
   const orchestratorView = introPhase === 'off' ? orchestratorPrefs.view : 'tavern';
   const threadHost = useRef<HTMLDivElement | null>(null);
+  const dockToggle = useRef<HTMLButtonElement | null>(null);
+  // Focus lands on the header toggle, the way back in, rather than on a dock that just hid.
+  const closeDock = useCallback(() => {
+    setDockOpen(false);
+    dockToggle.current?.focus();
+  }, [setDockOpen]);
   const parentReport = useMemo(
     () => (conversation.session?.id === activeId ? latestQuestReport(conversation.messages) : undefined),
     [conversation.session?.id, activeId, conversation.messages]
@@ -714,6 +757,77 @@ export function ChatShell({
     setDockOpen(true);
     setComposerFocus(request => request + 1);
   }, [setDockOpen]);
+
+  // The ambient Tavern: after a quiet spell the dock and composer settle out and leave the scene.
+  const [slipRequest, setSlipRequest] = useState<{ seq: number; seed: string } | undefined>(undefined);
+  const openOrderSlip = useCallback(
+    (seed: string) => setSlipRequest(previous => ({ seq: (previous?.seq ?? 0) + 1, seed })),
+    []
+  );
+  const ambient = useAmbientSettle({
+    enabled:
+      orchestratorPrefs.ambient &&
+      orchestrating &&
+      activeId !== null &&
+      orchestratorView === 'tavern' &&
+      introPhase !== 'playing',
+    // A reply streaming in is something to watch arrive, not to hide.
+    held: () => conversation.streaming || ambientHeld(document),
+    // Typing into the quiet scene starts an order to the Innkeeper with that character.
+    onSettledKey: event => {
+      if (!isPrintableKey(event) || isEditable(event.target)) return;
+      event.preventDefault();
+      openOrderSlip(event.key);
+    },
+  });
+  const [ambientHint, setAmbientHint] = useState(false);
+  useEffect(() => {
+    if (!ambient.settled) {
+      setAmbientHint(false);
+      return;
+    }
+    if (readAmbientHintSeen()) return;
+    writeAmbientHintSeen();
+    setAmbientHint(true);
+  }, [ambient.settled]);
+  const { wake: wakeAmbient } = ambient;
+  const stageAmbient = useMemo<StageAmbient>(
+    () => ({
+      settled: ambient.settled,
+      wake: wakeAmbient,
+      on: orchestratorPrefs.ambient,
+      onToggle: orchestratorPrefs.setAmbient,
+    }),
+    [ambient.settled, wakeAmbient, orchestratorPrefs.ambient, orchestratorPrefs.setAmbient]
+  );
+
+  const parentReply = useMemo(() => {
+    if (conversation.session?.id !== activeId) return undefined;
+    const message = latestReply(conversation.messages, turnOpen);
+    const snippet = message ? snippetOf(plainText(closingText(message))) : '';
+    return message && snippet ? { id: message.id, snippet } : undefined;
+  }, [conversation.session?.id, activeId, conversation.messages, turnOpen]);
+  const { send: sendToConversation } = conversation;
+  const dockVisible = orchestratorPrefs.dockOpen && !ambient.settled;
+  const innkeeperDesk = useMemo<InnkeeperDesk>(
+    () => ({
+      // Straight to the conversation, not through onSend: that one also sends whatever is attached
+      // in the composer, which the user staged for a different message.
+      send: text => void sendToConversation(text),
+      reply: parentReply,
+      onReadReply: id => {
+        wakeAmbient();
+        readParentReport(id);
+      },
+      onOpenConversation: () => {
+        wakeAmbient();
+        focusParentChat();
+      },
+      conversationHidden: !dockVisible,
+      openRequest: slipRequest,
+    }),
+    [sendToConversation, parentReply, wakeAmbient, readParentReport, focusParentChat, dockVisible, slipRequest]
+  );
   // The agent a clicked needs-you notice asked for; handed to its parent's stage once that is open.
   const [noticeFocus, setNoticeFocus] = useState<{ rootId: string; agentId: string } | null>(null);
   const openNotice = ({ sessionId, rootId }: AttentionOpenEvent) => {
@@ -1332,7 +1446,7 @@ export function ChatShell({
   );
 
   const orchestratorShown = orchestrating && activeId !== null;
-  const threadDockMode: ThreadDockMode = !orchestratorShown ? 'chat' : orchestratorPrefs.dockOpen ? 'docked' : 'hidden';
+  const threadDockMode: ThreadDockMode = !orchestratorShown ? 'chat' : dockVisible ? 'docked' : 'hidden';
 
   return (
     <Box sx={chatShellRootSx} {...drop.handlers} data-testid="chat-shell">
@@ -1570,6 +1684,26 @@ export function ChatShell({
                   </IconButton>
                 </Tooltip>
               )}
+              {modelAvailable && (
+                <Tooltip
+                  size="sm"
+                  variant="soft"
+                  placement="bottom-end"
+                  title={modelOpen ? 'Hide the 3D model' : 'Show the 3D model'}
+                >
+                  <IconButton
+                    size="sm"
+                    variant={modelOpen ? 'soft' : 'plain'}
+                    color="neutral"
+                    aria-pressed={modelOpen}
+                    aria-label={modelOpen ? 'Hide the 3D model' : 'Show the 3D model'}
+                    onClick={toggleModel}
+                    data-testid="chat-toggle-model-btn"
+                  >
+                    <CubeIcon />
+                  </IconButton>
+                </Tooltip>
+              )}
             </Box>
           </Box>
 
@@ -1603,6 +1737,8 @@ export function ChatShell({
                   onFocusAgentConsumed={clearNoticeFocus}
                   onExampleQuest={pickExampleQuest}
                   onTurnOn={orchestrateCapable && !delegating ? () => void setOrchestrate(true) : undefined}
+                  desk={innkeeperDesk}
+                  ambient={stageAmbient}
                   dockControl={
                     <Tooltip
                       size="sm"
@@ -1616,6 +1752,7 @@ export function ChatShell({
                         color="neutral"
                         aria-pressed={orchestratorPrefs.dockOpen}
                         aria-label={orchestratorPrefs.dockOpen ? 'Hide the conversation' : 'Show the conversation'}
+                        ref={dockToggle}
                         onClick={() => setDockOpen(!orchestratorPrefs.dockOpen)}
                         data-testid="orchestrator-dock-toggle-btn"
                       >
@@ -1625,7 +1762,7 @@ export function ChatShell({
                   }
                 />
               )}
-              <ThreadDock mode={threadDockMode} hostRef={threadHost}>
+              <ThreadDock mode={threadDockMode} hostRef={threadHost} onClose={closeDock}>
                 {thread}
               </ThreadDock>
             </Box>
@@ -1683,253 +1820,282 @@ export function ChatShell({
             )}
           </Box>
 
-          {!panelShown && <TodoPanel todos={plan} turnOpen={turnOpen} />}
+          {ambient.settled && (
+            <Box sx={contentColumnSx}>
+              <Box
+                data-testid="orchestrator-ambient-chip-row"
+                sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5, py: 1 }}
+              >
+                <Button
+                  size="sm"
+                  variant="soft"
+                  color="neutral"
+                  onClick={() => {
+                    wakeAmbient();
+                    openOrderSlip('');
+                  }}
+                  data-testid="orchestrator-ambient-talk-btn"
+                >
+                  Type to talk to the Innkeeper
+                </Button>
+                {ambientHint && (
+                  <Typography level="body-xs" textColor="text.tertiary" data-testid="orchestrator-ambient-hint">
+                    Move the mouse to bring the controls back
+                  </Typography>
+                )}
+              </Box>
+            </Box>
+          )}
+          {/* Hidden, never unmounted, while the Tavern is quiet: the composer keeps its draft and state. */}
+          <Box data-testid="chat-composer-region" sx={{ display: ambient.settled ? 'none' : 'contents' }}>
+            {!panelShown && <TodoPanel todos={plan} turnOpen={turnOpen} />}
 
-          {/* A compaction is a round trip the user is waiting on, with nothing streaming into the
+            {/* A compaction is a round trip the user is waiting on, with nothing streaming into the
               thread to show for it. Above the error slot, because a refusal replaces it. */}
-          {conversation.commandProgress && (
-            <Box sx={contentColumnSx}>
-              <Alert size="sm" color="neutral" variant="soft" data-testid="chat-command-progress">
-                {conversation.commandProgress}
-              </Alert>
-            </Box>
-          )}
-
-          {conversation.sendError && (
-            <Box sx={contentColumnSx}>
-              <Alert size="sm" color="danger" variant="soft" data-testid="chat-send-error">
-                {conversation.sendError}
-              </Alert>
-            </Box>
-          )}
-
-          {conversation.notice && (
-            <Box sx={contentColumnSx}>
-              <Alert
-                size="sm"
-                color="warning"
-                variant="soft"
-                sx={{ cursor: 'pointer', whiteSpace: 'pre-line' }}
-                onClick={conversation.dismissNotice}
-                data-testid="chat-notice"
-              >
-                {conversation.notice}
-              </Alert>
-            </Box>
-          )}
-
-          {addFolderAlert && (
-            <Box sx={contentColumnSx}>
-              <Alert
-                size="sm"
-                color={addFolderAlert.color}
-                variant="soft"
-                sx={{ cursor: 'pointer' }}
-                onClick={() => clearAddFolderAlert(activeId ?? NO_CHAT)}
-                data-testid={addFolderAlert.color === 'danger' ? 'chat-add-folder-error' : 'chat-add-folder-notice'}
-              >
-                {addFolderAlert.text}
-              </Alert>
-            </Box>
-          )}
-
-          {defaultsReadError && defaultsSessionId && (
-            <Box sx={contentColumnSx}>
-              <Alert
-                size="sm"
-                color="warning"
-                variant="soft"
-                sx={{ cursor: 'pointer' }}
-                onClick={() => clearDefaultsReadFailure(defaultsSessionId)}
-                data-testid="chat-model-defaults-error"
-              >
-                {defaultsReadError}
-              </Alert>
-            </Box>
-          )}
-
-          {codeError && (
-            <Box sx={contentColumnSx}>
-              <Alert
-                size="sm"
-                color="danger"
-                variant="soft"
-                sx={{ cursor: 'pointer' }}
-                onClick={clearCodeError}
-                data-testid="chat-code-create-error"
-              >
-                {codeError}
-              </Alert>
-            </Box>
-          )}
-
-          <HeldRelayCard held={heldRelays.held} onResolve={heldRelays.resolve} onOpenSession={selectSession} />
-
-          <SpawnSuggestionTray
-            suggestions={spawnSuggestions.suggestions}
-            onStart={onStartSuggestion}
-            onDismiss={spawnSuggestions.dismiss}
-          />
-
-          {/* After first use, an unbound session or a hidden panel error still needs these controls
-            above the composer. Empty Code sessions render them in the transcript instead. */}
-          {conversation.session?.mode === 'code' &&
-            !initialCodeSetup &&
-            (!conversation.session.project || bindingErrorHidden) && (
-              <SessionChips
-                project={conversation.session.project ?? null}
-                {...(conversation.session.grantedDirectories
-                  ? { grantedDirectories: conversation.session.grantedDirectories }
-                  : {})}
-                binding={conversation.project}
-                settledTurns={conversation.settledTurns}
-                inUse={conversation.messages.length > 0}
-                preparing={conversation.preparing !== null}
-              />
+            {conversation.commandProgress && (
+              <Box sx={contentColumnSx}>
+                <Alert size="sm" color="neutral" variant="soft" data-testid="chat-command-progress">
+                  {conversation.commandProgress}
+                </Alert>
+              </Box>
             )}
-          {conversation.session && conversation.session.mode !== 'code' && (
-            <GrantedFolderChips
-              directories={conversation.session.grantedDirectories ?? []}
-              onRemove={conversation.project.removeContextDirectory}
+
+            {conversation.sendError && (
+              <Box sx={contentColumnSx}>
+                <Alert size="sm" color="danger" variant="soft" data-testid="chat-send-error">
+                  {conversation.sendError}
+                </Alert>
+              </Box>
+            )}
+
+            {conversation.notice && (
+              <Box sx={contentColumnSx}>
+                <Alert
+                  size="sm"
+                  color="warning"
+                  variant="soft"
+                  sx={{ cursor: 'pointer', whiteSpace: 'pre-line' }}
+                  onClick={conversation.dismissNotice}
+                  data-testid="chat-notice"
+                >
+                  {conversation.notice}
+                </Alert>
+              </Box>
+            )}
+
+            {addFolderAlert && (
+              <Box sx={contentColumnSx}>
+                <Alert
+                  size="sm"
+                  color={addFolderAlert.color}
+                  variant="soft"
+                  sx={{ cursor: 'pointer' }}
+                  onClick={() => clearAddFolderAlert(activeId ?? NO_CHAT)}
+                  data-testid={addFolderAlert.color === 'danger' ? 'chat-add-folder-error' : 'chat-add-folder-notice'}
+                >
+                  {addFolderAlert.text}
+                </Alert>
+              </Box>
+            )}
+
+            {defaultsReadError && defaultsSessionId && (
+              <Box sx={contentColumnSx}>
+                <Alert
+                  size="sm"
+                  color="warning"
+                  variant="soft"
+                  sx={{ cursor: 'pointer' }}
+                  onClick={() => clearDefaultsReadFailure(defaultsSessionId)}
+                  data-testid="chat-model-defaults-error"
+                >
+                  {defaultsReadError}
+                </Alert>
+              </Box>
+            )}
+
+            {codeError && (
+              <Box sx={contentColumnSx}>
+                <Alert
+                  size="sm"
+                  color="danger"
+                  variant="soft"
+                  sx={{ cursor: 'pointer' }}
+                  onClick={clearCodeError}
+                  data-testid="chat-code-create-error"
+                >
+                  {codeError}
+                </Alert>
+              </Box>
+            )}
+
+            <HeldRelayCard held={heldRelays.held} onResolve={heldRelays.resolve} onOpenSession={selectSession} />
+
+            <SpawnSuggestionTray
+              suggestions={spawnSuggestions.suggestions}
+              onStart={onStartSuggestion}
+              onDismiss={spawnSuggestions.dismiss}
             />
-          )}
 
-          <CacheExpiryNote
-            stamp={promptCache}
-            model={modelOption}
-            contextTokens={composerUsage.contextTokens ?? 0}
-            ttl={cacheTtlFor(modelOption)}
-            turnOpen={turnOpen}
-            sx={contentColumnSx}
-          />
-
-          <Composer
-            sessionId={activeId}
-            disabled={!activeId || creatingCode}
-            disabledPlaceholder={disabledPlaceholder}
-            streaming={turnOpen}
-            attachments={draft}
-            blockedReason={blockedReason}
-            blockedAction={blockedAction}
-            blockedNotice={blockedNotice}
-            // Blocked rather than refused: a refused send has already cleared the box.
-            notReady={
-              auth?.reauthRequired && !(conversation.session && isLocalModel(conversation.session.model))
-                ? 'Sign in'
-                : unbound
-                  ? 'No folder'
-                  : null
-            }
-            usage={composerUsage}
-            contextStatus={
-              <ContextRing
-                tokens={composerUsage.contextSnapshot?.inputTokens ?? composerUsage.contextTokens}
-                limit={composerUsage.contextLimit}
-                modelId={conversation.session?.model ?? null}
-                promptCache={promptCache}
-                streaming={turnOpen}
-                hasReply={hasReply}
-                usage={composerUsage}
-              />
-            }
-            placeholder={
-              conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'
-            }
-            onSend={text => void onSend(text)}
-            onStop={conversation.stop}
-            onRunCommand={(name, args) => void conversation.runCommand(name, args)}
-            onBrowseSkillMarket={() => openSkillMarket()}
-            // A Code session shares folders from its workspace controls instead. Both must say
-            // Chat: for a frame after a mode switch, the open session is still the old mode's.
-            addFolder={
-              mode === 'chat' && (conversation.session?.mode ?? 'chat') === 'chat'
-                ? { onClick: () => void addFolder(), disabled: opening }
-                : null
-            }
-            sessionMode={conversation.session?.mode ?? 'chat'}
-            suggestion={nextPrompt.suggestion}
-            onSuggestionDismissed={nextPrompt.dismiss}
-            queued={conversation.queued}
-            onCancelQueued={conversation.cancelQueued}
-            onSendQueuedNow={conversation.sendQueuedNow}
-            returned={conversation.returned}
-            onReturnedConsumed={conversation.clearReturned}
-            fill={composerFill}
-            onFillConsumed={clearComposerFill}
-            focusRequest={composerFocus}
-            skills={skills}
-            mentionSessions={sessions}
-            leading={
-              <>
-                <ApprovalModePill
-                  mode={conversation.session?.approvalMode ?? 'ask'}
-                  disabled={!activeId}
-                  onSelect={mode => void conversation.setApprovalMode(mode)}
+            {/* After first use, an unbound session or a hidden panel error still needs these controls
+            above the composer. Empty Code sessions render them in the transcript instead. */}
+            {conversation.session?.mode === 'code' &&
+              !initialCodeSetup &&
+              (!conversation.session.project || bindingErrorHidden) && (
+                <SessionChips
+                  project={conversation.session.project ?? null}
+                  {...(conversation.session.grantedDirectories
+                    ? { grantedDirectories: conversation.session.grantedDirectories }
+                    : {})}
+                  binding={conversation.project}
+                  settledTurns={conversation.settledTurns}
+                  inUse={conversation.messages.length > 0}
+                  preparing={conversation.preparing !== null}
                 />
-                {orchestrateCapable && (
-                  <OrchestratePill on={delegating} disabled={!activeId} onChange={on => void setOrchestrate(on)} />
-                )}
-              </>
-            }
-            footer={indicators => (
-              <TuneTray
-                disabled={!activeId}
-                trailing={
-                  <>
-                    <ModelPicker
-                      catalog={catalog}
-                      modelId={conversation.session?.model ?? null}
-                      disabled={!activeId}
-                      onSelect={model => void conversation.setModel(model)}
-                      noLocal={noLocal}
-                      local={localMode}
-                      onOpenModels={() => setScreen('models')}
-                      switchCredits={model =>
-                        modelSwitchCredits(model, composerUsage.contextTokens ?? 0, cacheTtlFor(model))
-                      }
-                      servers={savedServers}
-                      hasHistory={conversation.messages.length > 0}
-                      sessionId={activeId}
-                    />
-                    {indicators}
-                  </>
-                }
-              >
-                {compact => (
-                  <>
-                    <ReasoningEffortPicker
-                      models={catalog.models}
-                      modelId={conversation.session?.model ?? null}
-                      effort={conversation.session?.reasoningEffort ?? 'default'}
-                      defaultEffort={defaultEffort}
-                      disabled={!activeId}
-                      compact={compact}
-                      onSelect={effort => void conversation.setReasoningEffort(effort)}
-                    />
-                    {/* One per chat: Mod+1-9 switches chats from inside the dialog, and its edits belong to the old one. */}
-                    <GenerationSettingsPicker
-                      key={activeId ?? ''}
-                      model={modelOption}
-                      generation={conversation.session?.generation}
-                      modelDefaults={modelDefaults ?? undefined}
-                      effort={conversation.session?.reasoningEffort ?? 'default'}
-                      disabled={!activeId}
-                      compact={compact}
-                      onChange={conversation.setGeneration}
-                    />
-                    <PromptCacheTtlPicker
-                      model={modelOption}
-                      ttl={sessionCacheTtl}
-                      contextTokens={composerUsage.contextTokens ?? 0}
-                      disabled={!activeId}
-                      compact={compact}
-                      onSelect={ttl => void conversation.setPromptCacheTtl(ttl)}
-                    />
-                  </>
-                )}
-              </TuneTray>
+              )}
+            {conversation.session && conversation.session.mode !== 'code' && (
+              <GrantedFolderChips
+                directories={conversation.session.grantedDirectories ?? []}
+                onRemove={conversation.project.removeContextDirectory}
+              />
             )}
-          />
+
+            <CacheExpiryNote
+              stamp={promptCache}
+              model={modelOption}
+              contextTokens={composerUsage.contextTokens ?? 0}
+              ttl={cacheTtlFor(modelOption)}
+              turnOpen={turnOpen}
+              sx={contentColumnSx}
+            />
+
+            <Composer
+              sessionId={activeId}
+              disabled={!activeId || creatingCode}
+              disabledPlaceholder={disabledPlaceholder}
+              streaming={turnOpen}
+              attachments={draft}
+              blockedReason={blockedReason}
+              blockedAction={blockedAction}
+              blockedNotice={blockedNotice}
+              // Blocked rather than refused: a refused send has already cleared the box.
+              notReady={
+                auth?.reauthRequired && !(conversation.session && isLocalModel(conversation.session.model))
+                  ? 'Sign in'
+                  : unbound
+                    ? 'No folder'
+                    : null
+              }
+              usage={composerUsage}
+              contextStatus={
+                <ContextRing
+                  tokens={composerUsage.contextSnapshot?.inputTokens ?? composerUsage.contextTokens}
+                  limit={composerUsage.contextLimit}
+                  modelId={conversation.session?.model ?? null}
+                  promptCache={promptCache}
+                  streaming={turnOpen}
+                  hasReply={hasReply}
+                  usage={composerUsage}
+                />
+              }
+              placeholder={
+                conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'
+              }
+              onSend={text => void onSend(text)}
+              onStop={conversation.stop}
+              onRunCommand={(name, args) => void conversation.runCommand(name, args)}
+              onBrowseSkillMarket={() => openSkillMarket()}
+              // A Code session shares folders from its workspace controls instead. Both must say
+              // Chat: for a frame after a mode switch, the open session is still the old mode's.
+              addFolder={
+                mode === 'chat' && (conversation.session?.mode ?? 'chat') === 'chat'
+                  ? { onClick: () => void addFolder(), disabled: opening }
+                  : null
+              }
+              sessionMode={conversation.session?.mode ?? 'chat'}
+              suggestion={nextPrompt.suggestion}
+              onSuggestionDismissed={nextPrompt.dismiss}
+              queued={conversation.queued}
+              onCancelQueued={conversation.cancelQueued}
+              onSendQueuedNow={conversation.sendQueuedNow}
+              returned={conversation.returned}
+              onReturnedConsumed={conversation.clearReturned}
+              fill={composerFill}
+              onFillConsumed={clearComposerFill}
+              focusRequest={composerFocus}
+              skills={skills}
+              mentionSessions={sessions}
+              leading={
+                <>
+                  <ApprovalModePill
+                    mode={conversation.session?.approvalMode ?? 'ask'}
+                    disabled={!activeId}
+                    onSelect={mode => void conversation.setApprovalMode(mode)}
+                  />
+                  {orchestrateCapable && (
+                    <OrchestratePill on={delegating} disabled={!activeId} onChange={on => void setOrchestrate(on)} />
+                  )}
+                </>
+              }
+              footer={indicators => (
+                <TuneTray
+                  disabled={!activeId}
+                  trailing={
+                    <>
+                      <ModelPicker
+                        catalog={catalog}
+                        modelId={conversation.session?.model ?? null}
+                        disabled={!activeId}
+                        onSelect={model => void conversation.setModel(model)}
+                        noLocal={noLocal}
+                        local={localMode}
+                        onOpenModels={() => setScreen('models')}
+                        switchCredits={model =>
+                          modelSwitchCredits(model, composerUsage.contextTokens ?? 0, cacheTtlFor(model))
+                        }
+                        servers={savedServers}
+                        hasHistory={conversation.messages.length > 0}
+                        sessionId={activeId}
+                      />
+                      {indicators}
+                    </>
+                  }
+                >
+                  {compact => (
+                    <>
+                      <ReasoningEffortPicker
+                        models={catalog.models}
+                        modelId={conversation.session?.model ?? null}
+                        effort={conversation.session?.reasoningEffort ?? 'default'}
+                        defaultEffort={defaultEffort}
+                        disabled={!activeId}
+                        compact={compact}
+                        onSelect={effort => void conversation.setReasoningEffort(effort)}
+                      />
+                      {/* One per chat: Mod+1-9 switches chats from inside the dialog, and its edits belong to the old one. */}
+                      <GenerationSettingsPicker
+                        key={activeId ?? ''}
+                        model={modelOption}
+                        generation={conversation.session?.generation}
+                        modelDefaults={modelDefaults ?? undefined}
+                        effort={conversation.session?.reasoningEffort ?? 'default'}
+                        disabled={!activeId}
+                        compact={compact}
+                        onChange={conversation.setGeneration}
+                      />
+                      <PromptCacheTtlPicker
+                        model={modelOption}
+                        ttl={sessionCacheTtl}
+                        contextTokens={composerUsage.contextTokens ?? 0}
+                        disabled={!activeId}
+                        compact={compact}
+                        onSelect={ttl => void conversation.setPromptCacheTtl(ttl)}
+                      />
+                    </>
+                  )}
+                </TuneTray>
+              )}
+            />
+          </Box>
 
           {terminalOpen && activeId && (
             <TerminalPanel
@@ -1965,6 +2131,17 @@ export function ChatShell({
       {/* macOS only: `available` is false elsewhere, so the pane and its button never draw. */}
       {simulatorOpen && simulatorView.available && screen === 'conversation' && (
         <SimulatorPane state={simulatorView} onClose={toggleSimulator} />
+      )}
+
+      {modelOpen && modelAvailable && (
+        <ModelPane
+          engine={modelEngine}
+          dark={darkMode}
+          onClose={toggleModel}
+          onExamplePrompt={fillComposer}
+          onPickPart={appendToComposer}
+          conversation={conversationColumn}
+        />
       )}
 
       {/* Last in the row, so the web page is at the window's own right edge.

@@ -56,15 +56,17 @@ vi.mock('@bike4mind/common', async importOriginal => {
 });
 vi.mock('@server/utils/respond', () => ({ respond: (_res: any, _schema: any, data: any) => data }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn(async () => {}) }));
+const { ForbiddenError } = vi.hoisted(() => ({ ForbiddenError: class ForbiddenError extends Error {} }));
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class extends Error {},
+  ForbiddenError,
 }));
 
 import '@pages/api/organizations/[id]/members/index';
 
-function makeReq(body: unknown) {
+function makeReq(body: unknown, { isAdmin = true }: { isAdmin?: boolean } = {}) {
   const { req, res } = createMocks({ method: 'POST', query: { id: 'org-123' } });
-  (req as any).user = { id: 'u1' };
+  (req as any).user = { id: 'u1', isAdmin };
   (req as any).ability = null;
   (req as any).body = body;
   (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -101,5 +103,14 @@ describe('POST /api/organizations/[id]/members -- Zod validation', () => {
     const calledBody = addMember.mock.calls[0][1] as any;
     // service is called with organizationId from req.query, not from body
     expect(calledBody.organizationId).toBe('org-123');
+  });
+
+  it.each([
+    ['by email', { email: 'someone@example.com' }],
+    ['by user id', { userId: 'uid-abc' }],
+  ])('refuses a direct add %s from a non-admin before any lookup', async (_label, body) => {
+    const { req, res } = makeReq(body, { isAdmin: false });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(ForbiddenError);
+    expect(addMember).not.toHaveBeenCalled();
   });
 });

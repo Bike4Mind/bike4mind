@@ -13,12 +13,12 @@ const UNMETERED_BACKFILLS = [
 
 /**
  * reserveSignupGrantBudget pays unmetered when `signupProtection.grantBudget` is absent, so every runtime
- * adapter set (client, hosted workers and self-host, which reach it through `@server/*`) must use the
- * shared apps/client/server/auth/signupProtection.ts rather than build its own literal.
+ * adapter set (client, hosted workers and self-host, which import it from the package) must use the
+ * shared packages/server-utils/src/auth/signupProtection.ts rather than build its own literal.
  */
 describe('signup grant budget wiring', () => {
   it('wires the budget repository on the shared signupProtection adapter', () => {
-    const source = readFileSync(join(root, 'apps/client/server/auth/signupProtection.ts'), 'utf8');
+    const source = readFileSync(join(root, 'packages/server-utils/src/auth/signupProtection.ts'), 'utf8');
     expect(source).toMatch(/grantBudget:\s*\{\s*get repository\(\)\s*\{\s*return signupGrantBudgetRepository;/);
   });
 

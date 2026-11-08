@@ -269,9 +269,12 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
       scopes: fd.scopes.includes(value) ? fd.scopes.filter(s => s !== value) : [...fd.scopes, value],
     }));
 
-  // Only personal keys are trust-gated; picking an org to bill makes the key org-billed.
-  const blockedByTrust = eligibility?.canCreate === false && !formData.organizationId;
-  const canSubmit = !!formData.name.trim() && formData.scopes.length > 0 && !blockedByTrust;
+  // A refusal covers personal keys; an org-billed key still passes unless the access switch refuses that org.
+  const refusedOrgIds = eligibility?.refusedOrgIds ?? [];
+  const blockedByGate =
+    eligibility?.canCreate === false && (!formData.organizationId || refusedOrgIds.includes(formData.organizationId));
+  const someOrgAdmitted = (billingOrgs ?? []).some(org => !refusedOrgIds.includes(org.id));
+  const canSubmit = !!formData.name.trim() && formData.scopes.length > 0 && !blockedByGate;
 
   return (
     <Modal open={open} onClose={onClose} className="project-api-keys-modal">
@@ -288,9 +291,9 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
         </Typography>
 
         <Stack spacing={2.5} className="project-api-keys-modal-content">
-          {blockedByTrust && (
-            <Alert color="warning" variant="soft" data-testid="api-key-trust-alert">
-              {canBillOrg
+          {blockedByGate && (
+            <Alert color="warning" variant="soft" data-testid="api-key-gate-alert">
+              {canBillOrg && someOrgAdmitted
                 ? `${eligibility?.message} You can still create a key billed to an organization you manage.`
                 : eligibility?.message}
             </Alert>
@@ -323,7 +326,11 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
               >
                 <Option value="personal">Personal (your credits)</Option>
                 {billingOrgs?.map(org => (
-                  <Option key={org.id} value={org.id}>
+                  <Option
+                    key={org.id}
+                    value={org.id}
+                    disabled={eligibility?.canCreate === false && refusedOrgIds.includes(org.id)}
+                  >
                     {org.name} (organization credits)
                   </Option>
                 ))}
@@ -1931,7 +1938,9 @@ export default function UserApiKeysTab() {
   const { data: billingOrgs } = useBillingOrganizations();
   const orgNameById = new Map((billingOrgs ?? []).map(org => [org.id, org.name]));
   const { data: eligibility } = useApiKeyEligibility();
-  const createBlockedByTrust = eligibility?.canCreate === false && (billingOrgs?.length ?? 0) === 0;
+  const createBlockedByGate =
+    eligibility?.canCreate === false &&
+    !(billingOrgs ?? []).some(org => !(eligibility.refusedOrgIds ?? []).includes(org.id));
   const [showNewKeyModal, setShowNewKeyModal] = useState(false);
   const [showKeyCreatedModal, setShowKeyCreatedModal] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState('');
@@ -2069,7 +2078,7 @@ export default function UserApiKeysTab() {
                 startDecorator={<AddIcon />}
                 onClick={() => setShowNewKeyModal(true)}
                 variant="solid"
-                disabled={createBlockedByTrust}
+                disabled={createBlockedByGate}
                 data-testid="api-keys-create-btn"
               >
                 Create API Key
@@ -2077,8 +2086,8 @@ export default function UserApiKeysTab() {
             </Box>
           </Box>
 
-          {createBlockedByTrust && (
-            <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-keys-trust-notice">
+          {createBlockedByGate && (
+            <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-keys-gate-notice">
               {eligibility?.message}
             </Alert>
           )}

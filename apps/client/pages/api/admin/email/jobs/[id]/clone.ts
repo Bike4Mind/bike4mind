@@ -2,7 +2,7 @@ import { emailJobRepository } from '@bike4mind/database';
 import { ApiKeyScope, EmailJobOverallStatus, EmailJobStatus } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
  * Clone an existing email job to create a new draft

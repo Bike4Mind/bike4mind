@@ -69,6 +69,13 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
    * concurrent requests can exceed the limit by one. Accepted: window is tiny, stakes are low.
    */
   maxCreditsPerMember?: number | null;
+
+  /**
+   * When true, push notifications to members' first-party native clients carry category-generic
+   * text instead of session names or message content (applied at delivery, apps/workers/src/events/sendPush.ts).
+   * Applies to pushes for users whose active organization is this one.
+   */
+  redactPushContent?: boolean;
 }
 export interface IOrganizationDocument extends IOrganization, IShareableDocument {}
 

@@ -37,7 +37,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
 import handler from '../provider-invoices';
 

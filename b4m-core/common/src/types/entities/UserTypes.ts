@@ -3,6 +3,7 @@ import { ISessionDocument } from './SessionTypes';
 import { IRegInviteDocument } from './RegistrationInviteType';
 import { IOrganizationDocument } from './OrganizationTypes';
 import { ICounters } from './CounterTypes';
+import type { PushNotificationPreferences } from '../../schemas/pushNotification';
 import { IMementoDocument } from './MementoTypes';
 import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
 import { PaginatedResponse, UserReasoningEffort } from '../common';
@@ -11,6 +12,7 @@ import type { SignupRiskSignal } from '../../schemas/settings';
 import type { SignupRiskAutoApprovalPolicy } from '../../schemas/signupRiskReview';
 import type { RiskEvidenceRecord, RiskEvidenceSummary, RiskEvidenceTrigger } from '../../schemas/riskEvidence';
 import type { SignupGrant, SignupGrantAssessment } from '../../signupGrant';
+import type { ClientSurface } from '../analytics';
 import type { AdminPermissionId } from '../../adminPermissions';
 
 export enum CollectionType {
@@ -244,6 +246,8 @@ export interface IUserPreferences {
   desktopPromoDismissed?: boolean;
   /** Prompt-cache lifetime for web chats that haven't picked their own, on models that support both. Default: '5m'. */
   promptCacheTtl?: '5m' | '1h';
+  /** Per-category push opt-outs for first-party native clients; a missing key means on (see isPushCategoryEnabled). */
+  pushNotifications?: PushNotificationPreferences;
 }
 
 /**
@@ -388,6 +392,13 @@ export interface IUserDeletion {
   purgeStartedAt?: Date;
   purgeLeaseId?: string;
   purgeLeaseExpiresAt?: Date;
+}
+
+export interface IClientUsageEntry {
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+  /** Last reported client version (desktop and CLI only). */
+  version?: string;
 }
 
 export interface IUser extends ICreditHolder {
@@ -735,6 +746,13 @@ export interface IUser extends ICreditHolder {
   lastActiveAt?: Date;
   /** Tracks if the user is online or not */
   isOnline?: boolean;
+
+  /**
+   * Which first-party clients this user has used, keyed by surface. Stamped at most daily per
+   * surface by apps/client/server/middlewares/clientUsage.ts; absent means not seen since that
+   * shipped, not "never used". Attribution only: the client header behind it is caller-controlled.
+   */
+  clientUsage?: Partial<Record<ClientSurface, IClientUsageEntry>>;
 
   /**
    * Array of memento references belonging to the user

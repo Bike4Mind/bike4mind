@@ -42,7 +42,7 @@ vi.mock('@bike4mind/database/content', () => ({
     findByIdAndDelete: h.categoryDelete,
   },
 }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: h.audit,
   definedKeys: (data: Record<string, unknown>) => Object.keys(data).filter(key => data[key] !== undefined),
 }));

@@ -3,8 +3,8 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { getActiveSubscriptionsForUser } from '@server/entitlements/activeSubscriptions';
-import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
+import { getActiveSubscriptionsForUser } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
+import { getEntitlingPlanByPriceId } from '@bike4mind/server-utils/lib/userSubscriptions/utils';
 import {
   DOMAIN_GRANTS,
   IMPLIED_ENTITLEMENTS,
@@ -16,7 +16,7 @@ import {
   isBypassExemptEntitlement,
   normalizeTag,
 } from '@bike4mind/server-utils/lib/entitlements/registry';
-import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
+import { partnerEntitlementsForEmail } from '@bike4mind/server-utils/entitlements/partnerRules';
 import { entitlementsForPaidSubscription } from '@server/entitlements/paidStanding';
 import { ApiKeyScope, hasDeveloperUserTag } from '@bike4mind/common';
 import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';

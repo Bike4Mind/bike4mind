@@ -1,4 +1,5 @@
 import {
+  ABUSE_SUSPENSION_REASONS,
   ADMIN_ACTION_REASON_MAX_LENGTH,
   ADMIN_ACTION_REASON_MIN_LENGTH,
   isValidAdminActionReason,
@@ -6,14 +7,15 @@ import {
 
 /**
  * Preset reasons per audited action. A preset alone is a complete reason, so every label must
- * satisfy the shared `adminActionReason` rule unchanged; `adminAudit.test.ts` pins that against
+ * satisfy the shared `adminActionReason` rule unchanged; `adminReason.test.ts` pins that against
  * the server's `parseAdminActionReason`.
  */
 export const ADMIN_REASON_PRESETS = {
   subscriptionCancel: ['Customer request', 'Billing dispute', 'Duplicate subscription', 'Account closure'],
   subscriptionResume: ['Customer changed their mind', 'Canceled in error', 'Customer request'],
   creditAdjustment: ['Goodwill credit', 'Refund', 'Support request', 'Abuse / automated signups'],
-  suspension: ['Abuse / automated signups', 'Payment fraud', 'Terms violation', 'Customer request'],
+  // The abuse presets also grade the account's open shadow detections confirmed abuse.
+  suspension: [...ABUSE_SUSPENSION_REASONS, 'Customer request'],
   reinstatement: ['Suspended in error', 'Appeal accepted', 'Issue resolved'],
   restriction: ['Abuse / automated signups', 'Suspicious usage', 'Terms violation', 'Under investigation'],
   limitedTier: ['Abuse / automated signups', 'Suspicious usage', 'Under investigation'],

@@ -1,7 +1,7 @@
 import { AuthSessionModel, SupportAccess, authSessionRepository, withTransaction } from '@bike4mind/database';
 import { isAuthSessionActive, UnauthorizedError } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const handler = baseApi({ auth: 'jwtOnly' })
   .get(async (req, res) => {

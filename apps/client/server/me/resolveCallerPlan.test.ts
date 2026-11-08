@@ -5,7 +5,9 @@ import { SubscriptionPlanInterval, UserSubscriptionTier } from '@bike4mind/serve
 
 const { mockPlanByPriceId } = vi.hoisted(() => ({ mockPlanByPriceId: vi.fn() }));
 
-vi.mock('@client/lib/userSubscriptions/utils', () => ({ getEntitlingPlanByPriceId: mockPlanByPriceId }));
+vi.mock('@bike4mind/server-utils/lib/userSubscriptions/utils', () => ({
+  getEntitlingPlanByPriceId: mockPlanByPriceId,
+}));
 
 const { resolveCallerPlan } = await import('./resolveCallerPlan');
 

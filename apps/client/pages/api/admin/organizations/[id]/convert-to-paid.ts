@@ -4,7 +4,7 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
@@ -15,7 +15,7 @@ import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSe
 import { StripeSubscriptionMetadataSchema } from '@bike4mind/server-utils/lib/subscriptions/schema';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
-import { resolveSubscriptionSource } from '@server/services/organizationService';
+import { resolveSubscriptionSource } from '@bike4mind/server-utils/services/organizationService';
 import { z } from 'zod';
 
 const ConvertSchema = z.object({

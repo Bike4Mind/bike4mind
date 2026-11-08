@@ -1,3 +1,8 @@
+import {
+  type EmbeddingKeyTable,
+  buildEmbeddingRegistry,
+  resolveEmbeddingWithKeylessFallback,
+} from '@bike4mind/utils/embeddingProviders';
 /**
  * Agent Executor Lambda Handler
  *
@@ -46,7 +51,7 @@ import {
   cacheRepository,
 } from '@bike4mind/database';
 import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
-import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import {
   registerLambdaErrorHandlers,
@@ -59,7 +64,7 @@ import {
   DEFAULT_OUTPUT_MAX_TOKENS,
 } from '@bike4mind/utils';
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
-import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback, type EmbeddingKeyTable } from '@bike4mind/fab-pipeline';
+
 import {
   applyWorkspaceSessionSettings,
   workspaceAnswersTurns,
@@ -80,11 +85,11 @@ import { Permission } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { getUserEntitlements } from '@server/entitlements';
-import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { executionTurnAuth } from '@server/auth/turnAuth';
 import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
-import defineAbilitiesFor from '@server/auth/ability';
+import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
@@ -260,6 +265,8 @@ import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-uti
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
 import { publishRunPendingAction } from './agentExecutor.pendingAction';
+import { createAgentPushDeps, withAgentTerminalPush, publishAgentTerminalPush } from './agentExecutor.push';
+import { publishPushNotification, sessionDeepLink } from '@server/utils/pushNotifications';
 import { createAgentToolEchoMarker, persistedExecutionSteps } from '@bike4mind/server-utils/utils/markAgentToolEchoes';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
 import { extractFinalAnswer } from '@bike4mind/server-utils/utils/extractFinalAnswer';
@@ -267,7 +274,7 @@ import { resolveAndPublishMementoCompletion } from '@server/utils/publishMemento
 import { resolveAndBuildMementosPreamble } from '@workers/utils/getFirstIterationMementosPreamble';
 import { resolveExecutionMementoGates } from '@bike4mind/server-utils/utils/resolveExecutionMementoGates';
 import { getFirstIterationSkillsPreamble } from '@workers/utils/getFirstIterationSkillsPreamble';
-import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
+import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
 import { loadAgentMcpTools, type AgentMcpTools } from '@workers/utils/loadAgentMcpTools';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
@@ -884,7 +891,7 @@ export async function materializeAttachmentsForRun(args: {
           `is unavailable for this run and attachments fall through to raw content`
       );
     }
-    const embeddingFactory = new EmbeddingFactory(embeddingConfig);
+    const embeddingFactory = buildEmbeddingRegistry(embeddingConfig);
 
     // Reserve against the budget the turn will actually send, not the model's raw cap - a
     // derived cap on a reasoning model resolves to a much larger value (see
@@ -961,7 +968,8 @@ async function processExecution(
   checkpointDepth: number = 0
 ): Promise<void> {
   logger.updateMetadata({ executionId });
-  const sendWs = createWsSender(connectionId, logger);
+  // Every terminal frame of a top-level run also publishes its push (agentExecutor.push.ts).
+  const sendWs = withAgentTerminalPush(createWsSender(connectionId, logger), createAgentPushDeps(logger), logger);
 
   // Depth guard: refuse to process if this execution has self-dispatched too many times.
   // A runaway agent (infinite tool loop, stuck abort signal) would otherwise chain Lambdas
@@ -2120,7 +2128,20 @@ async function processExecution(
         allSideEffects.push(sideEffect);
       },
       onPendingAction: action =>
-        publishRunPendingAction({ executionId, questId: runQuestId, action, questRepository, sendWs, logger }),
+        publishRunPendingAction({
+          executionId,
+          questId: runQuestId,
+          action,
+          questRepository,
+          sendWs,
+          logger,
+          approvalPush: {
+            userId: execution.userId,
+            sessionId: execution.sessionId,
+            sessionDeepLink,
+            publish: event => publishPushNotification(event, logger),
+          },
+        }),
       sessionId: execution.sessionId,
       questId: runQuestId,
       // Only spend no tracker bills reaches here: an in-process subagent whose `tracker.onStart`
@@ -3750,6 +3771,12 @@ async function fireDagNodeTerminalOnRefusal(args: {
           });
         });
       await sendWs('failed', { executionId: parentExecutionId, reason: 'dag_hook_error' });
+      // This sender belongs to the child's dispatch, so the parent's push is published explicitly.
+      await publishAgentTerminalPush(
+        { executionId: parentExecutionId, outcome: 'failed' },
+        createAgentPushDeps(logger),
+        logger
+      );
     }
   }
 }
@@ -4453,6 +4480,12 @@ async function processSubagentDispatch(
           questRepository,
           sendWs,
           logger,
+          approvalPush: {
+            userId: child.userId,
+            sessionId: child.sessionId,
+            sessionDeepLink,
+            publish: event => publishPushNotification(event, logger),
+          },
         }),
       sessionId: child.sessionId,
       // Inherited from the parent at create time (see baseFields / nodeDefaults). Inert today -

@@ -54,22 +54,22 @@ import { getSettingsByNames, ITokenizer, TiktokenTokenizer } from '@bike4mind/ut
 import { ILogger, Logger } from '@bike4mind/observability';
 import { accessibleBy } from '@casl/mongoose';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
-import { operationalBillingAdapters } from '@server/billing/operationalBilling';
+import { operationalBillingAdapters } from '@bike4mind/server-utils/billing/operationalBilling';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { recallMementosV2 } from '@bike4mind/server-utils/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@bike4mind/server-utils/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@bike4mind/server-utils/utils/sessionSystemPromptResolver';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
-import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { Resource } from 'sst';
 import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
-import { buildMcpEnvVariables } from '@server/utils/mcpEnv';
-import { LLMEvents, TelemetryEvents } from '@server/utils/eventBus';
-import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { buildMcpEnvVariables } from '@bike4mind/server-utils/utils/mcpEnv';
+import { LLMEvents, TelemetryEvents } from '@bike4mind/server-utils/utils/eventBus';
+import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 
 /**
  * Publish telemetry alert events to EventBridge for async processing.
@@ -94,7 +94,7 @@ export const publishTelemetryAlertCallback = async (args: {
 // Create an adapter for sessionService.autoName to publish event to EventBridge
 const autoNameSessionAdapter = async (sessionId: string, logger: Logger): Promise<string | null> => {
   // Import SessionEvents dynamically to avoid circular dependencies
-  const { SessionEvents } = await import('@server/utils/eventBus');
+  const { SessionEvents } = await import('@bike4mind/server-utils/utils/eventBus');
 
   // Get the session to determine the userId
   const session = await Session.findById(sessionId);

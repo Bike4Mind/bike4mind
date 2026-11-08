@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { SignupSignal } from './signupSignals';
+import type { SignupSignal } from '@bike4mind/server-utils/app/utils/signupSignals';
 
 /**
  * The admin Analytics overview: query and response shared by the route

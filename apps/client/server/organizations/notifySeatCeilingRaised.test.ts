@@ -13,7 +13,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: { findById: (id: string) => mockFindUserById(id) } }));
 vi.mock('@bike4mind/database', () => ({ adminAuditLogRepository: { append: vi.fn() } }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   systemAuditActor: (name: string) => ({ kind: 'system', scope: 'platform', name, wasAdmin: false }),
 }));
 

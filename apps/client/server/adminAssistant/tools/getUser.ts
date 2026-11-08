@@ -2,7 +2,7 @@ import type { IUserDocument } from '@bike4mind/common';
 import { organizationRepository } from '@bike4mind/database';
 import { userApiKeyService } from '@bike4mind/services';
 import { toEntitlementUser, getUserEntitlements } from '../../entitlements';
-import { getActiveSubscriptionsForUser } from '../../entitlements/activeSubscriptions';
+import { getActiveSubscriptionsForUser } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { defineAdminTool } from '../defineAdminTool';
 import { orgRoleOf, toSubscriptionSummary } from '../formatters';

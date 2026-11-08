@@ -81,7 +81,7 @@ vi.mock('@bike4mind/common', async importOriginal => {
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
-vi.mock('@server/utils/auditLog', async importOriginal => {
+vi.mock('@bike4mind/server-utils/utils/auditLog', async importOriginal => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, logAuditEvent: h.logAuditEvent };
 });

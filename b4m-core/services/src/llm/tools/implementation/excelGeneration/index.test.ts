@@ -1,3 +1,4 @@
+import { ExpectedToolError } from '@bike4mind/common';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { excelGenerationTool } from './index';
 
@@ -222,7 +223,8 @@ describe('excel_generation', () => {
         ],
       };
 
-      await expect(toolFn(params)).rejects.toThrow('disallowed pattern');
+      await expect(toolFn(params)).rejects.toBeInstanceOf(ExpectedToolError);
+      expect(mockContext.logger.error).not.toHaveBeenCalled();
     });
 
     it('should reject HYPERLINK formula', async () => {

@@ -206,3 +206,12 @@ export function shownSuggestion(input: {
   if (input.disabled || input.text.length > 0) return null;
   return input.suggestion || null;
 }
+
+/** What the shell puts in the composer: a suggestion that replaces the draft, or text added after it. */
+export type ComposerFill = { id: number; text: string; append?: boolean };
+
+/** `text` after the draft, a space between them unless the draft already ends in whitespace. */
+export function appendToDraft(draft: string, text: string): string {
+  if (!draft || /\s$/.test(draft)) return draft + text;
+  return `${draft} ${text}`;
+}

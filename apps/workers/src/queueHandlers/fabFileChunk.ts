@@ -26,7 +26,7 @@ import {
   finalizeBatchIfComplete,
   completedBatchStatus,
   deferFailureIfRetryable,
-} from '@server/dataLakes/dataLakeBatchProgress';
+} from '@bike4mind/server-utils/dataLakes/dataLakeBatchProgress';
 import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
 import {
   isChunkClaimLostError,

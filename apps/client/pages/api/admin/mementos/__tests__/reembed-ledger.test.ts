@@ -39,7 +39,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 const mockAudit = vi.hoisted(() => vi.fn().mockResolvedValue(null));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
 const listPrincipals = vi.fn();
 vi.mock('@bike4mind/database', () => ({

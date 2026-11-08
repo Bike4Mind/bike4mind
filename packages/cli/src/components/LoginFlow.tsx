@@ -19,6 +19,8 @@ interface LoginFlowProps {
   configStore: ConfigStore;
   onSuccess: () => void;
   onError: (error: Error) => void;
+  /** When given, Esc abandons the sign-in and stores nothing. */
+  onCancel?: () => void;
 }
 
 /**
@@ -105,7 +107,13 @@ function extractErrorMessage(err: unknown): string {
   return 'Unknown error occurred';
 }
 
-export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuccess, onError }: LoginFlowProps) {
+export function LoginFlow({
+  apiUrl = 'http://localhost:3000',
+  configStore,
+  onSuccess,
+  onError,
+  onCancel,
+}: LoginFlowProps) {
   const [status, setStatus] = useState<'initiating' | 'waiting' | 'success' | 'error'>('initiating');
   const [deviceFlow, setDeviceFlow] = useState<DeviceFlowResponse | null>(null);
   const [statusMessage, setStatusMessage] = useState('Initiating device authorization...');
@@ -113,14 +121,23 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
   const [account, setAccount] = useState<{ userId: string; email?: string; username?: string } | null>(null);
   const [copyResult, setCopyResult] = useState<CopyResult | null>(null);
 
+  // The parent passes new callbacks on every render; the flow reads the latest ones instead of restarting.
+  const callbacks = useRef({ onSuccess, onError, onCancel });
+  callbacks.current = { onSuccess, onError, onCancel };
+  const abortRef = useRef<AbortController | null>(null);
+  const tokenIssued = useRef(false);
+
   useEffect(() => {
+    const abort = new AbortController();
+    abortRef.current = abort;
+    let successTimer: ReturnType<typeof setTimeout> | undefined;
     const runLoginFlow = async () => {
       const oauth = new OAuthClient(apiUrl);
 
       try {
         // Step 1: Initiate device flow
         setStatus('initiating');
-        const deviceFlowResponse = await oauth.initiateDeviceFlow();
+        const deviceFlowResponse = await oauth.initiateDeviceFlow(abort.signal);
         // Sanitized at intake so the trust check, the opener and the screen all see the same string.
         setDeviceFlow({
           ...deviceFlowResponse,
@@ -135,8 +152,12 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
         const tokens = await oauth.waitForAuthorization(
           deviceFlowResponse.device_code,
           deviceFlowResponse.interval,
-          message => setStatusMessage(message)
+          message => setStatusMessage(message),
+          abort.signal
         );
+        if (abort.signal.aborted) return;
+        // The server has issued the token, so Esc no longer cancels: it is saved and the session restarts.
+        tokenIssued.current = true;
 
         // Step 3: Decode access token to get userId
         const decoded = jwt.decode(tokens.access_token) as JwtPayload | null;
@@ -145,20 +166,22 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
         // Step 4: Calculate expiry time
         const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
 
-        // Step 5: Store tokens
-        await configStore.setAuthTokens({
-          accessToken: tokens.access_token,
-          refreshToken: tokens.refresh_token,
-          expiresAt,
-          userId,
-        });
+        // Step 5: Store tokens, under the lock so a refresh in another b4m process cannot write over them.
+        await configStore.withRefreshLock(() =>
+          configStore.setAuthTokens({
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+            expiresAt,
+            userId,
+          })
+        );
 
         setAccount({ userId });
         setStatus('success');
         setStatusMessage('Successfully authenticated!');
 
         // Wait a moment before calling success callback
-        setTimeout(() => onSuccess(), 1500);
+        successTimer = setTimeout(() => callbacks.current.onSuccess(), 1500);
 
         // Best-effort and not awaited, so a slow or failed identify never delays onSuccess;
         // the success screen falls back to the user ID until (unless) this resolves.
@@ -173,15 +196,20 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
           )
           .catch(() => {});
       } catch (err) {
+        if (abort.signal.aborted) return;
         setStatus('error');
         const errorMessage = stripControlChars(extractErrorMessage(err));
         setError(errorMessage);
-        onError(new Error(errorMessage));
+        callbacks.current.onError(new Error(errorMessage));
       }
     };
 
     runLoginFlow();
-  }, [apiUrl, configStore, onSuccess, onError]);
+    return () => {
+      abort.abort(new Error('Sign-in cancelled'));
+      clearTimeout(successTimer);
+    };
+  }, [apiUrl, configStore]);
 
   // verification_uri_complete is optional in RFC 8628 and the CLI never builds one itself. Only a link on
   // the API origin is shown or copied; anything else falls back to URL + code.
@@ -222,6 +250,11 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
   const copying = useRef(false);
   useInput(
     (input, key) => {
+      if (key.escape && callbacks.current.onCancel && !tokenIssued.current) {
+        abortRef.current?.abort(new Error('Sign-in cancelled'));
+        callbacks.current.onCancel();
+        return;
+      }
       // Ink reports Ctrl+C and Alt+C as 'c' plus a modifier flag.
       if (key.ctrl || key.meta || input.toLowerCase() !== 'c' || !copyTarget || copying.current) return;
       copying.current = true;
@@ -232,7 +265,7 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
           copying.current = false;
         });
     },
-    { isActive: status === 'waiting' && isRawModeSupported }
+    { isActive: (status === 'waiting' || status === 'initiating') && isRawModeSupported }
   );
 
   if (status === 'initiating') {
@@ -377,6 +410,12 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
       <Box marginTop={1}>
         <Text dimColor>Expires in {deviceFlow ? Math.floor(deviceFlow.expires_in / 60) : 0} minutes</Text>
       </Box>
+
+      {onCancel && isRawModeSupported && (
+        <Box>
+          <Text dimColor>Press Esc to cancel.</Text>
+        </Box>
+      )}
     </Box>
   );
 }

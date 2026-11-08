@@ -691,7 +691,7 @@ const SlackWorkspacesTab: React.FC = () => {
   }
 
   return (
-    <Box sx={{ p: 2 }}>
+    <Box>
       {/* Header */}
       <Stack
         direction={{ xs: 'column', sm: 'row' }}

@@ -16,7 +16,7 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import { adminAuditService, userService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { systemAuditActor } from '@server/utils/adminAudit';
+import { systemAuditActor } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
  * Approves a pending signup risk review on evidence an abuser cannot cheaply produce, so a

@@ -55,6 +55,12 @@ describe('organizationService - update', () => {
     };
   });
 
+  it('persists redactPushContent for a caller with update access', async () => {
+    await update(mockRegularUser as IUserDocument, { id: 'org1', redactPushContent: true }, mockAdapters);
+
+    expect(mockAdapters.db.organizations.update.mock.calls[0][0]).toEqual({ id: 'org1', redactPushContent: true });
+  });
+
   it('should update an organization with provided values when user is admin', async () => {
     const updateParams = {
       id: 'org1',

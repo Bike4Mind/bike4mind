@@ -261,6 +261,17 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('chat-thread-empty-host')).not.toBeNull();
   });
 
+  it("hides the dock from its own close button and hands focus to the header's dock toggle", async () => {
+    await openParent();
+    await enterOrchestrate();
+    expect(query('orchestrator-dock')).not.toBeNull();
+
+    act(() => el('orchestrator-dock-close-btn').click());
+    expect(query('orchestrator-dock')).toBeNull();
+    expect(query('orchestrator-dock-hidden')).not.toBeNull();
+    expect(document.activeElement).toBe(el('orchestrator-dock-toggle-btn'));
+  });
+
   it('keeps the same thread mounted across surface and dock toggles', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     await openParent();
@@ -474,7 +485,7 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('orchestrator-turn-on-btn')).toBeNull();
   });
 
-  it('brings the parent conversation forward when the Innkeeper is clicked, reopening a hidden dock', async () => {
+  it('takes an order at the bar, and brings the whole conversation forward from it into a hidden dock', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     await openParent();
     await enterOrchestrate();
@@ -482,6 +493,11 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('orchestrator-dock')).toBeNull();
 
     await act(async () => el('orchestrator-tavern-innkeeper').click());
+    expect(query('orchestrator-tavern-order-slip')).not.toBeNull();
+    expect(query('orchestrator-dock')).toBeNull();
+
+    await act(async () => el('orchestrator-tavern-order-open-conversation-btn').click());
+    expect(query('orchestrator-tavern-order-slip')).toBeNull();
     expect(query('orchestrator-dock')).not.toBeNull();
     expect(document.activeElement).toBe(el('chat-composer-input'));
   });

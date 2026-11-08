@@ -1,6 +1,6 @@
 import { copyFileSync, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import react from '@vitejs/plugin-react';
 import { defineConfig, externalizeDepsPlugin, loadEnv } from 'electron-vite';
 import type { Plugin } from 'vite';
@@ -28,6 +28,26 @@ function copyTreeSitterWasm(): Plugin {
       const target = join(options.dir ?? resolve(__dirname, 'out/main'), 'wasm');
       mkdirSync(target, { recursive: true });
       for (const asset of assets) copyFileSync(require.resolve(asset), join(target, asset.split('/').pop() as string));
+    },
+  };
+}
+
+/**
+ * Puts the manifold-3d engine (Apache-2.0) beside the main bundle, in `model3d/`. The b4m-model:
+ * protocol (src/main/chat/model3d/engineProtocol.ts) serves these files to the sandboxed engine
+ * frame by path, so no bundler ever sees an import for them.
+ */
+function copyManifoldEngine(): Plugin {
+  const require = createRequire(join(__dirname, 'package.json'));
+  // LICENSE is not in the package's exports map, so it is found beside the wasm instead.
+  const packageDir = dirname(require.resolve('manifold-3d/manifold.wasm'));
+  const files = ['manifold.js', 'manifold.wasm', 'LICENSE'];
+  return {
+    name: 'copy-manifold-engine',
+    writeBundle(options) {
+      const target = join(options.dir ?? resolve(__dirname, 'out/main'), 'model3d');
+      mkdirSync(target, { recursive: true });
+      for (const file of files) copyFileSync(join(packageDir, file), join(target, file));
     },
   };
 }
@@ -105,6 +125,7 @@ export default defineConfig(({ mode }) => {
       plugins: [
         externalizeDepsPlugin({ exclude: ['@bike4mind/utils', '@bike4mind/observability'] }),
         copyTreeSitterWasm(),
+        copyManifoldEngine(),
         curatedBuildInfo({ devKeys: curatedDevKeys, manifestUrl: curatedUrl }),
       ],
     },

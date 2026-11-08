@@ -1,19 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
-import {
-  Box,
-  Card,
-  Grid,
-  Stack,
-  Typography,
-  IconButton,
-  Button,
-  Input,
-  Modal,
-  ModalDialog,
-  ModalClose,
-  Sheet,
-  Chip,
-} from '@mui/joy';
+import { Box, Button, Chip, IconButton, Input, Sheet, Stack, Typography } from '@mui/joy';
 import SunIcon from '@mui/icons-material/WbSunny';
 import MoonIcon from '@mui/icons-material/NightsStay';
 import AddIcon from '@mui/icons-material/Add';
@@ -21,123 +7,18 @@ import CloseIcon from '@mui/icons-material/Close';
 import SearchIcon from '@mui/icons-material/Search';
 import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
-import ClockIcon from '@mui/icons-material/Schedule';
-import CalendarIcon from '@mui/icons-material/CalendarToday';
-import GlobeIcon from '@mui/icons-material/Language';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
 import advancedFormat from 'dayjs/plugin/advancedFormat';
-import { motion, AnimatePresence } from 'framer-motion';
-import { keyframes, styled } from '@mui/system';
 import { WORLD_CITIES } from './worldCities';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { AdminDialog, AdminPageHeader, EmptyState, SectionCard } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 dayjs.extend(timezone);
 dayjs.extend(utc);
 dayjs.extend(advancedFormat);
-
-// Styled components
-const GlowingCard = styled(motion.div)<{ glowColor: string; isDaytime: boolean }>`
-  position: relative;
-  border-radius: 24px;
-  overflow: hidden;
-  backdrop-filter: blur(20px);
-  background: ${props =>
-    props.isDaytime
-      ? 'linear-gradient(135deg, rgba(255,255,255,0.9) 0%, rgba(255,255,255,0.7) 100%)'
-      : 'linear-gradient(135deg, rgba(20,20,40,0.95) 0%, rgba(40,40,80,0.85) 100%)'};
-  box-shadow: ${props => `
-    0 8px 32px rgba(0,0,0,0.1),
-    0 0 80px ${props.glowColor}20,
-    inset 0 0 60px ${props.glowColor}10
-  `};
-  transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-
-  &:hover {
-    transform: translateY(-8px) scale(1.02);
-    box-shadow: ${props => `
-      0 20px 60px rgba(0,0,0,0.2),
-      0 0 120px ${props.glowColor}40,
-      inset 0 0 80px ${props.glowColor}20
-    `};
-  }
-
-  &::before {
-    content: '';
-    position: absolute;
-    top: -50%;
-    left: -50%;
-    width: 200%;
-    height: 200%;
-    background: radial-gradient(circle at center, ${props => props.glowColor}20 0%, transparent 70%);
-    opacity: 0;
-    transition: opacity 0.6s ease;
-    pointer-events: none;
-  }
-
-  &:hover::before {
-    opacity: 1;
-  }
-`;
-
-const float = keyframes`
-  0%, 100% { transform: translateY(0px) rotate(0deg); }
-  25% { transform: translateY(-10px) rotate(1deg); }
-  75% { transform: translateY(5px) rotate(-1deg); }
-`;
-
-const pulse = keyframes`
-  0%, 100% { opacity: 0.8; transform: scale(1); }
-  50% { opacity: 1; transform: scale(1.05); }
-`;
-
-const SunMoonContainer = styled(motion.div)`
-  position: absolute;
-  top: 20px;
-  right: 20px;
-  width: 60px;
-  height: 60px;
-  animation: ${float} 6s ease-in-out infinite;
-`;
-
-const BackgroundGradient = styled('div')<{ isDaytime: boolean }>`
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: ${(props: { isDaytime: boolean }) =>
-    props.isDaytime
-      ? 'radial-gradient(ellipse at top, #87CEEB 0%, #98D8E8 50%, #F0E68C 100%)'
-      : 'radial-gradient(ellipse at top, #0a0a2a 0%, #16213e 50%, #1a1a3a 100%)'};
-  transition: background 2s ease;
-  z-index: 0;
-  pointer-events: none;
-`;
-
-const StarsContainer = styled('div')`
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  pointer-events: none;
-  z-index: 0;
-`;
-
-const Star = styled('div')<{ size: number; top: number; left: number; delay: number }>`
-  position: absolute;
-  width: ${(props: { size: number }) => props.size}px;
-  height: ${(props: { size: number }) => props.size}px;
-  background: white;
-  border-radius: 50%;
-  top: ${(props: { top: number }) => props.top}%;
-  left: ${(props: { left: number }) => props.left}%;
-  animation: ${pulse} ${(props: { delay: number }) => 2 + props.delay}s ease-in-out infinite;
-  animation-delay: ${(props: { delay: number }) => props.delay}s;
-  box-shadow: 0 0 ${(props: { size: number }) => props.size * 2}px white;
-`;
 
 // Timezone data with metadata
 interface CityData {
@@ -269,39 +150,13 @@ const getTimeOfDay = (hour: number): 'night' | 'dawn' | 'morning' | 'afternoon' 
   return 'night';
 };
 
-const getGradientColors = (timeOfDay: string) => {
-  const gradients = {
-    night: ['#0a0a2a', '#16213e', '#1a1a3a'],
-    dawn: ['#FF6B6B', '#FF8E53', '#FFA07A'],
-    morning: ['#87CEEB', '#98D8E8', '#F0E68C'],
-    afternoon: ['#FFD700', '#FFA500', '#FF8C00'],
-    dusk: ['#FF6347', '#FF1493', '#8B008B'],
-  };
-  return gradients[timeOfDay as keyof typeof gradients] || gradients.morning;
-};
+const QUICK_PICKS = ['Los Angeles', 'Austin', 'Kyiv', 'Cebu', 'London', 'Tokyo', 'Sydney', 'Dubai'];
 
 const WorldTimeTab: React.FC = () => {
   const [cities, setCities] = useState<CityData[]>(defaultCities);
   const [showAddModal, setShowAddModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentTime, setCurrentTime] = useState(dayjs());
-
-  const globalTimeState = useMemo(() => {
-    const hours = cities.map(city => dayjs().tz(city.timezone).hour());
-    const avgHour = hours.reduce((a, b) => a + b, 0) / hours.length;
-    return avgHour >= 6 && avgHour <= 18;
-  }, [cities]);
-
-  // Generate stars for night sky (stable random data, computed once on mount)
-  const [stars] = useState(() =>
-    Array.from({ length: 50 }, (_, i) => ({
-      id: i,
-      size: Math.random() * 3 + 1,
-      top: Math.random() * 100,
-      left: Math.random() * 100,
-      delay: Math.random() * 3,
-    }))
-  );
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -353,340 +208,211 @@ const WorldTimeTab: React.FC = () => {
   }, [cities]);
 
   return (
-    <Box sx={{ position: 'relative', minHeight: '100vh', p: 3, overflow: 'hidden' }}>
-      {/* Dynamic background */}
-      <BackgroundGradient isDaytime={globalTimeState} />
-
-      {/* Stars for night time */}
-      {!globalTimeState && (
-        <StarsContainer>
-          {stars.map(star => (
-            <Star key={`star-${star.id}`} size={star.size} top={star.top} left={star.left} delay={star.delay} />
-          ))}
-        </StarsContainer>
-      )}
-
-      {/* Content wrapper with z-index */}
-      <Box sx={{ position: 'relative', zIndex: 1 }}>
-        {/* Header */}
-        <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
-          <Stack
-            direction={{ xs: 'column', sm: 'row' }}
-            justifyContent="space-between"
-            alignItems={{ xs: 'flex-start', sm: 'center' }}
-            spacing={2}
-            mb={4}
-          >
-            <Stack direction="row" alignItems="center" spacing={{ xs: 1, sm: 2 }}>
-              <GlobeIcon sx={{ fontSize: { xs: 32, sm: 40 }, color: globalTimeState ? '#FFD700' : '#E6E6FA' }} />
-              <Typography
-                level="h1"
-                sx={{
-                  fontSize: { xs: '1.5rem', sm: '2rem', md: '3rem' },
-                  fontWeight: 800,
-                  background: globalTimeState
-                    ? 'linear-gradient(135deg, #FFD700 0%, #FFA500 100%)'
-                    : 'linear-gradient(135deg, #E6E6FA 0%, #9370DB 100%)',
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent',
-                  textShadow: '0 0 30px rgba(255,215,0,0.5)',
-                }}
-              >
-                World Time Dashboard
-              </Typography>
-              <ContextHelpButton helpId="admin/world-time" tooltipText="World Time Help" />
-            </Stack>
-
+    <Stack sx={{ gap: ADMIN_REGION_GAP }} data-testid="admin-world-time-tab">
+      <AdminPageHeader
+        title="World time"
+        count={cities.length}
+        description="Local time, date and offset for the team's cities. Favorites sort first."
+        actions={
+          <>
+            <ContextHelpButton helpId="admin/world-time" tooltipText="World time help" />
             <Button
+              size="sm"
               startDecorator={<AddIcon />}
               onClick={() => setShowAddModal(true)}
-              size="lg"
+              data-testid="admin-world-time-add-btn"
+            >
+              Add location
+            </Button>
+          </>
+        }
+      />
+
+      {sortedCities.length === 0 ? (
+        <Sheet variant="outlined" sx={{ bgcolor: 'admin.surface', borderColor: 'admin.border', borderRadius: 'lg' }}>
+          <EmptyState
+            title="No locations yet"
+            description="Add a city to see its local time."
+            action={
+              <Button size="sm" variant="outlined" onClick={() => setShowAddModal(true)}>
+                Add location
+              </Button>
+            }
+          />
+        </Sheet>
+      ) : (
+        <Box
+          sx={{
+            display: 'grid',
+            gap: 2,
+            gridTemplateColumns: 'repeat(auto-fill, minmax(min(280px, 100%), 1fr))',
+          }}
+        >
+          {sortedCities.map(city => {
+            const cityTime = currentTime.tz(city.timezone);
+            const isDaytime = getSunPosition(cityTime, city.lat, city.lng) > 0;
+            const timeOfDay = getTimeOfDay(cityTime.hour());
+            const DayIcon = isDaytime ? SunIcon : MoonIcon;
+
+            return (
+              <SectionCard
+                key={city.id}
+                title={city.name}
+                body="custom"
+                data-testid={`admin-world-time-city-${city.id}`}
+                action={
+                  <Stack direction="row" gap={0.5}>
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      aria-label={city.isFavorite ? `Unfavorite ${city.name}` : `Favorite ${city.name}`}
+                      aria-pressed={Boolean(city.isFavorite)}
+                      onClick={() => handleToggleFavorite(city.id)}
+                      sx={{ color: city.isFavorite ? 'admin.ink' : 'admin.inkMuted' }}
+                    >
+                      {city.isFavorite ? <StarIcon sx={{ fontSize: 18 }} /> : <StarBorderIcon sx={{ fontSize: 18 }} />}
+                    </IconButton>
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      aria-label={`Remove ${city.name}`}
+                      onClick={() => handleRemoveCity(city.id)}
+                      sx={{ color: 'admin.inkMuted' }}
+                    >
+                      <CloseIcon sx={{ fontSize: 18 }} />
+                    </IconButton>
+                  </Stack>
+                }
+              >
+                <Stack gap={1} sx={{ px: 2, py: 1.75 }}>
+                  <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+                    {city.country}
+                  </Typography>
+                  <Typography
+                    sx={{
+                      color: 'admin.ink',
+                      fontSize: 22,
+                      fontWeight: 600,
+                      lineHeight: 1.25,
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    {cityTime.format('h:mm:ss A')}
+                  </Typography>
+                  <Typography level="body-sm" sx={{ color: 'admin.inkSecondary' }}>
+                    {cityTime.format('dddd, MMMM D, YYYY')}
+                  </Typography>
+                  <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1} flexWrap="wrap">
+                    <Chip
+                      size="sm"
+                      variant="soft"
+                      color="neutral"
+                      startDecorator={<DayIcon sx={{ fontSize: 16, color: 'admin.inkMuted' }} />}
+                    >
+                      {timeOfDay.charAt(0).toUpperCase() + timeOfDay.slice(1)}
+                    </Chip>
+                    <Typography
+                      level="body-xs"
+                      sx={{ color: 'admin.inkMuted', fontVariantNumeric: 'tabular-nums', overflowWrap: 'anywhere' }}
+                    >
+                      {city.timezone} - UTC{cityTime.format('Z')}
+                    </Typography>
+                  </Stack>
+                </Stack>
+              </SectionCard>
+            );
+          })}
+        </Box>
+      )}
+
+      <AdminDialog
+        open={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        title="Add location"
+        width={520}
+        data-testid="admin-world-time-add-dialog"
+      >
+        <Stack gap={2}>
+          <Input
+            size="sm"
+            placeholder='Search cities (try "Los Angeles", "London")'
+            value={searchQuery}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value)}
+            startDecorator={<SearchIcon sx={{ fontSize: 16, color: 'admin.inkMuted' }} />}
+            endDecorator={
+              searchQuery ? (
+                <IconButton size="sm" variant="plain" aria-label="Clear search" onClick={() => setSearchQuery('')}>
+                  <CloseIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              ) : null
+            }
+            slotProps={{ input: { 'aria-label': 'Search cities' } }}
+          />
+
+          <Stack direction="row" gap={1} flexWrap="wrap">
+            {QUICK_PICKS.map(label => (
+              <Chip key={label} size="sm" variant="outlined" color="neutral" onClick={() => setSearchQuery(label)}>
+                {label}
+              </Chip>
+            ))}
+          </Stack>
+
+          {filteredCities.length === 0 ? (
+            <EmptyState
+              title={`No results for "${searchQuery}"`}
+              action={
+                <Button size="sm" variant="outlined" onClick={() => setSearchQuery('')}>
+                  Clear search
+                </Button>
+              }
+            />
+          ) : (
+            <Stack
+              component="ul"
               sx={{
-                width: { xs: '100%', sm: 'auto' },
-                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                color: 'white',
-                '&:hover': {
-                  background: 'linear-gradient(135deg, #764ba2 0%, #667eea 100%)',
-                },
+                m: 0,
+                p: 0,
+                listStyle: 'none',
+                maxHeight: 400,
+                overflowY: 'auto',
+                border: '1px solid',
+                borderColor: 'admin.border',
+                borderRadius: 'md',
+                '& > li + li': { borderTop: '1px solid', borderColor: 'admin.border' },
               }}
             >
-              Add Location
-            </Button>
-          </Stack>
-        </motion.div>
-
-        {/* City Grid */}
-        <Grid container spacing={3}>
-          <AnimatePresence>
-            {sortedCities.map((city, index) => {
-              const cityTime = currentTime.tz(city.timezone);
-              const hour = cityTime.hour();
-              const sunPosition = getSunPosition(cityTime, city.lat, city.lng);
-              const timeOfDay = getTimeOfDay(hour);
-              const isDaytime = sunPosition > 0;
-              const gradientColors = getGradientColors(timeOfDay);
-
-              return (
-                <Grid key={city.id} xs={12} sm={6} lg={4}>
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0.8, y: 20 }}
-                    animate={{ opacity: 1, scale: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.8, y: -20 }}
-                    transition={{
-                      duration: 0.5,
-                      delay: index * 0.1,
-                      type: 'spring',
-                      stiffness: 100,
+              {filteredCities.map(city => (
+                <Box component="li" key={city.id}>
+                  <Box
+                    component="button"
+                    type="button"
+                    onClick={() => handleAddCity(city)}
+                    sx={{
+                      all: 'unset',
+                      boxSizing: 'border-box',
+                      display: 'block',
+                      width: '100%',
+                      px: 1.5,
+                      py: 1,
+                      cursor: 'pointer',
+                      '&:hover': { bgcolor: 'admin.hover' },
+                      '&:focus-visible': { outline: '2px solid', outlineColor: 'admin.accent', outlineOffset: -2 },
                     }}
-                    layout
                   >
-                    <GlowingCard glowColor={isDaytime ? '#FFD700' : '#9370DB'} isDaytime={isDaytime}>
-                      <Card
-                        sx={{
-                          background: 'transparent',
-                          backdropFilter: 'none',
-                          position: 'relative',
-                          overflow: 'visible',
-                          minHeight: 280,
-                          p: 3,
-                        }}
-                      >
-                        {/* City actions */}
-                        <Stack direction="row" justifyContent="space-between" sx={{ mb: 2 }}>
-                          <IconButton
-                            size="sm"
-                            onClick={() => handleToggleFavorite(city.id)}
-                            sx={{ color: city.isFavorite ? '#FFD700' : 'neutral.400' }}
-                          >
-                            {city.isFavorite ? <StarIcon /> : <StarBorderIcon />}
-                          </IconButton>
-                          <IconButton size="sm" onClick={() => handleRemoveCity(city.id)} sx={{ color: 'neutral.400' }}>
-                            <CloseIcon />
-                          </IconButton>
-                        </Stack>
-
-                        {/* Sun/Moon visualization */}
-                        <SunMoonContainer
-                          animate={{
-                            rotate: isDaytime ? 0 : 180,
-                            scale: isDaytime ? 1 : 0.8,
-                          }}
-                          transition={{ duration: 2, type: 'spring' }}
-                        >
-                          {isDaytime ? (
-                            <SunIcon
-                              sx={{
-                                fontSize: 60,
-                                color: '#FFD700',
-                                filter: 'drop-shadow(0 0 20px #FFD700)',
-                              }}
-                            />
-                          ) : (
-                            <MoonIcon
-                              sx={{
-                                fontSize: 60,
-                                color: '#E6E6FA',
-                                filter: 'drop-shadow(0 0 20px #E6E6FA)',
-                              }}
-                            />
-                          )}
-                        </SunMoonContainer>
-
-                        {/* City info */}
-                        <Stack spacing={1}>
-                          <Typography
-                            level="h2"
-                            sx={{
-                              fontSize: '2.5rem',
-                              fontWeight: 800,
-                              color: isDaytime ? 'neutral.900' : 'neutral.100',
-                              textShadow: isDaytime
-                                ? '2px 2px 4px rgba(0,0,0,0.1)'
-                                : '2px 2px 4px rgba(255,255,255,0.1)',
-                            }}
-                          >
-                            {city.emoji} {city.name}
-                          </Typography>
-
-                          <Typography
-                            level="body-md"
-                            sx={{
-                              color: isDaytime ? 'neutral.700' : 'neutral.300',
-                              fontWeight: 500,
-                            }}
-                          >
-                            {city.country}
-                          </Typography>
-
-                          <Stack spacing={1} sx={{ mt: 2 }}>
-                            <Stack direction="row" spacing={1} alignItems="center">
-                              <ClockIcon sx={{ fontSize: 20, color: isDaytime ? 'neutral.600' : 'neutral.400' }} />
-                              <Typography
-                                level="h3"
-                                sx={{
-                                  fontSize: '1.75rem',
-                                  fontWeight: 600,
-                                  color: isDaytime ? 'neutral.800' : 'neutral.200',
-                                  fontVariantNumeric: 'tabular-nums',
-                                }}
-                              >
-                                {cityTime.format('h:mm:ss A')}
-                              </Typography>
-                            </Stack>
-
-                            <Stack direction="row" spacing={1} alignItems="center">
-                              <CalendarIcon sx={{ fontSize: 20, color: isDaytime ? 'neutral.600' : 'neutral.400' }} />
-                              <Typography level="body-lg" sx={{ color: isDaytime ? 'neutral.700' : 'neutral.300' }}>
-                                {cityTime.format('dddd, MMMM D, YYYY')}
-                              </Typography>
-                            </Stack>
-
-                            <Chip
-                              size="sm"
-                              sx={{
-                                mt: 1,
-                                background: `linear-gradient(135deg, ${gradientColors[0]} 0%, ${gradientColors[1]} 100%)`,
-                                color: 'white',
-                                fontWeight: 600,
-                              }}
-                            >
-                              {timeOfDay.charAt(0).toUpperCase() + timeOfDay.slice(1)}
-                            </Chip>
-                          </Stack>
-                        </Stack>
-
-                        {/* Time zone indicator */}
-                        <Typography
-                          level="body-xs"
-                          sx={{
-                            position: 'absolute',
-                            bottom: 16,
-                            right: 16,
-                            color: isDaytime ? 'neutral.500' : 'neutral.400',
-                            fontFamily: 'monospace',
-                          }}
-                        >
-                          {city.timezone} • UTC{cityTime.format('Z')}
-                        </Typography>
-                      </Card>
-                    </GlowingCard>
-                  </motion.div>
-                </Grid>
-              );
-            })}
-          </AnimatePresence>
-        </Grid>
-
-        {/* Add Location Modal */}
-        <Modal open={showAddModal} onClose={() => setShowAddModal(false)}>
-          <ModalDialog
-            size="lg"
-            sx={{
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              color: 'white',
-            }}
-          >
-            <ModalClose sx={{ color: 'white' }} />
-            <Typography level="h2" sx={{ mb: 2, color: 'white' }}>
-              Add New Location
-            </Typography>
-
-            <Input
-              placeholder='Search cities (try "Los Angeles", "London")...'
-              value={searchQuery}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value)}
-              startDecorator={<SearchIcon />}
-              endDecorator={
-                searchQuery ? (
-                  <IconButton size="sm" variant="soft" color="neutral" onClick={() => setSearchQuery('')}>
-                    <CloseIcon />
-                  </IconButton>
-                ) : null
-              }
-              sx={{
-                mb: 3,
-                background: 'rgba(255,255,255,0.2)',
-                color: 'white',
-                '&::placeholder': { color: 'rgba(255,255,255,0.7)' },
-                '& .MuiInput-startDecorator': { color: 'white' },
-              }}
-            />
-
-            {/* Quick picks */}
-            <Stack direction="row" spacing={1} sx={{ mb: 2, flexWrap: 'wrap' }}>
-              {['Los Angeles', 'Austin', 'Kyiv', 'Cebu', 'London', 'Tokyo', 'Sydney', 'Dubai'].map(label => (
-                <Chip
-                  key={label}
-                  size="sm"
-                  variant="soft"
-                  onClick={() => setSearchQuery(label)}
-                  sx={{ cursor: 'pointer' }}
-                >
-                  {label}
-                </Chip>
+                    <Typography level="body-sm" sx={{ color: 'admin.ink', fontWeight: 500 }}>
+                      {city.name}
+                    </Typography>
+                    <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                      {city.country} - {city.timezone}
+                    </Typography>
+                  </Box>
+                </Box>
               ))}
-              {searchQuery && (
-                <Button size="sm" variant="plain" color="neutral" onClick={() => setSearchQuery('')}>
-                  Clear search
-                </Button>
-              )}
             </Stack>
-
-            {filteredCities.length === 0 ? (
-              <Sheet
-                sx={{
-                  p: 3,
-                  borderRadius: 'md',
-                  background: 'rgba(255,255,255,0.08)',
-                  textAlign: 'center',
-                }}
-              >
-                <Typography level="body-lg" sx={{ color: 'white', mb: 1 }}>
-                  No results for &quot;{searchQuery}&quot;.
-                </Typography>
-                <Button size="sm" variant="soft" onClick={() => setSearchQuery('')}>
-                  Clear search
-                </Button>
-              </Sheet>
-            ) : (
-              <Stack spacing={2} sx={{ maxHeight: 400, overflowY: 'auto' }}>
-                {filteredCities.map(city => (
-                  <motion.div key={city.id} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-                    <Sheet
-                      onClick={() => handleAddCity(city)}
-                      sx={{
-                        p: 2,
-                        borderRadius: 'md',
-                        cursor: 'pointer',
-                        background: 'rgba(255,255,255,0.1)',
-                        transition: 'all 0.3s ease',
-                        '&:hover': {
-                          background: 'rgba(255,255,255,0.2)',
-                        },
-                      }}
-                    >
-                      <Stack direction="row" alignItems="center" spacing={2}>
-                        <Typography level="h4" sx={{ color: 'white' }}>
-                          {city.emoji}
-                        </Typography>
-                        <Stack>
-                          <Typography level="body-lg" sx={{ color: 'white', fontWeight: 600 }}>
-                            {city.name}
-                          </Typography>
-                          <Typography level="body-sm" sx={{ color: 'rgba(255,255,255,0.7)' }}>
-                            {city.country} • {city.timezone}
-                          </Typography>
-                        </Stack>
-                      </Stack>
-                    </Sheet>
-                  </motion.div>
-                ))}
-              </Stack>
-            )}
-          </ModalDialog>
-        </Modal>
-      </Box>
-    </Box>
+          )}
+        </Stack>
+      </AdminDialog>
+    </Stack>
   );
 };
 

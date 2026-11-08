@@ -7,7 +7,14 @@
 import { createInterface } from 'readline';
 import { lookup } from 'dns/promises';
 import { Writable } from 'stream';
-import type { CuratedSlot, HubBuild, HubEntry, HubManifest, HubTier } from '@bike4mind/common';
+import {
+  vramNeedsLlamaServer,
+  type CuratedSlot,
+  type HubBuild,
+  type HubEntry,
+  type HubManifest,
+  type HubTier,
+} from '@bike4mind/common';
 import {
   HUGGING_FACE_SSH_KEYS_URL,
   HuggingFaceHub,
@@ -28,26 +35,33 @@ import {
 } from '@bike4mind/local-models';
 import {
   answersWithoutCredentials,
+  createSshFetch,
+  discoverSshServers,
   parseServerAddress,
+  parseSshPort,
   leastTrusted,
   localModelId,
   probeServer,
   probeToolSupport,
   scopeOfIp,
   serverRuntimeId,
+  SSH_PORT_PROBLEM,
+  SSH_PROBE_TIMEOUT_MS,
+  sshDestinationProblem,
   toolsOffHint,
   transportVerdict,
+  usualPorts,
   type AddressScope,
 } from '@bike4mind/local-models/servers';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import { createCliCuratedList, type CuratedOrigin } from '../models/curatedList.js';
 import {
   defaultOn,
-  DESKTOP_ONLY_STATUS,
   findModelServer,
   loadModelServers,
   loginHint,
   serverAddressLabel,
+  serverBaseUrl,
   needsCredential,
   noSuchServer,
   productLabel,
@@ -56,9 +70,11 @@ import {
   serverFetch,
   serverRedactor,
   validateSecret,
+  withSignal,
   type CliModelServer,
   type LoadedModelServers,
   type SecretFor,
+  type SshFetchFor,
 } from '../models/modelServers.js';
 import {
   CancelledError,
@@ -102,6 +118,8 @@ import {
   FIT_LABELS,
   fitForHubBuild,
   fitForPlan,
+  LLAMA_SERVER_VRAM_HELP,
+  OLLAMA_SKIPS_INTEL_IGPU,
   machineLabel,
   machineReader,
   type MachineReader,
@@ -125,6 +143,7 @@ interface ModelsCommandArgs {
   server?: string;
   action?: string;
   'token-stdin'?: boolean;
+  port?: string | number;
   [key: string]: unknown;
 }
 
@@ -141,6 +160,8 @@ export interface ModelServersDeps {
   stdinIsTTY?: boolean;
   /** Addresses a host resolves to; defaults to the system resolver. */
   resolveHost?: (host: string) => Promise<string[]>;
+  /** The SSH forward to a server on another machine; defaults to the system ssh (createSshFetch). */
+  sshFetchFor?: SshFetchFor;
 }
 
 export interface ModelsConfig {
@@ -405,13 +426,24 @@ const formatGiB = (bytes: number) => {
   return `${gib >= 100 ? Math.round(gib) : Number(gib.toFixed(1))} GiB`;
 };
 
+/** "an Intel GPU (NAME)", or the name alone when it already starts with "Intel", as the probe's names on Linux do. */
+function anIntelGpu(name: string | null): string {
+  if (!name) return 'an Intel GPU';
+  return /^Intel\b/.test(name) ? `an ${clean(name)}` : `an Intel GPU (${clean(name)})`;
+}
+
 function machineText(hw: HardwareProfile): string {
   const memory = formatGiB(hw.totalMemoryBytes);
-  if (hw.memoryKind === 'unified') return `This computer has ${memory} of memory, shared with its GPU.`;
+  if (hw.memoryKind === 'unified') {
+    const shared = `This computer has ${memory} of memory, shared with its GPU${hw.gpuName ? ` (${clean(hw.gpuName)})` : ''}.`;
+    return hw.gpuVendor === 'intel' ? `${shared} ${OLLAMA_SKIPS_INTEL_IGPU}` : shared;
+  }
   if (hw.memoryKind === 'discrete' && hw.gpuMemoryBytes)
     return `This computer has ${memory} of RAM and ${formatGiB(hw.gpuMemoryBytes)} of GPU memory${
       hw.gpuName ? ` (${clean(hw.gpuName)})` : ''
     }.`;
+  if (vramNeedsLlamaServer(hw))
+    return `This computer has ${memory} of RAM and ${anIntelGpu(hw.gpuName)} of unknown memory, so its picks assume the CPU. ${LLAMA_SERVER_VRAM_HELP}`;
   return `This computer has ${memory} of RAM and no GPU memory was detected, so its picks assume the CPU.`;
 }
 
@@ -846,9 +878,11 @@ async function useServerModel(
   return 0;
 }
 
+/** The servers, with every ssh request also ended by Ctrl-C, so a running ssh stops too. */
 function requireServers(deps: ModelsDeps): ModelServersDeps {
   if (!deps.servers) throw new Error('Model servers are not available here.');
-  return deps.servers;
+  const sshFetchFor: SshFetchFor = deps.servers.sshFetchFor ?? (endpoint => createSshFetch(endpoint));
+  return { ...deps.servers, sshFetchFor: endpoint => withSignal(sshFetchFor(endpoint), deps.signal) };
 }
 
 async function scopeOfHost(host: string, resolve?: ModelServersDeps['resolveHost']): Promise<AddressScope | null> {
@@ -880,8 +914,8 @@ async function describeServer(server: CliModelServer, ctx: ModelServersDeps, che
   const secret = ctx.secret(server.id);
   const credentials = server.auth.type === 'none' ? 'none' : needsCredential(server, secret) ? 'needed' : 'set';
   const base = { server, credentials } as const;
-  const parsed = parseServerAddress(server.transport.baseUrl);
-  if (!parsed) {
+  const baseUrl = serverBaseUrl(server);
+  if (!baseUrl) {
     return {
       ...base,
       product: productLabel(server.kind, null),
@@ -889,23 +923,33 @@ async function describeServer(server: CliModelServer, ctx: ModelServersDeps, che
       notes: [],
     };
   }
+  const ssh = server.transport.type === 'ssh';
   const redactor = serverRedactor(server, secret);
-  const fetch = serverFetch(server, secret);
-  const outcome = await probeServer(fetch, parsed.baseUrl, server.name, () => performance.now(), server.kind);
-  const scope = await scopeOfHost(parsed.host, ctx.resolveHost);
+  const fetch = serverFetch(server, secret, ctx.sshFetchFor);
+  const outcome = await probeServer(
+    fetch,
+    baseUrl,
+    server.name,
+    () => performance.now(),
+    server.kind,
+    ssh ? SSH_PROBE_TIMEOUT_MS : undefined
+  );
   const notes: string[] = [];
-  if (scope) {
+  // Over SSH the traffic is encrypted and the server answers only on that machine's loopback.
+  const parsed = ssh ? null : parseServerAddress(baseUrl);
+  const scope = parsed ? await scopeOfHost(parsed.host, ctx.resolveHost) : null;
+  if (parsed && scope) {
     const verdict = transportVerdict(parsed.protocol, scope, credentials === 'set');
     if (!verdict.ok) notes.push(verdict.reason);
     else if (verdict.unencrypted) notes.push('Unencrypted');
   }
   if (outcome.kind && scope === 'public') {
-    const open = await answersWithoutCredentials(serverFetch(server, undefined), parsed.baseUrl, outcome.kind);
+    const open = await answersWithoutCredentials(serverFetch(server, undefined), baseUrl, outcome.kind);
     if (open) notes.push('Open to anyone');
   }
   const model = server.models[0];
   if (checkTools && outcome.kind === 'openai-compatible' && model) {
-    if ((await probeToolSupport(fetch, parsed.baseUrl, model)) === 'refused') {
+    if ((await probeToolSupport(fetch, baseUrl, model)) === 'refused') {
       notes.push(toolsOffHint(server.name, outcome.product, SERVER_APP));
     }
   }
@@ -936,39 +980,25 @@ export async function listServers(deps: ModelsDeps, opts: ModelsOptions): Promis
     Promise.all(loaded.servers.map(server => describeServer(server, ctx, Boolean(opts.checkTools)))),
     deps.signal
   );
-  const desktopOnly = loaded.desktopOnly ?? [];
   if (opts.json) {
     deps.log(
       JSON.stringify(
         {
           problem: loaded.problem,
           toolsChecked: Boolean(opts.checkTools),
-          servers: [
-            ...rows.map(({ server, product, credentials, status, notes }) => ({
-              id: server.id,
-              name: server.name,
-              kind: server.kind,
-              product,
-              address: serverAddressLabel(server),
-              access: server.access,
-              source: server.source,
-              credentials,
-              status,
-              notes,
-            })),
-            ...desktopOnly.map(server => ({
-              id: server.id,
-              name: server.name,
-              kind: server.kind,
-              product: productLabel(server.kind, null),
-              address: `ssh ${server.transport.destination}`,
-              access: server.access,
-              source: 'desktop',
-              credentials: 'none',
-              status: { state: 'desktop-only', latencyMs: null, text: DESKTOP_ONLY_STATUS },
-              notes: [],
-            })),
-          ],
+          servers: rows.map(({ server, product, credentials, status, notes }) => ({
+            id: server.id,
+            name: server.name,
+            kind: server.kind,
+            product,
+            transport: server.transport.type,
+            address: serverAddressLabel(server),
+            access: server.access,
+            source: server.source,
+            credentials,
+            status,
+            notes,
+          })),
         },
         null,
         2
@@ -976,7 +1006,7 @@ export async function listServers(deps: ModelsDeps, opts: ModelsOptions): Promis
     );
     return 0;
   }
-  if (rows.length === 0 && desktopOnly.length === 0) {
+  if (rows.length === 0) {
     deps.log(loaded.problem ?? 'No model servers are saved in Desktop. Add one in Desktop under Settings.');
     return 0;
   }
@@ -991,15 +1021,6 @@ export async function listServers(deps: ModelsDeps, opts: ModelsOptions): Promis
       credentials === 'needed' ? `needed: ${loginHint(server)}` : credentials,
       status.text,
       notes.map(clean).join(' '),
-    ]),
-    ...desktopOnly.map(server => [
-      clean(server.name),
-      productLabel(server.kind, null),
-      clean(`ssh ${server.transport.destination}`),
-      server.access === 'manage' ? 'Manage' : 'Chat only',
-      'none',
-      DESKTOP_ONLY_STATUS,
-      '',
     ]),
   ]);
   for (const line of lines) deps.log(line);
@@ -1033,7 +1054,8 @@ export async function loginServer(name: string, deps: ModelsDeps, opts: { tokenS
   }
   const secret = validateSecret(server, entered);
   const refused = () => new Error(`${label} refused these credentials. Nothing was saved.`);
-  const target = await resolveServerTarget(server, secret).catch((error: unknown) => {
+  const fetch = serverFetch(server, secret, ctx.sshFetchFor);
+  const target = await resolveServerTarget(server, secret, fetch).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     if (/refused the saved credentials|needs credentials/.test(message)) throw refused();
     throw error;
@@ -1072,10 +1094,64 @@ async function onServer(name: string, subcommand: string, deps: ModelsDeps): Pro
   const ctx = requireServers(deps);
   const server = await chosenServer(name, ctx, deps.signal);
   if (subcommand === 'pull' || subcommand === 'rm' || subcommand === 'remove') requireManageable(server);
+  const secret = ctx.secret(server.id);
   return {
     ...deps,
-    resolveRuntime: () => abortable(resolveServerTarget(server, ctx.secret(server.id)), deps.signal),
+    resolveRuntime: () =>
+      abortable(resolveServerTarget(server, secret, serverFetch(server, secret, ctx.sshFetchFor)), deps.signal),
   };
+}
+
+/**
+ * `servers discover <destination>`: the model servers on another machine's loopback, found over SSH. Saving one is
+ * Desktop's, since the CLI only reads Desktop's list.
+ */
+export async function discoverServers(
+  destination: string,
+  deps: ModelsDeps,
+  opts: ModelsOptions & { port?: string | number }
+): Promise<number> {
+  const problem = sshDestinationProblem(destination);
+  if (problem) throw new Error(problem);
+  const port = opts.port === undefined ? undefined : parseSshPort(opts.port);
+  if (port === null) throw new Error(SSH_PORT_PROBLEM);
+  const target = destination.trim();
+  const sshFetchFor = deps.servers?.sshFetchFor ?? createSshFetch;
+  if (!opts.json) {
+    deps.log(`Looking for model servers on ${clean(target)} (${port !== undefined ? `port ${port}` : usualPorts()})`);
+  }
+  const result = await abortable(
+    discoverSshServers({
+      destination: target,
+      ...(port !== undefined ? { port } : {}),
+      now: () => performance.now(),
+      signal: deps.signal,
+      fetchFor: farPort => sshFetchFor({ destination: target, port: farPort, label: target, app: 'The CLI' }),
+    }),
+    deps.signal
+  );
+  if (opts.json) {
+    deps.log(JSON.stringify({ destination: target, found: result.found, error: result.error }, null, 2));
+    return result.found.length > 0 ? 0 : 1;
+  }
+  if (result.found.length === 0) throw new Error(result.error ?? `Found no model server on ${target}.`);
+  const lines = table([
+    ['PORT', 'KIND', 'VERSION', 'MODELS', 'NOTE'],
+    ...result.found.map(server => [
+      String(server.port),
+      productLabel(server.kind, server.product),
+      clean(server.version ?? ''),
+      server.models === null ? '' : String(server.models),
+      server.needsCredentials ? 'asks for an API key' : '',
+    ]),
+  ]);
+  for (const line of lines) deps.log(line);
+  deps.log('');
+  deps.log(
+    `To use one, add it in Desktop under Settings, Model servers: choose SSH and enter ${clean(target)}. ` +
+      'The CLI then lists it in: b4m models servers'
+  );
+  return 0;
 }
 
 function positional(value: string | string[] | undefined, usage: string): string {
@@ -1109,12 +1185,20 @@ export async function runModelsCommand(
     }
     switch (subcommand) {
       case 'servers': {
+        if (argv.action === 'discover') {
+          const destination = positional(argv.name, 'b4m models servers discover <user@host> [--port N]');
+          return await discoverServers(destination, deps, {
+            ...opts,
+            ...(argv.port !== undefined ? { port: argv.port as string | number } : {}),
+          });
+        }
+        if (argv.port !== undefined) throw new Error('--port works only with: b4m models servers discover');
         const name = () => positional(argv.name, `b4m models servers ${argv.action} <name>`);
         if (argv.action === undefined) return await listServers(deps, opts);
         if (argv.action === 'login')
           return await loginServer(name(), deps, { tokenStdin: Boolean(argv['token-stdin']) });
         if (argv.action === 'logout') return await logoutServer(name(), deps);
-        throw new Error(`Unknown servers action: ${clean(String(argv.action))}. Use login or logout.`);
+        throw new Error(`Unknown servers action: ${clean(String(argv.action))}. Use discover, login or logout.`);
       }
       case 'ls':
       case 'list':

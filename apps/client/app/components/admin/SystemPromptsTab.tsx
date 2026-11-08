@@ -5,7 +5,7 @@ import SystemPromptEditor from './SystemPromptEditor';
 
 const SystemPromptsTab: React.FC = () => {
   return (
-    <Box sx={{ p: 3, height: '100%', overflowY: 'auto' }}>
+    <Box sx={{ height: '100%', overflowY: 'auto' }}>
       <Stack spacing={3}>
         {/* Versioned prompt editor */}
         <SystemPromptEditor />

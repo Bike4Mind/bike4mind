@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { adminApi } from '@server/middlewares/adminApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { securityDashboardSnapshotRepository, type ISecurityDashboardFinding } from '@bike4mind/database';
 import { getCooldownStatus } from '@bike4mind/server-utils/security/cooldown';

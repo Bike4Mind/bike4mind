@@ -37,7 +37,7 @@ vi.mock('@bike4mind/services', () => ({
     previewSignupGrantAction: h.preview,
   },
 }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   denySelfAdminAction: h.denySelf,
   isSelfOrImpersonator: (user: { id: string; impersonatedBy?: string }, targetId: string) =>
     [user.id, user.impersonatedBy].some(id => id?.toLowerCase() === targetId.toLowerCase()),
@@ -80,6 +80,13 @@ describe('admin bulk unblock signup grant', () => {
   ])('rejects %s before touching anything', async (_label, body) => {
     await expect(h.handler!(request({ body }), { json: vi.fn() })).rejects.toThrow('user ids');
     expect(h.run).not.toHaveBeenCalled();
+  });
+
+  it('accepts exactly the cap', async () => {
+    const userIds = Array.from({ length: 100 }, (_, n) => id(n));
+    await h.handler!(request({ body: { userIds, reason: 'Confirmed farming ring' } }), { json: vi.fn() });
+
+    expect(h.run.mock.calls[0][0].userIds).toHaveLength(100);
   });
 
   it('requires a reason for a real run', async () => {
@@ -140,6 +147,10 @@ describe('admin bulk unblock signup grant', () => {
         target: { kind: 'user', id: id(2), displayName: 'two' },
       })
     );
+    await adapters.auditFor(id(1))();
+    const [first, second] = h.audit.mock.calls.map(([, entry]) => entry.details.bulkId);
+    expect(first).toEqual(expect.any(String));
+    expect(second).toBe(first);
     expect(res.json).toHaveBeenCalledOnce();
   });
 

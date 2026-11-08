@@ -1,6 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { adminSettingsRepository, modelDiscoveryRunRepository } from '@bike4mind/database';
 import type { IModelDiscoveryRun } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';

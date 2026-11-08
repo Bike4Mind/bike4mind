@@ -58,8 +58,11 @@ import {
   noSuchServer,
   requireManageable,
   resolveServerTarget,
+  serverFetch,
+  withSignal,
   type LoadedModelServers,
   type SecretFor,
+  type SshFetchFor,
 } from '../models/modelServers.js';
 import type { ConfigStore } from '../storage/ConfigStore.js';
 import { errorResult, toResult } from './tools.js';
@@ -70,7 +73,12 @@ export interface ModelToolsDeps extends Omit<ModelSourceDeps, 'signal'> {
   defaultModel: () => Promise<string | undefined>;
   machine: MachineReader;
   /** Desktop's saved model servers and the CLI's credentials for them; without it `server` is unavailable. */
-  servers?: { load: () => Promise<LoadedModelServers>; secret: () => Promise<SecretFor> };
+  servers?: {
+    load: () => Promise<LoadedModelServers>;
+    secret: () => Promise<SecretFor>;
+    /** The SSH forward to a server on another machine; defaults to the system ssh. */
+    sshFetchFor?: SshFetchFor;
+  };
 }
 
 const serverShape = z
@@ -310,7 +318,8 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
     if (!server) throw noSuchServer(loaded, name);
     if (manage) requireManageable(server);
     const secret = (await abortable(deps.servers.secret(), signal))(server.id);
-    return { ...deps, resolveRuntime: () => abortable(resolveServerTarget(server, secret), signal) };
+    const fetch = withSignal(serverFetch(server, secret, deps.servers.sshFetchFor), signal);
+    return { ...deps, resolveRuntime: () => abortable(resolveServerTarget(server, secret, fetch), signal) };
   };
 
   const run = async (fn: () => Promise<CallToolResult>): Promise<CallToolResult> => {

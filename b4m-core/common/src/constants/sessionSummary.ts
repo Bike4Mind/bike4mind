@@ -2,7 +2,7 @@
  * Why a session summarization happened, stamped on `ISession.summaryTrigger`. Single source for the
  * places that each used to spell this list out: the Session zod schema (schemas/actions.ts), the
  * entity type (types/entities/SessionTypes.ts), the Mongoose path (packages/database SessionModel)
- * and the session.summarize event payload (apps/client server/utils/eventBus.ts). They drifted -
+ * and the session.summarize event payload (packages/server-utils/src/utils/eventBus.ts). They drifted -
  * the Mongoose enum said 'milestone'/'growth' for two values nothing produces - and a drift there
  * is invisible on the update path, because BaseModel's findOneAndUpdate writes without
  * runValidators.

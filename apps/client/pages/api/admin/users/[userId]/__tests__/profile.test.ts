@@ -43,7 +43,7 @@ vi.mock('@server/users/emailChangeMailer', () => ({
   buildEmailChangeMailer: h.buildEmailChangeMailer,
   publishEmailChangeMessages: h.publishEmailChangeMessages,
 }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   parseAdminActionReason: (value: unknown) => {
     if (typeof value !== 'string') throw new BadRequestError('A reason is required');
     return value;

@@ -3,7 +3,7 @@ import { Organization, User, adminAuditLogRepository, realtimeConnectionReposito
 import type { Logger } from '@bike4mind/observability';
 import { adminAuditService, authSessionService } from '@bike4mind/services';
 import { hardDeleteUser } from '@server/services/hardDeleteUser';
-import { systemAuditActor } from '@server/utils/adminAudit';
+import { systemAuditActor } from '@bike4mind/server-utils/utils/adminAudit';
 import { sendAccountDeletionCompleteEmail } from './accountDeletionEmail';
 import { purgeAccountContent } from './purgeAccountContent';
 import { purgeAccountFiles } from './purgeAccountFiles';

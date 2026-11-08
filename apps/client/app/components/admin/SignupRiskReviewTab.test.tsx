@@ -41,7 +41,7 @@ vi.mock('./Users/BulkAbuseResponseModal', () => ({
   },
 }));
 
-import SignupRiskReviewTab from './SignupRiskReviewTab';
+import SignupRiskReviewTab, { advisoryTooltip } from './SignupRiskReviewTab';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -66,6 +66,7 @@ const row = (over: Partial<SignupRiskReviewRow> = {}): SignupRiskReviewRow => ({
   creditsSpent: 1200,
   apiKeysCreated: 3,
   grantHeld: false,
+  advisory: null,
   ...over,
 });
 
@@ -351,5 +352,111 @@ describe('SignupRiskReviewTab', () => {
       expect((await screen.findByTestId('signup-risk-reopen-error')).textContent).toContain('Reopening failed');
       expect(screen.getByTestId('signup-risk-reopen-confirm-btn')).toBeTruthy();
     });
+  });
+
+  it('shows an advisory model verdict as a chip, coloring only an abuse verdict', () => {
+    m.useSignupRiskReviews.mockReturnValue(
+      queue([
+        row({
+          advisory: {
+            detectionId: 'd1',
+            detector: 'signupNetworkBurst',
+            result: 'abuse',
+            confidence: 0.82,
+            assessedAt: '2026-11-02T10:00:00.000Z',
+            otherVerdicts: 0,
+            newerVerdicts: 0,
+          },
+        }),
+        row({
+          userId: 'u2',
+          email: 'jane@example.org',
+          advisory: {
+            detectionId: 'd2',
+            detector: 'signupNetworkBurst',
+            result: 'legitimate_automation',
+            confidence: null,
+            assessedAt: '2026-11-02T10:00:00.000Z',
+            otherVerdicts: 0,
+            newerVerdicts: 0,
+          },
+        }),
+        row({
+          userId: 'u3',
+          email: 'sam@example.net',
+          advisory: {
+            detectionId: 'd3',
+            detector: 'signupNetworkBurst',
+            result: 'insufficient_evidence',
+            confidence: 0.4,
+            assessedAt: '2026-11-02T10:00:00.000Z',
+            otherVerdicts: 0,
+            newerVerdicts: 0,
+          },
+        }),
+      ])
+    );
+    renderTab();
+
+    const chip = (userId: string) =>
+      within(screen.getByTestId(`signup-risk-advisory-${userId}`)).getByTestId('admin-status-chip');
+    expect(chip('u1').textContent).toBe('Model: abuse');
+    expect(chip('u1').getAttribute('data-tone')).toBe('bad');
+    expect(chip('u2').textContent).toBe('Model: legit automation');
+    expect(chip('u2').getAttribute('data-tone')).toBe('neutral');
+    expect(chip('u3').textContent).toBe('Model: unsure');
+    expect(chip('u3').getAttribute('data-tone')).toBe('neutral');
+  });
+
+  it('words the advisory tooltip with the detector, confidence, age and other verdicts', () => {
+    const now = new Date('2026-11-02T10:00:00.000Z').getTime();
+    const advisory = {
+      detectionId: 'd1',
+      detector: 'signupNetworkBurst' as const,
+      result: 'abuse' as const,
+      confidence: 0.82,
+      assessedAt: '2026-11-02T10:00:00.000Z',
+      otherVerdicts: 0,
+      newerVerdicts: 0,
+    };
+
+    const single = advisoryTooltip(advisory, now);
+    expect(single).toContain('(Signup network burst)');
+    expect(single).toContain('82% confident');
+    expect(single).not.toContain('other verdict');
+    expect(single).toContain('It never approves or blocks an account.');
+    expect(advisoryTooltip({ ...advisory, confidence: null }, now)).not.toContain('confident');
+
+    const overNewer = advisoryTooltip({ ...advisory, otherVerdicts: 2, newerVerdicts: 1 }, now);
+    expect(overNewer).toContain('This abuse verdict is shown over 1 newer verdict; 2 other verdicts on this account.');
+
+    const abuseIsNewest = advisoryTooltip({ ...advisory, otherVerdicts: 1 }, now);
+    expect(abuseIsNewest).toContain(' 1 other verdict on this account.');
+    expect(abuseIsNewest).not.toContain('shown over');
+  });
+
+  it('never claims an abuse verdict on a non-abuse advisory with other verdicts', () => {
+    const now = new Date('2026-11-02T10:00:00.000Z').getTime();
+    const tooltip = advisoryTooltip(
+      {
+        detectionId: 'd1',
+        detector: 'signupNetworkBurst',
+        result: 'insufficient_evidence',
+        confidence: 0.6,
+        assessedAt: '2026-11-02T10:00:00.000Z',
+        otherVerdicts: 2,
+        newerVerdicts: 0,
+      },
+      now
+    );
+
+    expect(tooltip).toContain(' 2 other verdicts on this account.');
+    expect(tooltip).not.toContain('abuse');
+  });
+
+  it('shows no advisory chip on a row with no verdict', () => {
+    renderTab();
+
+    expect(screen.queryByTestId('signup-risk-advisory-u1')).toBeNull();
   });
 });

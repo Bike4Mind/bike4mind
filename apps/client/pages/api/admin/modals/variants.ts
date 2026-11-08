@@ -5,7 +5,7 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { NotFoundError, BadRequestError, isZodError } from '@bike4mind/server-utils/utils/errors';
 import { ModalModel } from '@bike4mind/database/social';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { modalAuditTitle } from '@client/server/tools/modalOperations';
 import { MODAL_AUDIENCE_KEY_SET, MODAL_SAFE_DEFAULT_KEY } from '@bike4mind/services';
 

@@ -45,6 +45,8 @@ describe('computeImageUsdCostPerImage', () => {
     [ImageModels.FLUX_2_KLEIN_9B, 0.015],
     [ImageModels.FLUX_2_KLEIN_9B_PREVIEW, 0.015],
     [ImageModels.FLUX_2_KLEIN_4B, 0.014],
+    [ImageModels.FLUX_3_IMAGE, 0.1],
+    [ImageModels.FLUX_3_IMAGE_KLEIN, 0.014],
   ])('prices %s at %s USD per image', (model, usd) => {
     expect(computeImageUsdCostPerImage(model, { model })).toBe(usd);
   });

@@ -47,6 +47,20 @@ vi.doMock('node:fs/promises', async () => {
   );
   return { ...recorded, default: recorded };
 });
+// A distro's share root exists on a Windows host; the rules floor resolves it with sync fs, which is otherwise real here.
+vi.doMock('node:fs', async () => {
+  const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+  const distroRoot = (path: unknown): boolean =>
+    typeof path === 'string' && /^\\\\wsl\.localhost\\[^\\]+\\?$/i.test(path);
+  const realpathSync = Object.assign(
+    (path: string, options?: unknown) => (distroRoot(path) ? path : actual.realpathSync(path, options as undefined)),
+    {
+      native: (path: string, options?: unknown) =>
+        distroRoot(path) ? path : actual.realpathSync.native(path, options as undefined),
+    }
+  );
+  return { ...actual, realpathSync, default: { ...actual, realpathSync } };
+});
 vi.doMock('../../wsl/wslPath', async () => {
   const actual = await vi.importActual<typeof import('../../wsl/wslPath')>('../../wsl/wslPath');
   return {

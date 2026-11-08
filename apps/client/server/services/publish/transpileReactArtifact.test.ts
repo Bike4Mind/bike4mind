@@ -10,7 +10,7 @@ import {
   UnsupportedReactDependencyError,
   ReactArtifactTranspileError,
 } from './transpileReactArtifact';
-import { validateBundle, __testing } from './validateBundle';
+import { validateBundle, __testing } from '@bike4mind/server-utils/services/publish/validateBundle';
 import { PUBLISH_REACT_DEP_SCRIPTS } from '@bike4mind/common';
 import { OPTIONAL_DEP_CDN, LUCIDE_WRAPPER_FN } from '@client/app/utils/reactArtifactDeps';
 

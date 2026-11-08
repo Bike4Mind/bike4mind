@@ -4,7 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { createModalVideoSchema, hasAdminPermission } from '@bike4mind/common';
-import { definedKeys } from '@server/utils/adminAudit';
+import { definedKeys } from '@bike4mind/server-utils/utils/adminAudit';
 import { modalAuditTitle } from '@client/server/tools/modalOperations';
 import { recordModalChanges } from '@client/server/tools/recordModalChanges';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';

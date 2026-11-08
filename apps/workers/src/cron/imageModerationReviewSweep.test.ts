@@ -32,7 +32,7 @@ vi.mock('@bike4mind/observability', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: mocks.emitMetrics }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
-vi.mock('@server/moderation/imageModerationIncidents', () => ({
+vi.mock('@bike4mind/server-utils/moderation/imageModerationIncidents', () => ({
   createReviewerAlertDelivery: mocks.createReviewerAlertDelivery,
 }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));

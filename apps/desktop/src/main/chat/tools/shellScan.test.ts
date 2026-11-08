@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { ApprovalGate } from './ApprovalGate';
 import { arityPrefix } from './bashArity';
-import { isWrapper, opaqueForm, outboundReason, requiresExactShellRule, scanShell } from './shellScan';
+import { globMatches, isWrapper, opaqueForm, outboundReason, requiresExactShellRule, scanShell } from './shellScan';
 
 const home = '/Users/tester';
 vi.mock('node:os', async importOriginal => ({
@@ -1005,5 +1005,47 @@ describe('arityPrefix', () => {
     [['./script.sh', 'a'], './script.sh'],
   ])('%j -> %s', (tokens, expected) => {
     expect(arityPrefix(tokens).join(' ')).toBe(expected);
+  });
+});
+
+describe('globMatches', () => {
+  /** A component as bash reads it; `quoted` marks the characters quoting made literal. */
+  const component = (text: string, quoted: readonly number[] = []) =>
+    [...text].map((char, index) => ({
+      char,
+      glob: !quoted.includes(index) && '*?['.includes(char),
+      active: !quoted.includes(index),
+    }));
+
+  it.each([
+    ['*.ts', 'a.ts', true],
+    ['*.ts', 'a.tsx', false],
+    ['a?c', 'abc', true],
+    ['a?c', 'ac', false],
+    ['[ab]x', 'bx', true],
+    ['[!0-9]x', '5x', false],
+    ['[!a]x', 'Ax', true],
+    ['[^ab]x', 'cx', true],
+    ['[a-c]x', 'bx', true],
+    ['[]a]x', ']x', true],
+    ['[a-', '[a-', true],
+    ['[[:alpha:]]', '9', true],
+    ['*', '.claude', false],
+    ['.*', '.claude', true],
+    ['.cl*', '.CLAUDE', true],
+  ] as const)('%s against %s is %s', (pattern, name, expected) => {
+    expect(globMatches(component(pattern), name, false)).toBe(expected);
+  });
+
+  it('reads a quoted bracket as a literal character', () => {
+    expect(globMatches(component('a[b]', [3]), 'ab', false)).toBe(false);
+    expect(globMatches(component('a[b]', [3]), 'a[b]', false)).toBe(true);
+  });
+
+  it('matches many stars against a long name in linear time', () => {
+    const name = 'a'.repeat(200);
+    const started = performance.now();
+    expect(globMatches(component('*a*a*a*a*a*a*a*b'), name, false)).toBe(false);
+    expect(performance.now() - started).toBeLessThan(50);
   });
 });

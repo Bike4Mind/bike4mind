@@ -38,6 +38,11 @@ vi.mock('../bootstrap/buildLlmBackend.js', () => ({
   })),
 }));
 
+vi.mock('../auth/savedSignIn.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../auth/savedSignIn.js')>();
+  return { ...actual, checkSavedSignIn: vi.fn(actual.checkSavedSignIn) };
+});
+
 vi.mock('../bootstrap/buildSandbox.js', () => ({
   buildSandbox: vi.fn(async () => ({ sandboxOrchestrator: null })),
 }));
@@ -150,5 +155,67 @@ describe('AcpServer agent stack', () => {
     expect(fallback).toBeInstanceOf(FallbackLlmBackend);
     expect(unwrap(fallback)).toBe(h.inner);
     expect(h.captured.tools?.map(t => t.toolSchema.name)).not.toContain('tool_search');
+  });
+});
+
+describe('AcpServer agent stack while signed out', () => {
+  function signedOutServer(): { server: AcpServer; mergeRemoteSkills: ReturnType<typeof vi.fn> } {
+    const server = serverWithStubbedBootstrap();
+    const internals = server as unknown as StackInternals;
+    internals.configStore = { ...internals.configStore, getAuthTokens: async () => null };
+    const mergeRemoteSkills = vi.fn(async () => {});
+    internals.mergeRemoteSkills = mergeRemoteSkills;
+    return { server, mergeRemoteSkills };
+  }
+
+  it('builds on local models with a client that cannot reach Bike4Mind, and skips remote skills', async () => {
+    const { buildLlmBackend } = await import('../bootstrap/buildLlmBackend.js');
+    vi.mocked(buildLlmBackend).mockClear();
+    const { server, mergeRemoteSkills } = signedOutServer();
+
+    await buildStack(server);
+
+    const input = vi.mocked(buildLlmBackend).mock.calls[0][0];
+    expect(input.apiClient.signedOut).toBe(true);
+    expect(input.detectOllama).toBe(true);
+    expect(mergeRemoteSkills).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ status: 'expired' } as const, 'Bike4Mind sign-in expired; running on local models.'],
+    [
+      { status: 'unchecked', reason: 'connect ECONNREFUSED' } as const,
+      'Could not check the Bike4Mind sign-in (connect ECONNREFUSED); running on local models for this run.',
+    ],
+  ])('builds on local models and says so on stderr when the saved sign-in is %o', async (signIn, said) => {
+    const { buildLlmBackend } = await import('../bootstrap/buildLlmBackend.js');
+    vi.mocked(buildLlmBackend).mockClear();
+    const { checkSavedSignIn } = await import('../auth/savedSignIn.js');
+    vi.mocked(checkSavedSignIn).mockResolvedValueOnce(signIn);
+    let stderr = '';
+    const write = vi.spyOn(process.stderr, 'write').mockImplementation(chunk => {
+      stderr += String(chunk);
+      return true;
+    });
+
+    try {
+      await buildStack(serverWithStubbedBootstrap());
+    } finally {
+      write.mockRestore();
+    }
+
+    expect(vi.mocked(buildLlmBackend).mock.calls[0][0].apiClient.signedOut).toBe(true);
+    expect(stderr).toContain(said);
+  });
+
+  it('asks for sign-in with what to fix locally when no local model can chat', async () => {
+    const { buildLlmBackend } = await import('../bootstrap/buildLlmBackend.js');
+    const { NoLocalModelsError } = await import('../bootstrap/signedOutLocal.js');
+    vi.mocked(buildLlmBackend).mockRejectedValueOnce(new NoLocalModelsError('No local model found. Start Ollama.'));
+
+    await expect(buildStack(signedOutServer().server)).rejects.toMatchObject({
+      code: -32000,
+      message: expect.stringContaining('No local model found. Start Ollama.'),
+    });
   });
 });

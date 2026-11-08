@@ -4,7 +4,7 @@ import { abuseService } from '@bike4mind/services';
 import { BadRequestError, ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { addBlockedEmailDomain } from '@server/admin/bulkAbuse/addBlockedEmailDomain';
 import {
   bulkAbuseCohortAdapters,

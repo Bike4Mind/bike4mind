@@ -312,6 +312,7 @@ describe('OpenAICompatibleChat generation settings', () => {
       { temperature: 0.3, top_p: 0.85, top_k: 25, repetition_penalty: 1.08, min_p: 0.04, presence_penalty: 1.5 },
     ],
     ['lmstudio', { temperature: 0.3, top_p: 0.85, top_k: 25, repeat_penalty: 1.08, presence_penalty: 1.5 }],
+    ['llama-swap', { temperature: 0.3, top_p: 0.85, presence_penalty: 1.5 }],
     [null, { temperature: 0.3, top_p: 0.85, presence_penalty: 1.5 }],
   ] as const)('sends the sampling fields %s takes', async (product, expected) => {
     const { fetch, bodies } = server();

@@ -1,12 +1,14 @@
 import Box from '@mui/joy/Box';
+import { useTheme } from '@mui/joy/styles';
 import { keyframes } from '@mui/system';
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { SESSION_SETUP_LABEL } from '@shared/chat';
 import { activityLabel, toolKind, type ToolKind } from '../activity';
 import { prefersReducedMotion } from '../motion';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
-import { AGENT_STATE_LABEL, spawnerName, type AgentView, type ParentView } from '../roster';
+import { AGENT_STATE_LABEL, spawnerName, type AgentState, type AgentView, type ParentView } from '../roster';
 import type { AgentPersona } from '@shared/agentPersona';
+import { INNKEEPER_GREETING, OrderSlip, ReplyBubble } from './InnkeeperDesk';
 import { innkeeperAct, innkeeperBubble } from './innkeeper';
 import {
   DOOR_POINT,
@@ -14,19 +16,23 @@ import {
   LABEL_SPAN,
   characterFor,
   nameLabelLayout,
+  hiddenByCounter,
   placeAgents,
   poseFor,
   type NameLabel,
   type Placement,
   type SlotPoint,
 } from './scene';
+import { TavernLight, type TavernMood } from './TavernLight';
 import { INNKEEPER_ART, TAVERN_BACKDROP, characterSprite, type InnkeeperPose } from './tavernArt';
 
 const BUBBLE_MAX = 28;
 const NAME_MAX = 26;
-const WALK = '1.2s ease-in-out';
-// Of the scene height, so sprites scale with the window; sprite canvases are square.
-const SPRITE_HEIGHT = '15%';
+const WALK_MS = 1200;
+const WALK = `${WALK_MS / 1000}s ease-in-out`;
+// Percent of the scene height, so sprites scale with the window; sprite canvases are square.
+const SPRITE_HEIGHT_PERCENT = 15;
+const SPRITE_HEIGHT = `${SPRITE_HEIGHT_PERCENT}%`;
 const NO_MOTION = '@media (prefers-reduced-motion: reduce)';
 // Pointing at, focusing or selecting an agent brings it forward and shows its label uncapped.
 const LIFTED = '&:hover, &:focus-visible, &[aria-pressed="true"]';
@@ -70,6 +76,12 @@ const bob = keyframes`
 const cheer = keyframes`
   0%, 100% { transform: translateY(0); }
   30%, 60% { transform: translateY(-12%); }
+`;
+
+// The quiet room's slow camera: a breath of drift, small enough that the door and hearth stay in frame.
+const drift = keyframes`
+  0%, 100% { transform: none; }
+  50% { transform: scale(1.035) translate(-0.8%, 0.5%); }
 `;
 
 const twinkle = keyframes`
@@ -121,10 +133,22 @@ function useAfterFirstPaint(already: boolean) {
 /** During the intro everyone starts at the door and walks to their seats. Only the first mount plays it. */
 const useArrived = (introPlaying: boolean) => useAfterFirstPaint(!introPlaying || prefersReducedMotion());
 
-function Bubble({ testId, text, urgent }: { testId: string; text: string; urgent: boolean }) {
+function Bubble({
+  testId,
+  text,
+  urgent,
+  onHover = false,
+}: {
+  testId: string;
+  text: string;
+  urgent: boolean;
+  /** Shown only while its sprite is hovered or focused. */
+  onHover?: boolean;
+}) {
   return (
     <Box
       data-testid={testId}
+      data-hover-bubble={onHover || undefined}
       sx={{
         position: 'absolute',
         bottom: '88%',
@@ -141,6 +165,7 @@ function Bubble({ testId, text, urgent }: { testId: string; text: string; urgent
         fontWeight: urgent ? 700 : 500,
         lineHeight: 1.2,
         pointerEvents: 'none',
+        ...(onHover && { opacity: 0, transition: 'opacity 120ms ease-out' }),
       }}
     >
       {text}
@@ -179,14 +204,73 @@ function Spark({ kind }: { kind: ToolKind }) {
   );
 }
 
-function NameLabelPlate({ testId, label, text }: { testId: string; label: NameLabel; text: string }) {
+/**
+ * The soft patch of floor under a sprite's feet that keeps it from reading as pasted on. Rendered
+ * before the art so the sprite paints over it; the art's feet sit at the bottom centre of its box.
+ */
+function ContactShadow({ hidden = false }: { hidden?: boolean }) {
+  return (
+    <Box
+      aria-hidden
+      data-contact-shadow
+      sx={{
+        position: 'absolute',
+        left: '50%',
+        bottom: 0,
+        width: '48%',
+        height: '9%',
+        transform: 'translate(-50%, 40%)',
+        borderRadius: '50%',
+        background: 'radial-gradient(closest-side, rgba(14, 7, 2, 0.6), rgba(14, 7, 2, 0))',
+        opacity: hidden ? 0 : 1,
+        transition: `opacity ${WALK}`,
+        pointerEvents: 'none',
+        [NO_MOTION]: { transition: 'none' },
+      }}
+    />
+  );
+}
+
+/** The lamp on each nameplate: the agent's state at a glance, without the bubble. */
+const STATE_LAMP: Record<AgentState, string> = {
+  'needs-you': '#f5c542',
+  working: '#ff9d3c',
+  done: '#7ed07a',
+  failed: '#e5534b',
+  stopped: '#a89a88',
+  idle: '#a89a88',
+};
+
+// Wood: a lit top edge and a dark bottom one, notched corners in the pixel-art way (no radius).
+const PLAQUE_WOOD = 'linear-gradient(#6b4523, #4a2e14)';
+const PLAQUE_EDGE =
+  'inset 0 1px 0 rgba(255, 214, 150, 0.35), 0 -1px 0 #1f1208, 0 1px 0 #1f1208, -1px 0 0 #1f1208, 1px 0 0 #1f1208, 0 2px 0 rgba(0, 0, 0, 0.45)';
+
+function NameLabelPlate({
+  testId,
+  label,
+  text,
+  state,
+}: {
+  testId: string;
+  label: NameLabel;
+  text: string;
+  state?: AgentState;
+}) {
   return (
     <Box
       data-testid={testId}
       data-name-label
       data-lane={label.lane}
+      data-state={state}
       // cqw/cqh resolve against the scene box, the nearest size container.
-      style={{ '--label-max': `${label.maxWidth}cqw`, '--label-drop': `${label.lane * LABEL_SPAN}cqh` } as CssVars}
+      style={
+        {
+          '--label-max': `${label.maxWidth}cqw`,
+          '--label-drop': `${label.lane * LABEL_SPAN}cqh`,
+          '--lamp': state ? STATE_LAMP[state] : 'transparent',
+        } as CssVars
+      }
       sx={{
         display: label.shown ? 'block' : 'none',
         position: 'absolute',
@@ -200,12 +284,27 @@ function NameLabelPlate({ testId, label, text }: { testId: string; label: NameLa
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
         px: '0.5em',
-        borderRadius: '4px',
-        bgcolor: 'rgba(20, 12, 6, 0.78)',
+        background: PLAQUE_WOOD,
+        boxShadow: PLAQUE_EDGE,
         color: '#fbe9c8',
+        textShadow: '0 1px 0 #1f1208',
         fontSize: 'clamp(9px, 1.9cqh, 12px)',
         lineHeight: 1.4,
         pointerEvents: 'none',
+        ...(state && {
+          pl: '1.25em',
+          '&::before': {
+            content: '""',
+            position: 'absolute',
+            left: '0.45em',
+            top: '50%',
+            width: '0.45em',
+            height: '0.45em',
+            transform: 'translateY(-50%)',
+            bgcolor: 'var(--lamp)',
+            boxShadow: '0 0 4px var(--lamp)',
+          },
+        }),
       }}
     >
       {truncate(text, NAME_MAX)}
@@ -275,12 +374,15 @@ function Sprite({
         [LIFTED]: { zIndex: LIFTED_Z, '& [data-name-label]': { display: 'block', maxWidth: 'none' } },
       }}
     >
+      <ContactShadow />
       <Box
         component="img"
         src={characterSprite(characterFor(agent.id, persona?.epithet), pose)}
         alt=""
         draggable={false}
         sx={{
+          // Positioned so it paints over the ContactShadow before it.
+          position: 'relative',
           display: 'block',
           width: '100%',
           height: '100%',
@@ -298,7 +400,12 @@ function Sprite({
       {bubble && (
         <Bubble testId={`orchestrator-tavern-bubble-${agent.id}`} text={bubble} urgent={agent.state === 'needs-you'} />
       )}
-      <NameLabelPlate testId={`orchestrator-tavern-name-${agent.id}`} label={label} text={displayName} />
+      <NameLabelPlate
+        testId={`orchestrator-tavern-name-${agent.id}`}
+        label={label}
+        text={displayName}
+        state={agent.state}
+      />
     </Box>
   );
 }
@@ -330,6 +437,7 @@ function Innkeeper({
   bubble,
   urgent,
   label,
+  greeting,
   onSelect,
 }: {
   point: SlotPoint;
@@ -337,13 +445,58 @@ function Innkeeper({
   bubble: string | undefined;
   urgent: boolean;
   label: NameLabel;
+  /** What he says when nothing else is on his mind: always, or only on hover. */
+  greeting?: 'always' | 'hover';
   onSelect?(): void;
 }) {
+  const hidden = hiddenByCounter(point, SPRITE_HEIGHT_PERCENT);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const artRef = useRef<HTMLImageElement>(null);
+  const walkedFrom = useRef(point);
+  const rest = `inset(0 0 ${hidden}% 0)`;
+
+  // The counter overlap is not linear along a walk, so the clip follows his live position instead of easing.
+  useLayoutEffect(() => {
+    const from = walkedFrom.current;
+    walkedFrom.current = point;
+    const button = buttonRef.current;
+    const art = artRef.current;
+    const scene = button?.parentElement;
+    if (!button || !art || !scene || (from.x === point.x && from.y === point.y) || prefersReducedMotion()) return;
+    const follow = () => {
+      const box = scene.getBoundingClientRect();
+      if (box.height <= 0) return;
+      const feet = button.getBoundingClientRect();
+      const live = {
+        x: ((feet.left + feet.width / 2 - box.left) / box.width) * 100,
+        y: ((feet.bottom - box.top) / box.height) * 100,
+      };
+      art.style.clipPath = `inset(0 0 ${hiddenByCounter(live, SPRITE_HEIGHT_PERCENT)}% 0)`;
+    };
+    let start: number | undefined;
+    let frame = 0;
+    const tick = (now: number) => {
+      start ??= now;
+      if (now - start >= WALK_MS) {
+        art.style.clipPath = rest;
+        return;
+      }
+      follow();
+      frame = requestAnimationFrame(tick);
+    };
+    follow();
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+    // Keyed on the coordinates: a re-render with an equal point must not cancel a walk in progress.
+  }, [point.x, point.y, rest]);
+
   return (
     <Box
+      ref={buttonRef}
       component="button"
       type="button"
       disabled={!onSelect}
+      data-behind-counter={hidden > 0 || undefined}
       tabIndex={onSelect ? undefined : -1}
       data-testid="orchestrator-tavern-innkeeper"
       data-pose={pose}
@@ -360,22 +513,46 @@ function Innkeeper({
         p: 0,
         border: 0,
         bgcolor: 'transparent',
-        cursor: onSelect ? 'pointer' : 'default',
+        // Only the art takes the pointer: its clip-path keeps the part hidden behind the counter from being hit.
+        pointerEvents: 'none',
         transition: `left ${WALK}, top ${WALK}`,
         [NO_MOTION]: { transition: 'none' },
         '&:focus-visible': { outline: '2px solid #f5c542', outlineOffset: 2, borderRadius: '4px' },
         [LIFTED]: { zIndex: LIFTED_Z, '& [data-name-label]': { display: 'block', maxWidth: 'none' } },
+        '&:hover [data-hover-bubble], &:focus-visible [data-hover-bubble]': { opacity: 1 },
       }}
     >
+      <ContactShadow hidden={hidden > 0} />
       <Box
         component="img"
         src={INNKEEPER_ART[pose]}
         alt=""
         draggable={false}
-        sx={{ display: 'block', width: '100%', height: '100%', imageRendering: 'pixelated' }}
+        ref={artRef}
+        data-testid="orchestrator-tavern-innkeeper-art"
+        // The resting clip; while he walks the layout effect above overrides it frame by frame.
+        style={{ clipPath: rest }}
+        sx={{
+          position: 'relative',
+          display: 'block',
+          width: '100%',
+          height: '100%',
+          imageRendering: 'pixelated',
+          pointerEvents: 'auto',
+          cursor: onSelect ? 'pointer' : 'default',
+        }}
       />
-      {bubble && (
+      {bubble ? (
         <Bubble testId="orchestrator-tavern-innkeeper-bubble" text={truncate(bubble, BUBBLE_MAX)} urgent={urgent} />
+      ) : (
+        greeting && (
+          <Bubble
+            testId="orchestrator-tavern-innkeeper-greeting"
+            text={INNKEEPER_GREETING}
+            urgent={false}
+            onHover={greeting === 'hover'}
+          />
+        )
       )}
       <NameLabelPlate testId="orchestrator-tavern-innkeeper-name" label={label} text={INNKEEPER_NAME} />
     </Box>
@@ -392,7 +569,11 @@ export function TavernView({
   onInnkeeperSelect,
   celebrating = false,
   sceneOverlay,
+  desk,
+  settled = false,
 }: OrchestratorViewProps) {
+  const mode = useTheme().palette.mode;
+  const mood: TavernMood = settled ? 'last-call' : mode === 'dark' ? 'night' : 'day';
   const placements = usePlacements(agents);
   const arrived = useArrived(introPlaying);
   const act = innkeeperAct(parent, agents);
@@ -434,22 +615,67 @@ export function TavernView({
       [INNKEEPER_KEY, INNKEEPER_POINT] as const,
     ])
   );
+  const [slip, setSlip] = useState<{ key: number; seed: string } | null>(null);
+  const [dismissedReply, setDismissedReply] = useState<string | undefined>(undefined);
+  // Starts at the request already pending, so a remount (a view switch) never reopens an old slip.
+  const lastOpenRequest = useRef(desk?.openRequest?.seq);
+  const openRequest = desk?.openRequest;
+  useEffect(() => {
+    if (!openRequest || openRequest.seq === lastOpenRequest.current) return;
+    lastOpenRequest.current = openRequest.seq;
+    setSlip({ key: openRequest.seq, seed: openRequest.seed });
+  }, [openRequest]);
+  const statusBubble = innkeeperBubble(parent);
+  // Only while the conversation is hidden: with the dock open the reply is already in plain sight.
+  const reply =
+    desk?.reply && desk.conversationHidden && !slip && !statusBubble && desk.reply.id !== dismissedReply
+      ? desk.reply
+      : undefined;
+  const selectInnkeeper = desk
+    ? () => setSlip(open => (open ? null : { key: Date.now(), seed: '' }))
+    : onInnkeeperSelect;
+
   const visitedPoint = visit === undefined ? undefined : placements.get(visit)?.point;
   const innkeeperPoint = visitedPoint && !reducedMotion && arrived ? standBeside(visitedPoint) : INNKEEPER_POINT;
 
   return (
+    // The scene is a framed picture on the page surface rather than a dark band edge to edge, so the
+    // composer below sits on the same surface as the margin around it instead of cutting the scene off.
     <Box
+      data-testid="orchestrator-tavern-frame"
+      data-settled={settled || undefined}
       sx={{
+        position: 'relative',
         flex: 1,
         minHeight: 0,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        bgcolor: '#140c06',
+        p: settled ? 0 : 1.5,
+        bgcolor: settled ? '#0b0603' : 'background.body',
+        transition: 'padding 0.8s ease-in-out, background-color 0.8s ease-in-out',
         containerType: 'size',
         overflow: 'hidden',
+        [NO_MOTION]: { transition: 'none' },
       }}
     >
+      {/* Quiet, the room spills past its frame: a soft, dim copy of it fills the bars around the picture. */}
+      <Box
+        aria-hidden
+        data-testid="orchestrator-tavern-spill"
+        sx={{
+          position: 'absolute',
+          inset: '-6%',
+          backgroundImage: `url(${TAVERN_BACKDROP})`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          filter: 'blur(28px) brightness(0.45) saturate(1.2)',
+          opacity: settled ? 1 : 0,
+          transition: 'opacity 1.6s ease-in-out',
+          pointerEvents: 'none',
+          [NO_MOTION]: { transition: 'none' },
+        }}
+      />
       <Box
         data-testid="orchestrator-tavern"
         sx={{
@@ -458,6 +684,14 @@ export function TavernView({
           aspectRatio: '16 / 9',
           containerType: 'size',
           overflow: 'hidden',
+          borderRadius: settled ? 0 : 'lg',
+          bgcolor: '#140c06',
+          boxShadow: settled ? '0 0 80px 30px rgba(8, 4, 2, 0.85)' : 'md',
+          outline: settled ? 'none' : '1px solid',
+          outlineColor: 'divider',
+          transition: 'border-radius 0.8s ease-in-out, box-shadow 1.6s ease-in-out',
+          animation: settled ? `${drift} 120s ease-in-out infinite` : 'none',
+          [NO_MOTION]: { transition: 'none', animation: 'none' },
         }}
       >
         <Box
@@ -475,6 +709,7 @@ export function TavernView({
             transition: 'opacity 0.6s ease-in',
           }}
         />
+        <TavernLight mood={mood} />
         {visible.map(({ agent, placement }) => (
           <Sprite
             key={agent.id}
@@ -493,11 +728,35 @@ export function TavernView({
         <Innkeeper
           point={innkeeperPoint}
           pose={celebrating ? 'cheering' : visit ? 'walking' : act.pose}
-          bubble={innkeeperBubble(parent)}
+          bubble={statusBubble}
           urgent={parent.status === 'needs-action'}
           label={labels.get(INNKEEPER_KEY) ?? HIDDEN_LABEL}
-          onSelect={onInnkeeperSelect}
+          // A first-timer is told outright that he takes orders; after that it is a hover hint.
+          greeting={!desk || slip || reply ? undefined : agents.length === 0 ? 'always' : 'hover'}
+          onSelect={selectInnkeeper}
         />
+        {desk && slip && (
+          <OrderSlip
+            key={slip.key}
+            seed={slip.seed}
+            onSend={desk.send}
+            onClose={() => setSlip(null)}
+            onOpenConversation={() => {
+              setSlip(null);
+              desk.onOpenConversation();
+            }}
+          />
+        )}
+        {desk && reply && (
+          <ReplyBubble
+            snippet={reply.snippet}
+            onReadAll={() => {
+              setDismissedReply(reply.id);
+              desk.onReadReply(reply.id);
+            }}
+            onDismiss={() => setDismissedReply(reply.id)}
+          />
+        )}
         {waiting > 0 && (
           <Box
             component="button"

@@ -355,12 +355,23 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'settings.agent_ops.version_activated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.agent_ops.repaired': { category: 'settings', severity: 'info', write: 'bestEffort' },
 
+  'admin.search.performed': { category: 'support', severity: 'info', write: 'strict' },
+
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
   // info, not critical: a sign-off row must never itself enter the review queue. The review document is the source of truth.
   'audit.reviewed': { category: 'support', severity: 'info', write: 'bestEffort' },
   'audit.unreviewed': { category: 'support', severity: 'info', write: 'bestEffort' },
 
   'model_hub.curated.imported': { category: 'settings', severity: 'critical', write: 'strict' },
+
+  // Two-person approvals (apps/client/server/admin/approvals). executed/failed are bestEffort because
+  // the gated action has already run (or failed) when they are written; the record keeps the outcome.
+  'admin.approval.requested': { category: 'access', severity: 'notice', write: 'strict' },
+  'admin.approval.approved': { category: 'access', severity: 'critical', write: 'strict' },
+  'admin.approval.rejected': { category: 'access', severity: 'notice', write: 'strict' },
+  'admin.approval.executed': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'admin.approval.failed': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'admin.approval.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 
 export type AdminAuditAction = keyof typeof ADMIN_AUDIT_CATALOGUE;

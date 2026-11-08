@@ -1,6 +1,6 @@
 import { Box, Button, Stack, Typography } from '@mui/joy';
-import type { EmailDomainGroup } from '@client/app/utils/signupAnomaly';
-import { SIGNUP_SIGNAL_LABELS } from '@client/app/utils/signupSignals';
+import type { EmailDomainGroup } from '@bike4mind/server-utils/app/utils/signupAnomaly';
+import { SIGNUP_SIGNAL_LABELS } from '@bike4mind/server-utils/app/utils/signupSignals';
 import { StatusChip } from '../../shared/StatusChip';
 import { adminFocus } from '../../shared/adminStyles';
 import { parseDomain } from '../usersTabSearch';

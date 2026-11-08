@@ -23,7 +23,7 @@ vi.mock('@server/services/purgeDeletedUserData', () => ({
   readUserIntegrationGrants: h.readGrants,
   purgeDeletedUserData: h.purge,
 }));
-vi.mock('@server/analytics/signupEvents', () => ({ emitBillingEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({ emitBillingEvent: vi.fn() }));
 vi.mock('@server/analytics/billingEventDetails', () => ({ wholeDaysBetween: vi.fn() }));
 vi.mock('@server/analytics/resolveUserType', () => ({ resolveUserType: vi.fn() }));
 vi.mock('@bike4mind/server-utils/analytics/pseudonymize', () => ({ pseudonymizeUserId: vi.fn() }));
@@ -96,6 +96,32 @@ describe('hardDeleteUser guarded self-serve purge', () => {
 
     await expect(runDelete()).rejects.toThrow('unexpected cancellation error');
     expect(h.purge).toHaveBeenCalledWith('user-1', { deletedBy: 'user-1', logger, integrationGrants: null });
+  });
+
+  it('runs the admin assertion before the subscription cancel, and cancels nothing when it throws', async () => {
+    const onDeleteFailed = vi.fn();
+    await expect(
+      runDelete({
+        initiatedBy: 'admin',
+        onDeleteFailed,
+        assertInTransaction: async () => {
+          throw new Error('no longer an admin');
+        },
+      })
+    ).rejects.toThrow('no longer an admin');
+
+    expect(h.cancelSubscriptions).not.toHaveBeenCalled();
+    expect(h.deleteUser).not.toHaveBeenCalled();
+    expect(onDeleteFailed).not.toHaveBeenCalled();
+  });
+
+  it('re-runs the admin assertion inside the transaction after the cancel', async () => {
+    const assertInTransaction = vi.fn(async () => {
+      h.order.push('assert');
+    });
+    await runDelete({ initiatedBy: 'admin', assertInTransaction });
+
+    expect(h.order).toEqual(['assert', 'cancel', 'assert', 'delete', 'purge']);
   });
 
   it('keeps admin cancellation before deletion by default', async () => {

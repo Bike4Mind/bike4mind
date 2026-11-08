@@ -4,7 +4,7 @@ import { makeContributedStringSetting, registerContributedSettings, resetContrib
 import { adminAuditService } from '@bike4mind/services';
 
 const recordAdminActionFromRequest = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 
 import { diffSettingChanges, recordAdminSettingChange } from './adminSettingsAudit';
 

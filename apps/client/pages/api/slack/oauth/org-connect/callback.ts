@@ -23,7 +23,7 @@ import { getSystemSlackAppCredentials, verifyOrgSlackConnectStateToken } from '@
 import { consumeStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
-import { recordAdminActionForActor } from '@server/utils/adminAudit';
+import { recordAdminActionForActor } from '@bike4mind/server-utils/utils/adminAudit';
 import { randomUUID } from 'crypto';
 import type { Response } from 'express';
 

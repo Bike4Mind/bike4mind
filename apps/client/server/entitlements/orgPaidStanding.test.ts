@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   findActiveSubscriptionsByOwners: vi.fn(),
 }));
 
-vi.mock('@client/lib/userSubscriptions/constants', () => ({
+vi.mock('@bike4mind/server-utils/lib/userSubscriptions/constants', () => ({
   SUBSCRIPTION_PLANS: [],
   SUBSCRIPTION_PLANS_MAP: { price_basic: { tier: 1 } },
   TEAM_PLAN: { priceId: 'price_team', tier: 2 },

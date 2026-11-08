@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { ApiKeyScope, isPlaceholderValue } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Resource } from 'sst';
 import { securityDashboardSnapshotRepository, type ISecurityDashboardSnapshotDocument } from '@bike4mind/database';
 import axios from 'axios';

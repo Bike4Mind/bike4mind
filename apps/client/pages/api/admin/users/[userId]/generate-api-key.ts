@@ -23,7 +23,7 @@ import {
 } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { toEntitlementUser } from '@server/entitlements';
 import { resolveApiKeyScopeAccessForUser } from '@server/entitlements/apiKeyScopeAccess';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 // Scopes this admin endpoint may mint: the standard self-service set plus the
 // admin-provisioned ingest scopes. ADMIN and CC_BRIDGE are still excluded -

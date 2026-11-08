@@ -2,7 +2,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { adminApi } from '@server/middlewares/adminApi';
 import { getArenaService } from '@server/preferenceArena';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
 
 const bodySchema = z.object({ active: z.boolean() });

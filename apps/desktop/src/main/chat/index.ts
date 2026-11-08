@@ -67,7 +67,8 @@ import { registerGenerationIpc } from './generationIpc';
 import { modelSettingsChanged, registerModelSettingsIpc } from './modelSettingsIpc';
 import { ModelSettingsStore } from './ModelSettingsStore';
 import { registerLocalContextIpc } from './localContextIpc';
-import { localContextSizing, localHardware } from './localContextSizing';
+import { localContextSizing, localHardware, localLlamaServer } from './localContextSizing';
+import { findOnPath, resolveUserPath } from './tools/userPath';
 import { SidebarSectionStore } from './SidebarSectionStore';
 import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerSessionExportIpc } from './sessionExportIpc';
@@ -82,6 +83,9 @@ import { SkillMarket } from './skills/SkillMarket';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
+import { registerModelProtocol } from './model3d/engineProtocol';
+import { ModelLiveView } from './model3d/ModelLiveView';
+import { modelIpcHandlers } from './model3d/modelIpc';
 import { ChatService, sessionForRenderer, type ChatServiceDeps } from './ChatService';
 import { DeferredToolsSetting, parseDeferredToolsOverride } from './DeferredToolsSetting';
 import { CHAT_STREAM_TAG } from './devLogTag';
@@ -154,7 +158,7 @@ import { XcodeSimulatorDriver } from './simulator/XcodeSimulatorDriver';
 import { devLog } from '../devlog/DevLogSink';
 import { registerPullRequests } from '../pr';
 import type { PrMonitor } from '../pr/PrMonitor';
-import { appWindows } from '../windows';
+import { appWindows, focusedAppWindow } from '../windows';
 import { registerClaudeImport } from '../claudeImport';
 import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
 
@@ -297,6 +301,8 @@ export interface RegisteredChat {
   browser: BrowserManager;
   /** The live iOS Simulator view, whose stream is stopped on quit. */
   simulatorView: SimulatorLiveView;
+  /** The 3D model pane's open file, whose watcher is stopped on quit. */
+  modelView: ModelLiveView;
   /** Each conversation's pull request, and the timers that watch it. */
   pullRequests: PrMonitor;
   /** Import from Claude; started once the window is up so it never delays launch. */
@@ -486,6 +492,7 @@ export function registerChat(
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
   registerArtifactProtocol();
+  registerModelProtocol();
   const artifacts = new ArtifactPublisher(() => auth.getApiClient(), logger);
   const artifactLibrary = new ArtifactLibrary(() => auth.getApiClient(), logger);
   const skillMarket = new SkillMarket({
@@ -503,7 +510,6 @@ export function registerChat(
     logger,
   });
   const localContext = new LocalContextPreference(join(userData, 'local-context.json'));
-  void localHardware.profile();
   const localSizing = localContextSizing({
     setting: () => localContext.read(),
     pinnedProjectors: () => hooks.pinnedProjectors?.() ?? new Map(),
@@ -532,6 +538,8 @@ export function registerChat(
     readOllamaEnv: url => readHostOllamaEnv(url),
     launchers: hostLaunchers({
       unifiedMemory: async () => (await localHardware.profile())?.memoryKind === 'unified',
+      // The probe itself: hardware entered in Settings carries no vendor.
+      gpuVendor: async () => (await localHardware.probed())?.gpuVendor ?? null,
     }),
     ownedServers: privateFile(join(userData, 'local-servers.json')),
     ownedCipher: safeStorage,
@@ -542,7 +550,17 @@ export function registerChat(
     },
   });
   localHardware.setOverride(probed => withEnteredSpecs(probed, modelServers.specs(LOCAL_SERVER_ID)));
-  void modelServers.start().catch(error => logger.warn(`MODEL SERVERS: could not load: ${String(error)}`));
+  const serversLoaded = modelServers
+    .start()
+    .catch(error => logger.warn(`MODEL SERVERS: could not load: ${String(error)}`));
+  localHardware.setLlamaServer(
+    localLlamaServer({
+      views: () => serversLoaded.then(() => modelServers.views()),
+      onPath: async () => findOnPath('llama-server', await resolveUserPath()),
+    })
+  );
+  modelServers.onServerSaved(() => localHardware.relistLlamaServer());
+  void localHardware.profile();
   const local = new LocalModels(
     new OllamaLocal((url, init) => net.fetch(url, init), localSizing, undefined, loadSettings),
     modelServers,
@@ -678,6 +696,21 @@ export function registerChat(
       })
   );
 
+  const modelView = new ModelLiveView({
+    state: state => send(IPC_CHANNELS.modelState, state),
+    // One rendering is enough: the focused app window, else the first.
+    captureTarget: () => {
+      const target = focusedAppWindow();
+      return target && !target.isDestroyed() ? target.webContents.id : null;
+    },
+    captureRequest: (target, request) => {
+      const window = appWindows().find(entry => !entry.isDestroyed() && entry.webContents.id === target);
+      if (!window) return false;
+      window.webContents.send(IPC_CHANNELS.modelCaptureRequest, request);
+      return true;
+    },
+  });
+
   const simulatorDriver = new XcodeSimulatorDriver();
   const simulatorView = new SimulatorLiveView(
     simulatorDriver,
@@ -727,6 +760,7 @@ export function registerChat(
     pullRequests,
     screen: desktopScreenCapturer(app.getName()),
     ...(process.platform === 'darwin' ? { simulator: { driver: simulatorDriver, view: simulatorView } } : {}),
+    model: modelView,
     prepareImage: prepareToolImage,
     history,
     local,
@@ -740,6 +774,9 @@ export function registerChat(
     },
     get unresolvedProtectedPaths() {
       return toolProtected.unresolved();
+    },
+    get uncoverablePaths() {
+      return permissionProtected.paths();
     },
     get deferredTools() {
       return deferredTools.current();
@@ -1250,6 +1287,7 @@ export function registerChat(
     return mcp.state();
   });
 
+  modelIpcHandlers(modelView);
   ipcMain.handle(IPC_CHANNELS.simulatorGetState, () => simulatorView.current());
   ipcMain.handle(IPC_CHANNELS.simulatorListDevices, async () =>
     process.platform === 'darwin' ? (await simulatorDriver.devices()).devices : []
@@ -1448,6 +1486,7 @@ export function registerChat(
     },
     send,
     logger,
+    webApi: () => auth.getApiClient(),
   });
 
   return {
@@ -1456,6 +1495,7 @@ export function registerChat(
     mcp,
     browser,
     simulatorView,
+    modelView,
     pullRequests,
     claudeImport,
     spareWorktrees,

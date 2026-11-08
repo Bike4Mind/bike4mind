@@ -15,7 +15,7 @@ import {
 import { NotFoundError } from '@bike4mind/utils';
 import { IOrgSlackWorkspaceDocument, IOrgSlackWorkspaceResponse } from '@bike4mind/common';
 import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 function toResponse(
   doc: IOrgSlackWorkspaceDocument & { createdAt: Date; updatedAt: Date }

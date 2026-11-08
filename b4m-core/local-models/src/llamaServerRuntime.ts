@@ -53,7 +53,7 @@ export interface StartModelOptions extends LlamaServerTuning {
   onExit?: (exit: LlamaServerExit) => void;
 }
 
-export interface StartRouterOptions extends Pick<LlamaServerTuning, 'flashAttention' | 'extraArgs'> {
+export interface StartRouterOptions extends Pick<LlamaServerTuning, 'flashAttention' | 'fitTargetMiB' | 'extraArgs'> {
   port: number;
   modelsMax?: number;
   signal?: AbortSignal;
@@ -134,6 +134,14 @@ export class LlamaServerRuntime implements LocalRuntime {
     } catch (error) {
       return { ok: false, version: null, error: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  /** Why the binary runs on the CPU though it is a SYCL or Vulkan build; null when it lists a GPU or is not checked. */
+  async warning(): Promise<string | null> {
+    return this.#binary().then(
+      binary => binary.warning ?? null,
+      () => null
+    );
   }
 
   /** The binary's version and build, probed once until the binary file changes; start needs the build for its flags. */
@@ -312,6 +320,7 @@ export class LlamaServerRuntime implements LocalRuntime {
     const defaults = this.#options;
     const tuning = {
       flashAttention: options.flashAttention ?? defaults.flashAttention,
+      fitTargetMiB: options.fitTargetMiB ?? defaults.fitTargetMiB,
       extraArgs: options.extraArgs ?? defaults.extraArgs,
     };
     const build = await this.#buildFor(tuning);
@@ -369,6 +378,7 @@ export class LlamaServerRuntime implements LocalRuntime {
     const defaults = this.#options;
     const tuning = {
       flashAttention: options.flashAttention ?? defaults.flashAttention,
+      fitTargetMiB: options.fitTargetMiB ?? defaults.fitTargetMiB,
       extraArgs: options.extraArgs ?? defaults.extraArgs,
     };
     const build = await this.#buildFor(tuning);

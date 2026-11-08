@@ -3,8 +3,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AdminRevenueData, AdminRevenueResponse, RevenueTrendPoint } from '@client/app/utils/adminRevenue';
-import type { AdminSubscriptionRow } from '@client/app/utils/adminSubscriptionsFilter';
+import type {
+  AdminRevenueData,
+  AdminRevenueResponse,
+  RevenueTrendPoint,
+} from '@bike4mind/server-utils/app/utils/adminRevenue';
+import type { AdminSubscriptionRow } from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 vi.mock('@tanstack/react-router', async () => (await import('../__tests__/fakeAdminRouter')).fakeRouterModule);

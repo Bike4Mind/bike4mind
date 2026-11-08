@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
   toastWarning: vi.fn(),
+  toastInfo: vi.fn(),
   currentUser: null as CurrentUser,
 }));
 
@@ -48,7 +49,7 @@ vi.mock('@client/app/hooks/data/user', () => ({
 vi.mock('@client/app/hooks/data/mfa', () => ({ useForceResetMFA: () => ({ mutateAsync: mocks.resetMfa }) }));
 vi.mock('@client/app/hooks/data/inbox', () => ({ useSendSystemMessage: () => ({ mutateAsync: mocks.sendMessage }) }));
 vi.mock('sonner', () => ({
-  toast: { error: mocks.toastError, success: mocks.toastSuccess, warning: mocks.toastWarning },
+  toast: { error: mocks.toastError, success: mocks.toastSuccess, warning: mocks.toastWarning, info: mocks.toastInfo },
 }));
 
 const renderDialog = (
@@ -428,6 +429,18 @@ describe('account dialogs', () => {
         })
       );
       await waitFor(() => expect(onClose).toHaveBeenCalled());
+    });
+
+    it('shows pending approval without claiming the deletion was scheduled', async () => {
+      mocks.apiPost.mockResolvedValue({ data: { approvalId: 'approval-1', status: 'pending' } });
+      const { onClose } = renderDialog((user, close) => <ScheduleDeletionDialog user={user} onClose={close} />);
+      pickDate('2026-11-01');
+      pickReason(id);
+      typeEmail();
+      fireEvent.click(confirmButton(id));
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+      expect(mocks.toastInfo).toHaveBeenCalledWith(expect.stringContaining('Submitted for approval'));
+      expect(mocks.toastSuccess).not.toHaveBeenCalled();
     });
 
     it('stays open and toasts when the server refuses', async () => {

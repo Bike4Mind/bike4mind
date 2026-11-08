@@ -10,9 +10,9 @@ import { Logger } from '@bike4mind/observability';
 import { creditService, userService } from '@bike4mind/services';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
-import { buildHeldGrantAdapters } from '@server/credits/heldSignupGrantAdapters';
-import { buildCreditRewardAdapters } from '@server/credits/creditRewardAdapters';
-import { alertForReleasedReferralRewards } from '@server/referrals/firstAnswerReward';
+import { buildHeldGrantAdapters } from '@bike4mind/server-utils/credits/heldSignupGrantAdapters';
+import { buildCreditRewardAdapters } from '@bike4mind/server-utils/credits/creditRewardAdapters';
+import { alertForReleasedReferralRewards } from '@bike4mind/server-utils/referrals/firstAnswerReward';
 import {
   sweepRiskReviewAutoApprovals,
   type RiskReviewAutoApprovalSweepResult,

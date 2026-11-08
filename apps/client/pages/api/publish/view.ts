@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { PublishedArtifact, shareTokenFilter } from '@bike4mind/database';
 import { checkShareGrant, checkVisibility, toPublishUser } from '@server/services/publish';
 import { parsePublishPath, segmentsFromViewerPathname } from '@server/services/publish/parsePublishPath';
-import { requestHasGateProof } from '@server/services/publish/publishGateToken';
+import { requestHasGateProof } from '@bike4mind/server-utils/services/publish/publishGateToken';
 import type { PublishVisibility } from '@bike4mind/common';
 
 /**

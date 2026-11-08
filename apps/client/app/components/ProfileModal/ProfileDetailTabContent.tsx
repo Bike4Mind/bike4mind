@@ -21,7 +21,7 @@ import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 import AdminPanelSettings from '@mui/icons-material/AdminPanelSettings';
 import Storage from '@mui/icons-material/Storage';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
-import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import { SUBSCRIPTION_PLANS } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useOpenUserStripePortal } from '@client/app/components/subscription/useOpenUserStripePortal';
 import dayjs from 'dayjs';

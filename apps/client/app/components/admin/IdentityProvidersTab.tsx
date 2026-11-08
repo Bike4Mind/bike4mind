@@ -225,7 +225,7 @@ const IdentityProvidersTab: React.FC = () => {
   }
 
   return (
-    <Box sx={{ p: 2 }}>
+    <Box>
       <Box
         sx={{
           display: 'flex',

@@ -29,7 +29,7 @@ export {
   getFilesByIdsContract,
   bulkDeleteFilesContract,
 } from './contracts/files.contract';
-export { createEmbeddingsContract } from './contracts/embeddings.contract';
+export { createEmbeddingsContract, listEmbeddingModelsContract } from './contracts/embeddings.contract';
 export { postSlackMessageContract } from './contracts/slackMessages.contract';
 export { createTextRefinementContract } from './contracts/textRefinement.contract';
 export { createDecisionContract, listDecisionModelsContract } from './contracts/decisions.contract';
@@ -42,6 +42,9 @@ export {
   deleteArtifactContract,
   listArtifactVersionsContract,
   getArtifactVersionContract,
+  createArtifactVersionContract,
+  searchArtifactsContract,
+  listArtifactTypesContract,
 } from './contracts/artifacts.contract';
 export { createTranscriptionUploadContract, createTranscriptionContract } from './contracts/transcription.contract';
 export { createSessionContract } from './contracts/sessionCreate.contract';

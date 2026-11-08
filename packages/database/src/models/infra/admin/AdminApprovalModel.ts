@@ -1,0 +1,184 @@
+import mongoose, { Model, model, Schema, Types, type FilterQuery } from 'mongoose';
+import {
+  ADMIN_APPROVAL_ACTIONS,
+  ADMIN_APPROVAL_STATUSES,
+  type AdminApproval,
+  type AdminApprovalAction,
+  type AdminApprovalClaimGuard,
+  type AdminApprovalDecider,
+  type AdminApprovalListQuery,
+  type AdminApprovalRequester,
+  type AdminApprovalStatus,
+  type AdminApprovalUpdate,
+  type AdminPermissionId,
+  type IAdminApprovalRepository,
+  type NewAdminApproval,
+} from '@bike4mind/common';
+
+type AdminApprovalDocumentShape = {
+  _id: Types.ObjectId;
+  action: AdminApprovalAction;
+  paramsJson: string;
+  paramsHash: string;
+  summary: string;
+  requestedBy: AdminApprovalRequester;
+  reason: string;
+  requiredPermission: AdminPermissionId;
+  requiresFullAdmin: boolean;
+  status: AdminApprovalStatus;
+  expiresAt: Date;
+  createdAt: Date;
+  decidedBy?: AdminApprovalDecider;
+  decidedAt?: Date;
+  decisionReason?: string;
+  executedAt?: Date;
+  result?: unknown;
+  error?: string;
+};
+
+const RequesterSchema = new Schema(
+  {
+    id: { type: String, required: true },
+    name: { type: String, required: true },
+    email: { type: String, required: true },
+    selfIds: { type: [String], required: true },
+  },
+  { _id: false }
+);
+
+const DeciderSchema = new Schema(
+  { id: { type: String, required: true }, name: { type: String, required: true } },
+  { _id: false }
+);
+
+// No TTL: a decided record is audit evidence for the action it gated.
+const AdminApprovalSchema = new Schema<AdminApprovalDocumentShape>(
+  {
+    action: { type: String, enum: ADMIN_APPROVAL_ACTIONS, required: true },
+    paramsJson: { type: String, required: true },
+    paramsHash: { type: String, required: true },
+    summary: { type: String, required: true },
+    requestedBy: { type: RequesterSchema, required: true },
+    reason: { type: String, required: true },
+    requiredPermission: { type: String, required: true },
+    requiresFullAdmin: { type: Boolean, required: true },
+    status: { type: String, enum: ADMIN_APPROVAL_STATUSES, required: true, default: 'pending' },
+    expiresAt: { type: Date, required: true },
+    decidedBy: { type: DeciderSchema },
+    decidedAt: { type: Date },
+    decisionReason: { type: String },
+    executedAt: { type: Date },
+    result: { type: Schema.Types.Mixed },
+    error: { type: String },
+  },
+  { collection: 'adminapprovals', timestamps: { createdAt: true, updatedAt: false }, versionKey: false }
+);
+
+AdminApprovalSchema.index({ status: 1, expiresAt: 1 });
+AdminApprovalSchema.index({ 'requestedBy.id': 1, createdAt: -1 });
+AdminApprovalSchema.index({ createdAt: -1, _id: -1 });
+
+export const AdminApprovalModel: Model<AdminApprovalDocumentShape> =
+  (mongoose.models.AdminApproval as Model<AdminApprovalDocumentShape> | undefined) ??
+  model<AdminApprovalDocumentShape>('AdminApproval', AdminApprovalSchema);
+
+export const toAdminApproval = (document: AdminApprovalDocumentShape): AdminApproval => {
+  const { _id, ...rest } = document;
+  return {
+    ...rest,
+    id: String(_id),
+    requestedBy: { ...document.requestedBy, selfIds: [...document.requestedBy.selfIds] },
+  };
+};
+
+const effectiveStatusFilter = (
+  status: AdminApprovalStatus | undefined,
+  now: Date
+): FilterQuery<AdminApprovalDocumentShape> => {
+  if (!status) return {};
+  if (status === 'expired') {
+    return { $or: [{ status: 'expired' }, { status: { $in: ['pending', 'approved'] }, expiresAt: { $lte: now } }] };
+  }
+  if (status === 'pending' || status === 'approved') return { status, expiresAt: { $gt: now } };
+  return { status };
+};
+
+const approvalCursorFilter = (
+  before: Date | undefined,
+  beforeId: string | undefined
+): FilterQuery<AdminApprovalDocumentShape> => {
+  if (!before) return {};
+  if (!beforeId) return { createdAt: { $lt: before } };
+  return { $or: [{ createdAt: { $lt: before } }, { createdAt: before, _id: { $lt: new Types.ObjectId(beforeId) } }] };
+};
+
+class AdminApprovalRepository implements IAdminApprovalRepository {
+  constructor(private readonly approvalModel: Model<AdminApprovalDocumentShape>) {}
+
+  async create(approval: NewAdminApproval): Promise<AdminApproval> {
+    const created = await this.approvalModel.create({ ...approval, status: 'pending' });
+    return toAdminApproval(created.toObject<AdminApprovalDocumentShape>());
+  }
+
+  async findById(id: string): Promise<AdminApproval | null> {
+    if (!Types.ObjectId.isValid(id)) return null;
+    const document = await this.approvalModel.findById(id).lean<AdminApprovalDocumentShape>();
+    return document ? toAdminApproval(document) : null;
+  }
+
+  async list({ status, before, beforeId, now = new Date(), limit }: AdminApprovalListQuery): Promise<AdminApproval[]> {
+    const documents = await this.approvalModel
+      .find({ $and: [effectiveStatusFilter(status, now), approvalCursorFilter(before, beforeId)] })
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(limit)
+      .lean<AdminApprovalDocumentShape[]>();
+    return documents.map(toAdminApproval);
+  }
+
+  async claim(
+    id: string,
+    from: AdminApprovalStatus,
+    to: AdminApprovalStatus,
+    guard: AdminApprovalClaimGuard,
+    set: AdminApprovalUpdate = {}
+  ): Promise<AdminApproval | null> {
+    if (!Types.ObjectId.isValid(id)) return null;
+    const filter: FilterQuery<AdminApprovalDocumentShape> = {
+      _id: new Types.ObjectId(id),
+      status: from,
+      expiresAt: { $gt: guard.now },
+    };
+    if (guard.requestedBy !== undefined) filter['requestedBy.id'] = guard.requestedBy;
+    else if (guard.notRequestedBy !== undefined) filter['requestedBy.id'] = { $ne: guard.notRequestedBy };
+    return this.transition(filter, to, set);
+  }
+
+  async finish(
+    id: string,
+    from: AdminApprovalStatus,
+    to: AdminApprovalStatus,
+    set: AdminApprovalUpdate = {}
+  ): Promise<AdminApproval | null> {
+    if (!Types.ObjectId.isValid(id)) return null;
+    return this.transition({ _id: new Types.ObjectId(id), status: from }, to, set);
+  }
+
+  private async transition(
+    filter: FilterQuery<AdminApprovalDocumentShape>,
+    to: AdminApprovalStatus,
+    set: AdminApprovalUpdate
+  ): Promise<AdminApproval | null> {
+    // A key passed as undefined is cleared; Mongoose would otherwise drop it from $set and leave the old value.
+    const cleared = Object.keys(set).filter(key => set[key as keyof AdminApprovalUpdate] === undefined);
+    const update = {
+      $set: { ...set, status: to },
+      ...(cleared.length > 0 && { $unset: Object.fromEntries(cleared.map(key => [key, 1])) }),
+    };
+    const document = await this.approvalModel
+      .findOneAndUpdate(filter, update, { new: true })
+      .lean<AdminApprovalDocumentShape>();
+    return document ? toAdminApproval(document) : null;
+  }
+}
+
+export const adminApprovalRepository: IAdminApprovalRepository = new AdminApprovalRepository(AdminApprovalModel);

@@ -14,7 +14,7 @@ import omit from 'lodash/omit';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { type NetworkRequest, readNetworkMeta } from '@server/auth/networkMeta';
 import { isSignupNetworkOverLimit } from '@server/auth/signupNetworkLimits';
-import { signupProtection } from '@server/auth/signupProtection';
+import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import { applyEmailVerifiedGrants, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
 import { wasTurnstileVerified } from '@server/auth/signupChallenge';
 import { readOAuthInviteCode } from '@server/auth/passportOAuthStateStore';
@@ -27,6 +27,7 @@ import { OAuthFailureReason } from './oauthFailureReason';
 import { isOpenRegistrationAllowed } from './openRegistration';
 import { isPartnerDomainSignupAllowed } from './partnerSignupBypass';
 import { applyOAuthSignupDomainGrant } from './oauthSignupGrants';
+import { sealProviderTokens } from './providerTokensAtRest';
 
 /**
  * Strategies where anyone on the internet can present an identity, so a first login
@@ -138,11 +139,11 @@ const authenticateUser = async (
       user = await User.findOne({ $or: conditions });
     }
 
+    // A strategy that seals its own tokens (Apple) passes them in authProvider, which wins.
     const oauthCredentials = {
       id,
       strategy,
-      refreshToken,
-      accessToken,
+      ...sealProviderTokens(accessToken, refreshToken),
       ...(authProvider ?? {}),
     };
 

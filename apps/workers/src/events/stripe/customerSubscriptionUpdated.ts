@@ -6,7 +6,7 @@ import {
   SubscriptionMetadata,
   SubscriptionOwnerType,
 } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { emitBillingEvent } from '@server/analytics/signupEvents';
+import { emitBillingEvent } from '@bike4mind/server-utils/analytics/signupEvents';
 import {
   planChangeDirection,
   planDetails,
@@ -17,7 +17,7 @@ import type Stripe from 'stripe';
 import { applyStripeSubscriptionState } from '@server/subscriptions/applyStripeSubscriptionState';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
-import { StripeEvents } from '@server/utils/eventBus';
+import { StripeEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { voidOpenSubscriptionInvoices } from '@bike4mind/server-utils/integrations/stripe/dunning';
 import { postSubscriptionChangesToSlack } from '@server/integrations/slack/subscriptionLifecycle';
 import { detectSubscriptionChanges } from '@bike4mind/server-utils/lib/subscriptions/subscriptionChanges';

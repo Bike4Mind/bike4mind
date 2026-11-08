@@ -8,7 +8,7 @@ import {
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { ApiKeyScope } from '@bike4mind/common';
 
 /**

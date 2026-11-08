@@ -4,7 +4,7 @@ import {
   IUser,
 } from '@bike4mind/common';
 import type { AdminUserListItem } from './adminUserProjection';
-import type { EmailDomainGroup } from './signupAnomaly';
+import type { EmailDomainGroup } from '@bike4mind/server-utils/app/utils/signupAnomaly';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import axios, { AxiosResponse } from 'axios';

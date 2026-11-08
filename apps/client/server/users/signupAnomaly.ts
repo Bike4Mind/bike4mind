@@ -1,6 +1,6 @@
 import { adminSettingsRepository, User, UserApiKey } from '@bike4mind/database';
-import { exceedsSignupBaseline, groupSignupDomains } from '@client/app/utils/signupAnomaly';
-import { DOMAIN_SIGNUP_SIGNALS } from '@client/app/utils/signupSignals';
+import { exceedsSignupBaseline, groupSignupDomains } from '@bike4mind/server-utils/app/utils/signupAnomaly';
+import { DOMAIN_SIGNUP_SIGNALS } from '@bike4mind/server-utils/app/utils/signupSignals';
 import { classifyDomainCohorts } from './signupClassifier';
 
 export const SIGNUP_SCAN_LIMIT = 5000;

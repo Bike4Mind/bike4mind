@@ -25,6 +25,7 @@ export const CreditAdjustmentsLog: React.FC = () => {
   return (
     <Stack gap={2} data-testid="credit-adjustments-log">
       <AdminPageHeader
+        level="section"
         title="Credit adjustments"
         count={data?.total}
         description="Manual credit changes across all users, newest first. Each row records the actor, delta, resulting balance and reason."

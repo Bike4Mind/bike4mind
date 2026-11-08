@@ -38,7 +38,9 @@ const renderStage = (agents: AgentView[], dockControl?: ReactNode, turnOn?: () =
 
 const pressEscape = (init: KeyboardEventInit = {}) =>
   act(() => {
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, ...init }));
+    document.body.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true, ...init })
+    );
   });
 
 beforeEach(() => {
@@ -206,11 +208,23 @@ describe('OrchestratorStage', () => {
     await pressEscape({ isComposing: true });
     expect(query('orchestrator-peek-drawer')).not.toBeNull();
     act(() => {
-      const handled = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+      const handled = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
       handled.preventDefault();
-      window.dispatchEvent(handled);
+      document.body.dispatchEvent(handled);
     });
     expect(query('orchestrator-peek-drawer')).not.toBeNull();
+  });
+
+  it('claims the Escape that closes the drawer, so the docked conversation stays open', async () => {
+    await renderStage(FIXTURE);
+    await act(async () => el('orchestrator-needs-you-pill').click());
+    const reachedWindow: boolean[] = [];
+    const onWindow = (event: KeyboardEvent) => reachedWindow.push(event.defaultPrevented);
+    window.addEventListener('keydown', onWindow);
+    await pressEscape();
+    window.removeEventListener('keydown', onWindow);
+    expect(query('orchestrator-peek-drawer')).toBeNull();
+    expect(reachedWindow).toEqual([true]);
   });
 
   it('opens the drawer when a table row is clicked', async () => {
@@ -237,6 +251,91 @@ describe('OrchestratorStage', () => {
   it('renders the dock control in the header', async () => {
     await renderStage(FIXTURE, <span data-testid="dock-probe" />);
     expect(query('dock-probe')).not.toBeNull();
+  });
+
+  describe('settled (the ambient Tavern)', () => {
+    const wake = vi.fn();
+    const renderSettled = (agents: AgentView[], settled = true, parentStatus?: 'needs-action') =>
+      themed.render(
+        <OrchestratorStage
+          agents={agents}
+          parent={parentStatus ? { status: parentStatus } : undefined}
+          view="tavern"
+          onViewChange={onViewChange}
+          actions={actions}
+          introPlaying={false}
+          onParentFocus={onParentFocus}
+          dockControl={<button data-testid="fake-dock-control" />}
+          ambient={{ settled, wake, on: true, onToggle: vi.fn() }}
+        />
+      );
+    const onParentFocus = vi.fn();
+
+    it('thins the header to a status line', async () => {
+      await renderSettled([agentFixture('w', 'working')]);
+      expect(el('orchestrator-ambient-status').textContent).toContain('1 agent');
+      expect(query('orchestrator-view-menu-btn')).toBeNull();
+      expect(query('fake-dock-control')).toBeNull();
+
+      await renderSettled([agentFixture('w', 'working')], false);
+      expect(query('orchestrator-ambient-status')).toBeNull();
+      expect(query('orchestrator-view-menu-btn')).not.toBeNull();
+    });
+
+    it('slides in only the request of an agent that needs you, answerable in place', async () => {
+      const chat = {
+        getSession: vi.fn().mockResolvedValue({
+          messages: [
+            {
+              id: 'm0',
+              role: 'assistant',
+              content: '',
+              toolCalls: [
+                {
+                  id: 'c1',
+                  name: 'bash_execute',
+                  input: { command: 'rm -rf build' },
+                  status: 'awaiting-approval',
+                  approvalId: 'ap-1',
+                  approvalDetail: 'rm -rf build',
+                },
+              ],
+            },
+          ],
+        }),
+        respondToApproval: vi.fn().mockResolvedValue(undefined),
+        onQueueChanged: vi.fn(() => () => undefined),
+      };
+      (window as unknown as { b4m: unknown }).b4m = { chat };
+      await renderSettled([agentFixture('n', 'needs-you'), agentFixture('w', 'working')]);
+      const card = el('orchestrator-needs-you-card');
+      expect(card.hasAttribute('data-ambient-quiet')).toBe(true);
+      expect(card.textContent).toContain('rm -rf build');
+
+      await act(async () => el('chat-tool-approve-once').click());
+      expect(chat.respondToApproval).toHaveBeenCalledWith('ap-1', { decision: 'once' });
+      expect(wake).not.toHaveBeenCalled();
+    });
+
+    it("opens the asking agent's drawer, waking the chrome", async () => {
+      await renderSettled([agentFixture('n', 'needs-you')]);
+      act(() => el('orchestrator-needs-you-open-btn').click());
+      expect(wake).toHaveBeenCalledTimes(1);
+      expect(query('orchestrator-peek-drawer')).not.toBeNull();
+    });
+
+    it('points at the conversation when the Innkeeper himself is waiting', async () => {
+      await renderSettled([agentFixture('w', 'working')], true, 'needs-action');
+      expect(el('orchestrator-needs-you-card').textContent).toContain('The Innkeeper needs you');
+      act(() => el('orchestrator-needs-you-open-btn').click());
+      expect(onParentFocus).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows no card while awake: the header pill already says it', async () => {
+      await renderSettled([agentFixture('n', 'needs-you')], false);
+      expect(query('orchestrator-needs-you-card')).toBeNull();
+      expect(query('orchestrator-needs-you-pill')).not.toBeNull();
+    });
   });
 
   describe('the finale', () => {

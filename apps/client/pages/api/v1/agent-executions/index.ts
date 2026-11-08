@@ -28,7 +28,7 @@ import { isChatModelUsable, resolveDefaultChatModel } from '@server/utils/chatCo
 import { resolveCallerDefaultModel } from '@server/utils/callerModelList';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 const handler = nextRouteForContract(startAgentExecutionContract, {
   rateLimit: rateLimit({

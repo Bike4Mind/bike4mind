@@ -16,11 +16,11 @@ import { groupRepository } from '@bike4mind/database/social';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
-import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
+import { invalidatePartnerRuleCache } from '@bike4mind/server-utils/entitlements/partnerRules';
 import { creditService, organizationService } from '@bike4mind/services';
 import { CreditHolderType, MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Request } from 'express';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
@@ -35,6 +35,7 @@ const updateOrgBodySchema = z.object({
     .pipe(z.coerce.number<string | number>().min(0))
     .optional(),
   systemPrompt: z.string().max(10000).optional(),
+  redactPushContent: z.boolean().optional(),
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
   storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
 });

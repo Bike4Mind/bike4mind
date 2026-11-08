@@ -41,7 +41,7 @@
 import type { Logger } from '@bike4mind/observability';
 import type { IAgentExecution } from '@bike4mind/database';
 import type { MementoGates } from '@bike4mind/services/llm';
-import { LLMEvents } from '@server/utils/eventBus';
+import { LLMEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   resolveExecutionMementoGates,
   type MementoGateAdapters,

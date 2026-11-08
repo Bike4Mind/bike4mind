@@ -258,6 +258,7 @@ function useDismiss(
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       if (event.target instanceof Element && event.target.closest('[role="menu"]')) return;
+      event.preventDefault();
       onDismiss();
     };
     document.addEventListener('pointerdown', onPointerDown, true);

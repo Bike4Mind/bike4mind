@@ -5,14 +5,19 @@
 
 import {
   estimateFitFromSize,
-  fitMarginBytes,
-  memoryBudgets,
   ollamaNumCtx,
+  vramNeedsLlamaServer,
   type HardwareProfile,
   type SizeFitLevel,
 } from '@bike4mind/common';
 import { probeHardware, type HubGgufBuild, type HubModelDetail } from '@bike4mind/local-models';
 import { formatBytes, largestProjectorBytes, type PullPlan } from './localModels.js';
+
+/** What makes an Intel card's memory readable on Linux, for hardware where vramNeedsLlamaServer holds. */
+export const LLAMA_SERVER_VRAM_HELP =
+  'Linux does not report it; put a llama.cpp SYCL or Vulkan build of llama-server first on PATH, with its ggml-sycl or ggml-vulkan library beside it, and b4m reads it from there.';
+export const OLLAMA_SKIPS_INTEL_IGPU =
+  'Ollama does not use Intel integrated graphics, so picks and badges assume the CPU.';
 
 export type FitVerdict = SizeFitLevel | 'unknown';
 
@@ -62,11 +67,15 @@ export function machineReader(probe: () => Promise<HardwareProfile> = () => prob
 
 export function machineLabel({ hardware }: { hardware: HardwareProfile }): string {
   const ram = `${formatBytes(hardware.totalMemoryBytes)} RAM`;
-  if (hardware.memoryKind === 'unified')
-    return `${hardware.chip ?? 'unified memory'}, ${formatBytes(hardware.totalMemoryBytes)}`;
+  if (hardware.memoryKind === 'unified') {
+    const label = `${hardware.chip ?? hardware.gpuName ?? 'unified memory'}, ${formatBytes(hardware.totalMemoryBytes)}`;
+    return hardware.gpuVendor === 'intel' ? `${label}, rated on the CPU` : label;
+  }
   if (hardware.memoryKind === 'discrete' && hardware.gpuMemoryBytes) {
     return `${hardware.gpuName ?? 'GPU'} with ${formatBytes(hardware.gpuMemoryBytes)}, ${ram}`;
   }
+  if (vramNeedsLlamaServer(hardware))
+    return `Intel GPU of unknown memory (a SYCL or Vulkan llama-server on PATH reads it), rated on the CPU, ${ram}`;
   return hardware.memoryKind === 'discrete' ? `GPU of unknown memory, rated on the CPU, ${ram}` : `no GPU, ${ram}`;
 }
 
@@ -104,10 +113,9 @@ function rateOnHardware(sizeBytes: number, hardware: HardwareProfile, trainedCon
   const known = trainedContext !== null && trainedContext > 0;
   const context = ollamaNumCtx(known ? trainedContext : Infinity);
   const fit = estimateFitFromSize(sizeBytes, hardware, context);
-  const margin = fitMarginBytes(hardware);
   // What a model can use once the planner's headroom is kept free, on the GPU and with layers in system RAM too.
-  const usable = fit.budgetBytes - margin;
-  const machine = fit.budgetBytes + memoryBudgets(hardware).ramPool - margin;
+  const usable = fit.budgetBytes - fit.marginBytes;
+  const machine = fit.budgetBytes + fit.ramPoolBytes - fit.marginBytes;
   const at = `before context memory, at ${known ? '' : 'up to '}the ${contextLabel(context)} context the CLI requests`;
   const need = (shown: string) => `about ${shown} ${at}`;
   const budget = `the ${formatBytes(usable)} a model can use ${fit.cpuOnly ? 'in RAM' : 'in GPU memory'} here`;

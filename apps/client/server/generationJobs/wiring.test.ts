@@ -33,7 +33,9 @@ vi.mock('@bike4mind/services/generationJobs', async importOriginal => ({
     }
   },
 }));
-vi.mock('./slackJobDelivery', () => ({ deliverJobToSlack: notifications.deliverToSlack }));
+vi.mock('@bike4mind/server-utils/generationJobs/slackJobDelivery', () => ({
+  deliverJobToSlack: notifications.deliverToSlack,
+}));
 vi.mock('./slackJobDeliveryDeps', () => ({ createSlackJobDeliveryDeps: () => notifications.slackDeps }));
 
 // A getter mirrors sst's Resource proxy, which throws when a key is not linked to the Lambda.

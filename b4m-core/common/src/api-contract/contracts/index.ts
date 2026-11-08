@@ -27,7 +27,7 @@ import {
   getFilesByIdsContract,
   bulkDeleteFilesContract,
 } from './files.contract';
-import { createEmbeddingsContract } from './embeddings.contract';
+import { createEmbeddingsContract, listEmbeddingModelsContract } from './embeddings.contract';
 import { postSlackMessageContract } from './slackMessages.contract';
 import { createTextRefinementContract } from './textRefinement.contract';
 import { createDecisionContract, listDecisionModelsContract } from './decisions.contract';
@@ -40,6 +40,9 @@ import {
   deleteArtifactContract,
   listArtifactVersionsContract,
   getArtifactVersionContract,
+  createArtifactVersionContract,
+  searchArtifactsContract,
+  listArtifactTypesContract,
 } from './artifacts.contract';
 import { createTranscriptionUploadContract, createTranscriptionContract } from './transcription.contract';
 import { createSessionContract } from './sessionCreate.contract';
@@ -149,6 +152,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getFilesByIdsContract,
   bulkDeleteFilesContract,
   createEmbeddingsContract,
+  listEmbeddingModelsContract,
   createTextRefinementContract,
   createDecisionContract,
   listDecisionModelsContract,
@@ -189,6 +193,9 @@ export const CONTRACTS: readonly EndpointContract[] = [
   deleteArtifactContract,
   listArtifactVersionsContract,
   getArtifactVersionContract,
+  createArtifactVersionContract,
+  searchArtifactsContract,
+  listArtifactTypesContract,
   createTranscriptionUploadContract,
   createTranscriptionContract,
   updateProjectContract,

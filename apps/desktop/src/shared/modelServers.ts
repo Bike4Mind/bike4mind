@@ -8,9 +8,13 @@ export type ModelServerKind = 'ollama' | 'openai-compatible';
 /** What this device may do on the server. Only chat is wired so far; pulls and removals need 'manage'. */
 export type ModelServerAccess = 'chat' | 'manage';
 
-/** How the server is reached: an address, or the system ssh to the far end's Ollama on its loopback. */
-export type ModelServerTransport = { type: 'http'; baseUrl: string } | { type: 'ssh'; destination: string };
+/** How the server is reached: an address, or the system ssh to a port on the far end's loopback. */
+export type ModelServerTransport =
+  { type: 'http'; baseUrl: string } | { type: 'ssh'; destination: string; port: number };
 export type ModelServerTransportType = ModelServerTransport['type'];
+
+/** What an OpenAI-compatible server turned out to be; must match OpenAICompatibleProduct in local-models. */
+export type ModelServerProduct = 'lmstudio' | 'llama-server' | 'vllm' | 'llama-swap';
 
 export type ModelServerAuthKind = 'none' | 'bearer' | 'header';
 
@@ -40,6 +44,8 @@ export interface ModelServerView {
   transport: ModelServerTransportType;
   /** The URL, or the SSH destination. */
   address: string;
+  /** An SSH server's port on the far end's loopback. */
+  port?: number;
   access: ModelServerAccess;
   auth: { type: ModelServerAuthKind; headerName?: string };
   /** False when the credential is kept only until Desktop quits, because this computer has no keyring. */
@@ -97,7 +103,7 @@ export interface ModelServerLaunchView {
   pendingRestart: boolean;
   /** Nothing answers there, and Desktop has what it needs to start the server. */
   canStart: boolean;
-  /** Why Desktop cannot start it, or why its last start or run ended. */
+  /** Why Desktop cannot start it, why its last start or run ended, or why the server it runs is not on the GPU. */
   problem: string | null;
   /** "This computer" only: Desktop found no Ollama program to start. Information, not a fault, for hosted-only users. */
   programMissing?: string;
@@ -260,15 +266,39 @@ export function specsProblem(specs: ModelServerSpecs, local: boolean): string | 
 export interface ModelServerProbeInput {
   /** A URL, or with `transport: 'ssh'` an SSH destination (`user@host` or a Host alias). */
   address: string;
+  /**
+   * SSH: ssh signs in with the user's keys; only an OpenAI-compatible server takes a bearer token, for its own
+   * --api-key, and only on a probe of one `port`.
+   */
   credential: ModelServerCredentialInput;
-  /** Defaults to 'http'. An SSH server takes no credential: ssh signs in with the user's keys. */
+  /** Defaults to 'http'. */
   transport?: ModelServerTransportType;
+  /** SSH: the far-end port, as typed or as found. Omitted, a probe looks on every usual port. */
+  port?: number | string;
+}
+
+/** A server an SSH probe found on the far end's loopback. */
+export interface ModelServerFound {
+  port: number;
+  kind: ModelServerKind;
+  product: ModelServerProduct | null;
+  version: string | null;
+  models: number | null;
+  latencyMs: number | null;
+  /** It asks for a token: an OpenAI-compatible server started with an API key. */
+  needsCredentials: boolean;
+  /** Unique among `found`. */
+  suggestedName: string;
 }
 
 export interface ModelServerProbeResult {
   ok: boolean;
   /** Normalized address the server answered at. */
   address: string | null;
+  /** SSH: every server found, in discovery order (11434, 1234, 8080, 8000). With one, the fields above and below describe it too. */
+  found?: ModelServerFound[];
+  /** SSH: the far-end port of the one server found. */
+  port?: number;
   kind: ModelServerKind | null;
   version: string | null;
   latencyMs: number | null;
@@ -287,6 +317,7 @@ export interface ModelServerProbeResult {
 
 export interface ModelServerAddInput extends ModelServerProbeInput {
   name: string;
+  /** SSH: the server at `port` must answer as this kind; omitted `port` is Ollama's 11434. */
   kind: ModelServerKind;
   access: ModelServerAccess;
   /** Required when the probe said `openToAnyone`. */
