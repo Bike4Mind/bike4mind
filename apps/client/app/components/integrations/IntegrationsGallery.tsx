@@ -4,6 +4,7 @@ import SearchIcon from '@mui/icons-material/Search';
 import {
   INTEGRATION_CATEGORY_LABELS,
   IntegrationsEvents,
+  MCP_PRESET_IDS,
   MODEL_PROVIDERS,
   MODEL_PROVIDER_KIND_LABELS,
   buildIntegrationsSearchMetadata,
@@ -54,7 +55,7 @@ import {
 type GalleryTab = 'integrations' | 'models';
 
 /** Entries whose drawer carries a setup form, as opposed to a pointer elsewhere. */
-const SET_UP_IDS: readonly IntegrationId[] = ['jupyter', 'email', 'blog', 'linkedin'];
+const SET_UP_IDS: readonly IntegrationId[] = ['jupyter', 'email', 'blog', 'linkedin', 'custom-mcp', ...MCP_PRESET_IDS];
 
 const MODEL_STATUS: DerivedIntegrationStatus = { status: 'available', betaTag: false, adminOnly: false };
 
@@ -470,6 +471,7 @@ const IntegrationsGallery = ({
     if (isConnectable(id)) {
       return button(connection?.needsReconnect ? 'Reconnect' : 'Connect', () => onConnect(id), true);
     }
+    if (connection?.needsReconnect) return button('Reconnect', open, true);
     return button(SET_UP_IDS.includes(id) ? 'Set up' : 'Details', open);
   };
 
