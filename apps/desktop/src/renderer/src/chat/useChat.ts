@@ -77,6 +77,9 @@ export interface SessionPlacement {
 /** Newest context notice of each kind per conversation that was not open when it arrived; shown when it opens. */
 const backgroundNotices = new Map<string, ContextNotice[]>();
 
+// Refused prompts of a conversation that was not open when the refusal arrived; returned to its composer when it opens.
+const backgroundReturned = new Map<string, ChatQueuedMessage[]>();
+
 interface ContextNotice {
   message: string;
   kind?: ContextNoticeKind;
@@ -188,6 +191,7 @@ export function useSessions(): SessionsController {
   const remove = useCallback(async (sessionId: string, removeWorktree = false) => {
     await window.b4m.chat.deleteSession(sessionId, removeWorktree);
     backgroundNotices.delete(sessionId);
+    backgroundReturned.delete(sessionId);
     forgetSessionPrefs(sessionId);
     editSessions(current => current.filter(session => session.id !== sessionId));
   }, []);
@@ -650,7 +654,9 @@ export function useConversation(
     setNotices(backgroundNotices.get(sessionId ?? '') ?? []);
     if (sessionId) backgroundNotices.delete(sessionId);
     setProjectError(null);
-    setReturned(null);
+    const stashed = sessionId ? backgroundReturned.get(sessionId) : undefined;
+    if (sessionId) backgroundReturned.delete(sessionId);
+    setReturned(stashed ? { id: ++returnBatch.current, messages: stashed } : null);
     setQueued([]);
     setCommandProgress(null);
     setPreparing(null);
@@ -1035,7 +1041,15 @@ export function useConversation(
           // Whatever the outcome: a refused turn has no 'start' coming to clear it.
           if (activeSessionId.current === sessionId) setPreparing(null);
         });
-      if (activeSessionId.current !== sessionId) return result.ok;
+      if (activeSessionId.current !== sessionId) {
+        if (!result.ok && prompt) {
+          backgroundReturned.set(sessionId, [
+            ...(backgroundReturned.get(sessionId) ?? []),
+            { id: 'refused', sessionId, text: prompt, queuedAt: new Date().toISOString() },
+          ]);
+        }
+        return result.ok;
+      }
       if (!result.ok) {
         discardOptimistic();
         setSendError(result.error);

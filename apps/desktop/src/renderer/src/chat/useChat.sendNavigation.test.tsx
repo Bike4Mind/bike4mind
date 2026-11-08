@@ -185,5 +185,12 @@ describe('sending while navigating between conversations', () => {
     expect(conversation.messages).toEqual(session('second').messages);
     expect(conversation.sendError).toBeNull();
     expect(conversation.returned).toBeNull();
+
+    await show('first');
+    if (accepted) {
+      expect(conversation.returned).toBeNull();
+    } else {
+      expect(conversation.returned?.messages.map(m => m.text)).toEqual(['Old prompt']);
+    }
   });
 });
