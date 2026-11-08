@@ -67,7 +67,7 @@ function formatPerSecond(rate: number): string {
   return `${rate >= 100 ? Math.round(rate) : rate.toFixed(1)} tok/s`;
 }
 
-function formatSeconds(ms: number): string {
+export function formatSeconds(ms: number): string {
   return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
