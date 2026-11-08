@@ -1,13 +1,16 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { parseSshDestination } from './ssh';
+import { parseSshDestination, parseSshPort, SSH_DEFAULT_PORT } from './ssh';
 
 export type ModelServerKind = 'ollama' | 'openai-compatible';
 export type ModelServerAccess = 'chat' | 'manage';
 export type HttpTransport = { type: 'http'; baseUrl: string };
-/** Ollama on the far end's loopback, through the system ssh (see ssh.ts). */
-export type SshTransport = { type: 'ssh'; destination: string };
+/**
+ * A server on the far end's loopback `port`, through the system ssh (see ssh.ts). A record saved before records
+ * carried a port has none on disk and is Ollama's SSH_DEFAULT_PORT.
+ */
+export type SshTransport = { type: 'ssh'; destination: string; port: number };
 export type ModelServerTransport = HttpTransport | SshTransport;
 export type StoredAuth = { type: 'none' } | { type: 'bearer' } | { type: 'header'; name: string };
 
@@ -23,7 +26,7 @@ export interface ModelServerSpecs {
   gpuMemoryGiB: number | null;
   bandwidthGBps: number | null;
   unified: boolean;
-  /** The server's OLLAMA_KV_CACHE_TYPE as entered; absent is Ollama's f16 default. */
+  /** A remote or SSH Ollama's OLLAMA_KV_CACHE_TYPE as entered; absent is Ollama's f16 default. */
   kvCacheType?: QuantizedKvCacheType;
 }
 
@@ -41,13 +44,8 @@ export interface ModelServerRecord {
   specs: ModelServerSpecs | null;
 }
 
-/** A Desktop server the CLI can reach: one with an address. */
-export type SharedServerRecord = ModelServerRecord & { transport: HttpTransport };
-
-/** A Desktop server over SSH, which the CLI lists but cannot reach. */
-export type DesktopOnlyServer = Pick<ModelServerRecord, 'id' | 'name' | 'kind' | 'access'> & {
-  transport: SshTransport;
-};
+/** A Desktop server as the CLI reads it: without a credential embedded in its address. */
+export type SharedServerRecord = ModelServerRecord;
 
 /**
  * On disk, `model-servers.json`. Fields this version does not know (per-server settings, a companion)
@@ -58,7 +56,7 @@ export interface StoredServer extends Record<string, unknown> {
   id: string;
   name: string;
   kind: ModelServerKind;
-  transport: { type: string; baseUrl?: string; destination?: string };
+  transport: { type: string; baseUrl?: string; destination?: string; port?: unknown };
   access: ModelServerAccess;
   auth: StoredAuth;
   secret?: string;
@@ -137,12 +135,13 @@ function storedTransport(transport: StoredServer['transport']): ModelServerTrans
   if (transport.type === 'http' && typeof transport.baseUrl === 'string') {
     return { type: 'http', baseUrl: transport.baseUrl };
   }
-  // A hand-edited destination that could pass as an ssh option is never used.
+  // A hand-edited destination that could pass as an ssh option, or a port that is not one, is never used.
   const destination =
     transport.type === 'ssh' && typeof transport.destination === 'string'
       ? parseSshDestination(transport.destination)
       : null;
-  return destination ? { type: 'ssh', destination } : null;
+  const port = transport.port === undefined ? SSH_DEFAULT_PORT : parseSshPort(transport.port);
+  return destination && port !== null ? { type: 'ssh', destination, port } : null;
 }
 
 /** Null for a record this version cannot use (an unknown transport); it stays on disk untouched. */
@@ -219,19 +218,7 @@ export function serverRuntimeId(serverId: string): string {
   return `srv-${serverId}`;
 }
 
-export function localModelId(runtimeId: string, model: string): string {
-  return `local:${encodeURIComponent(runtimeId)}:${model}`;
-}
-
-export function parseLocalModelId(id: string): { runtimeId: string; model: string } | null {
-  const match = /^local:([^:]+):(.+)$/s.exec(id);
-  if (!match) return null;
-  try {
-    return { runtimeId: decodeURIComponent(match[1]), model: match[2] };
-  } catch {
-    return null;
-  }
-}
+export { localModelId, parseLocalModelId } from '../modelSettings/fields';
 
 export interface DesktopDirsOptions {
   platform?: NodeJS.Platform;
@@ -259,10 +246,39 @@ export function desktopUserDataDirs(opts: DesktopDirsOptions = {}): string[] {
   return [flavor.join(appData, '@bike4mind', 'desktop'), flavor.join(appData, 'Bike4Mind')];
 }
 
+async function entryAt(target: string): Promise<'dir' | 'file' | 'missing' | 'unchecked'> {
+  try {
+    return (await stat(target)).isDirectory() ? 'dir' : 'file';
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'unchecked';
+  }
+}
+
+/**
+ * Where to read Desktop's file `name`: in `B4M_DESKTOP_USER_DATA` when set, else in the first of
+ * desktopUserDataDirs holding it, else in the first that exists. Null when none does.
+ */
+export async function desktopUserDataFile(name: string, opts: DesktopDirsOptions = {}): Promise<string | null> {
+  const flavor = (opts.platform ?? process.platform) === 'win32' ? path.win32 : path.posix;
+  const override = (opts.env ?? process.env).B4M_DESKTOP_USER_DATA?.trim();
+  if (override) return flavor.join(override, name);
+  // Electron creates the packaged folder on first launch, and each file may still sit in the older one. An entry
+  // that cannot be checked is taken, so its read reports why instead of falling through to another folder.
+  let firstExisting: string | null = null;
+  for (const dir of desktopUserDataDirs(opts)) {
+    const file = flavor.join(dir, name);
+    const folder = await entryAt(dir);
+    if (folder === 'unchecked') return file;
+    if (folder !== 'dir') continue;
+    firstExisting ??= file;
+    if ((await entryAt(file)) !== 'missing') return file;
+  }
+  return firstExisting;
+}
+
 export interface DesktopModelServers {
   servers: SharedServerRecord[];
-  /** Servers only Desktop can reach (SSH), so a listing can name them instead of leaving them out. */
-  desktopOnly?: DesktopOnlyServer[];
   /** The file that was read; null when Desktop has none. */
   path: string | null;
   /** Why the file could not be used; never quotes its contents. */
@@ -294,8 +310,13 @@ function withoutUserinfo(baseUrl: string): string {
  * Desktop is read as it is. A missing file is not a problem: Desktop may not be installed.
  */
 export async function readDesktopModelServers(opts: ReadDesktopOptions = {}): Promise<DesktopModelServers> {
-  for (const dir of opts.dirs ?? desktopUserDataDirs(opts)) {
-    const file = path.join(dir, FILE_NAME);
+  let files: string[];
+  if (opts.dirs) files = opts.dirs.map(dir => path.join(dir, FILE_NAME));
+  else {
+    const file = await desktopUserDataFile(FILE_NAME, opts);
+    files = file === null ? [] : [file];
+  }
+  for (const file of files) {
     let raw: string;
     try {
       raw = await readFile(file, 'utf8');
@@ -313,17 +334,13 @@ export async function readDesktopModelServers(opts: ReadDesktopOptions = {}): Pr
     const all = (parsed as { servers?: unknown } | null)?.servers;
     if (!Array.isArray(all)) return { servers: [], path: file, problem: `${FILE_NAME} has no server list.` };
     const servers: SharedServerRecord[] = [];
-    const desktopOnly: DesktopOnlyServer[] = [];
     for (const value of all) {
       const record = isStored(value) ? hydrate(value) : null;
       if (record?.transport.type === 'http') {
         servers.push({ ...record, transport: { type: 'http', baseUrl: withoutUserinfo(record.transport.baseUrl) } });
-      } else if (record?.transport.type === 'ssh') {
-        const { id, name, kind, access } = record;
-        desktopOnly.push({ id, name, kind, access, transport: record.transport });
-      }
+      } else if (record) servers.push(record);
     }
-    return { servers, desktopOnly, path: file, problem: null };
+    return { servers, path: file, problem: null };
   }
   return { servers: [], path: null, problem: null };
 }

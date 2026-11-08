@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { crc32 } from 'zlib';
+import { describeImportFailure } from '@bike4mind/common';
 import { extractFileFromZip } from './index';
 
 // Minimal stored (uncompressed) zip writer, enough for yauzl to read.
@@ -101,5 +102,33 @@ describe('extractFileFromZip', () => {
     const notZip = writeTmp('not-a-zip.zip', 'this is plain text, not an archive');
 
     await expect(extractFileFromZip(notZip, 'conversations.json')).rejects.toThrow();
+  });
+});
+
+// Feeds the real rejection text into the shared mapper, so a yauzl wording change cannot
+// silently drop these uploads back to the generic "try again later" reason.
+describe('extractFileFromZip rejections map to a non-retryable reason', () => {
+  const rejectionOf = async (path: string) => {
+    const err = await extractFileFromZip(path, 'conversations.json').then(
+      () => undefined,
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(Error);
+    return describeImportFailure((err as Error).message, 'OpenAI');
+  };
+
+  it('a zip holding only user.json', async () => {
+    const zip = writeTmp('user-only.zip', buildStoredZip({ 'user.json': '{}' }));
+
+    expect(await rejectionOf(zip)).toEqual({
+      reason: "This file doesn't look like a ChatGPT export (no conversations.json).",
+      retryable: false,
+    });
+  });
+
+  it('a text file renamed to .zip', async () => {
+    const notZip = writeTmp('renamed.zip', 'plain text renamed to look like an archive');
+
+    expect(await rejectionOf(notZip)).toEqual({ reason: 'This file is not a valid .zip archive.', retryable: false });
   });
 });

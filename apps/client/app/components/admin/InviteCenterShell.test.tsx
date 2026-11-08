@@ -18,6 +18,10 @@ vi.mock('./InviteCenter/Packages/GrantPackagesTab', () => ({
   ),
 }));
 
+vi.mock('./InviteCenter/Pending/PendingSection', () => ({
+  PendingSection: () => <div data-testid="pending-section-stub" />,
+}));
+
 vi.mock('@tanstack/react-router', () => ({
   useSearch: () => routerMock.search,
   useNavigate: () => routerMock.navigate,
@@ -53,7 +57,10 @@ describe('InviteCenterShell', () => {
     renderShell();
     expect(screen.getByTestId('invite-center-section-pending')).toBeInTheDocument();
     expect(screen.queryByTestId('waitlist-child')).not.toBeInTheDocument();
-    expect(screen.getByText('Pending grants are coming here')).toBeInTheDocument();
+    expect(screen.getByTestId('invite-center-section-pending')).toContainElement(
+      screen.getByTestId('pending-section-stub')
+    );
+    expect(screen.queryByTestId('admin-empty-state')).not.toBeInTheDocument();
   });
 
   it('navigates with replace, keeping other params', () => {
@@ -84,7 +91,6 @@ describe('InviteCenterShell', () => {
 
   it.each([
     ['schedule', 'The signup credit schedule is coming here'],
-    ['pending', 'Pending grants are coming here'],
     ['rewards', 'Rewards are coming here'],
   ])('shows the %s empty state', (id, title) => {
     routerMock.search = { inviteSection: id };
@@ -113,7 +119,6 @@ describe('InviteCenterShell', () => {
   it.each([
     ['packages', 'invite-center-open-invites-btn', AdminTab.RegistrationInvites],
     ['packages', 'invite-center-open-partner-signups-btn', AdminTab.PartnerSignupRules],
-    ['pending', 'invite-center-open-held-grants-btn', AdminTab.HeldSignupGrants],
   ])('on %s, %s opens its admin tab', (id, testId, tab) => {
     routerMock.search = { inviteSection: id };
     renderShell();

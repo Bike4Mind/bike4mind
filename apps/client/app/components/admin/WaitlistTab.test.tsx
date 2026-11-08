@@ -127,3 +127,63 @@ describe('WaitlistTab Invite Center', () => {
     expect(section).toContainElement(screen.getByText('ada@example.com'));
   });
 });
+
+describe('WaitlistTab network and payload signals', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.fetchGrantPackages.mockResolvedValue({ data: [], meta: { total: 0, page: 1, limit: 100, totalPages: 0 } });
+  });
+
+  it('renders a payload name as text, badges it and summarises the network with details on expand', async () => {
+    const payload = '<img src=x onerror=alert(1)>';
+    mocks.fetchSubscribers.mockResolvedValue({
+      data: [
+        {
+          ...SUBSCRIBER,
+          firstName: payload,
+          lastName: '<b>bold</b>',
+          suspicious: { reasons: ['markup'] },
+          signupNetwork: {
+            ipPrefix: '203.0.113.0',
+            userAgent: 'curl/8.4',
+            asn: 64500,
+            asnOrg: 'Example Hosting',
+            country: 'NL',
+            isDatacenter: true,
+            ja4: null,
+            wafAnonIp: true,
+            wafBotSignal: null,
+            challengeVerified: true,
+            capturedAt: '2026-10-30T00:00:00.000Z',
+          },
+        },
+      ],
+      meta: { total: 1 },
+    });
+    const { container } = render(<WaitlistTab />, { wrapper: Wrapper });
+
+    expect(await screen.findByText(`${payload} <b>bold</b>`)).toBeInTheDocument();
+    expect(container.querySelector('img[src="x"]')).toBeNull();
+    expect(container.querySelector('b')).toBeNull();
+    expect(screen.getByTestId('waitlist-suspicious-chip')).toHaveTextContent('Payload-like name');
+    expect(screen.getByTestId('waitlist-network-cell')).toHaveTextContent('NL');
+    expect(screen.getByTestId('waitlist-network-cell')).toHaveTextContent('Example Hosting');
+    expect(screen.getByTestId('waitlist-anon-ip-chip')).toBeInTheDocument();
+    expect(screen.queryByTestId('waitlist-network-details')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('waitlist-network-toggle'));
+    const details = screen.getByTestId('waitlist-network-details');
+    expect(details).toHaveTextContent('203.0.113.0');
+    expect(details).toHaveTextContent('curl/8.4');
+    expect(details).toHaveTextContent('Turnstile: passed');
+    expect(details).toHaveTextContent('Bot signal (WAF): not checked');
+  });
+
+  it('shows a dash and no badge for a row without network capture', async () => {
+    mocks.fetchSubscribers.mockResolvedValue({ data: [SUBSCRIBER], meta: { total: 1 } });
+    render(<WaitlistTab />, { wrapper: Wrapper });
+
+    expect(await screen.findByTestId('waitlist-network-none')).toBeInTheDocument();
+    expect(screen.queryByTestId('waitlist-suspicious-chip')).toBeNull();
+  });
+});

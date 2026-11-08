@@ -18,7 +18,7 @@ import {
   publishEmailChangeMessages,
   type EmailChangeMessage,
 } from '@server/users/emailChangeMailer';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 export type AdminProfileField = 'name' | 'username' | 'email';
 

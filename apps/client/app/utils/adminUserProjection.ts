@@ -38,6 +38,7 @@ export const ADMIN_USER_LIST_FIELDS = [
   'createdAt',
   'updatedAt',
   'lastActiveAt',
+  'clientUsage',
   // loginRecords and signupMeta are admin-only PII (IPs/userAgents): they are in
   // USER_SECRET_FIELDS so the toSafeUser/redactUserSecretsForSelf serializers drop them, but the
   // admin activity view reads them here. Intentional admin-only exposure, not serialize-everywhere.

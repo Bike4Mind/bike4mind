@@ -20,7 +20,7 @@ export function PrReportTab() {
   const repoConfigured = typeof repo === 'string' && repo.trim().length > 0;
 
   return (
-    <Box sx={{ maxWidth: 760, mx: 'auto', p: { xs: 1, sm: 2 } }}>
+    <Box sx={{ maxWidth: 760, mx: 'auto' }}>
       <Stack spacing={0.75} sx={{ mb: 3 }}>
         <Typography level="h3">PR Status Digest</Typography>
         <Typography level="body-sm" textColor="text.secondary">

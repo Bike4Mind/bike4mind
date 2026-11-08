@@ -25,7 +25,7 @@ vi.mock('@aws-sdk/client-lambda', () => ({
 vi.mock('sst', () => ({ Resource: resource }));
 vi.mock('@bike4mind/server-utils/modelDiscovery/scheduledRun', () => ({ runScheduledDiscovery }));
 // The real module pulls in the whole source registry; only the gate matters here.
-vi.mock('./startupLeg', () => ({
+vi.mock('@bike4mind/server-utils/modelDiscovery/startupLeg', () => ({
   DISCOVERY_DRIVER_ENV: 'B4M_DISCOVERY_DRIVER',
   isDiscoveryDriver: () => process.env.B4M_DISCOVERY_DRIVER === 'true',
 }));

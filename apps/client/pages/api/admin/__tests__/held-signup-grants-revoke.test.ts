@@ -29,12 +29,12 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/database', () => ({ creditTransactionRepository: {}, userRepository: {} }));
 vi.mock('@bike4mind/services', () => ({ userService: { revokeHeldGrantRelease: revoke } }));
 const findBatch = vi.hoisted(() => vi.fn());
-vi.mock('@server/credits/heldSignupGrantAdapters', () => ({ heldGrantBatches: { findBatch } }));
+vi.mock('@bike4mind/server-utils/credits/heldSignupGrantAdapters', () => ({ heldGrantBatches: { findBatch } }));
 const audit = vi.hoisted(() => ({
   record: vi.fn(),
   deny: vi.fn(),
 }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   isSelfOrImpersonator: (user: { id: string; impersonatedBy?: string }, targetId: string) =>
     [user.id, user.impersonatedBy].some(id => id?.toLowerCase() === targetId.toLowerCase()),
   denySelfAdminAction: audit.deny,

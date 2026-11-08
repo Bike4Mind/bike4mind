@@ -65,7 +65,10 @@ export const PublicImageCapabilitiesSchema = z.object({
     max_reference_images: z
       .number()
       .int()
-      .describe('Most `referenceImageFabFileIds` honoured; 0 when the model takes none.'),
+      .describe(
+        'Most `referenceImageFabFileIds` honoured on generation; 0 when the model takes none. ' +
+          'FLUX.2 edits take one fewer, as the source uses a slot.'
+      ),
     edit: z.boolean().describe('Accepted by `POST /api/v1/image-edits`.'),
     requires_input_image: z.boolean(),
   }),

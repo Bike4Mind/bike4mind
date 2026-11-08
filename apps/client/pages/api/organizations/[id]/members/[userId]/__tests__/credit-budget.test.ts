@@ -32,7 +32,7 @@ vi.mock('@bike4mind/services', () => ({ organizationService: { setMemberCreditOv
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { marker: 'orgRepo' } }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: { marker: 'userRepo' } }));
 const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 
 import '@pages/api/organizations/[id]/members/[userId]/credit-budget';
 

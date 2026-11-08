@@ -15,11 +15,6 @@ import {
 } from './agent-parser';
 import { ImageModels } from '@bike4mind/common';
 
-// Prevent importing SST Resource-backed modules during unit tests.
-vi.mock('@server/utils/mcpEnv', () => ({
-  buildMcpEnvVariables: vi.fn(async () => []),
-}));
-
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => {
   const filesStorage = {
     download: vi.fn(async () => Buffer.from('')),

@@ -50,16 +50,22 @@ describe('loadModelServers', () => {
     const { servers, problem } = await loaded([
       stored({}),
       stored({ id: 'd4e5f6', name: 'ssh-box', transport: { type: 'ssh' } }),
+      stored({ id: 'f6e5d4', name: 'lab', transport: { type: 'ssh', destination: 'me@lab' } }),
     ]);
     expect(problem).toBeNull();
-    expect(servers).toHaveLength(1);
+    expect(servers).toHaveLength(2);
     expect(servers[0]).toMatchObject({ id: 'a1b2c3', name: 'gpu-box', source: 'desktop' });
+    expect(servers[1]).toMatchObject({
+      id: 'f6e5d4',
+      transport: { type: 'ssh', destination: 'me@lab', port: 11434 },
+      source: 'desktop',
+    });
     expect(JSON.stringify(servers)).not.toContain('ZGVza3RvcC1jaXBoZXJ0ZXh0');
   });
 
   it('uses the injected reader and passes its problem through', async () => {
     const result = await loadModelServers(async () => ({ servers: [], path: null, problem: 'broken' }));
-    expect(result).toEqual({ servers: [], desktopOnly: [], problem: 'broken' });
+    expect(result).toEqual({ servers: [], problem: 'broken' });
     expect((await readDesktopModelServers()).path).toBeNull();
   });
 });

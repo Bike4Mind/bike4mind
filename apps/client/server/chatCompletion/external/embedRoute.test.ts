@@ -134,7 +134,9 @@ vi.mock('@server/embed/embedSessionToken', () => ({ verifyEmbedSessionToken: moc
 
 const mockGetEffectiveLLMApiKeys = vi.hoisted(() => vi.fn());
 const mockCheckApiKeyRateLimit = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({ checkApiKeyRateLimit: mockCheckApiKeyRateLimit }));
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', () => ({
+  checkApiKeyRateLimit: mockCheckApiKeyRateLimit,
+}));
 
 const mockCheckEmbedSessionRateLimit = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/embedSessionRateLimit', () => ({ checkEmbedSessionRateLimit: mockCheckEmbedSessionRateLimit }));
@@ -148,6 +150,8 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 
 const mockEmitProcessingFailed = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../processingFailedMetric', () => ({ emitProcessingFailed: mockEmitProcessingFailed }));
+const mockRecordUserLimitEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/billing/userLimitEvents', () => ({ recordUserLimitEvent: mockRecordUserLimitEvent }));
 
 import { registerEmbedRoutes } from './embedRoute';
 import { spendCapExceededError } from '@bike4mind/common';
@@ -471,6 +475,7 @@ describe('POST /api/embed/chat', () => {
       error_description: 'This embed key has reached its spend cap',
       code: 'spend_cap_exceeded',
     });
+    expect(mockRecordUserLimitEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'api_key_spend_cap' }));
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 

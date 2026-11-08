@@ -28,6 +28,7 @@ vi.mock('@server/utils/userTimeline', () => ({
 import handler from '../timeline';
 
 const USER_ID = 'b'.repeat(24);
+const CREATED_AT = new Date('2026-10-01T00:00:00.000Z');
 const ENTRY_ID = 'c'.repeat(24);
 
 const call = (query: Record<string, string | string[]> = {}, user: unknown = { id: 'admin1', isAdmin: true }) => {
@@ -38,7 +39,15 @@ const call = (query: Record<string, string | string[]> = {}, user: unknown = { i
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.findById.mockResolvedValue({ id: USER_ID, name: 'Ada', email: 'ada@example.com', isAdmin: false });
+  mocks.findById.mockResolvedValue({
+    id: USER_ID,
+    name: 'Ada',
+    email: 'ada@example.com',
+    isAdmin: false,
+    createdAt: CREATED_AT,
+    currentCredits: 120,
+    signupMeta: { ip: '203.0.113.9' },
+  });
   mocks.listUserTimeline.mockResolvedValue({ entries: [], nextCursor: null });
 });
 
@@ -76,7 +85,19 @@ describe('GET /api/admin/users/[userId]/timeline', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.listUserTimeline).toHaveBeenCalledWith(
-      { id: USER_ID, name: 'Ada', email: 'ada@example.com', isAdmin: false },
+      {
+        id: USER_ID,
+        name: 'Ada',
+        email: 'ada@example.com',
+        isAdmin: false,
+        account: {
+          createdAt: CREATED_AT,
+          currentCredits: 120,
+          email: 'ada@example.com',
+          signupMeta: { ip: '203.0.113.9' },
+          signupGrantHeldReason: undefined,
+        },
+      },
       { types: [...USER_TIMELINE_TYPES], range: { from: undefined, to: undefined }, limit: 50, cursor: undefined }
     );
   });

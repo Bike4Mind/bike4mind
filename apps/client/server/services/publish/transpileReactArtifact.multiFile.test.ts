@@ -7,7 +7,7 @@ import {
   UnsupportedReactDependencyError,
   ReactArtifactTranspileError,
 } from './transpileReactArtifact';
-import { validateBundle } from './validateBundle';
+import { validateBundle } from '@bike4mind/server-utils/services/publish/validateBundle';
 
 const ENTRY = `import Stopwatch from './Stopwatch';
 export default function App() { return <main><Stopwatch /></main>; }`;

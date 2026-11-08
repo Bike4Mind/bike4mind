@@ -133,9 +133,14 @@ describe('evaluateScope', () => {
     expect(breaches[0]).toMatchObject({ rule: 'account_ceiling', severity: 'critical' });
   });
 
-  it('returns both the spike and the ceiling when both fire', () => {
-    const rules = evaluateScope(scope('Agent', 6000, 100), thresholds).map(breach => breach.rule);
-    expect(rules).toEqual(['account_spike', 'account_ceiling']);
+  it('raises only the ceiling when the spike and the ceiling both hold', () => {
+    const breaches = evaluateScope(scope('Agent', 6000, 100), thresholds);
+    expect(breaches).toEqual([expect.objectContaining({ rule: 'account_ceiling', severity: 'critical', ratio: 60 })]);
+  });
+
+  it('raises only the spike below the ceiling', () => {
+    const breaches = evaluateScope(scope('Agent', 4000, 100), thresholds);
+    expect(breaches).toEqual([expect.objectContaining({ rule: 'account_spike', severity: 'warning', ratio: 40 })]);
   });
 
   it('maps apiKey to apikey rules and raises exactly the ceiling for 6000 over a zero baseline', () => {
@@ -170,18 +175,12 @@ describe('evaluateScope trusted tier', () => {
 
   it('still pages a trusted account past its own ceiling, marking the breach trusted', () => {
     const breaches = evaluateScope(scope('User', 40000, 2000), thresholds, 'trusted');
-    expect(breaches.map(b => [b.rule, b.severity, b.trusted])).toEqual([
-      ['account_spike', 'warning', true],
-      ['account_ceiling', 'critical', true],
-    ]);
+    expect(breaches.map(b => [b.rule, b.severity, b.trusted])).toEqual([['account_ceiling', 'critical', true]]);
   });
 
   it('keeps the standard limits for an untrusted account', () => {
     const breaches = evaluateScope(scope('User', 15000, 1000), thresholds);
-    expect(breaches.map(b => [b.rule, b.severity])).toEqual([
-      ['account_spike', 'warning'],
-      ['account_ceiling', 'critical'],
-    ]);
+    expect(breaches.map(b => [b.rule, b.severity])).toEqual([['account_ceiling', 'critical']]);
     expect(breaches.every(b => b.trusted === undefined)).toBe(true);
   });
 

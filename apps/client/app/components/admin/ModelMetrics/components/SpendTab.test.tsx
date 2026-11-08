@@ -52,6 +52,41 @@ describe('SpendTabView', () => {
     expect(screen.queryByTestId('spend-account-truncation')).not.toBeInTheDocument();
   });
 
+  it('marks a flagged account and shows the banner, leaving unflagged rows bare', () => {
+    const [hot, calm, ...rest] = spendMockData.byAccount;
+    const data: SpendData = {
+      ...spendMockData,
+      byAccount: [{ ...hot, flags: ['dailyCost', 'errorRate'] }, calm, ...rest],
+    };
+    render(<SpendTabView data={data} />, { wrapper: TestWrapper });
+
+    const banner = screen.getByTestId('spend-account-flag-banner');
+    expect(banner).toHaveTextContent('1 account is over a limit');
+    expect(banner).toHaveAttribute('role', 'alert');
+    const hotRow = screen.getByTestId(`spend-account-row-${hot.accountId}`);
+    expect(within(hotRow).getByTestId('spend-account-flag-dailyCost')).toHaveTextContent('Cost/day');
+    expect(within(hotRow).getByTestId('spend-account-flag-errorRate')).toHaveTextContent('Errors');
+    const calmRow = screen.getByTestId(`spend-account-row-${calm.accountId}`);
+    expect(within(calmRow).queryByTestId(/^spend-account-flag-/)).not.toBeInTheDocument();
+  });
+
+  it('shows a dash for p95 when the account has no recorded latency', () => {
+    const [timed, untimed, ...rest] = spendMockData.byAccount;
+    const data: SpendData = {
+      ...spendMockData,
+      byAccount: [{ ...timed, p95LatencyMs: 4000 }, { ...untimed, p95LatencyMs: 0 }, ...rest],
+    };
+    render(<SpendTabView data={data} />, { wrapper: TestWrapper });
+
+    expect(screen.getByTestId(`spend-account-p95-${timed.accountId}`)).toHaveTextContent('4,000ms');
+    expect(screen.getByTestId(`spend-account-p95-${untimed.accountId}`)).toHaveTextContent('--');
+  });
+
+  it('shows no flag banner when no account is flagged', () => {
+    render(<SpendTabView data={spendMockData} />, { wrapper: TestWrapper });
+    expect(screen.queryByTestId('spend-account-flag-banner')).not.toBeInTheDocument();
+  });
+
   it('renders a cost-by-model bar for every model', () => {
     render(<SpendTabView data={spendMockData} />, { wrapper: TestWrapper });
     const bars = screen.getByTestId('spend-by-model-bars');
@@ -134,6 +169,9 @@ describe('SpendTabView', () => {
           requests: 5,
           creditsUsed: 1234,
           costPerRequest: 2.468,
+          errorRate: 0,
+          p95LatencyMs: 900,
+          flags: [],
         },
       ],
       byModel: [{ modelId: 'm1', modelName: 'Custom Model One', estCost: 12.34, requests: 5, share: 1 }],

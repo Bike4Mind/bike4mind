@@ -25,6 +25,10 @@ import {
   Typography,
 } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
+import { ADMIN_TAB_PARAM } from '@bike4mind/common';
+import { ADMIN_SUBSCRIPTIONS_TAB_SLUG } from './Subscriptions/Detail/subscriptionDetailModel';
+import { CLEARED_FILTER_PARAMS } from './Subscriptions/subscriptionsTabSearch';
+import { useSubscriptionsTab } from './Subscriptions/useSubscriptionsTabParams';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { IOrganizationDocument, WithId } from '@bike4mind/common';
 import { ActionDialog } from '@client/app/components/admin/shared/ActionDialog';
@@ -52,7 +56,6 @@ import {
   useAdminOrgGrants,
   useConvertOrgToPaid,
   useGrantOrganization,
-  useReconcileOrgSeats,
   useRevokeOrganization,
   useTopUpOrganization,
 } from '@client/app/hooks/data/adminOrganizations';
@@ -166,7 +169,6 @@ const OrganizationsTab: React.FC = () => {
   const [seatsValue, setSeatsValue] = useState<number>(4);
 
   const [revokeOrg, setRevokeOrg] = useState<WithId<IOrganizationDocument> | null>(null);
-  const [reconcileOrg, setReconcileOrg] = useState<WithId<IOrganizationDocument> | null>(null);
   const [convertOrg, setConvertOrg] = useState<WithId<IOrganizationDocument> | null>(null);
 
   useOrganizationsTabUrlSync();
@@ -186,6 +188,11 @@ const OrganizationsTab: React.FC = () => {
   const grantedOrgIds = useMemo(() => new Set((grants ?? []).map(g => g.ownerId)), [grants]);
   const grantSubscriptionIdByOrgId = useMemo(() => new Map((grants ?? []).map(g => [g.ownerId, g.id])), [grants]);
   const navigate = useNavigate();
+  // Sync lives on the subscription page; land on the list narrowed to this customer's rows.
+  const syncFromStripe = (org: WithId<IOrganizationDocument>) => {
+    useSubscriptionsTab.getState().setParams({ ...CLEARED_FILTER_PARAMS, search: org.stripeCustomerId ?? org.id });
+    void navigate({ to: '/admin', search: { [ADMIN_TAB_PARAM]: ADMIN_SUBSCRIPTIONS_TAB_SLUG } });
+  };
   const viewSubscription = (orgId: string) => {
     const subscriptionId = grantSubscriptionIdByOrgId.get(orgId);
     if (!subscriptionId) return;
@@ -212,7 +219,6 @@ const OrganizationsTab: React.FC = () => {
   const grantOrgMutation = useGrantOrganization();
   const topUpMutation = useTopUpOrganization();
   const seatsMutation = useAdjustOrgSeats();
-  const reconcileMutation = useReconcileOrgSeats();
   const convertMutation = useConvertOrgToPaid();
   const revokeMutation = useRevokeOrganization();
 
@@ -283,17 +289,6 @@ const OrganizationsTab: React.FC = () => {
     try {
       await seatsMutation.mutateAsync({ organizationId: seatsOrg.id, seats: seatsValue, reason });
       setSeatsOrg(null);
-      refetch();
-    } catch {
-      // toast handled
-    }
-  };
-
-  const handleReconcileSeats = async (reason: string) => {
-    if (!reconcileOrg) return;
-    try {
-      await reconcileMutation.mutateAsync({ organizationId: reconcileOrg.id, reason });
-      setReconcileOrg(null);
       refetch();
     } catch {
       // toast handled
@@ -537,8 +532,8 @@ const OrganizationsTab: React.FC = () => {
                             </MenuItem>
                           )}
                           {!isGranted && !org.personal && (
-                            <MenuItem data-testid={`reconcile-seats-${org.id}`} onClick={() => setReconcileOrg(org)}>
-                              Reconcile seats from Stripe
+                            <MenuItem data-testid={`sync-from-stripe-${org.id}`} onClick={() => syncFromStripe(org)}>
+                              Sync from Stripe
                             </MenuItem>
                           )}
                           {isGranted && (
@@ -666,10 +661,10 @@ const OrganizationsTab: React.FC = () => {
                               )}
                               {!isGranted && !org.personal && (
                                 <MenuItem
-                                  data-testid={`reconcile-seats-${org.id}`}
-                                  onClick={() => setReconcileOrg(org)}
+                                  data-testid={`sync-from-stripe-${org.id}`}
+                                  onClick={() => syncFromStripe(org)}
                                 >
-                                  Reconcile seats from Stripe
+                                  Sync from Stripe
                                 </MenuItem>
                               )}
                               {isGranted && (
@@ -874,18 +869,6 @@ const OrganizationsTab: React.FC = () => {
         onConfirm={handleRevoke}
         data-testid="org-revoke-dialog"
         testIds={{ reason: 'revoke-reason-input', confirm: 'revoke-submit' }}
-      />
-
-      <ActionDialog
-        open={!!reconcileOrg}
-        onClose={() => setReconcileOrg(null)}
-        title={`Reconcile seats for ${reconcileOrg?.name ?? 'organization'}`}
-        description="Sets the seat count to the quantity Stripe bills for. Stripe is not changed."
-        reasonPresets={ADMIN_REASON_PRESETS.seatChange}
-        confirmLabel="Reconcile seats"
-        pending={reconcileMutation.isPending}
-        onConfirm={handleReconcileSeats}
-        data-testid="org-reconcile-seats-dialog"
       />
 
       <ActionDialog

@@ -49,7 +49,12 @@ vi.mock('./accountDeletionEmail', () => ({
 }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: h.audit }));
 
-import { cancelAccountDeletion, requestAccountDeletion } from './accountDeletion';
+import {
+  cancelAccountDeletion,
+  clearAccountDeletion,
+  requestAccountDeletion,
+  scheduleAccountDeletion,
+} from './accountDeletion';
 import { withAccountNotPurging } from '@server/auth/withAccountNotPurging';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -167,7 +172,9 @@ describe('requestAccountDeletion', () => {
     expect(result.subscriptions.canceled).toEqual(['sub_1']);
     expect(h.purgeArtifacts).toHaveBeenCalledWith(userId, { deletedBy: userId, logger });
     expect(h.withdrawListings).toHaveBeenCalledWith(userId);
-    expect(h.sendEmail).toHaveBeenCalledWith(expect.stringContaining('@example.test'), user!.deletion.scheduledFor);
+    expect(h.sendEmail).toHaveBeenCalledWith(expect.stringContaining('@example.test'), user!.deletion.scheduledFor, {
+      source: 'self',
+    });
   });
 
   it('drops the trusted devices and MCP connections along with the rest of the lockdown', async () => {
@@ -332,5 +339,120 @@ describe('cancelAccountDeletion', () => {
     h.sendCancelledEmail.mockClear();
     await expect(cancelAccountDeletion(requestFor(userId))).rejects.toMatchObject({ statusCode: 404 });
     expect(h.sendCancelledEmail).not.toHaveBeenCalled();
+  });
+});
+
+describe('support-scheduled deletion', () => {
+  const received = new Date('2026-10-01T00:00:00Z');
+
+  it('stamps source support with the received date, grace from now, and the same lockdown', async () => {
+    const userId = await seedAccount();
+    const recordInTransaction = vi.fn();
+    const before = Date.now();
+
+    const result = await scheduleAccountDeletion(requestFor('admin-1'), {
+      userId,
+      source: 'support',
+      requestedAt: received,
+      actorUserId: 'admin-1',
+      recordInTransaction,
+    });
+
+    const user = await User.findById(userId).lean<{ deletion: Record<string, Date | string>; tokenVersion: number }>();
+    expect(user!.deletion.source).toBe('support');
+    expect(user!.deletion.requestedAt).toEqual(received);
+    const graceMs = ACCOUNT_DELETION_GRACE_DAYS * 86_400_000;
+    expect((user!.deletion.scheduledFor as Date).getTime()).toBeGreaterThanOrEqual(before + graceMs);
+    expect((user!.deletion.scheduledFor as Date).getTime()).toBeLessThanOrEqual(Date.now() + graceMs);
+    expect(user!.tokenVersion).toBe(4);
+    expect(await UserApiKey.countDocuments({ userId, status: { $ne: ApiKeyStatus.DISABLED } })).toBe(0);
+    expect(await McpServer.countDocuments({ userId })).toBe(0);
+    expect(recordInTransaction).toHaveBeenCalledWith(result.deletion);
+    expect(h.sendEmail).toHaveBeenCalledWith(expect.stringContaining('@example.test'), result.deletion.scheduledFor, {
+      source: 'support',
+    });
+    expect(h.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        userId,
+        actorUserId: 'admin-1',
+        event: 'account_deletion_requested',
+        metadata: expect.objectContaining({ source: 'support' }),
+      })
+    );
+    expect(h.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ userId, actorUserId: 'admin-1', event: 'session_revoked' })
+    );
+  });
+
+  it('refuses a support schedule for an organization owner with support wording', async () => {
+    const userId = await seedAccount();
+    await Organization.create({ name: 'Acme', userId, personal: false });
+
+    await expect(
+      scheduleAccountDeletion(requestFor('admin-1'), { userId, source: 'support', requestedAt: received })
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'Transfer or delete the organizations this user owns before scheduling deletion.',
+    });
+  });
+
+  it('stamps nothing when the in-transaction admin audit write fails', async () => {
+    const userId = await seedAccount();
+    h.sendEmail.mockClear();
+
+    await expect(
+      scheduleAccountDeletion(requestFor('admin-1'), {
+        userId,
+        source: 'support',
+        requestedAt: received,
+        recordInTransaction: async () => {
+          throw new Error('audit down');
+        },
+      })
+    ).rejects.toThrow('audit down');
+
+    const user = await User.findById(userId).lean<{ deletion?: unknown; tokenVersion: number }>();
+    expect(user!.deletion).toBeUndefined();
+    expect(user!.tokenVersion).toBe(3);
+    expect(await UserApiKey.countDocuments({ userId, status: { $ne: ApiKeyStatus.DISABLED } })).toBe(1);
+    expect(h.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('clears a pending deletion on behalf of the user, and keeps it when the audit write fails', async () => {
+    const userId = await seedAccount();
+    h.cancelSubscriptions.mockResolvedValue({ canceled: [], failed: [] });
+    await scheduleAccountDeletion(requestFor('admin-1'), { userId, source: 'support', requestedAt: received });
+    h.sendCancelledEmail.mockClear();
+
+    await expect(
+      clearAccountDeletion(requestFor('admin-1'), {
+        userId,
+        recordInTransaction: async () => {
+          throw new Error('audit down');
+        },
+      })
+    ).rejects.toThrow('audit down');
+    expect((await User.findById(userId).lean<{ deletion?: unknown }>())!.deletion).toBeDefined();
+    expect(h.sendCancelledEmail).not.toHaveBeenCalled();
+
+    const recordInTransaction = vi.fn();
+    await clearAccountDeletion(requestFor('admin-1'), { userId, actorUserId: 'admin-1', recordInTransaction });
+
+    expect((await User.findById(userId).lean<{ deletion?: unknown }>())!.deletion).toBeUndefined();
+    expect(recordInTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'support', requestedAt: received })
+    );
+    expect(h.sendCancelledEmail).toHaveBeenCalledTimes(1);
+    expect(h.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ userId, actorUserId: 'admin-1', event: 'account_deletion_cancelled' })
+    );
+  });
+
+  it('answers 404 when nothing is pending', async () => {
+    const userId = await seedAccount();
+    await expect(clearAccountDeletion(requestFor('admin-1'), { userId })).rejects.toMatchObject({ statusCode: 404 });
   });
 });

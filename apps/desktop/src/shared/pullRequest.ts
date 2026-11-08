@@ -192,6 +192,8 @@ export function prDisplayState(state: PrState, isDraft = false, queued = false):
 export interface PrSummary {
   number: number;
   state: PrDisplayState;
+  /** `owner/repo`, so a search for `owner/repo#N` can tell this PR from another repo's. */
+  repo?: string;
 }
 
 /** main -> renderer push; `summary` null means the conversation no longer has a PR to show. */
@@ -201,7 +203,7 @@ export interface PrSummaryEvent {
 }
 
 export function samePrSummary(a: PrSummary | null | undefined, b: PrSummary | null | undefined): boolean {
-  return a?.number === b?.number && a?.state === b?.state;
+  return a?.number === b?.number && a?.state === b?.state && a?.repo === b?.repo;
 }
 
 /** Whether `gh` can be used at all. Anything but 'ok' replaces the bar's content with a fix-it line. */

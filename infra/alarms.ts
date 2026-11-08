@@ -1548,6 +1548,24 @@ if (isMonitoredStage) {
     },
   });
 
+  // Two daily truncated runs mean the reconciliation repeatedly leaves subscriptions unchecked.
+  new aws.cloudwatch.MetricAlarm('subscriptionReconciliationTruncated', {
+    name: `${$app.name}-${$app.stage}-subscription-reconciliation-truncated`,
+    alarmDescription: 'Subscription reconciliation exhausted its time budget on two consecutive daily periods',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 2,
+    datapointsToAlarm: 2,
+    metricName: 'ReconciliationTruncated',
+    namespace: 'Lumina5/Billing',
+    dimensions: { Stage: $app.stage },
+    period: 86400,
+    statistic: 'Maximum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: { Application: 'Billing', Severity: 'Medium' },
+  });
+
   /**
    * Alarm: Data Lake un-chunked rescue sweep, failing enqueues
    *

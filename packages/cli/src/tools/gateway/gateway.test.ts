@@ -19,7 +19,7 @@ vi.mock('../../llm/ToolRouter', async importOriginal => {
   };
 });
 
-import { wrapToolWithPermission } from './gateway.js';
+import { SESSION_ENDED_MESSAGE, wrapToolWithPermission } from './gateway.js';
 import { PermissionManager } from '../../utils/PermissionManager.js';
 import { ToolCatalog } from './toolCatalog.js';
 import { PermissionDeniedError } from '@bike4mind/common';
@@ -778,5 +778,47 @@ describe('wrapToolWithPermission: session approval scope', () => {
     expect(prompt).toHaveBeenCalledTimes(1);
     expect(prompt.mock.calls[0][4]).toEqual({ sessionScope: undefined });
     expect(pm.isSessionTrusted('git_commit')).toBe(true);
+  });
+});
+
+describe('wrapToolWithPermission: a call whose session has ended', () => {
+  function wrapInSession(t: ICompletionOptionTools, prompt: unknown, pm: PermissionManager, ended: { value: boolean }) {
+    return wrapToolWithPermission(t, {
+      permissionManager: pm,
+      showPermissionPrompt: prompt as never,
+      agentContext: { currentAgent: null },
+      configStore: {},
+      apiClient: {} as never,
+      isCancelled: () => ended.value,
+    });
+  }
+
+  it('neither runs nor records trust for a prompt answered after the session ended', async () => {
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
+    const ended = { value: false };
+    const prompt = vi.fn(async () => {
+      ended.value = true;
+      return { action: 'allow-session' };
+    });
+    const fn = vi.fn(async () => 'ran');
+
+    const result = await wrapInSession(tool('git_commit', fn), prompt, pm, ended).toolFn({ message: 'x' });
+
+    expect(result).toBe(SESSION_ENDED_MESSAGE);
+    expect(fn).not.toHaveBeenCalled();
+    expect(pm.isSessionTrusted('git_commit')).toBe(false);
+  });
+
+  it('does not run a call that needs no prompt once the session ended', async () => {
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
+    pm.trustToolForSession('git_commit');
+    const fn = vi.fn(async () => 'ran');
+    const ended = { value: false };
+    const wrapped = wrapInSession(tool('git_commit', fn), vi.fn(), pm, ended);
+
+    expect(await wrapped.toolFn({ message: 'x' })).toBe('ran');
+    ended.value = true;
+    expect(await wrapped.toolFn({ message: 'y' })).toBe(SESSION_ENDED_MESSAGE);
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 });

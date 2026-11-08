@@ -18,17 +18,30 @@ import type {
   ModelServerAccess,
   ModelServerAuthKind,
   ModelServerCredentialInput,
+  ModelServerFound,
   ModelServerKind,
+  ModelServerLaunchAction,
+  ModelServerLaunchSettings,
+  ModelServerLaunchView,
   ModelServerMutationResult,
   ModelServerProbeResult,
+  ModelServerProduct,
   ModelServerSpecs,
   ModelServerState,
   ModelServerTransportType,
   ModelServerView,
   QuantizedKvCacheType,
 } from '@shared/modelServers';
-import { QUANTIZED_KV_CACHE_TYPES, specsProblem } from '@shared/modelServers';
+import {
+  launchLockedMessage,
+  launchSettingsProblem,
+  QUANTIZED_KV_CACHE_TYPES,
+  sizesWithSavedLaunch,
+  specsProblem,
+  WINDOWS_ORPHAN_HINT,
+} from '@shared/modelServers';
 import { formatMemory, type MachineView } from '@shared/models';
+import { own } from '@shared/ownKeys';
 
 const KIND_LABEL: Record<ModelServerKind, string> = { ollama: 'Ollama', 'openai-compatible': 'OpenAI-compatible' };
 const ACCESS_LABEL: Record<ModelServerAccess, string> = { chat: 'Chat only', manage: 'Chat and manage' };
@@ -102,10 +115,13 @@ function CredentialFields({
   draft,
   onChange,
   testPrefix,
+  bearerOnly = false,
 }: {
   draft: CredentialDraft;
   onChange: (draft: CredentialDraft) => void;
   testPrefix: string;
+  /** Over SSH, ssh signs in with the user's keys; the only credential is the server's own API key. */
+  bearerOnly?: boolean;
 }) {
   return (
     <Stack spacing={1}>
@@ -121,12 +137,19 @@ function CredentialFields({
             None
           </Option>
           <Option value="bearer" data-testid={`${testPrefix}-auth-bearer`}>
-            Bearer token
+            {bearerOnly ? 'API key (bearer token)' : 'Bearer token'}
           </Option>
-          <Option value="header" data-testid={`${testPrefix}-auth-header`}>
-            Custom header
-          </Option>
+          {!bearerOnly && (
+            <Option value="header" data-testid={`${testPrefix}-auth-header`}>
+              Custom header
+            </Option>
+          )}
         </Select>
+        {bearerOnly && (
+          <FormHelperText>
+            SSH signs in with your keys. A token here is only the server&apos;s own API key.
+          </FormHelperText>
+        )}
       </FormControl>
       {draft.type === 'bearer' && (
         <FormControl size="sm">
@@ -178,7 +201,6 @@ type SpecsDraft = {
 
 const figure = (value: number | null | undefined) => (value === null || value === undefined ? '' : String(value));
 const parsed = (value: string) => (value.trim() === '' ? null : Number(value));
-const KV_DEFAULT = 'f16';
 
 function specsDraft(specs: ModelServerSpecs | null): SpecsDraft {
   return {
@@ -198,6 +220,11 @@ function draftSpecs(draft: SpecsDraft): ModelServerSpecs {
     unified: draft.unified,
     ...(draft.kv ? { kvCacheType: draft.kv } : {}),
   };
+}
+
+/** A remote or SSH Ollama: Desktop cannot set its cache type, so Hardware says which one it runs with. */
+function hardwareKvCache(server: ModelServerView): boolean {
+  return server.kind === 'ollama' && server.launch?.owner === 'remote';
 }
 
 export function specsSummary(specs: ModelServerSpecs): string {
@@ -315,18 +342,18 @@ function SpecsFields({
         in Curated picks
         {gpuBandwidth ? ", so enter the GPU's own figure, not the system RAM's." : '.'}
       </Typography>
-      {server.kind === 'ollama' && (
+      {hardwareKvCache(server) && (
         <FormControl size="sm" sx={{ maxWidth: 260 }}>
           <FormLabel>KV cache type</FormLabel>
           <Select
             size="sm"
-            value={draft.kv ?? KV_DEFAULT}
+            value={draft.kv ?? 'f16'}
             onChange={(_event, value) =>
               setDraft({ ...draft, kv: QUANTIZED_KV_CACHE_TYPES.find(type => type === value) ?? null })
             }
             slotProps={{ button: { 'data-testid': 'model-servers-specs-kv-select' } }}
           >
-            <Option value={KV_DEFAULT} data-testid="model-servers-specs-kv-option-f16">
+            <Option value="f16" data-testid="model-servers-specs-kv-option-f16">
               f16 (Ollama&apos;s default)
             </Option>
             {QUANTIZED_KV_CACHE_TYPES.map(type => (
@@ -350,7 +377,7 @@ function SpecsFields({
         <Button
           size="sm"
           disabled={busy}
-          onClick={() => save(draftSpecs(server.kind === 'ollama' ? draft : { ...draft, kv: null }))}
+          onClick={() => save(draftSpecs(draft))}
           data-testid="model-servers-specs-save-btn"
         >
           Save hardware
@@ -372,6 +399,302 @@ function SpecsFields({
   );
 }
 
+type LaunchDraft = {
+  kv: QuantizedKvCacheType | 'f16';
+  flash: 'auto' | 'on' | 'off';
+  binaryPath: string;
+  modelsDir: string;
+};
+
+/** Saved settings win; with none saved, what Desktop read from the server fills the form. */
+function prefilled(launch: ModelServerLaunchView): boolean {
+  return launch.prefill !== null && Object.keys(launch.settings).length === 0;
+}
+
+function launchDraft(launch: ModelServerLaunchView): LaunchDraft {
+  const settings = prefilled(launch) && launch.prefill ? launch.prefill.settings : launch.settings;
+  return {
+    kv: settings.kvCacheType ?? 'f16',
+    flash: settings.flashAttention ?? 'auto',
+    binaryPath: settings.binaryPath ?? '',
+    modelsDir: settings.modelsDir ?? '',
+  };
+}
+
+function draftLaunch(draft: LaunchDraft, runtime: ModelServerLaunchView['runtime']): ModelServerLaunchSettings {
+  const path = (value: string) => value.trim() || undefined;
+  const binaryPath = runtime === 'llama-server' ? path(draft.binaryPath) : undefined;
+  const modelsDir = runtime === 'llama-server' ? path(draft.modelsDir) : undefined;
+  return {
+    ...(runtime === 'ollama' && draft.kv !== 'f16' ? { kvCacheType: draft.kv } : {}),
+    ...(draft.flash !== 'auto' ? { flashAttention: draft.flash } : {}),
+    ...(binaryPath ? { binaryPath } : {}),
+    ...(modelsDir ? { modelsDir } : {}),
+  };
+}
+
+const OWNER_LOOK: Record<
+  Exclude<ModelServerLaunchView['owner'], 'remote'>,
+  { color: 'success' | 'neutral'; label: string }
+> = {
+  desktop: { color: 'success', label: 'Started by Desktop' },
+  other: { color: 'neutral', label: 'Not started by Desktop' },
+  none: { color: 'neutral', label: 'Not running' },
+};
+
+/** What an unmanaged server runs with, as far as Desktop can read it, and what fit sizes with. */
+function observedLine(launch: ModelServerLaunchView): string {
+  const flash = launch.sizingFlashAttention === 'auto' ? '' : ` with flash attention ${launch.sizingFlashAttention}`;
+  const sizing = `Fit badges assume a${launch.sizingKvCacheType === 'f16' ? 'n' : ''} ${launch.sizingKvCacheType} KV cache${flash}.`;
+  if (launch.runtime !== 'ollama') return sizing;
+  if (!launch.observed) return `Desktop can't read this server's settings. ${sizing}`;
+  const set = Object.entries(launch.observed).map(([key, value]) => `${key}=${value}`);
+  return `${set.length > 0 ? `It runs with ${set.join(', ')}.` : "It runs with Ollama's defaults."} ${sizing}`;
+}
+
+/** Settings a server reads when it starts, and Start, Stop and Restart for one Desktop runs on this computer. */
+function LaunchSection({
+  server,
+  launch,
+  busy,
+  onSave,
+  onAction,
+}: {
+  server: ModelServerView;
+  launch: ModelServerLaunchView;
+  busy: boolean;
+  onSave: (settings: ModelServerLaunchSettings) => Promise<boolean>;
+  onAction: (action: ModelServerLaunchAction) => Promise<boolean>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<LaunchDraft>(() => launchDraft(launch));
+  const [problem, setProblem] = useState<string | null>(null);
+  const sizingOnly = sizesWithSavedLaunch(launch);
+  const locked = sizingOnly
+    ? `This ${launch.noun} was not started by Bike4Mind Desktop. Fit badges use the KV cache type and flash attention saved here, and Desktop applies all of these settings when it starts the server.${
+        launch.windowsHost ? ` ${WINDOWS_ORPHAN_HINT}` : ''
+      }`
+    : launchLockedMessage(launch);
+  const disabled = busy || !!launch.busy || (locked !== null && !sizingOnly);
+  const ollama = launch.runtime === 'ollama';
+
+  useEffect(() => {
+    if (!open) setDraft(launchDraft(launch));
+  }, [open, launch]);
+
+  if (launch.owner === 'remote') {
+    if (server.kind !== 'ollama') return null;
+    return (
+      <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-launch-locked">
+        {locked} Fit badges assume a{launch.sizingKvCacheType === 'f16' ? 'n' : ''} {launch.sizingKvCacheType} KV cache,
+        set under Hardware.
+      </Typography>
+    );
+  }
+
+  const look = OWNER_LOOK[launch.owner];
+  // A listener that holds the port without answering (see ModelServerRegistry.ownerOf).
+  const label =
+    launch.owner === 'other' && (server.health.state === 'unreachable' || server.health.state === 'unknown')
+      ? 'In use by another program'
+      : look.label;
+  const checked = (): ModelServerLaunchSettings | null => {
+    const settings = draftLaunch(draft, launch.runtime);
+    const issue = launchSettingsProblem(settings, launch.runtime);
+    setProblem(issue);
+    return issue ? null : settings;
+  };
+  const save = () => {
+    const settings = checked();
+    if (settings) void onSave(settings).then(ok => ok && setOpen(false));
+  };
+  // With nothing saved, Start runs what the form shows, so the prefill is saved first.
+  const start = async () => {
+    if (prefilled(launch)) {
+      const settings = checked();
+      if (!settings || !(await onSave(settings))) return;
+      setOpen(false);
+    }
+    await onAction('start');
+  };
+  const path = (key: 'binaryPath' | 'modelsDir', label: string, testId: string, hint: string) => (
+    <FormControl size="sm" sx={{ flex: 1, minWidth: 220 }}>
+      <FormLabel>{label}</FormLabel>
+      <Input
+        size="sm"
+        value={draft[key]}
+        placeholder={hint}
+        disabled={disabled}
+        onChange={event => setDraft({ ...draft, [key]: event.target.value })}
+        slotProps={{ input: { 'data-testid': testId } }}
+      />
+    </FormControl>
+  );
+
+  return (
+    <Stack spacing={1} data-testid="model-servers-launch" data-owner={launch.owner}>
+      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+        <Chip size="sm" variant="soft" color={look.color} data-testid="model-servers-launch-owner">
+          {launch.busy === 'starting' ? 'Starting' : launch.busy === 'stopping' ? 'Stopping' : label}
+        </Chip>
+        {launch.canStart && (
+          <Button
+            size="sm"
+            variant="outlined"
+            disabled={busy || !!launch.busy}
+            onClick={() => void start()}
+            data-testid="model-servers-launch-start-btn"
+          >
+            Start
+          </Button>
+        )}
+        {launch.owner === 'desktop' && !launch.busy && (
+          <>
+            <Button
+              size="sm"
+              variant={launch.pendingRestart ? 'solid' : 'outlined'}
+              disabled={busy}
+              onClick={() => void onAction('restart')}
+              data-testid="model-servers-launch-restart-btn"
+            >
+              {launch.pendingRestart ? 'Restart to apply' : 'Restart'}
+            </Button>
+            <Button
+              size="sm"
+              variant="plain"
+              color="neutral"
+              disabled={busy}
+              onClick={() => void onAction('stop')}
+              data-testid="model-servers-launch-stop-btn"
+            >
+              Stop
+            </Button>
+          </>
+        )}
+        <Button
+          size="sm"
+          variant="plain"
+          color="neutral"
+          onClick={() => setOpen(value => !value)}
+          data-testid="model-servers-launch-settings-btn"
+        >
+          Launch settings
+        </Button>
+      </Stack>
+      {locked && (
+        <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-launch-locked">
+          {locked}
+        </Typography>
+      )}
+      {launch.owner === 'other' && (
+        <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-launch-observed">
+          {observedLine(launch)}
+        </Typography>
+      )}
+      {launch.pendingRestart && (
+        <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-launch-pending">
+          The saved launch settings apply on the next start.
+        </Typography>
+      )}
+      {launch.problem && (
+        <Alert size="sm" color="warning" variant="soft" data-testid="model-servers-launch-problem">
+          {launch.problem}
+        </Alert>
+      )}
+      {launch.programMissing && (
+        <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-launch-program-missing">
+          {launch.programMissing}
+        </Typography>
+      )}
+      {open && (
+        <Stack spacing={1} data-testid="model-servers-launch-form">
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+            {ollama && (
+              <FormControl size="sm" sx={{ minWidth: 180 }}>
+                <FormLabel>KV cache type</FormLabel>
+                <Select
+                  size="sm"
+                  value={draft.kv}
+                  disabled={disabled}
+                  onChange={(_event, value) =>
+                    setDraft({ ...draft, kv: QUANTIZED_KV_CACHE_TYPES.find(type => type === value) ?? 'f16' })
+                  }
+                  slotProps={{ button: { 'data-testid': 'model-servers-launch-kv-select' } }}
+                >
+                  <Option value="f16" data-testid="model-servers-launch-kv-option-f16">
+                    f16 (default)
+                  </Option>
+                  {QUANTIZED_KV_CACHE_TYPES.map(type => (
+                    <Option key={type} value={type} data-testid={`model-servers-launch-kv-option-${type}`}>
+                      {type}
+                    </Option>
+                  ))}
+                </Select>
+              </FormControl>
+            )}
+            <FormControl size="sm" sx={{ minWidth: 160 }}>
+              <FormLabel>Flash attention</FormLabel>
+              <Select
+                size="sm"
+                value={draft.flash}
+                disabled={disabled}
+                onChange={(_event, value) => value && setDraft({ ...draft, flash: value })}
+                slotProps={{ button: { 'data-testid': 'model-servers-launch-flash-select' } }}
+              >
+                <Option value="auto">Auto</Option>
+                <Option value="on" data-testid="model-servers-launch-flash-option-on">
+                  On
+                </Option>
+                <Option value="off" data-testid="model-servers-launch-flash-option-off">
+                  Off
+                </Option>
+              </Select>
+            </FormControl>
+          </Stack>
+          {!ollama && (
+            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              {path('modelsDir', 'Models folder', 'model-servers-launch-models-dir-input', '/path/to/gguf-models')}
+              {path('binaryPath', 'llama-server program', 'model-servers-launch-binary-input', 'llama-server on PATH')}
+            </Stack>
+          )}
+          <Typography level="body-xs" textColor="text.tertiary">
+            {ollama
+              ? 'Ollama reads these when it starts, for every model it loads. A q8_0 or q4_0 cache uses less memory and needs flash attention.'
+              : 'llama-server serves every GGUF file in the models folder and loads each one when a chat first asks for it.'}
+          </Typography>
+          <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-launch-spill-hint">
+            On an NVIDIA or AMD GPU that shares system memory, a model that outgrows the GPU&apos;s share uses more
+            system memory instead of failing to load. To turn that off, start Desktop with B4M_DISABLE_GPU_SPILL=1.
+          </Typography>
+          {prefilled(launch) && launch.prefill && (
+            <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-launch-prefilled">
+              {launch.owner === 'other'
+                ? `Filled in from what this server runs with: ${launch.prefill.from}.`
+                : `Filled in from the Ollama that ran here: ${launch.prefill.from}. ${
+                    launch.owner === 'desktop' ? 'Save, then restart to use these.' : 'Start uses these.'
+                  }`}
+            </Typography>
+          )}
+          {problem && (
+            <Alert size="sm" color="danger" variant="soft" data-testid="model-servers-launch-error">
+              {problem}
+            </Alert>
+          )}
+          <Button
+            size="sm"
+            disabled={disabled}
+            sx={{ alignSelf: 'flex-start' }}
+            onClick={save}
+            data-testid="model-servers-launch-save-btn"
+          >
+            Save launch settings
+          </Button>
+        </Stack>
+      )}
+    </Stack>
+  );
+}
+
 function ServerRow({
   server,
   onResult,
@@ -387,7 +710,9 @@ function ServerRow({
   const [confirmRemove, setConfirmRemove] = useState(false);
   const look = STATE_LOOK[server.health.state];
   const ssh = server.transport === 'ssh';
-  const askCredentials = !server.local && !ssh && (server.health.state === 'credentials' || server.credentialsMissing);
+  // Ollama over SSH takes no credential at all; an OpenAI-compatible server there may take its own API key.
+  const takesCredentials = !server.local && (!ssh || server.kind === 'openai-compatible');
+  const askCredentials = takesCredentials && (server.health.state === 'credentials' || server.credentialsMissing);
   const removesCredential = draft.type === 'none' && server.auth.type !== 'none';
   const canSaveCredential = !secretMissing(draft) && (draft.type !== 'none' || removesCredential);
 
@@ -449,6 +774,7 @@ function ServerRow({
         </Stack>
         <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-address">
           {server.address}
+          {ssh && server.port !== undefined ? ` - port ${server.port} on that machine` : ''}
           {server.auth.type === 'bearer' ? ' - bearer token' : ''}
           {server.auth.type === 'header' ? ` - ${server.auth.headerName} header` : ''}
         </Typography>
@@ -488,22 +814,20 @@ function ServerRow({
                 <Option value="manage">{ACCESS_LABEL.manage}</Option>
               </Select>
             </FormControl>
-            {!ssh && (
-              <FormControl size="sm">
-                <FormLabel>Kind</FormLabel>
-                <Select
-                  size="sm"
-                  value={server.kind}
-                  disabled={busy}
-                  onChange={(_event, kind) => kind && kind !== server.kind && void update({ kind })}
-                  slotProps={{ button: { 'data-testid': 'model-servers-kind-select' } }}
-                >
-                  <Option value="ollama">{KIND_LABEL.ollama}</Option>
-                  <Option value="openai-compatible">{KIND_LABEL['openai-compatible']}</Option>
-                </Select>
-              </FormControl>
-            )}
-            {!ssh && (
+            <FormControl size="sm">
+              <FormLabel>Kind</FormLabel>
+              <Select
+                size="sm"
+                value={server.kind}
+                disabled={busy}
+                onChange={(_event, kind) => kind && kind !== server.kind && void update({ kind })}
+                slotProps={{ button: { 'data-testid': 'model-servers-kind-select' } }}
+              >
+                <Option value="ollama">{KIND_LABEL.ollama}</Option>
+                <Option value="openai-compatible">{KIND_LABEL['openai-compatible']}</Option>
+              </Select>
+            </FormControl>
+            {takesCredentials && (
               <Button
                 size="sm"
                 variant="outlined"
@@ -520,9 +844,9 @@ function ServerRow({
             )}
           </Stack>
         )}
-        {(editing || askCredentials) && !server.local && !ssh && (
+        {(editing || askCredentials) && takesCredentials && (
           <Stack spacing={1} data-testid="model-servers-credentials-form">
-            <CredentialFields draft={draft} onChange={setDraft} testPrefix="model-servers-edit" />
+            <CredentialFields draft={draft} onChange={setDraft} testPrefix="model-servers-edit" bearerOnly={ssh} />
             <Button
               size="sm"
               color={removesCredential ? 'danger' : 'primary'}
@@ -561,6 +885,15 @@ function ServerRow({
             busy={busy}
             onSave={specs => update({ specs })}
             onDone={() => setEditingSpecs(false)}
+          />
+        )}
+        {server.launch && (
+          <LaunchSection
+            server={server}
+            launch={server.launch}
+            busy={busy}
+            onSave={launch => update({ launch })}
+            onAction={action => run(() => window.b4m.modelServers.launch(server.id, action))}
           />
         )}
         {error && (
@@ -624,10 +957,111 @@ function ServerRow({
   );
 }
 
+const PRODUCT_LABEL: Record<ModelServerProduct, string> = {
+  lmstudio: 'LM Studio',
+  'llama-server': 'llama-server',
+  vllm: 'vLLM',
+  'llama-swap': 'llama-swap',
+};
+
+/** A server an SSH test found, as the user is choosing to save it. */
+type FoundDraft = ModelServerFound & { checked: boolean; name: string; token: string; error: string | null };
+
+function foundLine(server: ModelServerFound): string {
+  const what = (server.product && own(PRODUCT_LABEL, server.product)) ?? KIND_LABEL[server.kind];
+  const parts = [
+    `${what}${server.version ? ` ${server.version}` : ''} on port ${server.port}`,
+    server.models !== null ? `${server.models} ${server.models === 1 ? 'model' : 'models'}` : null,
+    server.needsCredentials ? 'asks for an API key' : null,
+  ].filter(Boolean);
+  return parts.join(', ');
+}
+
+function foundReady(server: FoundDraft): boolean {
+  return !!server.name.trim() && (!server.needsCredentials || !!server.token.trim());
+}
+
+function FoundServers({
+  servers,
+  destination,
+  busy,
+  onChange,
+}: {
+  servers: FoundDraft[];
+  destination: string;
+  busy: boolean;
+  onChange: (port: number, patch: Partial<FoundDraft>) => void;
+}) {
+  return (
+    <Stack spacing={1} data-testid="model-servers-add-found">
+      <Typography level="body-sm">
+        {servers.length === 1 ? 'Found one server' : `Found ${servers.length} servers`} on {destination}. Each one you
+        check is saved as its own server.
+      </Typography>
+      {servers.map(server => (
+        <Sheet
+          key={server.port}
+          variant="outlined"
+          sx={{ p: 1, borderRadius: 'sm' }}
+          data-testid="model-servers-add-found-row"
+          data-port={server.port}
+        >
+          <Stack spacing={1}>
+            <Checkbox
+              size="sm"
+              label={foundLine(server)}
+              checked={server.checked}
+              disabled={busy}
+              onChange={event => onChange(server.port, { checked: event.target.checked })}
+              slotProps={{ input: { 'data-testid': 'model-servers-add-found-checkbox' } }}
+            />
+            {server.checked && (
+              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                <FormControl size="sm" sx={{ flex: 2, minWidth: 160 }}>
+                  <FormLabel>Name</FormLabel>
+                  <Input
+                    size="sm"
+                    value={server.name}
+                    disabled={busy}
+                    onChange={event => onChange(server.port, { name: event.target.value })}
+                    slotProps={{ input: { 'data-testid': 'model-servers-add-found-name-input' } }}
+                  />
+                </FormControl>
+                {server.kind === 'openai-compatible' && (
+                  <FormControl size="sm" sx={{ flex: 2, minWidth: 160 }}>
+                    <FormLabel>{server.needsCredentials ? 'API key' : 'API key (optional)'}</FormLabel>
+                    <Input
+                      size="sm"
+                      type="password"
+                      value={server.token}
+                      disabled={busy}
+                      onChange={event => onChange(server.port, { token: event.target.value })}
+                      slotProps={{
+                        input: { 'data-testid': 'model-servers-add-found-token-input', autoComplete: 'off' },
+                      }}
+                    />
+                  </FormControl>
+                )}
+              </Stack>
+            )}
+            {server.error && (
+              <Typography level="body-xs" textColor="danger.plainColor" data-testid="model-servers-add-found-error">
+                {server.error}
+              </Typography>
+            )}
+          </Stack>
+        </Sheet>
+      ))}
+    </Stack>
+  );
+}
+
 function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult) => void }) {
   const [via, setVia] = useState<ModelServerTransportType>('http');
   const ssh = via === 'ssh';
   const [address, setAddress] = useState('');
+  const [port, setPort] = useState('');
+  const [found, setFound] = useState<FoundDraft[]>([]);
   const [credential, setCredential] = useState<CredentialDraft>(EMPTY_CREDENTIAL);
   const [probe, setProbe] = useState<ModelServerProbeResult | null>(null);
   const [name, setName] = useState('');
@@ -642,6 +1076,8 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
 
   const reset = useCallback(() => {
     setAddress('');
+    setPort('');
+    setFound([]);
     setCredential(EMPTY_CREDENTIAL);
     setProbe(null);
     setName('');
@@ -655,6 +1091,7 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
   const untest = () => {
     attempt.current += 1;
     setProbe(null);
+    setFound([]);
     setAcceptOpen(false);
   };
 
@@ -663,13 +1100,24 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
     setError(null);
     try {
       const tested = attempt.current;
+      // An SSH test sends no token: each server found that wants one takes it in its own row.
       const result = await window.b4m.modelServers.probe({
         address,
         credential: ssh ? { type: 'none' } : toCredential(credential),
         transport: via,
+        ...(ssh && port.trim() ? { port: port.trim() } : {}),
       });
       if (tested !== attempt.current) return;
       setProbe(result);
+      setFound(
+        (ssh ? (result.found ?? []) : []).map(server => ({
+          ...server,
+          checked: true,
+          name: server.suggestedName,
+          token: '',
+          error: null,
+        }))
+      );
       if (result.kind) setKind(result.kind);
       const suggested = result.suggestedName;
       if (suggested) {
@@ -681,6 +1129,9 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
       setBusy(false);
     }
   };
+
+  // Nothing answers at an address on this computer, so Desktop can start a server there once it is saved.
+  const launching = !!probe && !probe.ok && probe.launchable === true;
 
   const save = async () => {
     setBusy(true);
@@ -694,6 +1145,7 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
         kind,
         access,
         acceptOpen,
+        ...(launching ? { launch: true } : {}),
       });
       if (result.ok) {
         onResult(result);
@@ -704,7 +1156,41 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
     }
   };
 
-  const ready = !!probe?.ok && !!name.trim() && (!probe.openToAnyone || acceptOpen);
+  /** Saves each checked server in turn; one that fails keeps its row and says why, and the rest still save. */
+  const saveFound = async () => {
+    setBusy(true);
+    setError(null);
+    const tested = attempt.current;
+    try {
+      let left: FoundDraft[] = found.map(row => ({ ...row, error: null }));
+      for (const server of left.filter(row => row.checked)) {
+        const token = server.kind === 'openai-compatible' ? server.token.trim() : '';
+        const result = await window.b4m.modelServers.add({
+          address,
+          transport: 'ssh',
+          port: server.port,
+          credential: token ? { type: 'bearer', token } : { type: 'none' },
+          name: server.name,
+          kind: server.kind,
+          access,
+        });
+        if (result.ok) onResult(result);
+        if (tested !== attempt.current) return;
+        left = result.ok
+          ? left.filter(row => row.port !== server.port)
+          : left.map(row => (row.port === server.port ? { ...row, error: result.error } : row));
+        setFound(left);
+      }
+      if (left.every(row => !row.error)) reset();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const chosen = found.filter(server => server.checked);
+  const ready = ssh
+    ? chosen.length > 0 && chosen.every(foundReady)
+    : (!!probe?.ok || launching) && !!name.trim() && (!probe?.openToAnyone || acceptOpen);
 
   return (
     <Sheet variant="soft" sx={{ p: 1.25, borderRadius: 'sm' }} data-testid="model-servers-add">
@@ -747,10 +1233,30 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
           />
           <FormHelperText>
             {ssh
-              ? "Desktop uses this computer's ssh client and keys to reach Ollama at 127.0.0.1:11434 on that machine. It cannot ask for a password or passphrase: use a key, loaded into ssh-agent if it has a passphrase."
+              ? "Desktop uses this computer's ssh client and keys to reach model servers on that machine's loopback. It cannot ask for a password or passphrase: use a key, loaded into ssh-agent if it has a passphrase."
               : 'Ollama or an OpenAI-compatible server such as llama-server, LM Studio or vLLM.'}
           </FormHelperText>
         </FormControl>
+        {ssh && (
+          <FormControl size="sm">
+            <FormLabel>Port on that machine (optional)</FormLabel>
+            <Input
+              size="sm"
+              value={port}
+              placeholder="Any of the usual ports"
+              inputMode="numeric"
+              onChange={event => {
+                setPort(event.target.value);
+                untest();
+              }}
+              slotProps={{ input: { 'data-testid': 'model-servers-add-port-input' } }}
+            />
+            <FormHelperText>
+              Leave empty to look for Ollama (11434), LM Studio (1234), llama-server or llama-swap (8080) and vLLM
+              (8000). Enter a port for a server that listens anywhere else.
+            </FormHelperText>
+          </FormControl>
+        )}
         {!ssh && (
           <CredentialFields
             draft={credential}
@@ -772,7 +1278,7 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
         >
           Test
         </Button>
-        {probe && !probe.ok && (
+        {probe && !probe.ok && !launching && found.length === 0 && (
           <Alert
             size="sm"
             color={probe.needsCredentials ? 'warning' : 'danger'}
@@ -780,17 +1286,56 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
             data-testid="model-servers-add-result"
           >
             {probe.error}
-            {probe.needsCredentials ? ' Choose a bearer token or a custom header above, then test again.' : ''}
+            {probe.needsCredentials && !ssh ? ' Choose a bearer token or a custom header above, then test again.' : ''}
           </Alert>
         )}
-        {probe?.ok && (
+        {ssh && found.length > 0 && (
           <Stack spacing={1.25}>
-            <Alert size="sm" color="success" variant="soft" data-testid="model-servers-add-result">
-              Found {probe.kind ? KIND_LABEL[probe.kind] : 'a server'}
-              {probe.version ? ` ${probe.version}` : ''}
-              {probe.models !== null ? `, ${probe.models} ${probe.models === 1 ? 'model' : 'models'}` : ''}
-              {probe.latencyMs !== null ? `, ${probe.latencyMs} ms` : ''}.
-            </Alert>
+            <FoundServers
+              servers={found}
+              destination={address.trim()}
+              busy={busy}
+              onChange={(changed, patch) =>
+                setFound(rows => rows.map(row => (row.port === changed ? { ...row, ...patch } : row)))
+              }
+            />
+            <FormControl size="sm" sx={{ maxWidth: 240 }}>
+              <FormLabel>Access</FormLabel>
+              <Select
+                size="sm"
+                value={access}
+                onChange={(_event, next) => next && setAccess(next)}
+                slotProps={{ button: { 'data-testid': 'model-servers-add-access-select' } }}
+              >
+                <Option value="chat">{ACCESS_LABEL.chat}</Option>
+                <Option value="manage">{ACCESS_LABEL.manage}</Option>
+              </Select>
+            </FormControl>
+            <Button
+              size="sm"
+              disabled={busy || !ready}
+              sx={{ alignSelf: 'flex-start' }}
+              onClick={() => void saveFound()}
+              data-testid="model-servers-add-save-btn"
+            >
+              {chosen.length > 1 ? `Save ${chosen.length} servers` : 'Save server'}
+            </Button>
+          </Stack>
+        )}
+        {!ssh && probe && (probe.ok || launching) && (
+          <Stack spacing={1.25}>
+            {launching ? (
+              <Alert size="sm" color="neutral" variant="soft" data-testid="model-servers-add-launchable">
+                Nothing answers at this address yet. Save it, then start Ollama or llama-server there from Desktop.
+              </Alert>
+            ) : (
+              <Alert size="sm" color="success" variant="soft" data-testid="model-servers-add-result">
+                Found {probe.kind ? KIND_LABEL[probe.kind] : 'a server'}
+                {probe.version ? ` ${probe.version}` : ''}
+                {probe.models !== null ? `, ${probe.models} ${probe.models === 1 ? 'model' : 'models'}` : ''}
+                {probe.latencyMs !== null ? `, ${probe.latencyMs} ms` : ''}.
+              </Alert>
+            )}
             {probe.unencrypted && (
               <Alert size="sm" color="warning" variant="soft" data-testid="model-servers-add-unencrypted">
                 Unencrypted: plain http on a private network. Anyone on that network can read the conversation.
@@ -824,20 +1369,18 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
                   slotProps={{ input: { 'data-testid': 'model-servers-add-name-input' } }}
                 />
               </FormControl>
-              {!ssh && (
-                <FormControl size="sm" sx={{ flex: 1, minWidth: 160 }}>
-                  <FormLabel>Kind</FormLabel>
-                  <Select
-                    size="sm"
-                    value={kind}
-                    onChange={(_event, next) => next && setKind(next)}
-                    slotProps={{ button: { 'data-testid': 'model-servers-add-kind-select' } }}
-                  >
-                    <Option value="ollama">{KIND_LABEL.ollama}</Option>
-                    <Option value="openai-compatible">{KIND_LABEL['openai-compatible']}</Option>
-                  </Select>
-                </FormControl>
-              )}
+              <FormControl size="sm" sx={{ flex: 1, minWidth: 160 }}>
+                <FormLabel>Kind</FormLabel>
+                <Select
+                  size="sm"
+                  value={kind}
+                  onChange={(_event, next) => next && setKind(next)}
+                  slotProps={{ button: { 'data-testid': 'model-servers-add-kind-select' } }}
+                >
+                  <Option value="ollama">{KIND_LABEL.ollama}</Option>
+                  <Option value="openai-compatible">{KIND_LABEL['openai-compatible']}</Option>
+                </Select>
+              </FormControl>
               <FormControl size="sm" sx={{ flex: 1, minWidth: 160 }}>
                 <FormLabel>Access</FormLabel>
                 <Select

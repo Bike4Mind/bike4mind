@@ -1,11 +1,18 @@
 import {
+  bindEmbeddingModel,
+  buildEmbeddingRegistry,
+  embeddingBackendForModel,
+  resolveEmbeddingWithKeylessFallback,
+} from '@bike4mind/utils/embeddingProviders';
+import {
   FabFileSourceType,
+  ModelBackend,
   isTerminalCreditRefusal,
   SupportedEmbeddingModelSchema,
   usdToCredits,
   usdToCreditsStochastic,
 } from '@bike4mind/common';
-import { getVector } from '@server/managers/fabFileManager';
+import { getVector, getVectors } from '@bike4mind/server-utils/managers/fabFileManager';
 import {
   adminSettingsRepository,
   apiKeyRepository,
@@ -21,14 +28,11 @@ import {
   User,
   withTransaction,
 } from '@bike4mind/database';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { AI_ACCESS_REVOKED_MESSAGE } from '@bike4mind/services/userService/accountState';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { z } from 'zod';
 import {
   ChunkSchema,
-  EmbeddingFactory,
-  resolveEmbeddingWithKeylessFallback,
   EmbeddingAuthError,
   isEmbeddingAuthError,
   EmbeddingSpaceConflictError,
@@ -46,13 +50,14 @@ import {
   recordOperationalUsage,
 } from '@bike4mind/services';
 import { reserveRequestCredits, type CreditReservation } from '@server/billing/reserveRequestCredits';
-import { activePlanResolver } from '@server/entitlements/activeSubscriptions';
+import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
+import { activePlanResolver } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 import { getEmbeddingModelCost, provenancePayloadShape } from '@bike4mind/common';
 import {
   finalizeBatchIfComplete,
   completedBatchStatus,
   deferFailureIfRetryable,
-} from '@server/dataLakes/dataLakeBatchProgress';
+} from '@bike4mind/server-utils/dataLakes/dataLakeBatchProgress';
 import { notifySlackIndexingComplete } from '@workers/queueHandlers/notifySlackIndexingComplete';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
 import {
@@ -63,7 +68,7 @@ import {
 import { isConvergenceHalted } from '@bike4mind/server-utils/dataLakes/convergenceKillSwitch';
 import { makeDataLakeSpendNotifier } from '@workers/utils/dataLakeSpendNotifier';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { getProviderFromModel } from '@bike4mind/fab-pipeline';
+
 import { Resource } from 'sst';
 
 const VectorizePayload = z.object({
@@ -226,7 +231,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // stage: a substitute would land this file where searches over the rest cannot reach it.
       if (await fabFileRepository.hasVectorizedFileInEmbeddingSpace(requestedEmbeddingModel)) {
         throw new EmbeddingAuthError(
-          getProviderFromModel(requestedEmbeddingModel),
+          embeddingBackendForModel(requestedEmbeddingModel),
           `No credential for ${requestedEmbeddingModel}, which files on this deployment are already ` +
             `embedded with; refusing to embed with the keyless ${embeddingModel}, which searches could not ` +
             `match against them. Restore the credential and re-index the file.`
@@ -263,16 +268,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       throw new EmbeddingSpaceConflictError(embeddingModel, existingEmbeddingSpaces);
     }
 
-    const requiredProvider = getProviderFromModel(embeddingModel);
+    const requiredProvider = embeddingBackendForModel(embeddingModel);
 
-    const embeddingService = new EmbeddingFactory(embeddingConfig);
+    const embeddingService = buildEmbeddingRegistry(embeddingConfig);
 
-    const embeddingProvider = embeddingService.createEmbeddingService(embeddingModel);
+    const embeddingProvider = bindEmbeddingModel(embeddingService, embeddingModel);
 
     // Pre-flight: filter out chunks that exceed the model's context window.
     // These cannot be embedded and would cause the entire batch to fail.
     // Chunks stored before chunking fixes may have this issue.
-    const { contextWindow } = embeddingProvider.getModelInfo();
+    const contextWindow = embeddingProvider.maxInputTokens;
     const embeddableChunks = validChunks.filter(chunk => {
       if (chunk.tokenCount > contextWindow) {
         logger.warn(
@@ -392,28 +397,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
       let newVectors: number[][];
       try {
-        if (missTexts.length === 1) {
-          // Single chunk: use single embedding method
-          const vector = await getVector(embeddingProvider, missTexts[0]);
-          newVectors = [vector];
-        } else {
-          // Multiple chunks: use batch method
-          if (
-            'generateEmbeddingBatch' in embeddingProvider &&
-            typeof embeddingProvider.generateEmbeddingBatch === 'function'
-          ) {
-            newVectors = await (
-              embeddingProvider.generateEmbeddingBatch as (
-                texts: string[],
-                tokenCounts?: number[]
-              ) => Promise<number[][]>
-            )(missTexts, missTokenCounts);
-          } else {
-            // Fallback for providers without batch support
-            logger.log('Provider does not support batch embedding, falling back to individual calls');
-            newVectors = await Promise.all(missTexts.map(text => getVector(embeddingProvider, text)));
-          }
-        }
+        if (missTexts.length === 1) newVectors = [await getVector(embeddingProvider, missTexts[0])];
+        else if (embeddingBackendForModel(embeddingModel) === ModelBackend.OpenAI)
+          newVectors = (await embeddingProvider.embed(missTexts)).vectors;
+        else newVectors = await getVectors(embeddingProvider, missTexts);
       } catch (providerErr) {
         await creditReservation?.refund();
         // The provider call failed, so the reserved money was never spent: return it to the
@@ -799,13 +786,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // A non-retryable spend-gate denial is deterministic (a budget does not regrow, the
     // switch does not flip itself): retrying only re-reserves spend from the wider meters
     // and burns delivery attempts, so it skips the retry deferral and accounts immediately.
-    // Insufficient credits, the free-tier daily cap and an administrator's AI-access revocation are
-    // likewise terminal.
-    // Match the moderation refusal specifically; unrelated authorization failures still retry.
+    // Insufficient credits, the free-tier daily cap and an AI-access refusal (a banned, suspended,
+    // dispute-held, deletion-pending, moderated or review-held account) are likewise terminal: files an
+    // account queued before an admin blocked it are still draining. Unrelated 403s still retry.
     const isTerminalVectorizeDenial =
       (err instanceof dataLakeService.EmbeddingSpendDeniedError && !err.retryable) ||
       isTerminalCreditRefusal(err) ||
-      (err instanceof ForbiddenError && err.message === AI_ACCESS_REVOKED_MESSAGE);
+      isAiAccessRefusal(err);
 
     // Only account a failure into the batch/file state on the LAST SQS delivery attempt -
     // see deferFailureIfRetryable's doc comment for why an earlier attempt must leave

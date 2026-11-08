@@ -52,7 +52,8 @@ import {
   type CompletionQuotaGrant,
 } from '@server/utils/untrustedCompletionQuota';
 import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';
-import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
+import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
 
 /**
  * CLI completions with WebSocket response streaming (`/api/ai/v1/ws-completions`), served by
@@ -289,6 +290,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
               usageEvents: usageEventRepository,
               organizations: organizationRepository,
               cache: cacheRepository,
+              recordLimitEvent: recordUserLimitEvent,
             },
             apiKeyInfo: apiKeyInfoForCompletion,
             scopeActor: actorScopeForKey(apiKeyInfo),

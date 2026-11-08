@@ -1,7 +1,7 @@
 {
   "name": "@bike4mind/services",
   "description": "This packages contains all the core business logic",
-  "version": "22.0.0",
+  "version": "24.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -438,6 +438,16 @@
       "require": {
         "types": "./dist/utils/crypto.d.cts",
         "default": "./dist/utils/crypto.cjs"
+      }
+    },
+    "./llm/embeddingProviders": {
+      "import": {
+        "types": "./dist/llm/embeddingProviders.d.mts",
+        "default": "./dist/llm/embeddingProviders.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/embeddingProviders.d.cts",
+        "default": "./dist/llm/embeddingProviders.cjs"
       }
     }
   },

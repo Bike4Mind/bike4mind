@@ -1,3 +1,4 @@
+import type { ChatSessionSummary } from '@shared/chat';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -47,10 +48,15 @@ const window = vi.hoisted(() => ({
   webContents: { send: vi.fn() },
 }));
 
+const windows = vi.hoisted(() => ({ open: [] as unknown[] }));
+
 vi.mock('electron', () => electron);
-vi.mock('../windows', () => ({ appWindows: () => [window] }));
+vi.mock('../windows', () => ({ appWindows: () => windows.open }));
 
 const { registerAttention } = await import('./index');
+
+const openWindow = vi.fn();
+let attention: ReturnType<typeof registerAttention>;
 
 const notice = { sessionId: 'agent-1', rootId: 'root-1', title: 'Brannoc the Warden needs you', body: 'bash rm -rf' };
 const call = (channel: string, value?: unknown) => electron.handlers.get(channel)?.({}, value);
@@ -66,7 +72,8 @@ beforeEach(() => {
   });
   window.isFocused.mockReturnValue(false);
   setPlatform('darwin');
-  registerAttention();
+  windows.open = [window];
+  attention = registerAttention({ openWindow });
 });
 
 afterEach(() => setPlatform(originalPlatform));
@@ -114,6 +121,20 @@ describe('attention notices', () => {
       sessionId: 'agent-1',
       rootId: 'root-1',
     });
+  });
+
+  it('reopens a window when clicked with none open, and hands it the session once', () => {
+    windows.open = [];
+    call(IPC_CHANNELS.attentionNotify, notice);
+    electron.shown[0].emit('click');
+    expect(openWindow).toHaveBeenCalledTimes(1);
+    expect(window.webContents.send).not.toHaveBeenCalled();
+    expect(call(IPC_CHANNELS.attentionTakePendingOpen)).toEqual({ sessionId: 'agent-1', rootId: 'root-1' });
+    expect(call(IPC_CHANNELS.attentionTakePendingOpen)).toBeNull();
+  });
+
+  it('has nothing pending when no notice reopened the window', () => {
+    expect(call(IPC_CHANNELS.attentionTakePendingOpen)).toBeNull();
   });
 
   it('replaces an earlier notice for the same session rather than stacking them', () => {
@@ -176,5 +197,69 @@ describe('the dock badge', () => {
     setPlatform('linux');
     call(IPC_CHANNELS.attentionSetBadge, 2);
     expect(electron.app.dock.setBadge).not.toHaveBeenCalled();
+  });
+});
+
+describe("main's needs-you watch", () => {
+  const at = '2026-10-01T00:00:00.000Z';
+  const sessions = [
+    { id: 'root-1', title: 'Audit', createdAt: at, updatedAt: at, messageCount: 0, mode: 'code' },
+    {
+      id: 'agent-1',
+      title: 'Review',
+      createdAt: at,
+      updatedAt: at,
+      messageCount: 0,
+      mode: 'code',
+      origin: { parentSessionId: 'root-1', seedPrompt: 'review' },
+    },
+  ] as ChatSessionSummary[];
+  const watch = () =>
+    attention.watchNeedsYou({
+      listSessions: async () => sessions,
+      sessionMessages: async () => [],
+    });
+
+  it('hands back the same monitor when asked twice', () => {
+    expect(watch()).toBe(watch());
+  });
+
+  it('announces an entry and keeps the badge with every window closed', async () => {
+    windows.open = [];
+    const monitor = watch();
+    monitor.observe({ sessionId: 'agent-1', status: 'needs-action' });
+    await monitor.settled();
+    expect(electron.shown.map(shown => shown.options.title)).toEqual([expect.stringMatching(/ needs you$/)]);
+    expect(electron.app.dock.setBadge).toHaveBeenLastCalledWith('1');
+  });
+
+  it('leaves the entry to the open window, so it is announced once', async () => {
+    const monitor = watch();
+    monitor.observe({ sessionId: 'agent-1', status: 'needs-action' });
+    await monitor.settled();
+    expect(electron.shown).toEqual([]);
+    expect(electron.app.dock.setBadge).not.toHaveBeenCalled();
+  });
+
+  it('does not repeat an entry the closing window already claimed', async () => {
+    const monitor = watch();
+    expect(call(IPC_CHANNELS.attentionClaim, ['agent-1'])).toEqual(['agent-1']);
+    windows.open = [];
+    monitor.observe({ sessionId: 'agent-1', status: 'needs-action' });
+    await monitor.settled();
+    expect(electron.shown).toEqual([]);
+    expect(electron.app.dock.setBadge).toHaveBeenLastCalledWith('1');
+  });
+
+  it('takes the badge over from the last window to close', async () => {
+    const monitor = watch();
+    monitor.observe({ sessionId: 'agent-1', status: 'needs-action' });
+    const closing = { once: vi.fn() };
+    electron.appListeners.get('browser-window-created')?.({}, closing);
+    windows.open = [];
+    (closing.once.mock.calls[0][1] as () => void)();
+    await monitor.settled();
+    expect(electron.app.dock.setBadge).toHaveBeenLastCalledWith('1');
+    expect(electron.shown).toEqual([]);
   });
 });

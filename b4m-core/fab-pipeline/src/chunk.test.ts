@@ -91,6 +91,23 @@ describe('embeddingModelContextWindow', () => {
     expect(embeddingModelContextWindow('text-embedding-3-small')).toBe(MODEL_WINDOW);
   });
 
+  it.each([
+    ['voyage-3', 32000],
+    ['voyage-law-3', 16000],
+    ['amazon.titan-embed-text-v2:0', 8192],
+    ['qwen3-embedding:0.6b', 2048],
+    ['mxbai-embed-large', 512],
+  ])('preserves the existing %s input window', (model, tokens) => {
+    expect(embeddingModelContextWindow(model)).toBe(tokens);
+  });
+
+  it.each(['gemini-embedding-001', 'cohere.embed-v4:0', 'constructor', '__proto__'])(
+    'rejects %s outside the stored lake model schema',
+    model => {
+      expect(() => embeddingModelContextWindow(model)).toThrow(`Unsupported embedding model: ${model}`);
+    }
+  );
+
   it('throws on an unsupported model (matching the chunker)', () => {
     expect(() => embeddingModelContextWindow('not-a-real-model')).toThrow(/Unsupported embedding model/);
   });

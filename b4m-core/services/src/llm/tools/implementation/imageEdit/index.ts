@@ -251,6 +251,7 @@ export async function processAndStoreImage(
     contentType: mimeType,
     generation: { generator: 'image', provider, modelId, jobId: uuidv4(), prompt, ...(request && { request }) },
     ...(derivedFrom?.length && { derivedFrom }),
+    generatedOutputKey: path,
   });
 
   return path;

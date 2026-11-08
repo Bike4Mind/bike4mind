@@ -20,7 +20,7 @@ import { adminApi } from '@client/server/middlewares/adminApi';
 import { prReportService } from '@bike4mind/services';
 
 import { createSendDeps, loadPrReportConfig } from '@server/services/prReport/context';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const sendBodySchema = z.object({
   text: z.string(),

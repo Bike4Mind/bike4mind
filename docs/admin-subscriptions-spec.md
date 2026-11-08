@@ -29,12 +29,12 @@ There is no admin page for invoices, refunds, coupons, MRR/revenue, past due, tr
 
 - **Subscription** (`apps/client/server/models/Subscription.ts`) mirrors Stripe. The webhook worker overwrites status, period, canceledAt, priceId and quantity on every `customer.subscription.updated`. Mongo is the source of truth only for admin grants (`source: admin_grant`, `subscriptionId: admin_grant_<uuid>`), `customCreditsPerCycle` and the dunning-notice claims.
 - **Not stored in Mongo, Stripe only:** unit amount, currency, `cancel_at_period_end` (inferred from `canceledAt`), `trial_end`, payment method, invoices, discounts, pause state.
-- **Plans** are code constants (`apps/client/lib/userSubscriptions/constants.ts`, team plan in `packages/server-utils/src/lib/subscriptions/constants`), with price ids from env and **no amounts**. So MRR cannot be computed from our data today.
+- **Plans** are code constants (`packages/server-utils/src/lib/userSubscriptions/constants.ts`, team plan in `packages/server-utils/src/lib/subscriptions/constants`), with price ids from env and **no amounts**. So MRR cannot be computed from our data today.
 - **Seats** are kept in three copies: `organization.seats`, `Subscription.quantity`, and the Stripe item quantity. When they disagree, the `customer.subscription.updated` worker makes Stripe win.
 - **Webhook** (`pages/api/stripe/webhook.ts`):
   - Handles pack payments, `invoice.payment_succeeded` (through the worker: plan credit grants), `customer.subscription.updated/deleted`, `invoice.payment_failed` (marks past_due and sends a dunning email), `charge.refunded` and disputes (credit clawback), and `customer.deleted`.
   - Ignores `trial_will_end`, `invoice.paid/finalized/upcoming` and `subscription.created`.
-  - **Persists no events**, so there is nothing to build a billing timeline from.
+  - Persisted no events before the `BillingEvent` store (6.2); it now writes one row per owned event, which feeds the Timeline tab.
 - **Reconciliation:** the only cron is `creditPurchaseReconciliation`, which checks credit packs only. Nothing compares subscriptions or seats with Stripe.
 - **Guards on existing admin money routes:**
 
@@ -47,7 +47,7 @@ There is no admin page for invoices, refunds, coupons, MRR/revenue, past due, tr
 | `subscriptions/[id]/remove` | **none** | strict | - | no Stripe cancel |
 | `organizations/[id]/revoke` | **optional** | yes | - | |
 | `organizations/[id]/seats` | **none** | yes | - | refuses Stripe-billed orgs |
-| `organizations/[id]/reconcile-seats` | **none** | when changed | - | trusts Mongo quantity |
+| `organizations/[id]/reconcile-seats` | removed | - | - | replaced by `subscriptions/[id]/sync` (Stripe-wins, audited with a reason) |
 | `organizations/[id]/convert-to-paid` | **none** | yes | - | creates Stripe customer + Checkout |
 
   No admin money route is rate-limited.
@@ -243,7 +243,7 @@ Detail anatomy, max width 1280.
   - **At risk**: past due plus canceling, sorted by MRR.
 - Definitions, shown in a help popover so finance and admins agree:
   - **MRR**: the sum over Stripe-billed subscriptions with status active or past_due of `unitAmount x quantity`, normalized to a month (yearly / 12), in the account currency. Excludes comps, trialing, canceled, incomplete. Past due is included but shown separately as "at risk".
-    - As built (`server/admin/subscriptionsList/subscriptionMrr.ts`): `unitAmount` and `quantity` are the mirrored fields (6.1), so a Team row is the per-seat price times its seats. Never a price from the plan catalog: a row without a mirrored amount has none.
+    - As built (`packages/server-utils/src/admin/subscriptionsList/subscriptionMrr.ts`): `unitAmount` and `quantity` are the mirrored fields (6.1), so a Team row is the per-seat price times its seats. Never a price from the plan catalog: a row without a mirrored amount has none.
     - Normalizing divides by the months one billing period covers: `interval` month is 1, year is 12, and `intervalCount` multiplies it (every 3 months is 3). Week and day periods use the average month (52 / 12 weeks, 365 / 12 days). A row with no known interval counts as having no amount.
     - Statuses: only `active` and `past_due` (`MRR_STATUSES`). Excluded: `trialing`, `canceled`, `incomplete`, `incomplete_expired`, `unpaid`, `paused`. A Canceling row (cancel requested, still active) counts until it ends.
     - "Stripe-billed" is `source: stripe` on the row, the same condition as the Paying view.

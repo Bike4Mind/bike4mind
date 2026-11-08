@@ -1,6 +1,6 @@
 import { SupportAccess } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { customerSupportAccess } from '@server/auth/impersonation';
+import { customerSupportAccess } from '@bike4mind/server-utils/auth/impersonation';
 
 const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
   const rows = await SupportAccess.find({ userId: req.user.id })

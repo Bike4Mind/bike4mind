@@ -33,7 +33,7 @@ vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
     getOperationsModelConfig: vi.fn(),
   },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import handler from '../operations-model';
 

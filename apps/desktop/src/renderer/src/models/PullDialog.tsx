@@ -44,10 +44,13 @@ function StoreLine({
   location,
   server,
   needed,
+  split,
 }: {
   location: ModelStoreLocation | null | 'failed';
   server: string | null;
   needed: number;
+  /** For a split import `needed` is an upper bound; Desktop checks the real figure, so it never warns. */
+  split: boolean;
 }) {
   if (location === null)
     return (
@@ -58,7 +61,7 @@ function StoreLine({
   const path = location === 'failed' ? null : location.path;
   const source = (path && location !== 'failed' && location.source) || null;
   const free = location === 'failed' ? null : location.freeBytes;
-  const short = free !== null && free < needed;
+  const short = !split && free !== null && free < needed;
   const folder = path && <Typography fontFamily="code">{path}</Typography>;
   return (
     <Typography
@@ -88,6 +91,8 @@ function StoreLine({
         <>Saved to Ollama&apos;s model folder.</>
       )}
       {free !== null && ` ${formatBytes(free)} free${short ? ', which is not enough for this download' : ''}.`}
+      {split &&
+        ` Adding the parts needs up to ${formatBytes(needed)} free: every part, plus room for the largest while it is copied.`}
     </Typography>
   );
 }
@@ -116,7 +121,12 @@ export function PullDialog({
   const [overrideFit, setOverrideFit] = useState(false);
   const restricted = model.licenseKind === 'restricted';
   const tooLarge = build.fit?.level === 'too-large';
-  const ready = (!restricted || acceptLicense) && (!model.needsAccess || confirmAccess) && (!tooLarge || overrideFit);
+  // Desktop downloads a split build's parts with the Hugging Face token, so Ollama's key is not involved.
+  const needsKey = model.needsAccess && build.importParts === null;
+  const ready = (!restricted || acceptLicense) && (!needsKey || confirmAccess) && (!tooLarge || overrideFit);
+  const total = build.sizeBytes + (model.projectorBytes ?? 0);
+  const importNeeded =
+    build.importParts === null ? total : total + Math.max(build.importLargestBytes ?? 0, model.projectorBytes ?? 0);
   const names = model.licenseNames;
   const several = names.length > 1;
   const acceptLabel =
@@ -136,12 +146,16 @@ export function PullDialog({
             </Typography>
             <Typography level="body-sm" data-testid="models-pull-dialog-size">
               {formatBytes(build.sizeBytes)} download
+              {build.importParts !== null ? ` in ${build.importParts} parts` : ''}
               {model.projectorBytes ? `, plus a vision projector of up to ${formatBytes(model.projectorBytes)}` : ''}.
-              {server
-                ? ` ${server} downloads it straight from Hugging Face; you can remove it from Installed at any time.`
-                : ' Ollama downloads it; you can remove it from Installed at any time.'}
+              {build.importParts !== null
+                ? ' Desktop downloads the parts one at a time and adds each to Ollama; you can remove it from Installed' +
+                  ' at any time.'
+                : server
+                  ? ` ${server} downloads it straight from Hugging Face; you can remove it from Installed at any time.`
+                  : ' Ollama downloads it; you can remove it from Installed at any time.'}
             </Typography>
-            <StoreLine location={location} server={server} needed={build.sizeBytes + (model.projectorBytes ?? 0)} />
+            <StoreLine location={location} server={server} needed={importNeeded} split={build.importParts !== null} />
             {server && (
               <Typography level="body-sm" data-testid="models-pull-dialog-server">
                 Desktop cannot see how much free space {server} has. Keep Bike4Mind open until the download finishes.
@@ -179,7 +193,7 @@ export function PullDialog({
                 slotProps={{ input: { 'data-testid': 'models-pull-dialog-license-checkbox' } }}
               />
             )}
-            {model.needsAccess && (
+            {needsKey && (
               <>
                 <AccessSteps model={model} server={server} />
                 <Checkbox

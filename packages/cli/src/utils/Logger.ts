@@ -95,6 +95,11 @@ export class Logger {
     console.error(message);
   }
 
+  /** WARN to the log file only, for warnings raised mid-turn while ink owns the terminal. */
+  warnToFile(message: string): void {
+    this.writeToFile('WARN', message).catch(() => {});
+  }
+
   /**
    * Write log entry to file
    */

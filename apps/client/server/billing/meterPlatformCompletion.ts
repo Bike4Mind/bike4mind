@@ -38,15 +38,18 @@ import {
   type ModelAdmission,
 } from '@bike4mind/services/llm/modelAdmission';
 import {
+  executedModelFields,
   loadShadowTierSettings,
   recordShadowTokenUsage,
   reserveShadowTokenBudget,
+  resolveShadowModelInfo,
 } from '@bike4mind/services/llm/shadowTier';
 import { getSettingsMap, getSettingsValue, usdToCredits, usdToCreditsStochastic } from '@bike4mind/utils';
 import { assertApiKeyOrgMembership } from '@bike4mind/server-utils/billing/assertApiKeyOrgMembership';
 import { persistedIsAdmin } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { recordPaidPlanRefusal } from '@server/billing/userLimitEvents';
 import { getUserEntitlements } from '@server/entitlements';
-import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
+import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 import {
   reserveRequestCredits,
   resolveRequestBillingOrgId,
@@ -83,7 +86,7 @@ export async function createModelAdmission(
     isCreditsEnforced(),
     systemModel ? undefined : loadFreeTierAllowedModels(adminSettingsRepository),
   ]);
-  return createSharedModelAdmission({
+  const admission = createSharedModelAdmission({
     user,
     configs,
     getEntitlements: () => getUserEntitlements(user),
@@ -91,6 +94,17 @@ export async function createModelAdmission(
     enforceCredits,
     freeTierAllowedModels,
   });
+  return {
+    admits: modelId => admission.admits(modelId),
+    async assert(modelId) {
+      try {
+        await admission.assert(modelId);
+      } catch (error) {
+        await recordPaidPlanRefusal(user.id, modelId, error);
+        throw error;
+      }
+    },
+  };
 }
 
 /**
@@ -175,6 +189,22 @@ export async function reserveCompletionCredits(
   });
 }
 
+/**
+ * The allowlisted model a restricted caller runs in place of `requested`, or undefined when the request
+ * runs as asked. Callers keep admission, the hold and the response on the requested model.
+ */
+export async function resolveShadowSubstitute(
+  req: MeteredRequest,
+  requested: ModelInfo,
+  models: ModelInfo[],
+  { requireTools = false }: { requireTools?: boolean } = {}
+): Promise<ModelInfo | undefined> {
+  const user = throttleUser(req);
+  if (!user || !isShadowTier(user)) return undefined;
+  const { allowlist } = await loadShadowTierSettings(adminSettingsRepository);
+  return resolveShadowModelInfo(user, requested, models, allowlist, req.logger, { requireTools });
+}
+
 export { hasReportedUsage, latchUsage, type CompletionUsage };
 
 /** Same pricing rule as cliCompletions' settledUsdCost. */
@@ -201,6 +231,9 @@ export async function settleCompletion(
     model: string;
     provider: string;
     usd: number;
+    /** usd prices credits on the requested model; costUsd (defaults to usd) and executed record the model that ran. */
+    costUsd?: number;
+    executed?: { id: string; backend: string };
     inputTokens: number;
     outputTokens: number;
     cacheReadInputTokens?: number;
@@ -242,7 +275,8 @@ export async function settleCompletion(
       cachedInputTokens: charge.cacheReadInputTokens ?? 0,
       cacheWriteTokens: charge.cacheCreationInputTokens ?? 0,
       settledBasis: 'local',
-      costUsd: charge.usd,
+      costUsd: charge.costUsd ?? charge.usd,
+      ...executedModelFields({ id: charge.model, backend: charge.provider }, charge.executed),
       creditsCharged,
       status: 'ok',
       source,

@@ -3,7 +3,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { getOktaConfigStatus } from '@server/auth/oktaOidcClient';
 import axios, { AxiosError } from 'axios';

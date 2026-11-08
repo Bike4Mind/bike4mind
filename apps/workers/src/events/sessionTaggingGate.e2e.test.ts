@@ -51,7 +51,7 @@ vi.mock('sst', () => ({
 // Passthrough so the raw handler runs without connectDB / Config; this test owns the connection.
 vi.mock('@workers/utils/eventContext', () => ({ withEventContext: (fn: unknown) => fn }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   SessionEvents: {
     Tag: { schema: { parse: (properties: unknown) => properties }, publish: vi.fn() },
     Summarize: { publish: vi.fn() },
@@ -81,6 +81,11 @@ vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
 
 vi.mock('@workers/events/recordSessionOperationalUsage', () => ({
   recordSessionOperationalUsage: vi.fn(),
+}));
+
+// The credit gate is covered by its own tests; here every payer can fund the call.
+vi.mock('@workers/events/sessionOperationalCreditGate', () => ({
+  payerCanFundSessionOperation: vi.fn(async () => true),
 }));
 
 import { TAG_RETRY_BACKOFF_MS } from '@bike4mind/common';

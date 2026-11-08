@@ -7,6 +7,7 @@ export * from './registrationInvite';
 export * from './reservedUsername';
 export * from './freeCredits';
 export * from './signupRisk';
+export * from './signupOutcome';
 export * from './stagedSignupGrant';
 export * from './inviteBonus';
 export * from './disposableEmail';

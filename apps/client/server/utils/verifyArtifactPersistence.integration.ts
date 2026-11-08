@@ -29,7 +29,7 @@
  */
 
 import { connectDB, Artifact, ArtifactContent, ArtifactVersion } from '@bike4mind/database';
-import { persistAgentArtifacts, buildAgentArtifactPayloads } from './persistAgentArtifacts';
+import { persistAgentArtifacts, buildAgentArtifactPayloads } from '@bike4mind/server-utils/utils/persistAgentArtifacts';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import mongoose from 'mongoose';
 

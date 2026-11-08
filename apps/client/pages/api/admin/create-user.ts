@@ -10,13 +10,13 @@ import { userService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { requireStepUp } from '@server/auth/stepUp';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { getLogoUrl, buildEmailLogoImg } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { emitSignupFunnelEvents, recordAccountLane } from '@server/analytics/funnel';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const createUserSchema = z.object({
   username: usernameSchema,

@@ -2,7 +2,7 @@ import { hasPaidSignupDrip, signupGrantDripOpen, signupGrantDripRemaining } from
 import { resolveSignupDripPeriod } from './signupDripPeriod';
 import { adminSettingsRepository, User, userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
-import { signupProtection } from '@server/auth/signupProtection';
+import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import { payActivityDripForDay, resolveRequiredActiveSeconds } from './activityUnlock';
 
 // Client interval/idle constants live in app/hooks/useSignupGrantHeartbeat.ts; MAX_CREDIT_MS must exceed its interval.
@@ -16,6 +16,9 @@ interface HeartbeatResult {
   activeSeconds: number;
   requiredSeconds?: number;
   nextEligibleAt?: number;
+  // No grant, a closed drip or a reached cap, so the client stops pinging. A zero daily amount is not spent:
+  // raising it resumes the drip.
+  spent?: boolean;
 }
 
 /**
@@ -28,7 +31,7 @@ export async function recordHeartbeat(userId: string, now: Date = new Date()): P
 
   const user = await userRepository.findById(userId);
   const grant = user?.signupGrant;
-  if (!grant || !signupGrantDripOpen(grant)) return result;
+  if (!grant || !signupGrantDripOpen(grant)) return { ...result, spent: true };
   const period = await resolveSignupDripPeriod(clock);
   const { day } = period;
   result.nextEligibleAt = period.endsAt;
@@ -37,7 +40,7 @@ export async function recordHeartbeat(userId: string, now: Date = new Date()): P
   if (!(limits.dailyCredits > 0)) return result;
   const requiredSeconds = await resolveRequiredActiveSeconds();
   result.requiredSeconds = requiredSeconds;
-  if (signupGrantDripRemaining(grant, limits.dripCap) <= 0) return result;
+  if (signupGrantDripRemaining(grant, limits.dripCap) <= 0) return { ...result, spent: true };
 
   const prior = grant.activity;
   const samePeriod = prior?.day === day && prior.period === period.key;

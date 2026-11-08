@@ -118,6 +118,14 @@ describe('localContextSizing', () => {
     expect((await sizing().footprint(qwen)).kvCacheType).toBeUndefined();
   });
 
+  it('sizes with the flash attention known at the time of each read', async () => {
+    let known: 'off' | undefined = 'off';
+    const sized = sizing({ flashAttention: () => known });
+    expect((await sized.footprint(qwen)).flashAttention).toBe('off');
+    known = undefined;
+    expect(sized.cachedFootprint(qwen).flashAttention).toBeUndefined();
+  });
+
   it('backs off after a failed inspection instead of asking on every refresh', async () => {
     let clock = 0;
     const showVerbose = vi.fn().mockRejectedValueOnce(new Error('timeout')).mockResolvedValue(verbose);

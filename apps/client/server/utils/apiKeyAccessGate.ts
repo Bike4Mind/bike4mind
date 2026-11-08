@@ -12,7 +12,7 @@ import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscript
 import {
   getActiveSubscriptionsForUser,
   type ActiveSubscriptionsRequest,
-} from '@server/entitlements/activeSubscriptions';
+} from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 import {
   hasPaidSubscription,
   hasPurchasedCredits,

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { stat, statfs } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { app, ipcMain, powerSaveBlocker, safeStorage } from 'electron';
 import {
   CuratedListSource,
@@ -15,6 +15,7 @@ import {
   ollamaLibraryLayers,
   probeHardware,
   resolveCuratedUrl,
+  sweepSplitImports,
 } from '@bike4mind/local-models';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { CuratedList, CuratedListSettings, CuratedSourceView, HfTokenResult, ModelPull } from '@shared/models';
@@ -36,6 +37,19 @@ import { probeIntegratedGpu, runsInWsl } from './wslGpuCap';
 const RUNTIME_HEALTH_TIMEOUT_MS = 10_000;
 const LINUX_SERVICE_STORE = '/usr/share/ollama/.ollama/models';
 
+// Local cache, not userData: that is Roaming on Windows and parts run to tens of GB.
+function splitImportRoot(): string {
+  const home = app.getPath('home');
+  const absolute = (value: string | undefined) => (value && isAbsolute(value) ? value : undefined);
+  const cache =
+    process.platform === 'win32'
+      ? (absolute(process.env.LOCALAPPDATA) ?? join(home, 'AppData', 'Local'))
+      : process.platform === 'darwin'
+        ? join(home, 'Library', 'Caches')
+        : (absolute(process.env.XDG_CACHE_HOME) ?? join(home, '.cache'));
+  return join(cache, 'bike4mind-desktop', 'model-imports');
+}
+
 const warn = (message: string) => console.warn(message);
 
 function procVersion(): string | null {
@@ -54,6 +68,17 @@ async function freeBytes(path: string): Promise<number> {
     try {
       const stats = await statfs(current);
       return stats.bavail * stats.bsize;
+    } catch (error) {
+      if (!isMissing(error) || dirname(current) === current) throw error;
+    }
+  }
+}
+
+/** The device of the disk holding `path`, read upward like `freeBytes`. */
+async function deviceOf(path: string): Promise<number> {
+  for (let current = path; ; current = dirname(current)) {
+    try {
+      return (await stat(current)).dev;
     } catch (error) {
       if (!isMissing(error) || dirname(current) === current) throw error;
     }
@@ -94,7 +119,7 @@ function curatedSource(onChange: () => void): CuratedListSource {
  * Face token never leaves main except as the Authorization header of requests to huggingface.co.
  */
 export function registerModels(
-  servers: Pick<ModelServerRegistry, 'hubServer' | 'onServerSaved' | 'specs'>,
+  servers: Pick<ModelServerRegistry, 'hubServer' | 'onServerSaved' | 'specs' | 'kvCacheType' | 'flashAttention'>,
   { localContext, modelSettings }: Pick<ModelHubServiceDeps, 'localContext' | 'modelSettings'>,
   capabilityLedger: ConstructorParameters<typeof PullLedger>[0]
 ): ModelHubService {
@@ -120,6 +145,8 @@ export function registerModels(
     // Chat's own probe and entered specs, so badges and chat size context from the same reading of this machine.
     hardware: () => localHardware.probed().then(profile => profile ?? probeHardware()),
     specs: id => servers.specs(id),
+    kvCacheType: id => servers.kvCacheType(id),
+    flashAttention: id => servers.flashAttention(id),
     localContext,
     modelSettings,
     curated: () => source.current(),
@@ -143,6 +170,8 @@ export function registerModels(
     pathExists: async path => (await stat(path)).isDirectory(),
     wslHost: process.platform === 'win32' || (process.platform === 'linux' && runsInWsl(process.env, procVersion())),
     integratedGpu: () => probeIntegratedGpu(),
+    importDir: splitImportRoot,
+    sameDisk: async (a, b) => (await deviceOf(a)) === (await deviceOf(b)),
     // Once, right away: the picker's reload waits for any recheck the pull or removal started.
     onInstalledChanged: serverId => send(IPC_CHANNELS.modelsInstalledChanged, serverId),
     keepAwake: on => {
@@ -163,6 +192,7 @@ export function registerModels(
     send(IPC_CHANNELS.modelsCuratedChanged);
   });
   registerModelsIpc(ipcMain, service);
+  void sweepSplitImports(splitImportRoot()).catch(() => undefined);
 
   // Opening Models lists the curated models, so this is where a due check starts; it never blocks the list.
   ipcMain.handle(

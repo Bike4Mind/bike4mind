@@ -39,7 +39,7 @@ const findById = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: { findById } }));
 
 const resetApiKeyRateLimit = vi.hoisted(() => vi.fn().mockResolvedValue({}));
-vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', () => ({
   resetApiKeyRateLimit,
   evaluateCounterLockout: vi.fn(),
   resolveCounterLimit: vi.fn(),
@@ -66,7 +66,9 @@ vi.mock('@bike4mind/database', () => ({
   CounterLog: {},
 }));
 
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+}));
 
 import '@pages/api/admin/user-api-keys/[id]/rate-limit';
 import '@pages/api/admin/user-api-keys/[id]/reset-rate-limit';

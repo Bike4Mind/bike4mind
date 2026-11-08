@@ -1,8 +1,9 @@
 import type { HubBuild, HubEntry } from '@bike4mind/common/modelHub';
 import { isAbliteratedModel } from '../abliterated';
-import { curatedLibrary, isPermissiveEntry } from '../curated';
+import { curatedLibrary, isPermissiveEntry, ollamaVersionAtLeast } from '../curated';
 import { ollamaPullRef, type HubGgufBuild, type HubModelDetail } from '../huggingface';
 import { licenseKind } from '../licenses';
+import { SPLIT_IMPORT_MIN_OLLAMA, splitImportBlock, splitImportName } from '../splitImport';
 import type { OllamaRegistryLayers, RuntimeHealth } from '../types';
 import { checkReviewedLayers, checkRuntime, type LayersCheck, type LayerSources, type RuntimeCheck } from './checks';
 
@@ -83,7 +84,13 @@ export async function curatedLicensesMatch(
  * `ApprovalDeps.checkAfterPull`).
  */
 export type ApprovalResult =
-  | { ok: true; ref: string; verified: boolean }
+  | {
+      ok: true;
+      ref: string;
+      verified: boolean;
+      /** Set for a split build approved as an import (`ApprovalDeps.importSplit`): `ref` is the name to create. */
+      split?: { detail: HubModelDetail; build: HubGgufBuild };
+    }
   | {
       ok: false;
       reason:
@@ -117,6 +124,11 @@ export interface ApprovalDeps {
    * an uncurated build through unverified once access is confirmed, and the caller must check the installed blob.
    */
   checkAfterPull?: boolean;
+  /**
+   * True lets an uncurated split build through as an import, which the caller runs itself (`runSplitImport`):
+   * the files are downloaded with the Hub token, so Ollama's own key is not needed.
+   */
+  importSplit?: boolean;
 }
 
 export const sameRepo = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -153,17 +165,33 @@ async function checkHub(approval: HubPullApproval, deps: ApprovalDeps): Promise<
       return { ok: false, reason: 'license-changed' };
   }
   const block = pullBlock(detail, build);
+  const split = block === 'split' && !curated && deps.importSplit === true;
+  const importBlock = split ? splitImportBlock(detail, build) : null;
+  if (importBlock) return { ok: false, reason: 'blocked', block: importBlock };
   const deferred = block === 'needs-access' && !curated && deps.checkAfterPull === true ? build.ollamaRef : null;
-  if (block && !deferred) return { ok: false, reason: 'blocked', block };
+  if (block && !deferred && !split) return { ok: false, reason: 'blocked', block };
   const restricted = licenseKind(detail.licenses) !== 'permissive' || (curated && !isPermissiveEntry(curated.entry));
   if (restricted && !approval.licenseAccepted) return { ok: false, reason: 'license-required' };
-  if (detail.ollamaNeedsSshKey && !approval.accessConfirmed) return { ok: false, reason: 'access-required' };
+  if (detail.ollamaNeedsSshKey && !approval.accessConfirmed && !split) return { ok: false, reason: 'access-required' };
   deps.onReviewed?.({ label: build.label, sizeBytes: build.sizeBytes });
 
   const health = await deps.health();
   if (signal.aborted) return { ok: false, reason: 'cancelled' };
   const runtime = checkRuntime(health, curated?.build ?? null);
   if (!runtime.ok) return runtime;
+  if (split) {
+    const ref = splitImportName(detail.id, build);
+    if (!ref) return { ok: false, reason: 'blocked', block: 'unsupported-name' };
+    return ollamaVersionAtLeast(health.version, SPLIT_IMPORT_MIN_OLLAMA)
+      ? { ok: true, ref, verified: true, split: { detail, build } }
+      : {
+          ok: false,
+          reason: 'runtime-too-old',
+          blocked: `Adding a split build needs Ollama ${SPLIT_IMPORT_MIN_OLLAMA} or newer`,
+          required: SPLIT_IMPORT_MIN_OLLAMA,
+          actual: health.version,
+        };
+  }
   if (deferred) return { ok: true, ref: ollamaPullRef(deferred, true), verified: false };
   // The registry serves the first file whose name ends with the tag; only its manifest proves which one.
   const ref = await hub.verifyOllamaRef(detail, build, { signal });

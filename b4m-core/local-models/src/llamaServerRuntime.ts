@@ -7,7 +7,9 @@ import {
   LLAMA_SERVER_FLASH_ATTN_VALUE_BUILD,
   findLlamaServer,
   flashAttentionArgs,
+  startLlamaRouter,
   startLlamaServer,
+  type LlamaRouterProcess,
   type LlamaServerBinary,
   type LlamaServerExit,
   type LlamaServerProcess,
@@ -50,6 +52,16 @@ export interface StartModelOptions extends LlamaServerTuning {
   signal?: AbortSignal;
   onExit?: (exit: LlamaServerExit) => void;
 }
+
+export interface StartRouterOptions extends Pick<LlamaServerTuning, 'flashAttention' | 'extraArgs'> {
+  port: number;
+  modelsMax?: number;
+  signal?: AbortSignal;
+  onExit?: (exit: LlamaServerExit) => void;
+}
+
+/** The model name `onLog` gets for a router's lines. */
+export const ROUTER_LOG_NAME = '(router)';
 
 interface StartingEntry {
   controller: AbortController;
@@ -302,16 +314,7 @@ export class LlamaServerRuntime implements LocalRuntime {
       flashAttention: options.flashAttention ?? defaults.flashAttention,
       extraArgs: options.extraArgs ?? defaults.extraArgs,
     };
-    const build = await this.#binary().then(
-      found => found.build,
-      (error: unknown) => {
-        // A build that prints no number (built without git) still runs when no flag depends on the build.
-        const unnumbered = error instanceof LlamaServerVersionError && !error.found;
-        if (unnumbered && flashAttentionArgs(tuning, LLAMA_SERVER_FLASH_ATTN_VALUE_BUILD).length === 0)
-          return undefined;
-        throw error;
-      }
-    );
+    const build = await this.#buildFor(tuning);
     entry.controller.signal.throwIfAborted();
     const onLog = defaults.onLog;
     const server = await startLlamaServer({
@@ -342,5 +345,50 @@ export class LlamaServerRuntime implements LocalRuntime {
     });
     entry.server = server;
     return server;
+  }
+
+  /** The binary's build for a start with `tuning`; undefined for an unnumbered build no flag depends on. */
+  #buildFor(tuning: LlamaServerTuning): Promise<number | undefined> {
+    return this.#binary().then(
+      found => found.build,
+      (error: unknown) => {
+        // A build that prints no number (built without git) still runs when no flag depends on the build.
+        const unnumbered = error instanceof LlamaServerVersionError && !error.found;
+        if (unnumbered && flashAttentionArgs(tuning, LLAMA_SERVER_FLASH_ATTN_VALUE_BUILD).length === 0)
+          return undefined;
+        throw error;
+      }
+    );
+  }
+
+  /**
+   * One llama-server in router mode on loopback `port`, serving every GGUF file in the models directory (see
+   * `startLlamaRouter`). It is the caller's to stop: `stop` and `stopAll` reach only per-model servers.
+   */
+  async startRouter(options: StartRouterOptions): Promise<LlamaRouterProcess> {
+    const defaults = this.#options;
+    const tuning = {
+      flashAttention: options.flashAttention ?? defaults.flashAttention,
+      extraArgs: options.extraArgs ?? defaults.extraArgs,
+    };
+    const build = await this.#buildFor(tuning);
+    options.signal?.throwIfAborted();
+    const onLog = defaults.onLog;
+    return startLlamaRouter({
+      binaryPath: this.binaryPath,
+      binaryArgs: defaults.binaryArgs,
+      build,
+      ...tuning,
+      modelsDir: defaults.modelsDir,
+      port: options.port,
+      modelsMax: options.modelsMax,
+      startTimeoutMs: defaults.startTimeoutMs,
+      stopTimeoutMs: defaults.stopTimeoutMs,
+      fetch: defaults.fetch,
+      env: defaults.env,
+      signal: options.signal,
+      onExit: options.onExit,
+      onLog: onLog && (line => onLog(ROUTER_LOG_NAME, line)),
+    });
   }
 }

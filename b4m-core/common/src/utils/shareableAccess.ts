@@ -35,7 +35,7 @@ export function canUpdateShareable(
  * The permissions an actor actually holds on a shareable document: every permission for the
  * owner, otherwise the union of their own users[] entry and the entries of groups they belong
  * to. Matched per entry, so it cannot reproduce the cross-entry over-grant the CASL abilities
- * carried (apps/client/server/auth/ability.ts).
+ * carried (packages/server-utils/src/auth/ability.ts).
  *
  * Used to cap what a re-sharer may grant: an invite must never carry a permission its minter
  * does not hold.

@@ -140,6 +140,7 @@ export function BrowserNavbar({
             // Escape puts back where the page actually is, which is the only way out of a
             // half-typed address that does not navigate somewhere by accident.
             if (event.key === 'Escape') {
+              event.preventDefault();
               editing.current = false;
               setTypedError('');
               setDraft(state.url);

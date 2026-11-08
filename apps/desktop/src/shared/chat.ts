@@ -9,12 +9,21 @@
  * Credential-free like @shared/auth, for the same reason - see src/shared/ipc.ts.
  */
 
+import type { GithubRef } from './githubRefs';
 import type { GenerationJobState, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
+import type { ReasoningEffortSetting } from '@bike4mind/local-models/model-settings';
 import type { ChildOutcome } from './agentOutcome';
 import type { ChatImportOrigin } from './claudeImport';
 import type { CatalogSampling, GenerationSettings, ModelControls } from './generation';
 import type { ChatQuestionAnswer } from './questions';
 import type { SkillSource } from './skills';
+
+export {
+  localModelId,
+  parseLocalModelId,
+  REASONING_EFFORT_SETTINGS,
+  type ReasoningEffortSetting,
+} from '@bike4mind/local-models/model-settings';
 
 export type ChatRole = 'user' | 'assistant';
 
@@ -907,21 +916,6 @@ export interface BackgroundProcessInfo {
  */
 export type ChatMoveToBackgroundResult = { ok: true; process: BackgroundProcessInfo } | { ok: false; message: string };
 
-export function localModelId(runtimeId: string, model: string): string {
-  return `local:${encodeURIComponent(runtimeId)}:${model}`;
-}
-
-/** `local:<encoded runtime>:<model>`; runtime ids can contain colons so they are URL-encoded, the model stays raw. */
-export function parseLocalModelId(id: string): { runtimeId: string; model: string } | null {
-  const match = /^local:([^:]+):(.+)$/s.exec(id);
-  if (!match) return null;
-  try {
-    return { runtimeId: decodeURIComponent(match[1]), model: match[2] };
-  } catch {
-    return null;
-  }
-}
-
 /**
  * How deep the spawn chain may go. A session the user made is depth 0, so this admits a child
  * and a grandchild and refuses the next one.
@@ -1094,26 +1088,6 @@ export function thinkingSwitchedOff(
   if (!option?.thinkingToggle || option.controls?.effort) return false;
   return setting === THINKING_OFF_SETTING || (setting === 'minimal' && !option.minimalThinks);
 }
-
-/**
- * How hard a model that reasons thinks before answering.
- *
- * `default` sends nothing and leaves the provider at its own effort, which is what every
- * conversation did before the setting existed. It is a real choice in the picker rather than
- * an empty state, because "let the provider decide" is a different instruction from "low".
- */
-export type ReasoningEffortSetting = 'default' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
-
-/** Ascending, which is the order the picker lists them in. */
-export const REASONING_EFFORT_SETTINGS: readonly ReasoningEffortSetting[] = [
-  'default',
-  'none',
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-];
 
 /**
  * The answer to `listModels`.
@@ -1389,6 +1363,8 @@ export interface ChatSessionSummary extends ChatSessionMeta {
   totalUsdCost?: number;
   /** Sum of usage.creditsUsed over all messages; absent when none reported it. */
   totalCredits?: number;
+  /** Issue and PR refs the transcript mentions, first seen first; absent when none. See githubRefs.ts. */
+  githubRefs?: GithubRef[];
 }
 
 export interface ChatSession extends ChatSessionMeta {
@@ -1588,14 +1564,13 @@ export interface ChatSessionStatusEvent {
 }
 
 /**
- * What a session is doing before its first reply: cutting its worktree, waiting on that
- * worktree's dependency install, or starting the turn itself.
+ * What a session is doing before its first reply: cutting its worktree, or starting the turn
+ * itself. A worktree's dependency install is not a step: it runs alongside the first turn.
  */
-export type SessionSetupStep = 'worktree' | 'dependencies' | 'starting';
+export type SessionSetupStep = 'worktree' | 'starting';
 
 export const SESSION_SETUP_LABEL: Record<SessionSetupStep, string> = {
   worktree: 'Creating worktree',
-  dependencies: 'Installing dependencies',
   starting: 'Starting up',
 };
 

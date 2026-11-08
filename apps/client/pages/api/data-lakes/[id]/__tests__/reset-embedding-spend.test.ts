@@ -33,7 +33,7 @@ vi.mock('@bike4mind/database', () => ({
     }
   },
 }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...args: unknown[]) => {
     h.insideTransactionAtAudit = h.inTransaction;
     return h.recordAdminAction(...args);

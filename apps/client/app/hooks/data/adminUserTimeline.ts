@@ -15,13 +15,14 @@ const TIMELINE_PAGE_SIZE = 30;
 const SIGN_IN_PAGE_SIZE = 50;
 
 type Wire<T> = Omit<T, 'at'> & { at: string | Date };
-type WireTimelineEntry = Wire<UserTimelineEntry> & { audit?: WireAuditEntry };
+type WireTimelineEntry = Wire<UserTimelineEntry> & { audit?: WireAuditEntry; firstAt?: string | Date };
 
 /** Dates arrive as ISO strings; audit-backed entries carry an audit row that needs the same revival. */
 export const reviveTimelineEntry = (entry: WireTimelineEntry): UserTimelineEntry =>
   ({
     ...entry,
     at: new Date(entry.at),
+    ...(entry.firstAt ? { firstAt: new Date(entry.firstAt) } : {}),
     ...(entry.audit ? { audit: reviveAuditEntry(entry.audit) } : {}),
   }) as UserTimelineEntry;
 

@@ -16,7 +16,9 @@ vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', () => ({
   emitProductEvent: mockEmit,
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: mockLogEventSafe }));
-vi.mock('@server/referrals/firstAnswerReward', () => ({ rewardInviterForFirstAnswer: mockRewardInviter }));
+vi.mock('@bike4mind/server-utils/referrals/firstAnswerReward', () => ({
+  rewardInviterForFirstAnswer: mockRewardInviter,
+}));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { OVERWATCH_PSEUDONYM_SALT: 'test-salt' } }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: mockGetSetting },
@@ -28,7 +30,7 @@ vi.mock('./hops', () => ({ bindSignupHop: (...a: unknown[]) => mockBindSignupHop
 
 import { APP_DECISION_COOKIE } from '@bike4mind/server-utils/lib/consentCookies';
 import { pseudonymize } from '@bike4mind/server-utils/analytics/pseudonymize';
-import { stableEventId } from './signupEvents';
+import { stableEventId } from '@bike4mind/server-utils/analytics/signupEvents';
 import {
   emitEmailVerifiedFunnelEvents,
   emitFunnelEvent,

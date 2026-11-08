@@ -11,7 +11,7 @@ import type {
   ModelServerUpdateInput,
   ModelServerView,
 } from '@shared/modelServers';
-import { readSpecsShape } from '@shared/modelServers';
+import { readLaunchShape, readSpecsShape } from '@shared/modelServers';
 import type { MachineView } from '@shared/models';
 import type { ModelServerRegistry } from './ModelServerRegistry';
 import { MAX_HEADER_NAME_CHARS, MAX_SECRET_CHARS } from './ModelServerStore';
@@ -49,18 +49,30 @@ export function specsInput(value: unknown): ModelServerSpecs | null | undefined 
   return readSpecsShape(value);
 }
 
+/** The registry checks the port; only undefined is no port, and anything not a number or short text is invalid. */
+function portInput(value: unknown): number | string | undefined {
+  if (value === undefined || typeof value === 'number') return value;
+  // Not cut to length: a cut can leave a valid port followed by spaces, which the registry trims.
+  return typeof value === 'string' && value.length <= 16 ? value : 'invalid';
+}
+
 function probeInput(value: unknown): ModelServerProbeInput {
   const raw = (value ?? {}) as Record<string, unknown>;
+  const port = portInput(raw.port);
   return {
     address: text(raw.address, 2_048),
     credential: credentialInput(raw.credential),
     transport: raw.transport === 'ssh' ? 'ssh' : 'http',
+    ...(port !== undefined ? { port } : {}),
   };
 }
 
 export function registerModelServersIpc(
   ipc: Pick<IpcMain, 'handle'>,
-  registry: Pick<ModelServerRegistry, 'views' | 'probe' | 'add' | 'update' | 'remove' | 'check'>,
+  registry: Pick<
+    ModelServerRegistry,
+    'views' | 'probe' | 'add' | 'update' | 'remove' | 'check' | 'startServer' | 'stopServer' | 'restartServer'
+  >,
   /** This computer's hardware as probed, before any entered specs; null when the probe failed. */
   probedHardware: () => Promise<MachineView | null> = async () => null
 ): void {
@@ -82,6 +94,7 @@ export function registerModelServersIpc(
       kind: kind(raw.kind) ?? 'ollama',
       access: access(raw.access) ?? 'chat',
       acceptOpen: raw.acceptOpen === true,
+      ...(raw.launch === true ? { launch: true } : {}),
     };
     return mutate(() => registry.add(add));
   });
@@ -93,12 +106,20 @@ export function registerModelServersIpc(
       ...(access(raw.access) ? { access: access(raw.access) } : {}),
       ...(raw.credential !== undefined ? { credential: credentialInput(raw.credential) } : {}),
       ...(raw.specs !== undefined ? { specs: specsInput(raw.specs) } : {}),
+      ...(raw.launch !== undefined ? { launch: readLaunchShape(raw.launch) } : {}),
     };
     return mutate(() => registry.update(text(id, 64), update));
   });
   ipc.handle(IPC_CHANNELS.modelServersProbedHardware, () => probedHardware().catch(() => null));
+  ipc.handle(IPC_CHANNELS.modelServersLaunch, (_event, id: unknown, action: unknown) => {
+    const server = text(id, 64);
+    if (action === 'start') return mutate(() => registry.startServer(server));
+    if (action === 'stop') return mutate(() => registry.stopServer(server));
+    if (action === 'restart') return mutate(() => registry.restartServer(server));
+    return { ok: false, error: 'Unknown server action.' };
+  });
   ipc.handle(IPC_CHANNELS.modelServersRemove, (_event, id: unknown) => mutate(() => registry.remove(text(id, 64))));
   ipc.handle(IPC_CHANNELS.modelServersCheck, (_event, id: unknown) =>
-    registry.check(typeof id === 'string' ? text(id, 64) : undefined)
+    registry.check(typeof id === 'string' ? text(id, 64) : undefined, { lookAgain: true })
   );
 }

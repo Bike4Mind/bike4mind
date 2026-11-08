@@ -67,7 +67,31 @@ pnpm rebuild
 b4m
 ```
 
-The CLI will prompt you to authenticate with your Bike4Mind account on first run.
+When you are signed out, the CLI starts on a local model from Ollama or a model server saved in Desktop. With no local model available, it offers Bike4Mind sign-in.
+
+### Chat without signing in
+
+Start Ollama and pull a model, then open the CLI:
+
+```bash
+ollama serve
+# In another terminal:
+ollama pull qwen3.5
+b4m
+```
+
+The signed-out session lists only local models. Run `/login` to use Bike4Mind cloud models; finish or stop the current reply with Esc before signing in. From a local session, cancelling sign-in returns you to that session.
+
+For headless prompts, save a local default first:
+
+```bash
+b4m models use qwen3.5
+b4m -p "say hello" </dev/null
+```
+
+A signed-out headless run uses the selected local model or your saved local default. With a cloud default and no saved local default, it exits with an error instead of choosing an arbitrary model. ACP sessions also support local models while signed out.
+
+If no local model is found, start Ollama, pull a model, or check the saved model server's address and credentials. A server login hint uses `b4m models servers login <name>`. An expired Bike4Mind sign-in is refreshed at startup; a temporary refresh failure keeps the saved sign-in and uses local models for that run, so restart the CLI to retry.
 
 ### CLI Flags
 
@@ -171,6 +195,8 @@ b4m models rm qwen2.5:0.5b
 Nothing downloads without confirmation: `pull` prints the size and license first and asks (`--yes` skips the question). A license that is not a permissive open-source one (Apache-2.0, MIT, BSD and similar), or no declared license, is named with a link and must be accepted at a prompt or with `--accept-license`. For Ollama registry models the license is read from the model's own license texts, and only unmodified Apache-2.0 or MIT texts count as permissive. Refs naming any other registry are refused. A gated repo needs access granted on Hugging Face first, `HF_TOKEN` set to that account's token, and your Ollama public key added at https://huggingface.co/settings/keys. Ctrl-C cancels a pull without installing anything; pulling again resumes, and says how much was already downloaded. Without a saved host, `b4m models` uses the first local runtime it detects; a scheme-less host without a port uses 11434, and `--ollama-host ''` clears the saved host. `--output-format json` prints `ls`, `search`, `show` and `curated` as JSON. With a saved host, `b4m -p` fails instead of switching to another model when the model picked with `b4m models use` is not available, or Ollama does not answer.
 
 `b4m mcp serve` (stdio only) offers the same operations to MCP clients as `models_list`, `models_search`, `models_pull` and `models_remove`, with the same checks. Pull and remove act only on the user's own approval. A client that supports elicitation asks the user directly, showing the size and every license, with a separate tick for a license that is not all permissive. With any other client nothing changes: the tool returns the preview and the `b4m models pull` or `b4m models rm` command for the user to run in a terminal, where the CLI asks them. `models_pull` reports the same fit verdict in its preview and prompt, and refuses a too-large model before asking unless the caller passes `force: true`, which still leaves the download to the user's approval. `models_search` leaves abliterated and uncensored builds out unless `includeAbliterated` is true, and then lists them last, labelled `notRecommended`, as `b4m models search --include-abliterated` does. The host comes from `B4M_OLLAMA_HOST`, the saved host, or detection, as for `b4m models`. `b4m mcp serve --local` serves these four tools alone and needs no Bike4Mind backend.
+
+A chat with a model on this computer's Ollama (`http://127.0.0.1:11434`) or on an Ollama model server saved in Desktop uses that model's settings from Desktop's Models screen: a fixed context size, keep-alive, draft tokens, sampling (in place of the CLI's `temperature` preference), max output and, on a model with effort levels such as gpt-oss, its effort. Under Auto the CLI keeps its own context size (the trained length capped at 32K or `OLLAMA_MAX_NUM_CTX`) and only applies the model's cap. The CLI reads `model-settings.json` on every turn and never writes it, but the context size is the one it listed at startup, so a context change takes effect after a CLI restart. The file comes from the same Desktop userData folder as the saved model servers: `B4M_DESKTOP_USER_DATA` when set, else the first of `@bike4mind/desktop` and `Bike4Mind` under the app-data folder that holds `model-servers.json` or `model-settings.json`, or failing that the first that exists (a source run of Desktop uses `Bike4Mind Dev`, so point `B4M_DESKTOP_USER_DATA` at it). From WSL with mirrored networking, set `B4M_DESKTOP_USER_DATA=/mnt/c/Users/<you>/AppData/Roaming/@bike4mind/desktop` to use the Windows Desktop's settings. No file means no settings and values this CLI does not know are ignored; a broken file, or a broken entry for the model in use, fails that model's turns with a message naming the file, the model and the field. `B4M_DESKTOP_MODEL_SETTINGS=<path>` reads another file, which must exist, and `off`, `0`, `false`, `no` or `none` ignores Desktop's settings.
 
 ### Pushing a local skill
 
@@ -303,7 +329,7 @@ Configuration is stored in `~/.bike4mind/config.json`
 
 ### Authentication
 
-The CLI uses OAuth to authenticate with your Bike4Mind account. On first run, you'll be prompted to log in through the device authorization flow:
+Bike4Mind cloud models use OAuth authentication. You can chat with local models while signed out; run `/login` when you want to use your Bike4Mind account:
 
 1. Run `b4m` or use the `/login` command
 2. Visit the verification URL shown in the terminal

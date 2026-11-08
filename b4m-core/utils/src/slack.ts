@@ -1,5 +1,5 @@
 import axios, { isAxiosError } from 'axios';
-import { Logger } from '@bike4mind/observability';
+import { Logger, redactLogText } from '@bike4mind/observability';
 import { getNotificationDeduplicator } from './notificationDeduplicator';
 import type { CloudWatchLogsEvent, CloudWatchLogsDecodedData, CloudWatchLogsLogEvent } from 'aws-lambda';
 import * as util from 'node:util';
@@ -51,7 +51,12 @@ export const notifyEventLogsToSlack = async ({
    */
   const logEvents: CloudWatchLogsLogEvent[] = logData.logEvents;
 
-  for (const logEvent of logEvents) {
+  for (const rawLogEvent of logEvents) {
+    // Lines from raw `console.*` never went through the Logger's redaction; scrub before Slack sees them.
+    const logEvent: CloudWatchLogsLogEvent =
+      typeof rawLogEvent.message === 'string'
+        ? { ...rawLogEvent, message: redactLogText(rawLogEvent.message) }
+        : rawLogEvent;
     try {
       let message: string;
       let severity: string;

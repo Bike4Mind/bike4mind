@@ -1,12 +1,19 @@
+import {
+  bindEmbeddingModel,
+  buildEmbeddingRegistry,
+  embedOne,
+  embeddingBackendForModel,
+  resolveEmbeddingCredentials,
+} from '@bike4mind/utils/embeddingProviders';
 import { MEMENTO_EMBEDDING_MODEL, toMementoVector } from '@bike4mind/common';
-import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
+
 import type { Logger } from '@bike4mind/observability';
 
 /** Embeds text into the ledger's own vector space, or resolves undefined when it cannot. */
 export type MementoEmbedder = (text: string) => Promise<number[] | undefined>;
 
 /** The effective LLM key table, as `apiKeyService.getEffectiveLLMApiKeys` returns it. */
-type ApiKeyTable = Parameters<typeof resolveEmbeddingConfig>[1];
+type ApiKeyTable = Parameters<typeof resolveEmbeddingCredentials>[1];
 
 /**
  * Build an embedder for the MEMENTO space, pinned to `MEMENTO_EMBEDDING_MODEL`.
@@ -34,12 +41,12 @@ type ApiKeyTable = Parameters<typeof resolveEmbeddingConfig>[1];
  * (`POST /api/admin/mementos/reembed-ledger`, `migrateLedgerVectorsForPrincipal`).
  */
 export function createMementoEmbedder(apiKeyTable: ApiKeyTable, logger: Logger): MementoEmbedder {
-  const provider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);
-  const { config, missing } = resolveEmbeddingConfig(provider, apiKeyTable);
+  const provider = embeddingBackendForModel(MEMENTO_EMBEDDING_MODEL);
+  const { config, missing } = resolveEmbeddingCredentials(provider, apiKeyTable);
   if (missing) {
     logger.warn(`[Mementos V2] no ${provider} key for ${MEMENTO_EMBEDDING_MODEL}; writing facts without vectors`);
     return async () => undefined;
   }
-  const svc = new EmbeddingFactory(config).createEmbeddingService(MEMENTO_EMBEDDING_MODEL);
-  return async text => toMementoVector(await svc.generateEmbedding(text));
+  const svc = bindEmbeddingModel(buildEmbeddingRegistry(config), MEMENTO_EMBEDDING_MODEL);
+  return async text => toMementoVector(await embedOne(svc, text));
 }

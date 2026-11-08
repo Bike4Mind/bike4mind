@@ -37,6 +37,26 @@ export type CreditHoldAdapters = {
    */
   deductCredits?: typeof deductCreditsWithOrgSupport;
   newAccountSpendCap: NewAccountSpendCapAdapters;
+  /** Told about each refusal for the admin user timeline; best-effort, a throw is logged and ignored. */
+  onInsufficientCredits?: (event: {
+    userId: string;
+    reason: 'member_cap' | 'balance';
+    featureLabel: string;
+    requiredCredits: number;
+    availableCredits?: number;
+  }) => Promise<void>;
+};
+
+const notifyInsufficientCredits = async (
+  adapters: CreditHoldAdapters,
+  event: Parameters<NonNullable<CreditHoldAdapters['onInsufficientCredits']>>[0],
+  logger: ILogger
+): Promise<void> => {
+  try {
+    await adapters.onInsufficientCredits?.(event);
+  } catch (error) {
+    logger.warn('onInsufficientCredits failed', { error: error instanceof Error ? error.message : String(error) });
+  }
 };
 
 type HolderAdapters = Pick<CreditHoldAdapters, 'users' | 'organizations'>;
@@ -83,6 +103,7 @@ export async function holdCredits(
   // independent pre-flight - the settlement write (deductCreditsWithOrgSupport) does NOT
   // re-check the cap, so this is the only enforcement point for held requests.
   if (organization && isMemberCreditCapExceeded(organization, userId, requiredCredits)) {
+    await notifyInsufficientCredits(adapters, { userId, reason: 'member_cap', featureLabel, requiredCredits }, logger);
     throw insufficientCreditsError(
       `Your organization member credit limit has been reached for ${featureLabel}. Contact your organization administrator.`
     );
@@ -120,6 +141,11 @@ export async function holdCredits(
       });
     }
     const availableCredits = reservedHolder.currentCredits + requiredCredits;
+    await notifyInsufficientCredits(
+      adapters,
+      { userId, reason: 'balance', featureLabel, requiredCredits, availableCredits },
+      logger
+    );
     throw insufficientCreditsError(
       holdInsufficientCreditsMessage(featureLabel, availableCredits, requiredCredits, Boolean(organization))
     );

@@ -150,6 +150,21 @@ const PAYMENT_FAILURE_NOTICE_HISTORY = 12;
 export const Subscription =
   mongoose.models.Subscription || mongoose.model<ISubscription>('Subscription', SubscriptionSchema);
 
+export type ReconciliationSubscriptionRow = Pick<
+  ISubscription,
+  | 'ownerType'
+  | 'ownerId'
+  | 'subscriptionId'
+  | 'source'
+  | 'status'
+  | 'priceId'
+  | 'quantity'
+  | 'periodEndsAt'
+  | 'cancelAtPeriodEnd'
+  | 'unitAmount'
+> &
+  Pick<IMongoDocument, 'id' | 'updatedAt'>;
+
 class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocument> implements ISubscriptionRepository {
   constructor(model: mongoose.Model<ISubscription & IMongoDocument>) {
     super(model);
@@ -259,14 +274,44 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
    * The same write as updateByStripeSubscriptionId, resolving to the row as it stood just before
    * it. The pre-image comes from the write itself, so a caller comparing before and after sees
    * exactly the change this write made, even with another update to the row in flight; a separate
-   * read first could see a state another write has already replaced. Null when there is no row.
+   * read first could see a state another write has already replaced. Null when there is no row, or when
+   * `expectedUpdatedAt` is given and the row no longer carries that `updatedAt` (nothing is written).
    */
   updateByStripeSubscriptionIdReturningBefore(
     subscriptionId: string,
-    data: Partial<ISubscription>
+    data: Partial<ISubscription>,
+    expectedUpdatedAt?: Date
   ): Promise<ISubscription | null> {
     if (!subscriptionId) return Promise.resolve(null);
-    return this.model.findOneAndUpdate({ subscriptionId }, data, { new: false }).lean({ virtuals: true });
+    const filter = expectedUpdatedAt ? { subscriptionId, updatedAt: expectedUpdatedAt } : { subscriptionId };
+    return this.model.findOneAndUpdate(filter, data, { new: false }).lean({ virtuals: true });
+  }
+
+  /**
+   * Every non-terminal Stripe-sourced row, for the nightly reconciliation to match against Stripe's
+   * own listing. Admin grants have no Stripe subscription and are left out.
+   */
+  async findNonTerminalStripeRows(): Promise<ReconciliationSubscriptionRow[]> {
+    const rows = await this.model
+      .find({
+        status: { $nin: [...TERMINAL_SUBSCRIPTION_STATUSES] },
+        subscriptionId: { $exists: true, $nin: ['', null] },
+        $or: [
+          { source: SubscriptionSource.Stripe },
+          { source: { $in: [null, ''] }, subscriptionId: { $not: /^admin_granted_/ } },
+        ],
+      })
+      .select(
+        'ownerType ownerId subscriptionId source status priceId quantity periodEndsAt cancelAtPeriodEnd unitAmount updatedAt'
+      )
+      .lean({ virtuals: true });
+    return rows.filter(row => row.subscriptionId && resolveSubscriptionSource(row) === SubscriptionSource.Stripe);
+  }
+
+  /** Rows for the given Stripe subscription ids in any status, so the reconciliation can tell a terminal row from no row. */
+  async findBySubscriptionIds(subscriptionIds: string[]): Promise<(ISubscription & IMongoDocument)[]> {
+    if (subscriptionIds.length === 0) return [];
+    return this.model.find({ subscriptionId: { $in: subscriptionIds } }).lean({ virtuals: true });
   }
 
   markPastDue(subscriptionId: string): Promise<ISubscription | null> {

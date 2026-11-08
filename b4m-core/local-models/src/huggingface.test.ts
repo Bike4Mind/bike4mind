@@ -19,6 +19,7 @@ import {
   ggufQuantLabel,
   hubBuildTag,
   hubResolveUrl,
+  ollamaHubName,
   ollamaModelKey,
   ollamaPullRef,
   ollamaRefAliases,
@@ -119,6 +120,19 @@ describe('ggufQuantLabel', () => {
     ['Q8_0/model-F16-imported-Q8_0.gguf', 'Q8_0'],
   ])('labels %s as %s', (name, label) => {
     expect(ggufQuantLabel(name)).toBe(label);
+  });
+});
+
+describe('ollamaHubName', () => {
+  it('names a repo and tag the way Ollama pulls them, or null when Ollama would refuse the name', () => {
+    expect(ollamaHubName('unsloth/Qwen3-30B-A3B-GGUF', 'UD-Q8_K_XL')).toBe(
+      'hf.co/unsloth/Qwen3-30B-A3B-GGUF:UD-Q8_K_XL'
+    );
+    expect(ollamaHubName('my.org/repo', 'Q8_0')).toBeNull();
+    expect(ollamaHubName('org/repo', 'bad tag')).toBeNull();
+    expect(ollamaHubName('org/repo', '-Q8_0')).toBeNull();
+    expect(ollamaHubName('org/repo', 'Q'.repeat(81))).toBeNull();
+    expect(ollamaHubName('not-a-repo', 'Q8_0')).toBeNull();
   });
 });
 
@@ -595,6 +609,21 @@ describe('HuggingFaceHub.getModel', () => {
     expect(await hub.getModel(named)).toMatchObject({ licenses: ['other'], licenseName: 'custom-terms' });
   });
 
+  it('lists a set whose files disagree on the shard total as incomplete', async () => {
+    const repo = 'someone/mixed-GGUF';
+    const sha = 'a'.repeat(40);
+    const file = (path: string) => ({ type: 'file', path, size: 3, lfs: { oid: 'b'.repeat(64), size: 3 } });
+    const server = await serve(
+      repoRoutes(repo, sha, { id: repo, sha }, [
+        file('m-00001-of-00003.gguf'),
+        file('m-00002-of-00003.gguf'),
+        file('m-00003-of-00004.gguf'),
+      ])
+    );
+    const detail = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo);
+    expect(detail.builds.map(build => [build.id, build.complete])).toEqual([['m', false]]);
+  });
+
   it('flags missing shards and picks a tag no earlier file name ends with', async () => {
     const repo = 'someone/odd-GGUF';
     const sha = 'a'.repeat(40);
@@ -1006,6 +1035,18 @@ describe('HuggingFaceHub Ollama refs', () => {
     });
     expect(await hub.ollamaLayers(llama, 'F16')).toBeNull();
     await expect(hub.ollamaLayers(llama, '../x')).rejects.toThrow('Invalid Ollama tag');
+  });
+
+  it('reads a registry JSON layer by its sha256, and null for one the registry lacks', async () => {
+    const params = 'b'.repeat(64);
+    const server = await serve({
+      [`GET /v2/${llama}/blobs/sha256:${params}`]: json({ stop: ['<|eot_id|>'], temperature: 0.6 }),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    expect(await hub.ollamaRegistryJson(llama, params)).toEqual({ stop: ['<|eot_id|>'], temperature: 0.6 });
+    expect(await hub.ollamaRegistryJson(llama, 'c'.repeat(64))).toBeNull();
+    await expect(hub.ollamaRegistryJson(llama, `sha256:${params}`)).rejects.toThrow('Invalid blob digest');
+    await expect(hub.ollamaRegistryJson(llama, '../x')).rejects.toThrow('Invalid blob digest');
   });
 
   it('verifies a gated or private repo to its huggingface.co name and a public one to hf.co', async () => {

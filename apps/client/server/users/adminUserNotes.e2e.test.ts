@@ -11,7 +11,7 @@ import {
 import { AdminUserNoteModel, AdminUserNoteRevisionModel, AdminAuditLogModel, User } from '@bike4mind/database';
 import { listAdminUserNotes, writeAdminUserNote } from './adminUserNotes';
 import { listUserTimeline } from '../utils/userTimeline';
-import { recordAdminActionFromRequest } from '../utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const routes = vi.hoisted(() => ({
   patch: undefined as undefined | ((req: Request, res: Response) => Promise<unknown>),
@@ -31,11 +31,12 @@ vi.mock('@server/middlewares/baseApi', () => ({
 await import('../../pages/api/admin/users/[userId]/tags');
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
-vi.mock('../utils/adminAudit', async importOriginal => {
-  const original = await importOriginal<typeof import('../utils/adminAudit')>();
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
+  const original = await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>();
   return { ...original, recordAdminActionFromRequest: vi.fn(original.recordAdminActionFromRequest) };
 });
 const USER = '650000000000000000000001';
+const SUBJECT_ACCOUNT = { createdAt: new Date('2026-01-01T00:00:00Z'), currentCredits: 0 };
 const ADMIN = '650000000000000000000002';
 let server: MongoMemoryReplSet;
 const request = (
@@ -82,7 +83,7 @@ describe('admin user notes storage, service and timeline', () => {
     expect(edited.author.id).toBe(ADMIN);
     expect(deleted.deleted).toBe(true);
     const timeline = await listUserTimeline(
-      { id: USER, name: 'Synthetic user', isAdmin: false },
+      { id: USER, name: 'Synthetic user', isAdmin: false, account: SUBJECT_ACCOUNT },
       { types: ['admin'], limit: 50, range: {} }
     );
     expect(timeline.entries).toHaveLength(4);
@@ -172,7 +173,7 @@ describe('admin user notes storage, service and timeline', () => {
     };
     await writeTags([], ['pilot']);
     const timeline = await listUserTimeline(
-      { id: USER, name: 'Synthetic user', isAdmin: false },
+      { id: USER, name: 'Synthetic user', isAdmin: false, account: SUBJECT_ACCOUNT },
       { types: ['admin'], limit: 50, range: {} }
     );
     expect(timeline.entries).toHaveLength(1);

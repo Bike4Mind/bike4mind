@@ -1,6 +1,6 @@
 import { organizationRepository, userRepository } from '@bike4mind/database';
 import { SubscriptionOwnerType, type ISubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
-import type { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import type { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 type AuditTarget = Parameters<typeof recordAdminActionFromRequest>[1]['target'];
 

@@ -46,7 +46,7 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
     id: 'signup',
     title: 'Signup and starter credits',
     description: 'Who can sign up on their own, and what a referred user starts with.',
-    keys: ['allowOpenRegistration', 'defaultFreeCredits', 'ReferralCreditsAmount'],
+    keys: ['allowOpenRegistration', 'ReferralCreditsAmount'],
   },
   {
     id: 'referral-rewards',
@@ -220,19 +220,13 @@ const AdminGrowthPricingTab = () => {
         `Team Plan Minimum Seats (${requestedMin}) is above the maximum (${resolved.maxSeats}); the maximum is used as the minimum until this is fixed.`
       );
     }
-    const freeCredits = settingsMap.defaultFreeCredits.schema.safeParse(storedByKey.get('defaultFreeCredits'));
-    if (freeCredits.success && freeCredits.data > 0) {
-      out.push(
-        'Default Free Credits is retired and no longer pays any signup; set Signup Grant Initial Credits instead.'
-      );
-    }
     return out;
   }, [storedByKey]);
 
   if (isLoading) return <LinearProgress data-testid="admin-growth-pricing-loading" />;
 
   return (
-    <Stack spacing={2} sx={{ p: 2, maxWidth: 1100 }} data-testid="admin-growth-pricing-tab">
+    <Stack spacing={2} sx={{ maxWidth: 1100 }} data-testid="admin-growth-pricing-tab">
       <div>
         <Typography level="h3">Growth and Pricing</Typography>
         <Typography level="body-sm" sx={{ color: 'text.secondary' }}>

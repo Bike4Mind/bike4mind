@@ -11,8 +11,8 @@ const h = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', () => ({ adminAuditLogRepository: h.auditLog, adminSettingsRepository: {} }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: {} }));
 vi.mock('@bike4mind/services', () => ({ adminAuditService: { recordAdminAction: h.recordAdminAction } }));
-vi.mock('./adminAudit', async importOriginal => ({
-  ...(await importOriginal<typeof import('./adminAudit')>()),
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   loadCreditGrantPolicy: h.loadCreditGrantPolicy,
 }));
 

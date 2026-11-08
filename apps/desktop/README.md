@@ -147,6 +147,31 @@ the switch off or changing models clears the current hint and discards late answ
 previous choice. Ollama completion requests time out after 30 seconds; hosted requests after
 five. Loading the model list can add time before generation starts.
 
+## Starting local model servers
+
+Settings > Model servers offers Start, Stop, Restart and Launch settings for This computer
+and saved loopback addresses. Desktop runs `ollama serve` for Ollama, or a llama-server
+router for an OpenAI-compatible address. For the router, enter an absolute models folder
+and, if it is not on PATH, the full llama-server program path.
+
+Launch settings apply when Desktop next starts the server. Save changes and choose Restart
+when the row says Restart to apply. A server started outside Desktop has its launch settings
+locked; stop it first, check again, and start it from Desktop to use those settings.
+Fit badges use the running server's cache type and flash attention when Desktop knows them.
+When Desktop cannot read an unmanaged local Ollama's settings, it uses the saved launch
+settings as an assumption.
+
+### Troubleshooting local server startup
+
+- Port in use: stop the program holding the address, then choose Check now.
+- Ollama not found: install Ollama and check again. A llama-server without router support
+  needs a newer build that accepts `--models-dir`.
+- Desktop closed unexpectedly: Linux and macOS can recover a recorded server whose process
+  still matches. Windows requires ending ollama.exe or llama-server.exe in Task Manager.
+  A router can be recovered only when the OS keychain could store its key securely.
+- Stop failed: retry Stop before removing the server. Desktop retains the saved row when
+  stopping fails. On quit it logs a shutdown failure and continues after the shutdown deadline.
+
 ## Local history and offline models
 
 Turn on **Local history** for a conversation to index its messages and visited browser pages

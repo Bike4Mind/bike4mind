@@ -28,6 +28,7 @@ import type { ModelSettings } from '@shared/modelSettings';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
 import type {
   ModelServerAddInput,
+  ModelServerLaunchAction,
   ModelServerProbeInput,
   ModelServerUpdateInput,
   ModelServerView,
@@ -50,6 +51,7 @@ import type { TerminalCreateRequest, TerminalDataEvent, TerminalsChangedEvent } 
 import type { UpdateState } from '@shared/update';
 import type { UsageWindowId } from '@shared/usage';
 import type { FleetState } from '@shared/fleet';
+import type { ModelBuildReport, ModelPose, ModelView, ModelViewState } from '@shared/model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewState } from '@shared/simulator';
 
 // Written out one method per channel rather than a generic invoke(channel, ...args)
@@ -325,6 +327,28 @@ const api: DesktopApi = {
     copyShareLink: listingId => ipcRenderer.invoke(IPC_CHANNELS.skillMarketCopyShareLink, listingId),
     openSource: url => ipcRenderer.invoke(IPC_CHANNELS.skillMarketOpenSource, url),
   },
+  model: {
+    getState: () => ipcRenderer.invoke(IPC_CHANNELS.modelGetState),
+    openDialog: () => ipcRenderer.invoke(IPC_CHANNELS.modelOpenDialog),
+    close: () => ipcRenderer.invoke(IPC_CHANNELS.modelClose),
+    readAsset: () => ipcRenderer.invoke(IPC_CHANNELS.modelReadAsset),
+    reportBuild: (report: ModelBuildReport) => ipcRenderer.invoke(IPC_CHANNELS.modelBuildReport, report),
+    writeGlb: request => ipcRenderer.invoke(IPC_CHANNELS.modelWriteGlb, request),
+    setParam: request => ipcRenderer.invoke(IPC_CHANNELS.modelSetParam, request),
+    saveExport: request => ipcRenderer.invoke(IPC_CHANNELS.modelSaveExport, request),
+    captureResult: result => ipcRenderer.send(IPC_CHANNELS.modelCaptureResult, result),
+    onState: listener => {
+      const handler = (_event: unknown, state: ModelViewState) => listener(state);
+      ipcRenderer.on(IPC_CHANNELS.modelState, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.modelState, handler);
+    },
+    onCaptureRequest: listener => {
+      const handler = (_event: unknown, request: { id: string; views: ModelView[]; pose: ModelPose }) =>
+        listener(request);
+      ipcRenderer.on(IPC_CHANNELS.modelCaptureRequest, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.modelCaptureRequest, handler);
+    },
+  },
   simulator: {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.simulatorGetState),
     listDevices: () => ipcRenderer.invoke(IPC_CHANNELS.simulatorListDevices),
@@ -414,6 +438,8 @@ const api: DesktopApi = {
     remove: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.modelServersRemove, id),
     check: (id?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelServersCheck, id),
     probedHardware: () => ipcRenderer.invoke(IPC_CHANNELS.modelServersProbedHardware),
+    launch: (id: string, action: ModelServerLaunchAction) =>
+      ipcRenderer.invoke(IPC_CHANNELS.modelServersLaunch, id, action),
     onChanged: listener => {
       const handler = (_event: unknown, servers: ModelServerView[]) => listener(servers);
       ipcRenderer.on(IPC_CHANNELS.modelServersChanged, handler);
@@ -442,6 +468,8 @@ const api: DesktopApi = {
     syncCode: () => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSyncCode),
     importChatExport: () => ipcRenderer.invoke(IPC_CHANNELS.claudeImportChatExport),
     setWatchFolder: (clear: boolean) => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSetWatchFolder, clear),
+    setWebSettings: patch => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSetWebSettings, patch),
+    syncWeb: () => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSyncWeb),
     remove: kind => ipcRenderer.invoke(IPC_CHANNELS.claudeImportRemove, kind),
     onStateChanged: listener => {
       const handler = (_event: unknown, state: ClaudeImportState) => listener(state);
@@ -506,6 +534,7 @@ const api: DesktopApi = {
       ipcRenderer.on(IPC_CHANNELS.attentionOpen, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.attentionOpen, handler);
     },
+    takePendingOpen: () => ipcRenderer.invoke(IPC_CHANNELS.attentionTakePendingOpen),
   },
   devLog: {
     getSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.devLogGetSnapshot),

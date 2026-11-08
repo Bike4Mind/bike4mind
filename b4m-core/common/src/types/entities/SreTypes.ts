@@ -279,7 +279,7 @@ export const SRE_DEFAULT_REPO_SLUG = 'MillionOnMars/lumina5';
 
 /** EventBridge detail-type for the Diagnostician -> Surgeon handoff.
  *  Must stay in sync with the rule in infra/eventBus.ts (sreFixDispatch),
- *  the publisher (apps/client/server/utils/eventBus.ts), and the envelope
+ *  the publisher (packages/server-utils/src/utils/eventBus.ts), and the envelope
  *  unwrap in apps/workers/src/queueHandlers/sreFix.ts. */
 export const SRE_ANALYSIS_COMPLETED_EVENT = 'sre.analysis.completed';
 

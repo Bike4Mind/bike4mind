@@ -7,6 +7,7 @@ import { OllamaRuntime, type LocalRuntime } from '@bike4mind/local-models';
 import {
   OpenAICompatibleRuntime,
   createServerFetch,
+  createSshFetch,
   credentialHeaders,
   credentialRedactor,
   forbiddenMessage,
@@ -17,22 +18,26 @@ import {
   redactServerResponse,
   serverManagement,
   serverRuntimeId,
+  SSH_DEFAULT_PORT,
+  SSH_PROBE_TIMEOUT_MS,
+  sshServerUrl,
   type CredentialRedactor,
   type DesktopModelServers,
-  type DesktopOnlyServer,
   type FetchLike,
   type OpenAICompatibleProduct,
   type SharedServerRecord,
+  type SshEndpoint,
 } from '@bike4mind/local-models/servers';
 import { clean, type RuntimeTarget } from './localModels.js';
 import { shellWord } from '../utils/shellWord.js';
 
 export type CliModelServer = SharedServerRecord & { source: 'desktop' | 'cli' };
 
+/** Opens the SSH forward to a server on another machine's loopback; createSshFetch outside tests. */
+export type SshFetchFor = (endpoint: SshEndpoint) => FetchLike;
+
 export interface LoadedModelServers {
   servers: CliModelServer[];
-  /** Desktop's SSH servers: listed so they are not silently missing, but the CLI cannot reach them. */
-  desktopOnly?: DesktopOnlyServer[];
   /** Why Desktop's list could not be read, when it could not. */
   problem: string | null;
 }
@@ -43,12 +48,9 @@ export type SecretFor = (serverId: string) => string | undefined;
 export async function loadModelServers(
   read: () => Promise<DesktopModelServers> = readDesktopModelServers
 ): Promise<LoadedModelServers> {
-  const { servers, desktopOnly = [], problem } = await read();
-  return { servers: servers.map(server => ({ ...server, source: 'desktop' as const })), desktopOnly, problem };
+  const { servers, problem } = await read();
+  return { servers: servers.map(server => ({ ...server, source: 'desktop' as const })), problem };
 }
-
-/** How `b4m models servers` shows a server only Desktop can reach. */
-export const DESKTOP_ONLY_STATUS = 'SSH, Desktop only';
 
 export function findModelServer(servers: CliModelServer[], name: string): CliModelServer | undefined {
   const wanted = name.trim().toLowerCase();
@@ -56,11 +58,6 @@ export function findModelServer(servers: CliModelServer[], name: string): CliMod
 }
 
 export function noSuchServer(loaded: LoadedModelServers, name: string): Error {
-  const wanted = name.trim().toLowerCase();
-  const ssh = loaded.desktopOnly?.find(server => server.name.toLowerCase() === wanted);
-  if (ssh) {
-    return new Error(`${clean(ssh.name)} connects over SSH, which only Desktop supports. The CLI cannot use it yet.`);
-  }
   const known = loaded.servers.map(server => clean(server.name)).join(', ');
   const detail = loaded.problem ?? (known ? `Saved servers: ${known}.` : 'No model servers are saved in Desktop.');
   return new Error(`No model server named ${clean(name)}. ${detail} See: b4m models servers`);
@@ -97,11 +94,43 @@ export function loginHint(server: CliModelServer): string {
 
 /** The address to show; one the CLI cannot parse is not echoed, since it may carry a secret in its query. */
 export function serverAddressLabel(server: CliModelServer): string {
-  return parseServerAddress(server.transport.baseUrl)?.baseUrl ?? 'unusable address';
+  const { transport } = server;
+  if (transport.type === 'ssh') {
+    return `ssh ${transport.destination}${transport.port === SSH_DEFAULT_PORT ? '' : ` port ${transport.port}`}`;
+  }
+  return parseServerAddress(transport.baseUrl)?.baseUrl ?? 'unusable address';
 }
 
-export function serverFetch(server: CliModelServer, secret: string | undefined): FetchLike {
-  const parsed = parseServerAddress(server.transport.baseUrl);
+/** Where requests go: the address, or for SSH the port on the far end's loopback; null when unusable. */
+export function serverBaseUrl(server: CliModelServer): string | null {
+  const { transport } = server;
+  if (transport.type === 'ssh') return sshServerUrl(transport.port);
+  return parseServerAddress(transport.baseUrl)?.baseUrl ?? null;
+}
+
+/** Ends every request when `signal` aborts too, so a cancel stops an ssh already running. */
+export const withSignal =
+  (fetch: FetchLike, signal: AbortSignal): FetchLike =>
+  (input, init) =>
+    fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal });
+
+export function serverFetch(
+  server: CliModelServer,
+  secret: string | undefined,
+  sshFetchFor: SshFetchFor = endpoint => createSshFetch(endpoint)
+): FetchLike {
+  const { transport } = server;
+  if (transport.type === 'ssh') {
+    return sshFetchFor({
+      destination: transport.destination,
+      port: transport.port,
+      label: server.name,
+      app: 'The CLI',
+      // Ollama over SSH takes no credential; ssh signs in with the user's keys.
+      credentialHeaders: () => (server.kind === 'ollama' ? null : serverCredential(server, secret)),
+    });
+  }
+  const parsed = parseServerAddress(transport.baseUrl);
   if (!parsed) throw new Error(`${clean(server.name)} has an address the CLI cannot use.`);
   return createServerFetch({
     origin: parsed.origin,
@@ -121,7 +150,8 @@ export function runtimeFor(
   kind: CliModelServer['kind'] = server.kind,
   product: OpenAICompatibleProduct | null = null
 ): LocalRuntime {
-  const baseUrl = parseServerAddress(server.transport.baseUrl)?.baseUrl ?? server.transport.baseUrl;
+  const baseUrl = serverBaseUrl(server);
+  if (!baseUrl) throw new Error(`${clean(server.name)} has an address the CLI cannot use.`);
   const id = serverRuntimeId(server.id);
   return kind === 'ollama'
     ? new OllamaRuntime({ baseUrl, id, fetch, redact: redactServerResponse })
@@ -133,6 +163,7 @@ export function productLabel(kind: CliModelServer['kind'] | null, product: OpenA
   if (product === 'vllm') return 'vLLM';
   if (product === 'llama-server') return 'llama-server';
   if (product === 'lmstudio') return 'LM Studio';
+  if (product === 'llama-swap') return 'llama-swap';
   return 'OpenAI-compatible';
 }
 
@@ -160,15 +191,15 @@ const now = () => performance.now();
 export async function resolveServerTarget(
   server: CliModelServer,
   secret: string | undefined,
-  fetchOverride?: FetchLike,
+  fetch: FetchLike,
   probeTimeoutMs?: number
 ): Promise<RuntimeTarget & { product: OpenAICompatibleProduct | null }> {
   const name = clean(server.name);
   if (needsCredential(server, secret)) throw new Error(`${name} needs credentials. Run: ${loginHint(server)}`);
-  const fetch = fetchOverride ?? serverFetch(server, secret);
-  const parsed = parseServerAddress(server.transport.baseUrl);
-  const baseUrl = parsed?.baseUrl ?? server.transport.baseUrl;
-  const outcome = await probeServer(fetch, baseUrl, server.name, now, server.kind, probeTimeoutMs);
+  const baseUrl = serverBaseUrl(server);
+  if (!baseUrl) throw new Error(`${name} has an address the CLI cannot use.`);
+  const timeout = probeTimeoutMs ?? (server.transport.type === 'ssh' ? SSH_PROBE_TIMEOUT_MS : undefined);
+  const outcome = await probeServer(fetch, baseUrl, server.name, now, server.kind, timeout);
   if (!outcome.kind) {
     if (outcome.auth) {
       const refused = secret ? `${name} refused the saved credentials.` : `${name} needs credentials.`;

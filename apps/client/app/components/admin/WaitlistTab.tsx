@@ -42,6 +42,7 @@ import { toast } from 'sonner';
 import { ActionDialog } from './shared/ActionDialog';
 import { ADMIN_REASON_PRESETS } from './shared/adminReason';
 import { InviteCenterShell } from './InviteCenterShell';
+import { SubscriberNetworkCell, SuspiciousNameChip } from './WaitlistSignals';
 import GrantPackageSelect, { useGrantPackageOptions } from './InviteCenter/shared/GrantPackageSelect';
 
 const SOURCE_LABELS: Record<SubscriberSource, string> = {
@@ -460,7 +461,9 @@ const WaitlistSection = () => {
                         {new Date(subscriber.createdAt).toLocaleDateString()}
                       </Typography>
                       <SubscriberSourceChip source={subscriber.source} />
+                      {subscriber.suspicious && <SuspiciousNameChip reasons={subscriber.suspicious.reasons} />}
                     </Stack>
+                    <SubscriberNetworkCell network={subscriber.signupNetwork} />
                     <Divider />
                     <Stack direction="row" spacing={1}>
                       <Button
@@ -492,6 +495,7 @@ const WaitlistSection = () => {
                   <th>Email</th>
                   <th>Date</th>
                   <th>Source</th>
+                  <th style={{ width: 280 }}>Network</th>
                   <th>Status</th>
                   <th>Actions</th>
                 </tr>
@@ -499,11 +503,19 @@ const WaitlistSection = () => {
               <tbody>
                 {subscribers.data?.data.map(subscriber => (
                   <tr key={subscriber.id}>
-                    <td>{`${subscriber.firstName} ${subscriber.lastName}`}</td>
+                    <td>
+                      <Stack spacing={0.5} alignItems="flex-start">
+                        <span>{`${subscriber.firstName} ${subscriber.lastName}`}</span>
+                        {subscriber.suspicious && <SuspiciousNameChip reasons={subscriber.suspicious.reasons} />}
+                      </Stack>
+                    </td>
                     <td>{subscriber.email}</td>
                     <td>{new Date(subscriber.createdAt).toLocaleDateString()}</td>
                     <td>
                       <SubscriberSourceChip source={subscriber.source} />
+                    </td>
+                    <td>
+                      <SubscriberNetworkCell network={subscriber.signupNetwork} />
                     </td>
                     <td>
                       <Chip size="sm" color={subscriber.inviteGenerated ? 'success' : 'neutral'}>

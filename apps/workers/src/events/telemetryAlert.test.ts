@@ -18,15 +18,15 @@ vi.mock('@workers/utils/eventContext', () => ({
   withEventContext: (fn: unknown) => fn,
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   TelemetryEvents: { Alert: { schema: { parse: (properties: unknown) => properties } } },
 }));
 
-vi.mock('@server/utils/telemetryAnalysisCache', () => ({
+vi.mock('@bike4mind/server-utils/utils/telemetryAnalysisCache', () => ({
   cacheTelemetryAnalysisOnQuest: h.cacheTelemetryAnalysisOnQuest,
 }));
 
-vi.mock('@server/utils/telemetryIssueCreator', () => ({
+vi.mock('@bike4mind/server-utils/utils/telemetryIssueCreator', () => ({
   getFallbackPriority: () => 'P2',
   fetchExistingTelemetryIssues: async () => [],
   fetchRecentlyClosedIssues: async () => [],

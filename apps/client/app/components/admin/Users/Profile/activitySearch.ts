@@ -1,4 +1,11 @@
-import { USER_TIMELINE_TYPES, type UserTimelineType } from '@bike4mind/common';
+import {
+  USER_TIMELINE_CATEGORIES,
+  USER_TIMELINE_CATEGORY_TYPES,
+  USER_TIMELINE_TYPES,
+  userTimelineTypesFor,
+  type UserTimelineCategory,
+  type UserTimelineType,
+} from '@bike4mind/common';
 
 /**
  * The Activity tab's filters in the profile URL (`?tab=activity&types=signin,admin&from=...&to=...`).
@@ -42,6 +49,16 @@ export const activityFiltersFromSearch = (search: ActivitySearch): ActivityFilte
   from: parseDay(search.from),
   to: parseDay(search.to),
 });
+
+/** A category reads as selected when any of its types is, so a narrowed deep link still shows its chip. */
+export const categoriesOfTypes = (types: readonly UserTimelineType[]): UserTimelineCategory[] =>
+  USER_TIMELINE_CATEGORIES.filter(category =>
+    USER_TIMELINE_CATEGORY_TYPES[category].some(type => types.includes(type))
+  );
+
+/** No category left means every source, as with the types filter. */
+export const typesOfCategories = (categories: readonly UserTimelineCategory[]): UserTimelineType[] =>
+  categories.length === 0 ? [...USER_TIMELINE_TYPES] : userTimelineTypesFor(categories);
 
 export const activitySearchFromFilters = (filters: ActivityFilters): ActivitySearch =>
   parseActivitySearch({ types: filters.types.join(','), from: filters.from, to: filters.to });

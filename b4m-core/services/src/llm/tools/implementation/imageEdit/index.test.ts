@@ -262,6 +262,7 @@ describe('edit_image processAndStoreImage moderation gate (agent-tool serve-gate
         prompt: EDIT.prompt,
         jobId: expect.any(String),
       },
+      generatedOutputKey: 'generated/stored-key.png',
     });
   });
 

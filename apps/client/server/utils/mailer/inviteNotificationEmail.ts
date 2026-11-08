@@ -1,5 +1,5 @@
 import { InviteType } from '@bike4mind/common';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 
 /** Human-readable noun for an invite type, as used in invite email copy. */

@@ -1,6 +1,7 @@
 export {
   credentialHeaders,
   desktopUserDataDirs,
+  desktopUserDataFile,
   hydrate,
   isStored,
   localModelId,
@@ -14,7 +15,6 @@ export {
   serverRuntimeId,
   type DesktopDirsOptions,
   type DesktopModelServers,
-  type DesktopOnlyServer,
   type HttpTransport,
   type ModelServerAccess,
   type ModelServerCredentialInput,
@@ -55,20 +55,34 @@ export {
   createSshFetch,
   describeSshFailure,
   parseSshDestination,
+  parseSshPort,
   setsControlPath,
   sharedControlPath,
   SSH_CONNECT_TIMEOUT_S,
+  SSH_DEFAULT_PORT,
   SSH_OLLAMA_URL,
   SSH_PROBE_TIMEOUT_MS,
   sshArgs,
   sshChildEnv,
   SshConnectionError,
   sshDestinationProblem,
+  SshForwardRefusedError,
+  SSH_PORT_PROBLEM,
   SshRefusedError,
+  sshServerUrl,
   suggestSshName,
   type SshDeps,
   type SshEndpoint,
 } from './ssh';
+export {
+  discoverSshServers,
+  SSH_DISCOVERY_DEADLINE_MS,
+  SSH_DISCOVERY_PORTS,
+  type SshDiscovery,
+  type SshDiscoveryOptions,
+  type SshFoundServer,
+  usualPorts,
+} from './sshDiscovery';
 export { describeFailure, DROP_CODES, errorCode } from './failure';
 export { answersWithoutCredentials, forbiddenMessage, probeServer, type ProbeOutcome } from './probe';
 export {

@@ -65,7 +65,7 @@ const Team: React.FC = () => {
 
   if (isLoading) {
     return (
-      <Box sx={{ p: 3, display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '400px' }}>
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '400px' }}>
         <CircularProgress />
       </Box>
     );
@@ -73,7 +73,7 @@ const Team: React.FC = () => {
 
   if (error) {
     return (
-      <Box sx={{ p: 3 }}>
+      <Box>
         <Alert color="danger" variant="soft">
           Failed to load team members. Please try again later.
         </Alert>
@@ -82,7 +82,7 @@ const Team: React.FC = () => {
   }
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box>
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="space-between" sx={{ mb: 3 }}>
         <Stack direction="row" spacing={1} alignItems="center">
           <Typography level="h2" sx={{ fontWeight: 'bold' }}>

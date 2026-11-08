@@ -1,24 +1,15 @@
 import { useMemo } from 'react';
-import {
-  isStoredToggleOn,
-  runtimeSignupGrantSchedule,
-  storedGrantCredits,
-  type SignupGrantSchedule,
-} from '@bike4mind/common';
+import { runtimeSignupGrantSchedule, storedGrantCredits, type SignupGrantSchedule } from '@bike4mind/common';
 import { useSettingsFromServer } from './data/settings';
 
 /**
- * Client mirror of resolveSignupGrantSchedule in b4m-core/common/src/signupGrant.ts. Reads the raw
- * server rows rather than useGetSettingsValue, which fills an absent key with its registry default
- * and would hide the old-key fallback. Every key the resolver reads is userReadable, so both sides agree.
+ * Client mirror of resolveSignupGrantSchedule in b4m-core/common/src/signupGrant.ts. Reads the raw server
+ * rows so an unset key resolves exactly as the server does; every schedule key is userReadable.
  */
 export function useSignupGrantSchedule(): SignupGrantSchedule {
   const { data } = useSettingsFromServer();
   return useMemo(() => {
     const rows = new Map((data ?? []).map(row => [row.settingName, row.settingValue as unknown]));
-    return runtimeSignupGrantSchedule(
-      key => storedGrantCredits(key, rows.get(key)),
-      isStoredToggleOn(rows.get('signupGrantActivityEnabled'))
-    );
+    return runtimeSignupGrantSchedule(key => storedGrantCredits(key, rows.get(key)));
   }, [data]);
 }

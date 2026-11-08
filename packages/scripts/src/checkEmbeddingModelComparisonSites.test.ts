@@ -103,6 +103,12 @@ const FILTER_CONTEXT = /\b(filter|term|terms|match)\b/;
  */
 const NOT_THIS_RULE: { pattern: RegExp; reason: string }[] = [
   {
+    pattern: /(?<![.\w])(?:model|request\.model)\s*(===|!==)\s*ApiBedrockEmbeddingModel\.COHERE_EMBED_V4\b/,
+    reason:
+      'API-only Cohere provider dispatch, registration and token accounting. These compare the ' +
+      'requested model to a provider model ID, never a stored FabFile label to a retrieval query.',
+  },
+  {
     pattern: /MEMENTO_EMBEDDING_(ID|MODEL)/,
     reason:
       'The memento corpus is deliberately decoupled and pinned to its own model - see the ' +

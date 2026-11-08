@@ -19,11 +19,13 @@ import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { apiKeyService } from '@bike4mind/services';
 import { isTerminalCreditRefusal } from '@bike4mind/common';
+import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import * as agentProactiveMessagingService from '@bike4mind/services/agentProactiveMessagingService';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { canAccessSession } from '@bike4mind/server-utils/utils/sessionAccess';
-import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
+import { publishPushNotification, sessionDeepLink, truncateForPush } from '@server/utils/pushNotifications';
 
 const agentProactiveMessageQueuePayload = z.object({
   sessionAgentConfigId: z.string(),
@@ -131,9 +133,10 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
         meter: createCompletionMeter(user, logger, 'proactive agent messages', { sessionId: config.sessionId }),
       });
     } catch (err) {
-      // Refused before any provider call; retrying cannot help until the owner adds credits or the daily cap resets.
-      if (!isTerminalCreditRefusal(err)) throw err;
-      logger.info(`Skipping proactive message for agent ${config.agentId}: ${(err as Error).message}`);
+      // Refused before any provider call; retrying cannot help until the owner adds credits, the daily cap
+      // resets, or an admin restores the account's AI access.
+      if (!isTerminalCreditRefusal(err) && !isAiAccessRefusal(err)) throw err;
+      logger.warn(`Skipping proactive message for agent ${config.agentId}: ${(err as Error).message}`);
       return;
     }
 
@@ -146,6 +149,24 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
       action: 'invalidate_query',
       queryKey: ['recent-proactive-messages'],
     });
+
+    // Scheduled and unprompted, so it is pushed whether or not the user is connected.
+    const sessionName = session.name?.trim();
+    await publishPushNotification(
+      {
+        userId: config.userId,
+        category: 'agent_message',
+        title: agent.name ? truncateForPush(agent.name, 60) : 'New message',
+        body: sessionName
+          ? `New message in "${truncateForPush(sessionName, 60)}".`
+          : 'Your agent sent you a new message.',
+        deepLink: sessionDeepLink(config.sessionId),
+        // The body names only the session, so a later message replaces an earlier one rather than stacking.
+        collapseId: `agent-message:${config.sessionId}:${config.agentId}`,
+        sessionId: config.sessionId,
+      },
+      logger
+    );
 
     logger.info(`Successfully processed proactive message for agent ${config.agentId}`);
   } catch (error) {

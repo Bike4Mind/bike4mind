@@ -5,6 +5,9 @@
 
 import { beforeEach, afterEach, vi } from 'vitest';
 
+// Tests never read the Desktop install on the machine running them; a test that wants a settings file names it.
+process.env.B4M_DESKTOP_MODEL_SETTINGS = 'off';
+
 // Reset all mocks before each test
 beforeEach(() => {
   vi.clearAllMocks();

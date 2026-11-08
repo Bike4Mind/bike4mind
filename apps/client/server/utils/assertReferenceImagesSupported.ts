@@ -1,4 +1,4 @@
-import { getMaxReferenceImages, isGPTImageModel, MAX_REFERENCE_IMAGES } from '@bike4mind/common';
+import { getMaxEditReferenceImages, getMaxReferenceImages } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 /** Reject unsupported reference images before any work is queued. */
@@ -8,8 +8,7 @@ export function assertReferenceImagesSupported(
   operation: 'generate' | 'edit' = 'edit'
 ): void {
   if (!referenceImageFabFileIds?.length) return;
-  const limit =
-    operation === 'generate' ? getMaxReferenceImages(model) : isGPTImageModel(model) ? MAX_REFERENCE_IMAGES : 0;
+  const limit = operation === 'generate' ? getMaxReferenceImages(model) : getMaxEditReferenceImages(model);
   if (!limit) {
     throw new BadRequestError(`referenceImageFabFileIds is not supported by model "${model}" for ${operation}`);
   }

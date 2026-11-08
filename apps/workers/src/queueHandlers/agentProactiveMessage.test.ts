@@ -7,7 +7,8 @@
  * real here (not mocked) - only its inputs (the session doc) are controlled per test.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { insufficientCreditsError, TooManyRequestsError } from '@bike4mind/common';
+import { ForbiddenError, insufficientCreditsError, TooManyRequestsError } from '@bike4mind/common';
+import { ACCOUNT_BANNED_MESSAGE } from '@bike4mind/services/userService/accountState';
 
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: h.getUserEntitlements }));
 
@@ -27,6 +28,7 @@ const h = vi.hoisted(() => ({
   sendToClient: vi.fn(),
   createCompletionMeter: vi.fn(),
   getUserEntitlements: vi.fn(async (_user: unknown) => ['plan:paid']),
+  publishPushNotification: vi.fn(async () => undefined),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -59,6 +61,12 @@ vi.mock('@bike4mind/utils', () => ({
   },
 }));
 
+vi.mock('@server/utils/pushNotifications', () => ({
+  publishPushNotification: h.publishPushNotification,
+  sessionDeepLink: (sessionId: string) => `https://app.example.test/notebooks/${sessionId}`,
+  truncateForPush: (text: string) => text,
+}));
+
 vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: h.createCompletionMeter }));
 
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
@@ -77,7 +85,7 @@ vi.mock('sst', () => ({
 
 import { dispatch } from './agentProactiveMessage';
 
-const logger = { info: vi.fn(), error: vi.fn() } as never;
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
 const makeEvent = (body: unknown) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
 const payload = { sessionAgentConfigId: 'config-1' };
 
@@ -127,6 +135,26 @@ describe('agentProactiveMessage consumer', () => {
     expect(h.sendToClient).toHaveBeenCalledTimes(2);
   });
 
+  it('publishes an agent_message push to config.userId after the message is sent', async () => {
+    h.agentFindAccessibleById.mockResolvedValue({ id: 'agent-1', name: 'Scout' });
+    h.sessionFindById.mockResolvedValue({ ...SESSION_EDITOR_HAS_WRITE, name: 'Roadmap' });
+
+    await dispatch(makeEvent(payload), {} as never, logger);
+
+    expect(h.publishPushNotification).toHaveBeenCalledExactlyOnceWith(
+      {
+        userId: 'editor',
+        category: 'agent_message',
+        title: 'Scout',
+        body: 'New message in "Roadmap".',
+        deepLink: 'https://app.example.test/notebooks/session-1',
+        collapseId: 'agent-message:session-1:agent-1',
+        sessionId: 'session-1',
+      },
+      logger
+    );
+  });
+
   it('skips without executing when config.userId no longer has write access to the session (revoked session grant)', async () => {
     h.sessionFindById.mockResolvedValue(SESSION_EDITOR_REVOKED);
 
@@ -167,6 +195,7 @@ describe('agentProactiveMessage consumer', () => {
 
     await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
     expect(h.sendToClient).not.toHaveBeenCalled();
+    expect(h.publishPushNotification).not.toHaveBeenCalled();
   });
 
   it('skips without retrying or notifying when the owner hit the free-tier daily cap', async () => {
@@ -179,6 +208,19 @@ describe('agentProactiveMessage consumer', () => {
 
     await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
     expect(h.sendToClient).not.toHaveBeenCalled();
+  });
+
+  it('skips without retrying or notifying when the owner account is suspended', async () => {
+    h.generateAndSendProactiveMessage.mockRejectedValue(new ForbiddenError(ACCOUNT_BANNED_MESSAGE));
+
+    await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
+    expect(h.sendToClient).not.toHaveBeenCalled();
+  });
+
+  it('still rethrows an unrelated forbidden error', async () => {
+    h.generateAndSendProactiveMessage.mockRejectedValue(new ForbiddenError('Unauthorized. Admin access required.'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, logger)).rejects.toThrow('Unauthorized');
   });
 
   it('still rethrows an unrelated generation failure', async () => {

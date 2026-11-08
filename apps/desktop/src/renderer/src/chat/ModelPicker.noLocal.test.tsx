@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { localModelId, NO_LOCAL_MODEL, type ChatModelOption } from '@shared/chat';
+import { OLLAMA_NOT_RUNNING } from '@shared/modelServers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ModelPicker } from './ModelPicker';
 import type { NoLocalModels } from './noLocalModels';
@@ -77,16 +78,16 @@ const el = (testId: string) => {
 
 describe('ModelPicker with no local model', () => {
   it('names the empty state instead of the saved hosted model or a sign-in error', () => {
-    mount({ noLocal: { reason: 'Ollama is not running at http://127.0.0.1:11434.', fix: null } });
+    mount({ noLocal: { reason: OLLAMA_NOT_RUNNING, fix: 'start-ollama' } });
     expect(el('model-picker-btn').textContent).toBe('No local model');
-    expect(el('model-picker-no-local').textContent).toContain('Ollama is not running');
+    expect(el('model-picker-no-local').textContent).toBe(OLLAMA_NOT_RUNNING);
     expect(document.body.textContent).not.toContain('claude-opus-5');
     expect(document.body.textContent).not.toContain('Sign in');
     expect(document.querySelector('[data-testid="model-picker-open-models-item"]')).toBeNull();
   });
 
   it('makes the reason a focusable menu item that rechecks Ollama', () => {
-    const { reload } = mount({ noLocal: { reason: 'Ollama is not running.', fix: null } });
+    const { reload } = mount({ noLocal: { reason: OLLAMA_NOT_RUNNING, fix: 'start-ollama' } });
     expect(el('model-picker-no-local').getAttribute('role')).toBe('menuitem');
     act(() => el('model-picker-no-local').click());
     expect(reload).toHaveBeenCalledOnce();
@@ -103,9 +104,9 @@ describe('ModelPicker with no local model', () => {
   });
 
   it('keeps the model label while models are listed but Ollama stopped', () => {
-    mount({ models: [qwen], modelId: qwen.id, noLocal: { reason: 'Ollama is not running.', fix: null } });
+    mount({ models: [qwen], modelId: qwen.id, noLocal: { reason: OLLAMA_NOT_RUNNING, fix: 'start-ollama' } });
     expect(el('model-picker-btn').textContent).toBe('qwen2.5:0.5b');
-    expect(el('model-picker-no-local').textContent).toContain('Ollama is not running');
+    expect(el('model-picker-no-local').textContent).toBe(OLLAMA_NOT_RUNNING);
   });
 
   it('shows a transitional label, not a raw id, for a hosted or placeholder model before main moves it', () => {

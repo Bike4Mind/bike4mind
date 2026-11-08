@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { blockedIPRepository, withTransaction } from '@bike4mind/database';
 import { runOauthAbuseAutoBlock } from '@bike4mind/server-utils/security/oauthAbuseAutoBlock';
 import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 // POST /api/security/blocked-ips/evaluate
 // Manual trigger for the auto-block that the oauthAbuseAutoBlock cron runs every minute, using the

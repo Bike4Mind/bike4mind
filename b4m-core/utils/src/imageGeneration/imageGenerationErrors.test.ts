@@ -6,6 +6,7 @@ import {
   ImageProviderUnavailableError,
   logImageGenerationFailure,
 } from './imageGenerationErrors';
+import { ImageModerationBlockedError as OwnModerationBlockedError } from '../imageModeration';
 
 const makeLogger = () => ({ warn: vi.fn(), error: vi.fn() });
 
@@ -33,6 +34,35 @@ describe('logImageGenerationFailure', () => {
       provider: 'xai',
       requestId: 'req-1',
     });
+  });
+
+  it('logs our own post-generation moderation block at warn with the label names', () => {
+    const logger = makeLogger();
+    const error = new OwnModerationBlockedError([
+      { name: 'Explicit', parentName: '', confidence: 93.3 },
+      { name: 'Explicit Nudity', parentName: 'Explicit', confidence: 93.3 },
+    ]);
+
+    logImageGenerationFailure(logger, 'Error processing image generation:', error, { questId: 'q-1' });
+
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith('Error processing image generation:', {
+      questId: 'q-1',
+      kind: 'moderation_blocked',
+      provider: 'rekognition',
+      labels: ['Explicit', 'Explicit Nudity'],
+    });
+  });
+
+  it('keeps an unrelated error that merely shares the name at error', () => {
+    const logger = makeLogger();
+    const error = new Error('lookalike');
+    error.name = 'ImageModerationBlockedError';
+
+    logImageGenerationFailure(logger, 'failed', error);
+
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith('failed', error);
   });
 
   it('logs an insufficient-credits refusal at warn with its code and message', () => {

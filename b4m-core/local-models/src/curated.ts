@@ -118,6 +118,13 @@ export function curatedOllamaBlocked(build: HubBuild, version: string | null): s
   return partsBelow(have, want) ? needs : null;
 }
 
+/** Whether `version` is at least `minimum`; a missing or unreadable version is not. */
+export function ollamaVersionAtLeast(version: string | null, minimum: string): boolean {
+  const have = version ? versionParts(version) : undefined;
+  const want = versionParts(minimum);
+  return !!have && !!want && !partsBelow(have, want);
+}
+
 function partsBelow(have: number[], want: number[]): boolean {
   const differs = have.findIndex((part, index) => part !== want[index]);
   return differs !== -1 && have[differs] < want[differs];

@@ -4,6 +4,8 @@ import {
   INVITE_CENTER_SECTION_IDS,
   INVITE_CENTER_SECTION_PARAM,
   INVITE_CENTER_TAB_PARAMS,
+  PENDING_SORT_PARAM,
+  PENDING_STATUS_PARAM,
 } from './inviteCenterSearch';
 
 const parseSection = INVITE_CENTER_SEARCH_PARSERS[INVITE_CENTER_SECTION_PARAM];
@@ -17,7 +19,20 @@ describe('invite center section parser', () => {
     expect(parseSection(value)).toBeUndefined();
   });
 
-  it('registers only its own param', () => {
-    expect(INVITE_CENTER_TAB_PARAMS).toEqual([INVITE_CENTER_SECTION_PARAM]);
+  it('registers the section and the pending filter params, each once', () => {
+    expect(INVITE_CENTER_TAB_PARAMS).toEqual([
+      INVITE_CENTER_SECTION_PARAM,
+      'pendingStatus',
+      'pendingReason',
+      'pendingSource',
+      'pendingSort',
+    ]);
+    expect(Object.keys(INVITE_CENTER_SEARCH_PARSERS).sort()).toEqual([...INVITE_CENTER_TAB_PARAMS].sort());
+  });
+
+  it('coerces pending filters to their known values', () => {
+    expect(INVITE_CENTER_SEARCH_PARSERS[PENDING_STATUS_PARAM]('held')).toBe('held');
+    expect(INVITE_CENTER_SEARCH_PARSERS[PENDING_STATUS_PARAM]('released')).toBeUndefined();
+    expect(INVITE_CENTER_SEARCH_PARSERS[PENDING_SORT_PARAM]('remaining')).toBe('remaining');
   });
 });

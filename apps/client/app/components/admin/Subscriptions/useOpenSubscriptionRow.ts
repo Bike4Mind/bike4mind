@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import type { AdminSubscriptionRow } from '@client/app/utils/adminSubscriptionsFilter';
+import type { AdminSubscriptionRow } from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { ADMIN_ORGANIZATIONS_TAB_SLUG, adminSearchForTab } from '../adminTabParams';
 import { ORGS_ORG_ID_PARAM } from '../organizationsTabSearch';
 

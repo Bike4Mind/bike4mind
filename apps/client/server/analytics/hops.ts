@@ -22,7 +22,7 @@ import {
   signHopToken,
   verifyHopToken,
 } from './hopToken';
-import { stableEventId } from './signupEvents';
+import { stableEventId } from '@bike4mind/server-utils/analytics/signupEvents';
 import { readVisitId } from './visitSession';
 
 /**

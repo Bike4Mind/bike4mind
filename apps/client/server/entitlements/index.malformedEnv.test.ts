@@ -2,10 +2,10 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The env grant rows are parsed once at registry module load, so each case re-imports the
 // real registry (no registry mock here, unlike index.test.ts) under a stubbed env value.
-vi.mock('@server/entitlements/activeSubscriptions', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({
   getActiveSubscriptionsForUser: vi.fn().mockResolvedValue([]),
 }));
-vi.mock('@server/entitlements/partnerRules', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({
   partnerEntitlementsForEmail: vi.fn().mockResolvedValue(new Set()),
 }));
 

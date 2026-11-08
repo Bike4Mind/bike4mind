@@ -30,7 +30,7 @@ const DependenciesTab = () => {
   const [expandedPackage, setExpandedPackage] = useState<string | null>(null);
 
   return (
-    <Box sx={{ p: 3, height: '100%', overflow: 'auto' }}>
+    <Box sx={{ height: '100%', overflow: 'auto' }}>
       <Typography level="h3" sx={{ mb: 3 }}>
         Dependencies
       </Typography>

@@ -273,7 +273,7 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
 
   async updateUserShares(id: string, changes: UserSharesChange): Promise<T | null> {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
-    const { remove, add = [] } = changes;
+    const { remove, add = [], includeDeleted } = changes;
     if (remove && remove.userId === undefined && remove.projectId === undefined) {
       throw new Error('updateUserShares: remove needs a userId or projectId');
     }
@@ -317,6 +317,7 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
 
     const doc = await this.model.findOneAndUpdate({ _id: id }, stages as mongoose.UpdateWithAggregationPipeline, {
       new: true,
+      ...(includeDeleted ? { includeDeleted: true } : {}),
     });
     return (doc?.toJSON() ?? null) as T | null;
   }

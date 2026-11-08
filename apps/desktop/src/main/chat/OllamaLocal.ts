@@ -1,6 +1,7 @@
 import { StringDecoder } from 'node:string_decoder';
 import { z } from 'zod';
 import { modelBlobsOf, type FetchLike } from '@bike4mind/local-models';
+import { LOCAL_OLLAMA_RUNTIME_ID } from '@bike4mind/local-models/model-settings';
 import {
   localBackend,
   localModelId,
@@ -41,7 +42,8 @@ import type { CompletionStreamEvent } from './streamEvents';
 import { createThinkFilter, type ThinkSplit } from './thinkFilter';
 import { ollamaRate } from './tokenRate';
 
-export const OLLAMA_RUNTIME_ID = 'ollama';
+// The CLI applies this computer's model settings under the same id.
+export const OLLAMA_RUNTIME_ID = LOCAL_OLLAMA_RUNTIME_ID;
 const OLLAMA_URL = 'http://127.0.0.1:11434';
 const TIMEOUT_MS = 1_000;
 /** A server across a network answers short calls slower than the daemon on this computer. */
@@ -218,7 +220,7 @@ export interface LocalContextSizing {
   cachedFootprint(facts: LocalModelFacts): LocalModelFootprint;
   /** After the Settings choice changes: read every model's shape again. */
   forget?(): void;
-  /** The daemon's OLLAMA_KV_CACHE_TYPE as entered in Settings; undefined is f16. */
+  /** The OLLAMA_KV_CACHE_TYPE the daemon runs with (see ModelServerRegistry.kvCacheType); undefined is f16. */
   kvCacheType?(): QuantizedKvCacheType | undefined;
 }
 
@@ -249,7 +251,7 @@ export interface RemoteOllama {
   hasCredentials(): boolean;
   /** Removes the server's credential from text it sent, such as an error inside a streamed reply. */
   redact: (text: string, response: Response) => string;
-  /** The server's OLLAMA_KV_CACHE_TYPE as entered in Settings; undefined is f16. */
+  /** The OLLAMA_KV_CACHE_TYPE the server runs with (see ModelServerRegistry.kvCacheType); undefined is f16. */
   kvCacheType?(): QuantizedKvCacheType | undefined;
 }
 

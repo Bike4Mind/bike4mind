@@ -3,7 +3,7 @@ import { dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/da
 import { userRepository } from '@bike4mind/database/auth';
 import { orgAclRowConfersMembership } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import mailer from './mailer';
+import mailer from '@bike4mind/server-utils/utils/mailer/index';
 
 /**
  * Reads the departing member's surviving personal-lake shares and best-effort emails their owners,

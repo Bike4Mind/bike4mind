@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Link, Skeleton, Stack, Typography } from '@mui/joy';
+import { Box, Chip, Link, Skeleton, Stack, Typography } from '@mui/joy';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 
 export type TimelineTile = { text: string; tone: AdminStatusTone };
@@ -16,6 +16,8 @@ export type TimelineItem = {
   aside: React.ReactNode;
   /** Extra content under the meta line, e.g. a before/after list. */
   extra?: React.ReactNode;
+  /** Short tags beside the summary, e.g. "New IP". */
+  flags?: readonly string[];
 };
 
 /** A 28 px code tile; decorative, since the summary always names the event in words. */
@@ -73,6 +75,19 @@ export const TimelineList: React.FC<{ items: readonly TimelineItem[]; rowTestId:
             ) : (
               item.summary
             )}
+            {item.flags?.map(flag => (
+              <Chip
+                key={flag}
+                component="span"
+                size="sm"
+                variant="soft"
+                color="warning"
+                sx={{ ml: 0.75, verticalAlign: 'middle', '--Chip-minHeight': '18px', fontSize: 11 }}
+                data-testid={`${rowTestId}-flag`}
+              >
+                {flag}
+              </Chip>
+            ))}
           </Typography>
           {item.meta && (
             <Typography level="body-xs" sx={{ color: 'admin.inkMuted', overflowWrap: 'anywhere' }}>

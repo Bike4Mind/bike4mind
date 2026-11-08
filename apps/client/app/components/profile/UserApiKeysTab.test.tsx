@@ -54,7 +54,11 @@ const h = vi.hoisted(() => ({
     callbackSigningSecretCreatedAt: new Date('2026-03-01'),
   } as RotateCallbackSigningSecretResponse,
   hasOptiAccess: false,
-  eligibility: { canCreate: true, message: null } as { canCreate: boolean; message: string | null },
+  eligibility: { canCreate: true, message: null, refusedOrgIds: [] } as {
+    canCreate: boolean;
+    message: string | null;
+    refusedOrgIds: string[];
+  },
   billingOrgs: [] as { id: string; name: string }[],
 }));
 
@@ -572,11 +576,20 @@ describe('UserApiKeysTab - skills:write', () => {
 });
 
 describe('UserApiKeysTab - API key trust gate', () => {
-  const blocked = { canCreate: false, message: 'Verify your account to create API keys.' };
+  const blocked = {
+    canCreate: false,
+    message: 'Verify your account to create API keys.',
+    refusedOrgIds: [] as string[],
+  };
+  const accessDenied = {
+    canCreate: false,
+    message: 'API keys require an active paid subscription',
+    refusedOrgIds: ['org-1'],
+  };
 
   beforeEach(() => {
     h.keys = [activeKey];
-    h.eligibility = { canCreate: true, message: null };
+    h.eligibility = { canCreate: true, message: null, refusedOrgIds: [] };
     h.billingOrgs = [];
     h.createMutate.mockClear();
   });
@@ -592,7 +605,7 @@ describe('UserApiKeysTab - API key trust gate', () => {
   it('shows no alert and enables submit when the user can create keys', () => {
     openModalAndName();
 
-    expect(screen.queryByTestId('api-key-trust-alert')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('api-key-gate-alert')).not.toBeInTheDocument();
     expect(screen.getByTestId('api-key-create-btn')).toBeEnabled();
   });
 
@@ -601,13 +614,13 @@ describe('UserApiKeysTab - API key trust gate', () => {
     renderTab();
 
     expect(screen.getByTestId('api-keys-create-btn')).toBeDisabled();
-    expect(screen.getByTestId('api-keys-trust-notice')).toHaveTextContent(blocked.message);
+    expect(screen.getByTestId('api-keys-gate-notice')).toHaveTextContent(blocked.message);
   });
 
   it('shows no tab notice when the user can create keys', () => {
     renderTab();
 
-    expect(screen.queryByTestId('api-keys-trust-notice')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('api-keys-gate-notice')).not.toBeInTheDocument();
     expect(screen.getByTestId('api-keys-create-btn')).toBeEnabled();
   });
 
@@ -617,7 +630,16 @@ describe('UserApiKeysTab - API key trust gate', () => {
     renderTab();
 
     expect(screen.getByTestId('api-keys-create-btn')).toBeEnabled();
-    expect(screen.queryByTestId('api-keys-trust-notice')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('api-keys-gate-notice')).not.toBeInTheDocument();
+  });
+
+  it('disables create on the tab when the access switch refuses org billing too, even with an organization', () => {
+    h.eligibility = accessDenied;
+    h.billingOrgs = [{ id: 'org-1', name: 'Acme' }];
+    renderTab();
+
+    expect(screen.getByTestId('api-keys-create-btn')).toBeDisabled();
+    expect(screen.getByTestId('api-keys-gate-notice')).toHaveTextContent(accessDenied.message);
   });
 
   it('shows the alert with the org hint and disables submit while billing a personal account, then clears both on picking an org', async () => {
@@ -625,7 +647,7 @@ describe('UserApiKeysTab - API key trust gate', () => {
     h.billingOrgs = [{ id: 'org-1', name: 'Acme' }];
     openModalAndName();
 
-    const alert = screen.getByTestId('api-key-trust-alert');
+    const alert = screen.getByTestId('api-key-gate-alert');
     expect(alert).toHaveTextContent(blocked.message);
     expect(alert).toHaveTextContent('You can still create a key billed to an organization you manage.');
     expect(screen.getByTestId('api-key-create-btn')).toBeDisabled();
@@ -633,7 +655,72 @@ describe('UserApiKeysTab - API key trust gate', () => {
     fireEvent.click(within(screen.getByTestId('api-key-billing-select')).getByRole('combobox'));
     fireEvent.click(await screen.findByRole('option', { name: /Acme/ }));
 
-    expect(screen.queryByTestId('api-key-trust-alert')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('api-key-gate-alert')).not.toBeInTheDocument();
     expect(screen.getByTestId('api-key-create-btn')).toBeEnabled();
+  });
+
+  describe('access switch refusing some organizations', () => {
+    const switchRefusal = {
+      canCreate: false,
+      message: 'API keys require an active paid subscription',
+      refusedOrgIds: ['org-free'],
+    };
+
+    const pickOrg = async (name: RegExp) => {
+      fireEvent.click(within(screen.getByTestId('api-key-billing-select')).getByRole('combobox'));
+      fireEvent.click(await screen.findByRole('option', { name }));
+    };
+
+    it('disables a refused organization option so billing stays personal', async () => {
+      h.eligibility = switchRefusal;
+      h.billingOrgs = [
+        { id: 'org-free', name: 'FreeCo' },
+        { id: 'org-paid', name: 'PaidCo' },
+      ];
+      openModalAndName();
+      fireEvent.click(within(screen.getByTestId('api-key-billing-select')).getByRole('combobox'));
+      const freeCo = await screen.findByRole('option', { name: /FreeCo/ });
+      expect(freeCo).toHaveAttribute('aria-disabled', 'true');
+      fireEvent.click(freeCo);
+
+      expect(screen.getByText('This key bills your personal credit balance.')).toBeInTheDocument();
+      expect(screen.getByTestId('api-key-create-btn')).toBeDisabled();
+    });
+
+    it('enables submit when the selected organization is admitted', async () => {
+      h.eligibility = switchRefusal;
+      h.billingOrgs = [
+        { id: 'org-free', name: 'FreeCo' },
+        { id: 'org-paid', name: 'PaidCo' },
+      ];
+      openModalAndName();
+      await pickOrg(/PaidCo/);
+
+      expect(screen.queryByTestId('api-key-gate-alert')).not.toBeInTheDocument();
+      expect(screen.getByTestId('api-key-create-btn')).toBeEnabled();
+    });
+
+    it('offers the organization hint while billing personal when some organization is admitted', () => {
+      h.eligibility = switchRefusal;
+      h.billingOrgs = [
+        { id: 'org-free', name: 'FreeCo' },
+        { id: 'org-paid', name: 'PaidCo' },
+      ];
+      openModalAndName();
+
+      expect(screen.getByTestId('api-key-gate-alert')).toHaveTextContent('organization you manage');
+    });
+
+    it('disables create on the tab with no organization hint when every organization is refused', () => {
+      h.eligibility = { ...switchRefusal, refusedOrgIds: ['org-free', 'org-other'] };
+      h.billingOrgs = [
+        { id: 'org-free', name: 'FreeCo' },
+        { id: 'org-other', name: 'OtherCo' },
+      ];
+      renderTab();
+
+      expect(screen.getByTestId('api-keys-create-btn')).toBeDisabled();
+      expect(screen.getByTestId('api-keys-gate-notice')).toHaveTextContent(switchRefusal.message);
+    });
   });
 });

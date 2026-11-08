@@ -792,9 +792,8 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
                 hasUserWithToken: !!userWithToken,
                 hasSlackSettings: !!userWithToken?.slackSettings,
                 hasUserToken: !!userToken,
-                userTokenPrefix: userToken ? userToken.substring(0, 10) + '...' : 'none',
                 userScopes: userScopes || [],
-                commandText: text.substring(0, 50),
+                commandLength: text.length,
               });
 
               const b4mResult = await handleB4mCommand(text, {

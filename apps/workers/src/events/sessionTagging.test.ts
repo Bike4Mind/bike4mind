@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
   getOperationsModel: vi.fn(),
   llmComplete: vi.fn(),
   recordUsage: vi.fn(),
+  payerCanFund: vi.fn(),
   completionText: [] as (string | null)[],
   session: {} as Record<string, unknown>,
 }));
@@ -29,7 +30,7 @@ vi.mock('@workers/utils/eventContext', () => ({
   withEventContext: (fn: unknown) => fn,
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   SessionEvents: {
     Tag: { schema: { parse: (properties: unknown) => properties } },
   },
@@ -51,6 +52,8 @@ vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
 vi.mock('@workers/events/recordSessionOperationalUsage', () => ({
   recordSessionOperationalUsage: h.recordUsage,
 }));
+
+vi.mock('@workers/events/sessionOperationalCreditGate', () => ({ payerCanFundSessionOperation: h.payerCanFund }));
 
 import { handler } from './sessionTagging';
 
@@ -76,6 +79,7 @@ describe('sessionTagging', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.completionText = [];
+    h.payerCanFund.mockResolvedValue(true);
     h.userFindById.mockImplementation(async (id: string) => ({ id, isAdmin: false }));
     h.sessionUpdate.mockImplementation(async (_user: unknown, data: unknown) => data);
     h.questFindOne.mockResolvedValue({ id: 'quest-1', prompt: 'How do pulsars form?' });
@@ -121,6 +125,16 @@ describe('sessionTagging', () => {
     // Cleared explicitly, not omitted: an import overwrite reopens the gate by nulling `taggedAt`,
     // and a backoff left over from an earlier failure would hold the re-tag off for a full window.
     expect(written.tagLastAttemptAt).toBeNull();
+  });
+
+  it('spends nothing and writes nothing when the payer cannot fund the operation', async () => {
+    h.payerCanFund.mockResolvedValue(false);
+
+    await run({ sessionId: SESSION_ID, payerId: 'user-payer' });
+
+    expect(h.payerCanFund).toHaveBeenCalledWith(expect.objectContaining({ payerId: 'user-payer' }));
+    expectNoOperationalSpend();
+    expect(h.sessionUpdate).not.toHaveBeenCalled();
   });
 
   it.each([OWNER, 'user-sharee', 'user-payer'])('skips queued tagging when %s is pending review', async heldId => {

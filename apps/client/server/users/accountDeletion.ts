@@ -5,6 +5,7 @@ import {
   ConflictError,
   ForbiddenError,
   NotFoundError,
+  type AccountDeletionSource,
   type IUserDeletion,
 } from '@bike4mind/common';
 import {
@@ -15,6 +16,7 @@ import {
   oauthRefreshTokenRepository,
   organizationRepository,
   userApiKeyRepository,
+  withTransaction,
 } from '@bike4mind/database';
 import { withdrawAuthorListings } from '@bike4mind/server-utils/skillMarket/market';
 import { commitWithSessionEnd } from '@server/auth/endUserSessions';
@@ -48,32 +50,55 @@ export type AccountDeletionLockdown = {
   subscriptions: AccountSubscriptionCancellation;
 };
 
+export type ScheduleAccountDeletionInput = {
+  userId: string;
+  source: AccountDeletionSource;
+  /** When the request was made; the purge date counts from `now`, so the user always gets the full grace window. */
+  requestedAt: Date;
+  /** The admin acting for the user, recorded on the session-end and auth-audit rows. */
+  actorUserId?: string;
+  /** Runs in the stamp's transaction after it succeeds; a throw rolls the whole lockdown back. */
+  recordInTransaction?: (deletion: IUserDeletion) => Promise<void>;
+};
+
 /**
- * Schedule the caller's account for deletion and lock it down. The deletion stamp, the sign-out of
+ * Schedule the caller's account for deletion and lock it down. See scheduleAccountDeletion.
+ */
+export async function requestAccountDeletion(req: DeletionRequest, now = new Date()): Promise<AccountDeletionLockdown> {
+  if ((req.user as { impersonatedBy?: string }).impersonatedBy) {
+    throw new ForbiddenError('Account deletion cannot be requested while impersonating a user.');
+  }
+  return scheduleAccountDeletion(req, { userId: req.user.id, source: 'self', requestedAt: now }, now);
+}
+
+/**
+ * Schedule `userId`'s account for deletion and lock it down. The deletion stamp, the sign-out of
  * every device and the credential revokes (API keys, OAuth app grants, integration and MCP
  * credentials) commit in one transaction, so the account is never frozen with a credential left live.
  * The remote and best-effort steps (provider grant revokes, subscription cancel, taking published
  * pages and Skill Market listings offline, the email) run after commit and never fail the request.
  * Cancelling restores access only: nothing revoked or taken offline here comes back.
+ * Callers own the authorization: the self-serve wrapper and the admin endpoint both go through here.
  */
-export async function requestAccountDeletion(req: DeletionRequest, now = new Date()): Promise<AccountDeletionLockdown> {
-  const userId: string = req.user.id;
-  if ((req.user as { impersonatedBy?: string }).impersonatedBy) {
-    throw new ForbiddenError('Account deletion cannot be requested while impersonating a user.');
-  }
-
+export async function scheduleAccountDeletion(
+  req: DeletionRequest,
+  { userId, source, requestedAt, actorUserId, recordInTransaction }: ScheduleAccountDeletionInput,
+  now = new Date()
+): Promise<AccountDeletionLockdown> {
   const ownedOrganizations = await findOwnedOrganizations(userId);
   if (ownedOrganizations.length > 0) {
-    throw new ConflictError('Transfer or delete the organizations you own before deleting your account.', {
-      code: ACCOUNT_DELETION_ORG_OWNER_CODE,
-      organizations: ownedOrganizations,
-    });
+    throw new ConflictError(
+      source === 'self'
+        ? 'Transfer or delete the organizations you own before deleting your account.'
+        : 'Transfer or delete the organizations this user owns before scheduling deletion.',
+      { code: ACCOUNT_DELETION_ORG_OWNER_CODE, organizations: ownedOrganizations }
+    );
   }
 
   const deletion: IUserDeletion = {
-    requestedAt: now,
+    requestedAt,
     scheduledFor: new Date(now.getTime() + ACCOUNT_DELETION_GRACE_DAYS * DAY_MS),
-    source: 'self',
+    source,
   };
 
   let integrationGrants: UserIntegrationGrants | null = null;
@@ -86,6 +111,7 @@ export async function requestAccountDeletion(req: DeletionRequest, now = new Dat
         { new: true, projection: { email: 1 } }
       ).lean<{ email?: string }>();
       if (!updated) return null;
+      await recordInTransaction?.(deletion);
 
       // Read before the clear below: the provider revokes after commit need the stored tokens.
       integrationGrants = await readUserIntegrationGrants(userId);
@@ -111,14 +137,15 @@ export async function requestAccountDeletion(req: DeletionRequest, now = new Dat
       }
       return updated;
     },
-    updated => (updated ? { userId, reason: 'account_deletion_requested' } : undefined)
+    updated => (updated ? { userId, reason: 'account_deletion_requested', actorUserId } : undefined)
   );
   if (!stamped) throw new ConflictError('This account is already scheduled for deletion.');
 
   await logAuthAudit(req, {
     userId,
     event: 'account_deletion_requested',
-    metadata: { scheduledFor: deletion.scheduledFor.toISOString() },
+    actorUserId,
+    metadata: { scheduledFor: deletion.scheduledFor.toISOString(), source },
   });
 
   const logger = req.logger;
@@ -140,7 +167,7 @@ export async function requestAccountDeletion(req: DeletionRequest, now = new Dat
 
   if (stamped.email) {
     try {
-      await sendAccountDeletionScheduledEmail(stamped.email, deletion.scheduledFor);
+      await sendAccountDeletionScheduledEmail(stamped.email, deletion.scheduledFor, { source });
     } catch (err) {
       logger.error(`Failed to send the deletion-scheduled email for user ${userId}: ${String(err)}`);
     }
@@ -154,23 +181,41 @@ export async function requestAccountDeletion(req: DeletionRequest, now = new Dat
  * Throws NotFoundError when none is pending, so a repeated cancel sends no second email.
  */
 export async function cancelAccountDeletion(req: DeletionRequest): Promise<void> {
-  const userId: string = req.user.id;
   if ((req.user as { impersonatedBy?: string }).impersonatedBy) {
     throw new ForbiddenError('Account deletion cannot be cancelled while impersonating a user.');
   }
-  // Reads the address in the same query that clears the deletion.
-  const cancelled = await User.findOneAndUpdate(
-    { _id: userId, deletion: { $ne: null }, 'deletion.purgeStartedAt': null },
-    { $unset: { deletion: 1 } },
-    { projection: { email: 1 } }
-  ).lean<{ email?: string | null }>();
+  await clearAccountDeletion(req, { userId: req.user.id });
+}
+
+export type ClearAccountDeletionInput = {
+  userId: string;
+  actorUserId?: string;
+  /** Runs in the clear's transaction with the cleared deletion; a throw keeps the deletion pending. */
+  recordInTransaction?: (cleared: IUserDeletion) => Promise<void>;
+};
+
+/** Cancel core shared by the self-serve wrapper and the admin endpoint; callers own the authorization. */
+export async function clearAccountDeletion(
+  req: DeletionRequest,
+  { userId, actorUserId, recordInTransaction }: ClearAccountDeletionInput
+): Promise<void> {
+  const cancelled = await withTransaction(async () => {
+    // Reads the address and the cleared stamp in the same query that clears the deletion.
+    const cleared = await User.findOneAndUpdate(
+      { _id: userId, deletion: { $ne: null }, 'deletion.purgeStartedAt': null },
+      { $unset: { deletion: 1 } },
+      { projection: { email: 1, deletion: 1 } }
+    ).lean<{ email?: string | null; deletion?: IUserDeletion }>();
+    if (cleared?.deletion) await recordInTransaction?.(cleared.deletion);
+    return cleared;
+  });
   if (!cancelled) {
     if (await User.exists({ _id: userId, 'deletion.purgeStartedAt': { $type: 'date' } })) {
       throw new ConflictError('Account deletion has started and can no longer be cancelled.');
     }
     throw new NotFoundError('This account is not scheduled for deletion.');
   }
-  await logAuthAudit(req, { userId, event: 'account_deletion_cancelled' });
+  await logAuthAudit(req, { userId, actorUserId, event: 'account_deletion_cancelled' });
 
   if (cancelled.email) {
     try {

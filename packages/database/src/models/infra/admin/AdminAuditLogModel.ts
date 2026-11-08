@@ -4,13 +4,14 @@ import {
   AUDIT_REVIEW_BASELINE_DAYS,
   IMPERSONATION_ENDED_ACTION,
   IMPERSONATION_STARTED_ACTION,
+  type AdminAuditAction,
   type AuditEntry,
   type AuditLogCursor,
   type AuditLogFilters,
   type AuditReviewQueueEntry,
   type AuditReviewQueueQuery,
   type AuditSummary,
-  type IAdminAuditLogRepository,
+  type SubscriptionTimelineAuditLogRepository,
   type NewAdminAuditEntry,
 } from '@bike4mind/common';
 import { AdminAuditReviewModel, toAuditReview } from './AdminAuditReviewModel';
@@ -272,7 +273,7 @@ const writeErrorCode = (writeError: unknown): unknown => {
   return undefined;
 };
 
-class AdminAuditLogRepository implements IAdminAuditLogRepository {
+class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository {
   constructor(private readonly auditLogModel: Model<AdminAuditLogRecord>) {}
 
   async append(entry: NewAdminAuditEntry): Promise<AuditEntry> {
@@ -297,6 +298,18 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
         ? { 'target.kind': 'user', 'target.id': owner.id }
         : { $or: [{ organizationId: owner.id }, { 'target.kind': 'organization', 'target.id': owner.id }] };
     return this.listPage([ownerClause, { 'details.subscriptionId': { $in: subscriptionIds } }], page);
+  }
+
+  async listForSubscriptionOrOwner(
+    scope: { owner: { kind: 'user' | 'organization'; id: string }; subscriptionIds: string[] },
+    page: { limit: number; cursor?: AuditLogCursor }
+  ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }> {
+    const { owner, subscriptionIds } = scope;
+    const ownerClauses: FilterClause[] =
+      owner.kind === 'user'
+        ? [{ 'target.kind': 'user', 'target.id': owner.id }]
+        : [{ organizationId: owner.id }, { 'target.kind': 'organization', 'target.id': owner.id }];
+    return this.listPage([{ $or: [...ownerClauses, { 'details.subscriptionId': { $in: subscriptionIds } }] }], page);
   }
 
   private async listPage(
@@ -470,10 +483,36 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
       .maxTimeMS(LIST_QUERY_MAX_TIME_MS);
   }
 
-  async sumCreditsGranted(actorUserId: string, since: Date): Promise<number> {
+  async countActions(actorUserId: string, actions: readonly AdminAuditAction[], since: Date): Promise<number> {
+    return this.auditLogModel
+      .countDocuments({
+        'actor.userId': actorUserId,
+        action: { $in: [...actions] },
+        occurredAt: { $gte: since },
+        'details.approval': { $exists: false },
+      })
+      .maxTimeMS(LIST_QUERY_MAX_TIME_MS);
+  }
+
+  async sumCreditsGranted(
+    actorUserId: string,
+    since: Date,
+    options: { excludeApproved?: boolean; includeSubscriptionGrants?: boolean } = {}
+  ): Promise<number> {
+    const approved = options.excludeApproved ? { 'details.approval': { $exists: false } } : {};
+    const actions = options.includeSubscriptionGrants
+      ? [...ADMIN_AUDIT_CREDIT_GRANT_ACTIONS, 'user.subscription.granted']
+      : ADMIN_AUDIT_CREDIT_GRANT_ACTIONS;
     const [total] = await this.auditLogModel
       .aggregate<{ credits: number }>([
-        { $match: { ...creditGrantsBy(actorUserId), occurredAt: { $gte: since } } },
+        {
+          $match: {
+            ...creditGrantsBy(actorUserId),
+            action: { $in: actions },
+            occurredAt: { $gte: since },
+            ...approved,
+          },
+        },
         { $group: { _id: null, credits: { $sum: '$details.credits' } } },
       ])
       .option({ maxTimeMS: LIST_QUERY_MAX_TIME_MS });
@@ -505,4 +544,6 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
   }
 }
 
-export const adminAuditLogRepository: IAdminAuditLogRepository = new AdminAuditLogRepository(AdminAuditLogModel);
+export const adminAuditLogRepository: SubscriptionTimelineAuditLogRepository = new AdminAuditLogRepository(
+  AdminAuditLogModel
+);

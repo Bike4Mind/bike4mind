@@ -18,7 +18,9 @@ import {
   type ShadowDetectionSummaryRow,
   type ShadowDetectionVerdict,
   type ShadowDetectionVerdictEntry,
+  type ShadowDetectionVerdictSource,
   type ShadowDetector,
+  SHADOW_DETECTION_VERDICT_SOURCES,
 } from '@bike4mind/common';
 import { User } from '../../auth/UserModel';
 
@@ -89,6 +91,7 @@ const VerdictEntrySchema = new Schema<ShadowDetectionVerdictEntry>(
     reason: { type: String, required: true },
     reviewerId: { type: String, required: true },
     reviewedAt: { type: Date, required: true },
+    source: { type: String, enum: SHADOW_DETECTION_VERDICT_SOURCES },
   },
   { _id: false }
 );
@@ -193,6 +196,22 @@ export type AddShadowDetectionVerdictResult =
 
 type LeanShadowDetection = Omit<IShadowDetectionDocument, keyof Document> & { _id: Types.ObjectId };
 
+/**
+ * Matches a record carrying a verdict graded on the Detections page. Entries from before `source`
+ * existed were all such reviews.
+ */
+const HAS_REVIEW_VERDICT = {
+  verdicts: { $elemMatch: { $or: [{ source: 'review' }, { source: { $exists: false } }] } },
+};
+
+export type AccountStatusVerdictInput = {
+  userId: string;
+  /** The suspend or reinstate reason, as audited. */
+  reason: string;
+  /** The admin who suspended or reinstated the account. */
+  reviewerId: string;
+};
+
 const VERDICT_COUNT_FIELDS = {
   confirmed_abuse: 'confirmedAbuse',
   legitimate_human: 'legitimateHuman',
@@ -244,6 +263,7 @@ const toItem = (doc: LeanShadowDetection): ShadowDetectionItem => ({
     reason: entry.reason,
     reviewerId: entry.reviewerId,
     reviewedAt: entry.reviewedAt,
+    ...(entry.source ? { source: entry.source } : {}),
   })),
   revision: doc.revision ?? 0,
 });
@@ -384,6 +404,49 @@ class ShadowDetectionRepository {
     throw new Error(`Shadow detection ${doc._id.toString()} kept changing while removing a deleted user`);
   }
 
+  /** Detections naming this user that no reviewer has judged legitimate (unreviewed included). */
+  async countOpenForUser(userId: string): Promise<number> {
+    return ShadowDetectionModel.countDocuments({
+      userIds: userId,
+      verdict: { $nin: ['legitimate_human', 'legitimate_automation'] },
+    }).exec();
+  }
+
+  /**
+   * Detections naming any of these users, newest first, at most `limit`. The `$in` uses the userIds
+   * index but the detectedAt sort is in memory. `userIds` holds only the requested members, since a
+   * cohort detection can name many accounts.
+   */
+  async findForUsers(
+    userIds: string[],
+    limit: number
+  ): Promise<Pick<ShadowDetectionItem, 'id' | 'detector' | 'userIds' | 'detectedAt'>[]> {
+    if (userIds.length === 0) return [];
+    const docs = await ShadowDetectionModel.aggregate<{
+      _id: Types.ObjectId;
+      detector: ShadowDetector;
+      userIds: string[];
+      detectedAt: Date;
+    }>([
+      { $match: { userIds: { $in: userIds } } },
+      { $sort: { detectedAt: -1, _id: -1 } },
+      { $limit: limit },
+      {
+        $project: {
+          detector: 1,
+          detectedAt: 1,
+          userIds: { $filter: { input: { $ifNull: ['$userIds', []] }, cond: { $in: ['$$this', userIds] } } },
+        },
+      },
+    ]);
+    return docs.map(doc => ({
+      id: doc._id.toString(),
+      detector: doc.detector,
+      userIds: doc.userIds,
+      detectedAt: doc.detectedAt,
+    }));
+  }
+
   /** Newest first; `truncated` is true when more than `limit` records match. */
   async list(query: {
     detector?: ShadowDetector;
@@ -406,9 +469,18 @@ class ShadowDetectionRepository {
     return doc ? toItem(doc) : null;
   }
 
-  /** Ungraded detections recorded at or after `since`, newest first. */
-  async listUnreviewedSince(since: Date, limit: number): Promise<ShadowDetectionItem[]> {
-    const docs = await ShadowDetectionModel.find({ verdict: null, detectedAt: { $gte: since } })
+  /**
+   * Ungraded detections recorded at or after `since`, newest first. `excludeDetectors` filters in
+   * the query, so excluded detectors never take a slot from the `limit`.
+   */
+  async listUnreviewedSince(
+    since: Date,
+    limit: number,
+    options: { excludeDetectors?: readonly ShadowDetector[] } = {}
+  ): Promise<ShadowDetectionItem[]> {
+    const filter: Record<string, unknown> = { verdict: null, detectedAt: { $gte: since } };
+    if (options.excludeDetectors?.length) filter.detector = { $nin: [...options.excludeDetectors] };
+    const docs = await ShadowDetectionModel.find(filter)
       .sort({ detectedAt: -1, _id: -1 })
       .limit(limit)
       .lean<LeanShadowDetection[]>();
@@ -433,6 +505,7 @@ class ShadowDetectionRepository {
       reason: input.reason,
       reviewerId: input.reviewerId,
       reviewedAt: new Date(),
+      source: 'review',
     };
     const updated = await ShadowDetectionModel.findOneAndUpdate(
       { _id: input.id, revision: input.expectedRevision },
@@ -445,15 +518,96 @@ class ShadowDetectionRepository {
     return current ? { status: 'conflict', item: toItem(current) } : { status: 'not_found' };
   }
 
-  /** Counts per detector and policy version; verdict counts are on each record's latest verdict. */
+  /**
+   * An admin suspended the account for abuse: every detection naming it that no reviewer graded
+   * is graded confirmed_abuse, including one an earlier reinstatement set to legitimate_human. Returns the records it graded.
+   */
+  async gradeForSuspension(input: AccountStatusVerdictInput): Promise<ShadowDetectionItem[]> {
+    const open = { verdict: { $ne: 'confirmed_abuse' }, $nor: [HAS_REVIEW_VERDICT] };
+    const candidates = await ShadowDetectionModel.find({ userIds: input.userId, ...open }).lean<
+      LeanShadowDetection[]
+    >();
+    return this.appendStatusVerdicts(candidates, open, 'confirmed_abuse', 'suspension', input);
+  }
+
+  /**
+   * An admin reinstated the account: detections naming it are graded legitimate_human, replacing an
+   * ungraded state or a verdict recorded by a suspension. Skipped when a reviewer graded the record on
+   * the Detections page, when it already reads legitimate_human, or when it names another account that
+   * is still suspended (one reinstated member does not clear a burst). Returns the records it graded.
+   */
+  async gradeForReinstatement(input: AccountStatusVerdictInput): Promise<ShadowDetectionItem[]> {
+    const open = { verdict: { $ne: 'legitimate_human' }, $nor: [HAS_REVIEW_VERDICT] };
+    const candidates = await ShadowDetectionModel.find({ userIds: input.userId, ...open }).lean<
+      LeanShadowDetection[]
+    >();
+    const peerIds = [...new Set(candidates.flatMap(doc => doc.userIds ?? []).filter(id => id !== input.userId))].filter(
+      id => Types.ObjectId.isValid(id)
+    );
+    const suspendedPeers = new Set(
+      peerIds.length === 0
+        ? []
+        : (
+            await User.find({ _id: { $in: peerIds }, isBanned: true }, { _id: 1 }).lean<{ _id: Types.ObjectId }[]>()
+          ).map(({ _id }) => _id.toString())
+    );
+    const eligible = candidates.filter(doc => !(doc.userIds ?? []).some(id => suspendedPeers.has(id)));
+    return this.appendStatusVerdicts(eligible, open, 'legitimate_human', 'reinstatement', input);
+  }
+
+  /**
+   * Appends one verdict per record, each conditional on the revision it was read at and on `stillOpen`,
+   * so a reviewer grading the same record in between keeps their verdict.
+   */
+  private async appendStatusVerdicts(
+    candidates: LeanShadowDetection[],
+    stillOpen: Record<string, unknown>,
+    verdict: ShadowDetectionVerdict,
+    source: ShadowDetectionVerdictSource,
+    input: AccountStatusVerdictInput
+  ): Promise<ShadowDetectionItem[]> {
+    const graded: ShadowDetectionItem[] = [];
+    for (const doc of candidates) {
+      const entry: ShadowDetectionVerdictEntry = {
+        verdict,
+        reason: input.reason,
+        reviewerId: input.reviewerId,
+        reviewedAt: new Date(),
+        source,
+      };
+      const updated = await ShadowDetectionModel.findOneAndUpdate(
+        { _id: doc._id, revision: doc.revision, ...stillOpen },
+        { $push: { verdicts: entry }, $set: { verdict }, $inc: { revision: 1 } },
+        { new: true }
+      ).lean<LeanShadowDetection>();
+      if (updated) graded.push(toItem(updated));
+    }
+    return graded;
+  }
+
+  /**
+   * Counts per detector and policy version; verdict counts are on each record's latest verdict and
+   * only for records that would have acted. A `wouldAction: 'none'` record counts in `recorded` and
+   * `noAction` only, so agreeing with it never moves precision.
+   */
   async summarize(): Promise<ShadowDetectionSummaryRow[]> {
     const rows = await ShadowDetectionModel.aggregate<{
-      _id: { detector: ShadowDetector; policyVersion: number; verdict: ShadowDetectionVerdict | null };
+      _id: {
+        detector: ShadowDetector;
+        policyVersion: number;
+        verdict: ShadowDetectionVerdict | null;
+        noAction: boolean;
+      };
       count: number;
     }>([
       {
         $group: {
-          _id: { detector: '$detector', policyVersion: '$policyVersion', verdict: { $ifNull: ['$verdict', null] } },
+          _id: {
+            detector: '$detector',
+            policyVersion: '$policyVersion',
+            verdict: { $ifNull: ['$verdict', null] },
+            noAction: { $eq: ['$wouldAction', 'none'] },
+          },
           count: { $sum: 1 },
         },
       },
@@ -466,13 +620,15 @@ class ShadowDetectionRepository {
         detector: _id.detector,
         policyVersion: _id.policyVersion,
         recorded: 0,
+        noAction: 0,
         confirmedAbuse: 0,
         legitimateHuman: 0,
         legitimateAutomation: 0,
         insufficientEvidence: 0,
       };
       row.recorded += count;
-      if (_id.verdict) row[VERDICT_COUNT_FIELDS[_id.verdict]] += count;
+      if (_id.noAction) row.noAction += count;
+      else if (_id.verdict) row[VERDICT_COUNT_FIELDS[_id.verdict]] += count;
       byPolicy.set(key, row);
     }
     return [...byPolicy.values()].sort(

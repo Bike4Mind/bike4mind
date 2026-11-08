@@ -951,9 +951,11 @@ export class PrMonitor {
     // app's own enqueue, never from the binding file. A PR sits in the queue for minutes, so a
     // stored flag would keep a row the app has not re-read queued long after it left.
     const queued = !!this.live.get(sessionId)?.queued;
-    if (snapshot) return { number: binding.number, state: prDisplayState(snapshot.state, snapshot.isDraft, queued) };
+    const repo = `${binding.owner}/${binding.repo}`;
+    if (snapshot)
+      return { number: binding.number, state: prDisplayState(snapshot.state, snapshot.isDraft, queued), repo };
     if (!binding.lastState) return null;
-    return { number: binding.number, state: prDisplayState(binding.lastState, binding.lastDraft) };
+    return { number: binding.number, state: prDisplayState(binding.lastState, binding.lastDraft), repo };
   }
 
   private async sidebarSummaries(): Promise<Map<string, PrSummary>> {

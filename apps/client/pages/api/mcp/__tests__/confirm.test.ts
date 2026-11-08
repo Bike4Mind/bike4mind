@@ -31,7 +31,7 @@ vi.mock('@server/mcpConnections/customMcpToolHost', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/downloadAttachmentUrl', () => ({ downloadAttachmentUrl: vi.fn() }));
-vi.mock('@server/utils/pendingActionExecutor', () => ({ claimPendingAction: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/pendingActionExecutor', () => ({ claimPendingAction: vi.fn() }));
 vi.mock('@bike4mind/server-utils/integrations/github/github-repo-helper', () => ({
   getSelectedRepositoriesForMcp: vi.fn(),
 }));
@@ -48,7 +48,7 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { downloadAttachmentUrl } from '@bike4mind/server-utils/utils/downloadAttachmentUrl';
 import { JIRA_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
-import { claimPendingAction } from '@server/utils/pendingActionExecutor';
+import { claimPendingAction } from '@bike4mind/server-utils/utils/pendingActionExecutor';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';

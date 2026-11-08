@@ -6,11 +6,11 @@ import {
   handleOrganizationSubscriptionInvoice,
 } from '@workers/lib/userSubscriptions/serverUtils';
 import { handler } from './invoicePaymentSucceeded';
-import { unlockSignupGrantFromSubscription } from '@server/credits/subscriptionUnlock';
+import { unlockSignupGrantFromSubscription } from '@bike4mind/server-utils/credits/subscriptionUnlock';
 import { emitProductEvent } from '@bike4mind/server-utils/analytics/emitActiveEvent';
-import { stableEventId } from '@server/analytics/signupEvents';
+import { stableEventId } from '@bike4mind/server-utils/analytics/signupEvents';
 import { paymentAttemptRepository, userRepository } from '@bike4mind/database';
-import { recordSubscriptionPaymentReward } from '@server/referrals/subscriptionReward';
+import { recordSubscriptionPaymentReward } from '@bike4mind/server-utils/referrals/subscriptionReward';
 import { postNewPaidSubscriptionToSlack } from '@server/integrations/slack/subscriptionLifecycle';
 
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
@@ -21,7 +21,7 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   },
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   StripeEvents: {
     InvoicePaymentSucceeded: { schema: { parse: (x: unknown) => x } },
   },
@@ -59,7 +59,7 @@ vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', () => ({
   ingestKeyFor: (p: string) => (ingestKeys.has(p) ? 'key' : undefined),
 }));
 
-vi.mock('@server/credits/subscriptionUnlock', () => ({
+vi.mock('@bike4mind/server-utils/credits/subscriptionUnlock', () => ({
   unlockSignupGrantFromSubscription: vi.fn().mockResolvedValue({ creditsGranted: 0, currentCredits: null }),
 }));
 
@@ -68,7 +68,7 @@ vi.mock('@bike4mind/database', () => ({
   paymentAttemptRepository: { findVisitId: vi.fn().mockResolvedValue(null) },
 }));
 
-vi.mock('@server/referrals/subscriptionReward', () => ({ recordSubscriptionPaymentReward: vi.fn() }));
+vi.mock('@bike4mind/server-utils/referrals/subscriptionReward', () => ({ recordSubscriptionPaymentReward: vi.fn() }));
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 

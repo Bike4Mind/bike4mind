@@ -19,6 +19,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ElicitRequestSchema, type ElicitRequest, type ElicitResult } from '@modelcontextprotocol/sdk/types.js';
 import type { OllamaManifestInfo } from '../commands/ollamaRegistry';
 import type { HubClient, RuntimeTarget } from '../models/localModels';
+import type { SshFetchFor } from '../models/modelServers';
 import { reviewable, reviewedInspection, reviewedLayers } from '../test-utils/curatedReviewed';
 import { ConfigStore } from '../storage/ConfigStore';
 import { MODEL_TOOL_NAMES, localModelToolsDeps, registerModelTools, type ModelToolsDeps } from './modelTools';
@@ -800,6 +801,48 @@ describe('model tools', () => {
         expect.arrayContaining([expect.objectContaining({ name: 'qwen-small', aliases: ['qwen'] })])
       );
       expect(runtime.list).not.toHaveBeenCalled();
+    });
+
+    it('on cancel, ends the ssh request already running and starts none after', async () => {
+      const requests: { signal: AbortSignal | undefined; afterCancel: boolean }[] = [];
+      const cancel = new AbortController();
+      const sshFetchFor: SshFetchFor = () => (_input, init) =>
+        new Promise((_resolve, reject) => {
+          const signal = init?.signal ?? undefined;
+          requests.push({ signal, afterCancel: cancel.signal.aborted });
+          signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+      const handlers = new Map<string, (...args: unknown[]) => Promise<{ isError?: boolean; content: unknown }>>();
+      const stub = {
+        registerTool: (name: string, _config: unknown, handler: (...args: unknown[]) => never) =>
+          handlers.set(name, handler),
+        server: { getClientCapabilities: () => ({}) },
+      } as unknown as McpServer;
+      registerModelTools(stub, {
+        hub: () => fakeHub(),
+        ollamaRegistry: async () => manifest(),
+        libraryLayers: async () => null,
+        resolveRuntime: async () => ({ runtime: fakeRuntime(), source: 'env' }),
+        defaultModel: async () => undefined,
+        machine: async () => ({ hardware: CPU_64 }),
+        servers: {
+          load: async () => ({
+            servers: [
+              saved({ name: 'gpu', kind: 'ollama', transport: { type: 'ssh', destination: 'me@gpu', port: 11434 } }),
+            ],
+            problem: null,
+          }),
+          secret: async () => () => undefined,
+          sshFetchFor,
+        },
+      });
+      const result = handlers.get('models_list')?.({ server: 'gpu' }, { signal: cancel.signal, requestId: 1 });
+      await vi.waitFor(() => expect(requests.length).toBeGreaterThan(0));
+      cancel.abort(new DOMException('Cancelled', 'AbortError'));
+      expect((await result)?.isError).toBe(true);
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(requests.every(request => request.signal?.aborted === true)).toBe(true);
+      expect(requests.filter(request => request.afterCancel)).toEqual([]);
     });
 
     it('sends the saved credential and says to log in when it is missing', async () => {

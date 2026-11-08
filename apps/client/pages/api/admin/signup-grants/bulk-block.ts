@@ -1,10 +1,11 @@
+import { randomUUID } from 'crypto';
 import { heldCreditRewardRepository, userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { readBulkSignupGrantAction } from '@server/credits/bulkSignupGrantAdminAction';
 import { signupGrantAuditTarget } from '@server/credits/signupGrantAdminAction';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:adjust' } })
   .use(csrfProtection())
@@ -19,6 +20,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
         await userService.previewSignupGrantAction({ action: 'block', userIds }, { users: userRepository })
       );
     }
+    const bulkId = randomUUID();
     const result = await userService.bulkSetSignupGrantBlock(
       { action: 'block', userIds },
       {
@@ -31,7 +33,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
             target: targets.get(userId) ?? signupGrantAuditTarget(userId),
             summary: 'blocked signup grants and rewards',
             reason,
-            details: { bulk: true },
+            details: { bulk: true, bulkId },
           });
         },
       }
