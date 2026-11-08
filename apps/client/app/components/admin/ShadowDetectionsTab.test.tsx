@@ -18,6 +18,7 @@ const m = vi.hoisted(() => ({
   search: {} as Record<string, unknown>,
   navigate: vi.fn(),
   verdictError: null as Error | null,
+  realWatch: false,
 }));
 vi.mock('@client/app/hooks/data/shadowDetections', () => ({
   useShadowDetections: m.useShadowDetections,
@@ -49,10 +50,20 @@ vi.mock('@tanstack/react-router', () => ({
 
 import ShadowDetectionsTab, { formatPaymentAmount, relatedUnreviewed } from './ShadowDetectionsTab';
 vi.mock('./CampaignWatches/CampaignWatchesPanel', () => ({ CampaignWatchesPanel: () => null }));
-vi.mock('./CampaignWatches/WatchAccountsButton', () => ({
-  WatchAccountsButton: ({ incomplete }: { incomplete?: boolean }) => (
-    <button disabled={incomplete}>Watch cohort</button>
-  ),
+vi.mock('./CampaignWatches/WatchAccountsButton', async importOriginal => {
+  const actual = await importOriginal<typeof import('./CampaignWatches/WatchAccountsButton')>();
+  return {
+    WatchAccountsButton: (props: React.ComponentProps<typeof actual.WatchAccountsButton>) =>
+      m.realWatch ? (
+        <actual.WatchAccountsButton {...props} />
+      ) : (
+        <button disabled={props.incomplete}>Watch cohort</button>
+      ),
+  };
+});
+vi.mock('@client/app/hooks/data/campaignWatches', () => ({
+  useCreateCampaignWatch: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  watchErrorMessage: () => 'Could not create watch',
 }));
 import { DETECTIONS_INTRO_DISMISSED_KEY } from './shadowDetectionExplainer';
 
@@ -121,6 +132,7 @@ describe('ShadowDetectionsTab', () => {
     window.localStorage.clear();
     m.search = {};
     m.verdictError = null;
+    m.realWatch = false;
     m.useShadowDetections.mockReturnValue(queryResult(list()));
   });
 
@@ -538,6 +550,22 @@ describe('ShadowDetectionsTab', () => {
     expect(screen.queryByTestId('shadow-detection-campaign-truncated')).toBeNull();
   });
 
+  it('ignores verdict shortcuts from the nested Watch campaign dialog', async () => {
+    m.realWatch = true;
+    await openCampaignDialog(campaignGroup());
+    const dialog = screen.getByTestId('shadow-detection-verdict-dialog');
+    const selected = within(dialog).getByTestId('shadow-detection-verdict-option-confirmed_abuse');
+    fireEvent.click(selected);
+    fireEvent.click(within(dialog).getByTestId('watch-accounts-open-btn'));
+    const watchDialog = await screen.findByTestId('watch-accounts-dialog');
+    const cancel = within(watchDialog).getByTestId('watch-accounts-dialog-cancel-btn');
+    cancel.focus();
+    expect(cancel).toHaveFocus();
+    fireEvent.keyDown(cancel, { key: '2' });
+    expect(selected).toBeChecked();
+    expect(within(dialog).getByTestId('shadow-detection-verdict-option-legitimate_human')).not.toBeChecked();
+  });
+
   it('notes a truncated campaign group and hides empty ignored and unknown lists', async () => {
     await openCampaignDialog({
       ...campaignGroup(),
@@ -886,6 +914,38 @@ describe('ShadowDetectionsTab', () => {
         )
       );
     });
+
+    it.each(['conflict', 'failed'] as const)(
+      'prunes completed related targets before retrying an own-row %s',
+      async status => {
+        const retained = detection({ id: '999999999999999999999999', userIds: [ACTOR], revision: 2 });
+        const revised = { ...retained, revision: 3 };
+        const own = { ...burst, revision: 5 };
+        m.useShadowDetections.mockReturnValue(queryResult(list({ data: [burst, spend, retained] })));
+        m.bulkMutateAsync
+          .mockResolvedValueOnce({
+            updated: [spend],
+            conflicts: status === 'conflict' ? [own, revised] : [revised],
+            notFound: [],
+            failed: status === 'failed' ? [burst.id] : [],
+          })
+          .mockResolvedValueOnce({ updated: [own, revised], conflicts: [], notFound: [] });
+        renderTab();
+        const dialog = await openDialog();
+        fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-option-confirmed_abuse'));
+        fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-reason-input-preset-0'));
+        const save = within(dialog).getByTestId('shadow-detection-verdict-dialog-confirm-btn');
+        fireEvent.click(save);
+        await screen.findByTestId(`shadow-detection-verdict-${status === 'conflict' ? 'conflict' : 'error'}`);
+        await waitFor(() => expect(save).toBeEnabled());
+        fireEvent.click(save);
+        await waitFor(() => expect(m.bulkMutateAsync).toHaveBeenCalledTimes(2));
+        expect(m.bulkMutateAsync.mock.calls[1][0].items).toEqual([
+          { id: burst.id, expectedRevision: status === 'conflict' ? own.revision : burst.revision },
+          { id: retained.id, expectedRevision: revised.revision },
+        ]);
+      }
+    );
 
     it('grades only the open detection when the account box is cleared', async () => {
       m.mutateAsync.mockResolvedValue({ status: 'recorded', item: burst });
