@@ -17,7 +17,7 @@ Open a watch to see its owner, current account status and credits, profile and A
 
 Watches are manual: they do not send automatic alerts, run an AI assessment, change a verdict, or suspend an account. Membership does not expand when new detections arrive. Deleted accounts are removed, and a deleted owner's assignment is cleared. Watches remain until explicitly closed and their records do not expire automatically.
 
-Reading watches requires `support:read`; creating, assigning, checking, closing and reopening them requires `users:moderate`. Every change requires an audit reason.
+Watches are available to full administrators from the Detections tab. Creating, assigning, checking, closing and reopening a watch also requires `users:moderate`. Every change requires an audit reason.
 
 The Users tab is the primary interface for administering user accounts on the Bike4Mind platform. It is a single server-driven table with search, filters, built-in views, column sorting, grouping by email domain, and CSV export. The header shows the total number of accounts and how many were active this week.
 

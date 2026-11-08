@@ -2,10 +2,12 @@ import type { ReactNode } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { toast } from 'sonner';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { WatchAccountsButton } from './WatchAccountsButton';
 
 const mocks = vi.hoisted(() => ({ navigate: vi.fn(), create: vi.fn(), admin: true }));
+vi.mock('sonner', () => ({ toast: { info: vi.fn() } }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { isAdmin: mocks.admin } }) }));
 vi.mock('@client/app/hooks/data/campaignWatches', () => ({
@@ -37,6 +39,23 @@ describe('WatchAccountsButton', () => {
         sourceDetectionId: undefined,
         reason: 'Monitor account activity',
       })
+    );
+    await waitFor(() =>
+      expect(mocks.navigate).toHaveBeenCalledWith({
+        to: '/admin',
+        search: { tab: 'shadow-detections', campaignWatch: watchId },
+      })
+    );
+  });
+
+  it('notifies when the selected accounts already have an open watch and opens it', async () => {
+    mocks.create.mockResolvedValue({ watch: { id: watchId }, created: false });
+    render(<WatchAccountsButton userIds={[first]} />, { wrapper: Wrapper });
+    fireEvent.click(screen.getByTestId('watch-accounts-open-btn'));
+    fireEvent.click(screen.getByTestId('watch-accounts-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('watch-accounts-dialog-confirm-btn'));
+    await waitFor(() =>
+      expect(toast.info).toHaveBeenCalledWith('These accounts already have an open watch. Opening it instead.')
     );
     await waitFor(() =>
       expect(mocks.navigate).toHaveBeenCalledWith({

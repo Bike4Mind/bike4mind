@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { Alert, Button, FormControl, FormLabel, Input, Typography } from '@mui/joy';
+import { toast } from 'sonner';
 import { CAMPAIGN_WATCH_MAX_MEMBERS, hasAdminPermission } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useCreateCampaignWatch, watchErrorMessage } from '@client/app/hooks/data/campaignWatches';
@@ -71,6 +72,7 @@ export function WatchAccountsButton({
                 sourceDetectionId,
                 reason,
               });
+              if (!result.created) toast.info('These accounts already have an open watch. Opening it instead.');
               setOpen(false);
               onCreated?.();
               await navigate({ to: '/admin', search: { tab: 'shadow-detections', campaignWatch: result.watch.id } });
