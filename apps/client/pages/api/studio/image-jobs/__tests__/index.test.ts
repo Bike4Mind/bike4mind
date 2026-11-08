@@ -65,7 +65,9 @@ vi.mock('@server/generations/listOwnGenerationJobs', () => ({ listOwnGenerationJ
 vi.mock('@server/billing/resolveMediaBillingOrgId', () => ({
   resolveMediaBillingOrgId: mocks.resolveMediaBillingOrgId,
 }));
-vi.mock('@server/auth/assertAiAccessAllowed', () => ({ assertAiAccessAllowed: mocks.assertAiAccessAllowed }));
+vi.mock('@bike4mind/server-utils/auth/assertAiAccessAllowed', () => ({
+  assertAiAccessAllowed: mocks.assertAiAccessAllowed,
+}));
 
 const { default: handler } = await import('../index');
 
