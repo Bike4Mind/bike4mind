@@ -77,6 +77,27 @@ describe('model worker', () => {
     expect([Math.min(...xs), Math.max(...xs)]).toEqual([0, 15]);
   });
 
+  it('passes the physical material fields through, as plain numbers and a colour string', async () => {
+    const reply = await build(
+      `export default function model({ m }) {
+        return [{ name: 'lamp', shape: m.Manifold.cube([1, 1, 1]), clearcoat: 0.5, sheen: '0.25', transmission: 1,
+          ior: 1.45, thickness: 2, emissive: '#ffaa00', emissiveIntensity: 3, texture: 'wood' }];
+      }`,
+      false
+    );
+    if (!reply.ok) throw new Error(reply.error);
+    expect(reply.parts[0]).toMatchObject({
+      clearcoat: 0.5,
+      sheen: 0.25,
+      transmission: 1,
+      ior: 1.45,
+      thickness: 2,
+      emissive: '#ffaa00',
+      emissiveIntensity: 3,
+      texture: 'wood',
+    });
+  });
+
   it('reports a part that is not a shape the same way for a print', async () => {
     const reply = await build('export default function model() { return [{ name: "x" }]; }', true);
     expect(reply.ok ? '' : reply.error).toContain('item 0 is not');

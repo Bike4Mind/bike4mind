@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +15,17 @@ vi.mock('./userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./userPath')>()),
   resolveUserPath: vi.fn(async () => process.env.PATH ?? ''),
 }));
+
+/** Whether the temp folder tells `a` from `A`; macOS and Windows fold case by default. */
+const tmpKeepsCase = ((): boolean => {
+  const probe = mkdtempSync(join(tmpdir(), 'b4m-case-'));
+  try {
+    writeFileSync(join(probe, 'a'), '');
+    return !existsSync(join(probe, 'A'));
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
 
 const PROGRAMS = [
   'cat',
@@ -35,6 +47,8 @@ const PROGRAMS = [
   'docker',
   'head',
 ];
+
+const REPLACEMENT = String.fromCharCode(0xfffd);
 
 /** Commands that ran unasked on main and must still run as the mode allows, in a repository with a large node_modules. */
 describe('commands main ran unasked', () => {
@@ -148,6 +162,53 @@ describe('commands main ran unasked', () => {
     await writeFile(join(mrepo, '.claude', 'settings.json'), '{"x": 1}');
     git(mrepo, 'commit', '-qam', 'side');
     git(mrepo, 'checkout', '-q', 'main');
+    // hrepo's last commit, "second", changes its settings, and its work tree matches that commit.
+    const hrepo = await repository('hrepo', { '.claude/settings.json': '{}', 'src/b.ts': 'b' });
+    await writeFile(join(hrepo, '.claude', 'settings.json'), '{"x": 1}');
+    git(hrepo, 'commit', '-qam', 'second');
+    await mkdir(join(hrepo, ':'));
+    for (const name of ['^^!', '^^-1', 'HEAD^!', 'HEAD^-+1', 'HEAD^- 1', ':/first', ':/fir*']) {
+      await writeFile(join(hrepo, name), '');
+    }
+    // Files named as some words are written, which bash passes to git as other values.
+    for (const name of ["HEAD''~1", 'HEAD\\~1', 'HEAD~1:.', 'HEAD~1:src']) await writeFile(join(hrepo, name), '');
+    await mkdir(join(srepo, '\\--output=.claude'));
+    for (const name of ['\\*', ':\\!src', ':\\(exclude\\)src', '\\--output=.claude/settings.json', '*', ':.claude']) {
+      await writeFile(join(srepo, name), '');
+    }
+    // Names bash may pass git that git reads as magic or as a glob reaching `.claude/settings.json`.
+    for (const name of [':!x.ts', '[.]claude[!z]settings.json', '[.]claude[.-0test]settings.json']) {
+      await writeFile(join(srepo, name), '');
+    }
+    for (const name of ['q]x', '.x.']) await writeFile(join(srepo, 'src', name), '');
+    // `*[<KELVIN SIGN>n]` matches `*k*` under nocaseglob, and git reads it as a glob matching `settings.json`.
+    await writeFile(join(srepo, `*[${String.fromCharCode(0x212a)}n]`), '');
+    // vrepo has settings changed below `w`, and a file named as `\--relative=w` is written.
+    const vrepo = await repository('vrepo', { 'w/.claude/settings.json': '{}' });
+    await writeFile(join(vrepo, 'w', '.claude', 'settings.json'), '{"x": 1}');
+    await writeFile(join(vrepo, '\\--relative=w'), '');
+    // nrepo is a Next.js layout with bracket route names, everything changed, and a planted name that git reads as
+    // a glob matching `.claude/settings.json`.
+    const routes = ['pages/[id].tsx', 'pages/index.tsx', 'app/[[...slug]]/page.tsx', 'app/home/page.tsx'];
+    const nrepo = await repository('nrepo', {
+      '.claude/settings.json': '{}',
+      ...Object.fromEntries(routes.map(route => [route, 'a'])),
+    });
+    for (const path of ['.claude/settings.json', ...routes]) await writeFile(join(nrepo, path), 'b');
+    await writeFile(join(nrepo, '[.]claude[!q]settings.jso[nq]'), '');
+    await writeFile(join(nrepo, `[.]claude[!q]settings.jso[n${REPLACEMENT}]`), '');
+    await writeFile(join(nrepo, 'a'.repeat(56)), '');
+    // urepo is a clone two commits deep whose main tracks origin/main, with an untracked `u.ts` at its top.
+    const orepo = await repository('orepo', { '.claude/settings.json': '{}', 'src/b.ts': 'b' });
+    await writeFile(join(orepo, 'src', 'b.ts'), 'b2');
+    git(orepo, 'commit', '-qam', 'second');
+    git(proj, 'clone', '-q', orepo, join(proj, 'urepo'));
+    await writeFile(join(proj, 'urepo', 'u.ts'), 'u');
+    // wrepo has the same history, with `HEAD^!` its only top-level name a bare `*` expands to.
+    const wrepo = await repository('wrepo', { '.claude/settings.json': '{}' });
+    await writeFile(join(wrepo, '.claude', 'settings.json'), '{"x": 1}');
+    git(wrepo, 'commit', '-qam', 'second');
+    await writeFile(join(wrepo, 'HEAD^!'), '');
     // arepo gives settings an attribute, which the scan's git, reading attributes from the empty tree, never sees.
     const arepo = await repository('arepo', { '.gitattributes': '.claude/** foo\n', '.claude/settings.json': '{}' });
     await writeFile(join(arepo, '.claude', 'settings.json'), '{"x": 1}');
@@ -278,6 +339,44 @@ describe('commands main ran unasked', () => {
     ['git ls-files -z w | xargs -0 sed -i s/a/b/', 'brepo', unasked],
     ['rg -l0 hooks w | xargs -0 sed -i s/a/b/', 'brepo', unasked],
     ["find w -name '*.json' -print0 | xargs -0 sed -i s/a/b/", 'brepo', unasked],
+    ["git diff --name-only -- ':!x.lock' | xargs sed -i s/a/b/", '', unasked],
+    ["git diff --name-only ':!a' | xargs sed -i s/a/b/", '', unasked],
+    ["git diff --name-only ':^a' | xargs wc -l", '', unasked],
+    ["git diff --name-only -- . ':(exclude)src/c.ts' | xargs wc -l", '', unasked],
+    ["git diff --name-only -- ':(glob)src/**' | xargs sed -i s/a/b/", '', unasked],
+    ["git diff --name-only ':/src' | xargs sed -i s/a/b/", '', unasked],
+    ["git diff --name-only -- ':(top,icase)SRC' | xargs sed -i s/a/b/", '', unasked],
+    ["git diff --name-only '*.ts' | xargs sed -i s/a/b/", '', unasked],
+    ["git diff --name-only 'src/[id].tsx' | xargs sed -i s/a/b/", '', unasked],
+    ["git diff --name-only 'src/*.ts' ':!a' | xargs wc -l", '', unasked],
+    ['git diff --name-only --relative | xargs sed -i s/a/b/', '', unasked],
+    ['rg -l foo 2>"/dev/null" | xargs sed -i s/a/b/', '', unasked],
+    ["rg -l foo 2>'/dev/null' | xargs cat", '', unasked],
+    ['rg -l foo | grep -v zz 2>/dev/null | xargs sed -i s/a/b/', '', unasked],
+    ['git ls-files | grep -v x 2>/dev/null | head -5 | xargs wc -l', '', unasked],
+    ['git diff --name-only HEAD~1 | xargs sed -i s/a/b/', 'urepo', unasked],
+    ['git diff --name-only @{u} | xargs sed -i s/a/b/', 'urepo', unasked],
+    ['git diff --name-only main..HEAD | xargs sed -i s/a/b/', 'urepo', unasked],
+    ['git diff --name-only origin/main...HEAD | xargs sed -i s/a/b/', 'urepo', unasked],
+    ['git diff --name-only @{u} -- src | xargs sed -i s/a/b/', 'urepo', unasked],
+    ['git diff --name-only origin/main...HEAD -- src | xargs sed -i s/a/b/', 'urepo', unasked],
+    ['git diff --name-only -- src/*.ts | xargs npx prettier --check', '', unasked],
+    ['git diff --name-only -- src/*.ts | xargs wc -l', '', unasked],
+    ['git diff --name-only HEAD~1 -- src/*.ts | xargs sed -i s/a/b/', 'urepo', unasked],
+    ['git diff --name-only -- *.ts | xargs sed -i s/a/b/', 'urepo', unasked],
+    ['git diff --name-only -- src/{b,c}.ts | xargs sed -i s/a/b/', 'urepo', unasked],
+    // With no match, bash passes each pattern as written.
+    ['git diff --name-only -- *.ts | xargs eslint', '', unasked],
+    ['git diff --name-only -- src/*.tsx | xargs eslint', '', unasked],
+    ['git diff --name-only -- src/*.ts src/*.tsx | xargs eslint', '', unasked],
+    ['git diff --name-only -- src/*.{ts,tsx} | xargs eslint', '', unasked],
+    ['git diff --name-only -- *.{ts,tsx} | xargs eslint', '', unasked],
+    ['git diff --name-only -- src/**/*.ts | xargs eslint', '', unasked],
+    // bash passes the bracket names, which the scan's git reads as the command's does.
+    ['git diff --name-only -- pages/*.tsx | xargs npx prettier --write', 'nrepo', unasked],
+    ['git diff --name-only -- app/**/*.tsx | xargs npx eslint', 'nrepo', unasked],
+    ['git diff --name-only -- app/*/page.tsx | xargs npx eslint --fix', 'nrepo', unasked],
+    ['git diff --name-only HEAD -- pages/*.tsx | xargs sed -i s/a/b/', 'nrepo', unasked],
     ['cat .claude/agents/x.md', '', unaskedNamingClaude],
     ['ls -la .claude/', '', unaskedNamingClaude],
     ['grep -r hooks .claude', '', unaskedNamingClaude],
@@ -289,6 +388,13 @@ describe('commands main ran unasked', () => {
     ['git reset --hard', 'crepo', unasked],
   ])('decides %s (in proj/%s) as main did', async (command, folder, expected) => {
     expect(await judge(command, folder)).toEqual(expected);
+  });
+
+  it('reads a glob of many stars against a long name in linear time', async () => {
+    const started = performance.now();
+    expect(await judge('git diff --name-only -- *a*a*a*a*a*a*a*a*b | xargs wc -l', 'nrepo')).toEqual(unasked);
+    // Room for the git runs on a loaded host; the matching alone took minutes when it backtracked.
+    expect(performance.now() - started).toBeLessThan(10000);
   });
 
   it.each([
@@ -336,6 +442,86 @@ describe('commands main ran unasked', () => {
     ['git diff --name-only main...side | xargs sed -i s/a/b/', 'mrepo'],
     ['find . -maxdepth 1 -type d | xargs -I{} time -o {}/settings.json du -sh {}', ''],
     ["git diff --name-only . ':(exclude,attr:!foo)' | xargs sed -i s/a/b/", 'arepo'],
+    ["git diff --name-only -- ':(attr:foo)' | xargs sed -i s/a/b/", 'arepo'],
+    ["git diff --name-only ':!src' | xargs sed -i s/a/b/", 'srepo'],
+    ["git diff --name-only -- .claude ':!.claude/x' | xargs sed -i s/a/b/", 'srepo'],
+    ["git diff --name-only -- ':(top).claude' | xargs sed -i s/a/b/", 'srepo'],
+    ["git diff --name-only -- ':(icase).CLAUDE' | xargs sed -i s/a/b/", 'srepo'],
+    ["git diff --name-only ':/.claude' | xargs sed -i s/a/b/", 'srepo'],
+    ["git diff --name-only '.c*' | xargs sed -i s/a/b/", 'srepo'],
+    ['git diff --name-only --relative | xargs sed -i s/a/b/', 'srepo'],
+    // `:/sid*` names the commit whose message matches, so git compares it with the work tree.
+    ["git diff --name-only ':/sid*' | xargs sed -i s/a/b/", 'mrepo'],
+    // git diff reads each as revisions of the last commit, though rev-parse --verify exits 1 for the parent forms.
+    ["git diff --name-only 'HEAD^{/.*}^!' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only 'HEAD^{/.*}^@' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only 'HEAD^{/.*}^-' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only 'HEAD^{/.*}^-1' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only ':/sec*^!' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only ':/sec*^@' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only ':/sec*^-' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only '^HEAD^{/fir*}' | xargs sed -i s/a/b/", 'hrepo'],
+    // A file of the same name does not make git read a parent shorthand as a path.
+    ["git diff --name-only ':/^^!' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only ':/^^-1' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only 'HEAD^!' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only 'HEAD^-+1' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only 'HEAD^- 1' | xargs sed -i s/a/b/", 'hrepo'],
+    // Each names a commit by its message, though a file `:/first` and a file `:/fir*` exist.
+    ["git diff --name-only ':/first' | xargs sed -i s/a/b/", 'hrepo'],
+    ["git diff --name-only ':/fir*' | xargs sed -i s/a/b/", 'hrepo'],
+    // bash expands `*` to `HEAD^!` before git reads it.
+    ['git diff --name-only * | xargs sed -i s/a/b/', 'wrepo'],
+    // bash passes each to git as its value, not as written.
+    ['git diff --name-only -- :\\!src | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- :\\^src | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- :\\(exclude\\)src | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only :\\!src | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only :\\(exclude\\)src | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- \\* | xargs sed -i s/a/b/', 'srepo'],
+    ["git diff --name-only -- ':!'src | xargs sed -i s/a/b/", 'srepo'],
+    ['git diff --name-only -- ":(exclude)"src | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- * | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only \\* | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only \\--output=.claude/settings.json | xargs sed -i s/a/b/', 'srepo'],
+    ["git diff --name-only HEAD''~1 | xargs sed -i s/a/b/", 'hrepo'],
+    ['git diff --name-only HEAD\\~1 | xargs sed -i s/a/b/', 'hrepo'],
+    // git reads each as a tree of HEAD~1, though a file `HEAD~1:.` and a file `HEAD~1:src` exist.
+    ['git diff --name-only HEAD~1:./ | xargs sed -i s/a/b/', 'hrepo'],
+    ['git diff --name-only HEAD~1:src/ | xargs sed -i s/a/b/', 'hrepo'],
+    // git reads `--relative=w`, printing `w/.claude/settings.json` as `.claude/settings.json`.
+    ['git diff --name-only \\--relative=w | xargs sed -i s/a/b/', 'vrepo'],
+    // bash expands `*w` to the folder `w`, which git lists the settings below.
+    ['git diff --name-only -- *w | xargs sed -i s/a/b/', 'vrepo'],
+    // Globs after `--` the scan does not read: bash may make names git reads more widely (`*`, `:.claude`).
+    ['git diff --name-only -- ? | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- :* | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- src/*\\]x | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- src/[ab].ts | xargs sed -i s/a/b/', 'srepo'],
+    // bash passes a name git reads as an exclude-only pathspec or as a glob reaching the settings.
+    ['git diff --name-only -- *.ts | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- *z* | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- *test* | xargs sed -i s/a/b/', 'srepo'],
+    ['git diff --name-only -- *q* | xargs sed -i s/a/b/', 'nrepo'],
+    // The shell gets a lone surrogate as U+FFFD, which the planted name holds.
+    [`git diff --name-only -- *${REPLACEMENT}* | xargs sed -i s/a/b/`, 'nrepo'],
+    [`git diff --name-only -- *${String.fromCharCode(0xd800)}* | xargs sed -i s/a/b/`, 'nrepo'],
+    [`git diff --name-only -- *${String.fromCharCode(0xdc00)}* | xargs sed -i s/a/b/`, 'nrepo'],
+    // A bash without globskipdots expands `src/.*.` to `src/..` too.
+    ['git diff --name-only -- src/.*. | xargs sed -i s/a/b/', 'srepo'],
+    // bash re-reads the `\` the range makes, passing git `.claude`.
+    ['git diff --name-only -- .cl{a..Z..5}aude | xargs sed -i s/a/b/', 'srepo'],
+    // bash 3.2 leaves a stepped sequence as written, so git gets a bracket class holding `.`.
+    ["git diff --name-only -- '['{1..1..1}']c*/s*' | xargs sed -i s/a/b/", 'srepo'],
+    // bash 3.2 drops the padding, passing git the wider `*0*`.
+    ["git diff --name-only -- '*'{00..0}'*' | xargs sed -i s/a/b/", 'srepo'],
+    ['git diff --name-only x{1..1} -- | xargs sed -i s/a/b/', 'srepo'],
+    ['shopt -s nullglob; git diff --name-only -- src/*.ts | xargs sed -i s/a/b/', 'srepo'],
+    // Under nullglob find gets no start point and walks `.`.
+    ['shopt -s nullglob; find src/*.zz -delete', ''],
+    ['shopt -s nullglob\nfind src/*.zz -name settings.json -delete', ''],
+    ['rg -l hooks 2>"/dev/null" | xargs sed -i s/a/b/', ''],
+    ['rg -l hooks | grep -v zz 2>/dev/null | xargs sed -i s/a/b/', ''],
   ])('asks before %s (in proj/%s) rewrites settings', async (command, folder) => {
     expect(await judge(command, folder)).toMatchObject(asks);
   });
@@ -509,6 +695,17 @@ describe('commands main ran unasked', () => {
   });
 
   it.each([
+    'rg -l foo 2>"/dev/stdout" | xargs sed -i s/a/b/',
+    'rg -l foo 2>"$OUT" | xargs sed -i s/a/b/',
+    "rg -l foo | grep -E '( docs/secret' 2>/dev/stdout | xargs sed -i s/a/b/",
+    // A `..` after a link leads to the link target's parent, which may be /dev.
+    'rg -l foo 2>src/../err | xargs sed -i s/a/b/',
+    'rg -l foo | grep -v zz 2>src/../err | xargs sed -i s/a/b/',
+  ])('asks for %s, whose stderr may reach xargs', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each([
     "grep $'a' src/a.ts",
     "grep 'a$' src/a.ts; echo $'b'",
     'echo "$(cat $\'a\')"',
@@ -530,6 +727,137 @@ describe('commands main ran unasked', () => {
       vi.stubEnv(variable, undefined);
     }
   });
+
+  // Planted only for their own row, as no walk of the project could read past them. APFS refuses a name that is not
+  // UTF-8 (EILSEQ), so macOS cannot plant one.
+  it.skipIf(process.platform === 'darwin').each([
+    // `:!<ff>x` is not UTF-8; bash passes its child as `:!<ff>x/a`, an exclude.
+    [
+      'a folder whose name is not UTF-8',
+      'git diff --name-only -- *x/* | xargs sed -i s/a/b/',
+      async (repo: string): Promise<Buffer> => {
+        const folder = Buffer.concat([Buffer.from(`${repo}/:!`), Buffer.from([0xff]), Buffer.from('x')]);
+        await mkdir(folder);
+        await writeFile(Buffer.concat([folder, Buffer.from('/a')]), '');
+        return folder;
+      },
+    ],
+  ])('asks with %s for %s', async (_, command, plant) => {
+    const planted = await plant(join(proj, 'srepo'));
+    try {
+      expect(await judge(command, 'srepo')).toMatchObject(asks);
+    } finally {
+      await rm(planted, { recursive: true, force: true });
+    }
+  });
+
+  // bash reads BASHOPTS from its environment at startup, and `bash -c` runs the file BASH_ENV names first.
+  it.each([
+    ['BASHOPTS', 'nullglob', 'git diff --name-only -- src/*.ts | xargs sed -i s/a/b/', ''],
+    ['BASHOPTS', 'globstar', 'git diff --name-only -- src/**/*.ts | xargs sed -i s/a/b/', ''],
+    ['BASHOPTS', 'nocaseglob', 'git diff --name-only -- *k* | xargs sed -i s/a/b/', 'srepo'],
+    ['BASH_ENV', '/dev/null', 'git diff --name-only -- *.zz | xargs sed -i s/a/b/', ''],
+    ['BASH_ENV', '/dev/null', 'git diff --name-only -- **/w | xargs sed -i s/a/b/', ''],
+    // dotglob lets `*` match `.claude`; under nullglob a pattern with no match drops out, so find starts at `.`.
+    ['BASHOPTS', 'dotglob', 'rm -rf *', 'srepo'],
+    ['BASHOPTS', 'dotglob', 'chmod -R 000 *', 'srepo'],
+    ['BASH_ENV', '/dev/null', 'rm -rf *', 'srepo'],
+    ['BASHOPTS', 'nullglob', 'find src/*.zz -delete', ''],
+    ['BASHOPTS', 'nullglob', 'ls src/*.zz | xargs chmod -R 000', ''],
+    ['BASHOPTS', 'nullglob', 'cd src/*.zz && rm -rf *', ''],
+    ['BASH_ENV', '/dev/null', 'find src/*.zz -delete', ''],
+    ['BASH_ENV', '/dev/null', 'git ls-files src | xargs wc -l', 'srepo'],
+    // git reads these from its environment, and the scan's own git runs read none of them.
+    ['GIT_ICASE_PATHSPECS', '1', "git diff --name-only -- '*.JSON' | xargs sed -i s/a/b/", 'srepo'],
+    ['GIT_ICASE_PATHSPECS', 'true', "git diff --name-only '*.JSON' | xargs sed -i s/a/b/", 'srepo'],
+    ['GIT_ICASE_PATHSPECS', '1', "git ls-files '*.JSON' | xargs sed -i s/a/b/", 'srepo'],
+    ['GIT_ICASE_PATHSPECS', '1', "git grep -l x -- '*.JSON' | xargs sed -i s/a/b/", 'srepo'],
+    ['GIT_GLOB_PATHSPECS', '1', "git diff --name-only -- '*/**/settings.json' | xargs sed -i s/a/b/", 'srepo'],
+    ['GIT_GLOB_PATHSPECS', '1', "git ls-files '*/**/settings.json' | xargs sed -i s/a/b/", 'srepo'],
+    ['GIT_GLOB_PATHSPECS', '1', "git grep -l x -- '*/**/settings.json' | xargs sed -i s/a/b/", 'srepo'],
+  ])('with %s=%s asks for %s (in proj/%s)', async (variable, value, command, folder) => {
+    vi.stubEnv(variable, value);
+    try {
+      expect(await judge(command, folder)).toMatchObject(asks);
+    } finally {
+      vi.stubEnv(variable, undefined);
+    }
+  });
+
+  // Each setting leaves what the command reaches as it was: no pathspec, a pattern with a match, or a narrower read.
+  it.each([
+    ['BASHOPTS', 'nullglob', 'rm -rf *', 'srepo'],
+    ['BASHOPTS', 'nullglob', 'find src/*.ts -delete', ''],
+    ['BASHOPTS', 'nullglob', 'ls src/*.ts | xargs wc -l', ''],
+    ['GIT_ICASE_PATHSPECS', '1', 'git diff --name-only | xargs cat', ''],
+    ['GIT_ICASE_PATHSPECS', '0', 'git ls-files src | xargs wc -l', ''],
+    ['GIT_GLOB_PATHSPECS', '1', 'git ls-files | xargs wc -l', ''],
+    ['GIT_LITERAL_PATHSPECS', '1', 'git diff --name-only -- src | xargs wc -l', 'srepo'],
+    ['GIT_NOGLOB_PATHSPECS', '1', 'git diff --name-only -- src/*.ts | xargs wc -l', ''],
+    ['GIT_NOGLOB_PATHSPECS', '1', "git ls-files '*.ts' | xargs wc -l", ''],
+  ])('with %s=%s still runs %s (in proj/%s) unasked', async (variable, value, command, folder) => {
+    vi.stubEnv(variable, value);
+    try {
+      expect(await judge(command, folder)).toEqual(unasked);
+    } finally {
+      vi.stubEnv(variable, undefined);
+    }
+  });
+
+  // krepo tracks a link in a folder named `:(top)d`, now pointing at the app's data, and has an untracked `DD`
+  // holding a link to the same file beside an untracked `dd`. `DD` cannot sit beside `dd` where case folds.
+  it.for([
+    ['GIT_LITERAL_PATHSPECS', "git diff --name-only -- ':(top)d' | xargs cat", asks],
+    ['GIT_ICASE_PATHSPECS', 'git ls-files -o dd | xargs cat', asks],
+    ['nothing', "GIT_LITERAL_PATHSPECS=1 git diff --name-only -- ':(top)d' | xargs cat", asks],
+    ['nothing', 'GIT_ICASE_PATHSPECS=1 git ls-files -o dd | xargs cat', asks],
+    ['nothing', 'GIT_ICASE_PATHSPECS=1 git grep -l --untracked x -- dd | xargs cat', asks],
+    ['nothing', "git diff --name-only -- ':(top)d' | xargs cat", { auto: true, full: true }],
+    ['nothing', 'git ls-files -o dd | xargs cat', { auto: true, full: true }],
+  ] as const)(
+    'with %s set decides %s by the links git then prints',
+    async ([variable, command, expected], { skip }) => {
+      const casePair = / dd\b/.test(command);
+      skip(casePair && !tmpKeepsCase, 'the temp folder folds case');
+      const krepo = join(proj, 'krepo');
+      const vault = join(userData, 'vault.json');
+      const git = (...args: string[]): void => {
+        execFileSync('git', ['-C', krepo, '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', ...args], {
+          env: {
+            ...process.env,
+            GIT_AUTHOR_NAME: 't',
+            GIT_AUTHOR_EMAIL: 't@t',
+            GIT_COMMITTER_NAME: 't',
+            GIT_COMMITTER_EMAIL: 't@t',
+          },
+        });
+      };
+      await mkdir(krepo);
+      if (variable !== 'nothing') vi.stubEnv(variable, '1');
+      try {
+        await writeFile(vault, '{}');
+        await writeFile(join(krepo, 'a'), 'a');
+        await mkdir(join(krepo, ':(top)d'));
+        await symlink('../a', join(krepo, ':(top)d', 'lk'));
+        git('init', '-q', '-b', 'main');
+        git('add', '-A');
+        git('commit', '-qm', 'first');
+        await rm(join(krepo, ':(top)d', 'lk'));
+        await symlink(vault, join(krepo, ':(top)d', 'lk'));
+        if (casePair) {
+          await mkdir(join(krepo, 'dd'));
+          await writeFile(join(krepo, 'dd', 'x'), 'x');
+          await mkdir(join(krepo, 'DD'));
+          await symlink(vault, join(krepo, 'DD', 'lk'));
+        }
+        expect(await judge(command, 'krepo')).toMatchObject(expected);
+      } finally {
+        if (variable !== 'nothing') vi.stubEnv(variable, undefined);
+        await rm(krepo, { recursive: true, force: true });
+        await rm(vault, { force: true });
+      }
+    }
+  );
 
   it.each([
     "env sh -c 'echo x > .claude/settings.json'",

@@ -26,6 +26,8 @@ export function ModelClips({ clips, playing, onPlay }: Props) {
             variant={playing === clip ? 'soft' : 'plain'}
             color="neutral"
             onClick={() => onPlay(playing === clip ? null : clip)}
+            aria-label={playing === clip ? `Stop ${clip}` : `Play ${clip}`}
+            aria-pressed={playing === clip}
             data-testid={`model-pane-clip-${clip}`}
           >
             {playing === clip ? 'Stop' : 'Play'}

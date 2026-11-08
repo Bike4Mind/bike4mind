@@ -618,3 +618,68 @@ export function CloudIcon({ size }: { size?: number } = {}) {
     </Glyph>
   );
 }
+
+/** The model pane's wireframe toggle: a cube drawn as edges only, hidden ones included. */
+export function WireframeIcon() {
+  return (
+    <Glyph>
+      <path d="M8 1.75 13.75 5v6L8 14.25 2.25 11V5z" />
+      <path d="M2.25 5 8 8.25 13.75 5M8 8.25v6" />
+      <path d="M8 1.75v6.5M2.25 11 8 8.25l5.75 2.75" strokeDasharray="1.5 1.5" strokeWidth="1" />
+    </Glyph>
+  );
+}
+
+/** The model pane's exploded view: a cube split into pieces pushed apart from its centre. */
+export function ExplodeIcon() {
+  return (
+    <Glyph>
+      <path d="M5.5 1.75h5v3.5h-5zM1.75 9h4.5v5.25h-4.5zM9.75 9h4.5v5.25h-4.5z" />
+      <path d="M8 6.75v1.5M6.75 8.25 6 8.75M9.25 8.25l.75.5" strokeWidth="1" />
+    </Glyph>
+  );
+}
+
+export function GridIcon() {
+  return (
+    <Glyph>
+      <path d="M2 5.5h12M2 10.5h12M5.5 2v12M10.5 2v12" />
+    </Glyph>
+  );
+}
+
+export function MoonIcon() {
+  return (
+    <Glyph>
+      <path d="M13.5 9.75A5.75 5.75 0 1 1 6.25 2.5a4.5 4.5 0 0 0 7.25 7.25z" />
+    </Glyph>
+  );
+}
+
+/** A sun: the model pane's lighting menu. */
+export function SunIcon() {
+  return (
+    <Glyph>
+      <circle cx="8" cy="8" r="3" />
+      <path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1.06 1.06M11.54 11.54l1.06 1.06M3.4 12.6l1.06-1.06M11.54 4.46l1.06-1.06" />
+    </Glyph>
+  );
+}
+
+/** Camera framing: four corners around a point, for the model pane's view presets. */
+export function FrameIcon() {
+  return (
+    <Glyph>
+      <path d="M2 5.5V2h3.5M10.5 2H14v3.5M14 10.5V14h-3.5M5.5 14H2v-3.5" />
+      <circle cx="8" cy="8" r="1.75" />
+    </Glyph>
+  );
+}
+
+export function RecordIcon() {
+  return (
+    <Glyph>
+      <circle cx="8" cy="8" r="4" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}

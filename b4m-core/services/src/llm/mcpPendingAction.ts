@@ -12,11 +12,13 @@
 
 import { ATLASSIAN_CONFIRMABLE_TOOLS } from '@bike4mind/mcp/atlassian/constants';
 import { GITHUB_CONFIRMABLE_TOOLS } from '@bike4mind/mcp/github/constants';
+import type { IPendingAction } from '@bike4mind/common';
 
 export type McpPendingAction = {
   tool: string;
   params: Record<string, unknown>;
   ts: number;
+  customConnector?: IPendingAction['customConnector'];
 };
 
 export type McpPendingActionExtraction =

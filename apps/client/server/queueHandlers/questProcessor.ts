@@ -78,6 +78,7 @@ import {
 } from '@server/generationJobs/wiring';
 import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { customMcpToolHost } from '@server/mcpConnections/customMcpToolHost';
 import { checkFreeTierDailySpendCap, isFreeTierDailyCapError } from '@server/billing/freeTierDailyCapGate';
 import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 
@@ -208,6 +209,7 @@ export const getStaticOptions = () => {
     summarizeSession: summarizeSession,
     contextSummarizeSession: contextSummarizeSession,
     getMcpClient: getMcpClientAdapter,
+    customMcp: customMcpToolHost,
     logEvent: logEvent,
     cacheRepository: cacheRepository,
     publishTelemetryAlert: publishTelemetryAlertCallback,

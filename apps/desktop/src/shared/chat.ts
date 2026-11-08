@@ -780,6 +780,11 @@ export interface ChatMessage {
    */
   display?: string;
   /**
+   * Set with `system` on the message a side chat opens with, naming the conversation it was
+   * branched from, so the thread can say so and link back. See ChatService.startSideChat.
+   */
+  sideChatOf?: { sessionId: string; title: string };
+  /**
    * Artifacts parsed out of this reply. Their markup is NOT in `content`, which holds the prose
    * around them; the wire rebuilds it from here (restoreArtifactMarkup) so the model still sees
    * its own artifact on a follow-up while the body is stored exactly once.
@@ -925,6 +930,15 @@ export type ChatMoveToBackgroundResult = { ok: true; process: BackgroundProcessI
  * disappears is not a cap.
  */
 export const MAX_SPAWN_DEPTH = 2;
+
+/**
+ * Whether a session is an agent its parent started, as opposed to a top-level conversation or a
+ * side chat the user drives. The agent surfaces (background panel, roster, quest readiness)
+ * list only these; the sidebar still nests every child under its parent.
+ */
+export function isAgentSession(session: { origin?: Pick<ChatSessionOrigin, 'kind'> }): boolean {
+  return session.origin !== undefined && session.origin.kind !== 'side-chat';
+}
 
 /** Whether this session may still start one under MAX_SPAWN_DEPTH. */
 export function canSpawnDeeper(session: { origin?: Pick<ChatSessionOrigin, 'depth'> }): boolean {
@@ -1260,6 +1274,11 @@ export interface ChatSessionOrigin {
   depth: number;
   /** The prompt it was started with, so the row can say what it was sent off to do. */
   seedPrompt: string;
+  /**
+   * 'side-chat' for a child the user branched off a highlight (ChatService.startSideChat). It
+   * nests under its parent like a spawn but is not an agent; see isAgentSession.
+   */
+  kind?: 'side-chat';
 }
 
 interface ChatSessionMeta {
@@ -1939,6 +1958,14 @@ export interface StartSpawnSuggestionRequest {
   /** Required for a worktree start; ignored by the others. */
   branch?: string;
 }
+
+/** Branch a side chat off `sessionId` about text the user highlighted in its thread. */
+export interface StartSideChatRequest {
+  sessionId: string;
+  selection: string;
+}
+
+export type StartSideChatResult = { ok: true; session: ChatSessionSummary } | { ok: false; error: string };
 
 export type SpawnSuggestionResult = { ok: true; suggestion: ChatSpawnSuggestion } | { ok: false; error: string };
 

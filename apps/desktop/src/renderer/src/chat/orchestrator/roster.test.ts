@@ -120,6 +120,17 @@ describe('buildRoster', () => {
     expect(depths).toEqual({ child: 1, grandchild: 2 });
   });
 
+  it('leaves out a side chat, which is not an agent', () => {
+    const sessions = [
+      summary('root', undefined),
+      summary('child', 'root'),
+      summary('side-chat', 'root', {
+        origin: { parentSessionId: 'root', depth: 1, seedPrompt: 'passage', kind: 'side-chat' },
+      }),
+    ];
+    expect(buildRoster({ sessions, rootId: 'root', ...noInput }).map(agent => agent.id)).toEqual(['child']);
+  });
+
   it('terminates on a cycle that never reaches the root', () => {
     const sessions = [summary('root', undefined), summary('a', 'b'), summary('b', 'a')];
     expect(buildRoster({ sessions, rootId: 'root', ...noInput })).toEqual([]);

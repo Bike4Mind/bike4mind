@@ -53,7 +53,8 @@ vi.mock('@bike4mind/services', () => ({
   counterService: { incrementUserCounter },
 }));
 
-vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
 }));
 

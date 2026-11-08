@@ -136,6 +136,13 @@ describe('scanShell', () => {
         expect((await scan(command)).envFiles).toEqual([]);
       }
     );
+
+    it('reads a run of stars in a name in linear time', async () => {
+      await scan('true');
+      const started = performance.now();
+      expect((await scan(`cat .${'*'.repeat(40)}x`)).envFiles).toEqual([]);
+      expect(performance.now() - started).toBeLessThan(2000);
+    });
   });
 
   describe('commands that can send data out', () => {

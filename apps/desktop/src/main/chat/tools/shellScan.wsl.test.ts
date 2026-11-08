@@ -317,6 +317,16 @@ describe('the folders a command in a WSL project may reach unasked', () => {
     expect(scan?.ungranted).toEqual([]);
   });
 
+  // The scan does not expand a glob in a distro, so it cannot tell whether nullglob drops it.
+  it.each([
+    ['shopt -s nullglob; find src/*.zz -delete', true],
+    ['find src/*.zz -delete', false],
+  ])('reads %s as unread: %s', async (command, unread) => {
+    const scan = await scanShell(command, root, [root]);
+
+    expect(scan?.unread === true).toBe(unread);
+  });
+
   it('names the Linux folder an operand with a backslash lands in, outside the project', async () => {
     const scan = await scanShell("cat '/var/x\\..\\..\\home\\me\\repo\\f'", root, [root]);
 

@@ -1308,6 +1308,75 @@ export async function indexListed(
   return links === null ? null : { settings, links, odd: paths.some(oddForXargs) };
 }
 
+/** git's looks_like_pathspec: an unescaped `*`, `?` or `[`, or long pathspec magic. */
+function looksLikePathspec(word: string): boolean {
+  for (let at = 0; at < word.length; at++) {
+    if (word[at] === '\\') at++;
+    else if ('*?['.includes(word[at] as string)) return true;
+  }
+  return word.startsWith(':(');
+}
+
+/** Revision syntax other than `^` that git diff may read in a word: `~N`, `@{...}`, `<rev>:<path>` and `..`. */
+const REVISION_SYNTAX = /[~:]|@\{|\.\./;
+
+/**
+ * Whether git reads `word`, which is not a commit, as the first path of `git diff` run at the top `top`, as its
+ * verify_filename does: a glob or long magic form, or a path that exists once a leading `:/`, `:!` or `:^` is taken
+ * off. A word with a colon or a glob must also name no object, which git would read as a revision (`:/message`) or
+ * refuse as ambiguous; one whose pattern holds other revision syntax counts only when it exists whole.
+ */
+async function readsAsPath(top: string, word: string): Promise<boolean> {
+  // git reads a `^` anywhere but a leading `:^` as revision syntax, and the parent shorthands (`^!`, `^@`, `^-N`)
+  // as revisions even when a file has the same name.
+  if (word.startsWith('-') || word.replace(/^:\^/, '').includes('^')) return false;
+  // As git's check_filename, joined as written: a normalized `HEAD:./` would be the file `HEAD:.`.
+  const exists = (path: string): Promise<boolean> =>
+    lstat(isAbsolute(path) ? path : `${top}/${path}`).then(
+      () => true,
+      () => false
+    );
+  const pathspec = looksLikePathspec(word);
+  if (pathspec || word.startsWith(':')) {
+    // Only exit 1 says there is no such object; a timeout or other failure says nothing.
+    if ((await gitRun(top, ['rev-parse', '--verify', '--quiet', word]))?.code !== 1) return false;
+    if (REVISION_SYNTAX.test(word.replace(/^:(\([^)]*\)|[/!^]*:?)/, ''))) return exists(word);
+    if (pathspec) return true;
+  }
+  const [, special, rest = ''] = /^(:[/!^])?(.*)$/s.exec(word) ?? [];
+  if (special !== undefined && rest === '') return true;
+  return exists(special === undefined ? word : rest);
+}
+
+/**
+ * Pathspec magic that git matches from the path alone, so the scan's git reads it as the command's does. Not
+ * `attr:`, which it would match against attributes the scan's git reads from the empty tree.
+ */
+const PLAIN_MAGIC = new Set(['top', 'literal', 'glob', 'icase', 'exclude']);
+
+/**
+ * `pathspecs` with each exclude left out, which can only add to what they match (with none left, git matches
+ * everything); null when one has magic outside PLAIN_MAGIC.
+ */
+function withoutExcludes(pathspecs: readonly string[]): string[] | null {
+  const kept: string[] = [];
+  for (const pathspec of pathspecs) {
+    let magic: string[] = [];
+    if (pathspec.startsWith(':(')) {
+      const end = pathspec.indexOf(')');
+      const list = end === -1 ? null : pathspec.slice(2, end);
+      if (list === null || list.includes('\\')) return null;
+      magic = list.split(',');
+      if (!magic.every(word => PLAIN_MAGIC.has(word))) return null;
+    } else if (pathspec.startsWith(':')) {
+      const short = /^:([/!^]*)/.exec(pathspec)?.[1] ?? '';
+      magic = [...short].map(letter => (letter === '/' ? 'top' : 'exclude'));
+    }
+    if (!magic.includes('exclude')) kept.push(pathspec);
+  }
+  return kept;
+}
+
 /**
  * What `git diff --name-only [--cached] <words>` run at the top `top` compares, read as git reads the words: each a
  * revision (`A..B` its two ends, `A...B` whole) until one that is not a commit names a path, which with every later
@@ -1343,15 +1412,9 @@ export async function diffTargets(
       if (ends > 2) return null;
       continue;
     }
-    const exists = await lstat(resolve(top, word)).then(
-      () => true,
-      () => false
-    );
-    if (!exists) return null;
+    if (!(await readsAsPath(top, word))) return null;
     break;
   }
-  // Pathspec magic such as `attr:` would match against attributes git reads here with no GIT_ATTR_SOURCE.
-  if (words.slice(at).some(word => word.startsWith(':'))) return null;
   return {
     targets: targets.length > 0 ? targets : cached ? ['HEAD'] : [],
     worktree: !cached && ends < 2,
@@ -1360,18 +1423,20 @@ export async function diffTargets(
 }
 
 /**
- * What `git diff --name-only` run at the top `top` may print when it compares each of `targets` and, when
- * `worktree`, the work tree: the settings files among those paths, and the links at or on the way to them. Read
- * with diff-index against the index and hashed here, so git runs no filter on the work tree; null when git fails or
- * there is too much to look at.
+ * What `git diff --name-only` run at the top `top` may print under the pathspecs `written` (read withoutExcludes)
+ * when it compares each of `targets` and, when `worktree`, the work tree: the settings files among those paths,
+ * and the links at or on the way to them. Read with diff-index against the index and hashed here, so git runs no
+ * filter on the work tree; null when git fails or there is too much to look at.
  */
 export async function diffListed(
   top: string,
   targets: readonly string[],
   worktree: boolean,
-  pathspecs: readonly string[],
+  written: readonly string[],
   stopped: () => boolean
 ): Promise<{ settings: string[]; links: string[]; odd: boolean } | null> {
+  const pathspecs = withoutExcludes(written);
+  if (pathspecs === null) return null;
   const listed = await gitQuery(top, ['ls-files', '-s', '-z', '--full-name', '--', ...pathspecs]);
   const entries = listed === null ? null : indexEntries(listed);
   if (entries === null) return null;

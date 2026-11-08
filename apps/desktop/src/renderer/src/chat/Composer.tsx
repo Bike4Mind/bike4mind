@@ -25,6 +25,7 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatQueuedMessage, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import { AttachmentRow } from './Attachments';
+import { QuoteChip } from './QuoteChip';
 import { findCommand, matchCommands, type ComposerCommand } from './commands';
 import { ComposerHighlight, type HighlightToken } from './ComposerHighlight';
 import {
@@ -110,6 +111,8 @@ export function Composer({
   fill,
   onFillConsumed,
   focusRequest,
+  quote,
+  onRemoveQuote,
   footer,
   leading,
   skills,
@@ -198,6 +201,9 @@ export function Composer({
   onFillConsumed?: () => void;
   /** Bumped to move the keyboard into the box, caret at the end, without touching the draft. */
   focusRequest?: number;
+  /** The passage the next message replies to, shown above the box; see quotedMessage. */
+  quote?: string | null;
+  onRemoveQuote?: () => void;
   /**
    * Controls that belong to the next turn rather than to the app - the model picker. As a
    * function it is handed the row's indicators (context and credits rings) to place itself.
@@ -699,6 +705,12 @@ export function Composer({
         onSendNow={onSendQueuedNow}
         canSendNow={streaming}
       />
+
+      {quote && (
+        <Box sx={{ ...contentColumnSx, pt: 1.5 }}>
+          <QuoteChip quote={quote} onRemove={() => onRemoveQuote?.()} />
+        </Box>
+      )}
 
       {attachments.attachments.length > 0 && (
         <Box sx={{ ...contentColumnSx, pt: 1.5 }}>

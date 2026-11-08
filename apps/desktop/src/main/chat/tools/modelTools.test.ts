@@ -1,10 +1,10 @@
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatMedia } from '@shared/chat';
 import { EMPTY_MODEL_STATE, type ModelBuildReport, type ModelViewState } from '@shared/model3d';
-import { modelScreenshot, modelView } from './modelTools';
+import { modelRecord, modelScreenshot, modelView, turntablePath } from './modelTools';
 import type { ModelViewPort, ToolContext, ToolReporter } from './types';
 
 const OK: ModelBuildReport = {
@@ -25,6 +25,7 @@ function setup(report: ModelBuildReport = OK) {
     }),
     waitForBuild: vi.fn(async () => report),
     capture: vi.fn(async () => new Uint8Array([137, 80, 78, 71])),
+    recordTurntable: vi.fn(async () => new Uint8Array([26, 69, 223, 163])),
     glbPath: () => join(root, 'chest.glb'),
   } satisfies ModelViewPort;
   const images: Buffer[] = [];
@@ -185,5 +186,73 @@ describe('model_screenshot', () => {
     await expect(modelScreenshot.run({ path: 'chest.model.js', views: ['under'] }, context)).rejects.toThrow(
       /views must be/
     );
+  });
+});
+
+describe('model_record', () => {
+  it('records the model and saves the clip beside it', async () => {
+    const { root, view, context } = setup();
+    const text = await modelRecord.run({ path: 'chest.model.js' }, context);
+    expect(view.recordTurntable).toHaveBeenCalledWith('studio');
+    const saved = join(root, 'chest-turntable.webm');
+    expect(readFileSync(saved)).toEqual(Buffer.from([26, 69, 223, 163]));
+    expect(text).toContain(`studio turntable of chest.model.js to ${saved}`);
+  });
+
+  it('records night lighting under its own name, and validates lighting', async () => {
+    const { root, view, context } = setup();
+    await modelRecord.run({ path: 'chest.model.js', lighting: 'night' }, context);
+    expect(view.recordTurntable).toHaveBeenCalledWith('night');
+    expect(existsSync(join(root, 'chest-night-turntable.webm'))).toBe(true);
+    await expect(modelRecord.run({ path: 'chest.model.js', lighting: 'noon' }, context)).rejects.toThrow(
+      /lighting must be/
+    );
+  });
+
+  it('returns the build error and records nothing when the build failed', async () => {
+    const { view, context } = setup({ generation: 1, ok: false, error: 'boom' });
+    const text = await modelRecord.run({ path: 'chest.model.js' }, context);
+    expect(text).toContain('Build failed: boom');
+    expect(view.recordTurntable).not.toHaveBeenCalled();
+  });
+
+  it('saves nothing when another caller opened a model during the recording', async () => {
+    const { root, view, context } = setup();
+    view.recordTurntable.mockImplementationOnce(async () => {
+      await view.open(join(root, 'lamp.model.js'));
+      return new Uint8Array([1]);
+    });
+    await expect(modelRecord.run({ path: 'chest.model.js' }, context)).rejects.toThrow(/switched to another file/);
+    expect(existsSync(join(root, 'chest-turntable.webm'))).toBe(false);
+  });
+
+  it('refuses to record when the clip would land in a protected folder', async () => {
+    const { root, view, context } = setup();
+    mkdirSync(join(root, 'vault'));
+    writeFileSync(join(root, 'vault', 'lamp.glb'), 'glTF');
+    const guarded = { ...context, protectedPaths: [join(root, 'vault')] };
+    await expect(modelRecord.run({ path: 'vault/lamp.glb' }, guarded)).rejects.toThrow(/protected/);
+    expect(view.recordTurntable).not.toHaveBeenCalled();
+    expect(existsSync(join(root, 'vault', 'lamp-turntable.webm'))).toBe(false);
+  });
+
+  it('saves nothing when the folder became protected during the recording', async () => {
+    const { root, view, context } = setup();
+    const protectedPaths: string[] = [];
+    const guarded = { ...context, protectedPaths };
+    view.recordTurntable.mockImplementationOnce(async () => {
+      protectedPaths.push(root);
+      return new Uint8Array([1]);
+    });
+    await expect(modelRecord.run({ path: 'chest.model.js' }, guarded)).rejects.toThrow(/protected/);
+    expect(existsSync(join(root, 'chest-turntable.webm'))).toBe(false);
+  });
+});
+
+describe('turntablePath', () => {
+  it('names the clip after the model and its lighting', () => {
+    expect(turntablePath(join('/p', 'chest.model.js'), 'studio')).toBe(join('/p', 'chest-turntable.webm'));
+    expect(turntablePath(join('/p', 'Lamp.GLB'), 'night')).toBe(join('/p', 'Lamp-night-turntable.webm'));
+    expect(turntablePath(join('/p', 'Lamp.GLB'), 'sunset')).toBe(join('/p', 'Lamp-sunset-turntable.webm'));
   });
 });

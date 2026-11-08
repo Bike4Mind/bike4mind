@@ -1,23 +1,28 @@
+import { writeFile } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import {
   DEFAULT_MODEL_VIEWS,
+  MODEL_LIGHTINGS,
   MODEL_POSES,
   MODEL_VIEWS,
   type ModelBuildReport,
+  type ModelLighting,
   type ModelPose,
   type ModelView,
   formatModelSummary,
   modelKindFor,
   siblingGlbPath,
 } from '@shared/model3d';
-import { resolveWithinRoots } from './paths';
+import { realpathNearest, resolveWithinRoots } from './paths';
 import { showImage } from './toolImages';
-import { resolveWritablePath } from './writeTools';
+import { resolveWritablePath, withPathLock } from './writeTools';
 import { requireString, type ModelContext, type ToolContext, type ToolDefinition } from './types';
 
 /**
  * The 3D model tools: open a model in the user's live pane and look at it. The agent writes and
- * edits `*.model.js` files with the ordinary file tools (and their approvals); these two only read,
- * plus the derived `<name>.glb` that ModelLiveView writes beside the model on each good build.
+ * edits `*.model.js` files with the ordinary file tools (and their approvals); these only read, plus
+ * two derived files beside the model: the `<name>.glb` that ModelLiveView writes on each good build,
+ * and the `<name>-turntable.webm` clip model_record renders on request.
  */
 
 /** The contract the build expects. Must stay in step with the engine worker in model3d/engineProtocol.ts. */
@@ -36,8 +41,20 @@ const MODEL_FILE_CONTRACT = [
   'use 48-96 segments on round parts and set `smooth: true` on them. Either way give each part its own color; the GLB keeps them as materials.',
   'Stand the model on z = 0 with its footprint centred on x = y = 0: the GLB origin is then on the floor under its middle, which is',
   'where a game engine places and rotates an asset.',
-  'A part may also set `metalness` and `roughness` (0..1, glTF PBR; e.g. brass or iron 1 and 0.4, wood 0 and 0.8) and `smooth: true`',
-  'to shade curved faces smoothly (a barrel, a knob) while keeping sharp edges; parts are faceted by default.',
+  'A part may also set `metalness` and `roughness` (0..1, glTF PBR) and `smooth: true` to shade curved faces smoothly',
+  '(a barrel, a knob) while keeping sharp edges; parts are faceted by default. Optional physical fields: `clearcoat` (0..1, a',
+  'varnish layer), `sheen` (0..1, cloth), `transmission` (0..1, see-through) with `ior` (1..2.333) and `thickness` (model',
+  'units), and `emissive` (#rrggbb glow) with `emissiveIntensity` (0+; 2 to 5 blooms and lights nearby parts in the',
+  "pane's Workshop and Night lighting, so a lantern flame or a gem can light its own scene). Starting points: polished brass color #c9a043,",
+  'metalness 1, roughness 0.3; wrought iron #3a3a3c, metalness 1, roughness 0.6; oiled wood #7a4a24, roughness 0.7 (add',
+  'clearcoat 0.6 for varnished); clear glass #f2f8f8, roughness 0.05, transmission 1, ior 1.5, thickness about its wall depth; black rubber',
+  "#1e1e1e, roughness 0.9; velvet sheen 1, roughness 0.9. `texture` adds procedural surface detail tinted by the part's",
+  "colour: 'wood' (grain along the part's longest side; use it on planks and boards, e.g. #7a5536), 'brushed' (brushed",
+  "metal with stretched highlights; steel #b8bcc2, metalness 1, roughness 0.35), 'leather' (pebbled hide; saddle #6b3f22,",
+  "roughness 0.7, sheen 0.3), 'stone' (mottled, flecked rock; granite #8f8a82, sandstone #c2a878, roughness 0.9) or",
+  "'painted' (painted planks worn to bare wood at the edges; the colour is the paint, e.g. barn red #8e2a22, roughness",
+  '0.6). The pane renders with soft shadows and ambient occlusion, so',
+  'real gaps and bevels read: leave a small gap where a lid meets its box rather than fusing them.',
   'Moving parts: give a part `pivot: [x, y, z]` (the point it turns about, e.g. a lid hinge, in model coordinates) and',
   '`parent: "body"` to nest it under another part. Each part becomes its own GLB node with its origin at the pivot, so a game',
   'engine can rotate it (open the lid) without touching the mesh. Model the rest pose (lid closed); names must be unique.',
@@ -80,6 +97,19 @@ function parsePose(input: Record<string, unknown>): ModelPose {
   if (!(MODEL_POSES as readonly unknown[]).includes(raw))
     throw new Error(`pose must be one of: ${MODEL_POSES.join(', ')}`);
   return raw as ModelPose;
+}
+
+function parseLighting(input: Record<string, unknown>): ModelLighting {
+  const raw = input.lighting ?? 'studio';
+  if (!(MODEL_LIGHTINGS as readonly unknown[]).includes(raw))
+    throw new Error(`lighting must be one of: ${MODEL_LIGHTINGS.join(', ')}`);
+  return raw as ModelLighting;
+}
+
+/** Where a turntable clip of `modelPath` is saved: beside it, named after it and its lighting. */
+export function turntablePath(modelPath: string, lighting: ModelLighting): string {
+  const stem = basename(modelPath).replace(/\.(model\.js|glb|stl)$/i, '');
+  return join(dirname(modelPath), `${stem}${lighting === 'studio' ? '' : `-${lighting}`}-turntable.webm`);
 }
 
 function parseViews(input: Record<string, unknown>): ModelView[] {
@@ -209,4 +239,51 @@ export const modelScreenshot: ToolDefinition = {
   },
 };
 
-export const MODEL_TOOLS: readonly ToolDefinition[] = [modelView, modelScreenshot];
+export const modelRecord: ToolDefinition = {
+  schema: {
+    name: 'model_record',
+    description: [
+      'Record a turntable video of the open 3D model: an 8 second 1080p WebM clip of one full orbit while every joint',
+      'swings through its range and back, saved beside the model as <name>-turntable.webm (<name>-<lighting>-turntable.webm',
+      'for any other lighting). Use it when the user asks for a video, clip or showcase of the model, after checking the',
+      'model with model_screenshot. Workshop and night lighting let emissive parts glow and light what is near them; pick',
+      'one when the model has glowing parts. You cannot see the clip; tell the user where it is.',
+    ].join(' '),
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'A model file to open first. Omit it to use the open model.' },
+        lighting: {
+          type: 'string',
+          enum: [...MODEL_LIGHTINGS],
+          description: [
+            'studio (default): soft studio light. sunset: a low warm sun with long shadows, for wood, stone and leather.',
+            'workshop: a warm overhead lamp, with glowing parts lighting the scene. night: moonlight, the same but darker.',
+          ].join(' '),
+        },
+      },
+    },
+  },
+  async run(input, context) {
+    const model = requireModel(context);
+    const lighting = parseLighting(input);
+    const requested = typeof input.path === 'string' && input.path.trim() ? input.path.trim() : undefined;
+    const { report, path } = await openAndBuild(model, requested, context);
+    if (!report.ok) return formatModelSummary(report);
+    const name = path.split(/[\\/]/).pop() ?? 'model';
+    const planned = turntablePath(path, lighting);
+    // An opened .glb/.stl, or an already-open model, never passed the sibling-GLB check in
+    // openAndBuild, so the clip's folder is proven writable here, before an 8-90 s render.
+    await resolveWritablePath(planned, context);
+    context.report?.label(`Recording ${name}`);
+    const clip = await model.view.recordTurntable(lighting);
+    assertStillOpen(model, path);
+    // Re-resolved after the render: a root can be revoked, or the folder swapped for a symlink, meanwhile.
+    const target = await resolveWritablePath(planned, context);
+    await withPathLock(await realpathNearest(target), () => writeFile(target, clip));
+    context.report?.label(`Recorded ${name}`);
+    return `Saved a ${lighting} turntable of ${name} to ${target} (${(clip.length / 1e6).toFixed(1)} MB, 8 s, 1920x1080 WebM).`;
+  },
+};
+
+export const MODEL_TOOLS: readonly ToolDefinition[] = [modelView, modelScreenshot, modelRecord];

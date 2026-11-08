@@ -6,6 +6,7 @@ import {
   selectGatedToolCall,
   shouldWithholdToolCall,
   partitionApprovedPause,
+  partitionRepeatedApprovedCalls,
   resumeApprovedPause,
   resumeApprovedPauseAndGateConfidence,
   gateReplayConfidence,
@@ -222,6 +223,7 @@ describe('partitionApprovedPause', () => {
 describe('resumeApprovedPause', () => {
   function makeDeps(overrides: Partial<Parameters<typeof resumeApprovedPause>[1]> = {}) {
     const deps: Parameters<typeof resumeApprovedPause>[1] = {
+      answerRepeatedCall: vi.fn(),
       executeGatedToolCall: vi.fn(async () => 'ok'),
       toCheckpoint: vi.fn(() => ({ iteration: 1 })),
       updatePermissionState: vi.fn(async () => {}),
@@ -249,6 +251,7 @@ describe('resumeApprovedPause', () => {
         approvedToolCallId: approved.id,
         approvedTools: [],
         deniedTools: [],
+        guardedToolNames: new Set<string>(),
       },
       deps
     );
@@ -283,6 +286,7 @@ describe('resumeApprovedPause', () => {
         approvedToolCallId: approved.id,
         approvedTools: [],
         deniedTools: [],
+        guardedToolNames: new Set<string>(),
       },
       deps
     );
@@ -320,6 +324,7 @@ describe('resumeApprovedPause', () => {
         approvedToolCallId: first.id,
         approvedTools: ['send_slack_message'],
         deniedTools: [],
+        guardedToolNames: new Set<string>(),
       },
       deps
     );
@@ -355,6 +360,7 @@ describe('resumeApprovedPause', () => {
         approvedToolCallId: approvedCall.id,
         approvedTools: [],
         deniedTools: [],
+        guardedToolNames: new Set<string>(),
       },
       deps
     );
@@ -374,11 +380,67 @@ describe('resumeApprovedPause', () => {
     expect(gatedArg.toolCallId).toBe(secondCall.id);
     expect(withheldArg).toEqual([secondCall]);
   });
+  describe('identical custom calls in one batch', () => {
+    const guarded = new Set(['custom_write']);
+    const params = (
+      withheld: ReturnType<typeof call>[],
+      approvedToolCallId: string | undefined,
+      approvedTools: string[]
+    ) => ({
+      executionId: 'exec_dup',
+      iterationIndex: 1,
+      withheld,
+      approvedToolCallId,
+      approvedTools,
+      deniedTools: [],
+      guardedToolNames: guarded,
+    });
+
+    it('replays one of two identical withheld calls and answers the sibling without a card', async () => {
+      const a = call('custom_write', { id: 1 });
+      const b = call('custom_write', { id: 1 });
+      const deps = makeDeps();
+
+      const outcome = await resumeApprovedPause(params([a, b], a.id, []), deps);
+
+      expect(outcome).toEqual({ status: 'replayed' });
+      expect(deps.executeGatedToolCall).toHaveBeenCalledTimes(1);
+      expect(deps.answerRepeatedCall).toHaveBeenCalledTimes(1);
+      expect(deps.answerRepeatedCall).toHaveBeenCalledWith(b);
+      expect(deps.settleGatedCall).not.toHaveBeenCalled();
+    });
+
+    it('replays once when a remembered approval allows both identical calls', async () => {
+      const a = call('custom_write', { id: 1 });
+      const b = call('custom_write', { id: 1 });
+      const deps = makeDeps();
+
+      const outcome = await resumeApprovedPause(params([a, b], undefined, ['custom_write']), deps);
+
+      expect(outcome).toEqual({ status: 'replayed' });
+      expect(deps.executeGatedToolCall).toHaveBeenCalledTimes(1);
+      expect(deps.answerRepeatedCall).toHaveBeenCalledTimes(1);
+      expect(deps.answerRepeatedCall).toHaveBeenCalledWith(b);
+    });
+
+    it('leaves identical calls to a non-guarded tool alone', async () => {
+      const a = call('image_generation', { prompt: 'cat' });
+      const b = call('image_generation', { prompt: 'cat' });
+      const deps = makeDeps();
+
+      const outcome = await resumeApprovedPause(params([a, b], undefined, ['image_generation']), deps);
+
+      expect(outcome).toEqual({ status: 'replayed' });
+      expect(deps.executeGatedToolCall).toHaveBeenCalledTimes(2);
+      expect(deps.answerRepeatedCall).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('resumeApprovedPauseAndGateConfidence', () => {
   function makeDeps(overrides: Partial<Parameters<typeof resumeApprovedPauseAndGateConfidence>[1]> = {}) {
     const deps: Parameters<typeof resumeApprovedPauseAndGateConfidence>[1] = {
+      answerRepeatedCall: vi.fn(),
       executeGatedToolCall: vi.fn(async () => 'ok'),
       toCheckpoint: vi.fn(() => ({ iteration: 1 })),
       updatePermissionState: vi.fn(async () => {}),
@@ -420,6 +482,7 @@ describe('resumeApprovedPauseAndGateConfidence', () => {
         approvedToolCallId: approved.id,
         approvedTools: [],
         deniedTools: [],
+        guardedToolNames: new Set<string>(),
         confidenceGateThreshold: 0.6,
       },
       deps
@@ -449,6 +512,7 @@ describe('resumeApprovedPauseAndGateConfidence', () => {
         approvedToolCallId: approved.id,
         approvedTools: [],
         deniedTools: [],
+        guardedToolNames: new Set<string>(),
         confidenceGateThreshold: 0.6,
       },
       deps
@@ -474,6 +538,7 @@ describe('resumeApprovedPauseAndGateConfidence', () => {
         approvedToolCallId: approved.id,
         approvedTools: [],
         deniedTools: [],
+        guardedToolNames: new Set<string>(),
         confidenceGateThreshold: 0.6,
       },
       deps
@@ -496,6 +561,7 @@ describe('resumeApprovedPauseAndGateConfidence', () => {
         approvedToolCallId: approved.id,
         approvedTools: [],
         deniedTools: [],
+        guardedToolNames: new Set<string>(),
         confidenceGateThreshold: 0.6,
         confidenceOverrides: [0.9, 0.1],
       },
@@ -526,6 +592,7 @@ describe('resumeApprovedPauseAndGateConfidence', () => {
         approvedToolCallId: approved.id,
         approvedTools: [],
         deniedTools: [],
+        guardedToolNames: new Set<string>(),
         confidenceGateThreshold: 0.6,
       },
       deps
@@ -913,5 +980,31 @@ describe('settleGatedCall', () => {
       expect.objectContaining({ executionId: 'exec_4', iteration: 2, toolCallId: 'toolu_2' })
     );
     expect(deps.markFailed).not.toHaveBeenCalled();
+  });
+});
+
+describe('partitionRepeatedApprovedCalls', () => {
+  const guarded = new Set(['acme__create_note']);
+  const replayed: GatedToolCall = { id: 'a', name: 'acme__create_note', input: { title: 'T', body: 'B' } };
+
+  it('treats an identical custom call as a repeat, whatever its key order or encoding', () => {
+    const repeat: GatedToolCall = { id: 'b', name: 'acme__create_note', input: '{"body":"B","title":"T"}' };
+    expect(partitionRepeatedApprovedCalls([repeat], [replayed], guarded)).toEqual({ repeats: [repeat], remaining: [] });
+  });
+
+  it('keeps a call with different arguments gated', () => {
+    const other: GatedToolCall = { id: 'b', name: 'acme__create_note', input: { title: 'T2', body: 'B' } };
+    expect(partitionRepeatedApprovedCalls([other], [replayed], guarded)).toEqual({ repeats: [], remaining: [other] });
+  });
+
+  it('never short-circuits a tool outside the guarded set, such as a re-run shell command', () => {
+    const command: GatedToolCall = { id: 'a', name: 'bash_execute', input: { command: 'pnpm test' } };
+    const rerun: GatedToolCall = { ...command, id: 'b' };
+    expect(partitionRepeatedApprovedCalls([rerun], [command], guarded)).toEqual({ repeats: [], remaining: [rerun] });
+  });
+
+  it('keeps everything gated when nothing was just replayed', () => {
+    const call: GatedToolCall = { ...replayed, id: 'b' };
+    expect(partitionRepeatedApprovedCalls([call], [], guarded)).toEqual({ repeats: [], remaining: [call] });
   });
 });
