@@ -1,5 +1,5 @@
 import type { ImageInputRole } from '@bike4mind/common';
-import { ImageModerationBlockedError } from '../imageGeneration/imageGenerationErrors';
+import { ImageInputRejectedError, ImageModerationBlockedError } from '../imageGeneration/imageGenerationErrors';
 import type { ProviderOutput, ProviderTerminalResult } from '../generationProviders/types';
 import type { ImageInputs, ResolvedImageInput } from './types';
 
@@ -50,6 +50,10 @@ const messageOf = (error: unknown): string => (error instanceof Error ? error.me
 export const classifyImageProviderError = (error: unknown): ProviderTerminalResult | null => {
   if (error instanceof ImageModerationBlockedError) {
     return { status: 'blocked', reason: error.message, raw: { requestId: error.requestId } };
+  }
+  // The service refused the input before calling the provider: nothing was made, and resending fails the same way.
+  if (error instanceof ImageInputRejectedError) {
+    return { status: 'failed', retryable: false, message: error.message, raw: error.logContext };
   }
   const status = httpStatusOf(error);
   if (status === undefined || status < 400 || status >= 500) return null;

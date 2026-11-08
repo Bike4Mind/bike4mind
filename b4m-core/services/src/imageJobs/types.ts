@@ -87,7 +87,7 @@ export type CreateImageJobsInput = {
   count: number;
   source: GenerationJobSource;
   apiKeyId?: string;
-  /** Scopes the whole batch; each job holds `${idempotencyKey}:${index}`. */
+  /** Scopes the whole batch; each job holds `${idempotencyKey}:${index}/${count}`. */
   idempotencyKey?: string;
 };
 
@@ -97,6 +97,7 @@ export type CreateImageJobsErrorCode =
   | 'unsupported_by_model'
   | 'model_unavailable'
   | 'input_image_not_found'
+  | 'unsupported_input_image'
   | 'insufficient_credits'
   | 'storage_quota_exceeded'
   | 'idempotency_key_reused';

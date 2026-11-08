@@ -3,6 +3,7 @@ import {
   getImageModelCatalogEntry,
   ImageJobRequestSchema,
   imageJobInputs,
+  resolveLegacyImageModel,
   usdToCredits,
   validateImageRequest,
   type ImageJobRequest,
@@ -63,8 +64,18 @@ const toStoredRequest = (request: ImageJobRequest): StoredImageRequest => {
   return { ...request, ...(quality !== undefined && { quality }) };
 };
 
-const jobKey = (idempotencyKey: string | undefined, index: number) =>
-  idempotencyKey === undefined ? undefined : `${idempotencyKey}:${index}`;
+// The count is part of the key, so the same key with a different batch size never replays a partial batch.
+const jobKey = (idempotencyKey: string | undefined, index: number, count: number) =>
+  idempotencyKey === undefined ? undefined : `${idempotencyKey}:${index}/${count}`;
+
+// The formats both providers' edit paths accept; the mask is converted to PNG, which takes PNG or JPEG.
+const INPUT_MIME_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const MASK_MIME_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg']);
+
+const acceptsMimeType = (role: string, mimeType: string): boolean => {
+  const normalized = mimeType.split(';')[0].trim().toLowerCase();
+  return (role === 'mask' ? MASK_MIME_TYPES : INPUT_MIME_TYPES).has(normalized);
+};
 
 /**
  * Creates `count` image jobs that share a groupId ("make N"). Each job holds its own credits, so each settles on
@@ -82,7 +93,13 @@ export async function createImageJobs(
   if (!parsed.success) return refuse(400, 'invalid_request', parsed.error.issues[0]?.message ?? 'Invalid request');
 
   const caps = getImageModelCatalogEntry(parsed.data.model);
-  if (!deps.providers.get(caps.provider)) {
+  const provider = deps.providers.get(caps.provider);
+  // A retired id is refused rather than rendered as its successor: the job records the model it renders.
+  const served =
+    provider !== undefined &&
+    (provider.models as readonly string[]).includes(parsed.data.model) &&
+    resolveLegacyImageModel(parsed.data.model) === parsed.data.model;
+  if (!served) {
     return refuse(422, 'model_unavailable', `Image model ${parsed.data.model} is not available for generation jobs`);
   }
   const unsupported = checkAgainstModel(parsed.data, caps);
@@ -90,10 +107,14 @@ export async function createImageJobs(
   const request = toStoredRequest(parsed.data);
   // The pin must itself be a tier the model takes; a catalog that disagrees with the pin is a bug, not user error.
   const pinnedUnsupported = checkAgainstModel(request, caps);
-  if (pinnedUnsupported) return pinnedUnsupported;
+  if (pinnedUnsupported) {
+    throw new Error(
+      `image quality pin for ${request.model} is not a tier the model takes: ${pinnedUnsupported.message}`
+    );
+  }
 
   const owner = resolveJobOwner(input.user);
-  const keys = Array.from({ length: input.count }, (_, index) => jobKey(input.idempotencyKey, index));
+  const keys = Array.from({ length: input.count }, (_, index) => jobKey(input.idempotencyKey, index, input.count));
   const replays = await Promise.all(
     keys.map(idempotencyKey => findIdempotentReplay({ kind: 'image', owner, idempotencyKey, request }, deps))
   );
@@ -109,9 +130,15 @@ export async function createImageJobs(
     return refuse(422, 'model_unavailable', `Image model ${request.model} has no API key configured`);
   }
   for (const imageInput of imageJobInputs(request)) {
-    // Checked up front so a missing input refuses the request instead of failing every job after its hold.
-    if (!(await deps.loadInputFile(input.user.id, imageInput.fileId))) {
-      return refuse(422, 'input_image_not_found', `Input image not found (${imageInput.role})`);
+    // Checked up front so a bad input refuses the request instead of failing every job after its hold.
+    const file = await deps.loadInputFile(input.user.id, imageInput.fileId);
+    if (!file) return refuse(422, 'input_image_not_found', `Input image not found (${imageInput.role})`);
+    if (!acceptsMimeType(imageInput.role, file.mimeType)) {
+      return refuse(
+        422,
+        'unsupported_input_image',
+        `Input image (${imageInput.role}) must be ${imageInput.role === 'mask' ? 'PNG or JPEG' : 'PNG, JPEG or WebP'}`
+      );
     }
   }
   const missingIndexes = keys.flatMap((_, index) => (replays[index]?.ok ? [] : [index]));
@@ -149,7 +176,13 @@ async function holdBatch(
 ): Promise<{ ok: true; holds: (CreditHold | null)[] } | Refusal> {
   const holds: (CreditHold | null)[] = [];
   for (let index = 0; index < count; index++) {
-    const held = await holdJobCredits({ ...params, featureLabel: FEATURE_LABEL }, deps);
+    let held: Awaited<ReturnType<typeof holdJobCredits>>;
+    try {
+      held = await holdJobCredits({ ...params, featureLabel: FEATURE_LABEL }, deps);
+    } catch (error) {
+      await releaseHolds(holds, deps);
+      throw error;
+    }
     if (!held.ok) {
       await releaseHolds(holds, deps);
       return held;
@@ -165,8 +198,13 @@ async function releaseHolds(holds: readonly (CreditHold | null)[], deps: CreateI
     try {
       await releaseCreditHold(hold, deps.credits);
     } catch (error) {
-      // The hold's pending row stays, so the hold sweep refunds it; never mask the refusal being returned.
-      deps.logger.error('image_job_create_hold_release_failed', { error });
+      // No sweep refunds a create-time hold, so the log carries what to return by hand; never mask the refusal.
+      deps.logger.error('image_job_create_hold_release_failed', {
+        ownerId: hold.ownerId,
+        ownerType: hold.ownerType,
+        reservedCredits: hold.reservedCredits,
+        error,
+      });
     }
   }
 }

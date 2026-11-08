@@ -5,6 +5,7 @@ import {
   IMAGE_MODEL_CATALOG,
   ImageModels,
   insufficientCreditsError,
+  resolveLegacyImageModel,
   type ImageModels as ImageModelId,
   type StorageLimitErrorInfo,
 } from '@bike4mind/common';
@@ -45,6 +46,7 @@ const openAiProvider: ImageProvider = {
 };
 
 const FILE_ID = 'c'.repeat(24);
+const SOURCE_ID = 'd'.repeat(24);
 
 const makeDeps = (overrides: Partial<CreateImageJobsDeps> = {}) => {
   const repository = createInMemoryGenerationJobRepository();
@@ -80,7 +82,7 @@ const makeDeps = (overrides: Partial<CreateImageJobsDeps> = {}) => {
 };
 
 const user = { id: 'u1', organizationId: null };
-const validRequest = { model: ImageModels.GPT_IMAGE_1, mode: 'generate', prompt: 'a red bicycle' };
+const validRequest = { model: ImageModels.GPT_IMAGE_2, mode: 'generate', prompt: 'a red bicycle' };
 const run = (deps: CreateImageJobsDeps, request: unknown, extra: { count?: number; idempotencyKey?: string } = {}) =>
   createImageJobs({ user, request, count: extra.count ?? 1, source: 'api', ...extra }, deps);
 
@@ -158,6 +160,41 @@ describe('createImageJobs', () => {
         code: 'model_unavailable',
       });
       expect(holdCredits).not.toHaveBeenCalled();
+    });
+
+    it('refuses a retired alias with 422 model_unavailable instead of rendering its successor', async () => {
+      expect(resolveLegacyImageModel(ImageModels.GPT_IMAGE_1)).not.toBe(ImageModels.GPT_IMAGE_1);
+      expect(openAiProvider.models).toContain(ImageModels.GPT_IMAGE_1);
+      const { deps, repository } = makeDeps();
+      expect(await run(deps, { ...validRequest, model: ImageModels.GPT_IMAGE_1 })).toMatchObject({
+        ok: false,
+        status: 422,
+        code: 'model_unavailable',
+      });
+      expect(holdCredits).not.toHaveBeenCalled();
+      expect(repository.jobs.size).toBe(0);
+    });
+
+    it('refuses an id that is not in the model enum at all (dall-e-3) with 400 invalid_request', async () => {
+      const { deps } = makeDeps();
+      expect(await run(deps, { ...validRequest, model: 'dall-e-3' })).toMatchObject({
+        ok: false,
+        status: 400,
+        code: 'invalid_request',
+      });
+      expect(holdCredits).not.toHaveBeenCalled();
+    });
+
+    it('refuses a model the registered provider does not list with 422 model_unavailable', async () => {
+      const provider: ImageProvider = {
+        ...openAiProvider,
+        models: openAiProvider.models.filter(id => id !== validRequest.model),
+      };
+      // The real registry refuses a provider that omits a catalog model, so the narrowed one is served directly.
+      const { deps, repository } = makeDeps({ providers: { get: () => provider } });
+      expect(await run(deps, validRequest)).toMatchObject({ ok: false, status: 422, code: 'model_unavailable' });
+      expect(holdCredits).not.toHaveBeenCalled();
+      expect(repository.jobs.size).toBe(0);
     });
 
     it('refuses model_unavailable when no API key is configured', async () => {
@@ -260,6 +297,26 @@ describe('createImageJobs', () => {
       expect(repository.jobs.size).toBe(2);
     });
 
+    it('keys each job by index and batch size, so a different count never replays a partial batch', async () => {
+      const { deps, repository } = makeDeps();
+      const created = await run(deps, validRequest, { count: 2, idempotencyKey: 'k' });
+      if (!created.ok) throw new Error(`refused: ${created.code}`);
+      expect(created.jobs.map(job => job.idempotencyKey)).toEqual(['k:0/2', 'k:1/2']);
+      expect([...repository.jobs.values()].map(job => job.idempotencyKey).sort()).toEqual(['k:0/2', 'k:1/2']);
+
+      const resized = await run(deps, validRequest, { count: 3, idempotencyKey: 'k' });
+      if (!resized.ok) throw new Error(`refused: ${resized.code}`);
+      expect(resized.created).toBe(true);
+      expect(resized.jobs.map(job => job.idempotencyKey)).toEqual(['k:0/3', 'k:1/3', 'k:2/3']);
+    });
+
+    it('looks every key up through the repository', async () => {
+      const { deps, repository } = makeDeps();
+      const lookup = vi.spyOn(repository, 'findByIdempotencyKey');
+      await run(deps, validRequest, { count: 2, idempotencyKey: 'k' });
+      expect(lookup.mock.calls.map(call => call[2])).toEqual(['k:0/2', 'k:1/2']);
+    });
+
     it('treats an omitted quality and its pinned tier as the same request', async () => {
       const { deps } = makeDeps();
       const first = await run(deps, validRequest, { idempotencyKey: 'k1' });
@@ -283,7 +340,7 @@ describe('createImageJobs', () => {
     it('refuses a missing input file with 422 before any hold', async () => {
       const { deps } = makeDeps({ loadInputFile: vi.fn(async () => null) });
       const result = await run(deps, {
-        model: ImageModels.GPT_IMAGE_1,
+        model: ImageModels.GPT_IMAGE_2,
         mode: 'generate',
         prompt: 'x',
         inputs: [{ role: 'reference', fileId: FILE_ID }],
@@ -291,6 +348,50 @@ describe('createImageJobs', () => {
       expect(result).toMatchObject({ ok: false, status: 422, code: 'input_image_not_found' });
       expect(deps.loadInputFile).toHaveBeenCalledWith('u1', FILE_ID);
       expect(holdCredits).not.toHaveBeenCalled();
+    });
+
+    const inputRequest = (role: 'reference' | 'edit_source' | 'mask') => ({
+      model: ImageModels.GPT_IMAGE_2,
+      mode: role === 'reference' ? 'generate' : 'edit',
+      prompt: 'x',
+      inputs:
+        role === 'mask'
+          ? [
+              { role: 'edit_source', fileId: SOURCE_ID },
+              { role, fileId: FILE_ID },
+            ]
+          : [{ role, fileId: FILE_ID }],
+    });
+    const loadingAs = (mimeType: string) =>
+      makeDeps({ loadInputFile: vi.fn(async () => ({ bytes: Buffer.from('x'), mimeType })) });
+
+    it.each([
+      ['reference', 'image/gif'],
+      ['edit_source', 'image/gif'],
+      ['mask', 'image/webp'],
+    ] as const)('refuses a %s of type %s with 422 unsupported_input_image before any hold', async (role, mimeType) => {
+      const { deps, repository } = loadingAs(mimeType);
+      expect(await run(deps, inputRequest(role))).toMatchObject({
+        ok: false,
+        status: 422,
+        code: 'unsupported_input_image',
+      });
+      expect(holdCredits).not.toHaveBeenCalled();
+      expect(repository.jobs.size).toBe(0);
+      expect(deps.enqueue).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['reference', 'image/webp'],
+      ['edit_source', 'IMAGE/JPEG'],
+      ['edit_source', 'image/png; charset=binary'],
+      ['mask', 'image/png; charset=binary'],
+      ['mask', 'image/jpeg'],
+    ] as const)('accepts a %s of type %s', async (role, mimeType) => {
+      const { deps } = loadingAs(mimeType);
+      const result = await run(deps, inputRequest(role));
+      if (!result.ok) throw new Error(`refused: ${result.code} ${result.message}`);
+      expect(result.created).toBe(true);
     });
 
     it('refuses with 400 storage_quota_exceeded when the Files quota lacks room, sized per new job', async () => {
@@ -304,6 +405,69 @@ describe('createImageJobs', () => {
       });
       expect(deps.checkStorageFor).toHaveBeenCalledWith('u1', 3 * IMAGE_JOB_OUTPUT_BYTES_ESTIMATE);
       expect(holdCredits).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('hold and persist failures', () => {
+    const numberedHolds = () => {
+      let next = 0;
+      vi.mocked(holdCredits).mockImplementation(async params => ({
+        ...fakeHold(params),
+        balanceAfterHold: 1000 - next++,
+      }));
+    };
+    const releasedBalances = () => vi.mocked(releaseCreditHold).mock.calls.map(([hold]) => hold.balanceAfterHold);
+
+    it('releases the holds already taken and rethrows when a later hold throws', async () => {
+      const failure = new Error('credit store down');
+      numberedHolds();
+      vi.mocked(holdCredits)
+        .mockImplementationOnce(async params => ({ ...fakeHold(params), balanceAfterHold: 1000 }))
+        .mockImplementationOnce(async params => ({ ...fakeHold(params), balanceAfterHold: 999 }))
+        .mockRejectedValueOnce(failure);
+      const { deps, repository } = makeDeps();
+      await expect(run(deps, validRequest, { count: 3 })).rejects.toBe(failure);
+      expect(releaseCreditHold).toHaveBeenCalledTimes(2);
+      expect(releasedBalances()).toEqual([1000, 999]);
+      expect(repository.jobs.size).toBe(0);
+      expect(deps.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('returns the failed job hold and the unattached ones when the second job cannot be persisted', async () => {
+      numberedHolds();
+      const { deps, repository } = makeDeps();
+      const createJob = repository.createJob.bind(repository);
+      let calls = 0;
+      vi.spyOn(repository, 'createJob').mockImplementation(async input => {
+        if (++calls === 2) throw new Error('mongo down');
+        return createJob(input);
+      });
+      await expect(run(deps, validRequest, { count: 3 })).rejects.toThrow('mongo down');
+      // Job 1 is persisted and owns hold 1000. Job 2 returned its own hold (999) and persistBatch returned job 3's.
+      expect(releaseCreditHold).toHaveBeenCalledTimes(2);
+      expect(releasedBalances().sort()).toEqual([998, 999]);
+      expect(repository.jobs.size).toBe(1);
+      expect(deps.enqueue).toHaveBeenCalledTimes(1);
+    });
+
+    it('logs what to return by hand when releasing a hold fails, and still surfaces the refusal', async () => {
+      const firstHold = fakeHold({ userId: 'u1', requiredCredits: 7 });
+      vi.mocked(holdCredits)
+        .mockResolvedValueOnce(firstHold)
+        .mockRejectedValueOnce(insufficientCreditsError('You do not have enough credits'));
+      vi.mocked(releaseCreditHold).mockRejectedValueOnce(new Error('ledger down'));
+      const { deps } = makeDeps();
+      const logged = vi.spyOn(deps.logger, 'error');
+      expect(await run(deps, validRequest, { count: 2 })).toMatchObject({ ok: false, status: 402 });
+      expect(logged).toHaveBeenCalledWith(
+        'image_job_create_hold_release_failed',
+        expect.objectContaining({
+          ownerId: firstHold.ownerId,
+          ownerType: firstHold.ownerType,
+          reservedCredits: 7,
+          error: expect.any(Error),
+        })
+      );
     });
   });
 

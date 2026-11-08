@@ -30,7 +30,7 @@ import { holdCredits, releaseCreditHold, settleCreditHold } from '../creditServi
 const unusedCredits = {} as CreditHoldAdapters;
 
 const OPENAI_IMAGE_MODEL_IDS = ALL_IMAGE_MODELS.filter(id => IMAGE_MODEL_CATALOG[id].provider === 'openai');
-const MODEL = ImageModels.GPT_IMAGE_1;
+const MODEL = ImageModels.GPT_IMAGE_2;
 const SOURCE_FILE_ID = 'a'.repeat(24);
 const MASK_FILE_ID = 'b'.repeat(24);
 const PNG_BYTES = Buffer.from('fake-png-bytes');
@@ -191,7 +191,7 @@ describe('image job handler through the real engine', () => {
     const t = setup(generate, {
       loadInputFile: vi.fn(async (_userId: string, fileId: string) => ({
         bytes: Buffer.from(`bytes-${fileId}`),
-        mimeType: 'image/webp',
+        mimeType: fileId === MASK_FILE_ID ? 'image/jpeg' : 'image/webp',
       })),
     });
     const created = await create(t, editRequest());
@@ -206,7 +206,7 @@ describe('image job handler through the real engine', () => {
       {
         images: [
           { role: 'edit_source', bytes: Buffer.from(`bytes-${SOURCE_FILE_ID}`), mimeType: 'image/webp' },
-          { role: 'mask', bytes: Buffer.from(`bytes-${MASK_FILE_ID}`), mimeType: 'image/webp' },
+          { role: 'mask', bytes: Buffer.from(`bytes-${MASK_FILE_ID}`), mimeType: 'image/jpeg' },
         ],
       },
       expect.anything()

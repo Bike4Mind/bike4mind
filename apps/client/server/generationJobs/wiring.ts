@@ -346,7 +346,7 @@ const getImageSettings: ImageJobDeps['getSettings'] = async () => {
 
 // The same gate, settings and incident store as the chat image paths; a confirmed block becomes a verdict and
 // anything else (the scan could not run) propagates so the image is not kept.
-const moderateImage: ImageJobDeps['moderate'] = async ({ job, bytes, mimeType }) => {
+export const moderateImage: ImageJobDeps['moderate'] = async ({ job, bytes, mimeType }) => {
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
     { names: ['ImageModerationEnabled'], skipCache: true }
@@ -363,7 +363,7 @@ const moderateImage: ImageJobDeps['moderate'] = async ({ job, bytes, mimeType })
         ...(job.questId !== undefined && { questId: job.questId }),
         provider: job.payload.providerId,
         model: job.payload.request.model,
-        surface: 'generation',
+        surface: job.payload.request.mode === 'edit' ? 'edit' : 'generation',
       },
       logger,
     });
@@ -447,7 +447,7 @@ const recordUsage: VideoJobDeps['recordUsage'] = async ({ job, creditsCharged, c
   }
 };
 
-const recordImageUsage: ImageJobDeps['recordUsage'] = async ({ job, creditsCharged, costUsd, status }) => {
+export const recordImageUsage: ImageJobDeps['recordUsage'] = async ({ job, creditsCharged, costUsd, status }) => {
   try {
     await usageEventRepository.record({
       requestId: job.questId ?? job.id,

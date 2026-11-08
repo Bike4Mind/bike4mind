@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ImageModerationBlockedError } from '../imageGeneration/imageGenerationErrors';
+import { ImageInputRejectedError, ImageModerationBlockedError } from '../imageGeneration/imageGenerationErrors';
 import {
   classifyImageProviderError,
   dataUrlToOutput,
@@ -125,5 +125,20 @@ describe('inputsWithRole', () => {
 
   it('returns an empty list when there are no images', () => {
     expect(inputsWithRole({}, 'mask')).toEqual([]);
+  });
+});
+
+describe('classifyImageProviderError input rejection', () => {
+  it('maps an input the service refused to a non-retryable failure carrying its log context', () => {
+    const error = new ImageInputRejectedError('mask must be PNG', {
+      reason: 'unsupported_mask',
+      mimeType: 'image/gif',
+    });
+    expect(classifyImageProviderError(error)).toEqual({
+      status: 'failed',
+      retryable: false,
+      message: 'mask must be PNG',
+      raw: { reason: 'unsupported_mask', mimeType: 'image/gif' },
+    });
   });
 });

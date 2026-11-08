@@ -82,7 +82,7 @@ export function computeImageUsdCostPerImage(modelId: string, input: CostInput): 
  * estimateCredits and openaiParams dispatch, and the image job's create and provider call),
  * so the two cannot disagree.
  *
- * Pinning an omitted tier is the #3007 fix. Left undefined, the parameter is dropped from
+ * Pinning an omitted tier matters: left undefined, the parameter is dropped from
  * the OpenAI call entirely, OpenAI applies its own 'auto' and can render at high effort,
  * while the calculator has already held the medium price - and image credits are held once,
  * before the call, and settlement cannot charge above that hold. Pinning moves nobody's bill
