@@ -4865,7 +4865,7 @@ export async function scanShell(
     /**
      * The paths a glob operand expands to through a link, which are checked again as written; null when the
      * expansion is too large to read, or may be empty under nullglob, where a program given no operand may act on
-     * `.` (find). Empty where the scan does not expand (Windows, a WSL folder).
+     * `.` (find). Empty where the scan does not expand (Windows, a WSL folder) unless nullglob may be on.
      */
     const linkMatches = async (word: OperandWord, operand: ReadOperand, cwd: string): Promise<string[] | null> => {
       if (operand.start === null || operand.unread) return [];

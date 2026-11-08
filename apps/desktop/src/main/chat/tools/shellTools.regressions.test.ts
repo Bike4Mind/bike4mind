@@ -754,6 +754,7 @@ describe('commands main ran unasked', () => {
     ['BASHOPTS', 'nullglob', 'ls src/*.zz | xargs chmod -R 000', ''],
     ['BASHOPTS', 'nullglob', 'cd src/*.zz && rm -rf *', ''],
     ['BASH_ENV', '/dev/null', 'find src/*.zz -delete', ''],
+    ['BASH_ENV', '/dev/null', 'git ls-files src | xargs wc -l', 'srepo'],
     // git reads these from its environment, and the scan's own git runs read none of them.
     ['GIT_ICASE_PATHSPECS', '1', "git diff --name-only -- '*.JSON' | xargs sed -i s/a/b/", 'srepo'],
     ['GIT_ICASE_PATHSPECS', 'true', "git diff --name-only '*.JSON' | xargs sed -i s/a/b/", 'srepo'],
@@ -798,6 +799,7 @@ describe('commands main ran unasked', () => {
     ['GIT_ICASE_PATHSPECS', 'git ls-files -o dd | xargs cat', asks],
     ['nothing', "GIT_LITERAL_PATHSPECS=1 git diff --name-only -- ':(top)d' | xargs cat", asks],
     ['nothing', 'GIT_ICASE_PATHSPECS=1 git ls-files -o dd | xargs cat', asks],
+    ['nothing', 'GIT_ICASE_PATHSPECS=1 git grep -l --untracked x -- dd | xargs cat', asks],
     ['nothing', "git diff --name-only -- ':(top)d' | xargs cat", { auto: true, full: true }],
     ['nothing', 'git ls-files -o dd | xargs cat', { auto: true, full: true }],
   ])('with %s set decides %s by the links git then prints', async (variable, command, expected) => {
