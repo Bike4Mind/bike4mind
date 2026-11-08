@@ -7,7 +7,12 @@ import {
   type OpenAICompatibleBackendOptions,
 } from '@bike4mind/llm-adapters';
 import { detectRuntimes } from '@bike4mind/local-models';
-import { parseLocalModelId, serverRuntimeId, type FetchLike } from '@bike4mind/local-models/servers';
+import {
+  parseLocalModelId,
+  serverRuntimeId,
+  SSH_PROBE_TIMEOUT_MS,
+  type FetchLike,
+} from '@bike4mind/local-models/servers';
 import type { ILogger } from '@bike4mind/observability';
 import { extractErrorMessage } from '@bike4mind/utils';
 import type { CliConfig } from '../storage';
@@ -28,6 +33,7 @@ import {
   serverFetch,
   type CliModelServer,
   type LoadedModelServers,
+  type SshFetchFor,
 } from '../models/modelServers.js';
 import { setWebSocketToolExecutor } from '../llm/ToolRouter';
 import { WebSocketConnectionManager } from '../ws/WebSocketConnectionManager';
@@ -72,6 +78,12 @@ export interface BuildLlmBackendInput {
 }
 
 export const SAVED_OLLAMA_LISTING_TIMEOUT_MS = 5_000;
+
+/** How long a saved server that is not the default's gets at startup: an SSH one may need a login first. */
+export function savedServerListingMs(server: CliModelServer, listingTimeoutMs: number | undefined): number {
+  if (listingTimeoutMs !== undefined) return listingTimeoutMs;
+  return server.transport.type === 'ssh' ? SSH_PROBE_TIMEOUT_MS : SAVED_OLLAMA_LISTING_TIMEOUT_MS;
+}
 /** How long startup waits for an Ollama on the default loopback address when no host is configured. */
 export const OLLAMA_DETECT_TIMEOUT_MS = 1_000;
 /** How long startup waits to list the models of a detected Ollama; the user never configured it. */
@@ -135,6 +147,8 @@ export interface BuildLlmBackendDeps {
   ) => MultiLlmBackend;
   /** Desktop's saved model servers; defaults to reading Desktop's file. */
   loadModelServers?: () => Promise<LoadedModelServers>;
+  /** The SSH forward to a saved server on another machine; defaults to the system ssh. */
+  sshFetchFor?: SshFetchFor;
   /** The base URL of a healthy Ollama on the default loopback address, or null. Must stop when `signal` aborts. */
   detectOllama: (signal: AbortSignal) => Promise<string | null>;
 }
@@ -383,7 +397,7 @@ export interface AttachLocalModelsOptions {
 
 type LocalModelsDeps = Pick<
   BuildLlmBackendDeps,
-  'createOllamaBackend' | 'createOpenAICompatibleBackend' | 'createMultiBackend' | 'loadModelServers'
+  'createOllamaBackend' | 'createOpenAICompatibleBackend' | 'createMultiBackend' | 'loadModelServers' | 'sshFetchFor'
 >;
 
 /**
@@ -432,13 +446,14 @@ async function attachServer(
   const secret = config.modelServerCredentials?.[server.id]?.secret;
   if (needsCredential(server, secret))
     throw new Error(`${clean(server.name)} needs credentials. Run: ${loginHint(server)}`);
-  const base = serverFetch(server, secret);
+  const base = serverFetch(server, secret, deps.sshFetchFor);
   const startup = new AbortController();
-  let attaching = true;
+  // Set only on success: after the deadline, attach() still runs and its requests must stay aborted.
+  let attached = false;
   const fetch: FetchLike = (input, init = {}) =>
-    attaching
-      ? base(input, { ...init, signal: init.signal ? AbortSignal.any([init.signal, startup.signal]) : startup.signal })
-      : base(input, init);
+    attached
+      ? base(input, init)
+      : base(input, { ...init, signal: init.signal ? AbortSignal.any([init.signal, startup.signal]) : startup.signal });
   const attach = async (): Promise<LlmRoute> => {
     const target = await resolveServerTarget(server, secret, fetch, timeoutMs);
     const baseUrl = target.runtime.baseUrl;
@@ -465,11 +480,9 @@ async function attachServer(
     });
     return { backend, models: await backend.getModelInfo() };
   };
-  try {
-    return await withDeadline(attach(), timeoutMs, startup);
-  } finally {
-    attaching = false;
-  }
+  const route = await withDeadline(attach(), timeoutMs, startup);
+  attached = true;
+  return route;
 }
 
 type Settled = { route: LlmRoute; error: null } | { route: null; error: string };
@@ -512,7 +525,6 @@ async function attachServers(
   }
   if (loaded.problem) warnings.push(`\u26a0\ufe0f  Desktop's model servers were not read: ${loaded.problem}`);
 
-  const othersMs = opts.listingTimeoutMs ?? SAVED_OLLAMA_LISTING_TIMEOUT_MS;
   const candidates = (all ? loaded.servers : []).filter(server => server !== owner);
   const locked = (server: CliModelServer) =>
     needsCredential(server, config.modelServerCredentials?.[server.id]?.secret);
@@ -526,7 +538,7 @@ async function attachServers(
     .map(server => ({
       id: server.id,
       name: clean(server.name),
-      settled: settle(attachServer(server, config, opts, deps, othersMs)),
+      settled: settle(attachServer(server, config, opts, deps, savedServerListingMs(server, opts.listingTimeoutMs))),
     }));
   if (!owner || !wanted) return { owner: null, others, skipped, warnings };
 

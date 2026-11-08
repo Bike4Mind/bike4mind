@@ -8,10 +8,13 @@ import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { describeFailure } from './failure';
 import { probeServer } from './probe';
+import { redactServerResponse } from './serverFetch';
 import {
+  CONFIG_TIMEOUT_MS,
   createSshFetch,
   describeSshFailure,
   parseSshDestination,
+  parseSshPort,
   setsControlPath,
   sharedControlPath,
   SSH_OLLAMA_URL,
@@ -19,7 +22,9 @@ import {
   sshChildEnv,
   SshConnectionError,
   sshDestinationProblem,
+  SshForwardRefusedError,
   SshRefusedError,
+  sshServerUrl,
   suggestSshName,
   type SshDeps,
 } from './ssh';
@@ -55,6 +60,21 @@ describe('SSH destinations', () => {
       'host\n-oX',
     ]) {
       expect(parseSshDestination(value), value).toBeNull();
+    }
+  });
+});
+
+describe('far-end ports', () => {
+  it('accepts 1 to 65535 as a number or digits', () => {
+    expect(parseSshPort(8080)).toBe(8080);
+    expect(parseSshPort(' 1234 ')).toBe(1234);
+    expect(parseSshPort('65535')).toBe(65_535);
+    expect(sshServerUrl(8000)).toBe('http://127.0.0.1:8000');
+  });
+
+  it('refuses anything else', () => {
+    for (const bad of [0, '0', 65_536, '99999', -1, 1.5, '', ' ', '80a', '8080;id', '1e3', null, undefined, {}]) {
+      expect(parseSshPort(bad), String(bad)).toBeNull();
     }
   });
 });
@@ -114,6 +134,17 @@ describe('ssh arguments', () => {
     }
     expect(args.slice(-4)).toEqual(['-W', '127.0.0.1:11434', '--', 'user@gpu']);
     expect(args.filter(arg => arg.startsWith('Control'))).toEqual(['ControlMaster=no']);
+  });
+
+  it('forward to the far-end port asked for, and to Ollama by default', () => {
+    expect(sshArgs('gpu', null, 'linux', 8080).slice(-4)).toEqual(['-W', '127.0.0.1:8080', '--', 'gpu']);
+    expect(sshArgs('gpu', null, 'linux').slice(-4)).toEqual(['-W', '127.0.0.1:11434', '--', 'gpu']);
+  });
+
+  it('refuse a port that is not one, so nothing can reach another host or pass as an option', () => {
+    for (const bad of [0, 65_536, -22, 22.5, Number.NaN, '22 -oProxyCommand=x', '10.0.0.5:22', 'x']) {
+      expect(() => sshArgs('gpu', null, 'linux', bad as number), String(bad)).toThrow(SshRefusedError);
+    }
   });
 
   it('turn connection sharing off outright on Windows', () => {
@@ -234,7 +265,35 @@ describe('ssh failures', () => {
   it('names both causes when a shared connection refuses the forward', () => {
     const err = describeSshFailure('Stdio forwarding request failed: Session open refused by peer\n', 255, 'gpu');
     expect(err).toBeInstanceOf(SshConnectionError);
+    expect(err).toMatchObject({ ambiguous: true });
     expect(err.message).toMatch(/refused the forward to 127\.0\.0\.1:11434.*Ollama is running.*AllowTcpForwarding/);
+  });
+
+  it('names the port and no particular server for a port other than Ollama', () => {
+    const down = describeSshFailure(
+      'channel 0: open failed: connect failed: Connection refused\n',
+      255,
+      'gpu',
+      'Desktop',
+      'linux',
+      8080
+    );
+    expect(down).toBeInstanceOf(SshForwardRefusedError);
+    expect(down).toMatchObject({ ambiguous: false });
+    expect(down.message).toBe(
+      'SSH to gpu works, but nothing answers at 127.0.0.1:8080 there. Start the model server on that machine, or check its port.'
+    );
+    const shared = describeSshFailure('Session open refused by peer\n', 255, 'gpu', 'Desktop', 'linux', 8000);
+    expect(shared.message).toMatch(/127\.0\.0\.1:8000.*the model server is running.*AllowTcpForwarding/);
+    const prohibited = describeSshFailure(
+      'open failed: administratively prohibited\n',
+      255,
+      'gpu',
+      'The CLI',
+      'linux',
+      1234
+    );
+    expect(prohibited.message).toMatch(/which The CLI needs to reach a model server there/);
   });
 
   it('reads a refused forward as a stopped Ollama even when a key file or banner mentions permission', () => {
@@ -337,13 +396,18 @@ async function streamingOllama(delayMs: number): Promise<number> {
  * A stand-in for the ssh binary: `-G` prints `config`, and `-W` pipes stdio to a local port the way the
  * real forward reaches the far end's Ollama, or fails with `stderr` when it is set.
  */
-function fakeSsh(port: number, opts: { config?: string; stderr?: string } = {}) {
+function fakeSsh(port: number, opts: { config?: string; stderr?: string; configNeverCloses?: boolean } = {}) {
   const spawned: Spawned[] = [];
   const children: FakeChild[] = [];
   const spawn: SshDeps['spawn'] = (command, args, options) => {
     spawned.push({ command, args, env: options.env, detached: options.detached });
     const child = fakeChild();
     children.push(child);
+    if (args[0] === '-G' && opts.configNeverCloses) {
+      // As when a `Match exec` grandchild keeps the pipes open: killed, but never closes.
+      child.kill = vi.fn(() => true) as never;
+      return child;
+    }
     if (args[0] === '-G') {
       setImmediate(() => {
         child.stdout.write(opts.config ?? 'user me\ncontrolmaster false\n');
@@ -480,6 +544,58 @@ describe('createSshFetch', () => {
     expect(ssh.spawned).toEqual([]);
   });
 
+  it('never spawns ssh for a request whose signal has already aborted', async () => {
+    const ssh = fakeSsh(await ollama());
+    const fetch = createSshFetch({ destination: 'gpu', label: 'gpu' }, { spawn: ssh.spawn, platform: 'win32' });
+    const reason = new DOMException('Cancelled', 'AbortError');
+    await expect(fetch(`${SSH_OLLAMA_URL}/api/version`, { signal: AbortSignal.abort(reason) })).rejects.toBe(reason);
+    expect(ssh.spawned).toEqual([]);
+  });
+
+  it('does not read the ssh config for a first request whose signal has already aborted', async () => {
+    const ssh = fakeSsh(await ollama());
+    const fetch = createSshFetch(
+      { destination: 'me@gpu', label: 'gpu' },
+      { spawn: ssh.spawn, platform: 'linux', home: '/home/me', makeDir: async () => undefined }
+    );
+    const reason = new DOMException('Cancelled', 'AbortError');
+    await expect(fetch(`${SSH_OLLAMA_URL}/api/version`, { signal: AbortSignal.abort(reason) })).rejects.toBe(reason);
+    expect(ssh.spawned).toEqual([]);
+  });
+
+  describe('when ssh -G never closes', () => {
+    const linux = (ssh: ReturnType<typeof fakeSsh>) =>
+      createSshFetch(
+        { destination: 'me@gpu', label: 'gpu' },
+        { spawn: ssh.spawn, platform: 'linux', home: '/home/me', makeDir: async () => undefined }
+      );
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('ends a request at its own signal and starts no forward', async () => {
+      const ssh = fakeSsh(await ollama(), { configNeverCloses: true });
+      const started = performance.now();
+      await expect(linux(ssh)(`${SSH_OLLAMA_URL}/api/version`, { signal: AbortSignal.timeout(50) })).rejects.toThrow();
+      expect(performance.now() - started).toBeLessThan(1_000);
+      expect(ssh.spawned.map(call => call.args[0])).toEqual(['-G']);
+    });
+
+    it('goes ahead without the config once its limit passes', async () => {
+      const ssh = fakeSsh(await ollama(), { configNeverCloses: true });
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const response = linux(ssh)(`${SSH_OLLAMA_URL}/api/version`);
+      await vi.advanceTimersByTimeAsync(CONFIG_TIMEOUT_MS - 1);
+      expect(ssh.spawned.map(call => call.args[0])).toEqual(['-G']);
+      await vi.advanceTimersByTimeAsync(1);
+      vi.useRealTimers();
+      expect(await (await response).json()).toEqual({ version: '0.12.0' });
+      expect(ssh.children[0].kill).toHaveBeenCalled();
+      expect(ssh.spawned.find(call => call.args.includes('-W'))?.args).not.toContain('ControlPath=~/.ssh/b4m/%C');
+    });
+  });
+
   it('says when ssh is not installed', async () => {
     const fetch = createSshFetch(
       { destination: 'gpu', label: 'gpu' },
@@ -524,6 +640,101 @@ describe('createSshFetch', () => {
       controller.abort();
       await expect(reader.read()).rejects.toThrow();
       await vi.waitFor(() => expect(forwardOf(ssh).kill).toHaveBeenCalled());
+    });
+  });
+
+  describe('an OpenAI-compatible server on another far-end port', () => {
+    const TOKEN = 'sk-ssh-secret-zz';
+    const SSE = [
+      'data: {"choices":[{"delta":{"content":"he"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"llo"}}]}\n\n',
+      'data: [DONE]\n\n',
+    ];
+
+    /** A llama-server started with --api-key that streams SSE, echoing a bad key back in its 401 like some proxies do. */
+    async function keyedServer(): Promise<{ port: number; seen: (string | undefined)[] }> {
+      const seen: (string | undefined)[] = [];
+      const server = http.createServer((req, res) => {
+        seen.push(req.headers.authorization);
+        if (req.headers.authorization !== `Bearer ${TOKEN}`) {
+          res.writeHead(401, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: `bad key ${req.headers.authorization ?? 'none'}` }));
+          return;
+        }
+        if (req.url === '/v1/models') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end('{"data":[{"id":"qwen","owned_by":"llamacpp"}]}');
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        let sent = 0;
+        const timer = setInterval(() => {
+          if (sent < SSE.length) res.write(SSE[sent++]);
+          else {
+            clearInterval(timer);
+            res.end();
+          }
+        }, 5);
+        res.on('close', () => clearInterval(timer));
+      });
+      servers.push(server);
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+      return { port: (server.address() as AddressInfo).port, seen };
+    }
+
+    it('forwards to that port, adds the token and streams the chat', async () => {
+      const keyed = await keyedServer();
+      const ssh = fakeSsh(keyed.port);
+      const fetch = createSshFetch(
+        {
+          destination: 'gpu',
+          label: 'gpu',
+          port: 8080,
+          credentialHeaders: () => ({ authorization: `Bearer ${TOKEN}` }),
+        },
+        { spawn: ssh.spawn, platform: 'win32' }
+      );
+      const models = await fetch(`${sshServerUrl(8080)}/v1/models`);
+      expect(await models.json()).toEqual({ data: [{ id: 'qwen', owned_by: 'llamacpp' }] });
+      const chat = await fetch(`${sshServerUrl(8080)}/v1/chat/completions`, {
+        method: 'POST',
+        body: '{"stream":true}',
+      });
+      expect(await chat.text()).toBe(SSE.join(''));
+      expect(keyed.seen).toEqual([`Bearer ${TOKEN}`, `Bearer ${TOKEN}`]);
+      for (const call of ssh.spawned) {
+        expect(call.args.slice(-4)).toEqual(['-W', '127.0.0.1:8080', '--', 'gpu']);
+        expect(call.args.join(' ')).not.toContain(TOKEN);
+        expect(JSON.stringify(call.env)).not.toContain(TOKEN);
+      }
+    });
+
+    it('sends only to that port, and scrubs the token from a refusal', async () => {
+      const keyed = await keyedServer();
+      const ssh = fakeSsh(keyed.port);
+      const wrong = 'sk-wrong-key-zz';
+      const fetch = createSshFetch(
+        {
+          destination: 'gpu',
+          label: 'gpu',
+          port: 8080,
+          credentialHeaders: () => ({ authorization: `Bearer ${wrong}` }),
+        },
+        { spawn: ssh.spawn, platform: 'win32' }
+      );
+      const refused = await fetch(`${sshServerUrl(8080)}/v1/models`);
+      expect(refused.status).toBe(401);
+      expect(redactServerResponse(await refused.text(), refused)).not.toContain(wrong);
+      await expect(fetch(`${SSH_OLLAMA_URL}/api/version`)).rejects.toThrow(
+        "only sends gpu's requests to its own address"
+      );
+    });
+
+    it('never spawns ssh for a port that is not one', async () => {
+      const ssh = fakeSsh(await ollama());
+      const fetch = createSshFetch({ destination: 'gpu', label: 'gpu', port: 0 }, { spawn: ssh.spawn });
+      await expect(fetch(`${sshServerUrl(0)}/v1/models`)).rejects.toThrow('a number from 1 to 65535');
+      expect(ssh.spawned).toEqual([]);
     });
   });
 

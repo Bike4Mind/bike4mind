@@ -75,12 +75,18 @@ const NO_CAPABILITIES: ModelCapabilities = {
   completion: false,
 };
 
+// llama-swap sets owned_by "llama-swap" on every entry it lists (handleListModels in its internal/server/api.go).
+const OWNER_PRODUCT: Readonly<Record<string, OpenAICompatibleProduct>> = {
+  llamacpp: 'llama-server',
+  vllm: 'vllm',
+  'llama-swap': 'llama-swap',
+};
+
 /** Product hint from a `/v1/models` body, when `owned_by` gives it away. */
 export function productFromOwner(entries: unknown[]): OpenAICompatibleProduct | null {
   for (const raw of entries) {
-    const entry = openAIModelEntrySchema.safeParse(raw);
-    if (entry.data?.owned_by === 'llamacpp') return 'llama-server';
-    if (entry.data?.owned_by === 'vllm') return 'vllm';
+    const owner = (raw as { owned_by?: unknown } | null)?.owned_by;
+    if (typeof owner === 'string' && Object.hasOwn(OWNER_PRODUCT, owner)) return OWNER_PRODUCT[owner];
   }
   return null;
 }

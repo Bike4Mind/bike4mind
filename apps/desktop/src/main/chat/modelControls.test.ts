@@ -113,6 +113,7 @@ describe('openAICompatibleControls', () => {
     ['lmstudio', ['maxOutputTokens', 'presencePenalty', 'repeatPenalty', 'temperature', 'topK', 'topP']],
     ['llama-server', ['maxOutputTokens', 'minP', 'presencePenalty', 'repeatPenalty', 'temperature', 'topK', 'topP']],
     ['vllm', ['maxOutputTokens', 'minP', 'presencePenalty', 'repeatPenalty', 'temperature', 'topK', 'topP']],
+    ['llama-swap', ['maxOutputTokens', 'presencePenalty', 'temperature', 'topP']],
   ] as const)('adds the fields %s documents', (product, fields) => {
     expect(Object.keys(openAICompatibleControls(product, { effortLevels: false })).sort()).toEqual(fields);
   });

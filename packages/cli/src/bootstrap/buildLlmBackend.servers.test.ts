@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IMessage, ModelInfo } from '@bike4mind/common';
 import { OllamaBackend, OpenAICompatibleBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
-import { readDesktopModelServers } from '@bike4mind/local-models/servers';
+import { readDesktopModelServers, SSH_PROBE_TIMEOUT_MS } from '@bike4mind/local-models/servers';
 import {
   json,
   startFakeServer,
@@ -15,12 +15,14 @@ import {
   type FakeVllm,
   type Handler,
 } from '@bike4mind/local-models/testing';
-import { loadModelServers } from '../models/modelServers.js';
+import { loadModelServers, type SshFetchFor } from '../models/modelServers.js';
 import { MultiLlmBackend } from '../llm/MultiLlmBackend.js';
 import { createMockConfig } from '../test-utils/mocks.js';
 import {
   attachLocalModels,
   buildLlmBackend,
+  SAVED_OLLAMA_LISTING_TIMEOUT_MS,
+  savedServerListingMs,
   type AttachLocalModelsOptions,
   type BuildLlmBackendDeps,
 } from './buildLlmBackend.js';
@@ -459,6 +461,50 @@ describe('attachLocalModels with saved model servers', () => {
     await vi.waitFor(() => expect(stalled.open()).toBe(0));
   });
 
+  it('starts no ssh request after the startup deadline that the deadline has not ended', async () => {
+    await writeServers([
+      record({ id: 'o1', name: 'gpu', transport: { type: 'ssh', destination: 'me@gpu', port: 11434 } }),
+    ]);
+    let pastDeadline = false;
+    const requests: { path: string; signal: AbortSignal | undefined; pastDeadline: boolean }[] = [];
+    const sshFetchFor: SshFetchFor = () => async (input, init) => {
+      const url = new URL(input);
+      requests.push({ path: url.pathname, signal: init?.signal ?? undefined, pastDeadline });
+      init?.signal?.throwIfAborted();
+      if (url.pathname === '/api/version') return Response.json({ version: '0.12.0' });
+      const signal = init?.signal;
+      if (!signal) throw new Error('a request no deadline can end');
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    };
+    let listed = false;
+    const attaching = attachLocalModels(
+      serverBackend() as never,
+      createMockConfig({ defaultModel: 'local:srv-o1:tiny:1b' }),
+      { servers: 'all', defaultServerTimeoutMs: 200, onNotice: text => notices.push(text) },
+      {
+        ...deps,
+        sshFetchFor,
+        createOllamaBackend: (host, options) =>
+          ({
+            currentModel: '',
+            getModelInfo: async () => {
+              await vi.waitFor(() => expect(pastDeadline).toBe(true));
+              await options?.fetch?.(`${host}/api/tags`).catch(() => undefined);
+              listed = true;
+              return [];
+            },
+          }) as never,
+      }
+    );
+    await expect(attaching).rejects.toThrow('Cannot chat with tiny:1b on gpu');
+    pastDeadline = true;
+    await vi.waitFor(() => expect(listed).toBe(true));
+    expect(requests.filter(request => request.pastDeadline).map(request => request.path)).toEqual(['/api/tags']);
+    expect(requests.every(request => request.signal?.aborted === true)).toBe(true);
+  });
+
   it('gives the default model server longer than the others to answer', async () => {
     const slow = await ollama(undefined, {
       'GET /api/version': (_request, response) => {
@@ -602,5 +648,19 @@ describe('attachLocalModels with saved model servers while signed out', () => {
         signedOutDefaultReplacedMessage('claude-opus-4', 'tiny:1b'),
       ])
     );
+  });
+});
+
+describe('savedServerListingMs', () => {
+  const ssh = { transport: { type: 'ssh', destination: 'me@gpu', port: 8080 } } as never;
+  const direct = { transport: { type: 'http', baseUrl: 'http://10.0.0.5:11434' } } as never;
+
+  it('gives an SSH server the time an ssh login can take, and a direct one the saved-host limit', () => {
+    expect(savedServerListingMs(ssh, undefined)).toBe(SSH_PROBE_TIMEOUT_MS);
+    expect(savedServerListingMs(direct, undefined)).toBe(SAVED_OLLAMA_LISTING_TIMEOUT_MS);
+  });
+
+  it('keeps a limit passed for this run', () => {
+    expect(savedServerListingMs(ssh, 300)).toBe(300);
   });
 });
