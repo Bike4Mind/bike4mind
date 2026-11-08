@@ -381,6 +381,7 @@ export function ChatShell({
   const [threadRegion, threadRegionWidth] = useElementWidth<HTMLDivElement>();
   const [panelPopoverOpen, setPanelPopoverOpen] = useState(false);
   const panelToggle = useRef<HTMLButtonElement | null>(null);
+  const panesMenuButtonRef = useRef<HTMLButtonElement>(null);
 
   // The listing the market opens onto, when it was opened for one (an update badge).
   const [marketListing, setMarketListing] = useState<SkillMarketListingRef | null>(null);
@@ -1524,8 +1525,12 @@ export function ChatShell({
                 {/* Inside the reading column, not out at the window edge: a popup opening from
                   here cannot reach the pane, and one over the pane would be drawn behind the
                   web page - see agentBrowser.ts. */}
-                <OpenPaneButtons panes={paneControls} />
-                <PanesMenu panes={paneControls} historyOn={!opening && conversation.session?.historyEnabled === true} />
+                <OpenPaneButtons panes={paneControls} focusAfterClose={panesMenuButtonRef} />
+                <PanesMenu
+                  buttonRef={panesMenuButtonRef}
+                  panes={paneControls}
+                  historyOn={!opening && conversation.session?.historyEnabled === true}
+                />
               </Box>
             </Box>
           </Box>

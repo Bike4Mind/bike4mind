@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, createRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -43,15 +43,15 @@ const pane = (id: PaneControl['id'], overrides: Partial<PaneControl> = {}): Pane
   ...overrides,
 });
 
-async function mount(panes: PaneControl[], historyOn = false) {
+async function mount(panes: PaneControl[], historyOn = false, buttonRef = createRef<HTMLButtonElement>()) {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
   await act(async () => {
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <OpenPaneButtons panes={panes} />
-        <PanesMenu panes={panes} historyOn={historyOn} />
+        <OpenPaneButtons panes={panes} focusAfterClose={buttonRef} />
+        <PanesMenu panes={panes} historyOn={historyOn} buttonRef={buttonRef} />
       </CssVarsProvider>
     );
   });
@@ -113,6 +113,18 @@ describe('PanesMenu', () => {
 });
 
 describe('OpenPaneButtons', () => {
+  it('focuses the Panes menu button after closing a promoted pane', async () => {
+    const terminal = pane('terminal', { open: true });
+    const buttonRef = createRef<HTMLButtonElement>();
+    await mount([terminal], false, buttonRef);
+    await act(async () => {
+      get('chat-toggle-terminal-btn').focus();
+      get('chat-toggle-terminal-btn').click();
+    });
+    expect(document.activeElement).toBe(get('chat-panes-menu-btn'));
+    expect(terminal.onToggle).toHaveBeenCalledTimes(1);
+  });
+
   it('promotes only the open panes, in fixed order, as one-click closes', async () => {
     const terminal = pane('terminal', { open: true });
     await mount([pane('model', { open: true }), pane('browser'), pane('simulator', { open: true }), terminal]);

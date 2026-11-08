@@ -21,15 +21,17 @@ export function folderName(path: string): string {
  *
  * The branch is shown only once the session is in its own worktree, because only then is it a
  * fact: with the worktree off, `branch` is what the user picked and nothing checks it out, so
- * the checkout may be on anything by now. A worktree recorded before the app cut branches of its
- * own has no `workspaceBranch`, so its folder name - which encodes the branch - stands in.
+ * the checkout may be on anything by now. A worktree recorded before the app cut its own branches
+ * shows its recorded `branch`, falling back to the folder name.
  */
 export function projectSubtitle(
-  project: Pick<ChatProject, 'directory' | 'name' | 'workspaceBranch' | 'workingDirectory'>
+  project: Pick<ChatProject, 'directory' | 'name' | 'branch' | 'workspaceBranch' | 'workingDirectory'>
 ): ProjectSubtitle {
   const name = project.name.trim() || folderName(project.directory) || folderName(project.workingDirectory);
   const inWorktree = project.workingDirectory !== project.directory;
-  const branch = inWorktree ? project.workspaceBranch?.trim() || folderName(project.workingDirectory) : '';
+  const branch = inWorktree
+    ? project.workspaceBranch?.trim() || project.branch?.trim() || folderName(project.workingDirectory)
+    : '';
   return {
     label: branch && branch !== name ? `${name}${SEPARATOR}${branch}` : name,
     path: project.workingDirectory,

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref, RefObject } from 'react';
 import Box from '@mui/joy/Box';
 import Dropdown from '@mui/joy/Dropdown';
 import IconButton from '@mui/joy/IconButton';
@@ -82,7 +82,13 @@ const withShortcut = (label: string, shortcut: string | undefined) => (shortcut 
  * Every tooltip here and the menu below open bottom-end from inside the reading column: a popup
  * reaching over the browser pane would be drawn behind its native page - see agentBrowser.ts.
  */
-export function OpenPaneButtons({ panes }: { panes: readonly PaneControl[] }) {
+export function OpenPaneButtons({
+  panes,
+  focusAfterClose,
+}: {
+  panes: readonly PaneControl[];
+  focusAfterClose?: RefObject<HTMLElement | null>;
+}) {
   return (
     <>
       {inPaneOrder(panes.filter(pane => pane.open)).map(pane => {
@@ -101,7 +107,10 @@ export function OpenPaneButtons({ panes }: { panes: readonly PaneControl[] }) {
               color="neutral"
               aria-pressed
               aria-label={info.hideLabel}
-              onClick={pane.onToggle}
+              onClick={() => {
+                pane.onToggle();
+                focusAfterClose?.current?.focus();
+              }}
               data-testid={info.buttonTestId}
             >
               {info.icon}
@@ -120,11 +129,20 @@ export function OpenPaneButtons({ panes }: { panes: readonly PaneControl[] }) {
  * Panes that cannot exist here (the simulator off macOS, the 3D model outside a Code session) are
  * left out by the caller; ones that only need a conversation stay listed, disabled, saying so.
  */
-export function PanesMenu({ panes, historyOn }: { panes: readonly PaneControl[]; historyOn: boolean }) {
+export function PanesMenu({
+  panes,
+  historyOn,
+  buttonRef,
+}: {
+  panes: readonly PaneControl[];
+  historyOn: boolean;
+  buttonRef?: Ref<HTMLButtonElement>;
+}) {
   return (
     <Dropdown>
       <Tooltip size="sm" variant="soft" placement="bottom-end" title="Panes">
         <MenuButton
+          ref={buttonRef}
           slots={{ root: IconButton }}
           slotProps={{ root: { size: 'sm', variant: 'plain', color: 'neutral', 'data-testid': 'chat-panes-menu-btn' } }}
           aria-label="Panes"

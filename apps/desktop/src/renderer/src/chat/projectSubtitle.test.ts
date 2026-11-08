@@ -7,6 +7,7 @@ const WORKTREE = `${REPO}/.b4m/worktrees/b4m+this-session-is-long-abc123`;
 const project = (overrides: Partial<Parameters<typeof projectSubtitle>[0]> = {}) => ({
   directory: REPO,
   name: 'bike4mind',
+  branch: '',
   workingDirectory: REPO,
   ...overrides,
 });
@@ -18,8 +19,14 @@ describe('projectSubtitle', () => {
     ).toEqual({ label: 'bike4mind \u00B7 b4m/this-session-is-long-abc123', path: WORKTREE });
   });
 
+  it('shows the recorded branch for a legacy worktree', () => {
+    expect(projectSubtitle(project({ branch: 'b4m/legacy-branch', workingDirectory: WORKTREE })).label).toBe(
+      'bike4mind \u00B7 b4m/legacy-branch'
+    );
+  });
+
   it('falls back to the worktree folder when no branch was recorded', () => {
-    expect(projectSubtitle(project({ workingDirectory: WORKTREE })).label).toBe(
+    expect(projectSubtitle(project({ branch: '', workingDirectory: WORKTREE })).label).toBe(
       'bike4mind \u00B7 b4m+this-session-is-long-abc123'
     );
   });
