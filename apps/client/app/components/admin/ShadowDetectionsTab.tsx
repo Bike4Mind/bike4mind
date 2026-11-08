@@ -490,7 +490,16 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({ row, now, onClose, onRowC
         </Stack>
       </Stack>
       <DialogActors row={row} now={now} />
-      {row.detector === 'accountCampaign' && (
+      {row.completionSequence && (
+        <Alert color="neutral" data-testid="completion-sequence-observation">
+          {row.userIds.length} accounts repeated the same recorded completion settlement order across{' '}
+          {row.completionSequence.rounds} rounds. This supports coordination, not an abuse verdict. Team automation and
+          schedulers can look the same. Settlement order is not request start order. This detector is review-only and
+          cannot trigger automatic containment.
+          {row.completionSequence.scanTruncated && ' The source scan was capped; coverage is incomplete.'}
+        </Alert>
+      )}
+      {(row.detector === 'accountCampaign' || row.detector === 'completionSequence') && (
         <WatchAccountsButton
           userIds={row.userIds}
           sourceDetectionId={row.id}
@@ -618,7 +627,7 @@ export const ShadowDetectionsTab: React.FC = () => {
       >
         {row.verdict ? 'View review' : 'Review evidence'}
       </Button>
-      {row.detector === 'accountCampaign' && (
+      {(row.detector === 'accountCampaign' || row.detector === 'completionSequence') && (
         <WatchAccountsButton
           userIds={row.userIds}
           sourceDetectionId={row.id}

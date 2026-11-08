@@ -8,6 +8,7 @@ import {
 } from './accountCampaign';
 import { RISK_EVIDENCE_MISSING_REASONS, RISK_EVIDENCE_VERSION, riskEvidenceFactValueSchemas } from './riskEvidence';
 import { SHADOW_DETECTION_VERDICTS, SHADOW_DETECTORS } from './shadowDetection';
+import { completionSequenceEvidenceSchema } from './completionSequence';
 
 /**
  * Advisory abuse assessments: a Decisions model's judgment of a shadow detection, made from an
@@ -19,7 +20,7 @@ import { SHADOW_DETECTION_VERDICTS, SHADOW_DETECTORS } from './shadowDetection';
  */
 
 /** Bump when the question, its choices or the summary's meaning changes; cached results key on it. */
-export const ABUSE_ASSESSMENT_POLICY_VERSION = 3;
+export const ABUSE_ASSESSMENT_POLICY_VERSION = 4;
 
 /** What the model may answer. */
 export const ABUSE_ASSESSMENT_JUDGMENTS = ['abuse', 'legitimate_automation', 'insufficient_evidence'] as const;
@@ -164,6 +165,22 @@ const assessmentCampaignSchema = z.strictObject({
   truncated: z.boolean(),
 });
 
+export const assessmentCompletionSequenceSchema = z.discriminatedUnion('status', [
+  completionSequenceEvidenceSchema
+    .omit({ firstObservedAt: true, lastObservedAt: true })
+    .extend({
+      status: z.literal('observed'),
+      reviewOnly: z.literal(true),
+      memberRefs: z.array(accountRefSchema).min(3).max(10),
+    })
+    .strict(),
+  z.strictObject({
+    status: z.literal('incomplete'),
+    reviewOnly: z.literal(true),
+    reason: z.enum(['members_omitted', 'source_missing']),
+  }),
+]);
+
 /** Exactly what the provider receives. Strict, so a field added upstream never rides along. */
 export const abuseAssessmentFeatureSummarySchema = z.strictObject({
   evidenceVersion: z.literal(RISK_EVIDENCE_VERSION),
@@ -184,6 +201,7 @@ export const abuseAssessmentFeatureSummarySchema = z.strictObject({
   /** Accounts on the detection beyond the cap. */
   accountsOmitted: z.number().int().nonnegative(),
   group: abuseAssessmentGroupEvidenceSchema.nullable(),
+  completionSequence: assessmentCompletionSequenceSchema.optional(),
 });
 export type AbuseAssessmentFeatureSummary = z.infer<typeof abuseAssessmentFeatureSummarySchema>;
 

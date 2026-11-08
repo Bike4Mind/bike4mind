@@ -307,3 +307,77 @@ describe('rolloutBucket', () => {
     expect(bucket).toBeLessThan(100);
   });
 });
+
+const sequenceEvidence = {
+  source: 'completion_usage_ledger' as const,
+  windowHours: 24 as const,
+  eventsScanned: 40,
+  scanTruncated: true,
+  rounds: 2,
+  minRequestsPerRound: 3,
+  maxRequestsPerRound: 6,
+  maxRoundSpanSeconds: 20,
+  minGapSeconds: 120,
+  maxGapSeconds: 120,
+  firstObservedAt: detectedAt,
+  lastObservedAt: new Date(detectedAt.getTime() + 180_000),
+};
+const sequenceDetection = (overrides: Partial<ShadowDetectionItem> = {}) =>
+  detection({
+    detector: 'completionSequence',
+    wouldAction: 'none',
+    network: null,
+    userIds: [...detection().userIds, '65f0000000000000000000a3'],
+    completionSequence: sequenceEvidence,
+    ...overrides,
+  });
+
+describe('completion sequence projection', () => {
+  it('preserves coverage and ordered pseudonymous members without identities or timestamps', () => {
+    const source = sequenceDetection();
+    const summary = buildFeatureSummary({ detection: source, accounts: [], group: null });
+    expect(summary.completionSequence).toMatchObject({
+      status: 'observed',
+      reviewOnly: true,
+      scanTruncated: true,
+      rounds: 2,
+      memberRefs: ['acct_1', 'acct_2', 'acct_3'],
+    });
+    for (const secret of [...source.userIds, detectedAt.toISOString(), 'firstObservedAt', INJECTION]) {
+      expect(JSON.stringify(summary)).not.toContain(secret);
+    }
+    expect(abuseAssessmentFeatureSummarySchema.safeParse(summary).success).toBe(true);
+  });
+
+  it('treats a missing source as unknown and legacy detectors remain compatible', () => {
+    expect(
+      buildFeatureSummary({
+        detection: sequenceDetection({ completionSequence: undefined }),
+        accounts: [],
+        group: null,
+      }).completionSequence
+    ).toEqual({ status: 'incomplete', reviewOnly: true, reason: 'source_missing' });
+    expect(
+      buildFeatureSummary({ detection: detection(), accounts: [], group: null }).completionSequence
+    ).toBeUndefined();
+  });
+
+  it('never describes a full order after members are omitted', () => {
+    const source = sequenceDetection({ userIds: Array.from({ length: 11 }, (_, i) => `synthetic-${i}`) });
+    expect(buildFeatureSummary({ detection: source, accounts: [], group: null }).completionSequence).toEqual({
+      status: 'incomplete',
+      reviewOnly: true,
+      reason: 'members_omitted',
+    });
+  });
+
+  it('invalidates cached model evidence when more rounds appear', () => {
+    const summary = (rounds: number) =>
+      buildFeatureSummary({
+        detection: sequenceDetection({ completionSequence: { ...sequenceEvidence, rounds } }),
+        accounts: [],
+        group: null,
+      });
+    expect(evidenceHash(summary(2))).not.toBe(evidenceHash(summary(3)));
+  });
+});

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Alert, Box, Button, Stack, Typography } from '@mui/joy';
 import {
   hasAdminPermission,
+  assessmentCompletionSequenceSchema,
   type AbuseAssessmentFailureCode,
   type AbuseAssessmentResult,
   type AbuseAssessmentSkipReason,
@@ -58,6 +59,34 @@ const ResultChip: React.FC<{ item: AbuseAssessmentRow; testId?: string }> = ({ i
   <StatusChip tone={RESULT_DISPLAY[item.result].tone} label={RESULT_DISPLAY[item.result].label} data-testid={testId} />
 );
 
+const SequenceEvidence: React.FC<{ summary: Record<string, unknown> }> = ({ summary }) => {
+  const parsed = assessmentCompletionSequenceSchema.safeParse(summary.completionSequence);
+  if (!parsed.success) return null;
+  const evidence = parsed.data;
+  return (
+    <Alert color="neutral" data-testid="assessment-completion-sequence">
+      <Stack gap={0.5}>
+        <Typography level="title-sm">Coordinated API activity - review only</Typography>
+        <Typography level="body-sm">
+          {evidence.status === 'observed'
+            ? `${evidence.memberRefs.length} summarized accounts repeated the same settlement order across ${evidence.rounds} rounds, with ${evidence.minRequestsPerRound}-${evidence.maxRequestsPerRound} recorded requests per round.`
+            : 'Sequence evidence is incomplete: some participants or source evidence could not be included.'}
+        </Typography>
+        <Typography level="body-sm">
+          This is coordination evidence, not proof of abuse or the same operator. Legitimate schedulers and team
+          automation can look the same. These detections cannot trigger automated containment.
+        </Typography>
+        <Typography level="body-xs">
+          Only retained successful API-completion settlements are covered; settlement order is not request start order.
+        </Typography>
+        {evidence.status === 'observed' && evidence.scanTruncated && (
+          <Typography level="body-sm">The source scan reached a cap; this observation is incomplete.</Typography>
+        )}
+      </Stack>
+    </Alert>
+  );
+};
+
 const LatestAssessment: React.FC<{ item: AbuseAssessmentRow }> = ({ item }) => (
   <Stack gap={0.75} data-testid="shadow-detection-assessment-latest">
     <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
@@ -82,6 +111,7 @@ const LatestAssessment: React.FC<{ item: AbuseAssessmentRow }> = ({ item }) => (
         ))}
       </Box>
     )}
+    <SequenceEvidence summary={item.featureSummary} />
     <Typography level="body-xs" sx={muted}>
       {item.model}
       {item.modelVersion ? ` (${item.modelVersion})` : ''} / policy v{item.policyVersion} / evidence v

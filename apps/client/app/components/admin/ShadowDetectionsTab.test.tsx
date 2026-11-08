@@ -47,7 +47,11 @@ vi.mock('@tanstack/react-router', () => ({
 
 import ShadowDetectionsTab, { formatPaymentAmount } from './ShadowDetectionsTab';
 vi.mock('./CampaignWatches/CampaignWatchesPanel', () => ({ CampaignWatchesPanel: () => null }));
-vi.mock('./CampaignWatches/WatchAccountsButton', () => ({ WatchAccountsButton: () => null }));
+vi.mock('./CampaignWatches/WatchAccountsButton', () => ({
+  WatchAccountsButton: ({ incomplete }: { incomplete?: boolean }) => (
+    <button disabled={incomplete}>Watch cohort</button>
+  ),
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -111,6 +115,43 @@ describe('ShadowDetectionsTab', () => {
     m.search = {};
     m.verdictError = null;
     m.useShadowDetections.mockReturnValue(queryResult(list()));
+  });
+
+  it('explains a capped sequence before AI assessment and keeps exact-account watches available', () => {
+    m.useShadowDetections.mockReturnValue(
+      queryResult(
+        list({
+          data: [
+            detection({
+              detector: 'completionSequence',
+              wouldAction: 'none',
+              completionSequence: {
+                source: 'completion_usage_ledger',
+                windowHours: 24,
+                eventsScanned: 5000,
+                scanTruncated: true,
+                rounds: 2,
+                minRequestsPerRound: 3,
+                maxRequestsPerRound: 3,
+                maxRoundSpanSeconds: 10,
+                minGapSeconds: 60,
+                maxGapSeconds: 60,
+                firstObservedAt: '2026-01-01T12:00:00Z',
+                lastObservedAt: '2026-01-01T12:02:00Z',
+              },
+            }),
+          ],
+        })
+      )
+    );
+    renderTab();
+    expect(screen.getByRole('button', { name: 'Watch cohort' })).toBeEnabled();
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    expect(screen.getByTestId('completion-sequence-observation')).toHaveTextContent('review-only');
+    expect(screen.getByTestId('completion-sequence-observation')).toHaveTextContent('coverage is incomplete');
+    expect(
+      screen.getAllByRole('button', { name: 'Watch cohort' }).every(button => !button.hasAttribute('disabled'))
+    ).toBe(true);
   });
 
   it('defaults to unreviewed detections and renders rows and stats', () => {

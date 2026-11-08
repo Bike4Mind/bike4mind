@@ -1,4 +1,5 @@
 import mongoose, { Document, Model, model, Schema, Types } from 'mongoose';
+import { createHash } from 'node:crypto';
 import {
   accountCampaignGroupSchema,
   accountCampaignSignals,
@@ -8,6 +9,8 @@ import {
   SHADOW_DETECTION_PAYMENT_KINDS,
   SHADOW_DETECTION_PAYMENT_OUTCOMES,
   type AccountCampaignGroup,
+  completionSequenceEvidenceSchema,
+  type CompletionSequenceEvidence,
   SHADOW_DETECTION_VERDICTS,
   SHADOW_DETECTORS,
   type ShadowDetectionAction,
@@ -39,6 +42,7 @@ export interface IShadowDetectionDocument extends Document {
   signals: ShadowDetectionSignal[];
   windowMinutes: number | null;
   group: AccountCampaignGroup | null;
+  completionSequence?: CompletionSequenceEvidence;
   payment: ShadowDetectionPayment | null;
   detectedAt: Date;
   verdict: ShadowDetectionVerdict | null;
@@ -109,6 +113,7 @@ export const ShadowDetectionSchema = new Schema<IShadowDetectionDocument>(
     // Validated against accountCampaignGroupSchema on write (recordCampaignGroup); Mixed because the
     // nested evidence lists are read whole and never queried field by field.
     group: { type: Schema.Types.Mixed, default: null },
+    completionSequence: { type: Schema.Types.Mixed, default: undefined },
     payment: { type: PaymentSchema, default: null },
     detectedAt: { type: Date, required: true },
     verdict: { type: String, enum: [...SHADOW_DETECTION_VERDICTS, null], default: null },
@@ -243,6 +248,9 @@ const toItem = (doc: LeanShadowDetection): ShadowDetectionItem => ({
   })),
   windowMinutes: doc.windowMinutes ?? null,
   group: doc.group ?? null,
+  ...(doc.completionSequence
+    ? { completionSequence: completionSequenceEvidenceSchema.parse(doc.completionSequence) }
+    : {}),
   // Records written before payment evidence existed carry no field at all.
   payment: doc.payment
     ? {
@@ -269,6 +277,52 @@ const toItem = (doc: LeanShadowDetection): ShadowDetectionItem => ({
 });
 
 class ShadowDetectionRepository {
+  /** One observation per ordered cohort and UTC activity day; reviewed records stay immutable. */
+  async recordCompletionSequence(input: RecordShadowDetectionInput): Promise<'created' | 'updated' | 'unchanged'> {
+    if (input.detector !== 'completionSequence' || input.wouldAction !== 'none')
+      throw new Error('Sequence observations must be review-only');
+    const sequence = completionSequenceEvidenceSchema.parse(input.completionSequence);
+    if (input.userIds.length < 3 || input.userIds.length > 10 || new Set(input.userIds).size !== input.userIds.length)
+      throw new Error('Invalid sequence membership');
+    const day = sequence.lastObservedAt.toISOString().slice(0, 10);
+    // The unique _id makes retries/concurrent sweeps idempotent without a lazily-built secondary index.
+    const id = new Types.ObjectId(
+      createHash('sha256')
+        .update(JSON.stringify(['completionSequence', input.policyVersion, day, input.userIds]))
+        .digest('hex')
+        .slice(0, 24)
+    );
+    const membersAvailable = async () =>
+      (await User.countDocuments({
+        _id: { $in: input.userIds },
+        deletedAt: null,
+        'deletion.purgeStartedAt': null,
+      }).maxTimeMS(5_000)) === input.userIds.length;
+    const reconcileMembers = async () => {
+      if (await membersAvailable()) return true;
+      await ShadowDetectionModel.deleteOne({ _id: id, detector: 'completionSequence' });
+      return false;
+    };
+    if (!(await reconcileMembers())) return 'unchanged';
+    const created = await ShadowDetectionModel.updateOne(
+      { _id: id },
+      {
+        $setOnInsert: { ...input, createdAt: input.detectedAt, updatedAt: input.detectedAt },
+      },
+      { upsert: true, timestamps: false }
+    );
+    if (created.upsertedCount > 0) return (await reconcileMembers()) ? 'created' : 'unchanged';
+    const updated = await ShadowDetectionModel.updateOne(
+      { _id: id, verdict: null, 'completionSequence.lastObservedAt': { $lt: sequence.lastObservedAt } },
+      {
+        $set: { completionSequence: sequence, summary: input.summary, signals: input.signals },
+        $inc: { revision: 1 },
+      }
+    );
+    if (!(await reconcileMembers())) return 'unchanged';
+    return updated.modifiedCount > 0 ? 'updated' : 'unchanged';
+  }
+
   async record(input: RecordShadowDetectionInput): Promise<string> {
     const doc = await ShadowDetectionModel.create(input);
     return doc._id.toString();
@@ -357,9 +411,11 @@ class ShadowDetectionRepository {
    * direct members remain, or when its stored group no longer parses. Returns how many records were deleted.
    */
   async removeUser(userId: string): Promise<number> {
+    // This observation is about an exact ordering; removing a participant invalidates the whole observation.
+    const sequences = await ShadowDetectionModel.deleteMany({ detector: 'completionSequence', userIds: userId });
     const touched = await ShadowDetectionModel.find({ userIds: userId }).lean<LeanShadowDetection[]>();
     const deleteIds: Types.ObjectId[] = [];
-    let deletedCampaigns = 0;
+    let deletedCampaigns = sequences.deletedCount;
     for (const doc of touched) {
       if (!doc.group) {
         if ((doc.userIds ?? []).every(id => id === userId)) deleteIds.push(doc._id);
@@ -404,10 +460,12 @@ class ShadowDetectionRepository {
     throw new Error(`Shadow detection ${doc._id.toString()} kept changing while removing a deleted user`);
   }
 
-  /** Detections naming this user that no reviewer has judged legitimate (unreviewed included). */
+  /** Actionable detections naming this user that no reviewer has judged legitimate. */
   async countOpenForUser(userId: string): Promise<number> {
     return ShadowDetectionModel.countDocuments({
       userIds: userId,
+      // Coordination observations must not change automatic risk-review decisions.
+      detector: { $ne: 'completionSequence' },
       verdict: { $nin: ['legitimate_human', 'legitimate_automation'] },
     }).exec();
   }

@@ -448,6 +448,14 @@ Every authenticated request to a `baseApi` route records which client the accoun
 
 The admin AI advisory can derive one-hop review candidates from exact signup and successful-login IP observations in the preceding seven days. It reads existing user signup metadata and AuthEvent records, returns the matching account ids, current display names, IP and observation kinds to authorized admins, and does not persist another evidence store or extend source retention. Reads are bounded and high-population addresses are discounted. The candidate scan sends no extra data to an AI provider and does not apply an abuse verdict or account action to a linked candidate. Capped and failed coverage are reported separately.
 
+## Coordinated completion observations
+
+An hourly job, controlled by `shadowDetectionRecordingEnabled`, reads existing successful `completion_api` UsageEvent settlements from the preceding 24 hours. Results are capped at 5,000 events and 1,000 eligible accounts, processing is bounded, and database reads have time limits. Unavailable account activity remains a barrier when comparing contiguous runs. No prompts, response bodies, model names, key identifiers or network observations are copied.
+
+The derived `ShadowDetection` record stores the ordered participant ids, settlement time range, repeated-round counts, request-count ranges, timing summaries, and coverage flags. One ordered group is deduplicated within a UTC activity day; reviewed records remain immutable. Records follow the existing 365-day shadow detection TTL. Purging any participant removes the whole ordered observation. The detector is review-only and is excluded from automatic containment and automatic risk-review approval decisions.
+
+When advisory model assessment is enabled, its allowlisted summary can include ordered pseudonymous member references, counts, relative timing summaries, coverage flags and an explicit review-only marker. It sends no participant identifiers or absolute settlement timestamps. Missing source data or omitted participants are represented as incomplete evidence. This uses the assessment's existing retention and budget controls; it does not train model weights.
+
 ## Manual campaign watches
 
 Admins can save a fixed group of accounts for manual follow-up independently of the rolling AI advisory. A watch contains its name, member user ids, an optional source detection id, owner id, status, revision and lifecycle timestamps. It also stores a hash of the originally selected ids to avoid duplicate open watches. It does not copy account names, emails, IPs, fingerprints or request histories. Account details are read from current user records when a watch is opened.

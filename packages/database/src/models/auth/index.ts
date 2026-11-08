@@ -44,3 +44,4 @@ export * from './SignupProtectionModel';
 export * from './SignupGrantBudgetModel';
 export * from './SignupGrantReleaseBatchModel';
 export * from './signupGrantPending';
+export * from './completionSequenceEvents';

@@ -12,6 +12,7 @@ import {
 
 export const AUTO_CONTAINMENT_SKIP_REASONS = [
   'mode_off',
+  'review_only_detector',
   'not_abuse',
   'below_confidence',
   /** The detector's policy maps the detection to something other than containment (restrict, blockIp). */
@@ -35,6 +36,7 @@ export function decideContainment(input: {
 }): ContainmentDecision {
   const { assessment, detection, config } = input;
   if (config.mode === 'off') return { kind: 'skip', why: 'mode_off' };
+  if (detection.detector === 'completionSequence') return { kind: 'skip', why: 'review_only_detector' };
   if (assessment.result !== 'abuse') return { kind: 'skip', why: 'not_abuse' };
   if ((assessment.confidence ?? 0) < config.minConfidence) return { kind: 'skip', why: 'below_confidence' };
   if (!CONTAINMENT_ACTIONS.has(detection.wouldAction)) return { kind: 'skip', why: 'not_a_containment_detection' };
