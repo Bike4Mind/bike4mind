@@ -41,6 +41,10 @@ const handler = adminApi({
       const { items, verdict } = parsed.data;
 
       const result = await shadowDetectionRepository.addVerdicts({ items, verdict, reason, reviewerId: req.user.id });
+      const failed = result.failed ?? [];
+      for (const { id, error } of failed) {
+        req.logger.error(`Shadow detection verdict write failed for ${id}`, error);
+      }
 
       // The verdicts have committed: a failed audit write is logged, never turned into a 500.
       for (const item of result.updated) {
@@ -56,7 +60,7 @@ const handler = adminApi({
           req.logger.error(`Audit entry failed for shadow detection verdict ${item.id}`, error);
         }
       }
-      respond(res, shadowDetectionBulkVerdictResponseSchema, result);
+      respond(res, shadowDetectionBulkVerdictResponseSchema, { ...result, failed: failed.map(item => item.id) });
     })
   );
 

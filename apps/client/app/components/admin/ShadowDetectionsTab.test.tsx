@@ -803,6 +803,88 @@ describe('ShadowDetectionsTab', () => {
       expect(screen.queryByTestId('shadow-detection-bulk-verdict-dialog')).toBeNull();
     });
 
+    it('keeps only failed bulk targets selected so retry does not grade completed targets again', async () => {
+      m.bulkMutateAsync
+        .mockResolvedValueOnce({ updated: [other], conflicts: [], notFound: [], failed: [SPEND_ID] })
+        .mockResolvedValueOnce({ updated: [spend], conflicts: [], notFound: [] });
+      renderTab();
+      fireEvent.click(within(screen.getByTestId(`admin-table-select-${SPEND_ID}`)).getByRole('checkbox'));
+      fireEvent.click(within(screen.getByTestId(`admin-table-select-${OTHER_ID}`)).getByRole('checkbox'));
+      fireEvent.click(screen.getByTestId('shadow-detection-bulk-grade-btn'));
+      const dialog = await screen.findByTestId('shadow-detection-bulk-verdict-dialog');
+      fireEvent.keyDown(document.body, { key: '1' });
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-bulk-verdict-dialog-reason-input-preset-0'));
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-bulk-verdict-dialog-confirm-btn'));
+
+      await waitFor(() => expect(screen.queryByTestId('shadow-detection-bulk-verdict-dialog')).toBeNull());
+      expect(screen.getByTestId('shadow-detection-bulk-notice').textContent).toContain(
+        'Refresh and review them before retrying'
+      );
+      expect(screen.getByTestId('admin-bulk-action-bar').textContent).toContain('1 selected');
+      fireEvent.click(screen.getByTestId('shadow-detection-bulk-grade-btn'));
+      const retry = await screen.findByTestId('shadow-detection-bulk-verdict-dialog');
+      fireEvent.keyDown(document.body, { key: '1' });
+      fireEvent.click(within(retry).getByTestId('shadow-detection-bulk-verdict-dialog-reason-input-preset-0'));
+      fireEvent.click(within(retry).getByTestId('shadow-detection-bulk-verdict-dialog-confirm-btn'));
+
+      await waitFor(() =>
+        expect(m.bulkMutateAsync).toHaveBeenLastCalledWith({
+          items: [{ id: SPEND_ID, expectedRevision: spend.revision }],
+          verdict: 'confirmed_abuse',
+          reason: 'Reviewed account activity',
+        })
+      );
+    });
+
+    it('saves and moves to the next row in the displayed sort order', async () => {
+      m.useShadowDetections.mockReturnValue(
+        queryResult(
+          list({
+            data: [
+              { ...burst, detectedAt: '2026-10-03T00:00:00.000Z' },
+              { ...spend, detectedAt: '2026-10-02T00:00:00.000Z' },
+              { ...other, detectedAt: '2026-10-01T00:00:00.000Z' },
+            ],
+          })
+        )
+      );
+      m.mutateAsync.mockResolvedValueOnce({ status: 'recorded', item: other });
+      renderTab();
+      fireEvent.click(screen.getByTestId('admin-table-sort-detectedAt-btn'));
+      expect(screen.getAllByTestId(/^shadow-detection-row-/).map(row => row.dataset.testid)).toEqual([
+        `shadow-detection-row-${OTHER_ID}`,
+        `shadow-detection-row-${SPEND_ID}`,
+        `shadow-detection-row-${DETECTION_ID}`,
+      ]);
+      const dialog = await openDialog(OTHER_ID);
+      fireEvent.keyDown(document.body, { key: '3' });
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-reason-input-preset-0'));
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-secondary-btn'));
+
+      await waitFor(() =>
+        expect(within(screen.getByTestId('shadow-detection-verdict-dialog')).getByText(spend.summary)).toBeTruthy()
+      );
+    });
+
+    it('labels the visible and total account-group counts on each page', () => {
+      m.useShadowDetections.mockReturnValue(
+        queryResult(
+          list({
+            data: Array.from({ length: 30 }, (_, index) =>
+              detection({ id: index.toString(16).padStart(24, '0'), userIds: [ACTOR] })
+            ),
+          })
+        )
+      );
+      renderTab();
+      fireEvent.click(screen.getByTestId('shadow-detection-group-toggle'));
+      expect(screen.getByTestId(`admin-table-group-${ACTOR}`).textContent).toContain(
+        '25 of 30 detections on this page'
+      );
+      fireEvent.click(screen.getByTestId('admin-table-next-btn'));
+      expect(screen.getByTestId(`admin-table-group-${ACTOR}`).textContent).toContain('5 of 30 detections on this page');
+    });
+
     it("groups an account's detections together under its account line", () => {
       renderTab();
       fireEvent.click(screen.getByTestId('shadow-detection-group-toggle'));

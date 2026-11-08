@@ -55,6 +55,7 @@ import {
   type AdminSelection,
   type DataColumn,
   type DataTableGroup,
+  type DataTableSort,
 } from './shared';
 import {
   ALL_VERDICTS_FILTER,
@@ -855,9 +856,13 @@ export const bulkResultNotice = (result: ShadowDetectionBulkVerdictResult): stri
     result.conflicts.length > 0 &&
       `${countOf(result.conflicts.length, 'detection')} changed since this page loaded and kept their verdict`,
     result.notFound.length > 0 && `${countOf(result.notFound.length, 'detection')} no longer exist`,
+    (result.failed?.length ?? 0) > 0 &&
+      `${countOf(result.failed?.length ?? 0, 'detection')} could not be confirmed and remain selected. Refresh and review them before retrying`,
   ].filter((part): part is string => !!part);
   if (parts.length === 0) return null;
-  return `Graded ${countOf(result.updated.length, 'detection')}. ${parts.join('; ')}. Review them again.`;
+  return `Graded ${countOf(result.updated.length, 'detection')}. ${parts.join('; ')}. Review them again.${
+    result.failureMessage ? ` ${result.failureMessage}` : ''
+  }`;
 };
 
 type VerdictDialogProps = {
@@ -890,6 +895,7 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
   const [skipRelatedChoice, setSkipRelatedChoice] = useState<RowChoice<boolean>>(null);
   // The server's explanation of a stale verdict, or null when there is no conflict to show.
   const [conflictChoice, setConflictChoice] = useState<RowChoice<string>>(null);
+  const [failureChoice, setFailureChoice] = useState<RowChoice<string>>(null);
   const forRow = <T,>(choice: RowChoice<T>): T | null => (choice?.rowId === row.id ? choice.value : null);
   const verdict = forRow(verdictChoice);
   const conflict = forRow(conflictChoice);
@@ -901,12 +907,13 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
   );
   const title = row.verdict ? 'Change verdict' : 'Record verdict';
   const pending = single.isPending || bulk.isPending;
-  const error = single.error ?? bulk.error;
+  const error = forRow(failureChoice) ?? single.error ?? bulk.error;
 
   /** Records the verdict; the ids it graded, or null when this row conflicted and must be re-read. */
   const record = async (reason: string): Promise<string[] | null> => {
     if (!verdict) return null;
     setConflictChoice(null);
+    setFailureChoice(null);
     if (!applyRelated) {
       const result = await single.mutateAsync({ id: row.id, expectedRevision: row.revision, verdict, reason });
       if (result.status === 'conflict') {
@@ -922,13 +929,17 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
       verdict,
       reason,
     });
+    onBulkResult(result);
+    if (result.failed?.includes(row.id)) {
+      setFailureChoice({ rowId: row.id, value: result.failureMessage ?? 'Could not record this verdict. Try again.' });
+      return null;
+    }
     const ownConflict = result.conflicts.find(item => item.id === row.id);
     if (ownConflict) {
       onRowChange(ownConflict);
       setConflictChoice({ rowId: row.id, value: CONFLICT_FALLBACK_MESSAGE });
       return null;
     }
-    onBulkResult(result);
     return result.updated.map(item => item.id);
   };
 
@@ -1045,7 +1056,7 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
       )}
       {error && (
         <Alert color="danger" data-testid="shadow-detection-verdict-error">
-          {getErrorMessage(error)}
+          {typeof error === 'string' ? error : getErrorMessage(error)}
         </Alert>
       )}
       <VerdictPicker value={verdict} onChange={pickVerdict} />
@@ -1123,6 +1134,7 @@ export const ShadowDetectionsTab: React.FC = () => {
   const [bulkGrading, setBulkGrading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [groupAccounts, setGroupAccounts] = useState(false);
+  const [sort, setSort] = useState<DataTableSort>();
   const [now] = useState(() => Date.now());
 
   const listed = detections.data?.data;
@@ -1139,19 +1151,38 @@ export const ShadowDetectionsTab: React.FC = () => {
     [listed, accounts, burstPeers, reviewers]
   );
   const accountGroups = useMemo(() => (groupAccounts ? groupByAccount(listed ?? []) : []), [groupAccounts, listed]);
-  // Grouped rows sit together so a group never splits across the table's pages.
+  // Keep this order shared with Save and next; groups can span table pages.
   const rows = useMemo(() => {
-    const all = listed ?? [];
+    const sortValue = (row: ShadowDetectionRow): string => {
+      switch (sort?.columnId) {
+        case 'detector':
+          return DETECTOR_LABELS[row.detector];
+        case 'wouldAction':
+          return ACTION_DISPLAY[row.wouldAction].label;
+        case 'verdict':
+          return row.verdict ? VERDICT_DISPLAY[row.verdict].label : '';
+        default:
+          return row.detectedAt;
+      }
+    };
+    const all = sort
+      ? [...(listed ?? [])].sort(
+          (left, right) => sortValue(left).localeCompare(sortValue(right)) * (sort.direction === 'desc' ? -1 : 1)
+        )
+      : (listed ?? []);
     if (accountGroups.length === 0) return all;
-    const grouped = accountGroups.flatMap(group => group.rows);
+    const grouped = accountGroups.flatMap(group => {
+      const ids = new Set(group.rows.map(row => row.id));
+      return all.filter(row => ids.has(row.id));
+    });
     const groupedIds = new Set(grouped.map(row => row.id));
     return [...grouped, ...all.filter(row => !groupedIds.has(row.id))];
-  }, [listed, accountGroups]);
+  }, [listed, accountGroups, sort]);
   const tableGroups: DataTableGroup[] | undefined = groupAccounts
     ? accountGroups.map(group => ({
         id: group.userId,
         rowIds: group.rows.map(row => row.id),
-        header: (
+        header: visibleCount => (
           <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
             <AccountLine
               userId={group.userId}
@@ -1160,7 +1191,9 @@ export const ShadowDetectionsTab: React.FC = () => {
               testId={`shadow-detection-group-account-${group.userId}`}
             />
             <Typography level="body-xs" sx={muted}>
-              {countOf(group.rows.length, 'detection')}
+              {visibleCount === group.rows.length
+                ? countOf(group.rows.length, 'detection')
+                : `${visibleCount.toLocaleString()} of ${countOf(group.rows.length, 'detection')} on this page`}
             </Typography>
           </Stack>
         ),
@@ -1186,7 +1219,7 @@ export const ShadowDetectionsTab: React.FC = () => {
       id: 'detectedAt',
       label: 'Detected',
       render: row => <Time iso={row.detectedAt} now={now} />,
-      sortValue: row => row.detectedAt,
+      sortable: true,
       width: '8rem',
     },
     {
@@ -1202,7 +1235,7 @@ export const ShadowDetectionsTab: React.FC = () => {
           </Typography>
         </Stack>
       ),
-      sortValue: row => DETECTOR_LABELS[row.detector],
+      sortable: true,
       width: '11rem',
     },
     {
@@ -1225,7 +1258,7 @@ export const ShadowDetectionsTab: React.FC = () => {
           data-testid={`shadow-detection-action-${row.id}`}
         />
       ),
-      sortValue: row => ACTION_DISPLAY[row.wouldAction].label,
+      sortable: true,
       width: '8.5rem',
     },
     { id: 'actor', label: 'Actor', render: row => <Actor row={row} context={context} />, width: '18rem' },
@@ -1238,7 +1271,7 @@ export const ShadowDetectionsTab: React.FC = () => {
           <RowVerdictAttribution row={row} reviewers={context.reviewers} />
         </Stack>
       ),
-      sortValue: row => (row.verdict ? VERDICT_DISPLAY[row.verdict].label : ''),
+      sortable: true,
       width: '11rem',
     },
   ];
@@ -1371,6 +1404,8 @@ export const ShadowDetectionsTab: React.FC = () => {
         onSelectionChange={setSelection}
         groups={tableGroups}
         pageResetKey={JSON.stringify([detector, verdict, groupAccounts])}
+        sort={sort}
+        onSortChange={setSort}
         testId="shadow-detection-table"
         rowTestId={row => `shadow-detection-row-${row.id}`}
         loading={detections.isPending}
@@ -1422,7 +1457,10 @@ export const ShadowDetectionsTab: React.FC = () => {
           onClose={() => setGrading(null)}
           onRowChange={setGrading}
           onNext={nextAfterGrading ? graded => setGrading(nextUnreviewed(grading, graded) ?? null) : undefined}
-          onBulkResult={result => setNotice(bulkResultNotice(result))}
+          onBulkResult={result => {
+            setNotice(bulkResultNotice(result));
+            if (result.failed?.length) setSelection({ mode: 'explicit', ids: result.failed });
+          }}
         />
       )}
       {bulkGrading && selectedRows.length > 0 && (
@@ -1431,7 +1469,7 @@ export const ShadowDetectionsTab: React.FC = () => {
           onClose={() => setBulkGrading(false)}
           onDone={result => {
             setBulkGrading(false);
-            setSelection({ mode: 'explicit', ids: [] });
+            setSelection({ mode: 'explicit', ids: result.failed ?? [] });
             setNotice(bulkResultNotice(result));
           }}
         />

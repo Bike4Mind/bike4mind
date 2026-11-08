@@ -277,6 +277,8 @@ export const shadowDetectionBulkVerdictResponseSchema = z.object({
   updated: z.array(shadowDetectionItemSchema),
   conflicts: z.array(shadowDetectionItemSchema),
   notFound: z.array(z.string()),
+  /** Writes whose outcome could not be confirmed; refresh before retrying them. */
+  failed: z.array(z.string()).optional(),
 });
 export type ShadowDetectionBulkVerdictResponse = z.infer<typeof shadowDetectionBulkVerdictResponseSchema>;
 
