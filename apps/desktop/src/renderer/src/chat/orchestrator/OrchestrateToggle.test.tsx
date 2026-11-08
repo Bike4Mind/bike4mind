@@ -10,10 +10,8 @@ import { createThemedMount, el, query } from './testUtils';
 const onSurfaceChange = vi.fn();
 const themed = createThemedMount();
 
-const renderToggle = (states: AgentState[], surface: SessionSurface = 'chat', canStart = false) =>
-  themed.render(
-    <OrchestrateToggle states={states} surface={surface} onSurfaceChange={onSurfaceChange} canStart={canStart} />
-  );
+const renderToggle = (states: AgentState[], surface: SessionSurface = 'chat') =>
+  themed.render(<OrchestrateToggle states={states} surface={surface} onSurfaceChange={onSurfaceChange} />);
 
 afterEach(() => {
   themed.unmount();
@@ -21,24 +19,25 @@ afterEach(() => {
 });
 
 describe('OrchestrateToggle', () => {
-  it('renders nothing when the session has no agents and cannot start', async () => {
+  it('renders nothing while the session has no agents', async () => {
     await renderToggle([]);
-    expect(query('chat-surface-toggle-orchestrate')).toBeNull();
-    expect(query('chat-surface-toggle-chat')).toBeNull();
+    expect(query('chat-surface-toggle')).toBeNull();
   });
 
-  it('opens the agents view of an agentless code session, icon-only with named buttons', async () => {
-    await renderToggle([], 'chat', true);
-    expect(el('chat-surface-toggle-chat').getAttribute('aria-label')).toBe('Conversation');
-    expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-label')).toBe('Agents');
-    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('');
-    expect(query('chat-orchestrate-count')).toBeNull();
+  it('reads as navigation: a labelled Agents segment and an icon-only conversation one', async () => {
+    await renderToggle(['working']);
+    expect(el('chat-surface-toggle-chat').getAttribute('aria-label')).toBe('Show conversation');
+    expect(el('chat-surface-toggle-chat').textContent).toBe('');
+    expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-label')).toBe('Show agents, 1 agent: 1 working');
+    expect(el('chat-orchestrate-label').textContent).toBe('Agents');
+    expect(el('chat-surface-toggle').textContent).not.toMatch(/orchestrate/i);
+    expect(el('chat-surface-toggle').getAttribute('aria-label')).not.toMatch(/orchestrate/i);
     act(() => el('chat-surface-toggle-orchestrate').click());
     expect(onSurfaceChange).toHaveBeenCalledWith('orchestrate');
   });
 
   it('switches back to the conversation, and ignores a click on the shown view', async () => {
-    await renderToggle([], 'orchestrate', true);
+    await renderToggle(['done'], 'orchestrate');
     act(() => el('chat-surface-toggle-orchestrate').click());
     expect(onSurfaceChange).not.toHaveBeenCalled();
     act(() => el('chat-surface-toggle-chat').click());
@@ -48,7 +47,7 @@ describe('OrchestrateToggle', () => {
   it('badges the agent count on the Agents segment, neutral when nothing needs attention', async () => {
     await renderToggle(['done', 'idle', 'stopped']);
     expect(el('chat-orchestrate-count').textContent).toBe('3');
-    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('3');
+    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Agents3');
     expect(el('chat-orchestrate-count').dataset.tone).toBe('neutral');
     expect(query('chat-orchestrate-working')).toBeNull();
   });
@@ -71,7 +70,7 @@ describe('OrchestrateToggle', () => {
   it('names the agents segment with the agent states, most urgent first, and hides the badge', async () => {
     await renderToggle(['done', 'working', 'needs-you', 'idle']);
     expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-label')).toBe(
-      'Agents, 4 agents: 1 needs you, 1 working, 2 done'
+      'Show agents, 4 agents: 1 needs you, 1 working, 2 done'
     );
     expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-label')).toContain('1 needs you');
     expect(el('chat-orchestrate-count').getAttribute('aria-hidden')).toBe('true');
@@ -124,14 +123,10 @@ describe('OrchestrateToggle', () => {
       expect(onSurfaceChange).toHaveBeenCalledTimes(1);
     });
 
-    it('opens the agents view of an agentless code session, and does nothing where the switch is absent', async () => {
-      await renderToggle([], 'chat', true);
+    it('does nothing while the session has no agents', async () => {
+      await renderToggle([], 'chat');
       press();
-      expect(onSurfaceChange).toHaveBeenCalledTimes(1);
-
-      await renderToggle([], 'chat', false);
-      press();
-      expect(onSurfaceChange).toHaveBeenCalledTimes(1);
+      expect(onSurfaceChange).not.toHaveBeenCalled();
     });
   });
 });

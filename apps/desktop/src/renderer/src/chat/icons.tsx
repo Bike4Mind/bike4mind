@@ -295,6 +295,21 @@ export function TableIcon() {
   );
 }
 
+/**
+ * The header's way to the agents stage: a grid of agent cards. Kept apart from AgentsIcon, which is
+ * the composer's Orchestrate behaviour, so the view switch never reads as a second copy of it.
+ */
+export function AgentStageIcon() {
+  return (
+    <Glyph>
+      <rect x="2.25" y="2.25" width="4.75" height="4.75" rx="1" />
+      <rect x="9" y="2.25" width="4.75" height="4.75" rx="1" />
+      <rect x="2.25" y="9" width="4.75" height="4.75" rx="1" />
+      <rect x="9" y="9" width="4.75" height="4.75" rx="1" />
+    </Glyph>
+  );
+}
+
 /** Widen the task panel, or put it back: arrows out when narrow, in when already wide. */
 export function ExpandIcon({ expanded }: { expanded: boolean }) {
   return (
