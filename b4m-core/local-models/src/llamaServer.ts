@@ -1,7 +1,7 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { access, constants, readFile, readdir, readlink, stat } from 'node:fs/promises';
+import { access, constants, readFile, readdir, readlink, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { z } from 'zod';
@@ -341,7 +341,9 @@ export async function listLlamaServerDevices(options: ListLlamaServerDevicesOpti
 
 /** The GPU backends whose ggml library sits beside the binary, plus SYCL for an Intel oneAPI compiler build. */
 async function gpuBackends(path: string, versionText: string): Promise<Set<string>> {
-  const files = await readdir(dirname(path)).catch((): string[] => []);
+  // The libraries sit beside the real binary, not beside a symlink to it on PATH.
+  const real = await realpath(path).catch(() => path);
+  const files = await readdir(dirname(real)).catch((): string[] => []);
   const backends = new Set(files.flatMap(file => GPU_BACKEND_LIBRARY_RE.exec(file)?.[1].toLowerCase() ?? []));
   if (/^built with IntelLLVM\b/m.test(versionText)) backends.add('sycl');
   return backends;

@@ -446,6 +446,9 @@ describe('parseListedDevices', () => {
   });
 });
 
+// The 300 ms listing timeouts outrun node's cold start on macOS, and ETXTBSY is Linux-only.
+const onLinux = process.platform === 'linux';
+
 describe.skipIf(process.platform === 'win32')('listLlamaServerDevices', () => {
   let dir: string;
   let count: string;
@@ -488,6 +491,16 @@ describe.skipIf(process.platform === 'win32')('listLlamaServerDevices', () => {
     const plain = await listingBuild(LIST_DEVICES_SYCL_G31, null);
     expect(await listLlamaServerDevices({ path: plain })).toEqual([]);
     expect(await runs()).toBe(0);
+  });
+
+  it('finds the backend beside the real binary when PATH holds a symlink to it', async () => {
+    const real = await listingBuild(LIST_DEVICES_SYCL_G31);
+    const linkDir = join(dir, `link-${serial++}`);
+    await mkdir(linkDir, { recursive: true });
+    await symlink(real, join(linkDir, 'llama-server'));
+    expect(await listLlamaServerDevices({ path: join(linkDir, 'llama-server') })).toEqual(
+      parseListedDevices(LIST_DEVICES_SYCL_G31)
+    );
   });
 
   it('rejects for a missing binary, a failed listing, and one that times out', async () => {
@@ -553,12 +566,15 @@ describe.skipIf(process.platform === 'win32')('listLlamaServerDevices', () => {
     expect(await runs()).toBe(2);
   });
 
-  it('warns that a GPU build did not list its devices in time, without saying where it runs', async () => {
-    const hanging = await listingBuild('', 'libggml-vulkan.so', 'setInterval(() => {}, 1000);');
-    expect((await findLlamaServer({ path: hanging, env: {}, timeoutMs: 300 }))?.warning).toBe(
-      `llama-server at ${hanging} is a Vulkan build that did not list its devices within 0.3 s, so whether it can use the GPU is unknown.`
-    );
-  });
+  it.runIf(onLinux)(
+    'warns that a GPU build did not list its devices in time, without saying where it runs',
+    async () => {
+      const hanging = await listingBuild('', 'libggml-vulkan.so', 'setInterval(() => {}, 1000);');
+      expect((await findLlamaServer({ path: hanging, env: {}, timeoutMs: 300 }))?.warning).toBe(
+        `llama-server at ${hanging} is a Vulkan build that did not list its devices within 0.3 s, so whether it can use the GPU is unknown.`
+      );
+    }
+  );
 
   it('settles a listing whose child ignores SIGTERM within a second of its timeout, and keeps it as a failure', async () => {
     const stubborn = await listingBuild(
@@ -577,78 +593,87 @@ describe.skipIf(process.platform === 'win32')('listLlamaServerDevices', () => {
     expect(await runs()).toBe(1);
   });
 
-  it('keeps one listing process per binary while a killed child has not exited, then a minute after', async () => {
-    const exitedMarker = join(dir, `exited-${serial}`);
-    const stuck = await listingBuild(
-      '',
-      'libggml-vulkan.so',
-      `setTimeout(() => fs.writeFileSync(${JSON.stringify(exitedMarker)}, ''), 3000);`
-    );
-    const list = () => listLlamaServerDevices({ path: stuck, env: {}, timeoutMs: 300 });
-    childHooks.survivesKill = true;
-    try {
-      const started = Date.now();
-      await expect(list()).rejects.toThrow(/timed out after 300 ms/);
-      expect(Date.now() - started).toBeLessThan(2_000);
-      await expect(listLlamaServerDevices({ path: stuck, env: {}, timeoutMs: 300, maxAgeMs: 0 })).rejects.toThrow(
-        /timed out after 300 ms/
+  it.runIf(onLinux)(
+    'keeps one listing process per binary while a killed child has not exited, then a minute after',
+    async () => {
+      const exitedMarker = join(dir, `exited-${serial}`);
+      const stuck = await listingBuild(
+        '',
+        'libggml-vulkan.so',
+        `setTimeout(() => fs.writeFileSync(${JSON.stringify(exitedMarker)}, ''), 3000);`
       );
-      expect(await runs()).toBe(1);
-      // Past the retry window from the start, so only a window from the child's exit keeps the failure.
-      vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 61_000 });
-      await vi.waitFor(async () => expect(await readFile(exitedMarker, 'utf8')).toBe(''), {
-        timeout: 8_000,
-        interval: 100,
-      });
-      await new Promise(resolve => setTimeout(resolve, 300));
-      await expect(list()).rejects.toThrow(/timed out after 300 ms/);
-      expect(await runs()).toBe(1);
-    } finally {
-      childHooks.survivesKill = false;
-    }
-    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 61_000 });
-    await expect(list()).rejects.toThrow(/timed out after 300 ms/);
-    expect(await runs()).toBe(2);
-  });
-
-  it('names the pid of a stuck listing of a binary since replaced, rather than starting another', async () => {
-    const stuck = await listingBuild('', 'libggml-vulkan.so', 'setTimeout(() => {}, 3000);');
-    childHooks.survivesKill = true;
-    try {
-      await expect(listLlamaServerDevices({ path: stuck, env: {}, timeoutMs: 300 })).rejects.toThrow(/timed out/);
-      await utimes(stuck, new Date(), new Date(Date.now() + 5_000));
-      const previous =
-        /an earlier `llama-server --list-devices` \(pid \d+\) of the previous binary has not exited; end it or restart the computer/;
-      await expect(listLlamaServerDevices({ path: stuck, env: {}, timeoutMs: 300 })).rejects.toThrow(previous);
-      expect((await findLlamaServer({ path: stuck, env: {}, timeoutMs: 300 }))?.warning).toMatch(previous);
-      expect(await runs()).toBe(1);
-    } finally {
-      childHooks.survivesKill = false;
-    }
-  });
-
-  it('rejects a binary that cannot be spawned without pinning its listing or leaving a rejection unhandled', async () => {
-    const path = await listingBuild(LIST_DEVICES_SYCL_G31);
-    const unhandled = vi.fn();
-    process.on('unhandledRejection', unhandled);
-    try {
-      // Open for writing, the file cannot be executed.
-      const handle = openSync(path, 'r+');
+      const list = () => listLlamaServerDevices({ path: stuck, env: {}, timeoutMs: 300 });
+      childHooks.survivesKill = true;
       try {
-        await expect(listLlamaServerDevices({ path, env: {} })).rejects.toThrow(/ETXTBSY/);
-        await expect(listLlamaServerDevices({ path, env: {}, maxAgeMs: 0 })).rejects.toThrow(/ETXTBSY/);
+        const started = Date.now();
+        await expect(list()).rejects.toThrow(/timed out after 300 ms/);
+        expect(Date.now() - started).toBeLessThan(2_000);
+        await expect(listLlamaServerDevices({ path: stuck, env: {}, timeoutMs: 300, maxAgeMs: 0 })).rejects.toThrow(
+          /timed out after 300 ms/
+        );
+        expect(await runs()).toBe(1);
+        // Past the retry window from the start, so only a window from the child's exit keeps the failure.
+        vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 61_000 });
+        await vi.waitFor(async () => expect(await readFile(exitedMarker, 'utf8')).toBe(''), {
+          timeout: 8_000,
+          interval: 100,
+        });
+        await new Promise(resolve => setTimeout(resolve, 300));
+        await expect(list()).rejects.toThrow(/timed out after 300 ms/);
+        expect(await runs()).toBe(1);
       } finally {
-        closeSync(handle);
+        childHooks.survivesKill = false;
       }
-      expect(await listLlamaServerDevices({ path, env: {} })).toHaveLength(1);
-      await new Promise(resolve => setTimeout(resolve, 50));
-      expect(unhandled).not.toHaveBeenCalled();
-    } finally {
-      process.off('unhandledRejection', unhandled);
+      vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 61_000 });
+      await expect(list()).rejects.toThrow(/timed out after 300 ms/);
+      expect(await runs()).toBe(2);
     }
-  });
+  );
 
-  it('skips a PATH entry that cannot be spawned and finds the next one', async () => {
+  it.runIf(onLinux)(
+    'names the pid of a stuck listing of a binary since replaced, rather than starting another',
+    async () => {
+      const stuck = await listingBuild('', 'libggml-vulkan.so', 'setTimeout(() => {}, 3000);');
+      childHooks.survivesKill = true;
+      try {
+        await expect(listLlamaServerDevices({ path: stuck, env: {}, timeoutMs: 300 })).rejects.toThrow(/timed out/);
+        await utimes(stuck, new Date(), new Date(Date.now() + 5_000));
+        const previous =
+          /an earlier `llama-server --list-devices` \(pid \d+\) of the previous binary has not exited; end it or restart the computer/;
+        await expect(listLlamaServerDevices({ path: stuck, env: {}, timeoutMs: 300 })).rejects.toThrow(previous);
+        expect((await findLlamaServer({ path: stuck, env: {}, timeoutMs: 300 }))?.warning).toMatch(previous);
+        expect(await runs()).toBe(1);
+      } finally {
+        childHooks.survivesKill = false;
+      }
+    }
+  );
+
+  it.runIf(onLinux)(
+    'rejects a binary that cannot be spawned without pinning its listing or leaving a rejection unhandled',
+    async () => {
+      const path = await listingBuild(LIST_DEVICES_SYCL_G31);
+      const unhandled = vi.fn();
+      process.on('unhandledRejection', unhandled);
+      try {
+        // Open for writing, the file cannot be executed.
+        const handle = openSync(path, 'r+');
+        try {
+          await expect(listLlamaServerDevices({ path, env: {} })).rejects.toThrow(/ETXTBSY/);
+          await expect(listLlamaServerDevices({ path, env: {}, maxAgeMs: 0 })).rejects.toThrow(/ETXTBSY/);
+        } finally {
+          closeSync(handle);
+        }
+        expect(await listLlamaServerDevices({ path, env: {} })).toHaveLength(1);
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        process.off('unhandledRejection', unhandled);
+      }
+    }
+  );
+
+  it.runIf(onLinux)('skips a PATH entry that cannot be spawned and finds the next one', async () => {
     const busy = await listingBuild(LIST_DEVICES_SYCL_G31);
     const plain = await listingBuild(LIST_DEVICES_SYCL_G31, null);
     const handle = openSync(busy, 'r+');
@@ -660,28 +685,31 @@ describe.skipIf(process.platform === 'win32')('listLlamaServerDevices', () => {
     }
   });
 
-  it('reads a wrapper that exits 0 while a grandchild holds its output as a timeout, not as no GPU', async () => {
-    const pidFile = join(dir, `grandchild-${serial}`);
-    const wrapper = await listingBuild(
-      '',
-      'libggml-vulkan.so',
-      `import('node:child_process').then(cp => { const kid = cp.spawn(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], { stdio: ['ignore', 'inherit', 'inherit'] }); fs.writeFileSync(${JSON.stringify(pidFile)}, String(kid.pid)); process.exit(0); });`
-    );
-    try {
-      expect((await findLlamaServer({ path: wrapper, env: {}, timeoutMs: 500 }))?.warning).toMatch(
-        /did not list its devices within 0\.5 s/
+  it.runIf(onLinux)(
+    'reads a wrapper that exits 0 while a grandchild holds its output as a timeout, not as no GPU',
+    async () => {
+      const pidFile = join(dir, `grandchild-${serial}`);
+      const wrapper = await listingBuild(
+        '',
+        'libggml-vulkan.so',
+        `import('node:child_process').then(cp => { const kid = cp.spawn(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], { stdio: ['ignore', 'inherit', 'inherit'] }); fs.writeFileSync(${JSON.stringify(pidFile)}, String(kid.pid)); process.exit(0); });`
       );
-    } finally {
-      const pid = Number(await readFile(pidFile, 'utf8').catch(() => ''));
-      if (pid > 0) {
-        try {
-          process.kill(pid, 'SIGKILL');
-        } catch {
-          // Already gone.
+      try {
+        expect((await findLlamaServer({ path: wrapper, env: {}, timeoutMs: 500 }))?.warning).toMatch(
+          /did not list its devices within 0\.5 s/
+        );
+      } finally {
+        const pid = Number(await readFile(pidFile, 'utf8').catch(() => ''));
+        if (pid > 0) {
+          try {
+            process.kill(pid, 'SIGKILL');
+          } catch {
+            // Already gone.
+          }
         }
       }
     }
-  });
+  );
 
   it('reports a binary that vanishes before its listing as missing, and moves on along PATH', async () => {
     const vanishing = async () => {
