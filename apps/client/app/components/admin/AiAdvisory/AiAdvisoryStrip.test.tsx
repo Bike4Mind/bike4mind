@@ -124,4 +124,32 @@ describe('AiAdvisoryStrip', () => {
     );
     expect(screen.getByTestId('admin-dashboard-ai-advisory-summary')).toHaveTextContent('1 account likely abuse');
   });
+  it('navigates within the SPA when either related-account link is clicked', () => {
+    const candidateId = '2'.repeat(24);
+    const sourceId = '1'.repeat(24);
+    mocks.data = summary({
+      advisories: [advisory(sourceId, 'accountCampaign')],
+      linkedAccounts: [
+        {
+          userId: candidateId,
+          name: 'Example candidate',
+          links: [{ sourceUserId: sourceId, ip: '198.51.100.10', sourceKind: 'signup', candidateKind: 'login' }],
+        },
+      ],
+    });
+    render(<AiAdvisoryStrip />, { wrapper: Wrapper });
+    fireEvent.click(screen.getByTestId(`ai-advisory-linked-account-${candidateId}`));
+    expect(mocks.navigate).toHaveBeenNthCalledWith(1, {
+      to: '/admin/users/$userId',
+      params: { userId: candidateId },
+    });
+    fireEvent.click(
+      screen.getByTestId(`ai-advisory-linked-source-${candidateId}-${sourceId}-198.51.100.10-signup-login`)
+    );
+    expect(mocks.navigate).toHaveBeenNthCalledWith(2, {
+      to: '/admin/users/$userId',
+      params: { userId: sourceId },
+      search: { tab: 'signins' },
+    });
+  });
 });

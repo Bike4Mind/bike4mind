@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   failed: false,
   pending: false,
   truncated: false,
+  verdictsTruncated: false,
+  coldChart: false,
   search: {} as Record<string, unknown>,
 }));
 vi.mock('@tanstack/react-router', () => ({ useSearch: () => mocks.search, useNavigate: () => mocks.navigate }));
@@ -21,7 +23,7 @@ vi.mock('../../Signups/useSignupTimeseries', () => ({
   useSignupTimeseries: (range: string) => {
     mocks.chart(range);
     return {
-      data: { until: '2026-11-01T12:00:00.000Z', truncated: mocks.truncated },
+      data: mocks.coldChart ? undefined : { until: '2026-11-01T12:00:00.000Z', truncated: mocks.truncated },
       isError: mocks.failed,
       isPending: mocks.pending,
       refetch: mocks.refreshChart,
@@ -30,7 +32,7 @@ vi.mock('../../Signups/useSignupTimeseries', () => ({
   useSignupVerdicts: (...args: unknown[]) => {
     mocks.verdicts(...args);
     return {
-      data: { verdicts: { example: mocks.verdict } },
+      data: { verdicts: { example: mocks.verdict }, truncated: mocks.verdictsTruncated },
       isError: false,
       isPending: false,
       refetch: mocks.refreshVerdicts,
@@ -43,6 +45,8 @@ beforeEach(() => {
   mocks.failed = false;
   mocks.pending = false;
   mocks.truncated = false;
+  mocks.verdictsTruncated = false;
+  mocks.coldChart = false;
   mocks.search = {};
   mocks.verdict = { suspected: true, signals: ['earlyApiKey', 'signupSpike'] };
 });
@@ -136,5 +140,14 @@ describe('profile signup classification', () => {
       search: { signupRange: '30d' },
       replace: true,
     });
+  });
+  it('shows scan-cap coverage from verdicts for a carried snapshot with a cold chart cache', () => {
+    const asOf = new Date(Date.now() - 1_000).toISOString();
+    mocks.search = { signupRange: '30d', signupAsOf: asOf };
+    mocks.coldChart = true;
+    mocks.verdictsTruncated = true;
+    renderCard();
+    expect(mocks.verdicts).toHaveBeenLastCalledWith('30d', asOf, ['example'], undefined);
+    expect(screen.getByText(/Classification coverage is incomplete/)).toBeInTheDocument();
   });
 });

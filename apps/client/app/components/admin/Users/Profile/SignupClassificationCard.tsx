@@ -107,7 +107,10 @@ export function SignupClassificationCard({ userId }: { userId: string }) {
             with the window and new activity.
           </Typography>
         )}
-        {(chart.data?.truncated || chart.data?.keysTruncated) && (
+        {(chart.data?.truncated ||
+          chart.data?.keysTruncated ||
+          verdicts.data?.truncated ||
+          verdicts.data?.keysTruncated) && (
           <Typography level="body-sm" color="warning">
             Classification coverage is incomplete because a scan cap was reached. Missing signals are not proof of
             safety.

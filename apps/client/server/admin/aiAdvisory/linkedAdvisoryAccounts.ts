@@ -75,33 +75,56 @@ export async function findLinkedAdvisoryAccounts(seedUserIds: readonly string[],
     .limit(MAX_ROWS + 1)
     .maxTimeMS(QUERY_MS)
     .lean();
-  const seedObservations: Observation[] = seedUsers
+  let seedObservations: Observation[] = seedUsers
     .filter(user => user.createdAt >= window.$gte && user.createdAt < now)
     .flatMap(signupObservation);
   for (const event of seedEvents.slice(0, MAX_ROWS)) {
     if (event.ip && isIP(event.ip)) seedObservations.push({ userId: event.userId, ip: event.ip, kind: event.type });
   }
   const allIps = [...new Set(seedObservations.map(observation => observation.ip))].sort();
-  const ips = allIps.slice(0, MAX_IPS);
+  let ips = allIps.slice(0, MAX_IPS);
   let truncated = uniqueSeeds.length > MAX_SEEDS || seedEvents.length > MAX_ROWS || allIps.length > MAX_IPS;
   if (ips.length === 0) return { accounts: [], truncated };
 
-  const [signupUsers, events] = await Promise.all([
-    User.find({ 'signupMeta.ip': { $in: ips }, createdAt: window, deletedAt: null })
-      .select('_id name signupMeta.ip')
-      .sort({ createdAt: -1, _id: -1 })
-      .limit(MAX_ROWS + 1)
-      .maxTimeMS(QUERY_MS)
-      .lean(),
-    AuthEventModel.find({ type: { $in: ['signup', 'login'] }, ip: { $in: ips }, createdAt: window })
-      .select('userId ip type')
-      .sort({ createdAt: -1, _id: -1 })
-      .limit(MAX_ROWS + 1)
-      .maxTimeMS(QUERY_MS)
-      .lean(),
-  ]);
-  // An incomplete population cannot establish that a shared address is uncommon.
-  if (signupUsers.length > MAX_ROWS || events.length > MAX_ROWS) return { accounts: [], truncated: true };
+  const loadPopulation = (addresses: string[]) =>
+    Promise.all([
+      User.find({ 'signupMeta.ip': { $in: addresses }, createdAt: window, deletedAt: null })
+        .select('_id name signupMeta.ip')
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(MAX_ROWS + 1)
+        .maxTimeMS(QUERY_MS)
+        .lean(),
+      AuthEventModel.find({ type: { $in: ['signup', 'login'] }, ip: { $in: addresses }, createdAt: window })
+        .select('userId ip type')
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(MAX_ROWS + 1)
+        .maxTimeMS(QUERY_MS)
+        .lean(),
+    ]);
+  let [signupUsers, events] = await loadPopulation(ips);
+  // An incomplete population cannot establish that an address is uncommon; retry without addresses proven shared.
+  if (signupUsers.length > MAX_ROWS || events.length > MAX_ROWS) {
+    const population = new Map<string, Set<string>>();
+    const partialObservations = [...seedObservations, ...signupUsers.flatMap(signupObservation)];
+    for (const event of events) {
+      if (event.ip && isIP(event.ip))
+        partialObservations.push({ userId: event.userId, ip: event.ip, kind: event.type });
+    }
+    for (const observation of partialObservations) {
+      const users = population.get(observation.ip) ?? new Set<string>();
+      users.add(observation.userId);
+      population.set(observation.ip, users);
+    }
+    const sharedIps = new Set(
+      [...population].filter(([, users]) => users.size > MAX_SHARED_ACCOUNTS).map(([ip]) => ip)
+    );
+    if (sharedIps.size === 0) return { accounts: [], truncated: true };
+    ips = ips.filter(ip => !sharedIps.has(ip));
+    if (ips.length === 0) return { accounts: [], truncated: true };
+    seedObservations = seedObservations.filter(observation => !sharedIps.has(observation.ip));
+    [signupUsers, events] = await loadPopulation(ips);
+    if (signupUsers.length > MAX_ROWS || events.length > MAX_ROWS) return { accounts: [], truncated: true };
+  }
   const observations = signupUsers.flatMap(signupObservation);
   for (const event of events) {
     if (event.ip && isIP(event.ip)) observations.push({ userId: event.userId, ip: event.ip, kind: event.type });

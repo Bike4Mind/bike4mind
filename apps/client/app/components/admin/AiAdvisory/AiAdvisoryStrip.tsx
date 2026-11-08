@@ -87,14 +87,52 @@ export function AiAdvisoryStrip() {
               </Typography>
               {data?.linkedAccounts.map(account => (
                 <Stack gap={0.25} key={account.userId}>
-                  <Link href={`/admin/users/${account.userId}`}>{account.name ?? account.userId}</Link>
+                  <Link
+                    href={`/admin/users/${account.userId}`}
+                    data-testid={`ai-advisory-linked-account-${account.userId}`}
+                    onClick={event => {
+                      if (
+                        event.defaultPrevented ||
+                        event.button !== 0 ||
+                        event.metaKey ||
+                        event.ctrlKey ||
+                        event.shiftKey ||
+                        event.altKey
+                      )
+                        return;
+                      event.preventDefault();
+                      void navigate({ to: '/admin/users/$userId', params: { userId: account.userId } });
+                    }}
+                  >
+                    {account.name ?? account.userId}
+                  </Link>
                   {account.links.slice(0, 3).map(link => (
                     <Typography
                       level="body-xs"
                       key={`${link.sourceUserId}-${link.ip}-${link.sourceKind}-${link.candidateKind}`}
                     >
                       {`This account's ${link.candidateKind} IP ${link.ip} matches a `}
-                      <Link href={`/admin/users/${link.sourceUserId}?tab=signins`}>
+                      <Link
+                        href={`/admin/users/${link.sourceUserId}?tab=signins`}
+                        data-testid={`ai-advisory-linked-source-${account.userId}-${link.sourceUserId}-${link.ip}-${link.sourceKind}-${link.candidateKind}`}
+                        onClick={event => {
+                          if (
+                            event.defaultPrevented ||
+                            event.button !== 0 ||
+                            event.metaKey ||
+                            event.ctrlKey ||
+                            event.shiftKey ||
+                            event.altKey
+                          )
+                            return;
+                          event.preventDefault();
+                          void navigate({
+                            to: '/admin/users/$userId',
+                            params: { userId: link.sourceUserId },
+                            search: { tab: 'signins' },
+                          });
+                        }}
+                      >
                         {`flagged account's ${link.sourceKind} IP`}
                       </Link>
                       .

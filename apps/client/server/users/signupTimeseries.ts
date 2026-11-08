@@ -186,12 +186,12 @@ export async function getSignupVerdicts(
     QUERY_DEADLINE_MS
   );
   if (!inRange) return { verdicts };
-  const { signalsById } = await classifyCohort(since, now);
+  const { signalsById, truncated, keysTruncated } = await classifyCohort(since, now);
   for (const id of userIds) {
     const signals = signalsById.get(id);
     if (signals) verdicts[id] = { suspected: isSuspectedSignup(signals), signals };
   }
-  return { verdicts };
+  return { verdicts, truncated, keysTruncated };
 }
 
 export async function getSignupTimeseries(
