@@ -397,7 +397,10 @@ async function streamingOllama(delayMs: number): Promise<number> {
  * A stand-in for the ssh binary: `-G` prints `config`, and `-W` pipes stdio to a local port the way the
  * real forward reaches the far end's Ollama, or fails with `stderr` when it is set.
  */
-function fakeSsh(port: number, opts: { config?: string; stderr?: string; configNeverCloses?: boolean } = {}) {
+function fakeSsh(
+  port: number,
+  opts: { config?: string; stderr?: string; configNeverCloses?: boolean; configDelayMs?: number } = {}
+) {
   const spawned: Spawned[] = [];
   const children: FakeChild[] = [];
   const spawn: SshDeps['spawn'] = (command, args, options) => {
@@ -410,10 +413,12 @@ function fakeSsh(port: number, opts: { config?: string; stderr?: string; configN
       return child;
     }
     if (args[0] === '-G') {
-      setImmediate(() => {
+      const answer = () => {
         child.stdout.write(opts.config ?? 'user me\ncontrolmaster false\n');
         finish(child, 0);
-      });
+      };
+      if (opts.configDelayMs) setTimeout(answer, opts.configDelayMs);
+      else setImmediate(answer);
       return child;
     }
     if (opts.stderr) {
@@ -757,6 +762,19 @@ describe('createSshFetch', () => {
 });
 
 describe('the ssh config read', () => {
+  it('is read once and kept for the next request when the first request is aborted while it runs', async () => {
+    const ssh = fakeSsh(await ollama(), { configDelayMs: 100 });
+    const fetch = createSshFetch(
+      { destination: 'me@gpu', label: 'gpu' },
+      { spawn: ssh.spawn, platform: 'linux', home: '/home/me', makeDir: async () => undefined }
+    );
+    await expect(fetch(`${SSH_OLLAMA_URL}/api/version`, { signal: AbortSignal.timeout(20) })).rejects.toThrow();
+    expect(ssh.spawned.map(call => call.args[0])).toEqual(['-G']);
+    expect(await (await fetch(`${SSH_OLLAMA_URL}/api/version`)).json()).toEqual({ version: '0.12.0' });
+    expect(ssh.spawned.filter(call => call.args[0] === '-G')).toHaveLength(1);
+    expect(ssh.spawned.find(call => call.args.includes('-W'))?.args).toContain('ControlPath=~/.ssh/b4m/%C');
+  });
+
   describe.skipIf(process.platform === 'win32')('when it runs past its limit', () => {
     let dir: string;
     const alive = (pid: number) => {
