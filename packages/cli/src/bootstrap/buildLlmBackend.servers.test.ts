@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IMessage, ModelInfo } from '@bike4mind/common';
 import { OllamaBackend, OpenAICompatibleBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
-import { readDesktopModelServers } from '@bike4mind/local-models/servers';
+import { readDesktopModelServers, SSH_PROBE_TIMEOUT_MS } from '@bike4mind/local-models/servers';
 import {
   json,
   startFakeServer,
@@ -21,6 +21,8 @@ import { createMockConfig } from '../test-utils/mocks.js';
 import {
   attachLocalModels,
   buildLlmBackend,
+  SAVED_OLLAMA_LISTING_TIMEOUT_MS,
+  savedServerListingMs,
   type AttachLocalModelsOptions,
   type BuildLlmBackendDeps,
 } from './buildLlmBackend.js';
@@ -646,5 +648,19 @@ describe('attachLocalModels with saved model servers while signed out', () => {
         signedOutDefaultReplacedMessage('claude-opus-4', 'tiny:1b'),
       ])
     );
+  });
+});
+
+describe('savedServerListingMs', () => {
+  const ssh = { transport: { type: 'ssh', destination: 'me@gpu', port: 8080 } } as never;
+  const direct = { transport: { type: 'http', baseUrl: 'http://10.0.0.5:11434' } } as never;
+
+  it('gives an SSH server the time an ssh login can take, and a direct one the saved-host limit', () => {
+    expect(savedServerListingMs(ssh, undefined)).toBe(SSH_PROBE_TIMEOUT_MS);
+    expect(savedServerListingMs(direct, undefined)).toBe(SAVED_OLLAMA_LISTING_TIMEOUT_MS);
+  });
+
+  it('keeps a limit passed for this run', () => {
+    expect(savedServerListingMs(ssh, 300)).toBe(300);
   });
 });

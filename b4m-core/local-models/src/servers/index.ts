@@ -81,6 +81,7 @@ export {
   type SshDiscovery,
   type SshDiscoveryOptions,
   type SshFoundServer,
+  usualPorts,
 } from './sshDiscovery';
 export { describeFailure, DROP_CODES, errorCode } from './failure';
 export { answersWithoutCredentials, forbiddenMessage, probeServer, type ProbeOutcome } from './probe';

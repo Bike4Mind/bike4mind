@@ -428,6 +428,12 @@ describe('b4m models servers discover', () => {
     expect(ssh.forwards).toEqual([]);
   });
 
+  it('refuses --port outside discover rather than ignoring it', async () => {
+    await expect(run('servers', { action: 'login', name: 'locked', port: '8080' })).rejects.toThrow(
+      '--port works only with: b4m models servers discover'
+    );
+  });
+
   it('on Ctrl-C, ends the ssh requests in flight and starts no more', async () => {
     const requests: AbortSignal[] = [];
     const sshFetchFor: SshFetchFor = () => (_input, init) =>

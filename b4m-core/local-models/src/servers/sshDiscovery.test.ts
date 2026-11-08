@@ -70,9 +70,10 @@ const ollama = () =>
   );
 
 /** An OpenAI-compatible server listing `count` models owned by `owner`, with the product endpoints it names. */
-function openAI(owner: string, count = 1, opts: { token?: string; lmStudio?: boolean } = {}) {
+function openAI(owner: string, count = 1, opts: { token?: string; lmStudio?: boolean; publicModels?: boolean } = {}) {
   return serve(req => {
-    if (opts.token && req.headers.authorization !== `Bearer ${opts.token}`) {
+    const guarded = !(opts.publicModels && req.url === '/v1/models');
+    if (opts.token && guarded && req.headers.authorization !== `Bearer ${opts.token}`) {
       return { status: 401, body: { error: { code: 401, message: 'Invalid API Key', type: 'authentication_error' } } };
     }
     if (req.url === '/v1/models') {
@@ -272,6 +273,13 @@ describe('discoverSshServers', () => {
     const { result } = discover({ 8080: await openAI('llamacpp', 1, { token: 'sk-x' }) });
     expect((await result).found).toEqual([
       expect.objectContaining({ port: 8080, kind: 'openai-compatible', needsCredentials: true }),
+    ]);
+  });
+
+  it('reports a llama-server that lists its models openly but guards the rest with --api-key', async () => {
+    const { result } = discover({ 8080: await openAI('llamacpp', 1, { token: 'sk-x', publicModels: true }) });
+    expect((await result).found).toEqual([
+      expect.objectContaining({ port: 8080, product: 'llama-server', version: null, needsCredentials: true }),
     ]);
   });
 

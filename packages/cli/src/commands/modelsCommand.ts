@@ -38,12 +38,12 @@ import {
   probeToolSupport,
   scopeOfIp,
   serverRuntimeId,
-  SSH_DISCOVERY_PORTS,
   SSH_PORT_PROBLEM,
   SSH_PROBE_TIMEOUT_MS,
   sshDestinationProblem,
   toolsOffHint,
   transportVerdict,
+  usualPorts,
   type AddressScope,
 } from '@bike4mind/local-models/servers';
 import { ConfigStore } from '../storage/ConfigStore.js';
@@ -1082,8 +1082,6 @@ async function onServer(name: string, subcommand: string, deps: ModelsDeps): Pro
   };
 }
 
-const usualPortsLine = () => SSH_DISCOVERY_PORTS.map(({ port, usual }) => `${usual} ${port}`).join(', ');
-
 /**
  * `servers discover <destination>`: the model servers on another machine's loopback, found over SSH. Saving one is
  * Desktop's, since the CLI only reads Desktop's list.
@@ -1100,9 +1098,7 @@ export async function discoverServers(
   const target = destination.trim();
   const sshFetchFor = deps.servers?.sshFetchFor ?? createSshFetch;
   if (!opts.json) {
-    deps.log(
-      `Looking for model servers on ${clean(target)} (${port !== undefined ? `port ${port}` : usualPortsLine()})`
-    );
+    deps.log(`Looking for model servers on ${clean(target)} (${port !== undefined ? `port ${port}` : usualPorts()})`);
   }
   const result = await abortable(
     discoverSshServers({
@@ -1176,6 +1172,7 @@ export async function runModelsCommand(
             ...(argv.port !== undefined ? { port: argv.port as string | number } : {}),
           });
         }
+        if (argv.port !== undefined) throw new Error('--port works only with: b4m models servers discover');
         const name = () => positional(argv.name, `b4m models servers ${argv.action} <name>`);
         if (argv.action === undefined) return await listServers(deps, opts);
         if (argv.action === 'login')

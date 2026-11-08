@@ -200,6 +200,17 @@ async function apiStyleRefusal(fetch: FetchLike, baseUrl: string): Promise<boole
   }
 }
 
+/** llama-server lists its models without its `--api-key` but guards `/props`, so a 401 there means it wants one. */
+async function llamaServerWantsKey(fetch: FetchLike, baseUrl: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${baseUrl}/props`);
+    await response.body?.cancel();
+    return response.status === 401;
+  } catch {
+    return false;
+  }
+}
+
 const requestTimeout = (options: SshDiscoveryOptions) => options.requestTimeoutMs ?? SSH_PROBE_TIMEOUT_MS;
 const deadlineOf = (options: SshDiscoveryOptions) => options.deadlineMs ?? SSH_DISCOVERY_DEADLINE_MS;
 
@@ -235,7 +246,10 @@ async function probePort(
         version: outcome.version,
         models: outcome.models,
         latencyMs: outcome.latencyMs,
-        needsCredentials: false,
+        needsCredentials:
+          outcome.product === 'llama-server' &&
+          outcome.version === null &&
+          (await llamaServerWantsKey(tracked, baseUrl)),
       },
     };
   }
@@ -272,7 +286,8 @@ async function probePort(
 const FORWARDING_HINT =
   ' If a server is running there, check that its sshd_config allows TCP forwarding (AllowTcpForwarding).';
 
-function usualPorts(): string {
+/** The usual ports by server, e.g. "Ollama 11434, LM Studio 1234", as discovery's messages name them. */
+export function usualPorts(): string {
   return SSH_DISCOVERY_PORTS.map(({ port, usual }) => `${usual} ${port}`).join(', ');
 }
 
@@ -321,7 +336,8 @@ function nothingFound(results: PortResult[], ports: number[], options: SshDiscov
 /**
  * Finds the model servers on the far end's loopback: on `options.port` alone, or on every usual port at once after
  * the first request has logged in. Bounded by `deadlineMs` in all, and no request starts once it or `signal` has
- * ended. Sends no credential: a server that wants one is reported with `needsCredentials`.
+ * ended. Sends only what `fetchFor` adds: callers attach a credential only with `options.port`, so a scan of the usual
+ * ports carries none, and a server that wants one is reported with `needsCredentials`.
  */
 export async function discoverSshServers(options: SshDiscoveryOptions): Promise<SshDiscovery> {
   const ports = options.port === undefined ? SSH_DISCOVERY_PORTS.map(({ port }) => port) : [options.port];
