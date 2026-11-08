@@ -72,7 +72,7 @@ import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGen
 import { deliverJobToSlack } from '@bike4mind/server-utils/generationJobs/slackJobDelivery';
 import { createSlackJobDeliveryDeps } from './slackJobDeliveryDeps';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 
 // Must outlive the worker timeout (5 min, infra/queues.ts generationJobQueue) so two workers never overlap on
 // one job, and stay under the queue visibility timeout (6 min).
