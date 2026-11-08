@@ -2195,6 +2195,7 @@ describe('ModelServerRegistry SSH servers', () => {
     const { registry: servers, sshCalls, sent } = sshSetup(file);
     const views = await servers.views();
     expect(views.map(view => view.name)).toEqual(['This computer', 'typo', 'text', 'hostile', 'other']);
+    expect(views.map(view => view.unusable)).toEqual([undefined, true, true, true, true]);
     const port = 'Its saved SSH port is not a number from 1 to 65535. Remove this server and add it again.';
     expect(views[1]).toMatchObject({
       id: 'a1',
@@ -2206,6 +2207,7 @@ describe('ModelServerRegistry SSH servers', () => {
       models: [],
       launch: null,
       health: { state: 'refused', error: port },
+      unusable: true,
     });
     expect(views[1].port).toBeUndefined();
     expect(views[2].health.error).toBe(port);

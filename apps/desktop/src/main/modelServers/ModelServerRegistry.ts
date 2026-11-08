@@ -1464,6 +1464,7 @@ export class ModelServerRegistry {
       models: [],
       specs: null,
       launch: null,
+      unusable: true,
     };
   }
 
