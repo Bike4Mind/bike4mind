@@ -58,7 +58,8 @@ describe('globNames', () => {
     expect(await globNames(base, 'app/*/page.tsx', never)).toEqual(['app/[[...slug]]/page.tsx']);
   });
 
-  it('gives up on a name that is not UTF-8', async () => {
+  // APFS refuses a name that is not UTF-8 (EILSEQ), so macOS cannot plant one.
+  it.skipIf(process.platform === 'darwin')('gives up on a name that is not UTF-8', async () => {
     const folder = join(base, 'odd');
     await mkdir(folder);
     try {
