@@ -90,6 +90,7 @@ function engine(overrides: Partial<ModelEngine> = {}): ModelEngine {
     previewParam: vi.fn(),
     commitParam: vi.fn(async () => {}),
     exportFile: vi.fn(async () => '/project/chest.glb'),
+    saveRecording: vi.fn(async () => null),
     openFile: vi.fn(async () => {}),
     ...overrides,
   };
@@ -278,8 +279,7 @@ describe('ModelPane', () => {
   });
 
   it('records a turntable of the joints, stops playback first, and saves it as WebM', async () => {
-    const saveExport = vi.fn(async () => '/project/chest-turntable.webm');
-    (window as unknown as { b4m: unknown }).b4m = { model: { saveExport } };
+    const saveRecording = vi.fn(async () => '/project/chest-turntable.webm');
     const joints = [
       {
         name: 'lid',
@@ -293,6 +293,7 @@ describe('ModelPane', () => {
       state: { path: '/project/chest.glb', kind: 'glb' as const, generation: 3, source: null, missing: false },
       clips: ['lid'],
       joints,
+      saveRecording,
     };
     render(engine(glb));
     act(() => byTestId('model-pane-clip-lid')?.click());
@@ -300,13 +301,11 @@ describe('ModelPane', () => {
     await act(async () => byTestId('model-pane-record-btn')?.click());
     expect(byTestId('model-pane-viewport')?.dataset.clip).toBe('');
     expect(handle.recordTurntable).toHaveBeenCalledWith(joints, expect.any(Function));
-    expect(saveExport).toHaveBeenCalledWith({ format: 'webm', bytes: new Uint8Array([1, 2, 3]) });
+    expect(saveRecording).toHaveBeenCalledWith(new Uint8Array([1, 2, 3]));
     expect(byTestId('model-pane-note')?.textContent).toBe('Saved chest-turntable.webm');
   });
 
   it('shows recording progress on the view and the button while a turntable records', async () => {
-    const saveExport = vi.fn(async () => null);
-    (window as unknown as { b4m: unknown }).b4m = { model: { saveExport } };
     let finish: (bytes: Uint8Array) => void = () => undefined;
     handle.recordTurntable.mockImplementationOnce(async (_joints, onProgress) => {
       onProgress?.(0.5);

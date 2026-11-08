@@ -244,7 +244,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
     try {
       const bytes = await handle.recordTurntable(joints, setRecordProgress);
       setRecordProgress(null);
-      setNote(savedNote(await window.b4m.model.saveExport({ format: 'webm', bytes })));
+      setNote(savedNote(await engine.saveRecording(bytes)));
     } catch (caught) {
       setNote({ kind: 'error', text: errorText(caught) });
     } finally {

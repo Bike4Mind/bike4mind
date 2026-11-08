@@ -50,6 +50,8 @@ export type ModelEngine = {
   previewParam(key: string, value: number): void;
   commitParam(key: string, value: number): Promise<void>;
   exportFile(format: 'glb' | 'stl'): Promise<string | null>;
+  /** Saves a recorded turntable clip beside this conversation's model; null when cancelled. */
+  saveRecording(bytes: Uint8Array): Promise<string | null>;
   openFile(): Promise<void>;
 };
 
@@ -315,6 +317,12 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
     [build]
   );
 
+  const saveRecording = useCallback(async (bytes: Uint8Array) => {
+    const session = sessionRef.current;
+    if (session === null) return null;
+    return window.b4m.model.saveExport(session, { format: 'webm', bytes });
+  }, []);
+
   const openFile = useCallback(async () => {
     if (sessionRef.current !== null) await window.b4m.model.openDialog(sessionRef.current);
   }, []);
@@ -336,6 +344,7 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
     previewParam,
     commitParam,
     exportFile,
+    saveRecording,
     openFile,
   };
 }

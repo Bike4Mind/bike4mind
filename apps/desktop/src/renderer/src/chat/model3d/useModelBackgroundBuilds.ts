@@ -10,6 +10,7 @@ import {
   summarizeObject,
   summarizeParts,
 } from './modelScene';
+import { renderTurntable } from './turntable';
 
 type Built = { ok: true; object: THREE.Group; summary: ModelSummary } | { ok: false; error: string; line?: number };
 
@@ -55,13 +56,21 @@ async function buildAndReport(engine: ModelEngineFrame, sessionId: string, state
 
 /** Main sends a capture only after this window reported the current generation, so a fresh build matches it. */
 async function capture(engine: ModelEngineFrame, request: ModelCaptureRequestEvent, dark: boolean): Promise<void> {
-  const { sessionId, id, views, pose } = request;
+  const { sessionId, id } = request;
   try {
     const state = await window.b4m.model.getState(sessionId);
     const built = hasModel(state) ? await buildState(engine, sessionId, state) : null;
     if (!built?.ok) throw new Error(built ? built.error : 'The model pane has nothing to show yet.');
-    const posed = pose === 'open' ? openPose(built.object) : {};
-    window.b4m.model.captureResult({ id, bytes: await renderContactSheet(built.object, views, dark, posed) });
+    const bytes =
+      request.kind === 'turntable'
+        ? await renderTurntable(built.object, request.lighting, dark)
+        : await renderContactSheet(
+            built.object,
+            request.views,
+            dark,
+            request.pose === 'open' ? openPose(built.object) : {}
+          );
+    window.b4m.model.captureResult({ id, bytes });
   } catch (caught) {
     window.b4m.model.captureResult({ id, error: errorMessage(caught) });
   }

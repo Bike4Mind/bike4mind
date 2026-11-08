@@ -38,6 +38,7 @@ function fakeView(): FakeView {
       summary: { parts: ['body'], size: [10, 10, 10], units: 'mm', triangles: 12, params: {} },
     }),
     capture: async () => new Uint8Array([137, 80, 78, 71]),
+    recordTurntable: async () => new Uint8Array([26, 69, 223, 163]),
     glbPath: () => null,
   };
 }
