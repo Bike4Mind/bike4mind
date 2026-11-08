@@ -462,15 +462,25 @@ export function createSshFetch(endpoint: SshEndpoint, deps: SshDeps = {}): Fetch
         settle(value);
       };
       let child: ChildProcess;
+      const group = platform !== 'win32';
       try {
-        child = spawn(command, ['-G', '--', target], { env, windowsHide: true });
+        child = spawn(command, ['-G', '--', target], { env, windowsHide: true, detached: group });
       } catch {
         return resolve(null);
       }
       let out = '';
-      // Not waiting for 'close': a `Match exec` grandchild can hold the pipes open after the kill.
+      // A `Match exec` grandchild can outlive ssh and hold the pipes open, so end its whole group and our pipe ends.
       const timer = setTimeout(() => {
-        child.kill();
+        if (group && child.pid) {
+          try {
+            process.kill(-child.pid, 'SIGKILL');
+          } catch {
+            // Already gone.
+          }
+        }
+        child.kill('SIGKILL');
+        child.stdout?.destroy();
+        child.stderr?.destroy();
         resolve(null);
       }, CONFIG_TIMEOUT_MS);
       child.stdout?.on('data', (chunk: Buffer) => {

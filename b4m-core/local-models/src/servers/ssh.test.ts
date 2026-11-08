@@ -1,8 +1,9 @@
-import type { ChildProcess } from 'node:child_process';
+import { spawn as spawnChild, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import net, { type AddressInfo } from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -752,5 +753,65 @@ describe('createSshFetch', () => {
     controller.abort();
     await expect(pending).rejects.toThrow();
     expect(children[0].kill).toHaveBeenCalled();
+  });
+});
+
+describe('the ssh config read', () => {
+  describe.skipIf(process.platform === 'win32')('when it runs past its limit', () => {
+    let dir: string;
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    afterEach(async () => {
+      vi.useRealTimers();
+      const pid = Number(await readFile(path.join(dir, 'grandchild.pid'), 'utf8').catch(() => ''));
+      if (pid > 0 && alive(pid)) process.kill(pid, 'SIGKILL');
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it('ends a grandchild that holds its output open, and closes the pipes', async () => {
+      dir = await mkdtemp(path.join(os.tmpdir(), 'b4m-ssh-g-'));
+      const command = path.join(dir, 'ssh');
+      // As a `Match exec` command that outlives ssh: a background child holding ssh's stdout and stderr.
+      await writeFile(
+        command,
+        '#!/bin/sh\nif [ "$1" = "-G" ]; then\n  sleep 300 &\n  echo $! > "$(dirname "$0")/grandchild.pid"\n  wait\nfi\nexit 255\n'
+      );
+      await chmod(command, 0o755);
+      const children: ChildProcess[] = [];
+      const spawn: SshDeps['spawn'] = (file, args, options) => {
+        const child = spawnChild(file, args, { ...options, stdio: ['pipe', 'pipe', 'pipe'] });
+        children.push(child);
+        return child;
+      };
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const fetch = createSshFetch(
+        { destination: 'me@gpu', label: 'gpu' },
+        { command, spawn, platform: 'linux', home: '/home/me', makeDir: async () => undefined }
+      );
+      const response = fetch(`${SSH_OLLAMA_URL}/api/version`);
+      response.catch(() => undefined);
+      const pidFile = path.join(dir, 'grandchild.pid');
+      const grandchild = await vi.waitFor(
+        async () => {
+          const pid = Number(await readFile(pidFile, 'utf8'));
+          expect(pid).toBeGreaterThan(0);
+          return pid;
+        },
+        { timeout: 5_000 }
+      );
+      await vi.advanceTimersByTimeAsync(CONFIG_TIMEOUT_MS);
+      vi.useRealTimers();
+      await expect(response).rejects.toThrow();
+      await vi.waitFor(() => expect(alive(grandchild)).toBe(false), { timeout: 5_000 });
+      expect(children[0].stdout?.destroyed).toBe(true);
+      expect(children[0].stderr?.destroyed).toBe(true);
+    });
   });
 });
