@@ -154,8 +154,10 @@ async function acquire(lockPath: string, nonce: string, opts: LockDirOptions): P
       if (!held) throw error;
       retryNow = await breakIfStale(lockPath, opts.staleMs);
     }
+    // A lock just broken gets its retry even past the deadline: the break itself can outlast a short wait.
+    if (retryNow) continue;
     if (performance.now() >= deadline) throw new Error(`${opts.heldMessage} (${lockPath} is held)`);
-    if (!retryNow) await pause(opts.pollMs);
+    await pause(opts.pollMs);
   }
 }
 

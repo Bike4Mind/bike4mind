@@ -217,6 +217,17 @@ describe('withLockDir', () => {
     expect(await withLockDir(lockPath, async () => 'ran', opts(50))).toBe('ran');
   });
 
+  it('takes the lock after breaking a stale one even when the break outlasts the wait', async () => {
+    await staleLockAt(lockPath);
+    const realRename = fsPromises.rename.bind(fsPromises);
+    vi.spyOn(fsPromises, 'rename').mockImplementation((async (...args: Parameters<typeof realRename>) => {
+      if (String(args[0]) === lockPath) await sleep(80);
+      return realRename(...args);
+    }) as typeof fsPromises.rename);
+
+    expect(await withLockDir(lockPath, async () => 'ran', opts(50))).toBe('ran');
+  });
+
   it('pauses between attempts when a stale lock cannot be moved aside', async () => {
     await staleLockAt(lockPath);
     const realRename = fsPromises.rename.bind(fsPromises);
