@@ -525,6 +525,44 @@ describe('b4m models servers login and logout', () => {
     return locked;
   }
 
+  it.each(['http', 'ssh'] as const)(
+    'on Ctrl-C while checking the credential on an %s server, cancels at once and saves nothing',
+    async transport => {
+      const stalled = await startFakeServer({ 'GET /api/version': () => undefined, 'GET /api/tags': () => undefined });
+      open.push(stalled);
+      const sshFetchFor: SshFetchFor = () => (_input, init) =>
+        new Promise((_resolve, reject) => {
+          const signal = init?.signal;
+          signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+      await writeServers([
+        record({
+          id: 'ccc',
+          name: 'locked',
+          kind: transport === 'ssh' ? 'openai-compatible' : 'ollama',
+          auth: { type: 'bearer' },
+          transport:
+            transport === 'ssh'
+              ? { type: 'ssh', destination: 'me@lab', port: 8080 }
+              : { type: 'http', baseUrl: stalled.baseUrl },
+        }),
+      ]);
+      const ctrlC = new AbortController();
+      const running = run(
+        'servers',
+        { action: 'login', name: 'locked', 'token-stdin': true },
+        deps({ stdin: TOKEN, ssh: { sshFetchFor }, signal: ctrlC.signal })
+      );
+      await new Promise(resolve => setTimeout(resolve, 50));
+      const started = performance.now();
+      ctrlC.abort(new DOMException('Cancelled', 'AbortError'));
+      expect(await running).toBe(130);
+      expect(performance.now() - started).toBeLessThan(1_000);
+      expect(output()).toBe('Cancelled.');
+      expect(secrets).toEqual({});
+    }
+  );
+
   it('saves the credential only after the server answers with it', async () => {
     await lockedServer();
     const code = await run('servers', { action: 'login', name: 'locked' }, deps({ secretPrompt: TOKEN }));

@@ -1055,7 +1055,7 @@ export async function loginServer(name: string, deps: ModelsDeps, opts: { tokenS
   const secret = validateSecret(server, entered);
   const refused = () => new Error(`${label} refused these credentials. Nothing was saved.`);
   const fetch = serverFetch(server, secret, ctx.sshFetchFor);
-  const target = await resolveServerTarget(server, secret, fetch).catch((error: unknown) => {
+  const target = await abortable(resolveServerTarget(server, secret, fetch), deps.signal).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     if (/refused the saved credentials|needs credentials/.test(message)) throw refused();
     throw error;
