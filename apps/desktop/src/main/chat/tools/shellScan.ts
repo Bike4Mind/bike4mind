@@ -376,9 +376,10 @@ function globMayMatchEnvFile(path: string): boolean {
   const name = basename(path);
   if (isEnvFile(name.replace(/\[[^\]]*\]|[?*]/g, ''))) return true;
   if (/^[?*[]/.test(name)) return false;
+  // One `.*` per run of stars keeps the backtracking bounded by the short samples.
   const pattern = name
     .replace(/[.+^${}()|\\]/g, '\\$&')
-    .replace(/\*/g, '.*')
+    .replace(/\*+/g, '.*')
     .replace(/\?/g, '.');
   try {
     const matcher = new RegExp(`^${pattern}$`);
@@ -536,8 +537,12 @@ const BRACE_LIMIT = 64;
 /** A word with braces longer than this is not expanded, which keeps the search for pairs bounded. */
 const BRACE_PIECES = 1024;
 
-/** The words a `{a..e}` or `{1..9..2}` sequence makes, null when it is no sequence, or 'many' past the limit. */
-function braceSequence(inner: readonly WordPiece[]): WordPiece[][] | null | 'many' {
+/**
+ * The words a `{a..e}` or `{1..9..2}` sequence makes, null when it is no sequence, or 'many' past the limit or when
+ * the scan cannot tell them. With `portable`, a step or zero padding is 'many': bash 3.2 (macOS `/bin/bash`) leaves
+ * `{1..9..2}` as written and drops the padding of `{01..3}`, so only plain sequences mean the same in every bash.
+ */
+function braceSequence(inner: readonly WordPiece[], portable: boolean): WordPiece[][] | null | 'many' {
   if (!inner.every(piece => 'char' in piece && piece.active)) return null;
   const text = inner.map(piece => ('char' in piece ? piece.char : '')).join('');
   const numeric = /^(-?\d+)\.\.(-?\d+)(?:\.\.(-?\d+))?$/.exec(text);
@@ -549,9 +554,12 @@ function braceSequence(inner: readonly WordPiece[]): WordPiece[][] | null | 'man
     : [(match[1] as string).charCodeAt(0), (match[2] as string).charCodeAt(0)];
   const step = Math.abs(Number(match[3] ?? 1)) || 1;
   if (![from, to, step, to - from].every(Number.isSafeInteger)) return 'many';
+  // Bash reads a `\` or backtick a letter range between `Z` and `a` makes as quoting, not as a letter.
+  if (letters && Math.min(from, to) <= 0x60 && Math.max(from, to) >= 0x5b) return 'many';
   const count = Math.floor(Math.abs(to - from) / step) + 1;
   if (count > BRACE_LIMIT) return 'many';
   const padded = numeric && (/^-?0\d/.test(match[1] as string) || /^-?0\d/.test(match[2] as string));
+  if (portable && (padded || match[3] !== undefined)) return 'many';
   const size = padded ? Math.max((match[1] as string).length, (match[2] as string).length) : 0;
   const words: WordPiece[][] = [];
   for (let index = 0; index < count; index++) {
@@ -563,8 +571,11 @@ function braceSequence(inner: readonly WordPiece[]): WordPiece[][] | null | 'man
   return words;
 }
 
-/** Bash's brace expansion, which runs before every other: null when it makes more than BRACE_LIMIT words. */
-function expandBraces(pieces: readonly WordPiece[]): WordPiece[][] | null {
+/**
+ * Bash's brace expansion, which runs before every other: null when it makes more than BRACE_LIMIT words, or with
+ * `portable` when it holds a sequence bash versions expand differently (see braceSequence).
+ */
+function expandBraces(pieces: readonly WordPiece[], portable = false): WordPiece[][] | null {
   if (pieces.length > BRACE_PIECES && pieces.some(piece => isActive(piece, '{'))) return null;
   for (let open = 0; open < pieces.length; open++) {
     if (!isActive(pieces[open], '{')) continue;
@@ -581,12 +592,12 @@ function expandBraces(pieces: readonly WordPiece[]): WordPiece[][] | null {
     const options =
       commas.length > 0
         ? bounds.slice(1).map((end, index) => pieces.slice((bounds[index] as number) + 1, end))
-        : braceSequence(pieces.slice(open + 1, close));
+        : braceSequence(pieces.slice(open + 1, close), portable);
     if (options === null) continue;
     if (options === 'many') return null;
     const words: WordPiece[][] = [];
     for (const option of options) {
-      const expanded = expandBraces([...pieces.slice(0, open), ...option, ...pieces.slice(close + 1)]);
+      const expanded = expandBraces([...pieces.slice(0, open), ...option, ...pieces.slice(close + 1)], portable);
       if (expanded === null) return null;
       words.push(...expanded);
       if (words.length > BRACE_LIMIT) return null;
@@ -961,6 +972,9 @@ function globShape(word: OperandWord, start: number, dotGlob: boolean, separator
 /** A script that may turn on dotglob, so a leading `*` can match a dotfile. */
 const MAY_SET_DOTGLOB = /shopt|GLOBIGNORE|BASHOPTS|dotglob/;
 
+/** Whether git reads the variable `name` in this process's environment as true. */
+const gitEnvTrue = (name: string): boolean => !/^(false|no|off|0*)$/i.test(process.env[name] ?? '');
+
 type Reach = 'read' | 'write';
 
 /** Programs that unpack an archive into a folder, so `inPlaceWrites` names their trees. */
@@ -1310,21 +1324,10 @@ const missing = (error: unknown): boolean => {
 const under = (folder: string, name: string): string => (folder.endsWith('/') ? folder + name : `${folder}/${name}`);
 
 /**
- * Each path a glob word expands to that passes through a symbolic link, found component by component with
- * lstat as bash expands it. Null when the expansion reads more than WALK_ENTRIES entries or makes more than
- * GLOB_MATCHES paths.
+ * Each absolute path a glob word expands to, found component by component with lstat as bash expands it, with
+ * whether it passes through a symbolic link. Null when the expansion reads more than WALK_ENTRIES entries or makes
+ * more than GLOB_MATCHES paths.
  */
-async function globLinkMatches(
-  word: OperandWord,
-  cwd: string,
-  dotGlob: boolean,
-  stopped: () => boolean
-): Promise<string[] | null> {
-  const found = await globExpansion(word, cwd, dotGlob, stopped);
-  return found?.filter(match => match.linked).map(match => match.path) ?? null;
-}
-
-/** Each absolute path a glob word expands to, as globLinkMatches reads it, with whether it passes through a link. */
 async function globExpansion(
   word: OperandWord,
   cwd: string,
@@ -2502,7 +2505,8 @@ function pipedFrom(node: Node): Node | null {
   if (producer?.type === 'redirected_statement') {
     const body = producer.childForFieldName('body');
     redirects.push(...producer.namedChildren.filter((child): child is Node => child !== null && child.id !== body?.id));
-    producer = body ?? undefined;
+    // tree-sitter hangs the redirect of `a | b 2>x` on the pipeline `a | b`; bash gives it to `b` alone.
+    producer = (body?.type === 'pipeline' ? body.lastNamedChild : body) ?? undefined;
   }
   if (producer?.type !== 'command') return null;
   redirects.push(...producer.namedChildren.filter((child): child is Node => !!child?.type.endsWith('redirect')));
@@ -2517,10 +2521,15 @@ function stderrToFile(redirect: Node): boolean {
   const descriptor = redirect.children.find(child => child?.type === 'file_descriptor')?.text;
   const targets = redirect.childrenForFieldName('destination');
   const target = targets.length === 1 ? targets[0] : null;
-  if (redirect.type !== 'file_redirect' || descriptor !== '2' || target?.type !== 'word') return false;
-  if (!['>', '>>'].includes(redirectOperator(redirect) ?? '') || !/^[\w./+-]+$/.test(target.text)) return false;
-  const path = posix.normalize(target.text);
-  return path === '/dev/null' || (!/^\/(dev|proc)(\/|$)/.test(path) && !path.split('/').includes('..'));
+  if (redirect.type !== 'file_redirect' || descriptor !== '2') return false;
+  // A quoted target counts as its value when nothing in it expands.
+  const quotable = target && ['word', 'string', 'raw_string'].includes(target.type);
+  const value = quotable ? fixedWords([target.text])?.[0] : undefined;
+  if (value === undefined || !['>', '>>'].includes(redirectOperator(redirect) ?? '')) return false;
+  // Checked before normalizing, which would fold `link/..` into a path the link does not lead to.
+  if (!/^[\w./+-]+$/.test(value) || value.split('/').includes('..')) return false;
+  const path = posix.normalize(value);
+  return path === '/dev/null' || !/^\/(dev|proc)(\/|$)/.test(path);
 }
 
 /** The words of the command an xargs among the leading wrappers runs, past its own options; none without one. */
@@ -2799,7 +2808,7 @@ function listsNames(raw: readonly string[], script: string): Listing | null {
   }
   if (program === 'grep' || program === 'egrep' || program === 'fgrep') return grepLists(args);
   if (program === 'rg') return rgLists(args, containedCommand(raw), script);
-  if (program === 'git' && args[0] === 'diff') return diffLists(args.slice(1));
+  if (program === 'git' && args[0] === 'diff') return diffLists(raw.slice(2));
   if (program === 'git' && args[0] === 'grep') return gitGrepLists(args.slice(1));
   if (program === 'git' && args[0] === 'ls-files') {
     const operands: string[] = [];
@@ -2827,9 +2836,9 @@ function listsNames(raw: readonly string[], script: string): Listing | null {
       } else operands.push(arg);
     }
     const nul = /z/.test(flags);
-    if (others) return orHere(operands, 'walk', { kind: 'tree' }, nul);
+    if (others) return { ...orHere(operands, 'walk', { kind: 'tree' }, nul), gitPathspecs: pathspecs };
     const listing = orHere(operands, 'index', { kind: 'index', changedOnly, patterns: null }, nul);
-    return { ...listing, tracked: true, ...(globbed ? { pathspecs } : {}) };
+    return { ...listing, tracked: true, gitPathspecs: pathspecs, ...(globbed ? { pathspecs } : {}) };
   }
   return null;
 }
@@ -2948,23 +2957,165 @@ function grepLists(args: readonly string[]): Listing | null {
 }
 
 /**
- * `git diff --name-only [--cached|--staged] [rev [rev]] [-- pathspec...]`, which prints the paths that differ from
- * the top of the work tree; each `A..B` reads as its two ends.
+ * Whether bash may turn a word as written into other words: an unquoted glob, a brace expansion, or a tilde at its
+ * start or after an unquoted `=` or `:`.
  */
-function diffLists(args: readonly string[]): Listing | null {
+function shellExpands(raw: string): boolean {
+  const pieces = wordPieces(raw);
+  const live = pieces.some(piece => !('char' in piece) || (piece.active && '*?['.includes(piece.char)));
+  if (live || expandsTilde(pieces)) return true;
+  // A sequence such as `{1..1}` makes one word, but not the word as written.
+  const words = expandBraces(pieces, true);
+  return words?.length !== 1 || textOf(words[0] as WordPiece[]) !== textOf(pieces);
+}
+
+const expandsTilde = (pieces: readonly WordPiece[]): boolean =>
+  pieces.some(
+    (piece, at) => isActive(piece, '~') && (at === 0 || isActive(pieces[at - 1], '=') || isActive(pieces[at - 1], ':'))
+  );
+
+const textOf = (pieces: readonly WordPiece[]): string =>
+  pieces.map(piece => ('char' in piece ? piece.char : '')).join('');
+
+/**
+ * The values bash passes git for one word after `git diff --`, braces expanded: fixed text, or with `glob` a
+ * pattern of literals and unquoted `*`s that does not start with `:`. Null when the scan cannot tell.
+ */
+function pathspecValues(raw: string): { text: string; glob: boolean }[] | null {
+  const pieces = wordPieces(raw);
+  if (pieces.some(piece => !('char' in piece))) return null;
+  const words = expandBraces(pieces, true);
+  if (words === null) return null;
+  const values: { text: string; glob: boolean }[] = [];
+  for (const word of words) {
+    // `?`, `[` and extglob's `(` match by rules git's pathspecs do not share.
+    if (expandsTilde(word) || word.some(piece => ['?', '[', '('].some(char => isActive(piece, char)))) return null;
+    const text = textOf(word);
+    const stars = word.filter(piece => isActive(piece, '*')).length;
+    if (stars === 0) {
+      values.push({ text, glob: false });
+      continue;
+    }
+    // A leading `:` would be read as magic, a `.*` component may match `..` in a bash without globskipdots, and an
+    // empty component is not walked here.
+    const components = text.split('/');
+    const plain =
+      !/[?[\]\\]/.test(text) &&
+      !text.startsWith(':') &&
+      !components.some(component => component === '' || (component.startsWith('.') && component.includes('*')));
+    if (!plain || stars !== [...text].filter(char => char === '*').length) return null;
+    values.push({ text, glob: true });
+  }
+  return values;
+}
+
+/** Folded one code point at a time, so the fold of joined text is the join of the folds. */
+const foldCase = (text: string): string => Array.from(text, char => char.toUpperCase().toLowerCase()).join('');
+
+/**
+ * Whether `name` is the literals `parts` with any text, newlines included, between each pair: the split of a
+ * pattern whose `*` runs are collapsed. Linear in the name, with each middle part taken at its first fit.
+ */
+function starMatches(parts: readonly string[], name: string): boolean {
+  const first = parts[0] ?? '';
+  const last = parts.at(-1) ?? '';
+  if (parts.length < 2) return name === first;
+  if (name.length < first.length + last.length || !name.startsWith(first) || !name.endsWith(last)) return false;
+  const end = name.length - last.length;
+  let at = first.length;
+  for (let index = 1; index < parts.length - 1; index++) {
+    const part = parts[index] as string;
+    const found = name.indexOf(part, at);
+    if (found < 0 || found + part.length > end) return false;
+    at = found + part.length;
+  }
+  return true;
+}
+
+/**
+ * The names bash may expand a pattern of literals and `*`s to under `cwd`, as it passes them, matched ignoring
+ * leading dots so dotglob is covered, and ignoring case as well as exactly. Null for a folder that cannot be read, a
+ * name that is not UTF-8 (or not NFC on macOS, where git may precompose it), or past WALK_ENTRIES or GLOB_MATCHES.
+ */
+export async function globNames(cwd: string, pattern: string, stopped: () => boolean): Promise<string[] | null> {
+  let found: { path: string; name: string }[] = [{ path: cwd, name: '' }];
+  let entries = 0;
+  const join = (name: string, child: string): string => (name === '' ? child : `${name}/${child}`);
+  for (const component of pattern.split('/')) {
+    if (!component.includes('*')) {
+      found = found.map(({ path, name }) => ({ path: `${path}/${component}`, name: join(name, component) }));
+      continue;
+    }
+    const parts = component.replace(/\*+/g, '*').split('*');
+    const folded = parts.map(foldCase);
+    const next: typeof found = [];
+    for (const { path, name } of found) {
+      if (stopped()) return null;
+      // Joined as written, so `..` after a link leads where bash's does.
+      const listed = await readdir(path, { encoding: 'buffer' }).catch((error: unknown) =>
+        missing(error) ? [] : null
+      );
+      if (listed === null) return null;
+      entries += listed.length;
+      if (entries > WALK_ENTRIES) return null;
+      for (const raw of listed) {
+        const child = raw.toString('utf8');
+        // A name that does not survive decoding is one the walk could neither follow nor check.
+        if (!Buffer.from(child, 'utf8').equals(raw)) return null;
+        if (process.platform === 'darwin' && child.normalize('NFC') !== child) return null;
+        if (starMatches(parts, child) || starMatches(folded, foldCase(child))) {
+          next.push({ path: `${path}/${child}`, name: join(name, child) });
+        }
+      }
+      if (next.length > GLOB_MATCHES) return null;
+    }
+    found = next;
+  }
+  return found.map(({ name }) => name);
+}
+
+/**
+ * `git diff --name-only [--cached|--staged] [rev [rev]] [-- pathspec...]`, which prints the paths that differ from
+ * the top of the work tree; each `A..B` reads as its two ends. `raw` holds its words as written, read here as the
+ * values bash passes to git.
+ */
+function diffLists(raw: readonly string[]): Listing | null {
+  const args: string[] = [];
+  const pathspecs: string[] = [];
+  const written: string[] = [];
+  const globs: string[] = [];
+  let paths = false;
+  for (const word of raw) {
+    if (!paths) {
+      // The words bash expands one into may be options, revisions or pathspec magic.
+      if (shellExpands(word)) return null;
+      const arg = textOf(wordPieces(word));
+      if (arg === '--') paths = true;
+      else args.push(arg);
+      continue;
+    }
+    const values = pathspecValues(word);
+    if (values === null) return null;
+    for (const { text, glob } of values) {
+      written.push(text);
+      if (!glob) {
+        pathspecs.push(text);
+        continue;
+      }
+      // Without nullglob, globstar or nocaseglob, bash passes the pattern as written or names it matches, each of which
+      // git's `*` (crossing `/`) matches; `/*` adds a matched folder's contents, and listingChecked adds glob-like names.
+      globs.push(text);
+      pathspecs.push(`:(icase)${text}`, `:(icase)${text}/*`);
+    }
+  }
   let names = false;
   let cached = false;
-  let paths = false;
   const revisions: string[] = [];
-  const pathspecs: string[] = [];
   for (const arg of args) {
-    if (paths) {
-      if (arg.startsWith(':')) return null;
-      pathspecs.push(arg);
-    } else if (arg === '--') paths = true;
-    else if (arg === '--name-only') names = true;
+    if (arg === '--name-only') names = true;
     else if (arg === '--cached' || arg === '--staged') cached = true;
-    else if (/^(-z|--no-renames|--diff-filter=[A-Za-z]*)$/.test(arg)) continue;
+    // A bare `--relative` prints names from the folder git runs in, which the listing check requires be the top.
+    else if (/^(-z|--no-renames|--relative|--diff-filter=[A-Za-z]*)$/.test(arg)) continue;
     else if (arg.startsWith('-')) return null;
     else revisions.push(arg);
   }
@@ -2973,8 +3124,10 @@ function diffLists(args: readonly string[]): Listing | null {
     folders: ['.'],
     tracked: true,
     links: 'diff',
-    nul: args.slice(0, paths ? args.indexOf('--') : args.length).includes('-z'),
+    nul: args.includes('-z'),
     pathspecs,
+    gitPathspecs: written,
+    globs,
     // diffTargets reads the words as revisions or paths, as git does.
     settings: { kind: 'diff', words: revisions, cached },
   };
@@ -3014,7 +3167,9 @@ function gitGrepLists(args: readonly string[]): Listing | null {
   if (patterns.length === 0) patterns.push(operands.shift() ?? '');
   if (!lists || operands.some(operand => operand.startsWith(':'))) return null;
   const folders = operands.length > 0 ? operands : ['.'];
-  if (untracked) return { folders, tracked: false, links: 'walk', nul: false, settings: { kind: 'tree' } };
+  if (untracked) {
+    return { folders, tracked: false, links: 'walk', nul: false, gitPathspecs: operands, settings: { kind: 'tree' } };
+  }
   const globbed = operands.some(operand => /[*?[]/.test(operand));
   if (globbed && operands.some(operand => operand.startsWith('/') || operand.split('/').includes('..'))) return null;
   return {
@@ -3022,6 +3177,7 @@ function gitGrepLists(args: readonly string[]): Listing | null {
     tracked: true,
     links: 'index',
     nul: false,
+    gitPathspecs: operands,
     ...(globbed ? { pathspecs: operands } : {}),
     settings: {
       kind: 'index',
@@ -3141,6 +3297,10 @@ interface Listing {
   nul: boolean;
   tests?: string[];
   pathspecs?: string[];
+  /** For a git lister, the pathspecs it reads as written, which git's pathspec settings may read otherwise. */
+  gitPathspecs?: string[];
+  /** Patterns bash expands from where the lister runs, whose matched names the listing check reads too. */
+  globs?: string[];
   settings: ListedSettings;
 }
 
@@ -4550,7 +4710,8 @@ export async function scanShell(
   roots: readonly string[],
   deadlineMs = wslLocation(startDirectory) === null ? SCAN_DEADLINE_MS : WSL_SCAN_DEADLINE_MS
 ): Promise<ShellScan | null> {
-  if (command.length > MAX_SCRIPT) return null;
+  // The shell gets a lone surrogate as U+FFFD, a character the scan would never compare against.
+  if (command.length > MAX_SCRIPT || !command.isWellFormed()) return null;
   const tree = await parseBash(command);
   if (!tree) return null;
 
@@ -4572,7 +4733,16 @@ export async function scanShell(
     // Bash removes quotes and backslashes before it reads a name, so the name gates read the script without them.
     const gateText = command.replace(/[\\'"]/g, '');
     const anyName = rebindsAnyName(tree.rootNode, command, gateText);
-    const dotGlob = anyName || MAY_SET_DOTGLOB.test(gateText);
+    // bash -c runs BASH_ENV first, which may set any shell option or export any variable.
+    const bashEnv = (process.env.BASH_ENV ?? '') !== '';
+    const dotGlob = anyName || MAY_SET_DOTGLOB.test(gateText) || /dotglob/.test(process.env.BASHOPTS ?? '') || bashEnv;
+    // nullglob drops a pattern with no match, leaving git no pathspec and find no start point; globstar lets `**`
+    // match no folder at all; nocaseglob folds case as the locale does.
+    const globOptions =
+      anyName ||
+      /shopt|BASHOPTS|nullglob|globstar|nocaseglob/.test(gateText) ||
+      /nullglob|globstar|nocaseglob/.test(process.env.BASHOPTS ?? '') ||
+      bashEnv;
     // Links `ln -s` makes in this script, in guard form: the scan cannot follow one that does not exist yet.
     const createdLinks = new Set<string>();
     // Folders whose `.claude` holds settings this session may load: its own and each shared root's.
@@ -4598,6 +4768,19 @@ export async function scanShell(
       anyName ||
       /GIT_/.test(gateText) ||
       ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'].some(name => process.env[name] !== undefined);
+    // Pathspec settings the scan's own git never reads: icase and glob widen what a pathspec matches, literal reads
+    // magic as a name, and noglob only narrows.
+    const widenedPathspecs =
+      anyName ||
+      bashEnv ||
+      /GIT_(ICASE|GLOB)_PATHSPECS/.test(gateText) ||
+      gitEnvTrue('GIT_ICASE_PATHSPECS') ||
+      gitEnvTrue('GIT_GLOB_PATHSPECS');
+    const literalPathspecs =
+      anyName || bashEnv || /GIT_LITERAL_PATHSPECS/.test(gateText) || gitEnvTrue('GIT_LITERAL_PATHSPECS');
+    /** Whether the command's git matches `written` as the scan's git does, or within that. */
+    const pathspecsKept = (written: readonly string[]): boolean =>
+      written.length === 0 || !(widenedPathspecs || (literalPathspecs && written.some(spec => spec.startsWith(':'))));
     // Where `git rev-parse --show-toplevel` lands from each folder; filled in only while git reads no GIT_* setting.
     const toplevels = new Map<string, string | null>();
     const readsToplevel = /rev-parse/.test(gateText) && !gitEnvironment;
@@ -4681,11 +4864,15 @@ export async function scanShell(
 
     /**
      * The paths a glob operand expands to through a link, which are checked again as written; null when the
-     * expansion is too large to read. Empty where the scan does not expand (Windows, a WSL folder).
+     * expansion is too large to read, or may be empty under nullglob, where a program given no operand may act on
+     * `.` (find). Empty where the scan does not expand (Windows, a WSL folder) unless nullglob may be on.
      */
     const linkMatches = async (word: OperandWord, operand: ReadOperand, cwd: string): Promise<string[] | null> => {
-      if (operand.start === null || operand.unread || sep !== '/' || wslLocation(cwd) !== null) return [];
-      return globLinkMatches(word, cwd, dotGlob, stopped);
+      if (operand.start === null || operand.unread) return [];
+      if (sep !== '/' || wslLocation(cwd) !== null) return globOptions ? null : [];
+      const found = await globExpansion(word, cwd, dotGlob, stopped);
+      if (found === null || (globOptions && found.length === 0)) return null;
+      return found.filter(match => match.linked).map(match => match.path);
     };
 
     /** Counts an exact operand unread when a link on its way leads into a process's own folders. */
@@ -4721,6 +4908,7 @@ export async function scanShell(
       if (state.lost || sep !== '/' || wslLocation(state.cwd) !== null) return false;
       // Under a GIT_* setting git may read another index or repository than the one the scan asks about.
       if ((found === 'index' || found === 'diff') && gitEnvironment) return false;
+      if (listing.gitPathspecs !== undefined && !pathspecsKept(listing.gitPathspecs)) return false;
       const budget = { entries: WALK_ENTRIES };
       const reach: Reach = writing ? 'write' : 'read';
       const whole = writing && settings.kind === 'tree';
@@ -4766,9 +4954,18 @@ export async function scanShell(
         if (settings.kind !== 'diff' || top === null || top !== (await realpath(state.cwd).catch(() => null))) {
           return false;
         }
+        if (listing.globs !== undefined && listing.globs.length > 0 && globOptions) return false;
+        const matched: string[] = [];
+        for (const glob of listing.globs ?? []) {
+          const names = await globNames(state.cwd, glob, stopped);
+          // A name with a leading `:` reaches git as magic, which can turn every other pathspec into an exclude.
+          if (names === null || names.some(name => name.startsWith(':'))) return false;
+          // git reads a name holding `[`, `]`, `?`, `*` or `\` as a pattern too, so its own git gets it as written.
+          matched.push(...names.filter(name => /[[\]?*\\]/.test(name)));
+        }
         const diff = await diffTargets(top, settings.words, settings.cached, stopped);
-        if (diff === null) return false;
-        const pathspecs = [...diff.pathspecs, ...(listing.pathspecs ?? [])];
+        if (diff === null || !pathspecsKept(diff.pathspecs)) return false;
+        const pathspecs = [...diff.pathspecs, ...(listing.pathspecs ?? []), ...matched];
         const listed = await diffListed(top, diff.targets, diff.worktree, pathspecs, stopped);
         if (listed === null || (split && listed.odd)) return false;
         printed.push(...listed.links);
