@@ -972,6 +972,9 @@ function globShape(word: OperandWord, start: number, dotGlob: boolean, separator
 /** A script that may turn on dotglob, so a leading `*` can match a dotfile. */
 const MAY_SET_DOTGLOB = /shopt|GLOBIGNORE|BASHOPTS|dotglob/;
 
+/** Whether git reads the variable `name` in this process's environment as true. */
+const gitEnvTrue = (name: string): boolean => !/^(false|no|off|0*)$/i.test(process.env[name] ?? '');
+
 type Reach = 'read' | 'write';
 
 /** Programs that unpack an archive into a folder, so `inPlaceWrites` names their trees. */
@@ -1321,21 +1324,10 @@ const missing = (error: unknown): boolean => {
 const under = (folder: string, name: string): string => (folder.endsWith('/') ? folder + name : `${folder}/${name}`);
 
 /**
- * Each path a glob word expands to that passes through a symbolic link, found component by component with
- * lstat as bash expands it. Null when the expansion reads more than WALK_ENTRIES entries or makes more than
- * GLOB_MATCHES paths.
+ * Each absolute path a glob word expands to, found component by component with lstat as bash expands it, with
+ * whether it passes through a symbolic link. Null when the expansion reads more than WALK_ENTRIES entries or makes
+ * more than GLOB_MATCHES paths.
  */
-async function globLinkMatches(
-  word: OperandWord,
-  cwd: string,
-  dotGlob: boolean,
-  stopped: () => boolean
-): Promise<string[] | null> {
-  const found = await globExpansion(word, cwd, dotGlob, stopped);
-  return found?.filter(match => match.linked).map(match => match.path) ?? null;
-}
-
-/** Each absolute path a glob word expands to, as globLinkMatches reads it, with whether it passes through a link. */
 async function globExpansion(
   word: OperandWord,
   cwd: string,
@@ -2844,9 +2836,9 @@ function listsNames(raw: readonly string[], script: string): Listing | null {
       } else operands.push(arg);
     }
     const nul = /z/.test(flags);
-    if (others) return orHere(operands, 'walk', { kind: 'tree' }, nul);
+    if (others) return { ...orHere(operands, 'walk', { kind: 'tree' }, nul), gitPathspecs: pathspecs };
     const listing = orHere(operands, 'index', { kind: 'index', changedOnly, patterns: null }, nul);
-    return { ...listing, tracked: true, ...(globbed ? { pathspecs } : {}) };
+    return { ...listing, tracked: true, gitPathspecs: pathspecs, ...(globbed ? { pathspecs } : {}) };
   }
   return null;
 }
@@ -3090,6 +3082,7 @@ export async function globNames(cwd: string, pattern: string, stopped: () => boo
 function diffLists(raw: readonly string[]): Listing | null {
   const args: string[] = [];
   const pathspecs: string[] = [];
+  const written: string[] = [];
   const globs: string[] = [];
   let paths = false;
   for (const word of raw) {
@@ -3104,6 +3097,7 @@ function diffLists(raw: readonly string[]): Listing | null {
     const values = pathspecValues(word);
     if (values === null) return null;
     for (const { text, glob } of values) {
+      written.push(text);
       if (!glob) {
         pathspecs.push(text);
         continue;
@@ -3132,6 +3126,7 @@ function diffLists(raw: readonly string[]): Listing | null {
     links: 'diff',
     nul: args.includes('-z'),
     pathspecs,
+    gitPathspecs: written,
     globs,
     // diffTargets reads the words as revisions or paths, as git does.
     settings: { kind: 'diff', words: revisions, cached },
@@ -3172,7 +3167,9 @@ function gitGrepLists(args: readonly string[]): Listing | null {
   if (patterns.length === 0) patterns.push(operands.shift() ?? '');
   if (!lists || operands.some(operand => operand.startsWith(':'))) return null;
   const folders = operands.length > 0 ? operands : ['.'];
-  if (untracked) return { folders, tracked: false, links: 'walk', nul: false, settings: { kind: 'tree' } };
+  if (untracked) {
+    return { folders, tracked: false, links: 'walk', nul: false, gitPathspecs: operands, settings: { kind: 'tree' } };
+  }
   const globbed = operands.some(operand => /[*?[]/.test(operand));
   if (globbed && operands.some(operand => operand.startsWith('/') || operand.split('/').includes('..'))) return null;
   return {
@@ -3180,6 +3177,7 @@ function gitGrepLists(args: readonly string[]): Listing | null {
     tracked: true,
     links: 'index',
     nul: false,
+    gitPathspecs: operands,
     ...(globbed ? { pathspecs: operands } : {}),
     settings: {
       kind: 'index',
@@ -3299,6 +3297,8 @@ interface Listing {
   nul: boolean;
   tests?: string[];
   pathspecs?: string[];
+  /** For a git lister, the pathspecs it reads as written, which git's pathspec settings may read otherwise. */
+  gitPathspecs?: string[];
   /** Patterns bash expands from where the lister runs, whose matched names the listing check reads too. */
   globs?: string[];
   settings: ListedSettings;
@@ -4733,14 +4733,16 @@ export async function scanShell(
     // Bash removes quotes and backslashes before it reads a name, so the name gates read the script without them.
     const gateText = command.replace(/[\\'"]/g, '');
     const anyName = rebindsAnyName(tree.rootNode, command, gateText);
-    const dotGlob = anyName || MAY_SET_DOTGLOB.test(gateText);
-    // nullglob drops a pattern with no match, leaving git no pathspec; globstar lets `**` match no folder at all;
-    // nocaseglob folds case as the locale does. bash -c runs BASH_ENV first, which may set any of them.
+    // bash -c runs BASH_ENV first, which may set any shell option or export any variable.
+    const bashEnv = (process.env.BASH_ENV ?? '') !== '';
+    const dotGlob = anyName || MAY_SET_DOTGLOB.test(gateText) || /dotglob/.test(process.env.BASHOPTS ?? '') || bashEnv;
+    // nullglob drops a pattern with no match, leaving git no pathspec and find no start point; globstar lets `**`
+    // match no folder at all; nocaseglob folds case as the locale does.
     const globOptions =
       anyName ||
       /shopt|BASHOPTS|nullglob|globstar|nocaseglob/.test(gateText) ||
       /nullglob|globstar|nocaseglob/.test(process.env.BASHOPTS ?? '') ||
-      (process.env.BASH_ENV ?? '') !== '';
+      bashEnv;
     // Links `ln -s` makes in this script, in guard form: the scan cannot follow one that does not exist yet.
     const createdLinks = new Set<string>();
     // Folders whose `.claude` holds settings this session may load: its own and each shared root's.
@@ -4766,6 +4768,19 @@ export async function scanShell(
       anyName ||
       /GIT_/.test(gateText) ||
       ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'].some(name => process.env[name] !== undefined);
+    // Pathspec settings the scan's own git never reads: icase and glob widen what a pathspec matches, literal reads
+    // magic as a name, and noglob only narrows.
+    const widenedPathspecs =
+      anyName ||
+      bashEnv ||
+      /GIT_(ICASE|GLOB)_PATHSPECS/.test(gateText) ||
+      gitEnvTrue('GIT_ICASE_PATHSPECS') ||
+      gitEnvTrue('GIT_GLOB_PATHSPECS');
+    const literalPathspecs =
+      anyName || bashEnv || /GIT_LITERAL_PATHSPECS/.test(gateText) || gitEnvTrue('GIT_LITERAL_PATHSPECS');
+    /** Whether the command's git matches `written` as the scan's git does, or within that. */
+    const pathspecsKept = (written: readonly string[]): boolean =>
+      written.length === 0 || !(widenedPathspecs || (literalPathspecs && written.some(spec => spec.startsWith(':'))));
     // Where `git rev-parse --show-toplevel` lands from each folder; filled in only while git reads no GIT_* setting.
     const toplevels = new Map<string, string | null>();
     const readsToplevel = /rev-parse/.test(gateText) && !gitEnvironment;
@@ -4849,11 +4864,15 @@ export async function scanShell(
 
     /**
      * The paths a glob operand expands to through a link, which are checked again as written; null when the
-     * expansion is too large to read. Empty where the scan does not expand (Windows, a WSL folder).
+     * expansion is too large to read, or may be empty under nullglob, where a program given no operand may act on
+     * `.` (find). Empty where the scan does not expand (Windows, a WSL folder) unless nullglob may be on.
      */
     const linkMatches = async (word: OperandWord, operand: ReadOperand, cwd: string): Promise<string[] | null> => {
-      if (operand.start === null || operand.unread || sep !== '/' || wslLocation(cwd) !== null) return [];
-      return globLinkMatches(word, cwd, dotGlob, stopped);
+      if (operand.start === null || operand.unread) return [];
+      if (sep !== '/' || wslLocation(cwd) !== null) return globOptions ? null : [];
+      const found = await globExpansion(word, cwd, dotGlob, stopped);
+      if (found === null || (globOptions && found.length === 0)) return null;
+      return found.filter(match => match.linked).map(match => match.path);
     };
 
     /** Counts an exact operand unread when a link on its way leads into a process's own folders. */
@@ -4889,6 +4908,7 @@ export async function scanShell(
       if (state.lost || sep !== '/' || wslLocation(state.cwd) !== null) return false;
       // Under a GIT_* setting git may read another index or repository than the one the scan asks about.
       if ((found === 'index' || found === 'diff') && gitEnvironment) return false;
+      if (listing.gitPathspecs !== undefined && !pathspecsKept(listing.gitPathspecs)) return false;
       const budget = { entries: WALK_ENTRIES };
       const reach: Reach = writing ? 'write' : 'read';
       const whole = writing && settings.kind === 'tree';
@@ -4944,7 +4964,7 @@ export async function scanShell(
           matched.push(...names.filter(name => /[[\]?*\\]/.test(name)));
         }
         const diff = await diffTargets(top, settings.words, settings.cached, stopped);
-        if (diff === null) return false;
+        if (diff === null || !pathspecsKept(diff.pathspecs)) return false;
         const pathspecs = [...diff.pathspecs, ...(listing.pathspecs ?? []), ...matched];
         const listed = await diffListed(top, diff.targets, diff.worktree, pathspecs, stopped);
         if (listed === null || (split && listed.odd)) return false;
