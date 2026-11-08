@@ -79,7 +79,10 @@ export function chargedSpend(
       })
       .sort((a, b) => b.last90d - a.last90d);
 
-  const top = spend.topModel30d;
+  const byModel = bucketsLess(spend.byModel, writeOff => writeOff.model ?? null);
+  const top = byModel
+    .filter(bucket => bucket.key !== null && bucket.last30d > 0)
+    .sort((a, b) => b.last30d - a.last30d)[0];
   return {
     spent: {
       last24h: net(spend.spent.last24h, writtenOff.last24h),
@@ -87,20 +90,12 @@ export function chargedSpend(
       last30d: net(spend.spent.last30d, writtenOff.last30d),
     },
     writtenOff,
-    topModel30d: top
-      ? {
-          model: top.model,
-          credits: net(
-            top.credits,
-            sumSince(rollingFrom(30), writeOff => writeOff.model === top.model)
-          ),
-        }
-      : null,
+    topModel30d: top && top.key !== null ? { model: top.key, credits: top.last30d } : null,
     dailyCredits: spend.dailyCredits.map(({ day, credits }) => ({
       day,
       credits: net(credits, dailyOff.get(day) ?? 0),
     })),
-    byModel: bucketsLess(spend.byModel, writeOff => writeOff.model ?? null),
+    byModel,
     bySource: bucketsLess(spend.bySource, writeOff => writeOff.source ?? null),
   };
 }

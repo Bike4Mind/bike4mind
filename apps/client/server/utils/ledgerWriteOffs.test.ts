@@ -6,6 +6,34 @@ const id = (n: number) => new Types.ObjectId(n.toString(16).padStart(24, '0'));
 const at = (iso: string) => new Date(iso);
 
 describe('pairWriteOffs', () => {
+  it.each(['ascending', 'descending'])('pairs the nearest equal-cost row with rows in %s order', order => {
+    const rows = [
+      { _id: id(1), questId: 'q1', credits: -100, createdAt: at('2026-11-05T10:00:00Z') },
+      { _id: id(2), questId: 'q1', credits: -100, createdAt: at('2026-11-05T10:30:00Z') },
+    ];
+    const paired = pairWriteOffs(
+      [{ requestId: 'q1', creditsCharged: 100, writtenOffCredits: 10, createdAt: at('2026-11-05T10:30:01Z') }],
+      order === 'ascending' ? rows : [...rows].reverse()
+    );
+
+    expect(paired).toHaveLength(1);
+    expect(paired[0].transactionId).toBe(id(2).toHexString());
+  });
+
+  it('breaks distance ties by earlier timestamp, then smaller id', () => {
+    const paired = pairWriteOffs(
+      [{ requestId: 'q1', creditsCharged: 100, writtenOffCredits: 10, createdAt: at('2026-11-05T10:00:01Z') }],
+      [
+        { _id: id(1), questId: 'q1', credits: -100, createdAt: at('2026-11-05T10:00:02Z') },
+        { _id: id(3), questId: 'q1', credits: -100, createdAt: at('2026-11-05T10:00:00Z') },
+        { _id: id(2), questId: 'q1', credits: -100, createdAt: at('2026-11-05T10:00:00Z') },
+      ]
+    );
+
+    expect(paired).toHaveLength(1);
+    expect(paired[0].transactionId).toBe(id(2).toHexString());
+  });
+
   it('pairs each write-off with the ledger row of the same quest and gross credits, once', () => {
     const paired = pairWriteOffs(
       [

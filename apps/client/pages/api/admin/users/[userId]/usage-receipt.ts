@@ -2,11 +2,12 @@ import {
   adminUsageReceiptQuerySchema,
   adminUsageReceiptSchema,
   BadRequestError,
+  ForbiddenError,
   NotFoundError,
 } from '@bike4mind/common';
 import { userRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { adminApi } from '@server/middlewares/adminApi';
+import { baseApi } from '@server/middlewares/baseApi';
 import { loadUsageReceipt } from '@server/utils/adminUsageReceipt';
 import { respond } from '@server/utils/respond';
 
@@ -17,8 +18,9 @@ import { respond } from '@server/utils/respond';
  * written off), the limits it ran under, tool calls by name and attachment totals. The response goes
  * through adminUsageReceiptSchema, which carries no content fields, so none can leak.
  */
-const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'support:read' } }).get(
+const handler = baseApi({ auth: 'jwtOnly' }).get(
   asyncHandler(async (req, res) => {
+    if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
     const { userId, requestId, at } = req.query as Record<string, string | string[] | undefined>;
     if (typeof userId !== 'string' || !userId) throw new BadRequestError('Invalid user ID');
     const query = adminUsageReceiptQuerySchema.safeParse({ requestId, at });

@@ -7,6 +7,29 @@ import { chargedSpend } from './adminCreditSummary';
 const now = new Date('2026-11-06T12:00:00Z');
 
 describe('chargedSpend', () => {
+  it('ranks the top model by charged credits after write-offs', () => {
+    const spend = chargedSpend(
+      {
+        spent: { last24h: 150, last7d: 150, last30d: 150 },
+        topModel30d: { model: 'A', credits: 100 },
+        dailyCredits: [],
+        byModel: [
+          { key: 'A', last7d: 100, last30d: 100, last90d: 100 },
+          { key: 'B', last7d: 50, last30d: 50, last90d: 50 },
+        ],
+        bySource: [],
+      },
+      [{ createdAt: new Date('2026-11-06T10:00:00Z'), writtenOffCredits: 90, model: 'A' }],
+      now
+    );
+
+    expect(spend.topModel30d).toEqual({ model: 'B', credits: 50 });
+    expect(spend.byModel.map(bucket => [bucket.key, bucket.last30d])).toEqual([
+      ['B', 50],
+      ['A', 10],
+    ]);
+  });
+
   it('counts charged credits and reports the written-off shortfall on its own', () => {
     // The capped turn: 1,998 balance, 2,016 cost, 18 written off; plus a 2-credit turn earlier.
     const spend = chargedSpend(

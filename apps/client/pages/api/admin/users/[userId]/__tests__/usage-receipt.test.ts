@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { BadRequestError, NotFoundError } from '@bike4mind/common';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
@@ -9,8 +9,8 @@ const h = vi.hoisted(() => ({
   loadUsageReceipt: vi.fn(),
 }));
 
-vi.mock('@server/middlewares/adminApi', () => ({
-  adminApi: (config: unknown) => {
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: (config: unknown) => {
     h.config = config;
     return {
       get: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
@@ -66,8 +66,16 @@ beforeEach(() => {
 });
 
 describe('GET /api/admin/users/[userId]/usage-receipt', () => {
-  it('is jwt-only and gated on the support-read permission for GET', () => {
-    expect(h.config).toEqual({ auth: 'jwtOnly', adminPermissions: { GET: 'support:read' } });
+  it('is jwt-only', () => {
+    expect(h.config).toEqual({ auth: 'jwtOnly' });
+  });
+
+  it('rejects a support-read delegate without full admin access before any read', async () => {
+    const { promise } = run({}, { id: 'support1', isAdmin: false, adminPermissions: ['support:read'] });
+    await expect(promise).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(promise).rejects.toMatchObject({ statusCode: 403 });
+    expect(h.findUser).not.toHaveBeenCalled();
+    expect(h.loadUsageReceipt).not.toHaveBeenCalled();
   });
 
   it('rejects a missing request id or a bad timestamp', async () => {

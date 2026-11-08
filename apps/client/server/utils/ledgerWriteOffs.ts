@@ -42,24 +42,33 @@ type UsageLedgerRow = {
 };
 
 /**
- * Pairs write-off events with ledger rows: same quest and the same gross credits. Each row and each
- * event is used once, so a quest with several settlements (a retry) still pairs one to one.
+ * Pairs write-off events with ledger rows nearest in time, with the same quest and gross credits.
+ * Each row and event is used once, so a quest with several settlements (a retry) still pairs one to one.
  */
 export const pairWriteOffs = (
   events: readonly WriteOffEventRow[],
   ledgerRows: readonly UsageLedgerRow[]
 ): LedgerWriteOff[] => {
-  const unpaired = new Map<string, WriteOffEventRow[]>();
-  for (const event of events) {
-    const key = `${event.requestId}|${Math.abs(event.creditsCharged)}`;
-    unpaired.set(key, [...(unpaired.get(key) ?? []), event]);
-  }
-  const paired: LedgerWriteOff[] = [];
+  const unpaired = new Map<string, UsageLedgerRow[]>();
   for (const row of ledgerRows) {
     if (!row.questId) continue;
-    const candidates = unpaired.get(`${row.questId}|${Math.abs(row.credits)}`);
-    const event = candidates?.shift();
-    if (!event) continue;
+    const key = `${row.questId}|${Math.abs(row.credits)}`;
+    unpaired.set(key, [...(unpaired.get(key) ?? []), row]);
+  }
+  const paired: LedgerWriteOff[] = [];
+  for (const event of events) {
+    const candidates = unpaired.get(`${event.requestId}|${Math.abs(event.creditsCharged)}`);
+    candidates?.sort((a, b) => {
+      const aTime = a.createdAt.getTime();
+      const bTime = b.createdAt.getTime();
+      return (
+        Math.abs(aTime - event.createdAt.getTime()) - Math.abs(bTime - event.createdAt.getTime()) ||
+        aTime - bTime ||
+        a._id.toHexString().localeCompare(b._id.toHexString())
+      );
+    });
+    const row = candidates?.shift();
+    if (!row) continue;
     paired.push({
       transactionId: row._id.toHexString(),
       createdAt: row.createdAt,
