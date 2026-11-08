@@ -22,7 +22,7 @@ import { isExternallyOpenable } from '@shared/externalLinks';
 import { persistConsoleWarnings } from './logFile';
 import { registerUpdates } from './update';
 import { registerTerminals } from './terminal';
-import { registerUsage } from './usage';
+import { registerLocalUsage, registerUsage } from './usage';
 import { registerAttention } from './attention';
 import { appWindows } from './windows';
 import { registerWatch } from './watch';
@@ -167,6 +167,7 @@ void app.whenReady().then(async () => {
     modelSettings,
     capabilityLedger,
     respondToApproval,
+    store: sessions,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
     releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
@@ -228,6 +229,7 @@ void app.whenReady().then(async () => {
     needsYou.scopeChanged();
     watch.scopeChanged();
   });
+  registerLocalUsage(auth, sessions, modelServers);
   fleet.setDirectoryResolver(async sessionId => {
     const session = await chat.getSession(sessionId);
     return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;

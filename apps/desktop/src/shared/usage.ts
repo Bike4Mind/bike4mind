@@ -59,3 +59,76 @@ export interface AccountUsage {
  * totals are zero is a real answer: the account spent nothing in that window.
  */
 export type AccountUsageResult = { ok: true; usage: AccountUsage } | { ok: false; error: string };
+
+/**
+ * Sums over self-hosted replies, counted in main from this device's conversations. Speeds stay token
+ * and millisecond sums so a total's rate is tokens over time, never a mean of per-reply rates.
+ */
+export interface LocalUsageFigures {
+  replies: number;
+  outputTokens: number;
+  /** Summed `inputTokens`: the context each request carried, not the prompt tokens evaluated. */
+  contextTokens: number;
+  /** Replies the server timed. Estimated and untimed replies count for tokens only. */
+  timedReplies: number;
+  evalTokens: number;
+  evalMs: number;
+  /** Replies this app timed off the stream, kept apart from the server-timed ones. */
+  estimatedReplies: number;
+  estimatedEvalTokens: number;
+  estimatedEvalMs: number;
+  promptTokens: number;
+  promptMs: number;
+  /**
+   * Server-timed replies that reported a load time, and those times summed. Ollama reports one on
+   * every request, warm or not, so this is an average per reply rather than a count of loads.
+   */
+  loads: number;
+  loadMs: number;
+  draftTokens: number;
+  draftAccepted: number;
+}
+
+export interface LocalUsageBar {
+  /** Bucket start, ISO 8601. */
+  startsAt: string;
+  replies: number;
+  outputTokens: number;
+}
+
+export interface LocalUsageRow {
+  key: string;
+  label: string;
+  detail?: string;
+  replies: number;
+  outputTokens: number;
+  evalTokens: number;
+  evalMs: number;
+  estimatedEvalTokens: number;
+  estimatedEvalMs: number;
+}
+
+export interface LocalUsage {
+  window: UsageWindowId;
+  granularity: UsageGranularity;
+  /** Ascending by time; UTC hours or UTC days. */
+  bars: LocalUsageBar[];
+  /** Summed over the same buckets as `bars`. */
+  totals: LocalUsageFigures;
+  byModel: LocalUsageRow[];
+  byServer: LocalUsageRow[];
+  /** Local replies in this scope across all time, so a screen can tell "none ever" from "none lately". */
+  allTimeReplies: number;
+  /**
+   * Which conversations these were counted from: the signed-out device folder, an account's
+   * folder, or none while no scope is known. A signed-out screen shows only `device`.
+   */
+  scope: LocalUsageScope;
+  /** `<environment url>\n<account id>` the figures were counted for; set for an `account` scope. */
+  account?: string;
+  readAt: number;
+}
+
+export type LocalUsageScope = 'device' | 'account' | 'none';
+
+export type LocalUsageResult = { ok: true; usage: LocalUsage } | { ok: false; error: string };

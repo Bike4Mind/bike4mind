@@ -44,7 +44,7 @@ const MAX_TICKS = 7;
  * from the NEWEST bar - today is the label a reader looks for first, and anchoring at the other
  * end is what leaves it missing.
  */
-export function tickIndices(bars: readonly UsageBar[], granularity: UsageGranularity): number[] {
+export function tickIndices(bars: readonly Pick<UsageBar, 'startsAt'>[], granularity: UsageGranularity): number[] {
   if (granularity === 'hour') {
     return bars.reduce<number[]>((ticks, bar, index) => {
       if (new Date(bar.startsAt).getHours() % 6 === 0) ticks.push(index);
