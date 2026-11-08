@@ -760,6 +760,13 @@ cannot load, its error offers **Try again**; sign in again if your session has e
 **Customize** maps onto the folder grants this app already had, which moved out of the account
 panel into the collapsible **More**.
 
+### Session panel
+
+In Code conversations, the session panel reserves space beside the conversation when the pane
+can fit the panel and a full reading column. The header, messages and composer recenter together
+when you toggle it. Smaller panes open the panel as a popover without shifting the conversation.
+The layout transition respects the system's reduced-motion preference.
+
 ## Authentication
 
 The whole RFC 8628 device flow lives in `src/main/auth`, on top of the shared
