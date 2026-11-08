@@ -3,6 +3,7 @@ import { Alert, Box, Button, Stack, Typography } from '@mui/joy';
 import {
   hasAdminPermission,
   assessmentCompletionSequenceSchema,
+  assessmentCompletionSynchronySchema,
   type AbuseAssessmentFailureCode,
   type AbuseAssessmentResult,
   type AbuseAssessmentSkipReason,
@@ -87,6 +88,33 @@ const SequenceEvidence: React.FC<{ summary: Record<string, unknown> }> = ({ summ
   );
 };
 
+const SynchronyEvidence: React.FC<{ summary: Record<string, unknown> }> = ({ summary }) => {
+  const parsed = assessmentCompletionSynchronySchema.safeParse(summary.completionSynchrony);
+  if (!parsed.success) return null;
+  const value = parsed.data;
+  return (
+    <Alert color="neutral" data-testid="assessment-completion-synchrony">
+      <Stack gap={0.5}>
+        <Typography level="title-sm">Synchronized API calls - review only</Typography>
+        <Typography level="body-sm">
+          {value.status === 'observed'
+            ? `${value.memberRefs.length} accounts shared ${value.bursts} request-start bursts and ${value.synchronizedModelSwitches} requested-model switches. ${value.dailyCapRejectedRequests} matched requests were stopped by daily free-tier caps.`
+            : 'Participants or request-start evidence could not be fully included.'}
+        </Typography>
+        <Typography level="body-sm">
+          Timing and model choices support coordination, not proof of one operator, the same prompts or misuse. These
+          observations cannot trigger automated containment.
+        </Typography>
+        {value.status === 'observed' && (value.scanTruncated || value.legacyRows > 0) && (
+          <Typography level="body-xs">
+            Coverage is incomplete because the scan was capped or older rows lack request-start metadata.
+          </Typography>
+        )}
+      </Stack>
+    </Alert>
+  );
+};
+
 const LatestAssessment: React.FC<{ item: AbuseAssessmentRow }> = ({ item }) => (
   <Stack gap={0.75} data-testid="shadow-detection-assessment-latest">
     <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
@@ -112,6 +140,7 @@ const LatestAssessment: React.FC<{ item: AbuseAssessmentRow }> = ({ item }) => (
       </Box>
     )}
     <SequenceEvidence summary={item.featureSummary} />
+    <SynchronyEvidence summary={item.featureSummary} />
     <Typography level="body-xs" sx={muted}>
       {item.model}
       {item.modelVersion ? ` (${item.modelVersion})` : ''} / policy v{item.policyVersion} / evidence v

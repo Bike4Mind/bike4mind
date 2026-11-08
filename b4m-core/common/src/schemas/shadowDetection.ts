@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { accountCampaignGroupSchema } from './accountCampaign';
+import { completionSynchronyEvidenceSchema } from './completionSynchrony';
 import { completionSequenceEvidenceSchema } from './completionSequence';
 
 /**
@@ -14,6 +15,7 @@ export const SHADOW_DETECTORS = [
   'signupNetworkBurst',
   'accountCampaign',
   'completionSequence',
+  'completionSynchrony',
   'youngAccountSpend',
   'paymentRisk',
   /** A new account that signed up from the same IP as a blocked account, close in time. */
@@ -122,6 +124,7 @@ export const shadowDetectionItemSchema = z.object({
   group: accountCampaignGroupSchema.nullable(),
   /** Optional for older records. Participants follow userIds order. Observation only. */
   completionSequence: completionSequenceEvidenceSchema.optional(),
+  completionSynchrony: completionSynchronyEvidenceSchema.optional(),
   /** The screened payment of a paymentRisk detection; null for detectors that do not watch payments. */
   payment: shadowDetectionPaymentSchema.nullable(),
   detectedAt: z.date(),

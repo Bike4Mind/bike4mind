@@ -5,6 +5,7 @@ export const DETECTOR_LABELS: Record<ShadowDetector, string> = {
   signupNetworkBurst: 'Signup network burst',
   accountCampaign: 'Account campaign',
   completionSequence: 'Coordinated API completions',
+  completionSynchrony: 'Synchronized API calls',
   youngAccountSpend: 'Young-account spend',
   paymentRisk: 'Payment risk',
   signupIpLinkedToBlocked: 'Signup IP linked to blocked',

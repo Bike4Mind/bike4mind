@@ -126,6 +126,57 @@ describe('ShadowDetectionsTab', () => {
     }
   });
 
+  it('explains synchronized starts, stopped calls and cohort funding before an AI assessment', () => {
+    m.useShadowDetections.mockReturnValue(
+      queryResult(
+        list({
+          data: [
+            detection({
+              detector: 'completionSynchrony',
+              wouldAction: 'none',
+              userIds: ['a'.repeat(24), 'b'.repeat(24), 'c'.repeat(24)],
+              completionSynchrony: {
+                source: 'api_key_request_starts',
+                windowHours: 24,
+                eventsScanned: 9,
+                legacyRows: 2,
+                scanTruncated: false,
+                bursts: 3,
+                synchronizedModelSwitches: 1,
+                distinctRequestedModels: 2,
+                maxStartSkewMilliseconds: 400,
+                completedRequests: 5,
+                dailyCapRejectedRequests: 2,
+                otherRejectedRequests: 1,
+                interruptedOrUnknownRequests: 1,
+                scannedAt: '2026-01-01T12:00:00Z',
+                firstObservedAt: '2026-01-01T11:50:00Z',
+                lastObservedAt: '2026-01-01T11:59:00Z',
+                creditExposure: {
+                  scope: 'cohort_completion_api_24h',
+                  creditsCharged: 15,
+                  grantFundedCredits: 10,
+                  unknownFundingCredits: 5,
+                  scanTruncated: false,
+                },
+              },
+            }),
+          ],
+        })
+      )
+    );
+    renderTab();
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    const evidence = screen.getByTestId('completion-synchrony-observation');
+    expect(evidence).toHaveTextContent('3 repeated request-start bursts');
+    expect(evidence).toHaveTextContent('2 stopped by daily free-tier caps');
+    expect(evidence).toHaveTextContent('1 other rejected or failed');
+    expect(evidence).toHaveTextContent('10 grant-funded');
+    expect(evidence).toHaveTextContent('not proof of one operator');
+    expect(evidence).toHaveTextContent('Coverage is incomplete');
+    expect(m.mutateAsync).not.toHaveBeenCalled();
+  });
+
   it('explains a capped sequence before AI assessment and keeps exact-account watches available', () => {
     m.useShadowDetections.mockReturnValue(
       queryResult(

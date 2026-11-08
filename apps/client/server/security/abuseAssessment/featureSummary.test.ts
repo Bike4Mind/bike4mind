@@ -381,3 +381,58 @@ describe('completion sequence projection', () => {
     expect(evidenceHash(summary(2))).not.toBe(evidenceHash(summary(3)));
   });
 });
+
+const synchronyEvidence = {
+  scannedAt: detectedAt,
+  source: 'api_key_request_starts' as const,
+  windowHours: 24 as const,
+  eventsScanned: 9,
+  legacyRows: 2,
+  scanTruncated: false,
+  bursts: 3,
+  synchronizedModelSwitches: 1,
+  distinctRequestedModels: 2,
+  maxStartSkewMilliseconds: 400,
+  completedRequests: 6,
+  dailyCapRejectedRequests: 3,
+  otherRejectedRequests: 0,
+  interruptedOrUnknownRequests: 0,
+  firstObservedAt: detectedAt,
+  lastObservedAt: detectedAt,
+};
+describe('synchrony provider projection', () => {
+  const source = () =>
+    sequenceDetection({
+      detector: 'completionSynchrony',
+      completionSequence: undefined,
+      completionSynchrony: synchronyEvidence,
+    });
+  it('sends only pseudonymous members, counts and coverage', () => {
+    const item = source();
+    const summary = buildFeatureSummary({ detection: item, accounts: [], group: null });
+    expect(summary.completionSynchrony).toMatchObject({
+      status: 'observed',
+      reviewOnly: true,
+      memberRefs: ['acct_1', 'acct_2', 'acct_3'],
+      bursts: 3,
+      synchronizedModelSwitches: 1,
+      dailyCapRejectedRequests: 3,
+      legacyRows: 2,
+    });
+    for (const secret of [...item.userIds, detectedAt.toISOString(), 'firstObservedAt', INJECTION])
+      expect(JSON.stringify(summary)).not.toContain(secret);
+  });
+  it('keeps missing evidence and omitted membership incomplete', () => {
+    expect(
+      buildFeatureSummary({ detection: { ...source(), completionSynchrony: undefined }, accounts: [], group: null })
+        .completionSynchrony
+    ).toMatchObject({ status: 'incomplete', reason: 'source_missing' });
+    expect(
+      buildFeatureSummary({
+        detection: { ...source(), userIds: Array.from({ length: 11 }, (_, i) => `account-${i}`) },
+        accounts: [],
+        group: null,
+      }).completionSynchrony
+    ).toMatchObject({ status: 'incomplete', reason: 'members_omitted' });
+  });
+});

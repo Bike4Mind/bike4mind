@@ -1,29 +1,30 @@
 import type { Request, Response } from 'express';
-import type { ApiKeyCompletionSource } from '@bike4mind/common';
+import {
+  apiCompletionObservationSchema,
+  type ApiCompletionOutcome,
+  type ApiKeyCompletionSource,
+} from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import type { ApiKeyInfo } from '@server/cli/auth';
 import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 
-// Non-standard status for a client that closed the connection before any response was sent.
 const CLIENT_CLOSED_REQUEST = 499;
 
-interface LogApiKeyUsageOnResponseParams {
+type LogApiKeyUsageOnResponseParams = {
   req: Request;
   res: Response;
   apiKey: ApiKeyInfo;
   endpoint: string;
   source: ApiKeyCompletionSource;
   startTime: number;
+  completion?: { requestId: string; requestedModel: string; outcome: () => ApiCompletionOutcome };
   logger: Logger;
-  track: (p: Promise<void>) => void;
-}
+  track: (promise: Promise<void>) => void;
+};
 
-/**
- * Logs one API key usage row when the response finishes or the client disconnects. The write is
- * registered with `track` up front so the SIGTERM drain waits for it.
- */
+/** Persists an authenticated start before execution, then updates it on finish or disconnect. */
 export function logApiKeyUsageOnResponse({
   req,
   res,
@@ -33,7 +34,38 @@ export function logApiKeyUsageOnResponse({
   startTime,
   logger,
   track,
-}: LogApiKeyUsageOnResponseParams): void {
+  completion,
+}: LogApiKeyUsageOnResponseParams): Promise<void> {
+  const metadata = completion
+    ? apiCompletionObservationSchema.safeParse({
+        requestId: completion.requestId,
+        requestedModel: completion.requestedModel,
+        startedAt: new Date(startTime).toISOString(),
+        outcome: 'unknown',
+      })
+    : null;
+  if (metadata && !metadata.success) logger.warn('Completion request metadata was invalid');
+  const captured = metadata?.success ? metadata.data : undefined;
+  const identity = {
+    keyId: apiKey.keyId,
+    userId: apiKey.userId,
+    ipAddress: getClientIp(req),
+    endpoint,
+    method: req.method,
+    source,
+    ownerType: resolveApiKeyOwnerType(apiKey),
+    logger,
+  };
+  const started = captured
+    ? ApiKeyUsageManager.beginCompletionUsage({
+        ...identity,
+        responseTime: 0,
+        statusCode: 0,
+        completionObservation: captured,
+      })
+    : Promise.resolve(null);
+  const ready = started.then(() => undefined);
+  track(ready);
   track(
     new Promise<void>(resolve => {
       let logged = false;
@@ -42,22 +74,45 @@ export function logApiKeyUsageOnResponse({
         res.off('close', handler);
         if (logged) return;
         logged = true;
-        void ApiKeyUsageManager.logUsage({
-          keyId: apiKey.keyId,
-          userId: apiKey.userId,
-          ipAddress: getClientIp(req),
-          endpoint,
-          method: req.method,
-          responseTime: Date.now() - startTime,
-          statusCode: res.headersSent ? res.statusCode : CLIENT_CLOSED_REQUEST,
-          source,
-          ownerType: resolveApiKeyOwnerType(apiKey),
-          logger,
-        }).finally(resolve);
+        const observed = completion?.outcome() ?? 'unknown';
+        const completionObservation = captured
+          ? {
+              ...captured,
+              outcome: observed === 'unknown' && !res.writableFinished ? ('interrupted' as const) : observed,
+            }
+          : undefined;
+        const statusCode = res.headersSent ? res.statusCode : CLIENT_CLOSED_REQUEST;
+        if (completionObservation)
+          logger.info('API completion request outcome', {
+            requestId: completionObservation.requestId,
+            userId: apiKey.userId,
+            endpoint,
+            outcome: completionObservation.outcome,
+            statusCode,
+          });
+        void started
+          .then(existingLogId => {
+            // A missing start may mean account purge; never recreate it from a late response.
+            if (captured && !existingLogId) return;
+            return ApiKeyUsageManager.logUsage({
+              ...identity,
+              responseTime: Date.now() - startTime,
+              statusCode,
+              ...(existingLogId ? { existingLogId } : {}),
+              ...(completionObservation ? { completionObservation } : {}),
+            });
+          })
+          .catch(error =>
+            logger.warn('Completion outcome logging failed', {
+              errorName: error instanceof Error ? error.name : typeof error,
+            })
+          )
+          .finally(resolve);
       };
       res.once('finish', handler);
       res.once('close', handler);
       if (res.destroyed || res.writableFinished) handler();
     })
   );
+  return ready;
 }

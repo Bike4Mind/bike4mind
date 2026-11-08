@@ -1,3 +1,4 @@
+import { sweepCompletionSynchrony } from './completionSynchronySweep';
 import type { Context } from 'aws-lambda';
 import { Logger } from '@bike4mind/observability';
 import {
@@ -103,5 +104,11 @@ export async function handler(_event: unknown, context: Context) {
     onRecordError: error => logger.error('Completion sequence observation failed to record', { error: String(error) }),
   });
   logger.log('Completion sequence observation sweep finished', report);
+  const synchrony = await sweepCompletionSynchrony({
+    now: new Date(),
+    onRecordError: error => logger.error('Synchronized completion evidence operation failed', { error: String(error) }),
+  });
+  logger.log('Synchronized completion observation sweep finished', synchrony);
+  if (synchrony.failed > 0) throw new Error(`Synchrony sweep failed to record ${synchrony.failed} observation(s)`);
   if (report.failed > 0) throw new Error(`Completion sequence sweep failed to record ${report.failed} observation(s)`);
 }
