@@ -8,7 +8,7 @@ import {
   SIGNUP_TIMESERIES_RANGE_LABELS,
   STRONG_SIGNUP_SIGNALS,
   type SignupTimeseriesRange,
-} from '@client/app/utils/signupSignals';
+} from '@bike4mind/server-utils/app/utils/signupSignals';
 import { useSignupTimeseries, useSignupVerdicts } from '../../Signups/useSignupTimeseries';
 import { ErrorState, SectionCard, StatusChip, formatUtc } from '../../shared';
 import { parseSignupClassificationContext } from './userProfileSearch';
