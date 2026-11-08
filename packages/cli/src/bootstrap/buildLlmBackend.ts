@@ -480,7 +480,10 @@ async function attachServer(
     });
     return { backend, models: await backend.getModelInfo() };
   };
-  const route = await withDeadline(attach(), timeoutMs, startup);
+  const route = await withDeadline(attach(), timeoutMs, startup).catch((error: unknown) => {
+    startup.abort(error);
+    throw error;
+  });
   attached = true;
   return route;
 }

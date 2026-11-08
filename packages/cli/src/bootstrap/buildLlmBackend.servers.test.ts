@@ -505,6 +505,44 @@ describe('attachLocalModels with saved model servers', () => {
     expect(requests.every(request => request.signal?.aborted === true)).toBe(true);
   });
 
+  it('ends the ssh requests still running when attaching fails before the deadline', async () => {
+    await writeServers([
+      record({ id: 'o1', name: 'gpu', transport: { type: 'ssh', destination: 'me@gpu', port: 11434 } }),
+    ]);
+    const pending: AbortSignal[] = [];
+    const sshFetchFor: SshFetchFor = () => async (input, init) => {
+      const { pathname } = new URL(input);
+      if (pathname === '/api/version') return Response.json({ version: '0.12.0' });
+      if (pathname === '/api/tags') return Response.json({ models: [] });
+      const signal = init?.signal;
+      if (!signal) throw new Error('a request no deadline can end');
+      pending.push(signal);
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    };
+    const attaching = attachLocalModels(
+      serverBackend() as never,
+      createMockConfig({ defaultModel: 'local:srv-o1:tiny:1b' }),
+      { servers: 'all', defaultServerTimeoutMs: 30_000, onNotice: text => notices.push(text) },
+      {
+        ...deps,
+        sshFetchFor,
+        createOllamaBackend: (host, options) =>
+          ({
+            currentModel: '',
+            getModelInfo: async () => {
+              void options?.fetch?.(`${host}/api/show`, { method: 'POST' }).catch(() => undefined);
+              throw new Error('listing failed');
+            },
+          }) as never,
+      }
+    );
+    await expect(attaching).rejects.toThrow('Cannot chat with tiny:1b on gpu: listing failed');
+    expect(pending).toHaveLength(1);
+    await vi.waitFor(() => expect(pending[0].aborted).toBe(true), { timeout: 1_000 });
+  });
+
   it('gives the default model server longer than the others to answer', async () => {
     const slow = await ollama(undefined, {
       'GET /api/version': (_request, response) => {
