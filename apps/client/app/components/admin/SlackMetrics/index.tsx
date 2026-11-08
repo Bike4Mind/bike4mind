@@ -71,7 +71,7 @@ const SlackMetricsPage: React.FC = () => {
   const chartData = processChartData(filteredAndSortedMetrics);
 
   return (
-    <Box sx={{ p: { xs: 1.5, sm: 3 } }}>
+    <Box>
       <Box sx={{ mb: 4 }}>
         <Typography level="h2">Slack Metrics</Typography>
         <Typography level="body-md" color="neutral">

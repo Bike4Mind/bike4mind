@@ -263,7 +263,7 @@ export default function PartnerSignupRulesTab() {
   const isEmpty = rules.length === 0 && !isPending;
 
   return (
-    <Box sx={{ p: 2 }} data-testid="partner-signup-rules-tab">
+    <Box data-testid="partner-signup-rules-tab">
       <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 2 }} gap={2}>
         <Box>
           <Stack direction="row" alignItems="center" gap={1}>

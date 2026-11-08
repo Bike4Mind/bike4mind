@@ -9,7 +9,12 @@ import { VoyageEmbeddingProvider } from './VoyageEmbeddingProvider';
 const API_KEY = 'pa-realLooking1234567890abcdef';
 const EMBEDDINGS_URL = 'https://api.voyageai.com/v1/embeddings';
 
-type VoyageBody = { input: string[]; model: VoyageAIEmbeddingModel; output_dimension?: number };
+type VoyageBody = {
+  input: string[];
+  model: VoyageAIEmbeddingModel;
+  output_dimension?: number;
+  input_type?: 'query' | 'document';
+};
 
 let requests: { body: VoyageBody; authorization: string | null }[] = [];
 
@@ -62,6 +67,18 @@ describeEmbeddingProviderConformance('Voyage', {
 });
 
 describe('VoyageEmbeddingProvider', () => {
+  it.each(['query', 'document'] as const)('forwards the %s hint', async inputType => {
+    armBackend();
+    await provider().embed({ model: VoyageAIEmbeddingModel.VOYAGE_3, inputs: ['hello'], inputType });
+    expect(requests[0].body.input_type).toBe(inputType);
+  });
+
+  it('leaves an omitted hint unspecified', async () => {
+    armBackend();
+    await provider().embed({ model: VoyageAIEmbeddingModel.VOYAGE_3, inputs: ['hello'] });
+    expect(requests[0].body).not.toHaveProperty('input_type');
+  });
+
   it.each([undefined, null, '', 'placeholder'])('refuses a missing or placeholder key (%s)', apiKey => {
     expect(() => new VoyageEmbeddingProvider({ apiKey })).toThrow(VOYAGE_KEY_MISSING_MESSAGE);
   });

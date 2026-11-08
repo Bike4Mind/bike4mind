@@ -181,7 +181,7 @@ const FeedbackTab: React.FC = () => {
   };
 
   return (
-    <Sheet sx={{ overflow: 'hidden', width: '100%', px: { xs: 1, sm: 2 } }}>
+    <Sheet sx={{ overflow: 'hidden', width: '100%' }}>
       <Grid container>
         <Grid xs={12}>
           <Stack direction="column" justifyContent={'center'} spacing={1} sx={{ width: '100%' }}>

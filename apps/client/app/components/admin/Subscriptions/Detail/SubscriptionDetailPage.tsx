@@ -6,6 +6,7 @@ import {
   useAdminSubscriptionDetail,
 } from '@client/app/hooks/data/adminSubscriptionDetail';
 import { ErrorState, UndoToastProvider } from '../../shared';
+import { ADMIN_DETAIL_MAX_WIDTH } from '../../shared/adminStyles';
 import { SubscriptionDetailView } from './SubscriptionDetailView';
 import { useSubscriptionNavigation } from './useSubscriptionNavigation';
 import type { SubscriptionDetailTab } from './subscriptionDetailSearch';
@@ -77,7 +78,9 @@ export const SubscriptionDetailPage: React.FC<SubscriptionDetailPageProps> = ({ 
     >
       {/* Keyed so an undo offered on one subscription never carries over to the next. */}
       <UndoToastProvider key={subscriptionId}>
-        <Box sx={{ maxWidth: 1280, mx: 'auto', px: { xs: 2, sm: 4 }, pt: 2.5, pb: 12 }}>{renderBody()}</Box>
+        <Box sx={{ maxWidth: ADMIN_DETAIL_MAX_WIDTH, mx: 'auto', px: { xs: 2, sm: 4 }, pt: 2.5, pb: 12 }}>
+          {renderBody()}
+        </Box>
       </UndoToastProvider>
     </Sheet>
   );

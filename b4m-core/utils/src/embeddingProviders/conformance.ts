@@ -3,7 +3,7 @@ import {
   EMBEDDING_MODEL_IDS,
   EMBEDDING_PROVIDER_IDS,
   getEmbeddingModelCapabilities,
-  type SupportedEmbeddingModel,
+  type EmbeddingModelId,
 } from '@bike4mind/common';
 import { isEmbeddingAuthError } from '@bike4mind/fab-pipeline';
 import { createEmbeddingProviderRegistry } from './registry';
@@ -57,7 +57,7 @@ export const LATE_FAILURE_INPUT = 'input number 69';
 // Crosses Ollama's 64-input sub-batch so the suite exercises splitting.
 const LARGE_BATCH_SIZE = 70;
 
-const nonNativeWidths = (model: SupportedEmbeddingModel): number[] => {
+const nonNativeWidths = (model: EmbeddingModelId): number[] => {
   const { dimensions } = getEmbeddingModelCapabilities(model);
   if (dimensions.kind === 'range') return [dimensions.min, Math.floor((dimensions.min + dimensions.native) / 2)];
   if (dimensions.kind === 'discrete') return dimensions.values.filter(width => width !== dimensions.native);

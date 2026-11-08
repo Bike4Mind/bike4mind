@@ -33,7 +33,13 @@ import {
 } from '@bike4mind/database';
 import { Quest } from '@bike4mind/database/content';
 import { computeCosineSimilarity, getSettingsByNames } from '@bike4mind/utils';
-import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
+import {
+  buildEmbeddingRegistry,
+  bindEmbeddingModel,
+  embedOne,
+  embeddingBackendForModel,
+  resolveEmbeddingWithKeylessFallback,
+} from '@bike4mind/services/llm/embeddingProviders';
 import {
   getEmbeddingModelCost,
   ForbiddenError,
@@ -254,7 +260,7 @@ const handler = baseApi().post(
             `[sessions/semantic-search] no credential resolved for ${requestedEmbeddingModel}; embedding the query with keyless ${embeddingModel} instead`
           );
         }
-        const requiredProvider = getProviderFromModel(embeddingModel);
+        const requiredProvider = embeddingBackendForModel(embeddingModel);
         req.logger?.debug?.('Required provider for model:', requiredProvider);
         if (missing === 'openai') {
           req.logger?.error?.('OpenAI API key not configured');
@@ -281,8 +287,8 @@ const handler = baseApi().post(
           hasOllamaBaseUrl: !!embeddingConfig.ollamaBaseUrl,
           model: embeddingModel,
         });
-        const embeddingFactory = new EmbeddingFactory(embeddingConfig);
-        const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
+        const embeddingRuntime = buildEmbeddingRegistry(embeddingConfig);
+        const embeddingService = bindEmbeddingModel(embeddingRuntime, embeddingModel);
 
         const generateEmbedding = async (text: string) => {
           // A UTF-8 byte bounds the tokenizer input; settle the same local estimate as before.
@@ -293,7 +299,7 @@ const handler = baseApi().post(
           );
           let vector: number[];
           try {
-            vector = await embeddingService.generateEmbedding(text);
+            vector = await embedOne(embeddingService, text);
           } catch (error) {
             await reservation.refund();
             throw error;

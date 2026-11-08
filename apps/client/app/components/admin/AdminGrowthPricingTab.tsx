@@ -226,7 +226,7 @@ const AdminGrowthPricingTab = () => {
   if (isLoading) return <LinearProgress data-testid="admin-growth-pricing-loading" />;
 
   return (
-    <Stack spacing={2} sx={{ p: 2, maxWidth: 1100 }} data-testid="admin-growth-pricing-tab">
+    <Stack spacing={2} sx={{ maxWidth: 1100 }} data-testid="admin-growth-pricing-tab">
       <div>
         <Typography level="h3">Growth and Pricing</Typography>
         <Typography level="body-sm" sx={{ color: 'text.secondary' }}>

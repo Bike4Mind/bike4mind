@@ -113,7 +113,7 @@ export default function RetrievalRateTab() {
   );
 
   return (
-    <Box sx={{ p: 2 }} data-testid="admin-retrieval-rate-tab">
+    <Box data-testid="admin-retrieval-rate-tab">
       <Typography level="h3" sx={{ mb: 0.5 }}>
         Retrieval Rate
       </Typography>

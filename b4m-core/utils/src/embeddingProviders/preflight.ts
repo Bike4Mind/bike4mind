@@ -26,8 +26,11 @@ export function assertOneVectorPerInput(providerLabel: string, inputCount: numbe
   }
 }
 
-/** Sums the token counts a provider reported; undefined when none of the responses carried one. */
+/**
+ * Sums the token counts a provider reported; undefined unless every response carried one, so a partial total is
+ * never billed as the provider's count and the caller falls back to its local count instead.
+ */
 export const sumReportedTokens = (counts: readonly (number | undefined)[]): number | undefined => {
-  const reported = counts.filter((count): count is number => count !== undefined);
-  return reported.length === 0 ? undefined : reported.reduce((sum, count) => sum + count, 0);
+  if (counts.length === 0 || counts.some(count => count === undefined)) return undefined;
+  return (counts as readonly number[]).reduce((sum, count) => sum + count, 0);
 };

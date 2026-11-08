@@ -10,19 +10,6 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 
-vi.mock('@bike4mind/utils', async importOriginal => {
-  const actual = await importOriginal<typeof import('@bike4mind/utils')>();
-  return {
-    ...actual,
-    getProviderFromModel: () => 'openai',
-    EmbeddingFactory: class {
-      createEmbeddingService() {
-        return { generateEmbedding: async () => [1, 0] };
-      }
-    },
-  };
-});
-
 import {
   DataLakeModel as DataLake,
   FabFile,
@@ -130,8 +117,7 @@ async function forcedRetrievalCitables(s: SessionShape): Promise<string[]> {
     libraryFlagForScope(s)
   );
   const embeddingFactory = {
-    createEmbeddingService: () => ({ generateEmbedding: async () => [1, 0] }),
-    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+    defaultModel: 'text-embedding-ada-002',
   };
   await feature.getContextMessages(quest as never, embeddingFactory as never, 'protocol');
   const meta = quest.promptMeta as { citables?: CitableSource[] };
@@ -207,3 +193,13 @@ describe('includeLibraryFiles against real Mongo', () => {
     expect(await retrieveById(off, lakeFileId)).toContain('Retrieved content from');
   });
 });
+
+vi.mock('@bike4mind/utils/embeddingProviders', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils/embeddingProviders')>()),
+  buildEmbeddingRegistry: vi.fn(() => ({ defaultModel: 'text-embedding-ada-002' })),
+  bindEmbeddingModel: (_registry: unknown, model: string) => ({
+    model,
+    maxInputTokens: 8192,
+    embed: async (inputs: readonly string[]) => ({ vectors: inputs.map(() => [1, 0]) }),
+  }),
+}));
