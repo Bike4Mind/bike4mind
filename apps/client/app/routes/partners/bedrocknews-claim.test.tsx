@@ -126,6 +126,15 @@ describe('BedrockNewsClaimPage', () => {
     expect(screen.getByRole('button', { name: 'Add 150 credits' })).toBeEnabled();
   });
 
+  it('offers no confirm when the daily limit pays nothing today, only another account', async () => {
+    mockPost.mockResolvedValue({ data: { ...READY, payable: 0 } });
+    renderPage();
+    const note = await screen.findByRole('note');
+    expect(note).toHaveTextContent('This account has reached today\u2019s Bike4Mind limit.');
+    expect(screen.queryByRole('button', { name: /^Add / })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use another account' })).toBeEnabled();
+  });
+
   it('disables the confirm button with a spinner while redeeming, then shows the result', async () => {
     let resolveRedeem: (value: unknown) => void = () => {};
     mockPost.mockResolvedValueOnce({ data: READY }).mockReturnValueOnce(

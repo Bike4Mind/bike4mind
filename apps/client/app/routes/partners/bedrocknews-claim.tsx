@@ -332,6 +332,8 @@ const ReadyView = ({
   backHref,
 }: ReadyViewProps) => {
   const { credits, payable, rungs, account } = claim;
+  // Nothing payable today: confirming would only come back capped, so there is nothing to offer.
+  const limitReached = payable === 0;
   return (
     <>
       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 0.75 }}>
@@ -369,10 +371,18 @@ const ReadyView = ({
         </Typography>
       </Sheet>
 
-      {payable != null && payable < credits && (
+      {limitReached ? (
         <LimitNote>
-          Your daily limit allows <strong>up to {payable}</strong> today. The rest stays waiting in Headword.
+          This account has reached today&rsquo;s Bike4Mind limit. The credits stay waiting in Headword: claim them
+          tomorrow or with another account.
         </LimitNote>
+      ) : (
+        payable != null &&
+        payable < credits && (
+          <LimitNote>
+            Your daily limit allows <strong>up to {payable}</strong> today. The rest stays waiting in Headword.
+          </LimitNote>
+        )
       )}
 
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -427,16 +437,18 @@ const ReadyView = ({
       </Box>
 
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-        <Button
-          data-testid="claim-confirm-btn"
-          loading={confirming}
-          loadingPosition="start"
-          disabled={confirming}
-          onClick={onConfirm}
-          sx={ACTION_SX}
-        >
-          {confirming ? 'Adding credits\u2026' : `Add ${credits} credits`}
-        </Button>
+        {!limitReached && (
+          <Button
+            data-testid="claim-confirm-btn"
+            loading={confirming}
+            loadingPosition="start"
+            disabled={confirming}
+            onClick={onConfirm}
+            sx={ACTION_SX}
+          >
+            {confirming ? 'Adding credits\u2026' : `Add ${credits} credits`}
+          </Button>
+        )}
         <Button
           variant="outlined"
           color="neutral"
