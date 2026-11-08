@@ -556,9 +556,12 @@ async function resolveChatSessionId(
   }
 
   if (request.newConversation || isApiKeyAuth(req)) {
+    // The generated name is also the auto-name placeholder: the auto-naming worker skips a session
+    // renamed in the last 10s unless its name is a placeholder, and a fast async turn lands inside that window.
+    const name = newNotebookName(req);
     const session = await sessionService.createSession(
       req.user,
-      { name: newNotebookName(req) },
+      { name, autoNamePlaceholder: name },
       {
         db: {
           sessions: sessionRepository,
