@@ -32,7 +32,9 @@ function Thread({ onReply, onSideChat }: { onReply: (text: string) => void; onSi
       <div data-testid="chat-message-assistant">
         <p id="reply-a">A monad is a monoid</p>
         <p id="reply-b">in the category of endofunctors.</p>
-        <textarea id="field" defaultValue="typed text" />
+        <div id="editable" contentEditable suppressContentEditableWarning>
+          editable text
+        </div>
       </div>
       <SelectionActions container={host} onReply={onReply} onSideChat={onSideChat} />
     </div>
@@ -107,14 +109,7 @@ describe('messageSelection', () => {
   });
 
   it('refuses a selection inside a text field', () => {
-    const field = document.getElementById('field')!;
-    act(() => {
-      const selection = document.getSelection()!;
-      selection.removeAllRanges();
-      selection.setBaseAndExtent(field, 0, field, 0);
-      selection.extend(field, 0);
-    });
-    // A field's caret sits at the field element itself, which the editable check catches.
+    select(byId('editable'), 0, byId('editable'), 8);
     expect(messageSelection(document.getSelection(), thread())).toBeNull();
   });
 });

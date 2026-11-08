@@ -983,14 +983,17 @@ export function ChatShell({
   const onSideChatFromSelection = useCallback(
     async (text: string) => {
       if (!activeId) return;
+      const origin = activeId;
       setSideChatError(null);
       const result = await window.b4m.chat.startSideChat({ sessionId: activeId, selection: text });
+      if (activeIdRef.current !== origin) return;
       if (!result.ok) {
         setSideChatError({ sessionId: activeId, error: result.error });
         return;
       }
       // Reread before opening it: the shell reselects away from an open session the list lacks.
       await reload();
+      if (activeIdRef.current !== origin) return;
       setMode(result.session.mode);
       setScreen('conversation');
       setActiveId(result.session.id);

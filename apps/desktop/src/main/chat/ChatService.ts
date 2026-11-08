@@ -2333,7 +2333,7 @@ export class ChatService {
     } else {
       this.attendedTurns.delete(sessionId);
       const parentSessionId = session.origin?.parentSessionId;
-      if (parentSessionId) this.spawnWatch.set(sessionId, { parentSessionId });
+      if (parentSessionId && isAgentSession(session)) this.spawnWatch.set(sessionId, { parentSessionId });
     }
     const replyId = this.startReply(session, api, historyScope, undefined, released?.relay?.hops ?? seedHops ?? 0);
     this.noteNotify(sessionId, released?.relay);

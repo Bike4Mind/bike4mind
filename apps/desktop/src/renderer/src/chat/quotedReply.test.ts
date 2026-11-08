@@ -18,6 +18,17 @@ describe('quotedMessage', () => {
   it('does not treat a path or a lone slash as a skill', () => {
     expect(quotedMessage('passage', '/ what?')).toBe('Regarding:\n> passage\n\n/ what?');
   });
+
+  it('makes skill mentions in the quote inert', () => {
+    expect(quotedMessage('run /review now', 'why?')).toBe('Regarding:\n> run `/review` now\n\nwhy?');
+    expect(quotedMessage('/deploy then /review', 'why?')).toBe('Regarding:\n> `/deploy` then `/review`\n\nwhy?');
+  });
+
+  it('leaves paths and URLs in the quote untouched', () => {
+    expect(quotedMessage('/etc/hosts https://example.com/review', 'why?')).toBe(
+      'Regarding:\n> /etc/hosts https://example.com/review\n\nwhy?'
+    );
+  });
 });
 
 describe('clampQuote', () => {

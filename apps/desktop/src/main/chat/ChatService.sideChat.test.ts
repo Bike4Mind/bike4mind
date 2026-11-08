@@ -35,8 +35,8 @@ describe('ChatService.startSideChat', () => {
     });
   });
 
-  async function chatParent(): Promise<ChatSession> {
-    const created = await store.create('test-model');
+  async function chatParent(approvalMode?: ChatSession['approvalMode']): Promise<ChatSession> {
+    const created = await store.create('test-model', { approvalMode });
     await store.appendMessage(created.id, {
       id: 'u1',
       role: 'user',
@@ -83,6 +83,14 @@ describe('ChatService.startSideChat', () => {
     await service.startSideChat({ sessionId: parent.id, selection: 'monoid' });
     expect((await store.get(parent.id))?.messages).toEqual(parent.messages);
     expect(post).not.toHaveBeenCalled();
+  });
+
+  it.each(['full', 'auto'] as const)('starts with auto approval for a parent with %s approval', async approvalMode => {
+    const parent = await chatParent(approvalMode);
+    const result = await service.startSideChat({ sessionId: parent.id, selection: 'monoid' });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.session.approvalMode).toBe('auto');
+    expect((await store.get(result.session.id))?.approvalMode).toBe('auto');
   });
 
   it("shares a Code parent's checkout rather than cutting a worktree", async () => {
