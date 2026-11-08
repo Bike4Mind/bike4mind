@@ -163,6 +163,13 @@ describe('readReasons', () => {
     ]);
   });
 
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -0.1, 1.1])(
+    'discards an unusable reason probability %s',
+    probability => {
+      expect(readReasons([{ type: 'predicate', name: 'signupBurst', probability }])).toEqual([]);
+    }
+  );
+
   it('keeps nothing when no factor clears the bar, and skips unusable answers', () => {
     expect(readReasons(predicates({}))).toEqual([]);
     expect(readReasons([{ type: 'refusal', name: 'x' }, undefined])).toEqual([]);
@@ -193,6 +200,21 @@ describe('assessShadowDetection', () => {
         { key: 'signupBurst', probability: 0.88 },
         { key: 'anonymizedNetwork', probability: 0.75 },
       ],
+    });
+  });
+
+  it('records an unknown result when the provider omits the required reason answers', async () => {
+    mocks.providerDecide.mockResolvedValue({
+      ...answer({ abuse: 0.7, legitimate_automation: 0.1, insufficient_evidence: 0.2 }),
+      answers: [
+        { type: 'choice', probabilities: { abuse: 0.7, legitimate_automation: 0.1, insufficient_evidence: 0.2 } },
+      ],
+    });
+    await run();
+    expect(mocks.save.mock.calls[0][0]).toMatchObject({
+      result: 'unknown',
+      failure: 'malformed_response',
+      reasons: [],
     });
   });
 

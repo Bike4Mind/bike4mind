@@ -8,6 +8,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { z } from 'zod';
 import {
   ACCOUNT_CAMPAIGN_AXIS_OF,
   ABUSE_ASSESSMENT_EVIDENCE_VERSION,
@@ -18,6 +19,8 @@ import {
   RISK_EVIDENCE_MISSING_REASONS,
   RISK_EVIDENCE_VERSION,
   abuseAssessmentFeatureSummarySchema,
+  abuseAssessmentAccountSchema,
+  abuseAssessmentAccountProfileSchema,
   riskEvidenceFactValueSchemas,
   type AbuseAssessmentAccount,
   type AbuseAssessmentAccountProfile,
@@ -33,6 +36,13 @@ import {
   type RiskEvidenceSummary,
   type ShadowDetectionItem,
 } from '@bike4mind/common';
+
+const providerSummarySchema = abuseAssessmentFeatureSummarySchema.extend({
+  evidenceVersion: z.literal(ABUSE_ASSESSMENT_EVIDENCE_VERSION),
+  accounts: z
+    .array(abuseAssessmentAccountSchema.extend({ profile: abuseAssessmentAccountProfileSchema.nullable() }))
+    .max(ABUSE_ASSESSMENT_MAX_ACCOUNTS),
+});
 
 export type AssessedAccountSource = {
   id: string;
@@ -225,7 +235,7 @@ export function buildFeatureSummary({
   );
 
   const build = (kept: AbuseAssessmentAccount[]): AbuseAssessmentFeatureSummary =>
-    abuseAssessmentFeatureSummarySchema.parse({
+    providerSummarySchema.parse({
       evidenceVersion: ABUSE_ASSESSMENT_EVIDENCE_VERSION,
       detection: {
         detector: detection.detector,

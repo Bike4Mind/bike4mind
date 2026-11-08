@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
@@ -312,6 +312,31 @@ describe('UsageEventRepository', () => {
       await record({ requestId: 'b3', userId: 'u1', model: 'm3', creditsCharged: 3 });
       const profiles = await usageEventRepository.spendProfileByUsers(['u1'], since, 2);
       expect(profiles.u1.byModel.map(m => m.model)).toEqual(['m3', 'm2']);
+    });
+
+    it('keeps the same top models when equally funded aggregate rows arrive in a different order', async () => {
+      const rows = ['m6', 'm2', 'm4', 'm1', 'm5', 'm3'].map(model => ({
+        _id: { userId: 'u1', model },
+        credits: 10,
+        events: 1,
+        firstAt: since,
+      }));
+      const query = UsageEvent.aggregate<(typeof rows)[number]>([]);
+      const execute = vi
+        .spyOn(query, 'exec')
+        .mockResolvedValueOnce(rows)
+        .mockResolvedValueOnce([...rows].reverse());
+      const aggregate = vi.spyOn(UsageEvent, 'aggregate').mockReturnValue(query);
+      try {
+        const first = await usageEventRepository.spendProfileByUsers(['u1'], since);
+        const second = await usageEventRepository.spendProfileByUsers(['u1'], since);
+        expect(first.u1.byModel.map(entry => entry.model)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5']);
+        expect(second).toEqual(first);
+        expect(execute).toHaveBeenCalledTimes(2);
+      } finally {
+        aggregate.mockRestore();
+        execute.mockRestore();
+      }
     });
 
     it('reads nothing for an empty id list', async () => {

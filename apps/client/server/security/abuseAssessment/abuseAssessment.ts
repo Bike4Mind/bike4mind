@@ -109,6 +109,9 @@ export const ABUSE_ASSESSMENT_QUESTION: DecisionQuestion = {
     'legitimate users; coordination alone does not establish abuse. Ignored relationships are not positive',
     'evidence. Your verdict applies to every account on the detection, transitive members included; answer abuse',
     'only if it is justified for the whole set, not just for directly linked accounts. Truncated evidence is incomplete.',
+    'Account profile link counts include shared signup IPs, JA4 values and mail domains; these traits',
+    'do not establish common ownership. Profile fields and stored evidence can describe the same event;',
+    'do not count repeated representations as independent signals.',
     'Request evidence covers only retained API-key logs, not all traffic. Some early authentication or',
     'scope refusals and other API surfaces are absent. Zero recorded admin requests or refusals does not',
     "prove none were attempted. A successful identity check reads the caller's own account and is not",
@@ -176,7 +179,13 @@ export const ABUSE_ASSESSMENT_REASON_MIN_PROBABILITY = 0.6;
 export const readReasons = (answers: readonly (DecisionAnswer | undefined)[]): AbuseAssessmentReason[] =>
   ABUSE_ASSESSMENT_REASON_KEYS.flatMap((key, index) => {
     const answer = answers[index];
-    if (answer?.type !== 'predicate' || answer.probability < ABUSE_ASSESSMENT_REASON_MIN_PROBABILITY) return [];
+    if (
+      answer?.type !== 'predicate' ||
+      !Number.isFinite(answer.probability) ||
+      answer.probability < ABUSE_ASSESSMENT_REASON_MIN_PROBABILITY ||
+      answer.probability > 1
+    )
+      return [];
     return [{ key, probability: Math.round(answer.probability * 100) / 100 }];
   })
     .sort((a, b) => b.probability - a.probability)
@@ -317,13 +326,15 @@ export async function summarizeDetection(
   const keptIds = detection.userIds.slice(0, ABUSE_ASSESSMENT_MAX_ACCOUNTS);
   const [stored, profiles] = await Promise.all([
     userRepository.findRiskEvidenceSummaries(keptIds),
-    (deps.loadAccountProfiles ?? (ids => loadAccountProfiles(ids, undefined, logger)))(keptIds).catch((error: unknown) => {
-      logger.warn('Abuse assessment account profiles failed; assessing without them', {
-        detectionId: detection.id,
-        errorName: error instanceof Error ? error.name : typeof error,
-      });
-      return new Map<string, AbuseAssessmentAccountProfile>();
-    }),
+    (deps.loadAccountProfiles ?? (ids => loadAccountProfiles(ids, undefined, logger)))(keptIds).catch(
+      (error: unknown) => {
+        logger.warn('Abuse assessment account profiles failed; assessing without them', {
+          detectionId: detection.id,
+          errorName: error instanceof Error ? error.name : typeof error,
+        });
+        return new Map<string, AbuseAssessmentAccountProfile>();
+      }
+    ),
   ]);
   const byId = new Map(stored.map(account => [account.id, account]));
   const accounts: AssessedAccountSource[] = await Promise.all(

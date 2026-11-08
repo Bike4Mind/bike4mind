@@ -207,6 +207,18 @@ describe('ShadowDetectionAssessmentPanel', () => {
     expect(screen.queryByTestId('abuse-assessment-reasons')).toBeNull();
   });
 
+  it('renders older assessments without profile or reason fields', () => {
+    hooks.useAbuseAssessments.mockReturnValue({
+      data: [makeItem({ reasons: undefined, featureSummary: { accounts: [{ ref: 'acct_1' }] } })],
+      isPending: false,
+      error: null,
+    });
+    renderPanel();
+    expect(screen.getByTestId('shadow-detection-assessment-result')).toBeTruthy();
+    expect(screen.queryByTestId('abuse-assessment-reasons')).toBeNull();
+    expect(screen.queryByTestId('shadow-detection-assessment-profiles')).toBeNull();
+  });
+
   it('renders unknown with its failure in plain words', () => {
     hooks.useAbuseAssessments.mockReturnValue({
       data: [makeItem({ result: 'unknown', probabilities: [], confidence: null, failure: 'provider_overloaded' })],

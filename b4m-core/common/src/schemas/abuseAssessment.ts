@@ -6,7 +6,7 @@ import {
   ACCOUNT_CAMPAIGN_MEMBERSHIPS,
   ACCOUNT_CAMPAIGN_RELATIONSHIPS,
 } from './accountCampaign';
-import { RISK_EVIDENCE_MISSING_REASONS, riskEvidenceFactValueSchemas } from './riskEvidence';
+import { RISK_EVIDENCE_MISSING_REASONS, RISK_EVIDENCE_VERSION, riskEvidenceFactValueSchemas } from './riskEvidence';
 import { SHADOW_DETECTION_VERDICTS, SHADOW_DETECTORS } from './shadowDetection';
 import { completionSynchronyEvidenceSchema } from './completionSynchrony';
 import { completionSequenceEvidenceSchema } from './completionSequence';
@@ -194,8 +194,8 @@ export const abuseAssessmentAccountSchema = z.strictObject({
   evidenceAgeHours: z.number().int().nullable(),
   evidence: abuseAssessmentAccountEvidenceSchema.nullable(),
   requests: abuseAssessmentRequestActivitySchema.optional(),
-  /** Null when the account could not be read. */
-  profile: abuseAssessmentAccountProfileSchema.nullable(),
+  /** Null when unreadable; earlier producers may omit this additive field. */
+  profile: abuseAssessmentAccountProfileSchema.nullable().optional(),
 });
 export type AbuseAssessmentAccount = z.infer<typeof abuseAssessmentAccountSchema>;
 
@@ -278,9 +278,9 @@ export const assessmentCompletionSynchronySchema = z.discriminatedUnion('status'
   }),
 ]);
 
-/** Exactly what the provider receives. Strict, so a field added upstream never rides along. */
+/** Published summary shapes. Strict allowlists also keep earlier producer payloads readable. */
 export const abuseAssessmentFeatureSummarySchema = z.strictObject({
-  evidenceVersion: z.literal(ABUSE_ASSESSMENT_EVIDENCE_VERSION),
+  evidenceVersion: z.union([z.literal(RISK_EVIDENCE_VERSION), z.literal(ABUSE_ASSESSMENT_EVIDENCE_VERSION)]),
   detection: z.strictObject({
     detector: z.enum(SHADOW_DETECTORS),
     detectorPolicyVersion: z.number().int(),
@@ -339,8 +339,8 @@ export const abuseAssessmentItemSchema = z.object({
   /** The model's distribution; empty for unknown. Not calibrated for abuse; read it as a hint. */
   probabilities: z.array(abuseAssessmentProbabilitySchema),
   confidence: z.number().nullable(),
-  /** The factors the model found most present, strongest first; empty for unknown and policy v1 rows. */
-  reasons: z.array(abuseAssessmentReasonSchema).max(ABUSE_ASSESSMENT_MAX_REASONS),
+  /** The factors the model found most present; older producers may omit this additive field. */
+  reasons: z.array(abuseAssessmentReasonSchema).max(ABUSE_ASSESSMENT_MAX_REASONS).optional(),
   /** The configured model, and the version the provider reported answering with. */
   model: z.enum(DECISION_MODEL_IDS),
   modelVersion: z.string().nullable(),

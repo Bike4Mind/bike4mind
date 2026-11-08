@@ -3,7 +3,7 @@ import { Box, Stack, Typography } from '@mui/joy';
 import React from 'react';
 
 /**
- * The advisory model's strongest reasons for an assessment. A reason is a fixed key the model
+ * The advisory model's most confident factors in the supplied evidence. A reason is a fixed key the model
  * answered yes to with a probability (questions in server/security/abuseAssessment/abuseAssessment.ts),
  * so every line shown here is worded by this file, never by the model.
  */
@@ -26,7 +26,7 @@ export const AbuseAssessmentReasons: React.FC<Props> = ({ reasons }) => {
   return (
     <Stack gap={0.25} data-testid="abuse-assessment-reasons">
       <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-        What the model weighed most
+        Factors identified by the model
       </Typography>
       <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
         {reasons.map(reason => (

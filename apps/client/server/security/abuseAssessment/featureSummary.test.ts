@@ -6,6 +6,8 @@ import {
   abuseAssessmentFeatureSummarySchema,
   type AccountCampaignGroup,
   type AbuseAssessmentAccountProfile,
+  type AbuseAssessmentAccount,
+  type AbuseAssessmentFeatureSummary,
   type RiskEvidenceSummary,
   type ShadowDetectionItem,
 } from '@bike4mind/common';
@@ -152,6 +154,31 @@ const campaign = (): AccountCampaignGroup => {
     totals: { direct: 1, transitive: 1, links: 1 },
   };
 };
+
+describe('published assessment compatibility', () => {
+  it('accepts an older typed account and v1 summary without the additive profile field', () => {
+    const account: AbuseAssessmentAccount = {
+      ref: 'acct_1',
+      accountAgeHours: 1,
+      evidenceAgeHours: null,
+      evidence: null,
+    };
+    const summary: AbuseAssessmentFeatureSummary = {
+      evidenceVersion: RISK_EVIDENCE_VERSION,
+      detection: {
+        detector: 'signupNetworkBurst',
+        detectorPolicyVersion: 1,
+        windowMinutes: 60,
+        hostingNetwork: null,
+        signals: [],
+      },
+      accounts: [account],
+      accountsOmitted: 0,
+      group: null,
+    };
+    expect(abuseAssessmentFeatureSummarySchema.safeParse(summary).success).toBe(true);
+  });
+});
 
 describe('buildFeatureSummary', () => {
   it('projects campaign relationships and rarity without raw identifiers or labels', () => {

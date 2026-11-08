@@ -390,7 +390,14 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       profile.byModel.push({ model: row._id.model ?? null, credits: row.credits, events: row.events });
     }
     for (const profile of Object.values(profiles)) {
-      profile.byModel = profile.byModel.sort((a, b) => b.credits - a.credits).slice(0, maxModels);
+      profile.byModel = profile.byModel
+        .sort((a, b) => {
+          const leftModel = a.model ?? '';
+          const rightModel = b.model ?? '';
+          const modelOrder = leftModel < rightModel ? -1 : leftModel > rightModel ? 1 : 0;
+          return b.credits - a.credits || modelOrder;
+        })
+        .slice(0, maxModels);
     }
     return profiles;
   }

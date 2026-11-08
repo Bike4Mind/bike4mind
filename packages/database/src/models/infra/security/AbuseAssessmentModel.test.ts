@@ -33,6 +33,13 @@ describe('abuseAssessmentRepository.findLatestJudgedForDetections', () => {
     ]);
   });
 
+  it('normalizes the missing reasons on an older stored assessment', async () => {
+    await insert('legacy', 'abuse', '2026-11-01T00:00:00Z');
+    const rows = await abuseAssessmentRepository.listForDetection('legacy');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].reasons).toEqual([]);
+  });
+
   it('reads nothing for no detections', async () => {
     await expect(abuseAssessmentRepository.findLatestJudgedForDetections([])).resolves.toEqual([]);
   });

@@ -17,7 +17,7 @@ const SIGNUP = new Date('2026-11-01T10:00:00Z');
 const farmAccount = (overrides: Partial<UserAccountRiskProfile> = {}): UserAccountRiskProfile => ({
   id: '65f0000000000000000000a1',
   createdAt: SIGNUP,
-  email: 'jordan+x7k2q9@outlook.com',
+  email: 'jordan+x7k2q9r8@outlook.com',
   signupMethod: 'otc',
   signupIp: '198.51.100.4',
   signupJa4: null,

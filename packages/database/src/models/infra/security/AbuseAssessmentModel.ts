@@ -132,10 +132,10 @@ export class AbuseAssessmentRepository {
 
   /** Writes the latest result for a cache key and counts the attempt; a judgment replaces an unknown. */
   async save(input: SaveAbuseAssessmentInput): Promise<AbuseAssessmentItem> {
-    const { cacheKey, model: decisionModel, ...fields } = input;
+    const { cacheKey, model: decisionModel, reasons = [], ...fields } = input;
     const doc = await AbuseAssessmentModel.findOneAndUpdate(
       { cacheKey },
-      { $set: { ...fields, decisionModel }, $inc: { attempts: 1 } },
+      { $set: { ...fields, reasons, decisionModel }, $inc: { attempts: 1 } },
       { upsert: true, new: true, lean: true }
     );
     return toItem(doc as unknown as LeanAbuseAssessment);
