@@ -334,11 +334,12 @@ describe('youngAccountSpendSection', () => {
     const text = await youngAccountSpendSection(hourly, { logGroups, fetch, sleep: async () => {} });
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(text.split('\n').pop()).toBe(
-      'Named lines add up to 1.08 of the 2.59 USD measured; the rest was not searchable yet, so a top account may be missing or understated.'
+      'Named lines add up to 1.08 of the 2.59 USD measured; the remaining spend is not represented in this lookup, so a top account may be missing or understated.'
     );
   });
 
   it('keeps the first read when the re-read fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const fetch = vi
       .fn()
       .mockResolvedValueOnce({ spenders: aggregateSpenders(partialRows), truncated: false })
@@ -346,6 +347,7 @@ describe('youngAccountSpendSection', () => {
     const text = await youngAccountSpendSection(hourly, { logGroups, fetch, sleep: async () => {} });
     expect(text).toContain('`u2`');
     expect(text).toContain('Named lines add up to 1.08');
+    expect(warn).toHaveBeenCalledWith('[youngAccountSpendDetail] catch-up lookup failed; retaining the first result');
   });
 
   it('skips the re-read when it could not finish inside the relay budget', async () => {

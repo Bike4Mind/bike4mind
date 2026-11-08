@@ -192,7 +192,7 @@ export function formatYoungAccountSpenders(
   const coverage =
     !options.truncated && fallsShort(spenders, options.measuredUsd)
       ? `Named lines add up to ${formatUsd(totalUsd(spenders))} of the ${formatUsd(options.measuredUsd as number)} USD measured; ` +
-        'the rest was not searchable yet, so a top account may be missing or understated.'
+        'the remaining spend is not represented in this lookup, so a top account may be missing or understated.'
       : undefined;
   if (spenders.length === 0) {
     return [SECTION_TITLE, 'No account is named on the spend lines for this window.', coverage]
@@ -252,7 +252,11 @@ export async function youngAccountSpendSection(
     if (!result.truncated && fallsShort(result.spenders, measuredUsd) && canReread) {
       await (options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms))))(CATCH_UP_DELAY_MS);
       // A failed re-read keeps the first answer: partial accounts beat none.
-      result = await fetchSpenders(window, { logGroups }).catch(() => result);
+      try {
+        result = await fetchSpenders(window, { logGroups });
+      } catch {
+        console.warn('[youngAccountSpendDetail] catch-up lookup failed; retaining the first result');
+      }
     }
     return formatYoungAccountSpenders(result.spenders, {
       windowEnd: window.end,
