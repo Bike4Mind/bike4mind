@@ -3,6 +3,7 @@ import { Alert, Box, Button, IconButton, LinearProgress, Stack, Typography } fro
 import CloseIcon from '@mui/icons-material/Close';
 import {
   SHADOW_DETECTION_ENFORCE_BAR,
+  isReviewOnlyCompletionDetector,
   shadowDetectionReadiness,
   type ShadowDetectionSummaryRow,
   type ShadowDetectionVerdict,
@@ -173,6 +174,19 @@ const READINESS_COPY = {
 
 /** Conclusive verdicts toward the enforce bar, and whether precision clears it once there are enough. */
 export function EnforceBarTile({ row, testId }: { row: ShadowDetectionSummaryRow; testId: string }) {
+  if (isReviewOnlyCompletionDetector(row.detector)) {
+    return (
+      <StatTile
+        label="Enforcement"
+        value={
+          <Box component="span" data-testid={`${testId}-enforce-bar`} data-status="review_only">
+            Review only
+          </Box>
+        }
+        comparison="No automatic containment"
+      />
+    );
+  }
   const readiness = shadowDetectionReadiness(row);
   const { minConclusive } = SHADOW_DETECTION_ENFORCE_BAR;
   const comparison: ReactNode = READINESS_COPY[readiness.status](Math.max(0, minConclusive - readiness.conclusive));

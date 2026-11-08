@@ -135,7 +135,7 @@ type ReviewerNames = ReadonlyMap<string, string | null>;
 
 const latestVerdictEntry = (row: ShadowDetectionRow): VerdictEntry | null =>
   row.verdicts.reduce<VerdictEntry | null>(
-    (latest, entry) => (!latest || entry.reviewedAt > latest.reviewedAt ? entry : latest),
+    (latest, entry) => (!latest || entry.reviewedAt >= latest.reviewedAt ? entry : latest),
     null
   );
 
@@ -913,7 +913,14 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
   const forRow = <T,>(choice: RowChoice<T>): T | null => (choice?.rowId === row.id ? choice.value : null);
   const verdict = forRow(verdictChoice);
   const conflict = forRow(conflictChoice);
-  const related = context.related.get(row.id) ?? EMPTY_RELATED;
+  const [relatedSnapshot, setRelatedSnapshot] = useState(() => ({
+    rowId: row.id,
+    rows: context.related.get(row.id) ?? EMPTY_RELATED,
+  }));
+  if (relatedSnapshot.rowId !== row.id) {
+    setRelatedSnapshot({ rowId: row.id, rows: context.related.get(row.id) ?? EMPTY_RELATED });
+  }
+  const related = relatedSnapshot.rowId === row.id ? relatedSnapshot.rows : EMPTY_RELATED;
   const applyRelated = related.length > 0 && forRow(skipRelatedChoice) !== true;
   const pickVerdict = useCallback(
     (value: ShadowDetectionVerdict) => setVerdictChoice({ rowId: row.id, value }),
@@ -1146,11 +1153,30 @@ export const ShadowDetectionsTab: React.FC = () => {
   const detections = useShadowDetections(toListQuery(detector, verdict));
   const [grading, setGrading] = useState<ShadowDetectionRow | null>(null);
   const [selection, setSelection] = useState<AdminSelection>({ mode: 'explicit', ids: [] });
-  const [bulkGrading, setBulkGrading] = useState(false);
+  const [bulkGrading, setBulkGrading] = useState<readonly ShadowDetectionRow[] | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [groupAccounts, setGroupAccounts] = useState(false);
   const [sort, setSort] = useState<DataTableSort>();
   const [now] = useState(() => Date.now());
+
+  // A selection and its open dialogs belong to the filters under which they were reviewed.
+  const filterKey = JSON.stringify([detector ?? null, verdict]);
+  const [selectionFilterKey, setSelectionFilterKey] = useState(filterKey);
+  if (selectionFilterKey !== filterKey) {
+    setSelectionFilterKey(filterKey);
+    setSelection({ mode: 'explicit', ids: [] });
+    setBulkGrading(null);
+    setGrading(null);
+    setNotice(null);
+  }
+  // A global placeholder-data policy can leave the previous query's rows selectable while loading.
+  const [settledFilterKey, setSettledFilterKey] = useState(filterKey);
+  if (!detections.isPlaceholderData && settledFilterKey !== filterKey) {
+    setSettledFilterKey(filterKey);
+    setSelection({ mode: 'explicit', ids: [] });
+    setBulkGrading(null);
+    setGrading(null);
+  }
 
   const listed = detections.data?.data;
   const accounts = detections.data?.accounts;
@@ -1468,7 +1494,7 @@ export const ShadowDetectionsTab: React.FC = () => {
           size="sm"
           disabled={selectedRows.length === 0}
           onClick={() => {
-            if (selectedRows.length > 0) setBulkGrading(true);
+            if (selectedRows.length > 0) setBulkGrading([...selectedRows]);
           }}
           data-testid="shadow-detection-bulk-grade-btn"
         >
@@ -1489,12 +1515,12 @@ export const ShadowDetectionsTab: React.FC = () => {
           }}
         />
       )}
-      {bulkGrading && selectedRows.length > 0 && (
+      {bulkGrading && (
         <BulkVerdictDialog
-          rows={selectedRows}
-          onClose={() => setBulkGrading(false)}
+          rows={bulkGrading}
+          onClose={() => setBulkGrading(null)}
           onDone={result => {
-            setBulkGrading(false);
+            setBulkGrading(null);
             setSelection({ mode: 'explicit', ids: result.failed ?? [] });
             setNotice(bulkResultNotice(result));
           }}
