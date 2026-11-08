@@ -1884,6 +1884,29 @@ describe('ModelServerRegistry SSH servers', () => {
       expect(sent.every(request => request.authorization === null)).toBe(true);
     });
 
+    it('does not suggest the name of a saved server it cannot use, which the store would refuse', async () => {
+      const file = memoryFile();
+      await file.write(
+        JSON.stringify({
+          version: 1,
+          servers: [
+            {
+              id: 'a1',
+              name: 'gpu',
+              kind: 'ollama',
+              transport: { type: 'ssh', destination: 'me@gpu', port: 0 },
+              access: 'chat',
+              auth: { type: 'none' },
+            },
+          ],
+        })
+      );
+      const { registry: servers } = sshSetup(file, { 8080: { owner: 'llamacpp', models: 2 } });
+      const result = await probeSsh(servers);
+      expect(result.suggestedName).not.toBe('gpu');
+      expect(result.found?.[0].suggestedName).toBe(result.suggestedName);
+    });
+
     it('suggests names no saved server or other row has, so every row saves as suggested', async () => {
       const { registry: servers } = sshSetup(memoryFile(), {
         11434: 'ollama',

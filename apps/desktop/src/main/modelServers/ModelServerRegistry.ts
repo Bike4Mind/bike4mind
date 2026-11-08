@@ -540,7 +540,12 @@ export class ModelServerRegistry {
     });
     if (discovery.found.length === 0) return failed(discovery.error ?? `${destination} did not answer.`, base);
     await this.load();
-    const saved = [LOCAL_SERVER_NAME, ...[...this.entries.values()].map(entry => entry.record.name)];
+    // The store refuses a name an unusable server still holds, so never suggest one.
+    const saved = [
+      LOCAL_SERVER_NAME,
+      ...[...this.entries.values()].map(entry => entry.record.name),
+      ...[...this.unusable.values()].map(record => record.name),
+    ];
     const found = foundServers(destination, discovery.found, saved);
     const settled = { unencrypted: false, openToAnyone: false };
     if (found.length > 1) {
