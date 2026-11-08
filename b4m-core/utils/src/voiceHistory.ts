@@ -6,6 +6,7 @@
 
 import { IChatHistoryItemDocument } from '@bike4mind/common';
 import { stripToolOutputMarker } from './artifactParser';
+import { historyReplySlots, REPLY_SLOT_SEPARATOR } from './llm/utils';
 
 export interface FormatVoiceHistoryOptions {
   /** Maximum characters for the formatted history (default: 3000) */
@@ -72,12 +73,10 @@ export function formatVoiceHistory(
       lines.push(formatMessage('user', item.prompt, maxCharsPerMessage));
     }
 
-    // First reply only, skipping thinking blocks.
-    if (item.replies && Array.isArray(item.replies)) {
-      const validReply = item.replies.find((reply: string) => !reply.trim().startsWith('<think>'));
-      if (validReply) {
-        lines.push(formatMessage('assistant', stripToolOutputMarker(validReply), maxCharsPerMessage));
-      }
+    // A tool turn's first slot is only its pre-tool preamble, so every non-thinking slot is kept.
+    const reply = Array.isArray(item.replies) ? historyReplySlots(item).join(REPLY_SLOT_SEPARATOR) : '';
+    if (reply) {
+      lines.push(formatMessage('assistant', stripToolOutputMarker(reply), maxCharsPerMessage));
     }
   }
 

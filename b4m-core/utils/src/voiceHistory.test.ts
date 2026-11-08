@@ -184,3 +184,24 @@ describe('formatVoiceHistory - tool output marker', () => {
     expect(result).not.toContain('b4m-tool-output');
   });
 });
+
+describe('formatVoiceHistory - multi-slot replies', () => {
+  const format = (replies: string[]) =>
+    formatVoiceHistory([{ id: 't', prompt: 'Q', replies }] as unknown as IChatHistoryItemDocument[]);
+
+  it('keeps the final answer of a tool turn, not only its preamble', () => {
+    const result = format(['Let me check.', 'It is 72F and sunny.']);
+    expect(result).toContain('Assistant: Let me check.\n\nIt is 72F and sunny.');
+  });
+
+  it('passes a single-slot reply through unchanged', () => {
+    const result = format(['Just one answer.']);
+    expect(result).toContain('Assistant: Just one answer.\n');
+  });
+
+  it('leaves out think slots and empty slots of a multi-slot turn', () => {
+    const result = format(['<think>plan</think>', 'Looking it up.', '  ', '<think>more</think>', 'Found it.']);
+    expect(result).not.toContain('<think>');
+    expect(result).toContain('Assistant: Looking it up.\n\nFound it.\n');
+  });
+});
