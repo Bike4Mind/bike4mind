@@ -305,6 +305,51 @@ describe('POST /api/admin/shadow-detections/verdicts', () => {
     expect(h.userWrite).not.toHaveBeenCalled();
   });
 
+  it('audits committed verdicts and returns failed ids without exposing database errors', async () => {
+    const error = new Error('Private database failure detail');
+    const graded = item({ verdict: 'confirmed_abuse', revision: 1 });
+    h.addVerdicts.mockResolvedValue({
+      updated: [graded],
+      conflicts: [],
+      notFound: [],
+      failed: [{ id: OTHER_ID, error }],
+    });
+    const { req, res } = request('POST', { body: bulkBody() });
+
+    await h.handlers.verdicts.post(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ updated: [{ id: DETECTION_ID }], failed: [OTHER_ID] });
+    expect(res._getData()).not.toContain(error.message);
+    expect(h.record).toHaveBeenCalledExactlyOnceWith(
+      req,
+      expect.objectContaining({ target: expect.objectContaining({ id: DETECTION_ID }) })
+    );
+    expect((req as unknown as { logger: { error: ReturnType<typeof vi.fn> } }).logger.error).toHaveBeenCalledWith(
+      expect.stringContaining(OTHER_ID),
+      error
+    );
+    expect(h.userWrite).not.toHaveBeenCalled();
+  });
+
+  it('keeps partial progress when an audit write also fails', async () => {
+    const graded = item({ verdict: 'confirmed_abuse', revision: 1 });
+    h.addVerdicts.mockResolvedValue({
+      updated: [graded],
+      conflicts: [],
+      notFound: [],
+      failed: [{ id: OTHER_ID, error: new Error('Write failed') }],
+    });
+    h.record.mockRejectedValue(new Error('Audit failed'));
+    const { req, res } = request('POST', { body: bulkBody() });
+
+    await h.handlers.verdicts.post(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ updated: [{ id: DETECTION_ID }], failed: [OTHER_ID] });
+    expect((req as unknown as { logger: { error: ReturnType<typeof vi.fn> } }).logger.error).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     ['no detections', { items: [] }],
     ['a malformed id', { items: [{ id: 'nope', expectedRevision: 0 }] }],

@@ -14,6 +14,7 @@ import {
   type ShadowDetectionVerdictRequest,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { getErrorMessage } from '@client/app/utils/error';
 import { verdictEvalReportSchema, type VerdictEvalWindowDays } from '@client/app/utils/verdictEval';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
@@ -90,6 +91,8 @@ export type ShadowDetectionBulkVerdictResult = {
   /** Moved since the reviewer read them; left alone and returned as they are now. */
   conflicts: ShadowDetectionRow[];
   notFound: string[];
+  failed?: string[];
+  failureMessage?: string;
 };
 
 /**
@@ -105,13 +108,22 @@ export function useShadowDetectionBulkVerdict() {
       const merged: ShadowDetectionBulkVerdictResult = { updated: [], conflicts: [], notFound: [] };
       for (let start = 0; start < request.items.length; start += SHADOW_DETECTION_BULK_VERDICT_LIMIT) {
         const items = request.items.slice(start, start + SHADOW_DETECTION_BULK_VERDICT_LIMIT);
-        const { data } = await api.post<ShadowDetectionBulkVerdictResult>(`${ENDPOINT}/verdicts`, {
-          ...request,
-          items,
-        });
-        merged.updated.push(...data.updated);
-        merged.conflicts.push(...data.conflicts);
-        merged.notFound.push(...data.notFound);
+        try {
+          const { data } = await api.post<ShadowDetectionBulkVerdictResult>(`${ENDPOINT}/verdicts`, {
+            ...request,
+            items,
+          });
+          merged.updated.push(...data.updated);
+          merged.conflicts.push(...data.conflicts);
+          merged.notFound.push(...data.notFound);
+          if (data.failed?.length) merged.failed = [...(merged.failed ?? []), ...data.failed];
+        } catch (error) {
+          return {
+            ...merged,
+            failed: [...(merged.failed ?? []), ...request.items.slice(start).map(item => item.id)],
+            failureMessage: getErrorMessage(error),
+          };
+        }
       }
       return merged;
     },

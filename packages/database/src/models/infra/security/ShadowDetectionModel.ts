@@ -791,25 +791,36 @@ class ShadowDetectionRepository {
 
   /**
    * Appends one verdict, decided once, to several detections, each conditional on its own revision
-   * like addVerdict; a record that moved is returned as a conflict and left alone.
+   * like addVerdict; a record that moved is returned as a conflict and left alone. Retains successful
+   * writes when another item fails, so the caller can audit them and report partial progress.
    */
   async addVerdicts(input: {
     items: { id: string; expectedRevision: number }[];
     verdict: ShadowDetectionVerdict;
     reason: string;
     reviewerId: string;
-  }): Promise<{ updated: ShadowDetectionItem[]; conflicts: ShadowDetectionItem[]; notFound: string[] }> {
+  }): Promise<{
+    updated: ShadowDetectionItem[];
+    conflicts: ShadowDetectionItem[];
+    notFound: string[];
+    failed: { id: string; error: unknown }[];
+  }> {
     const result = {
       updated: [] as ShadowDetectionItem[],
       conflicts: [] as ShadowDetectionItem[],
       notFound: [] as string[],
+      failed: [] as { id: string; error: unknown }[],
     };
     const unique = [...new Map(input.items.map(item => [item.id, item])).values()];
     for (const { id, expectedRevision } of unique) {
-      const outcome = await this.addVerdict({ ...input, id, expectedRevision });
-      if (outcome.status === 'updated') result.updated.push(outcome.item);
-      else if (outcome.status === 'conflict') result.conflicts.push(outcome.item);
-      else result.notFound.push(id);
+      try {
+        const outcome = await this.addVerdict({ ...input, id, expectedRevision });
+        if (outcome.status === 'updated') result.updated.push(outcome.item);
+        else if (outcome.status === 'conflict') result.conflicts.push(outcome.item);
+        else result.notFound.push(id);
+      } catch (error) {
+        result.failed.push({ id, error });
+      }
     }
     return result;
   }

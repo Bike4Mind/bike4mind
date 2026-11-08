@@ -31,7 +31,11 @@ export type DataTablePagination = {
   onPageSizeChange: (pageSize: number) => void;
 };
 /** A header row followed by its rows. Rows in no group render last, without a header. */
-export type DataTableGroup = { id: string; header: ReactNode; rowIds: readonly string[] };
+export type DataTableGroup = {
+  id: string;
+  header: ReactNode | ((visibleCount: number) => ReactNode);
+  rowIds: readonly string[];
+};
 export type DataTableProps<Row> = {
   rows: readonly Row[];
   columns: readonly DataColumn<Row>[];
@@ -525,7 +529,13 @@ function groupSections<Row>(
       placed.add(id);
       return true;
     });
-    if (groupRows.length > 0) sections.push({ id: group.id, header: group.header, rows: groupRows });
+    if (groupRows.length > 0) {
+      sections.push({
+        id: group.id,
+        header: typeof group.header === 'function' ? group.header(groupRows.length) : group.header,
+        rows: groupRows,
+      });
+    }
   }
   const rest = rows.filter(row => !placed.has(getRowId(row)));
   if (rest.length > 0) sections.push({ id: 'ungrouped', rows: rest });

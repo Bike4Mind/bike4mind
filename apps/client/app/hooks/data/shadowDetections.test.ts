@@ -154,7 +154,7 @@ describe('useShadowDetectionVerdict', () => {
 
 describe('useShadowDetectionBulkVerdict', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it('sends a large selection in batches of the server limit and merges the results', async () => {
@@ -162,11 +162,9 @@ describe('useShadowDetectionBulkVerdict', () => {
       id: index.toString(16).padStart(24, '0'),
       expectedRevision: 0,
     }));
-    post
-      .mockResolvedValueOnce({ data: { updated: [row()], conflicts: [], notFound: ['x'] } })
-      .mockResolvedValueOnce({
-        data: { updated: [], conflicts: [row({ verdict: 'legitimate_human' })], notFound: [] },
-      });
+    post.mockResolvedValueOnce({ data: { updated: [row()], conflicts: [], notFound: ['x'] } }).mockResolvedValueOnce({
+      data: { updated: [], conflicts: [row({ verdict: 'legitimate_human' })], notFound: [] },
+    });
     const { result } = renderHook(() => useShadowDetectionBulkVerdict(), { wrapper: createWrapper() });
 
     let outcome: unknown;
@@ -184,6 +182,32 @@ describe('useShadowDetectionBulkVerdict', () => {
       updated: [{ id: DETECTION_ID }],
       conflicts: [{ verdict: 'legitimate_human' }],
       notFound: ['x'],
+    });
+  });
+
+  it('preserves completed batches and reports the failed and unattempted ids for retry', async () => {
+    const items = Array.from({ length: 250 }, (_, index) => ({
+      id: index.toString(16).padStart(24, '0'),
+      expectedRevision: 0,
+    }));
+    post
+      .mockResolvedValueOnce({ data: { updated: [row()], conflicts: [], notFound: [], failed: ['server-failed'] } })
+      .mockRejectedValueOnce(new Error('Connection lost'));
+    const { result } = renderHook(() => useShadowDetectionBulkVerdict(), { wrapper: createWrapper() });
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.mutateAsync({ items, verdict: 'confirmed_abuse', reason: 'Reviewed cohort' });
+    });
+
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(post.mock.calls[1][1].items).toEqual(items.slice(100, 200));
+    expect(outcome).toEqual({
+      updated: [row()],
+      conflicts: [],
+      notFound: [],
+      failed: ['server-failed', ...items.slice(100).map(item => item.id)],
+      failureMessage: 'Connection lost',
     });
   });
 });

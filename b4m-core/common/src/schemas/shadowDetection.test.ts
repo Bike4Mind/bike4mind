@@ -3,8 +3,20 @@ import {
   SHADOW_DETECTION_ENFORCE_BAR,
   shadowDetectionSignalTrip,
   shadowDetectionReadiness,
+  shadowDetectionBulkVerdictResponseSchema,
   type ShadowDetectionSummaryRow,
 } from './shadowDetection';
+
+describe('shadowDetectionBulkVerdictResponseSchema', () => {
+  it('accepts old responses without failed ids and new partial-progress responses', () => {
+    const previous = { updated: [], conflicts: [], notFound: [] };
+    expect(shadowDetectionBulkVerdictResponseSchema.parse(previous)).toEqual(previous);
+    expect(shadowDetectionBulkVerdictResponseSchema.parse({ ...previous, failed: ['detection-id'] })).toEqual({
+      ...previous,
+      failed: ['detection-id'],
+    });
+  });
+});
 
 const row = (counts: Partial<ShadowDetectionSummaryRow>): ShadowDetectionSummaryRow => ({
   detector: 'signupNetworkBurst',

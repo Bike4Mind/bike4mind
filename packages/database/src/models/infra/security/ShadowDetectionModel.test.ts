@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Types } from 'mongoose';
 import { setupMongoTest } from '../../../__test__/utils';
 import { User } from '../../auth/UserModel';
@@ -34,6 +34,10 @@ const grade = (id: string, expectedRevision: number, verdict: 'confirmed_abuse' 
 
 describe('shadowDetectionRepository', () => {
   setupMongoTest();
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   beforeEach(async () => {
     await ShadowDetectionModel.deleteMany({});
@@ -510,5 +514,33 @@ describe('shadowDetectionRepository', () => {
     expect(result.updated.map(item => [item.id, item.verdict])).toEqual([[fresh, 'confirmed_abuse']]);
     expect(result.conflicts.map(item => [item.id, item.verdict])).toEqual([[moved, 'legitimate_human']]);
     expect(result.notFound).toEqual([missing]);
+  });
+
+  it('retains committed verdicts and continues grading after an item write fails', async () => {
+    const first = await shadowDetectionRepository.record(detection());
+    const failed = await shadowDetectionRepository.record(detection());
+    const last = await shadowDetectionRepository.record(detection());
+    const error = new Error('Temporary database failure');
+    const addVerdict = shadowDetectionRepository.addVerdict.bind(shadowDetectionRepository);
+    vi.spyOn(shadowDetectionRepository, 'addVerdict').mockImplementation(async input => {
+      if (input.id === failed) throw error;
+      return addVerdict(input);
+    });
+
+    const result = await shadowDetectionRepository.addVerdicts({
+      items: [first, failed, last].map(id => ({ id, expectedRevision: 0 })),
+      verdict: 'confirmed_abuse',
+      reason: 'Checked each detection',
+      reviewerId: 'admin1',
+    });
+
+    expect(result.updated.map(item => item.id)).toEqual([first, last]);
+    expect(result.failed).toEqual([{ id: failed, error }]);
+    expect(result.conflicts).toEqual([]);
+    expect(result.notFound).toEqual([]);
+    for (const id of [first, last]) {
+      expect(await shadowDetectionRepository.findById(id)).toMatchObject({ verdict: 'confirmed_abuse', revision: 1 });
+    }
+    expect(await shadowDetectionRepository.findById(failed)).toMatchObject({ verdict: null, revision: 0 });
   });
 });
