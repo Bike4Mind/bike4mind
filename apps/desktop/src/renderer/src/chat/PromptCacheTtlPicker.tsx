@@ -4,9 +4,10 @@ import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { PROMPT_CACHE_TTLS, type PromptCacheTtl } from '@bike4mind/common';
+import { DEFAULT_PROMPT_CACHE_TTL, PROMPT_CACHE_TTLS, type PromptCacheTtl } from '@bike4mind/common';
 import type { ChatModelOption } from '@shared/chat';
 import { modelSwitchCredits } from './modelSwitchCost';
+import { ChangedKnob, knobButtonProps } from './tuneChip';
 
 const creditFormat = new Intl.NumberFormat('en-US');
 
@@ -18,31 +19,32 @@ const CHOICES: Record<PromptCacheTtl, { label: string; description: string }> = 
 /**
  * How long the server keeps this conversation's prompt cache, beside the effort picker. Rendered
  * only for a model that takes the 1-hour TTL; each option shows what re-writing the current
- * context at that TTL would cost, so the trade is visible before it is made.
+ * context at that TTL would cost, so the trade is visible before it is made. `compact` hides it at
+ * the default TTL and otherwise adds a reset beside it (see ReasoningEffortPicker).
  */
 export function PromptCacheTtlPicker({
   model,
   ttl,
   contextTokens,
   disabled,
+  compact = false,
   onSelect,
 }: {
   model: ChatModelOption | undefined;
   ttl: PromptCacheTtl;
   contextTokens: number;
   disabled?: boolean;
+  compact?: boolean;
   onSelect: (ttl: PromptCacheTtl) => void;
 }) {
   if (!model?.supportsOneHourCache) return null;
+  if (compact && ttl === DEFAULT_PROMPT_CACHE_TTL) return null;
 
-  return (
+  const picker = (
     <Dropdown>
       <MenuButton
-        size="sm"
-        variant="plain"
-        color="neutral"
+        {...knobButtonProps(compact)}
         disabled={disabled}
-        sx={{ fontWeight: 'normal', minWidth: 0 }}
         slotProps={{ root: { 'data-testid': 'prompt-cache-ttl-picker-btn' } }}
       >
         <Typography level="body-xs" noWrap textColor="inherit">
@@ -83,5 +85,16 @@ export function PromptCacheTtlPicker({
         })}
       </Menu>
     </Dropdown>
+  );
+  if (!compact) return picker;
+  return (
+    <ChangedKnob
+      resetLabel={`Reset cache to ${DEFAULT_PROMPT_CACHE_TTL}`}
+      onReset={() => onSelect(DEFAULT_PROMPT_CACHE_TTL)}
+      disabled={disabled}
+      testId="prompt-cache-ttl-picker-reset-btn"
+    >
+      {picker}
+    </ChangedKnob>
   );
 }

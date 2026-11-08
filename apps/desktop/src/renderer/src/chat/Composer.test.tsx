@@ -69,21 +69,30 @@ function hasRing(props: Partial<Parameters<typeof Composer>[0]> = {}): boolean {
 }
 
 describe('the composer indicator', () => {
+  /** A balance down to 20% of the allowance: low enough that the credits ring stands up. */
+  const low = { ...usage, credits: 10_000, monthlyAllowance: 50_000 };
+
   /**
-   * The whole status line is one ring now. The dot moved to the account strip and the words
-   * went with it, so nothing here is drawn as text - which is exactly why the figure has to
-   * survive as the ring's accessible name rather than disappearing with the label.
+   * The row's standing indicator is the context ring, whose tooltip carries the balance. The
+   * credits ring only joins it once the allowance runs low, so a healthy, rolled-over or
+   * unstated balance draws nothing here.
    */
-  it('draws the ring and nothing else, keeping the figure as its name', () => {
-    expect(statusMarkup()).not.toContain('composer-status-text');
-    expect(statusMarkup()).not.toContain('turn-dot');
-    expect(ringLabel()).toBe('Credits 50% of monthly plan allowance');
-    expect(ringValue()).toBe(50);
+  it('draws no credits ring while the allowance is healthy', () => {
+    expect(hasRing()).toBe(false);
+    expect(hasRing({ usage: { ...usage, credits: 75_000, monthlyAllowance: 50_000 } })).toBe(false);
+    expect(hasRing({ usage: { ...usage, credits: 31_667, monthlyAllowance: null } })).toBe(false);
+  });
+
+  it('draws the ring and nothing else once the allowance runs low, keeping the figure as its name', () => {
+    expect(statusMarkup({ usage: low })).not.toContain('composer-status-text');
+    expect(statusMarkup({ usage: low })).not.toContain('turn-dot');
+    expect(ringLabel({ usage: low })).toBe('Credits 20% of monthly plan allowance');
+    expect(ringValue({ usage: low })).toBe(20);
   });
 
   it('keeps the ring up through a turn in flight', () => {
-    expect(hasRing({ streaming: true })).toBe(true);
-    expect(ringLabel({ streaming: true })).toBe('Credits 50% of monthly plan allowance');
+    expect(hasRing({ usage: low, streaming: true })).toBe(true);
+    expect(ringLabel({ usage: low, streaming: true })).toBe('Credits 20% of monthly plan allowance');
   });
 
   it('floors a tiny positive balance share so it remains visible', () => {
@@ -92,23 +101,12 @@ describe('the composer indicator', () => {
     expect(ringLabel({ usage: tiny })).toBe('Credits &lt;1% of monthly plan allowance');
   });
 
-  it('draws an empty ring when no finite monthly allowance is stated', () => {
-    const unstated = { ...usage, credits: 31_667, monthlyAllowance: null };
-    expect(ringValue({ usage: unstated })).toBe(0);
-    expect(ringLabel({ usage: unstated })).toBe('Credits personal balance; no monthly plan allowance');
-  });
-
-  it('clamps rollover above the allowance to a full arc while stating the real percentage', () => {
-    const rollover = { ...usage, credits: 75_000, monthlyAllowance: 50_000 };
-    expect(ringValue({ usage: rollover })).toBe(100);
-    expect(ringLabel({ usage: rollover })).toBe('Credits 150% of monthly plan allowance');
-  });
-
   // Nothing to measure and nothing to say: the sidebar dot speaks for these, so a ring here
   // would be a glyph standing for nothing.
   it('draws no ring where there is no conversation to measure', () => {
-    expect(hasRing({ disabled: true })).toBe(false);
-    expect(hasRing({ notReady: 'No folder' })).toBe(false);
+    const low = { ...usage, credits: 10_000, monthlyAllowance: 50_000 };
+    expect(hasRing({ usage: low, disabled: true })).toBe(false);
+    expect(hasRing({ usage: low, notReady: 'No folder' })).toBe(false);
   });
 });
 
@@ -599,7 +597,7 @@ describe('the context ring slot', () => {
   );
 
   it('draws the context ring left of the credits ring', () => {
-    const markup = statusMarkup({ contextStatus });
+    const markup = statusMarkup({ contextStatus, usage: { ...usage, credits: 10_000 } });
     const context = markup.indexOf('data-testid="composer-context-ring"');
     expect(context).toBeGreaterThan(-1);
     expect(context).toBeLessThan(markup.indexOf('data-testid="composer-status"'));
