@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   StorageLimitError,
   type IGenerationJobDocument,
+  type ImageProviderId,
   type MusicProviderId,
   type StorageLimitErrorInfo,
   type VideoProviderId,
@@ -93,6 +94,7 @@ import {
   getGenerationJobEngine,
   getMusicJobDeps,
   getVideoJobDeps,
+  selectImageProviderKey,
   selectMusicProviderKey,
   selectProviderKey,
   toJobUpdate,
@@ -234,6 +236,25 @@ describe('music provider key selection', () => {
   });
 });
 
+describe('image provider key selection', () => {
+  const keys = { openai: 'o-key', gemini: 'g-key', xai: 'x-key' } as never;
+
+  it('maps openai and gemini to the keys the chat image paths use', () => {
+    expect(selectImageProviderKey('openai', keys)).toBe('o-key');
+    expect(selectImageProviderKey('gemini', keys)).toBe('g-key');
+    expect(usableApiKey(selectImageProviderKey('openai', { openai: 'expired' } as never))).toBeNull();
+  });
+
+  it('gives providers without an image job adapter no key', () => {
+    expect(selectImageProviderKey('bfl', keys)).toBeNull();
+    expect(selectImageProviderKey('xai', keys)).toBeNull();
+  });
+
+  it('throws for a provider id with no mapping', () => {
+    expect(() => selectImageProviderKey('unmapped' as ImageProviderId, keys)).toThrow(/no API key mapping/);
+  });
+});
+
 describe('checkStorageFor', () => {
   const info: StorageLimitErrorInfo = {
     errorCode: 'storage_limit_exceeded',
@@ -297,6 +318,20 @@ describe('toJobUpdate', () => {
       payload: { ...baseJob.payload, output: { contentType: 'video/mp4', durationSeconds: 4 } },
     } as IGenerationJobDocument);
     expect(withoutFile.job.output).toEqual({ contentType: 'video/mp4', durationSeconds: 4 });
+  });
+
+  it('maps an image job output, which has no duration', () => {
+    const update = toJobUpdate({
+      ...baseJob,
+      kind: 'image',
+      state: 'succeeded',
+      payload: {
+        providerId: 'openai',
+        request: { model: 'gpt-image-1', mode: 'generate', prompt: 'p' },
+        output: { location: 'files', s3Key: 'k', contentType: 'image/png', bytes: 3, fileId: 'f1' },
+      },
+    } as IGenerationJobDocument);
+    expect(update.job.output).toEqual({ fileId: 'f1', contentType: 'image/png' });
   });
 
   it('maps a music job output without its lyrics', () => {

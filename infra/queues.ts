@@ -1198,6 +1198,8 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
       eventBus,
       generationCallbackQueue,
       generationJobQueue,
+      // A masked image edit converts the mask to PNG there.
+      imageProcessor,
     ],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
