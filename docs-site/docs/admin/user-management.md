@@ -15,7 +15,9 @@ In a user's Overview, **Signup classification** explains the Users table's **Sus
 
 In **Risk evidence**, **Observed** means the source returned data. It is not a safe-account judgment. In Sign-ins, matching JA4 values are described as TLS fingerprint matches; they do not prove the same device or operator.
 
-In Admin > Detections, start with **Review evidence**. Inspect the linked accounts and their Activity before recording a judgment. A suggested response describes the detector's recommendation; recording a review does not apply that response to account access.
+In Admin > Detections, start with **Review evidence**. Inspect the linked accounts and their Activity before recording a judgment. A suggested response describes the detector's recommendation; recording a review does not apply that response to account access. The **How this page works** guide combines these steps with the shadow-mode and verdict explanations. You can dismiss it and restore it from the button with the same name.
+
+Use **Group detections by account** to review related rows together. Selecting rows opens a bulk verdict action; the dialog can also grade other loaded, unreviewed detections for the same single account. Group counts distinguish the current page from all loaded rows. **Save and next** follows the displayed order. Revision conflicts and failed writes remain visible, and confirmed successful writes are retained when a later request fails. A verdict and its history show the reviewing admin when available.
 
 If you need more time, choose **Watch these accounts** and give the watch a name and reason. The watch saves the exact group you selected. You can find open watches on the admin dashboard and in Detections even after the AI advisory expires, changes verdict, or is reviewed. Groups with omitted participants cannot be saved as a watch; open an individual detection with a complete group instead. A capped activity scan can still be watched when its selected participant list is complete.
 
