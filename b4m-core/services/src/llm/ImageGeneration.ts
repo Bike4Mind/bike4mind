@@ -40,7 +40,6 @@ import {
   getMaxReferenceImages,
   isGPTImageModel,
   rejectsTransparentBackground,
-  clampImageQualityForModel,
   isGeminiImageModel,
   isImageServeable,
   isKontextModel,
@@ -89,12 +88,8 @@ import { z } from 'zod';
 import { recordGeneratedImages } from './recordGeneratedImages';
 import { saveGeneratedImage, type SaveGeneratedAssetFn } from './saveGeneratedImage';
 import { fromZodError } from 'zod-validation-error';
-import {
-  OMITTED_QUALITY_TIER,
-  OpenAICostInput,
-  OpenAIGPTImageInput,
-  OpenAIImageCostCalculator,
-} from './imageCostCalculator/OpenAIImageCostCalculator';
+import { resolveBilledImageQuality } from '../imageCost';
+import { OpenAICostInput, OpenAIImageCostCalculator } from './imageCostCalculator/OpenAIImageCostCalculator';
 import { FluxImageCostCalculator } from './imageCostCalculator/FluxImageCostCalculator';
 import { GeminiImageCostCalculator } from './imageCostCalculator/GeminiImageCostCalculator';
 import { CostInput } from './imageCostCalculator/types';
@@ -105,28 +100,6 @@ import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
 
 /** BFL models with no output_format field (flux-3-image): BFL picks the format, so none is persisted. */
 const bflPicksOutputFormat = (model: string): boolean => isBflImageModel(model) && !supportsBflOutputFormat(model);
-
-/**
- * The tier a GPT-Image request is both billed at and rendered at: standard -> medium,
- * hd -> high, and an omitted tier pinned to OMITTED_QUALITY_TIER. Quality is returned
- * unchanged for every other model family, none of which has a tier concept.
- *
- * Both callers below read this one function - estimateCredits (the reservation) and the
- * openaiParams dispatch (the render) - so the two cannot disagree.
- *
- * Pinning an omitted tier is the #3007 fix. Left undefined, the parameter is dropped from
- * the OpenAI call entirely, OpenAI applies its own 'auto' and can render at high effort,
- * while the calculator has already held the medium price - and image credits are held once,
- * before the call, and settlement cannot charge above that hold. Pinning moves nobody's bill
- * (the pin IS the billed tier); a caller who wants OpenAI's dynamic effort asks for it with
- * an explicit 'auto', which bills at the ceiling. Do not restore the undefined here without
- * repricing the omitted case in OpenAIImageCostCalculator.normalizeInput.
- */
-function mapQualityForModel(model: string, quality: OpenAIGPTImageInput['quality']): OpenAIGPTImageInput['quality'] {
-  if (!isGPTImageModel(model)) return quality;
-  if (!quality) return OMITTED_QUALITY_TIER;
-  return clampImageQualityForModel(model, quality === 'standard' ? 'medium' : quality === 'hd' ? 'high' : quality);
-}
 
 export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
@@ -1040,7 +1013,7 @@ export class ImageGenerationService {
           {
             model,
             size: effectiveSize,
-            quality: mapQualityForModel(model, quality),
+            quality: resolveBilledImageQuality(model, quality),
             inputImageCount: (fileImage?.filePath ? 1 : 0) + referenceImages.length,
           },
           logger
@@ -1440,9 +1413,9 @@ export class ImageGenerationService {
         if (isGPTImageModel(model)) {
           // GPT-Image models don't support 'style' or 'response_format' parameters.
           // Same mapping estimateCredits billed against, so the render matches the charge -
-          // including the omitted case, which mapQualityForModel pins rather than dropping.
+          // including the omitted case, which resolveBilledImageQuality pins rather than dropping.
           // The truthiness guard is kept for the unrecognized-value case only.
-          const mappedQuality = mapQualityForModel(model, quality);
+          const mappedQuality = resolveBilledImageQuality(model, quality);
           if (mappedQuality) {
             openaiParams.quality = mappedQuality;
           }

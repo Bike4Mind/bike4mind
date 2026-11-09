@@ -468,7 +468,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   broker('queue:infra/queues.ts:generationJobDLQ', '0eb29387a6952921e713298ba6acf3cd1aef5f60d84e67cffe177843b714f38f'),
   wired(
     'queue:infra/queues.ts:generationJobQueue',
-    '77d257af6ce49d148226e2905975e4d521c61454e28700fe3813e608573eb440',
+    '7e6d813e5a702b47db2e77d65f3f5f406ea5485e3468ff549448ea2b21df875d',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:generationJobQueue',
