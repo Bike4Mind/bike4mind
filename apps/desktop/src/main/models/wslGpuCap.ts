@@ -57,7 +57,8 @@ export function isWslHost(
 // availableMemoryForGPU): added in v0.30.0-rc0, checked through v0.40.15. Newer ones may carry the upstream fix.
 const FIRST_CAPPED_RELEASE = [0, 30, 0];
 const LAST_CAPPED_RELEASE = [0, 40, 15];
-// Release builds report their tag; source builds report 0.0.0 or a `git describe` version such as 0.40.13-11-ge7ff614.
+// A build reports its tag, 0.0.0 or a `git describe` version such as 0.40.13-11-ge7ff614. A patched build can report a
+// plain release number, so a version in range is flagged only once the running binary is read (ollamaWslPatch.ts).
 const RELEASE_VERSION = /^v?(\d+)\.(\d+)\.(\d+)(?:-rc\d+)?$/;
 
 const compareParts = (a: readonly number[], b: readonly number[]) => {
@@ -66,8 +67,8 @@ const compareParts = (a: readonly number[], b: readonly number[]) => {
 };
 
 /**
- * An Ollama release, by its /api/version, known to hold an integrated GPU under WSL to the VM's memory. A source build
- * may carry the fix and a newer release may include it, so neither counts, nor does a missing version.
+ * An /api/version in the releases known to hold an integrated GPU under WSL to the VM's memory. A newer release may
+ * include the fix, so it does not count, nor does a source build or a missing version.
  */
 export function releaseCapsWslGpu(version: string | null): boolean {
   const match = version === null ? null : RELEASE_VERSION.exec(version.trim());

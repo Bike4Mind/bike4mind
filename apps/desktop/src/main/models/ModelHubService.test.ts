@@ -214,6 +214,7 @@ function harness(
       | 'modelSettings'
       | 'wslHost'
       | 'integratedGpu'
+      | 'ollamaWslPatch'
       | 'onRatingsChanged'
       | 'flashAttention'
       | 'specs'
@@ -1305,10 +1306,13 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
       desktopInWsl?: boolean;
       hardware?: HardwareProfile;
       defaultStoreDir?: () => string | null;
-      deps?: Pick<ModelHubServiceDeps, 'onRatingsChanged' | 'flashAttention'>;
+      /** What reading the running Ollama binary found: false lacks the fix, null could not be read. */
+      patched?: boolean | null;
+      deps?: Partial<Pick<ModelHubServiceDeps, 'onRatingsChanged' | 'flashAttention' | 'ollamaWslPatch'>>;
     } = {}
   ) {
     const integratedGpu = vi.fn(async () => (options.integrated === undefined ? true : options.integrated));
+    const ollamaWslPatch = vi.fn(async (_url: string) => (options.patched === undefined ? false : options.patched));
     const made = harness({
       hardware: options.hardware ?? N1X,
       version: options.version === undefined ? '0.40.15' : options.version,
@@ -1316,6 +1320,7 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
       deps: {
         wslHost: options.wslHost ?? true,
         integratedGpu,
+        ollamaWslPatch,
         pathExists: async path => (options.desktopInWsl ? path.startsWith('/') : !path.startsWith('/')),
         defaultStoreDir: options.defaultStoreDir ?? (() => (options.desktopInWsl ? LINUX_STORE : WINDOWS_STORE)),
         ...options.deps,
@@ -1328,7 +1333,7 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
       ...(await inspect(name, inspectOptions)),
       contents: { template: null, license: null, modelBlob: SHA, storeDir },
     }));
-    return { ...made, integratedGpu };
+    return { ...made, integratedGpu, ollamaWslPatch };
   }
 
   const installedFits = async (service: ModelHubService, serverId?: string) => {
@@ -1386,6 +1391,68 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
   ])('does not flag badges when %s', async (_case, options) => {
     const { service } = flagHarness(options);
     for (const fit of (await settledFits(service)).values()) expect(fit).not.toHaveProperty('warning');
+  });
+
+  it('flags a release known to limit the GPU once its running binary is read without the fix', async () => {
+    const { service, runtime, ollamaWslPatch } = flagHarness({ version: '0.40.13', patched: false });
+    expect((await settledFits(service)).get('small:q4')?.warning).toMatch(/^Ollama 0\.40\.13 in WSL limits/);
+    expect(ollamaWslPatch).toHaveBeenCalledWith(runtime.baseUrl);
+  });
+
+  it.each([
+    ['carries the WSL GPU memory fix', { patched: true }],
+    ['cannot be read, or its read timed out', { patched: null }],
+    ['cannot be read from where Desktop runs, as on Windows', { deps: { ollamaWslPatch: undefined } }],
+    [
+      'check fails',
+      {
+        deps: {
+          ollamaWslPatch: async () => {
+            throw new Error('permission denied');
+          },
+        },
+      },
+    ],
+  ])('does not flag a release known to limit the GPU when its running binary %s', async (_case, options) => {
+    const { service } = flagHarness({ version: '0.40.13', ...options });
+    for (const fit of (await settledFits(service)).values()) expect(fit).not.toHaveProperty('warning');
+  });
+
+  it('logs once that the running binary could not be read', async () => {
+    const { service, warn } = flagHarness({ patched: null });
+    await settledFits(service);
+    await installedFits(service);
+    const logged = warn.mock.calls.filter(([message]) => message.includes('carries the WSL GPU memory fix'));
+    expect(logged).toHaveLength(1);
+  });
+
+  it.each([
+    ['the release is not known to limit the GPU', { version: '0.40.16' }],
+    ['Desktop runs on native Linux or macOS', { wslHost: false }],
+    ['the GPU is discrete', { integrated: false }],
+    ['Ollama runs on Windows itself', { storeDir: WINDOWS_STORE }],
+  ])('does not read the running binary when %s', async (_case, options) => {
+    const { service, ollamaWslPatch } = flagHarness(options);
+    await settledFits(service);
+    expect(ollamaWslPatch).not.toHaveBeenCalled();
+  });
+
+  it('follows the running binary from one read to the next', async () => {
+    const { service, ollamaWslPatch } = flagHarness({ version: '0.40.13' });
+    expect((await settledFits(service)).get('small:q4')?.warning).toMatch(/^Ollama 0\.40\.13 in WSL limits/);
+    ollamaWslPatch.mockResolvedValue(true);
+    expect((await installedFits(service)).get('small:q4')).not.toHaveProperty('warning');
+  });
+
+  it('names no release for a build with the fix once a load was seen held to the VM', async () => {
+    const { service, runtime } = flagHarness({ version: '0.40.13', patched: true });
+    expect((await settledFits(service)).get('small:q4')).not.toHaveProperty('warning');
+    runtime.loaded.mockResolvedValue([
+      { name: 'mid:q8_0', sizeBytes: 40 * GIB, vramBytes: 20 * GIB, contextLength: 131072, expiresAt: null },
+    ]);
+    await vi.waitFor(async () =>
+      expect((await installedFits(service)).get('small:q4')?.warning).toMatch(/^It looks like Ollama in WSL limits/)
+    );
   });
 
   it('does not run nvidia-smi on a computer that cannot host WSL', async () => {
@@ -1482,12 +1549,14 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
 
   it('does not flag a saved model server, Ollama or llama-server, whose GPU is not this computer', async () => {
     const integratedGpu = vi.fn(async () => true);
+    const ollamaWslPatch = vi.fn(async (_url: string) => false);
     const { service, runtimes, local } = servers({
       hardware: N1X,
       version: '0.40.15',
       deps: {
         wslHost: true,
         integratedGpu,
+        ollamaWslPatch,
         specs: id => (id === 'a' ? { ramGiB: 46, gpuMemoryGiB: 80, bandwidthGBps: null, unified: false } : null),
       },
     });
@@ -1503,8 +1572,10 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     expect(saved.get('small:q4')?.level).toBe('fits');
     expect(saved.get('small:q4')).not.toHaveProperty('warning');
     expect(integratedGpu).not.toHaveBeenCalled();
+    expect(ollamaWslPatch).not.toHaveBeenCalled();
     expect((await settledFits(service)).get('small:q4')?.warning).toMatch(RELEASE_FLAG);
     expect((await installedFits(service, 'a')).get('small:q4')).not.toHaveProperty('warning');
+    expect(ollamaWslPatch.mock.calls.every(([url]) => url === local.runtime.baseUrl)).toBe(true);
   });
 });
 

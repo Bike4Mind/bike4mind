@@ -241,6 +241,8 @@ export interface ModelHubServiceDeps {
   wslHost?: boolean;
   /** Whether this computer's NVIDIA GPU uses the CPU's memory; null when nvidia-smi cannot say. */
   integratedGpu?: () => Promise<boolean | null>;
+  /** Whether the Ollama at `url` on this computer carries the WSL shared GPU memory change; null when unreadable. */
+  ollamaWslPatch?: (url: string) => Promise<boolean | null>;
   /** The main log. */
   warn: (message: string) => void;
   /** Minimum gap between progress pushes (ms). */
@@ -806,6 +808,7 @@ export class ModelHubService {
   /** nvidia-smi's answer for the session, null included; undefined until it settles. */
   #integrated: boolean | null | undefined = undefined;
   #integratedAsked = false;
+  #patchUnknownLogged = false;
   #lastPush = 0;
   #pushTimer: ReturnType<typeof setTimeout> | null = null;
   #awake = false;
@@ -914,7 +917,8 @@ export class ModelHubService {
 
   /**
    * The flag this computer's badges carry while its Ollama runs in WSL on an integrated GPU and holds it to the VM's
-   * memory: a release known to, or one seen holding a load back. Null until nvidia-smi answers, which is not awaited.
+   * memory: a release known to, whose running binary lacks the fix, or one seen holding a load back. Null until
+   * nvidia-smi answers, which is not awaited.
    */
   async #wslFitWarning(target: Target): Promise<string | null> {
     if (!target.local || !this.#deps.wslHost || this.#integratedGpu(target) !== true) return null;
@@ -922,7 +926,9 @@ export class ModelHubService {
       const health = await target.runtime.health();
       const release = health.ok && releaseCapsWslGpu(health.version) ? health.version : null;
       if (!release && !this.#gpuCap) return null;
-      return (await this.#ollamaInLinux(target)) ? wslGpuCapWarning(release) : null;
+      if (!(await this.#ollamaInLinux(target))) return null;
+      if (release && (await this.#lacksWslPatch(target))) return wslGpuCapWarning(release);
+      return this.#gpuCap ? wslGpuCapWarning(null) : null;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       this.#deps.warn(
@@ -930,6 +936,18 @@ export class ModelHubService {
       );
       return null;
     }
+  }
+
+  /** True only when the running Ollama binary was read in full and lacks the WSL shared GPU memory change. */
+  async #lacksWslPatch(target: Target): Promise<boolean> {
+    const patched = this.#deps.ollamaWslPatch ? await this.#deps.ollamaWslPatch(target.runtime.baseUrl) : null;
+    if (patched === null && this.#deps.ollamaWslPatch && !this.#patchUnknownLogged) {
+      this.#patchUnknownLogged = true;
+      this.#deps.warn(
+        "MODELS: could not read whether this computer's Ollama carries the WSL GPU memory fix, so badges are not flagged before a load"
+      );
+    }
+    return patched === false;
   }
 
   #ratingsChanged(serverId: string): void {

@@ -30,6 +30,7 @@ import { curatedDevOverrides } from './curated/devKey';
 import { invalid, registerModelsIpc, serverArg, text } from './ipc';
 import { loadCuratedManifest } from './loadCuratedManifest';
 import { ModelHubService, type ModelHubServiceDeps } from './ModelHubService';
+import { createOllamaWslPatchProbe } from './ollamaWslPatch';
 import { PullLedger } from './pullLedger';
 import { isWslHost, probeIntegratedGpu } from './wslGpuCap';
 
@@ -170,6 +171,8 @@ export function registerModels(
     pathExists: async path => (await stat(path)).isDirectory(),
     wslHost: isWslHost(process.platform, process.env, procVersion),
     integratedGpu: () => probeIntegratedGpu(),
+    // Read through /proc, so only from inside the Linux that runs Ollama; Desktop on Windows flags after a load.
+    ollamaWslPatch: process.platform === 'linux' ? createOllamaWslPatchProbe() : undefined,
     importDir: splitImportRoot,
     sameDisk: async (a, b) => (await deviceOf(a)) === (await deviceOf(b)),
     // Once, right away: the picker's reload waits for any recheck the pull or removal started.
