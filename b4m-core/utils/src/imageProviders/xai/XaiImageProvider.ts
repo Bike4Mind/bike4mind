@@ -29,7 +29,7 @@ export class XaiImageProvider implements SyncImageProvider {
     const service = new XAIImageService(ctx.apiKey, ctx.logger, undefined, XAI_JOB_CLIENT_OPTIONS);
     let urls: string[];
     try {
-      urls = await raceAbort(service.generate(request.prompt, { n: 1 }), ctx.signal);
+      urls = await raceAbort(() => service.generate(request.prompt, { n: 1 }), ctx.signal);
     } catch (error) {
       if (ctx.signal.aborted) throw error;
       const classified = classifyImageProviderError(error);
