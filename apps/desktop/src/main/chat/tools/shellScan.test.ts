@@ -137,11 +137,17 @@ describe('scanShell', () => {
       }
     );
 
-    it('reads a run of stars in a name in linear time', async () => {
-      await scan('true');
-      const started = performance.now();
-      expect((await scan(`cat .${'*'.repeat(40)}x`)).envFiles).toEqual([]);
-      expect(performance.now() - started).toBeLessThan(2000);
+    it('reads a run of stars in a name as one wildcard', async () => {
+      const test = vi.spyOn(RegExp.prototype, 'test');
+      try {
+        expect((await scan(`cat .${'*'.repeat(40)}x`)).envFiles).toEqual([]);
+        const sources = test.mock.contexts.map(matcher => (matcher as RegExp).source);
+        expect(sources).toContain('^\\..*x$');
+        // Wildcards side by side would try every way to share a sample between them.
+        expect(sources.filter(source => source.includes('.*.*'))).toEqual([]);
+      } finally {
+        test.mockRestore();
+      }
     });
   });
 

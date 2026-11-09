@@ -105,7 +105,7 @@ describe('shell expansions reaching a protected location', () => {
     expect(scan?.paths?.filter(path => path.startsWith(join(project, 'range')))).toEqual(
       expected.map(name => join(project, 'range', name, 'value'))
     );
-    // The host's bash: 5.x on Linux, 3.2 as macOS `/bin/bash`.
+    // Runs whichever bash is first in PATH.
     const printed = execFileSync('bash', ['-c', `printf '%s\\n' ${range}`], { encoding: 'utf8' });
     expect(printed.split('\n').slice(0, -1)).toEqual(expected);
   });

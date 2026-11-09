@@ -114,11 +114,7 @@ describe('globNames', () => {
       expect((await globNames(folder, pattern, never))?.sort()).toEqual(names);
     });
 
-    it.each([
-      ['********.ts', 0],
-      ['*a*a*a*a*a*a*a*a*b', 0],
-      ['*a*a*a*a*a*a*a*a*b*', 1],
-    ])('matches %s searching each name once per part between stars', async (pattern, least) => {
+    const searchesFor = async (pattern: string): Promise<number> => {
       const search = vi.spyOn(String.prototype, 'indexOf');
       let searches = 0;
       const names = await globNames(long, pattern, never).finally(() => {
@@ -127,10 +123,21 @@ describe('globNames', () => {
         search.mockRestore();
       });
       expect(names).toEqual([]);
-      const between = Math.max(0, pattern.replace(/\*+/g, '*').split('*').length - 2);
-      // Each name is matched as written and case-folded; a backtracking match would search it far more often.
-      expect(searches).toBeLessThanOrEqual(longNames.length * 2 * between);
-      expect(searches).toBeGreaterThanOrEqual(least);
+      return searches;
+    };
+
+    it.each(['********.ts', '*a*a*a*a*a*a*a*a*b', '*a*a*a*a*a*a*a*a*b*'])(
+      'matches %s searching each name once per part between stars',
+      async pattern => {
+        const between = Math.max(0, pattern.replace(/\*+/g, '*').split('*').length - 2);
+        // Each name is matched as written and case-folded; a backtracking match would search it far more often.
+        expect(await searchesFor(pattern)).toBeLessThanOrEqual(longNames.length * 2 * between);
+      }
+    );
+
+    it('searches each name as written up to the first part it lacks', async () => {
+      // Eight `a`s and the missing `b` in the run of `a`s, two `a`s and the missing third in the other name.
+      expect(await searchesFor('*a*a*a*a*a*a*a*a*b*')).toBeGreaterThanOrEqual(9 + 3);
     });
   });
 
