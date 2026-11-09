@@ -73,6 +73,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.reinstated': { category: 'access', severity: 'notice', write: 'strict' },
   'user.restricted': { category: 'access', severity: 'notice', write: 'strict' },
   'user.restriction_lifted': { category: 'access', severity: 'notice', write: 'strict' },
+  // The linked-account propagation run once for accounts an admin suspended together
+  // (apps/client/pages/api/admin/users/linked-suspend-propagation.ts). bestEffort: it is written after the
+  // locks it reports, which have already happened.
+  'user.linked_accounts.propagated': { category: 'access', severity: 'notice', write: 'bestEffort' },
 
   'user.deleted': { category: 'account', severity: 'critical', write: 'strict' },
   'user.deletion.scheduled': { category: 'account', severity: 'critical', write: 'strict' },

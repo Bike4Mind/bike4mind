@@ -2,15 +2,24 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
 
-const mocks = vi.hoisted(() => ({ findLinkStatesByIds: vi.fn(), propagateBatchAccountRisk: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  findLinkStatesByIds: vi.fn(),
+  propagateBatchAccountRisk: vi.fn(),
+  audit: vi.fn(),
+}));
 
+// adminApi stays real: the permission guard it installs through use() is part of what is under test.
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config?: unknown) => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
+    const guards: ((req: unknown, res: unknown, next: () => void) => void)[] = [];
     const chain = Object.assign(
-      (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
+      (req: unknown, res: unknown) => {
+        for (const guard of guards) guard(req, res, () => {});
+        return h[(req as { method?: string }).method ?? 'GET']?.(req, res);
+      },
       {
-        use: () => chain,
+        use: (guard: (req: unknown, res: unknown, next: () => void) => void) => (guards.push(guard), chain),
         post: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.POST = fns[fns.length - 1]), chain),
         _config: config,
       }
@@ -21,6 +30,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findLinkStatesByIds: (...a: unknown[]) => mocks.findLinkStatesByIds(...a) },
+}));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...a: unknown[]) => mocks.audit(...a),
 }));
 vi.mock('@server/billing/linkedAccounts', () => ({
   propagateBatchAccountRisk: (...a: unknown[]) => mocks.propagateBatchAccountRisk(...a),
@@ -55,10 +67,18 @@ describe('POST /api/admin/users/linked-suspend-propagation', () => {
   });
 
   it('rejects a non-admin before reading anything', async () => {
-    await expect(call({ userIds: [ONE] }, { id: 'u2', isAdmin: false }).promise).rejects.toMatchObject({
-      statusCode: 403,
-    });
+    expect(() => call({ userIds: [ONE] }, { id: 'u2', isAdmin: false })).toThrow(
+      expect.objectContaining({ statusCode: 403 })
+    );
     expect(mocks.findLinkStatesByIds).not.toHaveBeenCalled();
+  });
+
+  it('admits a delegated admin holding users:moderate, and no other grant', async () => {
+    expect(() => call({ userIds: [ONE] }, { id: 'u3', adminPermissions: ['support:read'] })).toThrow(
+      expect.objectContaining({ statusCode: 403 })
+    );
+    await call({ userIds: [ONE] }, { id: 'u4', adminPermissions: ['users:moderate'] }).promise;
+    expect(mocks.propagateBatchAccountRisk).toHaveBeenCalledTimes(1);
   });
 
   it('rejects malformed or oversized id lists', async () => {
@@ -82,12 +102,21 @@ describe('POST /api/admin/users/linked-suspend-propagation', () => {
       expect.anything()
     );
     expect(res._getJSONData()).toEqual({ locked: [], review: ['x'] });
+    expect(mocks.audit).toHaveBeenCalledTimes(1);
+    expect(mocks.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.linked_accounts.propagated',
+        details: { sourceUserIds: [ONE, TWO], locked: [], review: ['x'] },
+      })
+    );
   });
 
   it('does nothing when none of the accounts is suspended', async () => {
     const { res, promise } = call({ userIds: [ACTIVE] });
     await promise;
     expect(mocks.propagateBatchAccountRisk).not.toHaveBeenCalled();
+    expect(mocks.audit).not.toHaveBeenCalled();
     expect(res._getJSONData()).toEqual({ locked: [], review: [] });
   });
 });
