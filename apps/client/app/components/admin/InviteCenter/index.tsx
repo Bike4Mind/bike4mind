@@ -10,7 +10,7 @@ import { APP_NAME } from '@client/config/general'; // brand externalized
 
 type InviteCenterTab = 'bulk' | 'codes';
 
-// The e2e page object clicks these two test ids.
+// The e2e page object clicks the codes tab and index.test.tsx clicks the bulk tab by these test ids.
 const VIEWS = [
   { id: 'bulk', label: 'Bulk invite', testId: 'invite-center-bulk-tab' },
   { id: 'codes', label: 'Invite codes', testId: 'invite-center-codes-tab' },
