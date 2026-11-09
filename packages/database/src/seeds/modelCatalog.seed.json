@@ -731,6 +731,41 @@
       }
     },
     {
+      "modelId": "claude-sonnet-5-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-sonnet-5-5",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude Sonnet 5.5",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's Claude 5.5 Sonnet model. Combines speed and intelligence for coding and agentic work, with adaptive extended thinking and a 1M-token context window.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "trainingCutoff": "2026-06-01"
+      }
+    },
+    {
       "modelId": "deepseek-flash",
       "ownedGroups": [
         "identity",
