@@ -30,7 +30,7 @@ export interface IAutoContainmentDecisionDocument extends Document {
 const RETENTION_SECONDS = 365 * 24 * 60 * 60;
 const DUPLICATE_KEY = 11000;
 
-export const AutoContainmentDecisionSchema = new Schema<IAutoContainmentDecisionDocument>(
+export const AutoContainmentDecisionSchema: Schema<IAutoContainmentDecisionDocument> = new Schema<IAutoContainmentDecisionDocument>(
   {
     detectionId: { type: String, required: true },
     revision: { type: Number, required: true },
