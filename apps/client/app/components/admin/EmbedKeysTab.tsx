@@ -66,6 +66,8 @@ import { toast } from 'sonner';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import {
+  ADMIN_REASON_PRESETS,
+  ActionDialog,
   AdminDialog,
   AdminDialogFooter,
   AdminPageHeader,
@@ -109,7 +111,7 @@ function EmbedOriginsField({ origins, onChange }: { origins: string[]; onChange:
   return (
     <FormControl>
       <FormLabel>Allowed origins</FormLabel>
-      <Typography level="body-xs" sx={{ color: 'text.tertiary', mb: 1 }}>
+      <Typography level="body-xs" sx={{ color: 'admin.inkMuted', mb: 1 }}>
         The exact https sites (up to {EMBED_ORIGINS_MAX}) allowed to use this key. Empty means the key works nowhere
         yet.
       </Typography>
@@ -126,7 +128,7 @@ function EmbedOriginsField({ origins, onChange }: { origins: string[]; onChange:
           }}
           disabled={origins.length >= EMBED_ORIGINS_MAX}
           slotProps={{ input: { 'data-testid': 'embed-key-origin-input', autoComplete: 'off' } }}
-          sx={{ flex: 1, fontFamily: 'monospace', fontSize: '13px' }}
+          sx={{ flex: 1, fontFamily: 'monospace' }}
         />
         <Button
           size="sm"
@@ -227,7 +229,7 @@ function EmbedKeyFormFields({
             </Option>
           ))}
         </Select>
-        <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 0.5 }}>
+        <Typography level="body-xs" sx={{ color: 'admin.inkMuted', mt: 0.5 }}>
           The embed key can only talk to this one agent.
         </Typography>
         {selectedAgentMissingModel && <ModellessAgentAlert testId="embed-key-model-warning" />}
@@ -239,7 +241,7 @@ function EmbedKeyFormFields({
       />
 
       <Box>
-        <Typography level="title-sm" mb={1}>
+        <Typography level="title-md" component="h3" sx={{ color: 'admin.ink', mb: 1 }}>
           Branding
         </Typography>
         <Stack spacing={1.5}>
@@ -276,7 +278,7 @@ function EmbedKeyFormFields({
             <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
               <Box>
                 <FormLabel>Hide Bike4Mind branding</FormLabel>
-                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
                   Removes the powered-by footer. Applied only when this key&apos;s plan includes white-label - the
                   server enforces it per key owner.
                 </Typography>
@@ -288,7 +290,7 @@ function EmbedKeyFormFields({
               />
             </FormControl>
           ) : (
-            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+            <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
               How the widget presents itself on the host site. Hiding Bike4Mind branding requires the white-label plan.
             </Typography>
           )}
@@ -352,7 +354,7 @@ function AdminOrgPicker({ value, onChange }: { value?: string; onChange: (organi
         getOptionLabel={option => option.name}
         data-testid="embed-key-org-admin-select"
       />
-      <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 0.5 }}>
+      <Typography level="body-xs" sx={{ color: 'admin.inkMuted', mt: 0.5 }}>
         {orgOwnerHint}
       </Typography>
     </FormControl>
@@ -398,7 +400,7 @@ function MemberOrgPicker({ value, onChange }: { value?: string; onChange: (organ
           </Option>
         ))}
       </Select>
-      <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 0.5 }}>
+      <Typography level="body-xs" sx={{ color: 'admin.inkMuted', mt: 0.5 }}>
         {orgOwnerHint}
       </Typography>
     </FormControl>
@@ -613,7 +615,7 @@ function EmbedKeyCreatedModal({ apiKey, onClose }: { apiKey: string; onClose: ()
           <Input
             value={showKey ? apiKey : apiKey.replace(/./g, '\u2022')}
             readOnly
-            sx={{ flex: 1, minWidth: 0, fontFamily: 'code', fontSize: '13px' }}
+            sx={{ flex: 1, minWidth: 0, fontFamily: 'code' }}
             slotProps={{ input: { 'data-testid': 'embed-key-plaintext', 'aria-label': 'Embed key' } }}
           />
           <Tooltip title={showKey ? 'Hide key' : 'Show key'}>
@@ -660,9 +662,13 @@ export default function EmbedKeysTab() {
   const [newlyCreatedKey, setNewlyCreatedKey] = useState('');
   const [configuringKey, setConfiguringKey] = useState<IUserApiKeyDocument | null>(null);
   const [revokingKey, setRevokingKey] = useState<IUserApiKeyDocument | null>(null);
+  const [rotatingKey, setRotatingKey] = useState<IUserApiKeyDocument | null>(null);
 
   const rotateMutation = useRotateUserApiKey({
-    onSuccess: result => setNewlyCreatedKey(result.key),
+    onSuccess: result => {
+      setRotatingKey(null);
+      setNewlyCreatedKey(result.key);
+    },
   });
   const revokeMutation = useRevokeUserApiKey({
     onSuccess: () => toast.success('Embed key revoked'),
@@ -824,7 +830,7 @@ export default function EmbedKeysTab() {
             embedKey={key}
             rotating={rotateMutation.isPending}
             onConfigure={() => setConfiguringKey(key)}
-            onRotate={() => rotateMutation.mutate(key.id)}
+            onRotate={() => setRotatingKey(key)}
             onRevoke={() => setRevokingKey(key)}
           />
         )}
@@ -845,47 +851,55 @@ export default function EmbedKeysTab() {
         onClose={() => setConfiguringKey(null)}
       />
       {newlyCreatedKey && <EmbedKeyCreatedModal apiKey={newlyCreatedKey} onClose={() => setNewlyCreatedKey('')} />}
-      <AdminDialog
+      {/* There is no way to un-revoke a key, so the admin types its name before the commit unlocks. */}
+      <ActionDialog
         open={revokingKey !== null}
-        // Esc, the X and the backdrop wait for an in-flight revoke, like the disabled Cancel.
+        // Esc, the X and the backdrop wait for an in-flight revoke, like the held Cancel.
         onClose={() => {
           if (!revokeMutation.isPending) setRevokingKey(null);
         }}
         title="Revoke embed key"
-        role="alertdialog"
-        data-testid="embed-key-revoke-dialog"
-      >
-        <DialogContent>
-          <Typography level="body-sm" component="div">
+        description={
+          <>
             Sites using <strong>{revokingKey?.name}</strong> stop working right away. A revoked key cannot be restored.
-          </Typography>
-        </DialogContent>
-        <AdminDialogFooter>
-          <Button
-            variant="plain"
-            color="neutral"
-            onClick={() => setRevokingKey(null)}
-            disabled={revokeMutation.isPending}
-            data-testid="embed-key-revoke-cancel-btn"
-          >
-            Cancel
-          </Button>
-          <Button
-            color="danger"
-            loading={revokeMutation.isPending}
-            onClick={() => {
-              if (!revokingKey) return;
-              revokeMutation.mutate(
-                { keyId: revokingKey.id, reason: 'Revoked by admin' },
-                { onSuccess: () => setRevokingKey(null) }
-              );
-            }}
-            data-testid="embed-key-revoke-confirm-btn"
-          >
-            Revoke key
-          </Button>
-        </AdminDialogFooter>
-      </AdminDialog>
+          </>
+        }
+        reasonPresets={ADMIN_REASON_PRESETS.embedKeyRevoke}
+        tone="danger"
+        // ActionDialog trims what the admin types, so the expected name is trimmed to match.
+        typedConfirm={revokingKey ? { expected: revokingKey.name.trim(), noun: 'key name' } : undefined}
+        confirmLabel="Revoke key"
+        pending={revokeMutation.isPending}
+        onConfirm={reason => {
+          if (revokingKey) {
+            revokeMutation.mutate({ keyId: revokingKey.id, reason }, { onSuccess: () => setRevokingKey(null) });
+          }
+        }}
+        data-testid="embed-key-revoke-dialog"
+      />
+      {/* The rotate endpoint takes no reason, so the dialog collects one without sending it. */}
+      <ActionDialog
+        open={rotatingKey !== null}
+        onClose={() => {
+          if (!rotateMutation.isPending) setRotatingKey(null);
+        }}
+        title="Rotate embed key"
+        description={
+          <>
+            Issues a new secret for <strong>{rotatingKey?.name}</strong>. The current one stops working at once, so
+            sites using it fail until they get the new key, which is shown once.
+          </>
+        }
+        reasonPresets={ADMIN_REASON_PRESETS.apiKeyRotate}
+        reasonAudited={false}
+        tone="danger"
+        confirmLabel="Rotate key"
+        pending={rotateMutation.isPending}
+        onConfirm={() => {
+          if (rotatingKey) rotateMutation.mutate(rotatingKey.id);
+        }}
+        data-testid="embed-key-rotate-dialog"
+      />
     </Stack>
   );
 }

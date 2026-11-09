@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, fireEvent, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ApiKeyScope } from '@bike4mind/common';
@@ -50,6 +50,8 @@ const h = vi.hoisted(() => ({
   refetch: vi.fn(),
   rotateMutate: vi.fn(),
   revokeMutate: vi.fn(),
+  rotatePending: false,
+  revokePending: false,
   onRotated: undefined as ((result: { key: string }) => void) | undefined,
 }));
 
@@ -58,9 +60,9 @@ vi.mock('@client/app/hooks/data/userApiKeys', () => ({
   useCreateUserApiKey: () => ({ mutate: h.createMutate, isPending: false }),
   useRotateUserApiKey: ({ onSuccess }: { onSuccess?: (result: { key: string }) => void } = {}) => {
     h.onRotated = onSuccess;
-    return { mutate: h.rotateMutate, isPending: false };
+    return { mutate: h.rotateMutate, isPending: h.rotatePending };
   },
-  useRevokeUserApiKey: () => ({ mutate: h.revokeMutate, isPending: false }),
+  useRevokeUserApiKey: () => ({ mutate: h.revokeMutate, isPending: h.revokePending }),
   useUpdateEmbedKey: () => ({ mutate: h.updateMutate, isPending: false }),
   useBillingOrganizations: () => ({ data: h.billingOrgs, isLoading: false }),
 }));
@@ -128,8 +130,10 @@ describe('EmbedKeysTab', () => {
     h.updateMutate.mockClear();
     h.createMutate.mockClear();
     h.refetch.mockClear();
-    h.rotateMutate.mockClear();
-    h.revokeMutate.mockClear();
+    h.rotateMutate.mockReset();
+    h.revokeMutate.mockReset();
+    h.rotatePending = false;
+    h.revokePending = false;
     ent.data = [];
   });
 
@@ -139,6 +143,14 @@ describe('EmbedKeysTab', () => {
     openRowMenu(id);
     fireEvent.click(screen.getByTestId(`embed-key-configure-${id}`));
   };
+  const openRevoke = (id: string) => {
+    openRowMenu(id);
+    fireEvent.click(screen.getByTestId(`embed-key-revoke-${id}`));
+    return screen.getByTestId('embed-key-revoke-dialog');
+  };
+  const revokeConfirm = () => screen.getByTestId('embed-key-revoke-dialog-confirm-btn');
+  const typeKeyName = (value: string) =>
+    fireEvent.change(screen.getByTestId('embed-key-revoke-dialog-typed-input'), { target: { value } });
 
   const fillNameAndAgent = (name: string) => {
     fireEvent.change(within(screen.getByTestId('embed-key-name-input')).getByRole('textbox'), {
@@ -440,41 +452,151 @@ describe('EmbedKeysTab', () => {
       expect(chip).toHaveTextContent('No model');
     });
 
-    it('asks before revoking, then sends the same revoke request', () => {
+    it('asks before revoking in an action dialog, then sends the revoke with the picked reason', async () => {
       renderTab();
-      openRowMenu('key-1');
-      fireEvent.click(screen.getByTestId('embed-key-revoke-key-1'));
-
-      const dialog = screen.getByTestId('embed-key-revoke-dialog');
-      expect(dialog).toHaveAttribute('role', 'alertdialog');
+      const dialog = openRevoke('key-1');
       expect(within(dialog).getByRole('heading', { level: 2 })).toHaveTextContent('Revoke embed key');
       expect(dialog).toHaveTextContent('Sites using Acme widget stop working right away.');
+      expect(revokeConfirm()).toHaveClass('MuiButton-colorDanger');
       expect(h.revokeMutate).not.toHaveBeenCalled();
 
-      fireEvent.click(screen.getByTestId('embed-key-revoke-confirm-btn'));
-      expect(h.revokeMutate).toHaveBeenCalledTimes(1);
-      expect(h.revokeMutate.mock.calls[0][0]).toEqual({ keyId: 'key-1', reason: 'Revoked by admin' });
+      fireEvent.click(screen.getByTestId('embed-key-revoke-dialog-reason-input-preset-0'));
+      typeKeyName('Acme widget');
+      fireEvent.click(revokeConfirm());
+      await waitFor(() => expect(h.revokeMutate).toHaveBeenCalledTimes(1));
+      expect(h.revokeMutate.mock.calls[0][0]).toEqual({ keyId: 'key-1', reason: 'Compromised or leaked key' });
 
       act(() => h.revokeMutate.mock.calls[0][1].onSuccess());
       expect(screen.queryByTestId('embed-key-revoke-dialog')).toBeNull();
     });
 
+    it('sends a preset with a note as the revoke reason', async () => {
+      renderTab();
+      openRevoke('key-1');
+      fireEvent.click(screen.getByTestId('embed-key-revoke-dialog-reason-input-preset-1'));
+      fireEvent.change(screen.getByTestId('embed-key-revoke-dialog-reason-input'), {
+        target: { value: ' moved to the v2 widget ' },
+      });
+      typeKeyName('Acme widget');
+      fireEvent.click(revokeConfirm());
+      await waitFor(() =>
+        expect(h.revokeMutate.mock.calls[0]?.[0]).toEqual({
+          keyId: 'key-1',
+          reason: 'Site no longer embeds the agent: moved to the v2 widget',
+        })
+      );
+    });
+
+    it('keeps Revoke key locked until the admin types the key name', () => {
+      renderTab();
+      openRevoke('key-1');
+      expect(screen.getByTestId('embed-key-revoke-dialog-typed-expected')).toHaveTextContent('Acme widget');
+      fireEvent.click(screen.getByTestId('embed-key-revoke-dialog-reason-input-preset-0'));
+      expect(revokeConfirm()).toBeDisabled();
+      expect(screen.getByTestId('embed-key-revoke-dialog-hint')).toHaveTextContent(
+        'Type the key name exactly to confirm.'
+      );
+
+      typeKeyName('Acme');
+      expect(revokeConfirm()).toBeDisabled();
+      typeKeyName('Acme widget');
+      expect(revokeConfirm()).toBeEnabled();
+    });
+
     it('cancels a revoke without sending it', () => {
       renderTab();
-      openRowMenu('key-1');
-      fireEvent.click(screen.getByTestId('embed-key-revoke-key-1'));
-      fireEvent.click(screen.getByTestId('embed-key-revoke-cancel-btn'));
+      openRevoke('key-1');
+      fireEvent.click(screen.getByTestId('embed-key-revoke-dialog-cancel-btn'));
       expect(screen.queryByTestId('embed-key-revoke-dialog')).toBeNull();
       expect(h.revokeMutate).not.toHaveBeenCalled();
     });
 
-    it('rotates from the row menu and shows the new key once, behind a warn banner', () => {
+    it('keeps the revoke dialog open, with Cancel held and the commit loading, while the revoke is in flight', () => {
+      h.revokePending = true;
+      renderTab();
+      const dialog = openRevoke('key-1');
+      expect(revokeConfirm()).toHaveClass('MuiButton-loading');
+      expect(screen.getByTestId('embed-key-revoke-dialog-cancel-btn')).toBeDisabled();
+
+      fireEvent.keyDown(dialog, { key: 'Escape' });
+      fireEvent.click(screen.getByTestId('embed-key-revoke-dialog-close-btn'));
+      fireEvent.click(document.querySelector('.MuiModal-backdrop') as HTMLElement);
+      expect(screen.getByTestId('embed-key-revoke-dialog')).toBeInTheDocument();
+    });
+
+    it('closes the revoke dialog from Esc once nothing is in flight', () => {
+      renderTab();
+      const dialog = openRevoke('key-1');
+      fireEvent.keyDown(dialog, { key: 'Escape' });
+      expect(screen.queryByTestId('embed-key-revoke-dialog')).toBeNull();
+    });
+
+    it('keeps the revoke dialog open when the revoke fails', async () => {
+      // The hook reports the failure in a toast; the dialog only closes on success.
+      h.revokeMutate.mockImplementation((_payload, options?: { onError?: (error: Error) => void }) =>
+        options?.onError?.(new Error('revoke failed'))
+      );
+      renderTab();
+      openRevoke('key-1');
+      fireEvent.click(screen.getByTestId('embed-key-revoke-dialog-reason-input-preset-0'));
+      typeKeyName('Acme widget');
+      fireEvent.click(revokeConfirm());
+      await waitFor(() => expect(h.revokeMutate).toHaveBeenCalledTimes(1));
+      expect(screen.getByTestId('embed-key-revoke-dialog')).toBeInTheDocument();
+      await waitFor(() => expect(revokeConfirm()).toBeEnabled());
+    });
+
+    it('asks before rotating, with a reason that is not sent, and shows the commit loading while it runs', async () => {
       renderTab();
       openRowMenu('key-1');
       fireEvent.click(screen.getByTestId('embed-key-rotate-key-1'));
-      expect(h.rotateMutate).toHaveBeenCalledWith('key-1');
+      const rotate = screen.getByTestId('embed-key-rotate-dialog');
+      expect(within(rotate).getByRole('heading', { level: 2 })).toHaveTextContent('Rotate embed key');
+      expect(rotate).toHaveTextContent('Issues a new secret for Acme widget.');
+      expect(rotate).toHaveTextContent('Not stored yet');
+      expect(h.rotateMutate).not.toHaveBeenCalled();
+
+      const confirm = screen.getByTestId('embed-key-rotate-dialog-confirm-btn');
+      expect(confirm).toBeDisabled();
+      fireEvent.click(screen.getByTestId('embed-key-rotate-dialog-reason-input-preset-0'));
+      fireEvent.click(confirm);
+      await waitFor(() => expect(h.rotateMutate).toHaveBeenCalledTimes(1));
+      expect(h.rotateMutate.mock.calls[0]).toEqual(['key-1']);
+    });
+
+    it('disables Rotate key in the row menu while a rotate is in flight', () => {
+      h.rotatePending = true;
+      renderTab();
+      openRowMenu('key-1');
+      expect(screen.getByTestId('embed-key-rotate-key-1')).toHaveAttribute('aria-disabled', 'true');
+    });
+
+    it('shows the rotate commit loading and holds Cancel while the rotate is in flight', () => {
+      const view = renderTab();
+      openRowMenu('key-1');
+      fireEvent.click(screen.getByTestId('embed-key-rotate-key-1'));
+      h.rotatePending = true;
+      view.rerender(
+        <CssVarsProvider theme={appTheme}>
+          <EmbedKeysTab />
+        </CssVarsProvider>
+      );
+      expect(screen.getByTestId('embed-key-rotate-dialog-confirm-btn')).toHaveClass('MuiButton-loading');
+      expect(screen.getByTestId('embed-key-rotate-dialog-cancel-btn')).toBeDisabled();
+      fireEvent.click(screen.getByTestId('embed-key-rotate-dialog-close-btn'));
+      expect(screen.getByTestId('embed-key-rotate-dialog')).toBeInTheDocument();
+    });
+
+    it('rotates from the row menu and shows the new key once, behind a warn banner', async () => {
+      renderTab();
+      openRowMenu('key-1');
+      fireEvent.click(screen.getByTestId('embed-key-rotate-key-1'));
+      fireEvent.click(screen.getByTestId('embed-key-rotate-dialog-reason-input-preset-0'));
+      fireEvent.click(screen.getByTestId('embed-key-rotate-dialog-confirm-btn'));
+      await waitFor(() => expect(h.rotateMutate).toHaveBeenCalledWith('key-1'));
 
       act(() => h.onRotated?.({ key: 'b4m_live_secret' }));
+      expect(screen.queryByTestId('embed-key-rotate-dialog')).toBeNull();
       const dialog = screen.getByTestId('embed-key-created-dialog');
       expect(within(dialog).getByRole('heading', { level: 2 })).toHaveTextContent('Embed key created');
       expect(within(dialog).getByTestId('embed-key-created-warning')).toHaveClass('MuiAlert-colorWarning');
