@@ -118,7 +118,16 @@ describe('ActionDialog', () => {
     const confirm = openDialog({ tone: 'danger' });
 
     expect(confirm.className).toContain('MuiButton-colorDanger');
+    expect(confirm).toHaveAttribute('data-tone', 'danger');
     expect(screen.getByTestId('adjust-dialog-cancel-btn').className).not.toContain('MuiButton-colorDanger');
+  });
+
+  // Callers assert the tone through `data-tone`, so it has to follow the color the confirm renders.
+  it('marks the confirm neutral, and not danger-colored, by default', () => {
+    const confirm = openDialog();
+
+    expect(confirm).toHaveAttribute('data-tone', 'neutral');
+    expect(confirm.className).not.toContain('MuiButton-colorDanger');
   });
 
   it('commits on Enter from an input inside the dialog', async () => {

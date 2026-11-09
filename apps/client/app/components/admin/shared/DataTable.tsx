@@ -4,7 +4,14 @@ import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { EmptyState } from './EmptyState';
 import { ErrorState } from './ErrorState';
-import { adminFocus, adminFocusScope, adminScrollGutter, adminScrollbarVisible, adminSurface } from './adminStyles';
+import {
+  ADMIN_PAGE_SIZES,
+  adminFocus,
+  adminFocusScope,
+  adminScrollGutter,
+  adminScrollbarVisible,
+  adminSurface,
+} from './adminStyles';
 import type { AdminSelection } from './BulkActionBar';
 
 export type DataColumn<Row> = {
@@ -62,8 +69,6 @@ export type DataTableProps<Row> = {
   /** Show the scrollbar thumb all the time instead of only on hover. */
   alwaysShowScrollbar?: boolean;
 };
-// A server-paged list that validates its page size (Feedback/constants.ts) offers exactly these.
-export const PAGE_SIZES = [25, 50, 100] as const;
 const CELL_CONTROLS = 'button, input, a, [role="checkbox"], [role="menu"], [role="menuitem"]';
 
 function nextDirection(current: DataTableSort | undefined, columnId: string): DataTableSort {
@@ -456,7 +461,7 @@ export function DataTable<Row>({
               }
             }}
           >
-            {PAGE_SIZES.map(size => (
+            {ADMIN_PAGE_SIZES.map(size => (
               <Option key={size} value={size} data-testid={`admin-table-page-size-${size}`}>
                 {size}
               </Option>

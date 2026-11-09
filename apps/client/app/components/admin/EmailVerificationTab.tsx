@@ -21,7 +21,7 @@ import {
   type AdminListState,
   type DataColumn,
 } from './shared';
-import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
+import { ADMIN_PAGE_SIZES, ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
 import UserIdChip from './Users/UserIdChip';
 
 interface User {
@@ -287,7 +287,7 @@ const RowMenu = ({
 const EmailVerificationTab = () => {
   const { value: search, debouncedValue: debouncedSearch, setValue: setSearch } = useDebounceValue('');
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = useState<number>(ADMIN_PAGE_SIZES[0]);
   const [statusFilter, setStatusFilter] = useState<VerificationStatusFilter>('all');
   // Verify and unverify change the account, so they go through a dialog that asks for an audited reason.
   const [dialog, setDialog] = useState<{ type: 'verify' | 'unverify'; user: User } | null>(null);

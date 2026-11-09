@@ -37,7 +37,10 @@ export type ActionDialogProps = {
    * surfaces its own failures: a rejection is not caught here and leaves the dialog open.
    */
   onConfirm: (reason: string) => void | Promise<void>;
-  /** Solid danger is reserved for this final confirm of a destructive command. */
+  /**
+   * Solid danger is reserved for this final confirm of a destructive command. Also set as the confirm
+   * button's `data-tone`, so a test reads the tone without matching Joy's color class.
+   */
   tone?: 'neutral' | 'danger';
   /** Why the caller's own inputs block the commit, shown in place; `null` when they are ready. */
   blockedReason?: string | null;
@@ -173,6 +176,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
           loading={busy}
           aria-describedby={hint ? hintId : undefined}
           type="submit"
+          data-tone={tone}
           data-testid={testIds.confirm ?? `${testId}-confirm-btn`}
         >
           {confirmLabel}

@@ -19,7 +19,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import Papa from 'papaparse';
 import { toast } from 'sonner';
 import { useNavigate, useSearch } from '@tanstack/react-router';
-import { FEEDBACK_ID_PARAM, FEEDBACK_SUBJECTS, FeedbackStatus } from '@bike4mind/common';
+import { FEEDBACK_ID_PARAM, FEEDBACK_SUBJECTS } from '@bike4mind/common';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { CSV_FORMULA_PREFIX } from '@client/app/utils/csv';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
@@ -46,6 +46,7 @@ import FocusedFeedbackCard from './FocusedFeedbackCard';
 import { copyFeedbackRecordLink, feedbackConversationPath } from './FeedbackRowLinks';
 import HelpContextChip from './HelpContextChip';
 import { FEEDBACK_STATUS_LABELS, FEEDBACK_STATUS_ORDER, FEEDBACK_SUBJECT_LABELS, toSubjectFilter } from './constants';
+import { checkedStatuses, toStatusFilters } from './feedbackTabSearch';
 
 type FeedbackRow = IExtendedFeedbackDocument;
 
@@ -57,12 +58,6 @@ const SUBJECT_FILTER_OPTIONS = FEEDBACK_SUBJECTS.map(subject => ({
   value: subject,
   label: FEEDBACK_SUBJECT_LABELS[subject],
 }));
-
-const statusFiltersOf = (statuses: readonly FeedbackStatus[]) =>
-  Object.fromEntries(FEEDBACK_STATUS_ORDER.map(status => [status, statuses.includes(status)])) as Record<
-    FeedbackStatus,
-    boolean
-  >;
 
 const reporterName = (row: FeedbackRow) => row.username || row.userEmail || 'an unknown user';
 
@@ -274,13 +269,13 @@ const FeedbackTab: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const checkedStatuses = FEEDBACK_STATUS_ORDER.filter(status => filters.statusFilters[status]);
-  const statusNarrowed = checkedStatuses.length < FEEDBACK_STATUS_ORDER.length;
+  const selectedStatuses = checkedStatuses(filters.statusFilters);
+  const statusNarrowed = selectedStatuses.length < FEEDBACK_STATUS_ORDER.length;
   // Every status checked narrows nothing, so the chip reads as unset. Clearing it, or unpicking its
   // last status, checks them all again instead of leaving a filter that matches no report.
   const setStatuses = (picked: string[]) => {
     const next = FEEDBACK_STATUS_ORDER.filter(status => picked.includes(status));
-    setStatusFilters(statusFiltersOf(next.length > 0 ? next : FEEDBACK_STATUS_ORDER));
+    setStatusFilters(toStatusFilters(next.length > 0 ? next : FEEDBACK_STATUS_ORDER));
   };
   // A selected organization stays pickable even if it has left the facet, so it can be unpicked.
   const organizationOptions = [...new Set([...organizations, ...filters.selectedOrganizations])].map(name => ({
@@ -295,7 +290,7 @@ const FeedbackTab: React.FC = () => {
     filters.selectedOrganizations.length > 0;
   const clearFilters = () => {
     setSearchTerm('');
-    setStatusFilters(statusFiltersOf(FEEDBACK_STATUS_ORDER));
+    setStatusFilters(toStatusFilters(FEEDBACK_STATUS_ORDER));
     setSubject(undefined);
     setSelectedOrganizations([]);
   };
@@ -388,7 +383,7 @@ const FeedbackTab: React.FC = () => {
           id="feedback-status"
           label="Status"
           multiple
-          value={statusNarrowed ? checkedStatuses : []}
+          value={statusNarrowed ? selectedStatuses : []}
           options={STATUS_FILTER_OPTIONS}
           onChange={setStatuses}
         />

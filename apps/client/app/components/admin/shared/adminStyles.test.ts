@@ -7,8 +7,6 @@ describe('adminPageFrame', () => {
     // last 60 px of the page is under it. The DataTable footer puts 8 px under its pager buttons, so the
     // frame needs (60 - 8) / 8 = 6.5 units, rounded up to 7.
     expect(ADMIN_FRAME_MIN_PB).toBe(7);
-    for (const [breakpoint, units] of Object.entries(adminPageFrame.pb)) {
-      expect(units, breakpoint).toBeGreaterThanOrEqual(ADMIN_FRAME_MIN_PB);
-    }
+    expect(adminPageFrame.pb).toBeGreaterThanOrEqual(ADMIN_FRAME_MIN_PB);
   });
 });

@@ -1,12 +1,12 @@
-import { FEEDBACK_LIST_MAX_LIMIT, FEEDBACK_SUBJECTS, FeedbackStatus, FeedbackSubject } from '@bike4mind/common';
+import { FEEDBACK_SUBJECTS, FeedbackStatus, FeedbackSubject } from '@bike4mind/common';
+import { ADMIN_PAGE_SIZES } from '../shared/adminStyles';
 
 /**
- * Page sizes offered for the feedback list. Must equal DataTable's PAGE_SIZES, the list's only pager
- * (constants.test.ts pins it); not imported from there because feedbackTabSearch.ts reads this file
- * and the router imports that eagerly, so it stays React-free. The top size is
- * FEEDBACK_LIST_MAX_LIMIT because GET /api/feedback rejects a larger limit outright.
+ * Page sizes offered for the feedback list: the DataTable footer's, its only pager. Read from the
+ * React-free adminStyles.ts because the router imports this file eagerly through feedbackTabSearch.ts.
+ * GET /api/feedback rejects a limit above FEEDBACK_LIST_MAX_LIMIT outright (constants.test.ts pins it).
  */
-export const FEEDBACK_PAGE_SIZE_OPTIONS = [25, 50, FEEDBACK_LIST_MAX_LIMIT];
+export const FEEDBACK_PAGE_SIZE_OPTIONS: readonly number[] = ADMIN_PAGE_SIZES;
 
 export const FEEDBACK_DEFAULT_PAGE_SIZE = FEEDBACK_PAGE_SIZE_OPTIONS[0];
 

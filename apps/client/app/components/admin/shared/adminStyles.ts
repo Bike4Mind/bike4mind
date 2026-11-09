@@ -32,7 +32,7 @@ export const adminSurface = {
 export const adminPageFrame = {
   px: { xs: 2, md: 4 },
   pt: { xs: 2, md: 3 },
-  pb: { xs: 8, md: 8 },
+  pb: 8,
 };
 
 /**
@@ -40,6 +40,12 @@ export const adminPageFrame = {
  * is 60 px up (20 px gap + 40 px pill), and the DataTable footer keeps 8 px under its pager buttons.
  */
 export const ADMIN_FRAME_MIN_PB = 7;
+
+/**
+ * Rows-per-page sizes the DataTable footer offers. Feedback/constants.ts derives the page sizes its URL
+ * parser accepts from this, so the footer never offers one the URL would drop.
+ */
+export const ADMIN_PAGE_SIZES = [25, 50, 100] as const;
 
 /** Max content width for detail and settings pages; list pages stay full width. */
 export const ADMIN_DETAIL_MAX_WIDTH = 1280;

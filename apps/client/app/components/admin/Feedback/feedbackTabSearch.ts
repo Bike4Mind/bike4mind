@@ -60,13 +60,13 @@ export type FeedbackView = {
   limit: number;
 };
 
-const toStatusFilters = (checked: readonly FeedbackStatus[]): Record<FeedbackStatus, boolean> =>
+export const toStatusFilters = (checked: readonly FeedbackStatus[]): Record<FeedbackStatus, boolean> =>
   Object.fromEntries(FEEDBACK_STATUS_ORDER.map(status => [status, checked.includes(status)])) as Record<
     FeedbackStatus,
     boolean
   >;
 
-const checkedStatuses = (statusFilters: Record<FeedbackStatus, boolean>): FeedbackStatus[] =>
+export const checkedStatuses = (statusFilters: Record<FeedbackStatus, boolean>): FeedbackStatus[] =>
   FEEDBACK_STATUS_ORDER.filter(status => statusFilters[status]);
 
 export const DEFAULT_FEEDBACK_VIEW: FeedbackView = {
