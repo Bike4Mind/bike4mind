@@ -28,7 +28,7 @@ type WorkerScope = { onmessage: (event: { data: unknown }) => Promise<void> };
  * leans on (self, a blob: URL for the model source) are stood in for, nothing else. `wasm` is the
  * page's precompiled module, as the engine page hands it over; without one the worker loads its own.
  */
-async function build(source: string, print: boolean, wasm: object | null = null): Promise<Reply> {
+async function boot(source: string, wasm: object | null): Promise<{ worker: WorkerScope; posted: unknown[] }> {
   const asset = resolveEngineAsset('/worker.js');
   if (asset?.kind !== 'inline') throw new Error('worker.js is not served inline');
   const manifold = pathToFileURL(manifoldPath).href;
@@ -43,6 +43,11 @@ async function build(source: string, print: boolean, wasm: object | null = null)
   await import(/* @vite-ignore */ pathToFileURL(file).href);
   const worker = (globalThis as unknown as { self: WorkerScope }).self;
   await worker.onmessage({ data: { type: 'init', wasm } });
+  return { worker, posted };
+}
+
+async function build(source: string, print: boolean, wasm: object | null = null): Promise<Reply> {
+  const { worker, posted } = await boot(source, wasm);
   expect(posted).toEqual([{ type: 'ready' }]);
   await worker.onmessage({ data: { type: 'build', source, params: {}, print } });
   return posted[1] as Reply;
@@ -119,6 +124,14 @@ describe('model worker', () => {
     const reply = await build(OVERLAPPING, false, wasm);
     expect(reply.ok && reply.parts.map(part => part.name)).toEqual(['a', 'b']);
     expect(instantiate).toHaveBeenCalledWith(wasm, expect.anything());
+    instantiate.mockRestore();
+  });
+
+  it('reports a failed instantiate as a start failure instead of hanging', async () => {
+    const wasm = await wasmApi.compile(readFileSync(join(manifoldPath, '..', 'manifold.wasm')));
+    const instantiate = vi.spyOn(wasmApi, 'instantiate').mockRejectedValueOnce(new Error('out of memory'));
+    const { posted } = await boot(OVERLAPPING, wasm);
+    expect(posted).toEqual([{ type: 'failed', error: 'The model engine failed to start: out of memory' }]);
     instantiate.mockRestore();
   });
 });

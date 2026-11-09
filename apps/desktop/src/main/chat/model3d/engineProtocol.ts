@@ -93,8 +93,12 @@ function stopActive() {
   clearTimeout(active.timer);
   active = null;
 }
-function bootTimeout() {
-  return new Promise((resolve) => setTimeout(() => resolve('The model engine did not start within ' + BOOT_TIMEOUT_MS / 1000 + ' s.'), BOOT_TIMEOUT_MS));
+function bootOrTimeout(ready) {
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve('The model engine did not start within ' + BOOT_TIMEOUT_MS / 1000 + ' s.'), BOOT_TIMEOUT_MS);
+  });
+  return Promise.race([ready, timeout]).finally(() => clearTimeout(timer));
 }
 async function run(id, source, params, print) {
   stopActive();
@@ -102,7 +106,7 @@ async function run(id, source, params, print) {
   const token = latest;
   next = next || spawn();
   const engine = next;
-  const boot = await Promise.race([engine.ready, bootTimeout()]);
+  const boot = await bootOrTimeout(engine.ready);
   // Superseded while booting: the worker stays as next, for the build that superseded this one.
   if (token !== latest) return;
   next = null;
@@ -229,11 +233,14 @@ let m = null;
 // The page's compiled module when it has one, so a new worker instantiates instead of fetching and compiling.
 async function load(wasm) {
   if (!wasm) return Module();
-  return Module({
-    instantiateWasm(imports, done) {
-      WebAssembly.instantiate(wasm, imports).then((instance) => done(instance, wasm));
-      return {};
-    },
+  // Emscripten never settles Module() when instantiateWasm fails, so the failure is surfaced here.
+  return new Promise((resolve, reject) => {
+    Module({
+      instantiateWasm(imports, done) {
+        WebAssembly.instantiate(wasm, imports).then((instance) => done(instance, wasm), reject);
+        return {};
+      },
+    }).then(resolve, reject);
   });
 }
 
