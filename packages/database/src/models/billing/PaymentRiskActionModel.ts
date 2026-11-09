@@ -16,7 +16,7 @@ export interface IPaymentRiskActionDocument extends Document {
   updatedAt: Date;
 }
 
-export const PaymentRiskActionSchema = new Schema<IPaymentRiskActionDocument>(
+export const PaymentRiskActionSchema: Schema<IPaymentRiskActionDocument> = new Schema<IPaymentRiskActionDocument>(
   {
     key: { type: String, required: true, unique: true },
     userId: { type: String, default: null },
