@@ -226,10 +226,12 @@ export default defineConfig({
         storageState: adminAuthFile,
       },
       dependencies: ['setup-core', 'unauthenticated'],
+      // signup-grants rides here for the admin session; it registers its own accounts through OTC.
       testMatch: [
         /(?:^|\/)admin\.spec\.ts$/,
         /(?:^|\/)admin-settings-secrets\.spec\.ts$/,
         /(?:^|\/)admin-approvals\.spec\.ts$/,
+        /(?:^|\/)signup-grants\.spec\.ts$/,
       ],
     },
     // Per-spec test projects (each depends only on its own setup)
