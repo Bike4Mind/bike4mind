@@ -24,15 +24,21 @@ export type StepResult<K extends GenerationJobKind = GenerationJobKind> =
  */
 export type GenerationJobStepContext = { signal: AbortSignal };
 
+/**
+ * `async`: submit creates a provider job that poll follows, and a cancel stops it at the provider.
+ * `sync`: submit makes the whole provider call and returns the outcome. The job reports running for the call's
+ * duration, and since the provider bills from the moment it starts, a job is only cancellable before it.
+ */
+export type GenerationJobSubmitMode = 'sync' | 'async';
+
 /** One kind's steps; each method only ever receives a job of that kind (the engine dispatches by `job.kind`). */
 export type GenerationJobHandler<K extends GenerationJobKind = GenerationJobKind> = {
   kind: K;
   /**
-   * `async`: submit creates a provider job that poll follows, and a cancel stops it at the provider.
-   * `sync`: submit makes the whole provider call and returns the outcome. The job reports running for the call's
-   * duration, and since the provider bills from the moment it starts, a job is only cancellable before it.
+   * Fixed for the kind, or chosen per job when a kind's providers differ (images). A per-job choice must depend only
+   * on fields that never change after create, since the engine reads it at submit, cancel and lease recovery.
    */
-  submitMode: 'sync' | 'async';
+  submitMode: GenerationJobSubmitMode | ((job: IGenerationJobDocumentOf<K>) => GenerationJobSubmitMode);
   /**
    * Throwing means the outcome is unknown (the provider may have created a job), so the engine fails it as
    * orphaned_submit. Return `{ next: 'retry' }` for anything that created nothing (a failure before the provider

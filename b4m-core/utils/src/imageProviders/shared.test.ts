@@ -103,7 +103,7 @@ describe('image data helpers', () => {
 
   it('refuses to decode output that is not inline', () => {
     expect(() => decodeInlineOutput({ kind: 'url', url: 'https://example.com/a.png' } as never)).toThrow(
-      'only produce inline output'
+      'expected inline image output'
     );
   });
 

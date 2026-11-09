@@ -395,7 +395,9 @@ describe('BFLImageService - expected failures stay below error level', () => {
     pollReturns({ status: 'Pending' });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const thrown = await (service as any).pollForResult('req-1', POLLING_URL, 1, 0).catch((e: unknown) => e);
+    const thrown = await (service as any)
+      .pollForResult({ id: 'req-1', pollingUrl: POLLING_URL }, 1, 0)
+      .catch((e: unknown) => e);
 
     expect(thrown).toBeInstanceOf(ImageProviderUnavailableError);
     expect((thrown as ImageProviderUnavailableError).logContext).toMatchObject({
@@ -410,7 +412,9 @@ describe('BFLImageService - expected failures stay below error level', () => {
     pollReturns({ status });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const thrown = await (service as any).pollForResult('req-1', POLLING_URL, 1, 0).catch((e: unknown) => e);
+    const thrown = await (service as any)
+      .pollForResult({ id: 'req-1', pollingUrl: POLLING_URL }, 1, 0)
+      .catch((e: unknown) => e);
 
     expect(thrown).toBeInstanceOf(ImageProviderUnavailableError);
   });
@@ -431,7 +435,9 @@ describe('BFLImageService - expected failures stay below error level', () => {
     pollReturns({ status: 'Task not found' });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const thrown = await (service as any).pollForResult('req-1', POLLING_URL, 1, 0).catch((e: unknown) => e);
+    const thrown = await (service as any)
+      .pollForResult({ id: 'req-1', pollingUrl: POLLING_URL }, 1, 0)
+      .catch((e: unknown) => e);
 
     expect(thrown).not.toBeInstanceOf(ImageProviderUnavailableError);
     expect((thrown as Error).message).toBe('BFL polling ended on unexpected status: Task not found');

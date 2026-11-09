@@ -1,9 +1,16 @@
 import type { ImageInputRole } from '@bike4mind/common';
 import { ImageInputRejectedError, ImageModerationBlockedError } from '../imageGeneration/imageGenerationErrors';
-import type { ProviderOutput, ProviderTerminalResult } from '../generationProviders/types';
+import {
+  ProviderOutputUnavailableError,
+  readBoundedResponse,
+  type ProviderOutput,
+  type ProviderTerminalResult,
+} from '../generationProviders/types';
 import type { ImageInputs, ResolvedImageInput } from './types';
 
 const MAX_CAUSE_DEPTH = 5;
+// Well above a large PNG at the biggest size any image model renders; the cap only stops a runaway download.
+export const MAX_IMAGE_OUTPUT_BYTES = 64 * 1024 * 1024;
 const DATA_URL_PATTERN = /^data:([^;,]+);base64,(.+)$/s;
 
 /**
@@ -30,12 +37,14 @@ export const raceAbort = <T>(start: () => Promise<T>, signal: AbortSignal): Prom
   });
 };
 
-// The services rewrap SDK errors in prose; the SDK error (with its HTTP status) rides on `cause`.
+// The services rewrap SDK errors in prose; the SDK error (with its HTTP status) rides on `cause`. OpenAI SDK errors
+// carry `status`; axios errors (BFL) carry it on `response`.
 const httpStatusOf = (error: unknown): number | undefined => {
   let current: unknown = error;
   for (let depth = 0; depth < MAX_CAUSE_DEPTH && current instanceof Error; depth++) {
-    const status: unknown = (current as { status?: unknown }).status;
+    const { status, response } = current as { status?: unknown; response?: { status?: unknown } };
     if (typeof status === 'number') return status;
+    if (typeof response?.status === 'number') return response.status;
     current = current.cause;
   }
   return undefined;
@@ -76,6 +85,32 @@ export const dataUrlToOutput = (dataUrl: string): ProviderOutput => {
 };
 
 export const decodeInlineOutput = (output: ProviderOutput): Buffer => {
-  if (output.kind !== 'inline') throw new Error('image providers only produce inline output');
+  if (output.kind !== 'inline') throw new Error('expected inline image output');
   return Buffer.from(output.base64, 'base64');
+};
+
+const assertHttps = (url: URL): void => {
+  if (url.protocol !== 'https:') throw new Error(`image output url must be https, got ${url.protocol}`);
+};
+
+/**
+ * Downloads a provider's delivery URL (an unauthenticated, short-lived link) under the image size cap. One redirect
+ * is followed, and both hops must be https. An expired or purged link throws ProviderOutputUnavailableError.
+ */
+export const downloadImageOutput = async (output: ProviderOutput, signal: AbortSignal): Promise<Buffer> => {
+  if (output.kind !== 'url') throw new Error('expected url image output');
+  const url = new URL(output.url);
+  assertHttps(url);
+  let response = await fetch(url, { redirect: 'manual', signal });
+  if (response.status >= 300 && response.status < 400) {
+    const location = response.headers.get('location');
+    if (!location) throw new Error('image output redirect without a location');
+    const target = new URL(location, url);
+    assertHttps(target);
+    await response.body?.cancel();
+    response = await fetch(target, { redirect: 'error', signal });
+  }
+  if ([403, 404, 410].includes(response.status)) throw new ProviderOutputUnavailableError(response.status);
+  if (!response.ok) throw new Error(`image output download failed with HTTP ${response.status}`);
+  return readBoundedResponse(response, MAX_IMAGE_OUTPUT_BYTES);
 };

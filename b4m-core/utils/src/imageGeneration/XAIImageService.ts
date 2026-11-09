@@ -62,8 +62,9 @@ export class XAIImageService extends AIImageService {
 
       Logger.error('XAI image generation failed:', error);
 
+      // `cause` keeps the SDK error (and its HTTP status) for callers that classify the failure.
       if (error instanceof Error) {
-        throw new Error(`XAI image generation failed: ${error.message}`);
+        throw new Error(`XAI image generation failed: ${error.message}`, { cause: error });
       }
 
       throw new Error('XAI image generation failed with unknown error');

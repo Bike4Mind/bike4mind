@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ALL_IMAGE_MODELS,
+  BFL_IMAGE_MODELS,
   CreditHolderType,
   IMAGE_MODEL_CATALOG,
   ImageModels,
@@ -8,7 +9,10 @@ import {
 } from '@bike4mind/common';
 import {
   createImageProviderRegistry,
+  ProviderSubmitError,
+  type AsyncImageProvider,
   type ImageProvider,
+  type ProviderPollResult,
   type ProviderTerminalResult,
 } from '@bike4mind/utils/imageProviders';
 import { Logger } from '@bike4mind/observability';
@@ -388,5 +392,121 @@ describe('image job handler through the real engine', () => {
     expect(generate).not.toHaveBeenCalled();
     expect(releaseCreditHold).toHaveBeenCalledTimes(1);
     expect(settleCreditHold).not.toHaveBeenCalled();
+  });
+});
+
+describe('image job handler with an async (submit then poll) provider', () => {
+  const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7, 7]);
+  const DELIVERY_URL = 'https://delivery.example/sample.png';
+  const handle = { provider: 'bfl' as const, data: { id: 'task-1', pollingUrl: 'https://api.bfl.ai/v1/r' } };
+  const fluxRequest = () => request({ model: ImageModels.FLUX_PRO_1_1 });
+
+  const makeAsyncProvider = (polls: ProviderPollResult[]) => {
+    const queue = [...polls];
+    return {
+      mode: 'async' as const,
+      id: 'bfl' as const,
+      models: BFL_IMAGE_MODELS,
+      submit: vi.fn<AsyncImageProvider['submit']>(async () => handle),
+      poll: vi.fn<AsyncImageProvider['poll']>(async () => queue.shift() ?? { status: 'running' }),
+      fetchOutput: vi.fn<AsyncImageProvider['fetchOutput']>(async () => PNG_MAGIC),
+    } satisfies AsyncImageProvider;
+  };
+
+  const setupAsync = (polls: ProviderPollResult[]) => {
+    const bfl = makeAsyncProvider(polls);
+    const t = setup(
+      vi.fn<Generate>(async () => succeeded),
+      { providers: createImageProviderRegistry([bfl]) }
+    );
+    return { ...t, bfl };
+  };
+
+  const readyPoll: ProviderPollResult = {
+    status: 'succeeded',
+    output: { kind: 'url', url: DELIVERY_URL, requiresAuth: false },
+  };
+
+  it('submits, polls across steps, then downloads, moderates, saves and settles', async () => {
+    const t = setupAsync([{ status: 'running' }, readyPoll]);
+    const created = await create(t, fluxRequest());
+    const job = t.jobOf(created);
+
+    expect(await t.engine.step(job.id)).toBe('advanced');
+    expect(t.jobOf(created)).toMatchObject({ state: 'running', payload: { providerHandle: handle } });
+
+    await t.runToCompletion();
+    const done = t.jobOf(created);
+    expect(done.state).toBe('succeeded');
+    expect(t.bfl.submit).toHaveBeenCalledTimes(1);
+    expect(t.bfl.poll).toHaveBeenCalledTimes(2);
+    expect(t.bfl.fetchOutput).toHaveBeenCalledWith(readyPoll.output, expect.objectContaining({ apiKey: 'key' }));
+    // A delivery URL carries no type: the bytes are sniffed.
+    expect(t.deps.moderate).toHaveBeenCalledWith(expect.objectContaining({ mimeType: 'image/png' }));
+    expect(done.payload.output).toMatchObject({ location: 'files', contentType: 'image/png' });
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ generation: expect.objectContaining({ provider: 'bfl' }) })
+    );
+    expect(settleCreditHold).toHaveBeenCalledTimes(1);
+    expect(releaseCreditHold).not.toHaveBeenCalled();
+  });
+
+  it('lets a running async job be cancelled, unlike a sync one mid-call', async () => {
+    const t = setupAsync([{ status: 'running' }]);
+    const created = await create(t, fluxRequest());
+    const job = t.jobOf(created);
+    await t.engine.step(job.id);
+    const outcome = await t.engine.requestCancel(t.jobOf(created));
+    expect(outcome.status).toBe('requested');
+  });
+
+  it('fails a definitive, non-retryable submit rejection and releases the hold', async () => {
+    const t = setupAsync([]);
+    t.bfl.submit.mockRejectedValue(new ProviderSubmitError('422 invalid', true, { status: 422 }, false));
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'provider_error' } });
+    expect(t.bfl.submit).toHaveBeenCalledTimes(1);
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails a submit with an unknown outcome as orphaned_submit, never resubmitting', async () => {
+    const t = setupAsync([]);
+    t.bfl.submit.mockRejectedValue(new Error('socket hang up'));
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'orphaned_submit' } });
+    expect(t.bfl.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks on a provider moderation verdict and releases the hold', async () => {
+    const t = setupAsync([{ status: 'blocked', reason: 'Content Moderated', raw: {} }]);
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'blocked', error: { code: 'content_blocked' } });
+    expect(t.bfl.fetchOutput).not.toHaveBeenCalled();
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses inline output from an async provider: its bytes would ride on the payload', async () => {
+    const t = setupAsync([
+      {
+        status: 'succeeded',
+        output: { kind: 'inline', base64: PNG_MAGIC.toString('base64'), contentType: 'image/png' },
+      },
+    ]);
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'provider_error' } });
+  });
+
+  it('fails a download that is not an image', async () => {
+    const t = setupAsync([readyPoll]);
+    t.bfl.fetchOutput.mockResolvedValue(Buffer.from('<html>expired</html>'));
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'provider_error' } });
+    expect(t.deps.moderate).not.toHaveBeenCalled();
+    expect(t.deps.saveToFiles).not.toHaveBeenCalled();
   });
 });

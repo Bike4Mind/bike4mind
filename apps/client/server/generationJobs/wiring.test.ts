@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  ALL_IMAGE_MODELS,
+  IMAGE_MODEL_CATALOG,
   StorageLimitError,
   type IGenerationJobDocument,
   type ImageProviderId,
@@ -104,6 +106,7 @@ import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { createImageProviderRegistry } from '@bike4mind/utils/imageProviders';
 import { createMusicProviderRegistry } from '@bike4mind/utils/musicProviders';
 import { createVideoProviderRegistry } from '@bike4mind/utils/videoProviders';
+import { createImageProviderRegistry } from '@bike4mind/utils/imageProviders';
 import {
   buildImageProviders,
   buildMusicProviders,
@@ -264,21 +267,28 @@ describe('music provider key selection', () => {
 });
 
 describe('image provider key selection', () => {
-  const keys = { openai: 'o-key', gemini: 'g-key', xai: 'x-key' } as never;
+  const keys = { openai: 'o-key', gemini: 'g-key', xai: 'x-key', bfl: 'b-key' } as never;
 
-  it('maps openai and gemini to the keys the chat image paths use', () => {
+  it('maps each provider to the key the chat image paths use', () => {
     expect(selectImageProviderKey('openai', keys)).toBe('o-key');
     expect(selectImageProviderKey('gemini', keys)).toBe('g-key');
+    expect(selectImageProviderKey('bfl', keys)).toBe('b-key');
+    expect(selectImageProviderKey('xai', keys)).toBe('x-key');
     expect(usableApiKey(selectImageProviderKey('openai', { openai: 'expired' } as never))).toBeNull();
-  });
-
-  it('gives providers without an image job adapter no key', () => {
-    expect(selectImageProviderKey('bfl', keys)).toBeNull();
-    expect(selectImageProviderKey('xai', keys)).toBeNull();
   });
 
   it('throws for a provider id with no mapping', () => {
     expect(() => selectImageProviderKey('unmapped' as ImageProviderId, keys)).toThrow(/no API key mapping/);
+  });
+});
+
+describe('buildImageProviders', () => {
+  // createImageJobs refuses a model whose provider is not registered (model_unavailable).
+  it.each(['bfl', 'xai'] as const)('serves every %s catalog model', providerId => {
+    const registry = createImageProviderRegistry(buildImageProviders());
+    const models = ALL_IMAGE_MODELS.filter(model => IMAGE_MODEL_CATALOG[model].provider === providerId);
+    expect(models.length).toBeGreaterThan(0);
+    for (const model of models) expect(registry.get(providerId)?.models).toContain(model);
   });
 });
 
