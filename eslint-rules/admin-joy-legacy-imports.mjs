@@ -99,7 +99,7 @@ export default {
   'WebhookAuditLogs/index.tsx': [[3, '22653ab828d91b71']],
   'email/EmailActivityHistory.tsx': [[2, '5d7be40ee2063946']],
   'email/EmailJobDetail.tsx': [[2, '81717d4fa42f09a7']],
-  'email/EmailJobsPanel.tsx': [[2, '5aa722f629a194a4']],
+  'email/EmailJobsPanel.tsx': [[2, '5d95c7fb7773210d']],
   'email/EmailPreviewModal.tsx': [[2, '68f4e2bf66b2c474']],
-  'email/EmailTemplatesPanel.tsx': [[2, 'b8a7c6938ed897df']],
+  'email/EmailTemplatesPanel.tsx': [[2, 'f9c81b2ddcc066d8']],
 };

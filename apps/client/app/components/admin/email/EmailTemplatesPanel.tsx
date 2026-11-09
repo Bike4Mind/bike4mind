@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import {
-  Box,
   Button,
   Table,
   Sheet,
@@ -10,7 +9,6 @@ import {
   IconButton,
   Chip,
   Stack,
-  CircularProgress,
   DialogTitle,
   DialogContent,
   DialogActions,
@@ -28,6 +26,8 @@ import {
   useEmailJobs,
 } from '@client/app/hooks/data/emailMarketing';
 import { EmailCategory, IEmailTemplateDocument } from '@bike4mind/common';
+import { EmptyState, ErrorState, LoadingState } from '../shared';
+import { ADMIN_REGION_GAP } from '../shared/adminStyles';
 import EmailTemplateEditor from './EmailTemplateEditor';
 
 const CATEGORY_LABELS: Record<EmailCategory, string> = {
@@ -39,7 +39,7 @@ const CATEGORY_LABELS: Record<EmailCategory, string> = {
 };
 
 export default function EmailTemplatesPanel() {
-  const { data: templates, isLoading, refetch } = useEmailTemplates({ limit: 100 });
+  const { data: templates, isLoading, isError, isFetching, refetch } = useEmailTemplates({ limit: 100 });
   const { data: jobs } = useEmailJobs({ limit: 1000 });
   const deleteMutation = useDeleteEmailTemplate();
   const cloneMutation = useCloneEmailTemplate();
@@ -116,18 +116,17 @@ export default function EmailTemplatesPanel() {
 
   // Show list view - simple layout, scrolls with page
   return (
-    <Box sx={{ p: 1 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-        <Typography level="title-lg">Email Templates</Typography>
-        <Button startDecorator={<AddIcon />} onClick={handleOpenCreate} data-testid="new-template-btn">
-          New Template
+    <Stack sx={{ gap: ADMIN_REGION_GAP, minWidth: 0 }} data-testid="email-templates-panel">
+      <Stack direction="row" justifyContent="flex-end" flexWrap="wrap" gap={1}>
+        <Button size="sm" startDecorator={<AddIcon />} onClick={handleOpenCreate} data-testid="new-template-btn">
+          New template
         </Button>
-      </Box>
+      </Stack>
 
       {isLoading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', p: 4 }}>
-          <CircularProgress />
-        </Box>
+        <LoadingState label="Loading templates" testId="email-templates-loading" />
+      ) : isError && !templates ? (
+        <ErrorState message="Could not load templates." onRetry={() => void refetch()} retrying={isFetching} />
       ) : (
         <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
           <Table stickyHeader>
@@ -144,9 +143,21 @@ export default function EmailTemplatesPanel() {
               {templates?.data?.length === 0 && (
                 <tr>
                   <td colSpan={5}>
-                    <Typography level="body-sm" sx={{ textAlign: 'center', py: 4 }}>
-                      No templates yet. Create your first template to get started.
-                    </Typography>
+                    <EmptyState
+                      title="No templates yet"
+                      description="A template holds the subject and body that a campaign sends."
+                      action={
+                        <Button
+                          size="sm"
+                          variant="outlined"
+                          startDecorator={<AddIcon />}
+                          onClick={handleOpenCreate}
+                          data-testid="email-templates-empty-create-btn"
+                        >
+                          New template
+                        </Button>
+                      }
+                    />
                   </td>
                 </tr>
               )}
@@ -245,6 +256,6 @@ export default function EmailTemplatesPanel() {
           </DialogActions>
         </ModalDialog>
       </Modal>
-    </Box>
+    </Stack>
   );
 }

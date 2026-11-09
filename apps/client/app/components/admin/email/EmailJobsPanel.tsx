@@ -8,7 +8,6 @@ import {
   IconButton,
   Chip,
   Stack,
-  CircularProgress,
   LinearProgress,
   Checkbox,
   FormControl,
@@ -22,6 +21,8 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import FilterListIcon from '@mui/icons-material/FilterList';
 import { useEmailJobs, useCancelEmailJob, useCloneEmailJob } from '@client/app/hooks/data/emailMarketing';
 import { EmailJobStatus, EmailJobOverallStatus, IEmailJobDocument } from '@bike4mind/common';
+import { EmptyState, ErrorState, LoadingState } from '../shared';
+import { ADMIN_REGION_GAP } from '../shared/adminStyles';
 import EmailJobDetail from './EmailJobDetail';
 
 export default function EmailJobsPanel() {
@@ -34,7 +35,13 @@ export default function EmailJobsPanel() {
   const [dateRange, setDateRange] = useState<{ start: string; end: string }>({ start: '', end: '' });
   const [showFilters, setShowFilters] = useState(false);
 
-  const { data: jobs, isLoading } = useEmailJobs({
+  const {
+    data: jobs,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useEmailJobs({
     excludeTest,
     startDate: dateRange.start || undefined,
     endDate: dateRange.end || undefined,
@@ -42,9 +49,16 @@ export default function EmailJobsPanel() {
   const cancelMutation = useCancelEmailJob();
   const cloneMutation = useCloneEmailJob();
 
+  const hasFilters = excludeTest || Boolean(dateRange.start) || Boolean(dateRange.end);
+
   const handleOpenCreate = () => {
     setIsCreating(true);
     setSelectedJobId(null);
+  };
+
+  const clearFilters = () => {
+    setExcludeTest(false);
+    setDateRange({ start: '', end: '' });
   };
 
   const handleOpenEdit = (job: IEmailJobDocument) => {
@@ -85,28 +99,26 @@ export default function EmailJobsPanel() {
 
   // Show list view - simple layout, scrolls with page
   return (
-    <Box sx={{ p: 1 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-        <Typography level="title-lg">Email Campaigns</Typography>
-        <Stack direction="row" spacing={1}>
-          <Button
-            variant={showFilters ? 'soft' : 'plain'}
-            color="neutral"
-            startDecorator={<FilterListIcon />}
-            onClick={() => setShowFilters(!showFilters)}
-            data-testid="filter-campaigns-btn"
-          >
-            Filters
-          </Button>
-          <Button startDecorator={<AddIcon />} onClick={handleOpenCreate} data-testid="new-campaign-btn">
-            New Campaign
-          </Button>
-        </Stack>
-      </Box>
+    <Stack sx={{ gap: ADMIN_REGION_GAP, minWidth: 0 }} data-testid="email-campaigns-panel">
+      <Stack direction="row" justifyContent="flex-end" flexWrap="wrap" gap={1}>
+        <Button
+          size="sm"
+          variant={showFilters ? 'soft' : 'plain'}
+          color="neutral"
+          startDecorator={<FilterListIcon />}
+          onClick={() => setShowFilters(!showFilters)}
+          data-testid="filter-campaigns-btn"
+        >
+          Filters
+        </Button>
+        <Button size="sm" startDecorator={<AddIcon />} onClick={handleOpenCreate} data-testid="new-campaign-btn">
+          New campaign
+        </Button>
+      </Stack>
 
       {/* Filter Controls */}
       {showFilters && (
-        <Sheet variant="soft" sx={{ p: 2, borderRadius: 'md', mb: 1 }}>
+        <Sheet variant="soft" sx={{ p: 2, borderRadius: 'md' }}>
           <Stack direction="row" spacing={3} alignItems="center" flexWrap="wrap">
             <Checkbox
               label="Exclude test campaigns"
@@ -132,17 +144,8 @@ export default function EmailJobsPanel() {
                 data-testid="date-range-end-input"
               />
             </FormControl>
-            {(excludeTest || dateRange.start || dateRange.end) && (
-              <Button
-                size="sm"
-                variant="plain"
-                color="neutral"
-                onClick={() => {
-                  setExcludeTest(false);
-                  setDateRange({ start: '', end: '' });
-                }}
-                data-testid="clear-filters-btn"
-              >
+            {hasFilters && (
+              <Button size="sm" variant="plain" color="neutral" onClick={clearFilters} data-testid="clear-filters-btn">
                 Clear Filters
               </Button>
             )}
@@ -151,9 +154,9 @@ export default function EmailJobsPanel() {
       )}
 
       {isLoading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', p: 4 }}>
-          <CircularProgress />
-        </Box>
+        <LoadingState label="Loading campaigns" testId="email-campaigns-loading" />
+      ) : isError && !jobs ? (
+        <ErrorState message="Could not load campaigns." onRetry={() => void refetch()} retrying={isFetching} />
       ) : (
         <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
           <Table stickyHeader>
@@ -171,9 +174,37 @@ export default function EmailJobsPanel() {
               {jobs?.data?.length === 0 && (
                 <tr>
                   <td colSpan={6}>
-                    <Typography level="body-sm" sx={{ textAlign: 'center', py: 4 }}>
-                      No campaigns yet. Create your first campaign to get started.
-                    </Typography>
+                    {hasFilters ? (
+                      <EmptyState
+                        title="No campaigns match these filters"
+                        action={
+                          <Button
+                            size="sm"
+                            variant="outlined"
+                            onClick={clearFilters}
+                            data-testid="email-campaigns-empty-clear-filters-btn"
+                          >
+                            Clear filters
+                          </Button>
+                        }
+                      />
+                    ) : (
+                      <EmptyState
+                        title="No campaigns yet"
+                        description="A campaign sends a template to the recipients you pick, now or on a schedule."
+                        action={
+                          <Button
+                            size="sm"
+                            variant="outlined"
+                            startDecorator={<AddIcon />}
+                            onClick={handleOpenCreate}
+                            data-testid="email-campaigns-empty-create-btn"
+                          >
+                            New campaign
+                          </Button>
+                        }
+                      />
+                    )}
                   </td>
                 </tr>
               )}
@@ -325,6 +356,6 @@ export default function EmailJobsPanel() {
           </Table>
         </Sheet>
       )}
-    </Box>
+    </Stack>
   );
 }
