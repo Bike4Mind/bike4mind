@@ -210,6 +210,8 @@ describe('drawnInRefundScope', () => {
 });
 
 describe('alertDripCapDefault', () => {
+  const DAY = '2030-01-01';
+
   it('alerts once per trickle pool-day with the default cap', async () => {
     const notify = vi.fn().mockResolvedValue(undefined);
     const { repository, adapters } = buildAdapters({ notify });
