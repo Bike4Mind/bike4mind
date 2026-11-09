@@ -255,6 +255,30 @@ describe('AdminReleaseNotesTab', () => {
     await waitFor(() => expect(screen.queryByTestId('release-notes-updating')).toBeNull());
   });
 
+  it('shows loading when switching from an empty list while a new filter loads', async () => {
+    let releasePublished: () => void = () => undefined;
+    mockGet.mockImplementation(async (url: string, opts?: { params?: { status: string } }) => {
+      if (url.endsWith('/config')) return { data: { config, malformed: false } };
+      if (opts?.params?.status === 'published') {
+        await new Promise<void>(resolve => (releasePublished = resolve));
+        return {
+          data: { data: [note({ id: 'p1', state: 'published', headline: 'Published one' })], next_cursor: null },
+        };
+      }
+      return { data: { data: [], next_cursor: null } };
+    });
+    renderTab();
+    expect(await screen.findByText('No scheduled release notes')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('release-notes-filter-published-btn'));
+    expect(await screen.findByTestId('release-notes-loading')).toBeTruthy();
+    expect(screen.queryByText('No published release notes')).toBeNull();
+
+    releasePublished();
+    expect(await screen.findByText('Published one')).toBeTruthy();
+    expect(screen.queryByTestId('release-notes-loading')).toBeNull();
+  });
+
   it('refreshes countdowns for all retained rows when another page arrives', async () => {
     const initialTime = new Date('2026-11-09T00:00:00Z').getTime();
     const clock = vi.spyOn(Date, 'now').mockReturnValue(initialTime);
