@@ -61,8 +61,6 @@ const componentsByFile = {
   'RateLimits/index.tsx': ['Table'],
   'RegistrationInvites/components/CreateInviteModal.tsx': ['Modal'],
   'RegistrationInvites/components/DeleteConfirmModal.tsx': ['Modal'],
-  'ReleaseNotes/AdminReleaseNotesTab.tsx': ['Card'],
-  'ReleaseNotes/ReleaseNoteEditDialog.tsx': ['Modal'],
   'RetrievalRateTab.tsx': ['Card'],
   'ScopedOverridesByScope.tsx': ['Card'],
   'SlackMetrics/SlackMetricsTab.tsx': ['Card'],

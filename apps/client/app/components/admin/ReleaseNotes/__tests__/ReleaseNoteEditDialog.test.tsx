@@ -1,6 +1,6 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -66,14 +66,29 @@ describe('ReleaseNoteEditDialog', () => {
     });
   });
 
-  const renderDialog = (value: AdminReleaseNote) =>
+  const renderDialog = (value: AdminReleaseNote, onClose = vi.fn()) =>
     render(
       <QueryClientProvider client={new QueryClient()}>
         <CssVarsProvider theme={appTheme}>
-          <ReleaseNoteEditDialog note={value} onClose={vi.fn()} />
+          <ReleaseNoteEditDialog note={value} onClose={onClose} />
         </CssVarsProvider>
       </QueryClientProvider>
     );
+
+  it('opens in the admin dialog shell, whose close button and Cancel both close without saving', () => {
+    const onClose = vi.fn();
+    renderDialog(note, onClose);
+
+    const dialog = screen.getByTestId('release-note-edit-dialog');
+    const title = within(dialog).getByRole('heading', { level: 2 });
+    expect(title.textContent).toBe('Edit release notes for v1.0.0');
+    expect(dialog).toHaveAttribute('aria-labelledby', title.id);
+
+    fireEvent.click(screen.getByTestId('release-note-edit-dialog-close-btn'));
+    fireEvent.click(screen.getByTestId('release-note-edit-cancel-btn'));
+    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(mockPatch).not.toHaveBeenCalled();
+  });
 
   it('sends the video when one is pasted', async () => {
     mockPatch.mockResolvedValue({ data: note });

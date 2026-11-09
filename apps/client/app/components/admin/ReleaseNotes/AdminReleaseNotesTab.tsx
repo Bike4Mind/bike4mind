@@ -1,7 +1,10 @@
 import React, { useState } from 'react';
-import { Alert, Box, Button, ButtonGroup, Card, Chip, Divider, Stack, Typography } from '@mui/joy';
+import { Box, Button, Stack, Typography } from '@mui/joy';
 import { toast } from 'sonner';
 import { getErrorMessage } from '@client/app/utils/error';
+import { SettingsDraftProvider } from '../SettingsDraftProvider';
+import { AdminPageHeader, EmptyState, ErrorState, LoadingState, SectionCard, StatusChip, ViewTabs } from '../shared';
+import { ADMIN_REGION_GAP } from '../shared/adminStyles';
 import ReleaseNoteEditDialog from './ReleaseNoteEditDialog';
 import ReleaseNotesConfigEditor from './ReleaseNotesConfigEditor';
 import {
@@ -12,23 +15,24 @@ import {
   useReleaseNoteStatus,
 } from './useReleaseNotes';
 
-const FILTERS: { value: ReleaseNoteState; label: string }[] = [
-  { value: 'scheduled', label: 'Scheduled' },
-  { value: 'published', label: 'Published' },
-  { value: 'hidden', label: 'Hidden' },
+const FILTERS: { value: ReleaseNoteState; label: string; empty: string }[] = [
+  { value: 'scheduled', label: 'Scheduled', empty: 'A new note waits here from its release until it goes live.' },
+  { value: 'published', label: 'Published', empty: 'Notes show here once they go live.' },
+  { value: 'hidden', label: 'Hidden', empty: 'Notes you hide show here.' },
 ];
 
 const MS_PER_HOUR = 60 * 60 * 1000;
 
 // `now` comes from the list fetch time so render stays pure.
 const StateChip: React.FC<{ note: AdminReleaseNote; now: number }> = ({ note, now }) => {
-  if (note.state === 'published') return <Chip color="success">Published</Chip>;
-  if (note.state === 'hidden') return <Chip color="neutral">Hidden</Chip>;
+  if (note.state === 'published') return <StatusChip tone="good" label="Published" />;
+  if (note.state === 'hidden') return <StatusChip tone="neutral" label="Hidden" />;
   const hours = Math.max(0, Math.ceil((new Date(note.publishAt).getTime() - now) / MS_PER_HOUR));
-  return <Chip color="warning">Goes live in {hours}h</Chip>;
+  return <StatusChip tone="warn" label={`Goes live in ${hours}h`} />;
 };
 
-const ReleaseNoteCard: React.FC<{
+/** One note as a row of the list card; rows are divided by hairlines, never cards of their own. */
+const ReleaseNoteRow: React.FC<{
   note: AdminReleaseNote;
   onAction: (note: AdminReleaseNote, action: ReleaseNoteAction) => void;
   onEdit: (note: AdminReleaseNote) => void;
@@ -37,42 +41,63 @@ const ReleaseNoteCard: React.FC<{
 }> = ({ note, onAction, onEdit, busy, now }) => {
   const empty = note.items.length === 0;
   return (
-    <Card variant="outlined" data-testid="release-notes-card">
-      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+    <Stack
+      component="article"
+      sx={{ gap: 1, p: 2, minWidth: 0, '& + &': { borderTop: '1px solid', borderColor: 'admin.border' } }}
+      data-testid="release-notes-row"
+    >
+      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
         <StateChip note={note} now={now} />
-        <Typography level="body-sm">{note.releaseTag}</Typography>
-        <Typography level="body-xs">publishes {new Date(note.publishAt).toLocaleString()}</Typography>
-        {note.editedAt && <Typography level="body-xs">edited</Typography>}
+        <Typography level="body-sm" sx={{ color: 'admin.ink' }}>
+          {note.releaseTag}
+        </Typography>
+        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+          publishes {new Date(note.publishAt).toLocaleString()}
+        </Typography>
+        {note.editedAt && (
+          <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+            edited
+          </Typography>
+        )}
         {note.deniedTerm && (
-          <Chip color="danger" variant="soft" data-testid="release-notes-denied-chip">
-            Withheld from the feed: mentions &quot;{note.deniedTerm}&quot;
-          </Chip>
+          <StatusChip
+            tone="bad"
+            label={`Withheld from the feed: mentions "${note.deniedTerm}"`}
+            data-testid="release-notes-denied-chip"
+          />
         )}
       </Stack>
-      <Typography level="title-md">{note.headline || '(no headline)'}</Typography>
-      {note.summary && <Typography level="body-sm">{note.summary}</Typography>}
+      <Typography level="title-md" sx={{ color: 'admin.ink', overflowWrap: 'anywhere' }}>
+        {note.headline || '(no headline)'}
+      </Typography>
+      {note.summary && (
+        <Typography level="body-sm" sx={{ color: 'admin.ink' }}>
+          {note.summary}
+        </Typography>
+      )}
       {empty ? (
-        <Typography level="body-sm" color="warning">
+        <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid="release-notes-no-items">
           No customer-facing items. Add items before this note can go live.
         </Typography>
       ) : (
         <Box component="ul" sx={{ m: 0, pl: 3 }}>
           {note.items.map((item, index) => (
             <li key={index}>
-              <Typography level="body-sm">
+              <Typography level="body-sm" sx={{ color: 'admin.ink' }}>
                 [{item.category}] {item.text}
               </Typography>
             </li>
           ))}
         </Box>
       )}
-      <Stack direction="row" spacing={1} flexWrap="wrap">
+      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
         <Button size="sm" variant="outlined" onClick={() => onEdit(note)} data-testid="release-notes-edit-btn">
           Edit
         </Button>
         {note.state === 'hidden' ? (
           <Button
             size="sm"
+            variant="outlined"
             disabled={busy || empty}
             onClick={() => onAction(note, 'unhide')}
             data-testid="release-notes-unhide-btn"
@@ -82,8 +107,7 @@ const ReleaseNoteCard: React.FC<{
         ) : (
           <Button
             size="sm"
-            color="danger"
-            variant="soft"
+            variant="outlined"
             disabled={busy}
             onClick={() => onAction(note, 'hide')}
             data-testid="release-notes-hide-btn"
@@ -94,7 +118,7 @@ const ReleaseNoteCard: React.FC<{
         {note.state === 'scheduled' && (
           <Button
             size="sm"
-            color="success"
+            variant="outlined"
             disabled={busy || empty}
             onClick={() => onAction(note, 'publishNow')}
             data-testid="release-notes-publish-now-btn"
@@ -103,17 +127,29 @@ const ReleaseNoteCard: React.FC<{
           </Button>
         )}
       </Stack>
-    </Card>
+    </Stack>
   );
 };
 
 const AdminReleaseNotesTab: React.FC = () => {
   const [status, setStatus] = useState<ReleaseNoteState>('scheduled');
   const [editing, setEditing] = useState<AdminReleaseNote | null>(null);
-  const { data, isLoading, error, hasNextPage, fetchNextPage, isFetchingNextPage, dataUpdatedAt } =
-    useReleaseNotes(status);
+  const {
+    data,
+    isLoading,
+    error,
+    refetch,
+    isRefetching,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage,
+    dataUpdatedAt,
+  } = useReleaseNotes(status);
   const statusMutation = useReleaseNoteStatus();
   const notes = data?.pages.flatMap(page => page.data) ?? [];
+  const filter = FILTERS.find(entry => entry.value === status) ?? FILTERS[0];
+  // The empty state's next step: look at the list a note would have moved to.
+  const fallback = FILTERS.find(entry => entry.value === (status === 'published' ? 'scheduled' : 'published'));
 
   const onAction = (note: AdminReleaseNote, action: ReleaseNoteAction) =>
     statusMutation.mutate(
@@ -125,54 +161,88 @@ const AdminReleaseNotesTab: React.FC = () => {
     );
 
   return (
-    <Stack spacing={3}>
-      <Typography level="h3">Release notes</Typography>
-      <Alert color="neutral" variant="soft" data-testid="release-notes-cache-note">
-        Customer-facing release notes generated from each production release and served by GET /api/v1/whats-new. This
-        is separate from the What&apos;s New Modals tab. Hiding a published note can take up to ~15 minutes to clear CDN
-        and downstream caches.
-      </Alert>
-      <ReleaseNotesConfigEditor />
-      <Divider />
-      <ButtonGroup aria-label="Filter release notes by status">
-        {FILTERS.map(filter => (
-          <Button
-            key={filter.value}
-            variant={status === filter.value ? 'solid' : 'outlined'}
-            onClick={() => setStatus(filter.value)}
-            data-testid={`release-notes-filter-${filter.value}-btn`}
-          >
-            {filter.label}
-          </Button>
-        ))}
-      </ButtonGroup>
-      {isLoading && <Typography level="body-sm">Loading release notes...</Typography>}
-      {error && <Alert color="danger">Could not load release notes: {getErrorMessage(error)}</Alert>}
-      {!isLoading && !error && notes.length === 0 && (
-        <Typography level="body-sm" data-testid="release-notes-empty">
-          No {status} release notes.
-        </Typography>
-      )}
-      <Stack spacing={2}>
-        {notes.map(note => (
-          <ReleaseNoteCard
-            key={note.id}
-            note={note}
-            onAction={onAction}
-            onEdit={setEditing}
-            busy={statusMutation.isPending}
-            now={dataUpdatedAt}
+    <Stack sx={{ gap: ADMIN_REGION_GAP }} data-testid="admin-release-notes-tab">
+      {/* Wraps the whole page so the settings' one SaveBar sits at its foot, below the list. */}
+      <SettingsDraftProvider>
+        <AdminPageHeader
+          title="Release notes"
+          description="Customer-facing notes generated from each production release and served by GET /api/v1/whats-new, separate from What's New modals."
+        />
+        <ReleaseNotesConfigEditor />
+        <Stack sx={{ gap: 2 }}>
+          <ViewTabs
+            views={FILTERS.map(entry => ({ id: entry.value, label: entry.label }))}
+            activeId={status}
+            onSelect={id => {
+              const next = FILTERS.find(entry => entry.value === id);
+              if (next) setStatus(next.value);
+            }}
+            aria-label="Filter release notes by status"
+            data-testid="release-notes-filter"
           />
-        ))}
-      </Stack>
-      {hasNextPage && (
-        <Box>
-          <Button variant="outlined" loading={isFetchingNextPage} onClick={() => fetchNextPage()}>
-            Load more
-          </Button>
-        </Box>
-      )}
-      {editing && <ReleaseNoteEditDialog note={editing} onClose={() => setEditing(null)} />}
+          <SectionCard
+            title={`${filter.label} notes`}
+            body="custom"
+            action={
+              <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="release-notes-cache-note">
+                Hiding a published note can take up to 15 minutes to clear CDN and downstream caches.
+              </Typography>
+            }
+            data-testid="release-notes-list"
+          >
+            {isLoading ? (
+              <LoadingState label="Loading release notes" testId="release-notes-loading" />
+            ) : error ? (
+              <ErrorState
+                message={`Could not load release notes: ${getErrorMessage(error)}`}
+                onRetry={() => void refetch()}
+                retrying={isRefetching}
+              />
+            ) : notes.length === 0 ? (
+              <EmptyState
+                title={`No ${status} release notes`}
+                description={filter.empty}
+                action={
+                  fallback && (
+                    <Button
+                      size="sm"
+                      variant="outlined"
+                      onClick={() => setStatus(fallback.value)}
+                      data-testid="release-notes-empty-show-btn"
+                    >
+                      Show {fallback.value} notes
+                    </Button>
+                  )
+                }
+              />
+            ) : (
+              notes.map(note => (
+                <ReleaseNoteRow
+                  key={note.id}
+                  note={note}
+                  onAction={onAction}
+                  onEdit={setEditing}
+                  busy={statusMutation.isPending}
+                  now={dataUpdatedAt}
+                />
+              ))
+            )}
+          </SectionCard>
+          {hasNextPage && (
+            <Box>
+              <Button
+                variant="outlined"
+                loading={isFetchingNextPage}
+                onClick={() => fetchNextPage()}
+                data-testid="release-notes-load-more-btn"
+              >
+                Load more
+              </Button>
+            </Box>
+          )}
+        </Stack>
+        {editing && <ReleaseNoteEditDialog note={editing} onClose={() => setEditing(null)} />}
+      </SettingsDraftProvider>
     </Stack>
   );
 };
