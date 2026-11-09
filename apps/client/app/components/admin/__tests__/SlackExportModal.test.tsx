@@ -36,11 +36,6 @@ vi.mock('sonner', () => ({
   },
 }));
 
-// Mock next/image
-vi.mock('next/image', () => ({
-  default: ({ src, alt, ...props }: any) => <img src={src} alt={alt} {...props} />,
-}));
-
 // Mock the branding settings hook to avoid cascading dependency issues
 vi.mock('@client/app/hooks/data/settings', () => ({
   useBrandingSettings: () => ({
@@ -53,11 +48,6 @@ vi.mock('@client/app/hooks/data/settings', () => ({
 // Mock EventMetrics component to avoid complex data fetching and rendering in tests
 vi.mock('../EventMetrics', () => ({
   default: () => <div data-testid="mock-event-metrics">Event Metrics Dashboard</div>,
-}));
-
-// Mock useIsMobile to avoid window.matchMedia dependency in jsdom
-vi.mock('@client/app/hooks/useIsMobile', () => ({
-  useIsMobile: () => false,
 }));
 
 // Import component after mocks

@@ -15,7 +15,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@tanstack/react-router', async () => (await import('../__tests__/fakeAdminRouter')).fakeRouterModule);
-vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 vi.mock('@client/app/hooks/data/webhookAuditLogs', () => ({
   useWebhookAuditLogs: mocks.useWebhookAuditLogs,
   useWebhookAuditStats: mocks.useWebhookAuditStats,
@@ -165,7 +164,7 @@ describe('WebhookAuditLogsTab delivery dialog', () => {
     expect(mocks.useWebhookAuditLog).toHaveBeenLastCalledWith(null);
   });
 
-  it('lays the delivery out as titled fact groups split by hairlines, with toned status chips', async () => {
+  it('lays the delivery out as titled fact groups, with toned status chips', async () => {
     mocks.useWebhookAuditLog.mockReturnValue({
       data: delivery(DELIVERY_ID, 'failed', {
         metadata: { prNumber: 42, branch: 'main' },
