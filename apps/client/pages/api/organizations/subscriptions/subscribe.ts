@@ -69,10 +69,7 @@ const handler = baseApi()
     // buying seats is at least as consequential as changing how many you already have.
     //
     // No id means "create a new org" (the organizationData branch), so there is no existing tenant
-    // to authorize against. The two are NOT mutually exclusive, though: the schema's refine requires
-    // only that at least one be present, and sending both gates the org here while the metadata
-    // block below still keys off organizationData (#3166). Pre-existing billing-attribution bug,
-    // not an authorization one; this gate does not widen it.
+    // to authorize against. The schema requires exactly one organization selector.
     const organization = organizationId ? await verifyOrgOwner(req.user, organizationId) : null;
     // The buyer is the signed-in user, whichever org the plan is for.
     await assertCheckoutAllowed(req.user, readNetworkMeta(req), req.logger, 'team_subscription');
@@ -139,14 +136,14 @@ const handler = baseApi()
       userId: req.user.id,
       stage: Config.STAGE,
       ownerType: SubscriptionOwnerType.Organization,
-      ...(organizationData
-        ? { newOrganizationName: organizationData.name }
-        : {
+      ...(organization
+        ? {
             // The gated document's canonical id, not the body string - this value becomes the
             // subscription row's `ownerId` via the invoice webhook, and the duplicate guard above
             // matches on it byte-for-byte.
             organizationId: gatedOrganizationId,
-          }),
+          }
+        : { newOrganizationName: organizationData?.name }),
     });
 
     // The org's customer carries the charge history; the buyer's own account age drives the window.
