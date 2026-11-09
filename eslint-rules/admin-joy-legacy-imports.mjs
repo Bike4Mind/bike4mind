@@ -64,7 +64,6 @@ export default {
   'Users/Details/CountersDetails.tsx': [[2, 'f212e3583e33dd41']],
   'Users/MigrationDetails.tsx': [[1, 'b8abb7928748f7fe']],
   'Users/Views/RecentActivityView.tsx': [[1, '4761ad3c8a441a88']],
-  'WebhookAuditLogs/index.tsx': [[3, '22653ab828d91b71']],
   'email/EmailActivityHistory.tsx': [[2, '5d7be40ee2063946']],
   'email/EmailJobDetail.tsx': [[2, '81717d4fa42f09a7']],
   'email/EmailJobsPanel.tsx': [[2, '5d95c7fb7773210d']],

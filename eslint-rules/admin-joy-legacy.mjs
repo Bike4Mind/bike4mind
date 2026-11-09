@@ -63,7 +63,6 @@ const componentsByFile = {
   'Users/Details/CountersDetails.tsx': ['Modal'],
   'Users/MigrationDetails.tsx': ['Card', 'Modal'],
   'Users/Views/RecentActivityView.tsx': ['Card'],
-  'WebhookAuditLogs/index.tsx': ['Card', 'Table'],
   'email/EmailActivityHistory.tsx': ['Table'],
   'email/EmailJobDetail.tsx': ['Table', 'Modal'],
   'email/EmailJobsPanel.tsx': ['Table'],

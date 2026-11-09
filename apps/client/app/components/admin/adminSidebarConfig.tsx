@@ -351,7 +351,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: Gauge, tab: AdminTab.RateLimits, label: 'Rate limits', testid: 'admin-rate-limits-btn' },
       { Icon: Hash, tab: AdminTab.SlackWorkspaces, label: 'Slack workspaces' },
       { Icon: GitBranch, tab: AdminTab.GitHubConnection, label: 'GitHub', testid: 'admin-github-connection-btn' },
-      { Icon: Webhook, tab: AdminTab.WebhookAuditLogs, label: 'Webhook logs' },
+      { Icon: Webhook, tab: AdminTab.WebhookAuditLogs, label: 'Webhook audit logs' },
       { Icon: MessagesSquare, tab: AdminTab.SlackMetrics, label: 'Slack metrics' },
       {
         Icon: TrendingUp,

@@ -261,7 +261,7 @@ describe('SidebarNav', () => {
       fireEvent.change(filterInput(), { target: { value: 'log' } });
 
       expect(screen.getByTestId('admin-audit-log-btn')).toBeInTheDocument();
-      expect(screen.getByRole('link', { name: 'Webhook logs' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Webhook audit logs' })).toBeInTheDocument();
       expect(screen.queryByTestId('admin-users-tab-btn')).toBeNull();
       expect(screen.queryByTestId('admin-dashboard-tab-btn')).toBeNull();
     });
