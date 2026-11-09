@@ -263,6 +263,24 @@ describe('publish comment widget - rendered behaviour', () => {
     expect(listText()).toContain('other body');
   });
 
+  it('refreshes an edited comment when a poll returns the same IDs with new text', async () => {
+    vi.setSystemTime(Date.parse('2026-01-01T00:00:00.000Z'));
+    let body = 'old text';
+    installFetch({
+      list: () => [{ id: 'c1', authorDisplayName: 'Me', body, createdAt: new Date().toISOString(), resolvedAt: null }],
+      canComment: false,
+    });
+
+    runWidget();
+    await flush();
+    click('b4m-launch');
+    expect(listText()).toContain('old text');
+
+    body = 'updated text';
+    await vi.advanceTimersByTimeAsync(FIRST_POLL_MS);
+    expect(listText()).toContain('updated text');
+  });
+
   it('keeps every just-posted comment when a poll returns a list that predates them', async () => {
     vi.setSystemTime(Date.parse('2026-01-01T00:00:00.000Z'));
     let posted = 0;
