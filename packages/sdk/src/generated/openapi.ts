@@ -29595,7 +29595,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key holds neither `skills:read` nor `skills:write`. */
+      /** @description The API key lacks `skills:write`. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -30000,7 +30000,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key holds neither `skills:read` nor `skills:write`. */
+      /** @description The API key lacks `skills:write`. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

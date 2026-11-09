@@ -373,13 +373,11 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
   ],
   [ApiKeyScope.QA_INGEST]: ['POST /api/qa/runs', 'POST /api/qa/uploads'],
   [ApiKeyScope.SKILLS_READ]: [
-    'GET /api/v1/skills/:id',
     'GET /api/v1/skills/market/:id/claude-plugin.zip',
     'GET /api/v1/skills/market/bundles/:id/claude-plugin.zip',
     'GET /api/v1/skills/market/claude-marketplace.json',
     'GET /api/v1/skills/market/listings',
     'GET /api/v1/skills/market/listings/:id',
-    'GET /api/v1/skills/mine',
   ],
   [ApiKeyScope.SKILLS_WRITE]: [
     'POST /api/v1/skills',

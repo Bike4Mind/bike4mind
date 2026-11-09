@@ -179,8 +179,8 @@ const DOMAIN_CALL: Record<RouteName, ReturnType<typeof vi.fn>> = {
 const MATRIX: [RouteName, number, ApiKeyScope, ApiKeyScope[]][] = [
   ['create', 201, ApiKeyScope.SKILLS_READ, [ApiKeyScope.SKILLS_WRITE]],
   ['update', 200, ApiKeyScope.SKILLS_READ, [ApiKeyScope.SKILLS_WRITE]],
-  ['get', 200, ApiKeyScope.READ_AGENTS, [ApiKeyScope.SKILLS_READ, ApiKeyScope.SKILLS_WRITE]],
-  ['mine', 200, ApiKeyScope.READ_AGENTS, [ApiKeyScope.SKILLS_READ, ApiKeyScope.SKILLS_WRITE]],
+  ['get', 200, ApiKeyScope.SKILLS_READ, [ApiKeyScope.SKILLS_WRITE]],
+  ['mine', 200, ApiKeyScope.SKILLS_READ, [ApiKeyScope.SKILLS_WRITE]],
 ];
 
 describe('/api/v1/skills scope enforcement (real middleware chain)', () => {
@@ -210,11 +210,11 @@ describe('/api/v1/skills scope enforcement (real middleware chain)', () => {
     expect((await ROUTES[route]('jwt'))._getStatusCode()).toBe(status);
   });
 
-  it('a confined skills:read key can list and read but not write', async () => {
+  it('a confined skills:read key is refused on every route', async () => {
     withScopes([ApiKeyScope.SKILLS_READ]);
-    expect((await ROUTES.mine())._getStatusCode()).toBe(200);
-    expect((await ROUTES.get())._getStatusCode()).toBe(200);
-    expect((await ROUTES.create())._getStatusCode()).toBe(403);
+    for (const route of Object.keys(ROUTES) as RouteName[]) {
+      expect((await ROUTES[route]())._getStatusCode()).toBe(403);
+    }
   });
 });
 

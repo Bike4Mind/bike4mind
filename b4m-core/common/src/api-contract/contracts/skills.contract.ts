@@ -17,11 +17,9 @@ import {
  * plus parseSkillMd); the SPA routes are unchanged. Publishing the result is the Skill Market listings route.
  */
 
-// skills:write is accepted for reads so a key that writes skills can read them back.
-const READ_SCOPES = [ApiKeyScope.SKILLS_READ, ApiKeyScope.SKILLS_WRITE];
+// Reads need skills:write too: skills:read is the plaintext Claude Code marketplace key and must not reach private skills.
 const WRITE_SCOPES = [ApiKeyScope.SKILLS_WRITE];
 
-const READ_FORBIDDEN = 'The API key holds neither `skills:read` nor `skills:write`.';
 const WRITE_FORBIDDEN = 'The API key lacks `skills:write`.';
 const SKILL_404 =
   'No skill with that id is visible to the caller. A skill you cannot see, a deleted skill and a malformed id ' +
@@ -126,12 +124,12 @@ export const listMySkillsContract = defineEndpoint({
     '`next_cursor` back as `cursor` until it is `null`, keeping the same filters.',
   tags: ['Skills'],
   auth: 'apiKeyOrJwt',
-  scopes: READ_SCOPES,
+  scopes: WRITE_SCOPES,
   queryParams: MySkillsQuerySchema,
   emitsRateLimitHeaders: true,
   responses: {
     200: { description: 'One page of skills.', schema: MySkillsResponseSchema },
-    403: { description: READ_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: {
       description:
         '`organization_id` names an organization that does not exist or that you do not own or manage, or is malformed.',
@@ -153,12 +151,12 @@ export const getSkillContract = defineEndpoint({
     'with you, or shared with everyone, is readable too.',
   tags: ['Skills'],
   auth: 'apiKeyOrJwt',
-  scopes: READ_SCOPES,
+  scopes: WRITE_SCOPES,
   pathParams: SkillIdParamSchema,
   emitsRateLimitHeaders: true,
   responses: {
     200: { description: 'The skill.', schema: PublicSkillSchema },
-    403: { description: READ_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: { description: SKILL_404, schema: ApiErrorSchema },
     429: { description: KEY_429, schema: ApiErrorSchema },
   },
