@@ -47,6 +47,14 @@ pnpm --filter @bike4mind/desktop dev
 Starts the Vite dev server for the renderer, builds main and preload, and launches
 Electron against it with HMR.
 
+On macOS, closing the last window leaves Desktop running. Use Cmd+Q to quit the app,
+including its background processes. If agents, approvals, background commands, terminal sessions,
+model downloads, or Desktop-managed model servers are active, Desktop asks before quitting and
+shows their counts. **Keep Running** is the default; **Quit Anyway** interrupts that work and
+shuts down the app. With nothing active, it quits without a prompt. Shutdown cleanup runs before
+the app exits; one quit request is enough. If Desktop remains in Cmd+Tab after cleanup, report the
+Desktop version and whether it was an installed build or a development run.
+
 | Command               | What it does                                       |
 | --------------------- | -------------------------------------------------- |
 | `pnpm dev`            | Dev server + Electron, with HMR                    |
