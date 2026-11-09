@@ -1,4 +1,4 @@
-// The node:fs half of report.ts, kept out of index.ts so that subpath stays fs-free.
+// The node:fs half of report.ts, kept apart so report.ts stays pure.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { AdminEvalReport } from './report';

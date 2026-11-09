@@ -10,7 +10,7 @@ import type { LakeRagApi } from '../lakeRag/provision';
 import { ADMIN_EVAL_CASES, TARGET_CREDITS } from './cases';
 import { buildAdminEvalReport, formatAdminEvalReport } from './report';
 import { writeAdminEvalReport } from './reportFile';
-import { runAdminEval } from './run';
+import { runAdminEval, type AdminEvalTurn } from './run';
 
 const baseUrl = process.env.ADMIN_EVAL_BASE_URL;
 const model = process.env.ADMIN_EVAL_MODEL;
@@ -24,8 +24,8 @@ if (enabled && (!Number.isInteger(samples) || samples < 1)) {
   throw new Error(`ADMIN_EVAL_SAMPLES must be a positive integer, got: ${process.env.ADMIN_EVAL_SAMPLES}`);
 }
 
-// One session, one chat and the quest poll per turn.
-const PER_TURN_MS = 2 * 60 * 1000;
+// Per turn: a session, a chat and a quest poll capped at the driver's default, each call allowed one 429 backoff.
+const PER_TURN_MS = 2 * 60 * 1000 + MAX_429_WAIT_MS;
 const TIMEOUT_MS = ADMIN_EVAL_CASES.length * samples * PER_TURN_MS;
 
 describe.skipIf(!enabled)('admin assistant eval (live deployment)', () => {
@@ -43,9 +43,19 @@ describe.skipIf(!enabled)('admin assistant eval (live deployment)', () => {
       const target = await auth.mintUser({ initialCredits: TARGET_CREDITS });
       const api: LakeRagApi = { baseUrl: baseUrl!, authorization: auth.authorization };
 
-      const turns = await runAdminEval(api, ADMIN_EVAL_CASES, { model: model!, samples, target: target.email });
+      // Rewrite the JSON after every turn, so a killed run still leaves what it finished.
+      const done: AdminEvalTurn[] = [];
+      const onTurn = (turn: AdminEvalTurn) => {
+        done.push(turn);
+        if (reportPath) writeAdminEvalReport(reportPath, buildAdminEvalReport(done, { model: model!, samples }));
+      };
+      const turns = await runAdminEval(api, ADMIN_EVAL_CASES, {
+        model: model!,
+        samples,
+        target: target.email,
+        onTurn,
+      });
       const report = buildAdminEvalReport(turns, { model: model!, samples });
-      if (reportPath) writeAdminEvalReport(reportPath, report);
       // stdout directly: vitest can drop console output from a passing test.
       process.stdout.write(`\n${formatAdminEvalReport(report)}\n`);
     },

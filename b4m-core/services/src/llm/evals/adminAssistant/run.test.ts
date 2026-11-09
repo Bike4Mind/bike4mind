@@ -84,7 +84,43 @@ describe('runAdminEval', () => {
     }) as typeof fetch;
     const turns = await runAdminEval(api, [rows[0]], { model: 'm' });
     expect(turns[0].grade.passed).toBe(true);
-    expect(sent.filter(s => s.path.startsWith('/api/v1/quests/')).length).toBeGreaterThanOrEqual(2);
+    // The third poll is served by the override above, so only the two running polls reach `sent`.
+    expect(n).toBe(3);
+    expect(sent.filter(s => s.path.startsWith('/api/v1/quests/')).map(s => s.path)).toEqual([
+      '/api/v1/quests/q1',
+      '/api/v1/quests/q1',
+    ]);
+  });
+
+  it('records a stopped quest with no reply as an empty reply', async () => {
+    const { api } = server([{ status: 'stopped', reply: '' }]);
+    const turns = await runAdminEval(api, [rows[0]], { model: 'm' });
+    expect(turns[0].grade.reason).toBe('empty reply');
+  });
+
+  it('grades a navigate_view-only turn on its view', async () => {
+    const { api } = server([{ ...navQuest, reply: '' }]);
+    const turns = await runAdminEval(api, [rows[0]], { model: 'm' });
+    expect(turns[0].grade).toMatchObject({ passed: true, checks: { view: true } });
+  });
+
+  it('turns a quest that never ends into one failed turn and keeps going', async () => {
+    let clock = 0;
+    const { api } = server([{ status: 'running' }, navQuest]);
+    api.now = () => clock;
+    api.sleep = async ms => {
+      clock += ms;
+    };
+    api.pollIntervalMs = 1_000;
+    const seen: string[] = [];
+    const turns = await runAdminEval(api, [rows[0], rows[0]], {
+      model: 'm',
+      turnTimeoutMs: 5_000,
+      onTurn: t => seen.push(t.grade.reason),
+    });
+    expect(turns[0].grade.reason).toMatch(/turn failed: quest q1: still running after 5000ms/);
+    expect(turns[1].grade.passed).toBe(true);
+    expect(seen).toHaveLength(2);
   });
 
   it('records an empty reply and a quest error as failures', async () => {

@@ -5,7 +5,7 @@
 import { ADMIN_ASSISTANT_TOOL_NAMES } from '@bike4mind/common';
 import { ADMIN_EVAL_DECLINE_PATTERN, type AdminEvalCase } from './cases';
 
-export type AdminFunctionCall = { name?: unknown; parameters?: unknown };
+export type AdminFunctionCall = { name?: unknown; parameters?: unknown; success?: unknown; returnValue?: unknown };
 
 export type AdminEvalGrade = {
   passed: boolean;
@@ -32,6 +32,22 @@ export function navigatedViewIds(calls: readonly AdminFunctionCall[]): string[] 
     .filter((id): id is string => typeof id === 'string');
 }
 
+// A tool that rejected its input or failed does not count as the row's tool having answered. A
+// not_found or ambiguous result does: the model asked the right question. Admin tools report errors
+// in a JSON `{ ok: false, error }` return value, not by throwing, so `success` alone misses them.
+const FAILED_TOOL_ERRORS: ReadonlySet<unknown> = new Set(['invalid_input', 'forbidden', 'failed']);
+
+function callFailed(call: AdminFunctionCall): boolean {
+  if (call.success === false) return true;
+  if (typeof call.returnValue !== 'string') return false;
+  try {
+    const parsed: unknown = JSON.parse(call.returnValue);
+    return isRecord(parsed) && parsed.ok === false && FAILED_TOOL_ERRORS.has(parsed.error);
+  } catch {
+    return false;
+  }
+}
+
 function calledNames(calls: readonly AdminFunctionCall[]): string[] {
   return calls.map(c => c.name).filter((n): n is string => typeof n === 'string');
 }
@@ -50,8 +66,15 @@ export function gradeAdminCase(
   // An out-of-scope row inverts the tool check: any admin tool at all is the failure.
   let tool: boolean | null = null;
   if (row.expectTools) {
-    tool = names.some(n => row.expectTools!.includes(n));
-    if (!tool) failures.push(`${row.expectTools.join('|')} not called`);
+    const expected = calls.filter(c => typeof c.name === 'string' && row.expectTools!.includes(c.name));
+    tool = expected.some(c => !callFailed(c));
+    if (!tool) {
+      failures.push(
+        expected.length > 0
+          ? `${expected.map(c => c.name).join(',')} called but failed`
+          : `${row.expectTools.join('|')} not called`
+      );
+    }
   } else if (row.declines) {
     const used = names.filter(n => ADMIN_TOOLS.has(n));
     tool = used.length === 0;
