@@ -24,6 +24,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_G
     runAuditedTool('web_fetch', req.user!.id, req.logger, async () => {
       const { url, offset } = WebFetchBodySchema.parse(req.body);
 
+      // Host only: never the path or query, which can carry secrets.
+      const host = new URL(url).hostname;
+      const logOutcome = (outcome: 'ok' | 'refused' | 'error') =>
+        req.logger.withMetadata({ host, outcome }).info('web-fetch');
+
       // Frontend Lambda has a 60s timeout. Cap Firecrawl below it AND reserve headroom for the
       // llms.txt probe (up to LLMS_TXT_PROBE_TIMEOUT_MS, awaited after the scrape on a truncated
       // first read) plus response serialization, so a slow-but-successful fetch cannot tip over 60s.
@@ -32,10 +37,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_G
         { url, offset, maxTimeoutMs: 52_000 }
       ).catch((error: unknown) => {
         // A refused target is the caller's input, not a server fault: 400 (logged at warn).
-        if (error instanceof RefusedFetchTargetError) throw new UrlBlockedError(error.message);
+        if (error instanceof RefusedFetchTargetError) {
+          logOutcome('refused');
+          throw new UrlBlockedError(error.message);
+        }
+        logOutcome('error');
         throw error;
       });
 
+      logOutcome('ok');
       const body = webFetchBody(result);
       const formattedResult = result.title ? `# ${result.title}\n\n${body}` : body;
 
