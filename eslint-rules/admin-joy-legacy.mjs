@@ -76,7 +76,6 @@ const componentsByFile = {
   'RetrievalRateTab.tsx': ['Card'],
   'ScopedOverridesByScope.tsx': ['Card'],
   'SecopsTriageTab.tsx': ['Card'],
-  'SecretsRotationTab.tsx': ['Table', 'Modal'],
   'SlackMetrics/SlackMetricsTab.tsx': ['Card'],
   'SlackWorkspacesTab.tsx': ['Card', 'Modal', 'Table'],
   'SreAgentTab.tsx': ['Card', 'Modal', 'Table'],

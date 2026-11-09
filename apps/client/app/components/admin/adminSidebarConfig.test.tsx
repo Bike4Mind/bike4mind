@@ -82,6 +82,7 @@ describe('SIDEBAR_SECTIONS', () => {
 
   it('labels the secrets items with their page titles', () => {
     expect(allItems.find(i => i.tab === AdminTab.SystemSecrets)?.label).toBe('System secrets');
+    expect(allItems.find(i => i.tab === AdminTab.SecretsRotation)?.label).toBe('Secrets rotation');
   });
 
   it('only badges the Waitlist, Subscriptions and Audit log tabs', () => {

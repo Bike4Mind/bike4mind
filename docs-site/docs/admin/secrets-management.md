@@ -7,52 +7,52 @@ tags: [admin, secrets, security, rotation]
 
 # Secrets Management
 
-Bike4Mind provides two admin tabs for managing secrets: **Secrets Rotation** for tracking rotation schedules and **System Secrets** for viewing and configuring secret values. Together they give administrators visibility into the state of all platform secrets and the ability to manage them without direct infrastructure access.
+Bike4Mind provides two admin tabs for managing secrets: **Secrets rotation** for tracking rotation schedules and **System secrets** for viewing and configuring secret values. Together they give administrators visibility into the state of all platform secrets and the ability to manage them without direct infrastructure access.
 
 ## Secrets Rotation
 
-The Secrets Rotation tab tracks the lifecycle of secrets that require periodic rotation. It displays a table of all registered secrets with their rotation status, schedules, and renewal history.
+The Secrets rotation tab tracks the lifecycle of secrets that require periodic rotation. It displays a table of all registered secrets with their rotation status, schedules, and renewal history. Each row stays on one line; on a narrow screen the table scrolls sideways inside its own frame.
 
 ### Rotation Table
 
 | Column | Description |
 |--------|-------------|
-| **Secret Key Name** | The identifier for the secret (word-break enabled for long names) |
+| **Secret** | The identifier for the secret. A long name is cut short with an ellipsis; hover it to see the full name. |
 | **Description** | Human-readable description of what the secret is used for |
-| **Last Rotation** | The date the secret was last rotated, with a relative time indicator (e.g., "3 days ago") |
-| **Next Rotation** | The scheduled next rotation date, with a relative time indicator. Overdue dates display in danger color. |
 | **Interval (days)** | The configured rotation interval in days |
-| **Status** | Color-coded chip: green for active, red for inactive, yellow when overdue |
-| **Last Renewed By** | The name of the administrator who last renewed the secret |
-| **Actions** | Renew and Edit buttons |
+| **Last renewed** | The date the secret was last renewed. Hover it for the relative time (e.g., "3 days ago"). |
+| **Last renewed by** | The name of the administrator who last renewed the secret |
+| **Next rotation** | The scheduled next rotation date. Hover it for the relative time. |
+| **Status** | Status chip: Active, Overdue, or Inactive |
+
+The row actions (Mark renewed and Edit rotation) are in the "..." menu at the end of each row.
 
 ### Status Color Coding
 
-The status chip color is determined by the combination of active state and next rotation date:
+The status chip is determined by the combination of active state and next rotation date:
 
-| Condition | Color |
-|-----------|-------|
-| Inactive | Danger (red) |
-| Active but past next rotation date | Warning (yellow) |
-| Active and before next rotation date | Success (green) |
+| Condition | Chip | Color |
+|-----------|------|-------|
+| Inactive | Inactive | Grey |
+| Active but past next rotation date | Overdue | Amber |
+| Active and before next rotation date | Active | Green |
 
 ### Renewing a Secret
 
-Click the "Renew" button on any row to open a confirmation dialog. Confirming the renewal marks the secret as renewed, resetting its rotation cycle. The renewal is recorded with the current administrator's identity.
+Open the row's "..." menu and choose "Mark renewed" to open a confirmation dialog. Confirming with "Mark renewed" marks the secret as renewed, resetting its rotation cycle. The renewal is recorded with the current administrator's identity.
 
 ### Editing a Secret
 
-Click the "Edit" button to open an edit dialog with the following fields:
+Open the row's "..." menu and choose "Edit rotation" to open an edit dialog with the following fields, then click "Save changes":
 
 | Field | Description |
 |-------|-------------|
 | **Description** | Update the human-readable description |
-| **Previous Key** | Record the previous key value for reference |
-| **Rotation Interval (days)** | Set the interval between rotations (1 to 365 days) |
+| **Rotation interval (days)** | Set the interval between rotations (1 to 365 days) |
 
 ### Auto-Refresh
 
-The rotation data automatically refreshes every 5 minutes to keep the displayed status current. A manual refresh button is also available in the header.
+The rotation data automatically refreshes every 5 minutes to keep the displayed status current. A Refresh button is also available in the page header.
 
 ## System Secrets
 
@@ -122,11 +122,11 @@ When a secret has a database override (shown as "GUI override"), the row's "..."
 
 ## Best Practices
 
-- Monitor the Secrets Rotation tab regularly to identify secrets approaching their rotation deadline. Overdue rotations are highlighted in yellow.
+- Monitor the Secrets rotation tab regularly to identify secrets approaching their rotation deadline. Overdue rotations show an Overdue status chip.
 - Use the System secrets GUI override capability for quick configuration changes, but ensure critical secrets are also properly set in SST for disaster recovery.
 - When editing system secrets, use the visibility toggle to verify the entered value before saving.
 - Delete GUI overrides when they are no longer needed to keep the secret source clean and traceable.
-- The 5-minute auto-refresh on the Secrets Rotation tab ensures the display stays current, but use the manual refresh button after making changes to see immediate updates.
+- The 5-minute auto-refresh on the Secrets rotation tab ensures the display stays current, but use the Refresh button after making changes to see immediate updates.
 
 ---
 

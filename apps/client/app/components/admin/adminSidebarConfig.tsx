@@ -280,7 +280,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: KeyRound, tab: AdminTab.OAuthClients, label: 'OAuth clients', testid: 'admin-oauth-clients-btn' },
       { Icon: Key, tab: AdminTab.ApiKeyScopePreflight, label: 'API key scopes', testid: 'admin-scope-preflight-btn' },
       { Icon: Lock, tab: AdminTab.SystemSecrets, label: 'System secrets' },
-      { Icon: RotateCcw, tab: AdminTab.SecretsRotation, label: 'Secret rotation' },
+      { Icon: RotateCcw, tab: AdminTab.SecretsRotation, label: 'Secrets rotation' },
       { Icon: Globe, tab: AdminTab.PublishedPages, label: 'Published pages', testid: 'admin-published-pages-btn' },
     ],
   },
