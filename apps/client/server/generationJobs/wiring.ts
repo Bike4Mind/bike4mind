@@ -271,11 +271,12 @@ const loadInputFabFile = async (userId: string, fileId: string) => {
   if (!isValidObjectId(fileId)) return null;
   const fabFile = await fabFileRepository.findByIdAndUserId(fileId, userId);
   if (!fabFile || fabFile.deletedAt) return null;
-  if (!fabFile.filePath || !fabFile.mimeType?.startsWith('image/')) return null;
+  const mimeType = fabFile.mimeType?.split(';')[0].trim().toLowerCase();
+  if (!fabFile.filePath || !mimeType?.startsWith('image/')) return null;
   // Same upload moderation gate as every other FabFile read: a pending or blocked image is not sent to a provider.
   if (!isImageServeable(fabFile)) return null;
   const bytes = await getFilesStorage().download(fabFile.filePath);
-  return { bytes, mimeType: fabFile.mimeType };
+  return { bytes, mimeType };
 };
 
 // Keyed by the extensions GENERATED_IMAGE_KEY_RE admits; callerOwnsGeneratedImage refuses any other key first.

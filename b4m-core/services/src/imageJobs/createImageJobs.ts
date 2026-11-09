@@ -164,7 +164,7 @@ export async function createImageJobs(
     const job = replay?.ok ? replay.job : fresh.next().value;
     return job ? [job] : [];
   });
-  return { ok: true, groupId, jobs, created: true };
+  return { ok: true, groupId: jobs[0]?.payload.groupId ?? groupId, jobs, created: true };
 }
 
 type HoldParams = { enforceCredits: boolean; user: CreateImageJobsInput['user']; requiredCredits: number };

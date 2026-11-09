@@ -238,6 +238,41 @@ describe('image job handler through the real engine', () => {
     );
   });
 
+  it('fails a thrown moderation scan as orphaned_submit and releases the hold', async () => {
+    const t = setup(
+      vi.fn<Generate>(async () => succeeded),
+      {
+        moderate: vi.fn(async () => {
+          throw new Error('scan down');
+        }),
+      }
+    );
+    const created = await create(t);
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'orphaned_submit' } });
+    expect(t.deps.saveToFiles).not.toHaveBeenCalled();
+    expect(t.deps.saveToGeneratedBucket).not.toHaveBeenCalled();
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+    expect(settleCreditHold).not.toHaveBeenCalled();
+  });
+
+  it('fails a thrown bucket fallback as orphaned_submit and releases the hold', async () => {
+    const t = setup(
+      vi.fn<Generate>(async () => succeeded),
+      {
+        saveToFiles: vi.fn(async () => ({ saved: false as const, reason: 'storage_limit' as const })),
+        saveToGeneratedBucket: vi.fn(async () => {
+          throw new Error('s3 down');
+        }),
+      }
+    );
+    const created = await create(t);
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'orphaned_submit' } });
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+    expect(settleCreditHold).not.toHaveBeenCalled();
+  });
+
   it('blocks on our own moderation: nothing saved, hold released not settled', async () => {
     const t = setup(
       vi.fn<Generate>(async () => succeeded),
