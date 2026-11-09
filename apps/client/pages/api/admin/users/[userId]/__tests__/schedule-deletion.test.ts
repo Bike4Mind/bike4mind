@@ -232,6 +232,17 @@ describe('POST /api/admin/users/[userId]/schedule-deletion', () => {
     expect(h.audit).not.toHaveBeenCalled();
   });
 
+  it('refuses a delegate whose target is promoted to admin before the lockdown, even with approvals off', async () => {
+    h.findById
+      .mockResolvedValueOnce({ id: 'user-1', username: 'u' })
+      .mockResolvedValueOnce({ id: 'user-1', username: 'u' })
+      .mockResolvedValue({ id: 'user-1', username: 'boss', isAdmin: true });
+    await expect(
+      call({ receivedAt: RECEIVED, reason: REASON }, { isAdmin: false, adminPermissions: ['users:delete'] })
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
   it('answers 404 for an unknown user', async () => {
     h.findById.mockResolvedValue(null);
     await expect(call({ receivedAt: RECEIVED, reason: REASON })).rejects.toMatchObject({ statusCode: 404 });

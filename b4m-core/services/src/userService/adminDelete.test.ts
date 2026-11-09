@@ -22,6 +22,44 @@ function makeAdapters() {
 }
 
 describe('adminDeleteUser', () => {
+  it.each([
+    ['a full admin', { isAdmin: true }],
+    ['a delegate with users:delete', { isAdmin: false, adminPermissions: ['users:delete'] }],
+  ])('lets %s delete', async (_label, actor) => {
+    const { adapters, users } = makeAdapters();
+    users.findById.mockImplementation(async (id: string) =>
+      id === 'admin-1' ? { id, ...actor } : { id, name: 'User', email: 'u@example.com' }
+    );
+
+    await adminDeleteUser('admin-1', { id: 'user-1' }, adapters);
+
+    expect(users.delete).toHaveBeenCalledWith('user-1');
+  });
+
+  it('refuses a delegate with users:delete deleting an account with admin access', async () => {
+    const { adapters, users } = makeAdapters();
+    users.findById.mockImplementation(async (id: string) =>
+      id === 'admin-1'
+        ? { id, isAdmin: false, adminPermissions: ['users:delete'] }
+        : { id, name: 'Boss', adminPermissions: ['support:read'] }
+    );
+
+    await expect(adminDeleteUser('admin-1', { id: 'user-1' }, adapters)).rejects.toThrow(
+      'Only full administrators can delete users with admin access'
+    );
+    expect(users.delete).not.toHaveBeenCalled();
+  });
+
+  it('refuses a delegate without users:delete', async () => {
+    const { adapters, users } = makeAdapters();
+    users.findById.mockImplementation(async (id: string) =>
+      id === 'admin-1' ? { id, isAdmin: false, adminPermissions: ['support:read'] } : { id, name: 'User' }
+    );
+
+    await expect(adminDeleteUser('admin-1', { id: 'user-1' }, adapters)).rejects.toThrow('not authorized');
+    expect(users.delete).not.toHaveBeenCalled();
+  });
+
   it("ends the deleted user's realtime connections after the delete", async () => {
     const { adapters, users, endConnections } = makeAdapters();
 
