@@ -32,6 +32,7 @@ import { protectSignupCredits } from './signupProtection';
 import { payInviteBonus } from './inviteBonus';
 import { callerTransactionSession, inCallerTransaction } from './callerTransaction';
 import {
+  alertDripCapDefault,
   queueHeadBlocks,
   reserveSignupGrantBudget,
   signupGrantBudgetDay,
@@ -709,8 +710,12 @@ export async function dripSignupGrant(
 ): Promise<GrantFreeCreditsResult> {
   if (period !== undefined && !/^preview:\d{1,4}:\d+$/.test(period)) return noGrant();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return noGrant();
-  const { dailyCredits, dripCap } = await resolveDripLimits(adapters.db.adminSettings);
-  if (!(dailyCredits > 0) || !(dripCap > 0)) return noGrant();
+  const { dailyCredits, dripCap, dripCapSource } = await resolveDripLimits(adapters.db.adminSettings);
+  if (!(dailyCredits > 0)) return noGrant();
+  // The built-in default cap is 0, so an unstored cap silently stops a drip that is otherwise on.
+  const budgetConfig = adapters.db.signupProtection?.grantBudget;
+  if (dripCapSource === 'default' && budgetConfig) await alertDripCapDefault(budgetConfig, day, dripCap);
+  if (!(dripCap > 0)) return noGrant();
   const user = await adapters.db.users.findById(userId);
   if (!user?.signupGrant || user.signupGrant.unlockForfeited || hasPaidSignupDrip(user.signupGrant, day, period))
     return noGrant();
