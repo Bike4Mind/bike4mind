@@ -53,8 +53,7 @@ model downloads, or Desktop-managed model servers are active, Desktop asks befor
 shows their counts. **Keep Running** is the default; **Quit Anyway** interrupts that work and
 shuts down the app. With nothing active, it quits without a prompt. Shutdown cleanup runs before
 the app exits; one quit request is enough. If Desktop remains in Cmd+Tab after cleanup, report the
-Desktop version
-and whether it was an installed build or a development run.
+Desktop version and whether it was an installed build or a development run.
 
 | Command               | What it does                                       |
 | --------------------- | -------------------------------------------------- |
