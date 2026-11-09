@@ -66,6 +66,33 @@ describe('completion sequence persistence', () => {
     expect(data[0]).toMatchObject({ revision: 1, wouldAction: 'none', completionSequence: { rounds: 2 } });
   });
 
+  it('retains stronger evidence and accepts a stronger later episode on the same activity day', async () => {
+    const stronger = observation();
+    stronger.completionSequence!.rounds = 4;
+    expect(await shadowDetectionRepository.recordCompletionSequence(stronger)).toBe('created');
+
+    const weaker = observation(new Date(at.getTime() + 60_000));
+    expect(await shadowDetectionRepository.recordCompletionSequence(weaker)).toBe('unchanged');
+    const stored = await ShadowDetectionModel.findOne().lean();
+    expect(stored?.completionSequence?.rounds).toBe(4);
+
+    const strongest = observation(new Date(at.getTime() + 120_000));
+    strongest.completionSequence!.rounds = 5;
+    expect(await shadowDetectionRepository.recordCompletionSequence(strongest)).toBe('updated');
+    const updated = await ShadowDetectionModel.findOne().lean();
+    expect(updated?.completionSequence?.rounds).toBe(5);
+  });
+
+  it('lists records while omitting malformed completion sequence evidence', async () => {
+    await shadowDetectionRepository.recordCompletionSequence(observation());
+    await ShadowDetectionModel.collection.updateOne({}, { $set: { 'completionSequence.windowHours': 12 } });
+
+    const { data } = await shadowDetectionRepository.list({ limit: 10 });
+    expect(data).toHaveLength(1);
+    expect(data[0]).toMatchObject({ detector: 'completionSequence', userIds: ids });
+    expect(data[0]).not.toHaveProperty('completionSequence');
+  });
+
   it('preserves human verdicts and opens a new observation on another activity day', async () => {
     await shadowDetectionRepository.recordCompletionSequence(observation());
     const {

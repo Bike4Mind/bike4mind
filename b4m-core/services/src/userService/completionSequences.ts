@@ -43,6 +43,8 @@ function eventRuns(events: readonly CompletionSequenceEvent[]): Run[] {
   for (const event of sorted) {
     const at = event.at.getTime();
     if (event.eligible === false) {
+      const previous = runs.at(-1);
+      if (previous?.last === at) previous.ambiguous = true;
       runs.push({ userId: '', first: at, last: at, count: 1, ambiguous: true });
       continue;
     }
