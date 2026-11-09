@@ -325,6 +325,7 @@ const SystemSecretsTab: React.FC = () => {
   const [showValue, setShowValue] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deletingSecret, setDeletingSecret] = useState<SecretStatus | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   const fetchTier1Status = useCallback(async () => {
@@ -385,7 +386,6 @@ const SystemSecretsTab: React.FC = () => {
 
   const handleCloseModal = () => {
     setEditModalOpen(false);
-    setEditingSecret(null);
     setSecretValue('');
     setShowValue(false);
   };
@@ -397,7 +397,12 @@ const SystemSecretsTab: React.FC = () => {
 
   const handleCloseDelete = () => {
     if (deleting) return;
-    setDeletingSecret(null);
+    setDeleteDialogOpen(false);
+  };
+
+  const handleRequestDelete = (secret: SecretStatus) => {
+    setDeletingSecret(secret);
+    setDeleteDialogOpen(true);
   };
 
   const handleSave = async () => {
@@ -433,7 +438,7 @@ const SystemSecretsTab: React.FC = () => {
     try {
       await api.delete(`/api/admin/system-secrets/${secret.dbRecord.id}`);
       toast.success(`Database override for ${secret.secretName} deleted`);
-      setDeletingSecret(null);
+      setDeleteDialogOpen(false);
       fetchSecrets();
     } catch (error) {
       const errorMessage = isAxiosError(error) ? error.response?.data?.error : undefined;
@@ -552,7 +557,7 @@ const SystemSecretsTab: React.FC = () => {
             />
           }
           groups={groups}
-          rowActions={secret => <SecretRowMenu secret={secret} onEdit={handleEdit} onDelete={setDeletingSecret} />}
+          rowActions={secret => <SecretRowMenu secret={secret} onEdit={handleEdit} onDelete={handleRequestDelete} />}
           pagination={false}
           // Wide enough that every column keeps one line; below it the table scrolls inside its frame.
           minWidth="56rem"
@@ -630,7 +635,7 @@ const SystemSecretsTab: React.FC = () => {
       </AdminDialog>
 
       <AdminDialog
-        open={deletingSecret !== null}
+        open={deleteDialogOpen}
         onClose={handleCloseDelete}
         title="Delete override"
         role="alertdialog"

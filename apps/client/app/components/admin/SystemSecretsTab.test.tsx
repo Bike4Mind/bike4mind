@@ -367,6 +367,81 @@ describe('SystemSecretsTab', () => {
     await waitFor(() => expect(screen.queryByTestId('system-secrets-delete-dialog')).toBeNull());
   });
 
+  const openEditDialog = async () => {
+    renderTab();
+    await screen.findByTestId('system-secrets-row-SMTP_PASSWORD');
+    openRowMenu('SMTP_PASSWORD');
+    fireEvent.click(await screen.findByTestId('system-secrets-row-edit-SMTP_PASSWORD'));
+    const dialog = await screen.findByTestId('system-secrets-edit-dialog');
+    fireEvent.change(within(dialog).getByTestId('system-secrets-edit-value-input'), {
+      target: { value: 'new-smtp-pass' },
+    });
+    fireEvent.click(within(dialog).getByTestId('system-secrets-edit-save-btn'));
+    return dialog;
+  };
+
+  const openDeleteDialog = async () => {
+    renderTab();
+    await screen.findByTestId('system-secrets-row-SMTP_PASSWORD');
+    openRowMenu('SMTP_PASSWORD');
+    fireEvent.click(await screen.findByTestId('system-secrets-row-delete-SMTP_PASSWORD'));
+    return screen.findByTestId('system-secrets-delete-dialog');
+  };
+
+  const axiosFailure = (message: string) =>
+    Object.assign(new Error('Request failed'), { isAxiosError: true, response: { data: { error: message } } });
+
+  it('shows the server message and keeps the edit dialog open when saving fails', async () => {
+    mocks.post.mockRejectedValue(axiosFailure('Encryption key unavailable'));
+    const dialog = await openEditDialog();
+
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('Encryption key unavailable'));
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
+    expect(screen.getByTestId('system-secrets-edit-dialog')).toBe(dialog);
+    expect(within(dialog).getByTestId('system-secrets-edit-save-btn')).not.toBeDisabled();
+    expect(callsTo(SECRETS_URL)).toBe(1);
+  });
+
+  it('falls back to a generic message and keeps the edit dialog open when saving fails without a response', async () => {
+    mocks.post.mockRejectedValue(new Error('Network Error'));
+    const dialog = await openEditDialog();
+
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('Failed to save secret'));
+    expect(screen.getByTestId('system-secrets-edit-dialog')).toBe(dialog);
+    expect(callsTo(SECRETS_URL)).toBe(1);
+  });
+
+  it('shows the server message and keeps the delete dialog open when deleting fails', async () => {
+    mocks.delete.mockRejectedValue(axiosFailure('Override is locked'));
+    const dialog = await openDeleteDialog();
+    fireEvent.click(within(dialog).getByTestId('system-secrets-delete-confirm-btn'));
+
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('Override is locked'));
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
+    expect(screen.getByTestId('system-secrets-delete-dialog')).toBe(dialog);
+    expect(within(dialog).getByTestId('system-secrets-delete-cancel-btn')).not.toBeDisabled();
+    expect(callsTo(SECRETS_URL)).toBe(1);
+  });
+
+  it('falls back to a generic message when deleting fails without a response', async () => {
+    mocks.delete.mockRejectedValue(new Error('Network Error'));
+    const dialog = await openDeleteDialog();
+    fireEvent.click(within(dialog).getByTestId('system-secrets-delete-confirm-btn'));
+
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('Failed to delete secret'));
+    expect(screen.getByTestId('system-secrets-delete-dialog')).toBe(dialog);
+    expect(callsTo(SECRETS_URL)).toBe(1);
+  });
+
+  it('closes the delete dialog on Cancel without sending a request', async () => {
+    const dialog = await openDeleteDialog();
+    fireEvent.click(within(dialog).getByTestId('system-secrets-delete-cancel-btn'));
+
+    await waitFor(() => expect(screen.queryByTestId('system-secrets-delete-dialog')).toBeNull());
+    expect(mocks.delete).not.toHaveBeenCalled();
+    expect(callsTo(SECRETS_URL)).toBe(1);
+  });
+
   it('keeps the header and shows skeleton rows while the lists load', async () => {
     mocks.get.mockReturnValue(new Promise(() => {}));
     renderTab();
