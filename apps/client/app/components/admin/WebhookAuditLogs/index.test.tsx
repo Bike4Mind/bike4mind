@@ -322,7 +322,8 @@ describe('WebhookAuditLogsTab delivery list', () => {
     const loadMore = screen.getByTestId('webhook-logs-load-more-btn');
     const frame = screen.getByTestId('webhook-logs-table-frame');
     expect(precedes(frame, loadMore)).toBe(true);
-    expect(['', 'none']).toContain(getComputedStyle(frame).maxHeight);
+    // DataTable puts its height cap on the scrolling region inside the frame.
+    expect(getComputedStyle(within(frame).getByRole('region')).maxHeight).toBe('none');
     fireEvent.click(loadMore);
     expect(mocks.fetchNextPage).toHaveBeenCalledTimes(1);
   });
