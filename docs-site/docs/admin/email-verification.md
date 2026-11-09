@@ -88,7 +88,7 @@ Open a row's menu (**...**) to see its actions. The available actions depend on 
 - The action being performed (Verify email or Unverify email)
 - The affected user's email and username
 - For unverify, a note that the user will have to verify the address again
-- A reason: pick a preset (Ownership confirmed by support, Bounced or invalid address, Internal testing) or write a note of at least 5 characters. The reason is recorded with the change.
+- A reason: pick a preset or write a note of at least 5 characters. The reason is recorded with the change. Verify offers Ownership confirmed by support and Internal testing; Unverify also offers Bounced or invalid address.
 - Cancel and confirm buttons (the confirm button is red for unverify)
 
 ## Resending Links
