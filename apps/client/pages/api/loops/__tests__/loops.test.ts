@@ -387,6 +387,22 @@ describe('PATCH /api/loops/:id status transitions', () => {
     expect(patch.nextRunAt).toEqual(new Date(lastRunAt.getTime() + 15 * 60_000));
   });
 
+  it('paused -> live runs now when a ticket became ready while it was paused', async () => {
+    tickets.findNextReadyForLoop.mockResolvedValue({ id: 't1' });
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'paused', lastRunAt: new Date() }));
+    const { res, result } = call('item', 'patch', { query: { id: OID }, body: { status: 'live' } });
+    await result;
+    expect(repo.makeDueNow).toHaveBeenCalledWith(OID, expect.any(Date));
+    expect(dispatch.requestLoopDispatch).toHaveBeenCalledWith(OID, expect.anything());
+    expect(new Date(res._getJSONData().nextRunAt).getTime()).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('paused -> live with nothing ready keeps the interval', async () => {
+    tickets.findNextReadyForLoop.mockResolvedValue(null);
+    await patchStatus({ status: 'paused', lastRunAt: new Date() }, 'live');
+    expect(repo.makeDueNow).not.toHaveBeenCalled();
+  });
+
   it('error -> live resets the failure count', async () => {
     const patch = await patchStatus({ status: 'error', consecutiveFailures: 3 }, 'live');
     expect(patch).toMatchObject({ status: 'live', consecutiveFailures: 0 });

@@ -10,6 +10,7 @@ import {
 import { ILoop, ILoopWithUsage, startOfUtcDay } from '@bike4mind/common';
 import { ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { requestLoopDispatch } from '@server/utils/loopDispatch';
+import { makeDueIfReady } from '@server/utils/loopTickets';
 import {
   assertLoopsEnabled,
   LOOP_RATE_LIMIT,
@@ -125,8 +126,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const guard = patch.stageConfig !== undefined ? { stages: existing.stages } : undefined;
     const updated = await loopRepository.updateForUser(id, req.user!.id, patch, existing.status, guard);
     if (!updated) throw new ConflictError('Loop changed while saving; reload and try again');
-    // Started or resumed: a no-op if its next run is not due yet.
-    if (updated.status === 'live' && existing.status !== 'live') await requestLoopDispatch(id, req.logger);
+    // Started or resumed: a no-op if its next run is not due yet. A ticket made ready while it was paused runs
+    // now rather than an interval after the last run, as it would have had the loop been live.
+    if (updated.status === 'live' && existing.status !== 'live') {
+      if (await makeDueIfReady(updated, now)) updated.nextRunAt = now;
+      await requestLoopDispatch(id, req.logger);
+    }
     res.json(updated);
   })
   .delete(async (req, res) => {
