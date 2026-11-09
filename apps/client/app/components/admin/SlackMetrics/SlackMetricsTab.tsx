@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { type ReactNode } from 'react';
 import { Box, Card, CardContent, Grid, Typography } from '@mui/joy';
 import {
   BarChart,
@@ -14,15 +14,26 @@ import {
   Cell,
 } from 'recharts';
 import type { ChartData } from '../EventMetrics/utils/chartDataProcessor';
-import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import {
+  CHART_ACCENT,
+  CHART_BAD,
+  CHART_GOOD,
+  adminChartSeries,
+  chartAxisProps,
+  chartGridProps,
+  chartLegendProps,
+  chartPieProps,
+  chartTooltipProps,
+} from '../EventMetrics/utils/chartTheme';
+import { EmptyState } from '../shared';
 
 interface SlackMetricsTabProps {
   chartData: ChartData;
+  /** The empty state's next step, e.g. a refresh. */
+  emptyAction: ReactNode;
 }
 
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8'];
-
-export const SlackMetricsTab: React.FC<SlackMetricsTabProps> = ({ chartData }) => {
+export const SlackMetricsTab: React.FC<SlackMetricsTabProps> = ({ chartData, emptyAction }) => {
   const { slackMetrics } = chartData;
 
   const typeData = React.useMemo(
@@ -60,18 +71,20 @@ export const SlackMetricsTab: React.FC<SlackMetricsTabProps> = ({ chartData }) =
 
   if (!slackMetrics) {
     return (
-      <Box sx={{ p: 4, textAlign: 'center' }}>
-        <Typography level="h4">No Slack Data Available</Typography>
-        <Typography sx={{ mt: 1 }}>Slack integration events will appear here once tracked.</Typography>
-      </Box>
+      <EmptyState
+        title="No Slack events yet"
+        description="Slack integration events appear here once tracked."
+        action={emptyAction}
+      />
     );
   }
 
+  const agentColors = adminChartSeries(agentData.length);
+  const intentColors = adminChartSeries(intentData.length);
+  const formatColors = adminChartSeries(formatData.length);
+
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
-        <ContextHelpButton helpId="admin/metrics" tooltipText="Slack Metrics Help" />
-      </Box>
       <Grid container spacing={2}>
         {/* Events Overview */}
         <Grid xs={12} md={6}>
@@ -82,11 +95,11 @@ export const SlackMetricsTab: React.FC<SlackMetricsTabProps> = ({ chartData }) =
               </Typography>
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={typeData} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis type="number" />
-                  <YAxis dataKey="name" type="category" width={180} tick={{ fontSize: 12 }} />
-                  <Tooltip />
-                  <Bar dataKey="value" fill="#8884d8" name="Count" />
+                  <CartesianGrid {...chartGridProps} />
+                  <XAxis type="number" {...chartAxisProps} />
+                  <YAxis dataKey="name" type="category" width={180} {...chartAxisProps} />
+                  <Tooltip {...chartTooltipProps} />
+                  <Bar dataKey="value" fill={CHART_ACCENT} name="Count" />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>
@@ -108,16 +121,16 @@ export const SlackMetricsTab: React.FC<SlackMetricsTabProps> = ({ chartData }) =
                     cy="50%"
                     innerRadius={40}
                     outerRadius={80}
-                    fill="#8884d8"
                     paddingAngle={5}
                     dataKey="value"
+                    {...chartPieProps}
                   >
                     {agentData.map((entry, index) => (
-                      <Cell key={`agent-${entry.name}`} fill={COLORS[index % COLORS.length]} />
+                      <Cell key={`agent-${entry.name}`} fill={agentColors[index]} />
                     ))}
                   </Pie>
-                  <Tooltip />
-                  <Legend />
+                  <Tooltip {...chartTooltipProps} />
+                  <Legend {...chartLegendProps} />
                 </PieChart>
               </ResponsiveContainer>
             </CardContent>
@@ -139,16 +152,16 @@ export const SlackMetricsTab: React.FC<SlackMetricsTabProps> = ({ chartData }) =
                     cy="50%"
                     innerRadius={40}
                     outerRadius={80}
-                    fill="#8884d8"
                     paddingAngle={5}
                     dataKey="value"
+                    {...chartPieProps}
                   >
                     {intentData.map((entry, index) => (
-                      <Cell key={`intent-${entry.name}`} fill={COLORS[index % COLORS.length]} />
+                      <Cell key={`intent-${entry.name}`} fill={intentColors[index]} />
                     ))}
                   </Pie>
-                  <Tooltip />
-                  <Legend />
+                  <Tooltip {...chartTooltipProps} />
+                  <Legend {...chartLegendProps} />
                 </PieChart>
               </ResponsiveContainer>
             </CardContent>
@@ -170,16 +183,16 @@ export const SlackMetricsTab: React.FC<SlackMetricsTabProps> = ({ chartData }) =
                     cy="50%"
                     innerRadius={60}
                     outerRadius={80}
-                    fill="#8884d8"
                     paddingAngle={5}
                     dataKey="value"
+                    {...chartPieProps}
                   >
                     {formatData.map((entry, index) => (
-                      <Cell key={`format-${entry.name}`} fill={COLORS[index % COLORS.length]} />
+                      <Cell key={`format-${entry.name}`} fill={formatColors[index]} />
                     ))}
                   </Pie>
-                  <Tooltip />
-                  <Legend />
+                  <Tooltip {...chartTooltipProps} />
+                  <Legend {...chartLegendProps} />
                 </PieChart>
               </ResponsiveContainer>
             </CardContent>
@@ -195,12 +208,14 @@ export const SlackMetricsTab: React.FC<SlackMetricsTabProps> = ({ chartData }) =
               </Typography>
               <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
-                  <Pie data={statusData} cx="50%" cy="50%" outerRadius={80} fill="#8884d8" dataKey="value">
-                    <Cell fill="#00C49F" />
-                    <Cell fill="#FF8042" />
+                  <Pie data={statusData} cx="50%" cy="50%" outerRadius={80} dataKey="value" {...chartPieProps}>
+                    {/* Keyed by name: a zero count is filtered out, so position does not tell the status. */}
+                    {statusData.map(entry => (
+                      <Cell key={`status-${entry.name}`} fill={entry.name === 'Success' ? CHART_GOOD : CHART_BAD} />
+                    ))}
                   </Pie>
-                  <Tooltip />
-                  <Legend />
+                  <Tooltip {...chartTooltipProps} />
+                  <Legend {...chartLegendProps} />
                 </PieChart>
               </ResponsiveContainer>
             </CardContent>

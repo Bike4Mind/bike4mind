@@ -1,19 +1,33 @@
-import React from 'react';
+import React, { type ReactNode } from 'react';
 import { Box, Card, CardContent, Grid, Typography } from '@mui/joy';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import type { ChartData } from '../utils/chartDataProcessor';
+import {
+  adminChartSeries,
+  chartAxisProps,
+  chartGridProps,
+  chartLegendProps,
+  chartTooltipProps,
+} from '../utils/chartTheme';
+import { EmptyState } from '../../shared';
 
 interface CurationBreakdownTabProps {
   chartData: ChartData;
+  /** The empty state's next step, e.g. a refresh. */
+  emptyAction: ReactNode;
 }
 
-export const CurationBreakdownTab: React.FC<CurationBreakdownTabProps> = ({ chartData }) => {
+const [TRANSCRIPT_COLOR, SUMMARY_COLOR] = adminChartSeries(2);
+const [MARKDOWN_COLOR, TXT_COLOR, HTML_COLOR] = adminChartSeries(3);
+
+export const CurationBreakdownTab: React.FC<CurationBreakdownTabProps> = ({ chartData, emptyAction }) => {
   if (!chartData.curationBreakdown || chartData.curationBreakdown.length === 0) {
     return (
-      <Box sx={{ p: 4, textAlign: 'center' }}>
-        <Typography level="h4">No Curation Data Available</Typography>
-        <Typography sx={{ mt: 1 }}>Curation events with file type metadata will appear here once tracked.</Typography>
-      </Box>
+      <EmptyState
+        title="No curation events yet"
+        description="Curation events with file type metadata appear here once tracked."
+        action={emptyAction}
+      />
     );
   }
 
@@ -44,13 +58,13 @@ export const CurationBreakdownTab: React.FC<CurationBreakdownTabProps> = ({ char
               </Typography>
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={curationTypeData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="fileType" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="transcript" fill="#0088FE" name="Transcript" stackId="a" />
-                  <Bar dataKey="executive_summary" fill="#00C49F" name="Executive Summary" stackId="a" />
+                  <CartesianGrid {...chartGridProps} />
+                  <XAxis dataKey="fileType" {...chartAxisProps} />
+                  <YAxis {...chartAxisProps} />
+                  <Tooltip {...chartTooltipProps} />
+                  <Legend {...chartLegendProps} />
+                  <Bar dataKey="transcript" fill={TRANSCRIPT_COLOR} name="Transcript" stackId="a" />
+                  <Bar dataKey="executive_summary" fill={SUMMARY_COLOR} name="Executive Summary" stackId="a" />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>
@@ -66,14 +80,14 @@ export const CurationBreakdownTab: React.FC<CurationBreakdownTabProps> = ({ char
               </Typography>
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={exportFormatData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="fileType" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="markdown" fill="#FFBB28" name="Markdown" stackId="a" />
-                  <Bar dataKey="txt" fill="#FF8042" name="TXT" stackId="a" />
-                  <Bar dataKey="html" fill="#8884D8" name="HTML" stackId="a" />
+                  <CartesianGrid {...chartGridProps} />
+                  <XAxis dataKey="fileType" {...chartAxisProps} />
+                  <YAxis {...chartAxisProps} />
+                  <Tooltip {...chartTooltipProps} />
+                  <Legend {...chartLegendProps} />
+                  <Bar dataKey="markdown" fill={MARKDOWN_COLOR} name="Markdown" stackId="a" />
+                  <Bar dataKey="txt" fill={TXT_COLOR} name="TXT" stackId="a" />
+                  <Bar dataKey="html" fill={HTML_COLOR} name="HTML" stackId="a" />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>

@@ -19,6 +19,16 @@ import type { PieLabelRenderProps } from 'recharts';
 import type { ChartData } from '../utils/chartDataProcessor';
 import { UsageBySourceCard } from './UsageBySourceCard';
 import { AnalyticsTermHelp } from './AnalyticsTermHelp';
+import {
+  CHART_ACCENT,
+  CHART_LABEL_FILL,
+  adminChartSeries,
+  chartAxisProps,
+  chartGridProps,
+  chartLegendProps,
+  chartPieProps,
+  chartTooltipProps,
+} from '../utils/chartTheme';
 
 interface OverviewTabProps {
   chartData: Pick<ChartData, 'timeSeriesData' | 'categoryBreakdown' | 'topEvents'>;
@@ -26,13 +36,12 @@ interface OverviewTabProps {
   isCompleteWindow?: boolean;
 }
 
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82CA9D', '#FFC658', '#FF6B6B'];
-
 export const OverviewTab: React.FC<OverviewTabProps> = ({
   chartData,
   showUsageBySource = true,
   isCompleteWindow = false,
 }) => {
+  const categoryColors = adminChartSeries(chartData.categoryBreakdown.length);
   return (
     <Box>
       <Grid container spacing={2}>
@@ -62,12 +71,12 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
               </Typography>
               <ResponsiveContainer width="100%" height={300}>
                 <LineChart data={chartData.timeSeriesData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Line type="monotone" dataKey="count" stroke="#8884d8" name="Event Count" />
+                  <CartesianGrid {...chartGridProps} />
+                  <XAxis dataKey="date" {...chartAxisProps} />
+                  <YAxis {...chartAxisProps} />
+                  <Tooltip {...chartTooltipProps} />
+                  <Legend {...chartLegendProps} />
+                  <Line type="monotone" dataKey="count" stroke={CHART_ACCENT} name="Event Count" />
                 </LineChart>
               </ResponsiveContainer>
             </CardContent>
@@ -94,20 +103,32 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                     cx="50%"
                     cy="50%"
                     outerRadius={100}
+                    {...chartPieProps}
                     label={entry => {
-                      const { category, count } = entry as PieLabelRenderProps & {
+                      const { category, count, x, y, textAnchor } = entry as PieLabelRenderProps & {
                         category: string;
                         count: number;
                       };
-                      return `${category}: ${count}`;
+                      return (
+                        <text
+                          x={x}
+                          y={y}
+                          textAnchor={textAnchor}
+                          dominantBaseline="central"
+                          fill={CHART_LABEL_FILL}
+                          fontSize={12}
+                        >
+                          {`${category}: ${count}`}
+                        </text>
+                      );
                     }}
                   >
                     {chartData.categoryBreakdown.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      <Cell key={`cell-${index}`} fill={categoryColors[index]} />
                     ))}
                   </Pie>
-                  <Tooltip />
-                  <Legend />
+                  <Tooltip {...chartTooltipProps} />
+                  <Legend {...chartLegendProps} />
                 </PieChart>
               </ResponsiveContainer>
             </CardContent>
@@ -127,12 +148,12 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
               </Typography>
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={chartData.topEvents.slice(0, 10)}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="eventName" angle={-45} textAnchor="end" height={120} />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="count" fill="#8884d8" name="Count" />
+                  <CartesianGrid {...chartGridProps} />
+                  <XAxis dataKey="eventName" angle={-45} textAnchor="end" height={120} {...chartAxisProps} />
+                  <YAxis {...chartAxisProps} />
+                  <Tooltip {...chartTooltipProps} />
+                  <Legend {...chartLegendProps} />
+                  <Bar dataKey="count" fill={CHART_ACCENT} name="Count" />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>

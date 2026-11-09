@@ -1,6 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider } from '@mui/joy';
 import { describe, expect, it, vi } from 'vitest';
+import { CHART_ACCENT, CHART_MUTED } from '../utils/chartTheme';
+import { chartColorReport, chartFills } from '../utils/chartTestUtils';
 import { UsageBySourceCard } from './UsageBySourceCard';
 
 vi.mock('../hooks/useUsageBySource', () => ({
@@ -13,22 +15,16 @@ vi.mock('../hooks/useUsageBySource', () => ({
         { source: 'manual', events: 3, uniqueUsers: 2 },
         { source: 'auto', events: 2, uniqueUsers: 1 },
         { source: 'future-client', events: 1, uniqueUsers: 1 },
+        { source: 'web', events: 5, uniqueUsers: 3 },
       ],
     },
   }),
 }));
 
-vi.mock('recharts', () => ({
-  ResponsiveContainer: () => null,
-  PieChart: () => null,
-  Pie: () => null,
-  Cell: () => null,
-  Tooltip: () => null,
-  Legend: () => null,
-}));
+vi.mock('recharts', async () => (await import('../utils/chartTestUtils')).recordingRecharts);
 
 function renderCard() {
-  render(
+  return render(
     <CssVarsProvider>
       <UsageBySourceCard />
     </CssVarsProvider>
@@ -103,5 +99,25 @@ describe('UsageBySourceCard help', () => {
     expect(await screen.findByRole('tooltip')).toBeInTheDocument();
     fireEvent.pointerDown(screen.getByTestId('usage-by-source-table'));
     await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument());
+  });
+});
+
+describe('UsageBySourceCard colors and width', () => {
+  it('draws the pie from admin tokens, with known sources on the accent and others muted', () => {
+    const { container } = renderCard();
+    expect(chartColorReport(container)).toEqual({ hex: [], unset: [] });
+    expect(chartFills(container, 'Cell')).toEqual([CHART_MUTED, CHART_MUTED, CHART_MUTED, CHART_MUTED, CHART_ACCENT]);
+  });
+
+  it('colors the table swatches like their slices', () => {
+    renderCard();
+    expect(screen.getByTestId('usage-by-source-swatch-badge-button')).toHaveStyle({ backgroundColor: CHART_MUTED });
+    expect(screen.getByTestId('usage-by-source-swatch-web')).toHaveStyle({ backgroundColor: CHART_ACCENT });
+  });
+
+  it('lets the table fit its card instead of forcing a 600 px minimum width', () => {
+    renderCard();
+    const table = within(screen.getByTestId('usage-by-source-table')).getByRole('table');
+    expect(getComputedStyle(table).minWidth).not.toBe('600px');
   });
 });

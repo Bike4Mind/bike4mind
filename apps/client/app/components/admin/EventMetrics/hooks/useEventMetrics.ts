@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient, hashKey } from '@tanstack/react-
 import { api } from '@client/app/contexts/ApiContext';
 import type { EventMetric } from '../types';
 
-interface MetricsFilters {
+export interface MetricsFilters {
   dateFrom?: string;
   dateTo?: string;
   userFilter?: string;
