@@ -102,6 +102,9 @@ describe('AdminReleaseNotesTab', () => {
     const [emptyBtn, fullBtn] = screen.getAllByTestId('release-notes-unhide-btn') as HTMLButtonElement[];
     expect(emptyBtn.disabled).toBe(true);
     expect(fullBtn.disabled).toBe(false);
+    for (const btn of [emptyBtn, fullBtn]) {
+      expect(btn).toHaveClass('MuiButton-variantOutlined', 'MuiButton-colorNeutral');
+    }
 
     mockPost.mockRejectedValue(new Error('A release note with no items cannot go live'));
     fireEvent.click(fullBtn);
@@ -119,6 +122,7 @@ describe('AdminReleaseNotesTab', () => {
     expect(within(header).getByRole('heading', { level: 1 }).textContent).toBe('Release notes');
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
     expect(header.textContent).toContain('GET /api/v1/whats-new');
+    expect(header.textContent).toContain("What's new modals");
     expect(tab.querySelector('.MuiAlert-root')).toBeNull();
   });
 
@@ -142,9 +146,9 @@ describe('AdminReleaseNotesTab', () => {
       hidden: [note({ state: 'hidden' })],
     });
     renderTab();
-    // Scoped to the rows: the filter tabs carry the same words.
+    // Scoped to the list: the filter tabs carry the same words.
     const tone = async (label: string) =>
-      (await within(await screen.findByTestId('release-notes-row')).findByText(label))
+      (await within(screen.getByTestId('release-notes-list')).findByText(label))
         .closest('[data-tone]')
         ?.getAttribute('data-tone');
 
@@ -192,6 +196,73 @@ describe('AdminReleaseNotesTab', () => {
     fail = false;
     fireEvent.click(within(error).getByTestId('admin-error-retry-btn'));
     expect(await screen.findByTestId('release-notes-row')).toBeTruthy();
+  });
+
+  it('renders row actions as neutral secondary buttons, none danger or success', async () => {
+    serve({ scheduled: [note({})] });
+    renderTab();
+    await screen.findByTestId('release-notes-row');
+
+    for (const id of ['release-notes-edit-btn', 'release-notes-hide-btn', 'release-notes-publish-now-btn']) {
+      const button = screen.getByTestId(id);
+      expect(button, id).toHaveClass('MuiButton-variantOutlined', 'MuiButton-colorNeutral');
+      expect(button, id).not.toHaveClass('MuiButton-colorDanger');
+      expect(button, id).not.toHaveClass('MuiButton-colorSuccess');
+    }
+  });
+
+  it('types the release tag as a mono id and lets a long withheld chip shrink to the row', async () => {
+    serve({ scheduled: [note({ deniedTerm: 'a-very-long-denylisted-term-that-would-overflow-a-phone-row' })] });
+    renderTab();
+
+    const tag = await screen.findByTestId('release-notes-row-tag');
+    expect(tag).toHaveTextContent('v1.0.0');
+    expect(tag).toHaveClass('MuiTypography-body-xs');
+    expect(getComputedStyle(tag).fontFamily).toContain('--joy-fontFamily-code');
+    expect(screen.getByTestId('release-notes-denied-chip')).toHaveStyle({ maxWidth: '100%' });
+  });
+
+  it('keeps the previous rows on screen under an updating bar while a new filter loads', async () => {
+    let releasePublished: () => void = () => undefined;
+    mockGet.mockImplementation(async (url: string, opts?: { params?: { status: string } }) => {
+      if (url.endsWith('/config')) return { data: { config, malformed: false } };
+      if (opts?.params?.status === 'published') {
+        await new Promise<void>(resolve => (releasePublished = resolve));
+        return {
+          data: { data: [note({ id: 'p1', state: 'published', headline: 'Published one' })], next_cursor: null },
+        };
+      }
+      return { data: { data: [note({ headline: 'Scheduled one' })], next_cursor: null } };
+    });
+    renderTab();
+    expect(await screen.findByText('Scheduled one')).toBeTruthy();
+    expect(screen.queryByTestId('release-notes-updating')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('release-notes-filter-published-btn'));
+    expect(await screen.findByTestId('release-notes-updating')).toBeTruthy();
+    expect(screen.getByText('Scheduled one')).toBeTruthy();
+    expect(screen.queryByTestId('release-notes-loading')).toBeNull();
+
+    releasePublished();
+    expect(await screen.findByText('Published one')).toBeTruthy();
+    expect(screen.queryByText('Scheduled one')).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId('release-notes-updating')).toBeNull());
+  });
+
+  it('keeps the rows and shows the error above them when a later page fails to load', async () => {
+    mockGet.mockImplementation(async (url: string, opts?: { params?: { cursor?: string } }) => {
+      if (url.endsWith('/config')) return { data: { config, malformed: false } };
+      if (opts?.params?.cursor === 'c2') throw new Error('Service unavailable');
+      return { data: { data: [note({})], next_cursor: 'c2' } };
+    });
+    renderTab();
+
+    fireEvent.click(await screen.findByTestId('release-notes-load-more-btn'));
+    const listError = await screen.findByTestId('release-notes-list-error');
+    expect(listError.textContent).toContain('Service unavailable');
+    expect(screen.getByTestId('release-notes-row')).toBeTruthy();
+    expect(screen.queryByTestId('admin-error-state')).toBeNull();
+    expect(within(listError).getByTestId('release-notes-list-retry-btn')).toBeTruthy();
   });
 
   it('saves the settings from one SaveBar at the foot of the page and guards leaving with an unsaved edit', async () => {

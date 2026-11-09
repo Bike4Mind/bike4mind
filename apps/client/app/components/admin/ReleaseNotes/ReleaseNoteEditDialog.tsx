@@ -14,10 +14,8 @@ import {
   Typography,
 } from '@mui/joy';
 import DeleteIcon from '@mui/icons-material/Delete';
-import { toast } from 'sonner';
 import type { ModalVideo, ReleaseNoteCategory, ReleaseNoteItem } from '@bike4mind/common';
 import { getModalVideoErrors } from '@bike4mind/common';
-import { getErrorMessage } from '@client/app/utils/error';
 import { useConfig } from '@client/app/hooks/data/settings';
 import AdminModalVideoFields from '@client/app/components/admin/AdminModalVideoFields';
 import { videoUrlsOf } from '@client/app/components/modals/whatsNewSlideMedia';
@@ -56,18 +54,16 @@ const ReleaseNoteEditDialog: React.FC<Props> = ({ note, onClose }) => {
         id: note.id,
         edit: { headline, summary, items, ...(videoChanged && { video }), ...(imageRemoved && { image: null }) },
       },
-      {
-        onSuccess: () => {
-          toast.success('Release note saved');
-          onClose();
-        },
-        onError: err => toast.error(getErrorMessage(err)),
-      }
+      // The toasts are on the mutation itself (useEditReleaseNote); a failed save keeps the dialog open.
+      { onSuccess: () => onClose() }
     );
+  // While the PATCH is in flight the dialog stays put: Cancel is disabled and the close button, Esc and
+  // the backdrop do nothing.
+  const close = edit.isPending ? () => undefined : onClose;
 
   return (
     <AdminDialog
-      onClose={onClose}
+      onClose={close}
       title={`Edit release notes for ${note.releaseTag}`}
       width={640}
       data-testid="release-note-edit-dialog"
@@ -170,7 +166,13 @@ const ReleaseNoteEditDialog: React.FC<Props> = ({ note, onClose }) => {
         >
           Save
         </Button>
-        <Button variant="plain" color="neutral" onClick={onClose} data-testid="release-note-edit-cancel-btn">
+        <Button
+          variant="plain"
+          color="neutral"
+          disabled={edit.isPending}
+          onClick={onClose}
+          data-testid="release-note-edit-cancel-btn"
+        >
           Cancel
         </Button>
       </DialogActions>

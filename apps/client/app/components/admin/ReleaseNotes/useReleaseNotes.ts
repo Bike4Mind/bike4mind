@@ -1,6 +1,8 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import type { ModalStillImage, ModalVideo, ReleaseNoteItem, ReleaseNotesConfig } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { getErrorMessage } from '@client/app/utils/error';
 
 export type ReleaseNoteState = 'scheduled' | 'published' | 'hidden';
 export type ReleaseNoteAction = 'hide' | 'unhide' | 'publishNow';
@@ -44,6 +46,8 @@ export function useReleaseNotes(status: ReleaseNoteState) {
       ).data,
     initialPageParam: undefined as string | undefined,
     getNextPageParam: page => page.next_cursor ?? undefined,
+    // A filter switch keeps the previous rows on screen (under an UpdatingBar) until the new list lands.
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -57,12 +61,18 @@ export function useReleaseNoteStatus() {
   });
 }
 
+// The toasts live on the mutation, not the mutate call: per-call callbacks are dropped once the
+// edit dialog unmounts, which would leave a save that lands (or fails) after it closes silent.
 export function useEditReleaseNote() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ id, edit }: { id: string; edit: ReleaseNoteEdit }) =>
       (await api.patch<AdminReleaseNote>(`/api/admin/release-notes/${id}`, edit)).data,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: LIST_KEY }),
+    onSuccess: () => {
+      toast.success('Release note saved');
+      return queryClient.invalidateQueries({ queryKey: LIST_KEY });
+    },
+    onError: err => toast.error(getErrorMessage(err)),
   });
 }
 

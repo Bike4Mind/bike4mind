@@ -59,7 +59,7 @@ const ConfigForm: React.FC<{ stored: ReleaseNotesConfig; malformed: boolean }> =
   // An unreadable stored value has no baseline (null): the form shows the defaults, and any edit, or
   // "Use these defaults", stages a draft so Save can replace it.
   const draft = useSettingsDraft<ReleaseNotesConfig | null>('releaseNotesConfig', malformed ? null : stored, {
-    name: 'Release notes settings',
+    name: 'Release notes config',
     save: next => save.mutateAsync(next ?? stored),
   });
   const config = draft.value ?? stored;

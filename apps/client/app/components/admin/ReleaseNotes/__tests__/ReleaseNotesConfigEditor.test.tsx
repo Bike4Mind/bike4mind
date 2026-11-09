@@ -105,6 +105,20 @@ describe('ReleaseNotesConfigEditor', () => {
     }
   });
 
+  it('names the config in the SaveBar when a save fails, and keeps the edit', async () => {
+    mockPut.mockRejectedValue(new Error('Service unavailable'));
+    renderEditor();
+    fireEvent.click(await screen.findByTestId('release-notes-config-enabled'));
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+
+    await waitFor(() =>
+      expect(within(saveBar() as HTMLElement).getByRole('alert')).toHaveTextContent(
+        'Release notes config was not saved: Service unavailable.'
+      )
+    );
+    expect(saveBar()).toHaveTextContent('1 unsaved change');
+  });
+
   it('warns when the stored value is malformed, and lets Save replace it with the shown defaults', async () => {
     mockGet.mockResolvedValue({ data: { config: { ...stored, denylist: [] }, malformed: true } });
     renderEditor();

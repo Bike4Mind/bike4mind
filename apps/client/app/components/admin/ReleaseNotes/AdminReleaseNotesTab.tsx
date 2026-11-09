@@ -1,9 +1,18 @@
 import React, { useState } from 'react';
-import { Box, Button, Stack, Typography } from '@mui/joy';
+import { Alert, Box, Button, Stack, Typography } from '@mui/joy';
 import { toast } from 'sonner';
 import { getErrorMessage } from '@client/app/utils/error';
 import { SettingsDraftProvider } from '../SettingsDraftProvider';
-import { AdminPageHeader, EmptyState, ErrorState, LoadingState, SectionCard, StatusChip, ViewTabs } from '../shared';
+import {
+  AdminPageHeader,
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  SectionCard,
+  StatusChip,
+  UpdatingBar,
+  ViewTabs,
+} from '../shared';
 import { ADMIN_REGION_GAP } from '../shared/adminStyles';
 import ReleaseNoteEditDialog from './ReleaseNoteEditDialog';
 import ReleaseNotesConfigEditor from './ReleaseNotesConfigEditor';
@@ -48,7 +57,11 @@ const ReleaseNoteRow: React.FC<{
     >
       <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
         <StateChip note={note} now={now} />
-        <Typography level="body-sm" sx={{ color: 'admin.ink' }}>
+        <Typography
+          level="body-xs"
+          sx={{ fontFamily: 'code', color: 'admin.inkMuted' }}
+          data-testid="release-notes-row-tag"
+        >
           {note.releaseTag}
         </Typography>
         <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
@@ -60,11 +73,14 @@ const ReleaseNoteRow: React.FC<{
           </Typography>
         )}
         {note.deniedTerm && (
-          <StatusChip
-            tone="bad"
-            label={`Withheld from the feed: mentions "${note.deniedTerm}"`}
-            data-testid="release-notes-denied-chip"
-          />
+          // A Joy Chip is max-content wide, so a long term would run past a narrow row; capped, it truncates.
+          <Box sx={{ minWidth: 0, maxWidth: '100%', '& > .MuiChip-root': { maxWidth: '100%' } }}>
+            <StatusChip
+              tone="bad"
+              label={`Withheld from the feed: mentions "${note.deniedTerm}"`}
+              data-testid="release-notes-denied-chip"
+            />
+          </Box>
         )}
       </Stack>
       <Typography level="title-md" sx={{ color: 'admin.ink', overflowWrap: 'anywhere' }}>
@@ -91,13 +107,20 @@ const ReleaseNoteRow: React.FC<{
         </Box>
       )}
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-        <Button size="sm" variant="outlined" onClick={() => onEdit(note)} data-testid="release-notes-edit-btn">
+        <Button
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          onClick={() => onEdit(note)}
+          data-testid="release-notes-edit-btn"
+        >
           Edit
         </Button>
         {note.state === 'hidden' ? (
           <Button
             size="sm"
             variant="outlined"
+            color="neutral"
             disabled={busy || empty}
             onClick={() => onAction(note, 'unhide')}
             data-testid="release-notes-unhide-btn"
@@ -108,6 +131,7 @@ const ReleaseNoteRow: React.FC<{
           <Button
             size="sm"
             variant="outlined"
+            color="neutral"
             disabled={busy}
             onClick={() => onAction(note, 'hide')}
             data-testid="release-notes-hide-btn"
@@ -119,6 +143,7 @@ const ReleaseNoteRow: React.FC<{
           <Button
             size="sm"
             variant="outlined"
+            color="neutral"
             disabled={busy || empty}
             onClick={() => onAction(note, 'publishNow')}
             data-testid="release-notes-publish-now-btn"
@@ -139,6 +164,7 @@ const AdminReleaseNotesTab: React.FC = () => {
     isLoading,
     error,
     refetch,
+    isFetching,
     isRefetching,
     hasNextPage,
     fetchNextPage,
@@ -166,7 +192,7 @@ const AdminReleaseNotesTab: React.FC = () => {
       <SettingsDraftProvider>
         <AdminPageHeader
           title="Release notes"
-          description="Customer-facing notes generated from each production release and served by GET /api/v1/whats-new, separate from What's New modals."
+          description="Customer-facing notes generated from each production release and served by GET /api/v1/whats-new, separate from What's new modals."
         />
         <ReleaseNotesConfigEditor />
         <Stack sx={{ gap: 2 }}>
@@ -180,6 +206,8 @@ const AdminReleaseNotesTab: React.FC = () => {
             aria-label="Filter release notes by status"
             data-testid="release-notes-filter"
           />
+          {/* Not on the first load (the card shows LoadingState) or a Load more (its button spins). */}
+          <UpdatingBar active={Boolean(data) && isFetching && !isFetchingNextPage} testId="release-notes-updating" />
           <SectionCard
             title={`${filter.label} notes`}
             body="custom"
@@ -192,7 +220,7 @@ const AdminReleaseNotesTab: React.FC = () => {
           >
             {isLoading ? (
               <LoadingState label="Loading release notes" testId="release-notes-loading" />
-            ) : error ? (
+            ) : error && notes.length === 0 ? (
               <ErrorState
                 message={`Could not load release notes: ${getErrorMessage(error)}`}
                 onRetry={() => void refetch()}
@@ -216,16 +244,42 @@ const AdminReleaseNotesTab: React.FC = () => {
                 }
               />
             ) : (
-              notes.map(note => (
-                <ReleaseNoteRow
-                  key={note.id}
-                  note={note}
-                  onAction={onAction}
-                  onEdit={setEditing}
-                  busy={statusMutation.isPending}
-                  now={dataUpdatedAt}
-                />
-              ))
+              <>
+                {/* A failed refetch or Load more keeps the rows it already has. */}
+                {error && (
+                  <Box sx={{ px: 2, pt: 2 }}>
+                    <Alert
+                      color="danger"
+                      variant="soft"
+                      data-testid="release-notes-list-error"
+                      endDecorator={
+                        <Button
+                          size="sm"
+                          variant="outlined"
+                          color="neutral"
+                          loading={isRefetching}
+                          onClick={() => void refetch()}
+                          data-testid="release-notes-list-retry-btn"
+                        >
+                          Try again
+                        </Button>
+                      }
+                    >
+                      Could not load release notes: {getErrorMessage(error)}
+                    </Alert>
+                  </Box>
+                )}
+                {notes.map(note => (
+                  <ReleaseNoteRow
+                    key={note.id}
+                    note={note}
+                    onAction={onAction}
+                    onEdit={setEditing}
+                    busy={statusMutation.isPending}
+                    now={dataUpdatedAt}
+                  />
+                ))}
+              </>
             )}
           </SectionCard>
           {hasNextPage && (
