@@ -111,13 +111,17 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
 const RAW_GATE_HELPER = /\bverifyOrgOwner\s*\(/;
 const RAW_GATE =
   /\b(?:req\.user|user)\s*[?!]*\s*\.\s*isAdmin\b|\bensureAdmin\s*\(|\{[^}]*\bisAdmin\b[^}]*\}\s*=\s*(?:req\.)?user\b/;
+const ADMIN_API_CALL = /\badminApi\s*(?:<[^>]*>)?\s*\(/;
 const PERMISSION_GATE_CALL = /\b(?:adminApi\s*(?:<[^>]*>)?|requireAdminPermission|hasAdminPermission)\s*\(/;
 
 /** Strings and comments are blanked first, so a quoted mention or a zod `isAdmin:` field is not a gate. */
 export function usesRawIsAdminGate(source: string): boolean {
   const { code, terminated } = blankStringLiterals(source);
   if (!terminated) throw new Error('source ends inside a string, template or block comment');
-  return (RAW_GATE.test(code) || RAW_GATE_HELPER.test(code)) && !PERMISSION_GATE_CALL.test(code);
+  return (
+    (RAW_GATE.test(code) && !ADMIN_API_CALL.test(code)) ||
+    (RAW_GATE_HELPER.test(code) && !PERMISSION_GATE_CALL.test(code))
+  );
 }
 
 function routeFiles(dir: string): string[] {
@@ -163,6 +167,14 @@ describe('usesRawIsAdminGate', () => {
   ])('does not flag a route whose admin branch checks %s', (_label, check) => {
     const code = `baseApi().get(async (req) => { ${check} await verifyOrgOwner(req.user, orgId); });`;
     expect(usesRawIsAdminGate(code)).toBe(false);
+  });
+
+  it.each([
+    ['requireAdminPermission(', "requireAdminPermission(req, 'support:read');"],
+    ['hasAdminPermission(', "const admin = hasAdminPermission(req.user, 'support:read');"],
+  ])('still flags a raw isAdmin gate beside %s', (_label, check) => {
+    const code = `baseApi().get(async (req) => { ${check} if (!req.user.isAdmin) throw new Error(); });`;
+    expect(usesRawIsAdminGate(code)).toBe(true);
   });
 
   it('ignores mentions in comments and strings', () => {
