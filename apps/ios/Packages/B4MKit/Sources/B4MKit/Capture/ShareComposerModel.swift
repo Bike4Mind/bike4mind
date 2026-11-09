@@ -15,6 +15,18 @@ public protocol CaptureSubmitting: Sendable {
 
 extension CaptureEngine: CaptureSubmitting {}
 
+/// `Result.init(catching:)` only takes a synchronous closure, so async loads that must not throw
+/// (each failure becomes a warning, not an abort) are wrapped here instead.
+private func catchingAsync<Success: Sendable>(
+  _ body: () async throws -> Success
+) async -> Result<Success, any Error> {
+  do {
+    return .success(try await body())
+  } catch {
+    return .failure(error)
+  }
+}
+
 public struct RemoteDestinationSource: DestinationSource {
   private let capture: any CaptureAPI
   private let api: any B4MAPI
@@ -95,8 +107,8 @@ public final class ShareComposerModel {
 
   public func load() async {
     phase = .loading
-    async let lakeResult = Result { try await source.lakes() }
-    async let sessionResult = Result { try await source.sessions() }
+    async let lakeResult = catchingAsync { try await source.lakes() }
+    async let sessionResult = catchingAsync { try await source.sessions() }
     let (lakeOutcome, sessionOutcome) = await (lakeResult, sessionResult)
 
     var warnings: [String] = []
