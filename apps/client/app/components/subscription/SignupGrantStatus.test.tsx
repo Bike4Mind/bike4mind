@@ -90,6 +90,13 @@ describe('signup grant status', () => {
       'once that payment settles (usually within 1 day)'
     );
   });
+  it('omits the settling wait when the payment hold is disabled', () => {
+    h.holdHours = 0;
+    show();
+    const paths = screen.getByTestId('signup-grant-unlock-paths');
+    expect(paths).toHaveTextContent('all at once when you subscribe, or all at once when you verify a card.');
+    expect(paths).not.toHaveTextContent('once that payment settles');
+  });
   it('derives the minutes from the setting', () => {
     h.minSeconds = 1800;
     show();

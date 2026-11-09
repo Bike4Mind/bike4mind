@@ -1,4 +1,5 @@
 import {
+  settingsMap,
   signupActiveSeconds,
   signupGrantDripOpen,
   signupGrantDripRemaining,
@@ -94,15 +95,11 @@ export function advertisedDripCredits({
   return dailyCredits > 0 ? Math.min(dailyCredits, signupGrantDripRemaining(grant ?? {}, dripCap)) : 0;
 }
 
-const DEFAULT_PAYMENT_HOLD_HOURS = 72;
-
-/**
- * The signupUnlockPaymentHoldHours setting as hours. A missing or invalid value reads as the default, as
- * resolvePaymentUnlockHoldHours (b4m-core/services/src/userService/stagedSignupGrant.ts) does on the server.
- */
+/** Use the server's setting schema so the advertised wait follows the payment hold. */
 export function paymentHoldHours(value: unknown): number {
-  const hours = typeof value === 'string' && !value.trim() ? NaN : Number(value);
-  return Number.isInteger(hours) && hours >= 0 && hours <= 720 ? hours : DEFAULT_PAYMENT_HOLD_HOURS;
+  const { schema, defaultValue } = settingsMap.signupUnlockPaymentHoldHours;
+  const parsed = schema.safeParse(value);
+  return parsed.success ? parsed.data : (defaultValue ?? 72);
 }
 
 /** "3 days" style phrase for the payment hold, in whole hours under a day and whole days (rounded up) from there. */

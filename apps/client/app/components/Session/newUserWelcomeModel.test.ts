@@ -152,12 +152,17 @@ describe('advertisedDripCredits', () => {
 describe('payment hold copy', () => {
   it.each([
     [undefined, 72],
+    [null, 72],
     ['', 72],
+    ['   ', 72],
     ['junk', 72],
+    [NaN, 72],
+    [Infinity, 72],
     [-1, 72],
     [721, 72],
     [1.5, 72],
     [0, 0],
+    ['0', 0],
     ['48', 48],
     [720, 720],
   ])('reads the setting %s as %s hours', (value, expected) => {
