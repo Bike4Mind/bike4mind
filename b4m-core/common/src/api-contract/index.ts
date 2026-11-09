@@ -134,6 +134,12 @@ export {
   rescanSkillMarketVersionContract,
 } from './contracts/skillMarketWrite.contract';
 export {
+  createSkillContract,
+  updateSkillContract,
+  listMySkillsContract,
+  getSkillContract,
+} from './contracts/skills.contract';
+export {
   listSkillMarketReviewQueueContract,
   reviewSkillMarketVersionContract,
 } from './contracts/skillMarketReview.contract';

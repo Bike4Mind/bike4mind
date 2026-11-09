@@ -145,6 +145,7 @@ use to build a typed client). They are deliberately not repeated here, so the tw
   \`/api/v1/text-refinements\`
 - Decisions (typed questions answered with probabilities): \`/api/v1/decisions\`, \`/api/v1/decision-models\`
 - Account and models: \`/api/v1/me\`, \`/api/v1/client-config\`, \`/api/v1/credits\`, \`/api/v1/models\`
+- Skills (create and update from a SKILL.md): \`/api/v1/skills\`, \`/api/v1/skills/mine\`, \`/api/v1/skills/{id}\`
 - Skill Market as a Claude Code plugin marketplace: \`/api/v1/skills/market/claude-marketplace.json\`,
   \`/api/v1/skills/market/{id}/claude-plugin.zip\`
 - Skill Market listings: \`/api/v1/skills/market/listings\`, \`/api/v1/skills/market/listings/mine\`,
