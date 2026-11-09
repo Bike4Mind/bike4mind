@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { UserDetectionLinks } from '@bike4mind/common';
 import { DetectionLinkedAccountsCard } from './DetectionLinkedAccountsCard';
 import { ProfileTestWrapper } from './profileTestUtils';
@@ -127,6 +127,58 @@ describe('DetectionLinkedAccountsCard', () => {
         undoSuspension: true,
       });
     }
+  });
+
+  it('keeps Undo open on a failed reinstate and retries only that account', async () => {
+    setup();
+    openDialog();
+    fireEvent.click(screen.getByTestId('suspend-linked-dialog-confirm-btn'));
+    await screen.findByTestId('undo-toast-message');
+    mocks.updateUser.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('network'));
+
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+
+    expect(await screen.findByTestId('undo-toast-error')).toHaveTextContent(
+      '1 of 2 accounts were not reinstated. Undo again to retry them.'
+    );
+    expect(screen.getByTestId('undo-toast')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('undo-toast-undo-btn')).toBeEnabled());
+
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+
+    await waitFor(() => expect(screen.queryByTestId('undo-toast')).not.toBeInTheDocument());
+    expect(mocks.updateUser).toHaveBeenCalledTimes(5);
+    expect(mocks.updateUser).toHaveBeenLastCalledWith('two', {
+      isBanned: false,
+      statusChangeReason: 'Undo: Abuse / automated signups',
+      undoSuspension: true,
+    });
+  });
+
+  it('propagates completed suspensions after Cancel while a request is pending', async () => {
+    let resolveSuspend!: (value: object) => void;
+    mocks.updateUser.mockReturnValueOnce(
+      new Promise(resolve => {
+        resolveSuspend = resolve;
+      })
+    );
+    setup();
+    openDialog();
+    fireEvent.click(screen.getByTestId('suspend-linked-dialog-confirm-btn'));
+    await waitFor(() => expect(mocks.updateUser).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByTestId('suspend-linked-dialog-cancel-btn'));
+    expect(screen.queryByTestId('suspend-linked-dialog')).not.toBeInTheDocument();
+    expect(mocks.post).not.toHaveBeenCalled();
+
+    await act(async () => resolveSuspend({}));
+
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(1));
+    expect(mocks.post).toHaveBeenCalledWith('/api/admin/users/linked-suspend-propagation', {
+      userIds: ['one', 'two'],
+    });
+    expect(screen.queryByTestId('undo-toast')).not.toBeInTheDocument();
+    expect(mocks.toastError).not.toHaveBeenCalled();
   });
 
   it('keeps the dialog open on a partial failure and retries only the accounts that failed', async () => {

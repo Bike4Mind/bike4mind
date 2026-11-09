@@ -783,6 +783,24 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
     expect(res._getJSONData().ignoredFields).toBeUndefined();
   });
 
+  it('propagates an admin API-key suspension inline even when deferral is requested', async () => {
+    adminEdit(BEFORE, { ...BEFORE, isBanned: true });
+    const { res, promise } = run({
+      user: ADMIN,
+      userId: 'target',
+      body: { isBanned: true, statusChangeReason: 'Abuse / automated signups', deferLinkPropagation: true },
+      apiKeyInfo: { keyId: 'k1', scopes: [ApiKeyScope.ADMIN] },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockPropagateAccountRisk).toHaveBeenCalledTimes(1);
+    expect(mockPropagateAccountRisk).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceUserId: 'target' }),
+      expect.anything()
+    );
+  });
+
   it('cancels the Stripe subscriptions of an account an admin bans, and audits what Stripe did', async () => {
     adminEdit(BEFORE, { ...BEFORE, isBanned: true });
     mockCancelAccountSubscriptions.mockResolvedValue({

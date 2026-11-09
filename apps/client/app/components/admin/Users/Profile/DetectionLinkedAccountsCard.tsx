@@ -80,6 +80,8 @@ const SuspendLinkedDialog: React.FC<{
   // Accounts suspended by an earlier attempt of this dialog: a retry skips them, and undo covers them.
   const [suspended, setSuspendedAccounts] = useState<LinkedAccount[]>([]);
   const propagated = useRef(false);
+  const inFlight = useRef(false);
+  const closed = useRef(false);
   const finish = (done: readonly LinkedAccount[]) => {
     if (propagated.current) return;
     propagated.current = true;
@@ -87,14 +89,25 @@ const SuspendLinkedDialog: React.FC<{
   };
   // Closing after a partial failure still propagates for the accounts that were suspended.
   const close = () => {
-    finish(suspended);
+    closed.current = true;
+    if (!inFlight.current) finish(suspended);
     onClose();
   };
 
   const handleConfirm = async (reason: string) => {
     const remaining = accounts.filter(account => !suspended.some(done => done.id === account.id));
-    const result = await setSuspended(remaining, true, reason);
+    inFlight.current = true;
+    let result;
+    try {
+      result = await setSuspended(remaining, true, reason);
+    } finally {
+      inFlight.current = false;
+    }
     const allDone = [...suspended, ...result.done];
+    if (closed.current) {
+      finish(allDone);
+      return;
+    }
     setSuspendedAccounts(allDone);
     setFailed(result.failed);
     onDone();
@@ -107,11 +120,17 @@ const SuspendLinkedDialog: React.FC<{
     }
     finish(allDone);
     onClose();
+    let undoPending: LinkedAccount[] = allDone;
     showUndo({
       message: `${allDone.length} linked accounts suspended. Undo does not restore API keys or canceled subscriptions.`,
       onUndo: async () => {
-        await setSuspended(allDone, false, undoAdminReason(reason));
+        const result = await setSuspended(undoPending, false, undoAdminReason(reason));
+        undoPending = result.failed;
         onDone();
+        if (result.failed.length > 0)
+          throw new Error(
+            `${result.failed.length} of ${allDone.length} accounts were not reinstated. Undo again to retry them.`
+          );
       },
     });
   };

@@ -419,7 +419,7 @@ const handler = baseApi().put(
       // A suspend that is one of several in an admin action defers this: the action propagates once for
       // all of its accounts afterwards (pages/api/admin/users/linked-suspend-propagation.ts).
       if (
-        deferLinkPropagation !== true &&
+        !(deferLinkPropagation === true && !req.apiKeyInfo) &&
         blockSnapshot &&
         blockUpdated &&
         userService.entersBlockedState(blockSnapshot, blockUpdated)
