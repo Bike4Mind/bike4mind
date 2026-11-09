@@ -392,6 +392,32 @@ describe('payCreditReward', () => {
     expect(await balance(rater.id)).toBe(100);
   });
 
+  it('keeps an arena reward queued while AI access is revoked or a risk review is pending, paying other sources', async () => {
+    config.signupGrantTricklePoolDaily = '0';
+    const rater = await makeUser();
+    const vote = { ...reward(rater.id, 'vote'), transactionId: 'arena-vote:v4', source: 'preference_arena' as const };
+    await creditService.payCreditReward(vote, adapters);
+    await creditService.payCreditReward(reward(rater.id, 'projects'), adapters);
+    await User.updateOne({ _id: rater.id }, { $set: { isModerated: true } });
+    config.signupGrantTricklePoolDaily = '1000';
+    expect(await creditService.releaseHeldCreditRewards(adapters, { limit: 10 })).toMatchObject({
+      paid: 1,
+      deferred: 1,
+      voided: 0,
+    });
+    expect(await balance(rater.id)).toBe(100);
+
+    await User.updateOne({ _id: rater.id }, { $set: { isModerated: false, 'riskScore.reviewState': 'pending' } });
+    expect(await creditService.releaseHeldCreditRewards(adapters, { limit: 10 })).toMatchObject({
+      paid: 0,
+      deferred: 1,
+    });
+
+    await User.updateOne({ _id: rater.id }, { $set: { 'riskScore.reviewState': 'approved' } });
+    expect(await creditService.releaseHeldCreditRewards(adapters, { limit: 10 })).toMatchObject({ paid: 1 });
+    expect(await balance(rater.id)).toBe(200);
+  });
+
   it('answers duplicate for a reward already in the ledger', async () => {
     const user = await makeUser();
     await creditService.payCreditReward(reward(user.id, 'projects'), adapters);
