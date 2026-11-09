@@ -1,4 +1,18 @@
+import {
+  acceptTask,
+  renderTaskBrief,
+  resolveWorkerModel,
+  validateWorkerModel,
+  spawnOptionsSchema,
+  taskActionSchema,
+  rolePolicySchema,
+  type RolePolicy,
+  type SpawnOptions,
+  type TaskAction,
+} from '@shared/orchestration';
 import { randomUUID } from 'node:crypto';
+import { LOOP_HELP, parseLoop, type LoopResult, type LoopState } from '@shared/loop';
+import { LoopScheduler, type LoopOutcome } from './LoopScheduler';
 import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { NotAuthenticatedError, SessionRevokedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
@@ -378,6 +392,13 @@ interface MidTurnArrival {
 const SESSION_PAUSED_MESSAGE = 'Your session expired before this reply finished. Sign in again, then press Continue.';
 
 type SendOptions = {
+  loop?: {
+    signal: AbortSignal;
+    valid(session: ChatSession): Promise<boolean>;
+    workspacePrepared(previous: ChatProject, session: ChatSession): void;
+    skill: string;
+    settled(outcome: TurnOutcome, reply: { content: string; stopReason?: string }): void;
+  };
   /** Only launchSpawned may consume the initial-turn reservation. */
   spawnSeed?: true;
   /** A taken queue entry must never fall back into the queue. */
@@ -608,6 +629,7 @@ export interface ChatServiceDeps {
   /** Identifies the cached completions endpoint; changing environments invalidates it. */
   getEnvironmentUrl(): string;
   emit(event: ChatStreamEvent): void;
+  loopChanged?(sessionId: string, state: LoopState | null): void;
   /**
    * A session's stored summary changed outside any reply, such as its title or worktree binding.
    *
@@ -700,6 +722,150 @@ function childProject(project: ChatProject, worktree: { branch: string; base: st
 export type AutomaticTurnResult = { ok: true } | { ok: false; busy: boolean; error: string };
 
 export class ChatService {
+  private readonly loopRequests = new Map<string, AbortController>();
+  private readonly loops = new LoopScheduler(
+    id => this.hasTurnInFlight(id) || this.queuedMessages(id).length > 0,
+    (id, state) => this.deps.loopChanged?.(id, state)
+  );
+
+  getLoop(sessionId: string): LoopState | null {
+    return this.loops.get(sessionId);
+  }
+
+  clearLoops(): void {
+    for (const request of this.loopRequests.values()) request.abort();
+    this.loopRequests.clear();
+    this.loops.clear();
+  }
+
+  private stopLoop(sessionId: string): void {
+    this.loopRequests.get(sessionId)?.abort();
+    this.loopRequests.delete(sessionId);
+    this.loops.stop(sessionId);
+  }
+
+  async loopCommand(sessionId: string, args: string): Promise<LoopResult> {
+    if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
+    const action = parseLoop(args);
+    if ('error' in action) return { ok: false, error: action.error };
+    if (action.kind === 'stop') {
+      this.stopLoop(sessionId);
+      return {
+        ok: true,
+        state: null,
+        notice: 'Loop stopped. A turn already running is left alone; use Stop to interrupt it.',
+      };
+    }
+    if (action.kind === 'help' || action.kind === 'list') {
+      return { ok: true, state: this.getLoop(sessionId), notice: action.kind === 'help' ? LOOP_HELP : undefined };
+    }
+    this.loopRequests.get(sessionId)?.abort();
+    const request = new AbortController();
+    this.loopRequests.set(sessionId, request);
+    const scope = this.deps.store.scopeKey();
+    try {
+      const session = await this.deps.store.get(sessionId);
+      if (!session || session.archived) return { ok: false, error: 'Open an unarchived conversation first.' };
+      if (session.mode === 'code' && !session.project) return { ok: false, error: 'Choose a project folder first.' };
+      const context = (value: ChatSession) => {
+        const project = value.project;
+        return JSON.stringify([
+          value.mode,
+          value.model,
+          project && [
+            project.directory,
+            project.name,
+            project.branch,
+            project.workspace,
+            project.workspaceBranch,
+            project.workingDirectory,
+            project.contextDirectories,
+          ],
+          value.grantedDirectories,
+        ]);
+      };
+      const captured = { context: context(session), roots: JSON.stringify(await this.deps.access.list()) };
+      const invocation = parseSkillInvocation(action.prompt);
+      const command = invocation
+        ? await this.deps.skills?.get(session.project?.workingDirectory ?? null, invocation.name)
+        : undefined;
+      if (invocation && !command)
+        return { ok: false, error: `No skill called /${invocation.name}. Type / to see what is available.` };
+      if (request.signal.aborted || this.deps.store.scopeKey() !== scope)
+        return { ok: false, error: 'Loop stopped or account changed. Start the loop again.' };
+      this.loops.start(
+        { sessionId, prompt: action.prompt, intervalMs: action.intervalMs, phase: 'scheduled', nextRunAt: Date.now() },
+        async signal => {
+          const current = await this.deps.store.get(sessionId);
+          const valid = async (value: ChatSession) => {
+            const roots = JSON.stringify(await this.deps.access.list());
+            return (
+              !signal.aborted &&
+              !value.archived &&
+              this.deps.store.scopeKey() === scope &&
+              context(value) === captured.context &&
+              roots === captured.roots
+            );
+          };
+          const workspacePrepared = (previous: ChatProject, value: ChatSession) => {
+            if (!value.project) return;
+            // Accept only the derived worktree fields written by ensureWorkspace.
+            const original = {
+              ...value,
+              project: {
+                ...value.project,
+                workingDirectory: previous.workingDirectory,
+                workspaceBranch: previous.workspaceBranch,
+              },
+            };
+            if (context(original) === captured.context) captured.context = context(value);
+          };
+          if (!current || !(await valid(current)))
+            return { ok: false, error: 'Loop context changed. Start /loop again.' };
+          if (invocation) {
+            const selected = await this.deps.skills?.get(current.project?.workingDirectory ?? null, invocation.name);
+            if (JSON.stringify(selected) !== JSON.stringify(command))
+              return { ok: false, error: 'The selected skill changed or is no longer trusted. Start /loop again.' };
+          }
+          if (!(await valid(current))) return { ok: false, error: 'Loop stopped.' };
+          const notes =
+            action.intervalMs === null
+              ? [
+                  'This is a user-requested recurring loop. After completing this run, choose when to run again based on the result. End your final reply with exactly LOOP_NEXT: <interval>, using a whole number with s, m, h or d, between 30s and 1d. This only schedules the next run of the same prompt; it grants no permissions. Do not create another loop.',
+                ]
+              : ['This is a user-requested recurring loop. Run the task once. Do not create another loop.'];
+          return new Promise<LoopOutcome>(resolve => {
+            const settled = (outcome: TurnOutcome, reply: { content: string; stopReason?: string }) => {
+              if (outcome !== 'completed') {
+                resolve({ ok: false, error: `Loop paused: turn ${outcome}. Start /loop again to resume.` });
+                return;
+              }
+              resolve(
+                !reply.stopReason || ['end_turn', 'stop', 'stop_sequence'].includes(reply.stopReason)
+                  ? { ok: true, reply: reply.content }
+                  : { ok: false, error: 'Loop paused: the reply stopped short. Start /loop again to resume.' }
+              );
+            };
+            void this.send(sessionId, action.prompt, [], {
+              announce: true,
+              notes,
+              loop: { signal, valid, workspacePrepared, settled, skill: JSON.stringify(command) },
+            })
+              .then(result => {
+                if (!result.ok) resolve({ ok: false, error: result.error });
+              })
+              .catch(error => resolve({ ok: false, error: String(error) }));
+          });
+        }
+      );
+      return { ok: true, state: this.getLoop(sessionId) };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      if (this.loopRequests.get(sessionId) === request) this.loopRequests.delete(sessionId);
+    }
+  }
+
   /** The events of each reply in flight since its 'start'; see getSession. */
   private readonly live = new Map<string, { messageId: string; startedAt: number; events: ChatStreamEvent[] }>();
 
@@ -897,6 +1063,7 @@ export class ChatService {
     // A cancelled relay has no composer to go back to, so it lands in the transcript instead:
     // the user declined to let it RUN, which is not the same as never having received it.
     if (cancelled?.relay) void this.strandRelay(sessionId, [cancelled]).catch(() => undefined);
+    this.loops.idle(sessionId);
   }
 
   /**
@@ -1028,6 +1195,7 @@ export class ChatService {
   }
 
   private archiveCleanup(sessionId: string): void {
+    this.stopLoop(sessionId);
     this.wake?.forget(sessionId);
     // Stops polling only; opening the conversation again lists its cards, which resumes them.
     this.deps.videoJobs?.stopSession(sessionId);
@@ -1596,6 +1764,19 @@ export class ChatService {
    * app chooses by itself comes through here.
    */
   async setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null> {
+    const scope = this.deps.store.scopeKey();
+    const session = await this.deps.store.get(sessionId);
+    if (session?.workerSelection) {
+      if (this.hasTurnInFlight(sessionId))
+        throw new Error('Stop the worker attempt before explicitly changing its model.');
+      validateWorkerModel(model, (await this.listModels()).models, {
+        localOnly: this.deviceLocal() || isLocalModel(session.model),
+        ...session.workerSelection?.requirements,
+      });
+      const updated = await this.deps.store.setWorkerModel(sessionId, model, scope);
+      if (updated) this.deps.summaryChanged?.(updated);
+      return updated;
+    }
     const updated = await this.deps.store.setModel(sessionId, model);
     if (updated) {
       // The conversation already switched; failing to remember it must not undo that for the user.
@@ -1625,8 +1806,209 @@ export class ChatService {
   }
 
   /** Read at the start of each turn, so a change applies from the next one. */
-  setSessionOrchestrate(sessionId: string, orchestrate: boolean): Promise<ChatSessionSummary | null> {
+  async setSessionOrchestrate(sessionId: string, orchestrate: boolean): Promise<ChatSessionSummary | null> {
+    const scope = this.deps.store.scopeKey();
+    const session = await this.deps.store.get(sessionId);
+    if (!session || this.deps.store.scopeKey() !== scope) return null;
+    if (orchestrate && !session.orchestrationPolicy) {
+      const policy = await this.deps.store.getRolePolicy();
+      const saved = await this.deps.store.setOrchestrationPolicy(
+        sessionId,
+        {
+          rootSessionId: sessionId,
+          rootRunId: randomUUID(),
+          policy,
+        },
+        scope
+      );
+      if (!saved) return null;
+    }
+    if (!orchestrate && !session.origin) await this.deps.store.setOrchestrationPolicy(sessionId, undefined, scope);
+    if (this.deps.store.scopeKey() !== scope) return null;
     return this.deps.store.setOrchestrate(sessionId, orchestrate);
+  }
+
+  getRolePolicy(): Promise<RolePolicy> {
+    return this.deps.store.getRolePolicy();
+  }
+
+  async setRolePolicy(value: RolePolicy): Promise<RolePolicy> {
+    const policy = rolePolicySchema.parse(value);
+    if (policy.escalation.mode === 'automatic')
+      throw new Error(
+        'Automatic model upgrades require shared root budget admission, which is not connected. Use ask-before-upgrade.'
+      );
+    const scope = this.deps.store.scopeKey();
+    const { models } = await this.listModels();
+    for (const model of new Set([
+      ...Object.values(policy.roles),
+      ...policy.allowedOverrides,
+      ...policy.escalation.allowedModels,
+    ])) {
+      if (model !== 'inherit') validateWorkerModel(model, models, { localOnly: this.deviceLocal() });
+    }
+    if (this.deps.store.scopeKey() !== scope) throw new Error('Account changed. Reopen settings.');
+    return this.deps.store.setRolePolicy(policy);
+  }
+
+  private taskDecisions = new Set<string>();
+
+  async actOnTask(callerId: string | null, sessionId: string, value: TaskAction): Promise<ChatSessionSummary> {
+    const action = taskActionSchema.parse(value);
+    const scope = this.deps.store.scopeKey();
+    const key = `${scope}:${sessionId}`;
+    if (action.kind !== 'report' && this.taskDecisions.has(key))
+      throw new Error('A task decision is already in progress.');
+    if (action.kind !== 'report') this.taskDecisions.add(key);
+    try {
+      const child = await this.deps.store.get(sessionId);
+      if (!child?.workerTask || !child.orchestrationPolicy) throw new Error('No structured task exists.');
+      const task = child.workerTask;
+      const caller = callerId ? await this.deps.store.get(callerId) : null;
+      if (callerId && (!caller || (isLocalModel(child.model) && !isLocalModel(caller.model))))
+        throw new Error('This caller cannot access the task evidence.');
+      if (callerId && action.kind === 'report' && callerId !== child.id)
+        throw new Error('Workers report only their own results.');
+      if (
+        callerId &&
+        action.kind !== 'report' &&
+        (child.origin?.parentSessionId !== callerId ||
+          !caller ||
+          (!orchestratesAgents(caller) && !(caller.origin && caller.orchestrationPolicy)))
+      )
+        throw new Error('Only the active orchestrating parent may assess this task.');
+      if (callerId && action.kind === 'upgrade')
+        throw new Error('A model cannot approve a model upgrade. Use agent details.');
+      if (action.kind !== 'report' && action.kind !== 'cancel' && this.hasTurnInFlight(sessionId))
+        throw new Error('Wait for the current attempt to stop before deciding.');
+      let next = task;
+      let nextModel: string | undefined;
+      let seed: string | undefined;
+      if (action.kind === 'report') {
+        if (task.state.status === 'canceled' || (task.state.status === 'completed' && task.state.accepted))
+          throw new Error('This task is already settled.');
+        if (
+          action.report.status === 'escalation-requested' &&
+          task.resolvedDecisions.includes(action.report.decisionId)
+        )
+          return summarizeSession(child);
+        next = {
+          ...task,
+          state: action.report.status === 'completed' ? { ...action.report, accepted: false } : action.report,
+        };
+      } else if (action.kind === 'accept') {
+        next = acceptTask(task, action.assessment);
+      } else if (action.kind === 'cancel') {
+        this.stop(sessionId);
+        next = { ...task, state: { status: 'canceled', reason: action.reason } };
+      } else if (action.kind === 'deny' || action.kind === 'upgrade') {
+        if (task.resolvedDecisions.includes(action.decisionId)) return summarizeSession(child);
+        if (task.state.status !== 'escalation-requested' || task.state.decisionId !== action.decisionId)
+          throw new Error('This decision is no longer pending.');
+        if (action.kind === 'deny')
+          next = {
+            ...task,
+            resolvedDecisions: [...task.resolvedDecisions, action.decisionId],
+            state: { status: 'blocked', reason: action.reason, evidence: task.state.evidence },
+          };
+        else {
+          const policy = child.orchestrationPolicy.policy;
+          if (
+            !policy.escalation.allowedRoles.includes(task.contract.role) ||
+            !policy.escalation.allowedModels.includes(action.modelId)
+          )
+            throw new Error('Model upgrade is outside this run policy. Revise the task or cancel it.');
+          nextModel = action.modelId;
+          validateWorkerModel(nextModel, (await this.listModels()).models, {
+            localOnly: this.deviceLocal() || isLocalModel(child.model),
+            ...child.workerSelection?.requirements,
+          });
+          seed = `The user approved this targeted model change. Continue the same task using the existing changes and evidence.\n\n${renderTaskBrief(task.contract)}`;
+          next = {
+            ...task,
+            resolvedDecisions: [...task.resolvedDecisions, action.decisionId],
+            state: { status: 'queued' },
+            attempts: [
+              ...task.attempts,
+              { id: randomUUID(), model: nextModel, startedAt: new Date().toISOString(), trigger: 'user-upgrade' },
+            ],
+          };
+        }
+      } else if (action.kind === 'revise') {
+        if (task.state.status === 'canceled') throw new Error('Canceled tasks cannot restart.');
+        if (action.contract.role !== task.contract.role)
+          throw new Error('Keep the task role when revising. Reassign explicitly with a new task.');
+        seed = `${action.instruction}\n\n${renderTaskBrief(action.contract)}`;
+        next = {
+          ...task,
+          contract: action.contract,
+          state: { status: 'queued' },
+          attempts: [
+            ...task.attempts,
+            { id: randomUUID(), model: child.model, startedAt: new Date().toISOString(), trigger: 'revision' },
+          ],
+        };
+      }
+      const updated = await this.deps.store.updateWorkerTask(
+        sessionId,
+        current => {
+          if (action.kind === 'report') {
+            if (current.state.status === 'canceled' || (current.state.status === 'completed' && current.state.accepted))
+              throw new Error('This task is already settled.');
+            if (current.attempts.at(-1)?.id !== task.attempts.at(-1)?.id)
+              throw new Error('A newer task attempt has started.');
+            if (
+              action.report.status === 'escalation-requested' &&
+              current.resolvedDecisions.includes(action.report.decisionId)
+            )
+              return current;
+            return { ...current, state: next.state };
+          }
+          if (current.state.status === 'canceled' && action.kind !== 'cancel')
+            throw new Error('This task was canceled.');
+          if (action.kind === 'cancel') return { ...current, state: next.state };
+          if (current.attempts.at(-1)?.id !== task.attempts.at(-1)?.id)
+            throw new Error('A newer task attempt has started. Reload agent details.');
+          return next;
+        },
+        scope,
+        nextModel
+      );
+      if (!updated) throw new Error('Account or task changed. Reload agent details.');
+      if (action.kind === 'cancel') this.stop(sessionId);
+      if (seed) {
+        if (!child.origin) throw new Error('Task lineage is missing.');
+        await this.deps.store.updateWorkerTask(
+          sessionId,
+          current => (current.state.status === 'canceled' ? current : { ...current, state: { status: 'running' } }),
+          scope
+        );
+        if (this.deps.store.scopeKey() !== scope) throw new Error('Account changed before the task could start.');
+        this.spawnWatch.set(sessionId, { parentSessionId: child.origin.parentSessionId });
+        const sent = await this.send(sessionId, seed, [], { spawnSeed: true });
+        if (!sent.ok) {
+          this.spawnWatch.delete(sessionId);
+          await this.deps.store.updateWorkerTask(
+            sessionId,
+            current =>
+              current.state.status === 'canceled'
+                ? current
+                : {
+                    ...current,
+                    state: { status: 'blocked', reason: sent.error, evidence: ['No new model attempt started.'] },
+                  },
+            scope
+          );
+          throw new Error(sent.error);
+        }
+      }
+      const latest = await this.deps.store.get(sessionId);
+      const summary = latest ? summarizeSession(latest) : updated;
+      this.deps.summaryChanged?.(summary);
+      return summary;
+    } finally {
+      if (action.kind !== 'report') this.taskDecisions.delete(key);
+    }
   }
 
   /**
@@ -2036,6 +2418,7 @@ export class ChatService {
    * server it started. `bash_kill` and the panel's Stop button are how those end.
    */
   stop(sessionId: string): void {
+    this.stopLoop(sessionId);
     if (this.launching.has(sessionId) && !this.launchInterrupts.has(sessionId)) {
       this.launchInterrupts.set(sessionId, 'stopped');
     }
@@ -2043,6 +2426,7 @@ export class ChatService {
   }
 
   dispose(): void {
+    this.clearLoops();
     // Dropped BEFORE the aborts, so a promotion still in flight does not start a turn on the
     // way out: each abort settles a reply, and settleQueue would otherwise send it.
     this.promoted.clear();
@@ -2085,6 +2469,7 @@ export class ChatService {
       // An exit that came due while this send was being accepted was skipped as busy; a send
       // that was then refused starts no turn that would deliver it.
       this.wakeIfIdle(sessionId);
+      this.loops.idle(sessionId);
     }
   }
 
@@ -2115,6 +2500,8 @@ export class ChatService {
     // turn after appending it would leave the prompt in the thread with no reply coming.
     const existing = await this.deps.store.get(sessionId);
     if (!existing) return { ok: false, error: 'That conversation no longer exists.' };
+    if (options.loop && !(await options.loop.valid(existing)))
+      return { ok: false, error: 'Loop context changed or stopped.' };
 
     // Refused in main, not merely disabled in the UI. A Code session with no project has no
     // working directory, and a turn is the only thing that can make its tools run - so the
@@ -2145,6 +2532,9 @@ export class ChatService {
     const skillCommand = invocation
       ? await this.deps.skills?.get(existing.project?.workingDirectory ?? null, invocation.name)
       : undefined;
+    if (options.loop && JSON.stringify(skillCommand) !== options.loop.skill) {
+      return { ok: false, error: 'The selected skill changed. Start /loop again.' };
+    }
     if (invocation && !skillCommand) {
       // Named rather than silently sent as prose: a skill the user believes ran, which in fact
       // reached the model as the literal text "/deploy", is the one outcome worth refusing over.
@@ -2176,6 +2566,7 @@ export class ChatService {
       return { ok: false, error: 'This conversation could not start. Wait for startup cleanup to finish.' };
     }
     if (this.isBusy(sessionId, options.spawnSeed === true)) {
+      if (options.loop) return { ok: false, error: 'Loop paused because another turn started. Start /loop again.' };
       if (!this.deps.queue || released) return { ok: false, error: 'This conversation is still replying.' };
       // A card the model is parked on would hold this message behind the turn forever; the new
       // message is the user moving on, so it closes the question rather than waiting on it.
@@ -2233,6 +2624,17 @@ export class ChatService {
     const api = this.deps.getApiClient();
     if (!api && !isLocalModel(claimed.model) && !this.deviceLocal())
       return { ok: false, error: 'Sign in to send a message.' };
+    if (claimed.workerSelection) {
+      try {
+        validateWorkerModel(claimed.model, (await this.listModels()).models, {
+          localOnly: this.deviceLocal() || isLocalModel(claimed.workerSelection.effectiveModel),
+          ...claimed.workerSelection.requirements,
+        });
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
+    if (claimed.workerTask?.state.status === 'canceled') return { ok: false, error: 'This task was canceled.' };
     const settled: SettledModel = this.deviceLocal()
       ? await this.settleDeviceLocal(claimed, await this.localModelsFor(claimed.model))
       : { session: claimed };
@@ -2258,9 +2660,11 @@ export class ChatService {
     // still ahead of the prompt being stored, for the reason createCodeSession resolved before
     // writing the session: a worktree that cannot be made must refuse the turn rather than
     // leave a prompt in the thread with no reply coming.
+    const previousProject = options.loop && awaitsWorktree(existing.project) ? existing.project : undefined;
     const workspaceFailure = await this.ensureWorkspace(existing, prompt, timer);
     timer?.lap('workspace');
     if (workspaceFailure) return { ok: false, error: workspaceFailure.error };
+    if (previousProject) options.loop?.workspacePrepared(previousProject, existing);
 
     // The skill's body becomes the turn, and `skill` records which one so the thread can show
     // "/review src/foo.ts" rather than the page of instructions that was actually sent.
@@ -2283,8 +2687,35 @@ export class ChatService {
     // Last before the prompt is stored, so the boundary lands above it and the summary covers
     // everything the prompt follows on from. Every refusal above has already had its say: a
     // turn that will not go out must not cost a summary.
+    if (reconciled.workerTask && !options.spawnSeed) {
+      if (reconciled.workerTask.state.status === 'canceled')
+        return { ok: false, error: 'This task was canceled. Start a new task explicitly.' };
+      const updated = await this.deps.store.updateWorkerTask(sessionId, task =>
+        task.state.status === 'canceled'
+          ? task
+          : {
+              ...task,
+              state: { status: 'running' },
+              attempts: [
+                ...task.attempts,
+                { id: randomUUID(), model: reconciled.model, startedAt: new Date().toISOString(), trigger: 'revision' },
+              ],
+            }
+      );
+      if (!updated || updated.workerTask?.state.status === 'canceled')
+        return { ok: false, error: 'The task no longer exists or was canceled.' };
+      this.deps.summaryChanged?.(updated);
+      if (reconciled.origin) this.spawnWatch.set(sessionId, { parentSessionId: reconciled.origin.parentSessionId });
+    }
     await this.autoCompact(reconciled);
     timer?.lap('autoCompact');
+    if (options.loop) {
+      const current = await this.deps.store.get(sessionId);
+      if (!current || !(await options.loop.valid(current)))
+        return { ok: false, error: 'Loop context changed or stopped.' };
+    }
+    if (options.loop && !(await options.loop.valid(reconciled)))
+      return { ok: false, error: 'Loop context changed or stopped.' };
 
     // A relay carries `role: 'user'` because that is the only role out-of-band text can reach a
     // stateless completions endpoint under - the same compromise the spawned-session report
@@ -2316,6 +2747,9 @@ export class ChatService {
     const session = await this.deps.store.appendMessage(sessionId, userMessage);
     timer?.lap('append');
     if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+    if (options.loop && !(await options.loop.valid(session)))
+      return { ok: false, error: 'Loop context changed or stopped.' };
+    if (session.workerTask?.state.status === 'canceled') return { ok: false, error: 'This task was canceled.' };
 
     // Now that the conversation's attachments are settled, anything on disk it does not
     // reference was added to the composer and then removed. See AttachmentStore.prune.
@@ -2328,7 +2762,7 @@ export class ChatService {
     if (released?.automatic?.kind === 'auto-fix') this.autoFixTurns.add(sessionId);
     else this.autoFixTurns.delete(sessionId);
     // A relay, an automatic turn and a spawn's seed prompt all start a turn nobody typed here.
-    if (!released?.relay && !released?.automatic && seedHops === undefined) {
+    if (!released?.relay && !released?.automatic && !options.loop && seedHops === undefined) {
       this.attendedTurns.add(sessionId);
       this.wake?.attended(sessionId);
       // The user typing here lifts a hold their stop put on agent wakes, restarts the wake cap,
@@ -2339,7 +2773,14 @@ export class ChatService {
       const parentSessionId = session.origin?.parentSessionId;
       if (parentSessionId && isAgentSession(session)) this.spawnWatch.set(sessionId, { parentSessionId });
     }
-    const replyId = this.startReply(session, api, historyScope, undefined, released?.relay?.hops ?? seedHops ?? 0);
+    const replyId = this.startReply(
+      session,
+      api,
+      historyScope,
+      undefined,
+      released?.relay?.hops ?? seedHops ?? 0,
+      options.loop?.settled
+    );
     this.noteNotify(sessionId, released?.relay);
 
     // After the reply is in flight, and never awaited: a first answer that waited on a title
@@ -2387,6 +2828,31 @@ export class ChatService {
       return { ok: false, error: 'There is nothing to continue here.' };
     }
 
+    if (session.workerSelection) {
+      try {
+        validateWorkerModel(session.model, (await this.listModels()).models, {
+          localOnly: this.deviceLocal() || isLocalModel(session.model),
+          ...session.workerSelection?.requirements,
+        });
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
+    if (session.workerTask) {
+      if (session.workerTask.state.status === 'canceled') return { ok: false, error: 'This task was canceled.' };
+      const updated = await this.deps.store.updateWorkerTask(sessionId, task =>
+        task.state.status === 'canceled'
+          ? task
+          : {
+              ...task,
+              state: { status: 'running' },
+            }
+      );
+      if (!updated || updated.workerTask?.state.status === 'canceled')
+        return { ok: false, error: 'This task no longer exists or was canceled.' };
+      if (updated) this.deps.summaryChanged?.(updated);
+      if (session.origin) this.spawnWatch.set(sessionId, { parentSessionId: session.origin.parentSessionId });
+    }
     // Reached only from the Continue button, so whoever clicked it is there to answer a card.
     this.attendedTurns.add(sessionId);
     // A reply stored before it was stamped still says what it started on in its context snapshot.
@@ -2452,9 +2918,18 @@ export class ChatService {
       return { ok: false, error: 'This conversation is still replying. Wait for the turn to finish, then compact it.' };
     }
 
-    const session = await this.deps.store.get(sessionId);
-    if (!session) return { ok: false, error: 'That conversation no longer exists.' };
-    return this.compact(session, focus, false);
+    this.compacting.add(sessionId);
+    try {
+      const session = await this.deps.store.get(sessionId);
+      if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+      const result = await this.compact(session, focus, false);
+      if (!result.ok) this.loops.pauseWaiting(sessionId);
+      return result;
+    } finally {
+      this.compacting.delete(sessionId);
+      this.flushQueue(sessionId);
+      this.loops.idle(sessionId);
+    }
   }
 
   /**
@@ -2642,7 +3117,8 @@ export class ChatService {
      * relayed message's own depth when session_send started it. Left undefined by
      * `continueReply`, which is carrying an existing turn on and keeps the depth it had.
      */
-    hops?: number
+    hops?: number,
+    onSettled?: (outcome: TurnOutcome, reply: { content: string; stopReason?: string }) => void
   ): string {
     const sessionId = session.id;
     const replyId = resume?.id ?? randomUUID();
@@ -2651,7 +3127,10 @@ export class ChatService {
     this.deps.activity?.replyStarted(sessionId);
     if (hops !== undefined) this.turnRelay.set(sessionId, { hops, sends: 0 });
 
-    void this.runReply(session, replyId, api, controller, historyScope, resume)
+    let finalReply = { content: '' } as { content: string; stopReason?: string };
+    void this.runReply(session, replyId, api, controller, historyScope, resume, reply => {
+      finalReply = reply;
+    })
       // runReply already catches, so this only covers a throw from its own bookkeeping. A turn
       // whose end cannot be classified is treated as failed, which HOLDS the queue rather than
       // firing it - the safe direction when the outcome is unknown.
@@ -2681,6 +3160,8 @@ export class ChatService {
         // and keeps the report above the turn that answers it.
         await this.flushChildReports(sessionId).catch(() => undefined);
         this.settleQueue(sessionId, outcome);
+        onSettled?.(outcome, finalReply);
+        this.loops.idle(sessionId);
       });
 
     return replyId;
@@ -2699,6 +3180,7 @@ export class ChatService {
    * gone - in that case the request goes out as saved and the server decides.
    */
   private async reconcileModel(session: ChatSession): Promise<{ session: ChatSession; notice?: string }> {
+    if (session.workerSelection) return { session };
     const available = this.deps.models?.cached();
     if (!available || available.length === 0) return { session };
     if (findModelOption(available, session.model)) return { session };
@@ -2723,7 +3205,7 @@ export class ChatService {
    * proceeds and anything else is refused, so nothing goes anywhere hosted.
    */
   private async settleDeviceLocal(session: ChatSession, models: readonly ChatModelOption[]): Promise<SettledModel> {
-    if (findModelOption(models, session.model)) return { session };
+    if (session.workerSelection || findModelOption(models, session.model)) return { session };
     if (models.length === 0)
       return parseLocalModelId(session.model)
         ? { session }
@@ -2842,7 +3324,8 @@ export class ChatService {
     api: AuthenticatedApiClient | null,
     controller: AbortController,
     historyScope: string | null,
-    resume?: ResumedReply
+    resume?: ResumedReply,
+    completed?: (reply: { content: string; stopReason?: string }) => void
   ): Promise<TurnOutcome> {
     const sessionId = session.id;
     // A new id from each mid-turn message on: see takeArrivals and the round loop below.
@@ -3048,6 +3531,8 @@ export class ChatService {
               ask,
               suggestions: !session.origin && !orchestrating,
               delegates: orchestrating,
+              structuredTask: !!session.workerTask,
+              managedDelegation: !!session.origin && !!session.orchestrationPolicy,
               mcp: mcpTools.map(binding => binding.definition.schema),
               mcpServers: !!this.deps.mcp,
               pullRequest: session.mode === 'code' && attended && !!this.deps.pullRequests,
@@ -3709,6 +4194,7 @@ export class ChatService {
       }
 
       await settleSegment();
+      completed?.({ content, stopReason });
       // A truncated reply ('max_tokens'), a budget stop and a context stop all count as
       // completed: the model said something and the user can read it. Only the user's own stop
       // is 'aborted'.
@@ -3884,6 +4370,7 @@ export class ChatService {
    * to the composer, where the user decides whether it still says what they meant.
    */
   private settleQueue(sessionId: string, outcome: TurnOutcome): void {
+    if (outcome !== 'completed') this.loops.pauseWaiting(sessionId);
     // A promotion outranks the outcome, and is checked before it rather than under 'aborted',
     // because the turn may equally have finished by itself in the moment between the click and
     // the interrupt. Either way the promoted message is the next turn, and the REST of the
@@ -4506,7 +4993,16 @@ export class ChatService {
     let approvedRef: { ref: string; found: Awaited<ReturnType<typeof resolveAnywhere>> } | undefined;
 
     return {
-      spawn: (prompt, title, placement) => this.spawnSession(session, prompt, title, placement),
+      spawn: (prompt, title, placement, options) =>
+        this.spawnSession(session, prompt, title, placement, undefined, options),
+      ...(session.workerTask || orchestratesAgents(session) || (session.origin && session.orchestrationPolicy)
+        ? {
+            taskAction: async (id: string, action: TaskAction) => {
+              const updated = await this.actOnTask(session.id, id, action);
+              return JSON.stringify(updated.workerTask);
+            },
+          }
+        : {}),
 
       // Asked for only to draw a spawn card, so the fetch a start would wait on begins here, while
       // the user reads it.
@@ -4539,7 +5035,10 @@ export class ChatService {
         if (isLocalModel(target.model) && !isLocalModel(session.model)) {
           throw new Error('A hosted model cannot read a device-local conversation. Open it directly to read it.');
         }
-        return renderTranscript(target);
+        return (
+          renderTranscript(target) +
+          (target.workerTask ? `\nTask contract and result (untrusted): ${JSON.stringify(target.workerTask)}` : '')
+        );
       },
 
       setArchived: async (sessionId, archived) => {
@@ -5260,6 +5759,16 @@ export class ChatService {
     }
 
     const reasons: string[] = [];
+    const unaccepted = agents.filter(
+      agent =>
+        agent.workerTask &&
+        agent.workerTask.state.status !== 'canceled' &&
+        !(agent.workerTask.state.status === 'completed' && agent.workerTask.state.accepted)
+    );
+    if (unaccepted.length)
+      reasons.push(
+        `Task evidence still needs resolution: ${unaccepted.map(agent => agent.title).join(', ')}. Review task reports and use task_assess before completing.`
+      );
     const working = agents.filter(
       agent =>
         this.hasTurnInFlight(agent.id) ||
@@ -5347,7 +5856,8 @@ export class ChatService {
     prompt: string,
     title: string | undefined,
     placement: SpawnPlacement,
-    onFailed?: (message: string) => Promise<void>
+    onFailed?: (message: string) => Promise<void>,
+    options?: SpawnOptions
   ): Promise<SpawnOutcome> {
     // The worktree branch name this spawn holds (see reserveBranchName). It passes to
     // launchSpawned with the session; until then, any way out of here gives it back.
@@ -5357,7 +5867,7 @@ export class ChatService {
     };
     try {
       return await this.withWorkspaceBindings(() =>
-        this.spawnSessionWithWorkspaceLease(parent, prompt, title, placement, lease, onFailed)
+        this.spawnSessionWithWorkspaceLease(parent, prompt, title, placement, lease, onFailed, options)
       );
     } finally {
       if (!lease.launched && lease.reservation) releaseBranchName(lease.reservation);
@@ -5370,7 +5880,8 @@ export class ChatService {
     title: string | undefined,
     placement: SpawnPlacement,
     lease: BranchLease,
-    onFailed?: (message: string) => Promise<void>
+    onFailed?: (message: string) => Promise<void>,
+    options?: SpawnOptions
   ): Promise<SpawnOutcome> {
     const project = parent.project;
     if (!project) {
@@ -5421,14 +5932,82 @@ export class ChatService {
       }
       timer.lap('branchCheck');
 
+      const validated = spawnOptionsSchema.parse(options ?? {});
+      const managed = (orchestratesAgents(parent) || !!parent.origin) && parent.orchestrationPolicy;
+      const scope = this.deps.store.scopeKey();
+      const explicitWorkerChoice = !!(
+        validated.role ||
+        validated.requestedModelId ||
+        validated.contract ||
+        validated.requirements
+      );
+      const selection =
+        managed && explicitWorkerChoice
+          ? { ...resolveWorkerModel(parent.model, managed.policy, validated), rootRunId: managed.rootRunId }
+          : undefined;
+      if (!managed && (validated.role || validated.requestedModelId || validated.contract || validated.requirements)) {
+        return {
+          ok: false,
+          reason: 'model-policy',
+          message:
+            'Turn on Orchestrate to use role routing or task contracts. Legacy free-text spawn is still available.',
+        };
+      }
+      if (selection) {
+        try {
+          const { models } = await this.listModels();
+          const contextWindow = models.find(model => model.id === selection.effectiveModel)?.contextWindow;
+          const briefTokens = Math.ceil((validated.contract ? renderTaskBrief(validated.contract) : seed).length / 3);
+          validateWorkerModel(selection.effectiveModel, models, {
+            localOnly: this.deviceLocal() || isLocalModel(parent.model),
+            ...validated.requirements,
+            contextTokens:
+              validated.requirements?.contextTokens !== undefined
+                ? Math.max(validated.requirements.contextTokens, briefTokens)
+                : contextWindow
+                  ? briefTokens
+                  : undefined,
+          });
+        } catch (error) {
+          return { ok: false, reason: 'model-policy', message: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      if (this.deps.store.scopeKey() !== scope)
+        return {
+          ok: false,
+          reason: 'model-policy',
+          message: 'Account changed before launch. Try again in the intended account.',
+        };
+      const brief = validated.contract ? renderTaskBrief(validated.contract) : seed;
       const named = title?.trim();
-      const child = await this.deps.store.create(parent.model, {
+      const child = await this.deps.store.create(selection?.effectiveModel ?? parent.model, {
+        ...(managed ? { orchestrationPolicy: managed } : {}),
+        ...(selection ? { workerSelection: selection } : {}),
+        ...(validated.contract
+          ? {
+              workerTask: {
+                version: 1,
+                contract: validated.contract,
+                automaticUpgrades: 0,
+                resolvedDecisions: [],
+                attempts: [
+                  {
+                    id: randomUUID(),
+                    model: selection?.effectiveModel ?? parent.model,
+                    startedAt: new Date().toISOString(),
+                    trigger: 'initial',
+                  },
+                ],
+                state: { status: 'queued' },
+              },
+            }
+          : {}),
         ...(named ? { title: named } : {}),
         project: childProject(project, worktree),
         // Copied with the context directories, for the same reason: a child is the parent's work
         // continued, and never holds a folder the parent did not.
         ...(parent.grantedDirectories?.length ? { grantedDirectories: [...parent.grantedDirectories] } : {}),
-        origin: { parentSessionId: parent.id, depth, seedPrompt: seed },
+        origin: { parentSessionId: parent.id, depth, seedPrompt: brief },
         // Inherit, never widen - the rule the folder grants above already follow - with one
         // ceiling on top of it: 'full' does not cross into a session nobody is watching. It
         // is the mode where a command may read any file on the machine, and it is already
@@ -5444,7 +6023,7 @@ export class ChatService {
       this.spawnWatch.set(child.id, { parentSessionId: parent.id });
       const seedHops = this.turnRelay.get(parent.id)?.hops ?? 0;
       lease.launched = true;
-      void this.launchSpawned(parent.id, project.directory, child, seed, worktree, {
+      void this.launchSpawned(parent.id, project.directory, child, brief, worktree, {
         seedHops,
         timer,
         onFailed,
@@ -5514,6 +6093,10 @@ export class ChatService {
       }
       if (!failure) {
         this.deps.activity?.preparingStep(child.id, 'starting');
+        if (child.workerTask)
+          await this.deps.store.updateWorkerTask(child.id, task =>
+            task.state.status === 'canceled' ? task : { ...task, state: { status: 'running' } }
+          );
         const sent = await this.send(child.id, text, [], { seedHops, spawnSeed: true });
         timer.lap('send');
         if (!sent.ok) failure = `The new session could not start: ${sent.error}`;
@@ -5565,6 +6148,11 @@ export class ChatService {
     this.spawnWatch.delete(child.id);
     const stored = await this.deps.store.get(child.id);
     if (!stored) return;
+    if (stored.workerTask)
+      await this.deps.store.updateWorkerTask(child.id, task => ({
+        ...task,
+        state: { status: 'canceled', reason: 'Stopped by the user before its first turn.' },
+      }));
     const seed: ChatQueuedMessage[] = stored.messages.some(message => message.role === 'user' && !message.system)
       ? []
       : [
@@ -5651,7 +6239,16 @@ export class ChatService {
       const stored = deleted ? null : await this.deps.store.get(child.id);
       if (!stored) return;
       const pending = this.deps.queue?.list(child.id) ?? [];
-      const retained = pending.some(message => !message.automatic);
+      const retained = !!stored.workerTask || pending.some(message => !message.automatic);
+      if (stored.workerTask)
+        await this.deps.store.updateWorkerTask(child.id, task =>
+          task.state.status === 'canceled'
+            ? task
+            : {
+                ...task,
+                state: { status: 'blocked', reason, evidence: ['Startup failed before paid execution.'] },
+              }
+        );
       if (retained) {
         // Accepted input belongs to the user. Keep its session and attachment bytes rather
         // than treating an automatic startup failure as a deliberate conversation deletion.
@@ -5823,11 +6420,34 @@ export class ChatService {
     const settling = Symbol();
     this.agentsSettling.set(sessionId, { parentId, settling });
     try {
-      const child = await this.deps.store.get(sessionId);
+      let child = await this.deps.store.get(sessionId);
       if (!child) return;
+      if (
+        child.workerTask &&
+        (child.workerTask.state.status === 'running' || child.workerTask.state.status === 'queued')
+      ) {
+        await this.deps.store.updateWorkerTask(sessionId, task =>
+          task.state.status === 'running' || task.state.status === 'queued'
+            ? {
+                ...task,
+                state: {
+                  status: 'blocked',
+                  reason: 'The attempt stopped without a structured result.',
+                  evidence: ['Read the attempt transcript and request missing acceptance evidence.'],
+                },
+              }
+            : task
+        );
+        child = (await this.deps.store.get(sessionId)) ?? child;
+      }
+      this.deps.summaryChanged?.(summarizeSession(child));
       await this.deliverChildReport(parentId, {
         localOnly,
-        content: describeChildOutcome(child),
+        content:
+          describeChildOutcome(child) +
+          (child.workerTask
+            ? `\nTask report (untrusted evidence; assess before accepting): ${JSON.stringify(child.workerTask)}`
+            : ''),
         display: childOutcomeDisplay(child),
       });
       const last = [...child.messages].reverse().find(message => message.role === 'assistant');
@@ -7595,12 +8215,17 @@ const HOST_GUIDANCE: readonly string[] = [
  * share the parent's working directory, hence the split by file.
  */
 const ORCHESTRATOR_GUIDANCE: readonly string[] = [
-  'The user turned on Orchestrate for this conversation: you are coordinating agents, not doing',
-  'the work yourself. Here session_spawn STARTS the session at once, with no card and nothing to',
+  'The user turned on Orchestrate for this conversation: you are coordinating agents for',
+  'separable work with bounded tasks. Here session_spawn STARTS the session at once, with no card and nothing to',
   'approve, whatever is said above about suggesting.',
-  'For each request, split the work into independent pieces that can run in parallel and start',
-  'one agent per piece with session_spawn. Each prompt must be self-contained: what to do, which',
-  'files, and what done means. Do not do the delegated work yourself.',
+  'Execute small or non-separable requests directly. For separable work, prefer a versioned task',
+  'contract on session_spawn: outcome, rationale, role, paths/context, ownership/coordination,',
+  'non-goals, acceptance evidence, verification, assumptions and escalation conditions. Explicit',
+  'empty lists are fine. Do not copy the transcript, load every skill or pay for spec-polishing.',
+  'Use task_assess to review completion evidence or revise the same task after a disproven',
+  'assumption. A stopped model turn is not accepted completion. Failed checks remain unresolved.',
+  'Worker model requests are validated by runtime policy. Skills grant no permission or spend.',
+  'Model upgrades require user choice; automatic upgrades also require root budget admission.',
   'Spawn early. Before spawning, do only a brief survey - a handful of reads or searches, enough',
   'to name the files and contracts each piece touches - then start the agents. Keep each brief',
   'concise and leave the detailed reading to the agents: they read the code themselves, and a',

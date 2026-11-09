@@ -16,6 +16,7 @@ import { EmptyState } from './shared/EmptyState';
 import GrantPackagesTab from './InviteCenter/Packages/GrantPackagesTab';
 import { PendingSection } from './InviteCenter/Pending/PendingSection';
 import { ViewTabs } from './shared/ViewTabs';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 type SectionLink = { label: string; tab: AdminTab; testId: string };
 
@@ -130,7 +131,7 @@ export function InviteCenterShell({ waitlist }: { waitlist: ReactNode }) {
   };
 
   return (
-    <Stack gap={2}>
+    <Stack gap={ADMIN_REGION_GAP}>
       <AdminPageHeader
         title="Invite Center"
         description="Waitlist, invite packages, signup credit schedule, held grants and rewards, in one place."

@@ -120,16 +120,25 @@ const parseTimelineTypes = (raw: string | undefined): UserTimelineType[] => {
 /** The per-user timeline query: every source by default, an optional inclusive date range, keyset paging. */
 export const parseUserTimelineQuery = (
   query: unknown
-): { types: UserTimelineType[]; range: { from?: Date; to?: Date }; limit: number; cursor?: AuditLogCursor } => {
+): {
+  types: UserTimelineType[];
+  range: { from?: Date; to?: Date };
+  limit: number;
+  cursor?: AuditLogCursor;
+  apiKeyId?: string;
+} => {
   const values = readSingleValues(query);
   const from = parseInstant(values.from, 'from');
   const to = parseInstant(values.to, 'to');
   if (from && to && from.getTime() > to.getTime()) throw new BadRequestError('from must not be after to');
+  const apiKeyId = values.apiKeyId?.toLowerCase();
+  if (apiKeyId !== undefined && !/^[0-9a-f]{24}$/i.test(apiKeyId)) throw new BadRequestError('Invalid API key id');
   return {
     types: parseTimelineTypes(values.types),
     range: { from, to },
     limit: parseLimit(values.limit),
     cursor: parseCursor(values.cursor),
+    ...(apiKeyId ? { apiKeyId } : {}),
   };
 };
 

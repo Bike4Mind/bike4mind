@@ -7,6 +7,7 @@ import { getFeedbackDisplayContent } from './types';
 import { feedbackRecordQueryKey } from './queryKeys';
 import FeedbackRowLinks from './FeedbackRowLinks';
 import HelpContextChip from './HelpContextChip';
+import { FEEDBACK_STATUS_LABELS } from './constants';
 
 interface FocusedFeedbackCardProps {
   /** The `?feedbackId=` a deep link arrived with. */
@@ -55,7 +56,7 @@ const FocusedFeedbackCard = ({ feedbackId, onDismiss }: FocusedFeedbackCardProps
             <Stack spacing={0.5}>
               <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
                 <Chip size="sm" variant="solid">
-                  {feedbackItem.status}
+                  {FEEDBACK_STATUS_LABELS[feedbackItem.status] ?? feedbackItem.status}
                 </Chip>
                 {feedbackItem.organization && feedbackItem.organization !== 'Unknown' && (
                   <Chip size="sm" variant="outlined">

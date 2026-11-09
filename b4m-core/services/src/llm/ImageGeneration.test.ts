@@ -487,16 +487,29 @@ describe('ImageGenerationService.selectInputImage reference images (#2744)', () 
     ).rejects.toThrow(/At most 10 input images/);
   });
 
-  it('preserves FLUX.2 attachment order when the database returns files in reverse order', async () => {
-    const files = { a: cleanImage('a'), b: cleanImage('b'), c: cleanImage('c') };
+  it.each([ImageModels.FLUX_2_PRO, ImageModels.FLUX_3_IMAGE])(
+    'preserves %s attachment order when the database returns files in reverse order',
+    async model => {
+      const files = { a: cleanImage('a'), b: cleanImage('b'), c: cleanImage('c') };
+      const { service, findAccessibleInIds } = makeService(files);
+      findAccessibleInIds.mockImplementation(async ids => ids.map(id => files[id as keyof typeof files]).reverse());
+      const result = await select(service, { model, fabFileIds: ['c', 'a', 'b'] });
+      expect(result.fileImage.id).toBe('c');
+      expect(result.referenceImages.map((file: FakeFile) => file.id)).toEqual(['a', 'b']);
+    }
+  );
+
+  it('keeps FLUX 3 references in caller order behind the primary when the database reverses them', async () => {
+    const files = { p: cleanImage('p'), a: cleanImage('a'), b: cleanImage('b'), c: cleanImage('c') };
     const { service, findAccessibleInIds } = makeService(files);
     findAccessibleInIds.mockImplementation(async ids => ids.map(id => files[id as keyof typeof files]).reverse());
     const result = await select(service, {
-      model: ImageModels.FLUX_2_PRO,
-      fabFileIds: ['c', 'a', 'b'],
+      model: ImageModels.FLUX_3_IMAGE,
+      fabFileIds: ['p'],
+      referenceImageFabFileIds: ['c', 'a', 'b'],
     });
-    expect(result.fileImage.id).toBe('c');
-    expect(result.referenceImages.map((file: FakeFile) => file.id)).toEqual(['a', 'b']);
+    expect(result.fileImage.id).toBe('p');
+    expect(result.referenceImages.map((file: FakeFile) => file.id)).toEqual(['c', 'a', 'b']);
   });
 
   it('counts the primary against the FLUX.2 Klein input limit', async () => {
@@ -1463,6 +1476,20 @@ describe('ImageGenerationService.process (size normalization)', () => {
       expect(rendered).not.toHaveProperty('image_prompt');
     }
   );
+
+  it('sends FLUX 3 references to BFL in referenceImageFabFileIds order', async () => {
+    const { rendered } = await generateWith(
+      ImageModels.FLUX_3_IMAGE,
+      ModelBackend.BFL,
+      undefined,
+      { referenceImageFabFileIds: ['b', 'a'] },
+      { files: refs }
+    );
+    expect(rendered?.reference_images).toEqual([
+      Buffer.from('fab/b').toString('base64'),
+      Buffer.from('fab/a').toString('base64'),
+    ]);
+  });
 
   it('forwards explicit FLUX.2 references without a primary image', async () => {
     const { rendered } = await generateWith(

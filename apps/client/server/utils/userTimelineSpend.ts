@@ -7,8 +7,9 @@ import {
   type CreditTransactionType,
   type UserTimelineSpendEntry,
 } from '@bike4mind/common';
-import { CreditTransaction, creditTransactionRepository, Session } from '@bike4mind/database';
+import { CreditTransaction, creditTransactionRepository } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
+import { loadLedgerWriteOffs, writtenOffNewerThan, type LedgerWriteOffs } from './ledgerWriteOffs';
 
 /**
  * Most ledger rows one spend page reads. Grouping happens here rather than in Mongo so that read stays
@@ -30,6 +31,9 @@ export type SpendLedgerRow = {
   sessionId?: string;
   source?: string;
   apiKeyId?: string;
+  questId?: string;
+  /** Part of this row's cost written off on a capped turn (see ledgerWriteOffs); the rest was charged. */
+  writtenOffCredits?: number;
 };
 
 export type SpendGroup = Omit<UserTimelineSpendEntry, 'summary' | 'detail' | 'alert' | 'type'>;
@@ -58,14 +62,18 @@ export const rollUpSpend = (
   let balance = balanceAfterNewest;
 
   for (const row of rows) {
+    const writtenOff = row.writtenOffCredits ?? 0;
     if (isUsageRow(row)) {
       const key = groupKey(row);
-      const credits = Math.abs(row.credits);
+      const credits = Math.abs(row.credits) - writtenOff;
       const group = groups.get(key);
       if (group) {
         group.credits += credits;
         group.calls += 1;
         group.firstAt = row.createdAt;
+        // A receipt is per request, so only a single-charge group links to one.
+        group.requestId = undefined;
+        if (writtenOff > 0) group.writtenOffCredits = (group.writtenOffCredits ?? 0) + writtenOff;
       } else {
         groups.set(key, {
           id: row._id.toHexString(),
@@ -79,12 +87,14 @@ export const rollUpSpend = (
           notebookId: row.sessionId || undefined,
           source: row.source || undefined,
           apiKeyId: row.apiKeyId || undefined,
+          requestId: row.questId || undefined,
+          writtenOffCredits: writtenOff > 0 ? writtenOff : undefined,
           balanceAfter: balance,
           partial: false,
         });
       }
     }
-    if (balance !== undefined) balance -= signedCredits(row.type, row.credits);
+    if (balance !== undefined) balance -= signedCredits(row.type, row.credits) + writtenOff;
   }
 
   const all = [...groups.values()];
@@ -124,7 +134,7 @@ const readLedger = async (ownerId: string, range: SpendPageOptions['range'], bef
     ownerType: CreditHolderType.User,
     ...(Object.keys(createdAt).length > 0 ? { createdAt } : {}),
   })
-    .select('_id type credits createdAt model sessionId source apiKeyId')
+    .select('_id type credits createdAt model sessionId source apiKeyId questId')
     .sort({ createdAt: -1, _id: -1 })
     .limit(SPEND_READ_LIMIT + 1)
     .maxTimeMS(QUERY_MAX_TIME_MS)
@@ -144,15 +154,19 @@ export const listSpendGroups = async ({
   range,
 }: SpendPageOptions): Promise<{ groups: SpendGroup[]; hasMore: boolean }> => {
   const cursorHourEnd = cursor ? new Date(hourStart(cursor.occurredAt) + HOUR_MS) : undefined;
-  let read = await readLedger(ownerId, range, cursorHourEnd);
-  let groups = await groupsFrom(read.rows, read.truncated, ownerId, currentBalance);
+  const [writeOffs, firstRead] = await Promise.all([
+    loadLedgerWriteOffs(ownerId),
+    readLedger(ownerId, range, cursorHourEnd),
+  ]);
+  let read = firstRead;
+  let groups = await groupsFrom(read.rows, read.truncated, ownerId, currentBalance, writeOffs);
   let older = groups.filter(group => isOlderThanCursor(group, cursor));
 
   // One hour busier than a whole read: what was shown of it is all there is, so continue below it.
   // Groups of that hour the first read never reached are skipped here, without a lower-bound marker.
   if (cursor && older.length === 0 && read.truncated) {
     read = await readLedger(ownerId, range, new Date(hourStart(cursor.occurredAt)));
-    groups = await groupsFrom(read.rows, read.truncated, ownerId, currentBalance);
+    groups = await groupsFrom(read.rows, read.truncated, ownerId, currentBalance, writeOffs);
     older = groups.filter(group => isOlderThanCursor(group, cursor));
   }
 
@@ -164,39 +178,39 @@ const groupsFrom = async (
   rows: SpendLedgerRow[],
   truncated: boolean,
   ownerId: string,
-  currentBalance: number
+  currentBalance: number,
+  writeOffs: LedgerWriteOffs
 ): Promise<SpendGroup[]> => {
   const newest = rows[0];
   if (!newest) return [];
-  const newerNet = await creditTransactionRepository.sumSignedCreditsNewerThan(ownerId, CreditHolderType.User, {
-    createdAt: newest.createdAt,
-    id: newest._id.toHexString(),
+  const position = { createdAt: newest.createdAt, id: newest._id.toHexString() };
+  const newerNet = await creditTransactionRepository.sumSignedCreditsNewerThan(
+    ownerId,
+    CreditHolderType.User,
+    position
+  );
+  const withWriteOffs = rows.map(row => {
+    const writtenOffCredits = writeOffs.byTransactionId.get(row._id.toHexString())?.writtenOffCredits;
+    return writtenOffCredits ? { ...row, writtenOffCredits } : row;
   });
-  return rollUpSpend(rows, { balanceAfterNewest: currentBalance - newerNet, truncated });
+  return rollUpSpend(withWriteOffs, {
+    balanceAfterNewest: currentBalance - (newerNet + writtenOffNewerThan(writeOffs, position)),
+    truncated,
+  });
 };
 
-export type SpendLookups = { notebookNames: Map<string, string>; apiKeyPrefixes: Map<string, string> };
+export type SpendLookups = { apiKeyPrefixes: Map<string, string> };
 
-/** Notebook names and key prefixes for a page of groups, one read each. */
+/**
+ * API key prefixes for a page of groups. Notebook names are deliberately not read: they are generated
+ * from the user's first message, so the feed names a notebook by id only.
+ */
 export const loadSpendLookups = async (groups: readonly SpendGroup[]): Promise<SpendLookups> => {
-  const ids = (pick: (group: SpendGroup) => string | undefined) => [
-    ...new Set(groups.map(pick).filter((id): id is string => !!id && OBJECT_ID_PATTERN.test(id))),
+  const apiKeyIds = [
+    ...new Set(groups.map(group => group.apiKeyId).filter((id): id is string => !!id && OBJECT_ID_PATTERN.test(id))),
   ];
-  const notebookIds = ids(group => group.notebookId);
-  const apiKeyIds = ids(group => group.apiKeyId);
-  const [notebooks, keys] = await Promise.all([
-    notebookIds.length > 0
-      ? Session.find({ _id: { $in: notebookIds } })
-          .select('_id name')
-          .maxTimeMS(QUERY_MAX_TIME_MS)
-          .lean<Array<{ _id: Types.ObjectId; name?: string }>>()
-      : Promise.resolve([]),
-    Promise.all(apiKeyIds.map(id => userApiKeyRepository.findById(id))),
-  ]);
+  const keys = await Promise.all(apiKeyIds.map(id => userApiKeyRepository.findById(id)));
   return {
-    notebookNames: new Map(
-      notebooks.map(notebook => [notebook._id.toHexString(), notebook.name?.trim() || 'Untitled'])
-    ),
     apiKeyPrefixes: new Map(
       keys.flatMap((key, index) => (key?.keyPrefix ? [[apiKeyIds[index], key.keyPrefix] as const] : []))
     ),
@@ -234,18 +248,18 @@ const formatSpan = (group: SpendGroup): string | undefined => {
   return minutes >= 1 ? `over ${minutes} min` : undefined;
 };
 
-/** "Spent 2,400 credits: 14 chat messages on claude-opus in "Notebook X"", plus the meta line. */
+/** "Spent 2,400 credits: 14 chat messages on claude-opus", plus the meta line (notebook id, source, key, balance). */
 export const spendGroupToEntry = (group: SpendGroup, lookups: SpendLookups): UserTimelineSpendEntry => {
   const [singular, plural] = USAGE_NOUNS[group.transactionType as CreditTransactionType] ?? ['charge', 'charges'];
-  const notebookName = group.notebookId ? lookups.notebookNames.get(group.notebookId) : undefined;
   const calls = `${group.calls.toLocaleString('en-US')}${group.partial ? '+' : ''} ${group.calls === 1 ? singular : plural}`;
   const summary = [
     `Spent ${formatCredits(group.credits)}${group.partial ? '+' : ''} credits: ${calls}`,
     group.model ? ` on ${group.model}` : '',
-    notebookName ? ` in "${notebookName}"` : '',
   ].join('');
   const keyPrefix = group.apiKeyId ? lookups.apiKeyPrefixes.get(group.apiKeyId) : undefined;
   const detail = [
+    group.writtenOffCredits ? `${formatCredits(group.writtenOffCredits)} written off` : undefined,
+    group.notebookId ? `notebook ${group.notebookId}` : undefined,
     group.source ? (SOURCE_LABELS[group.source] ?? group.source) : undefined,
     group.apiKeyId ? `key ${keyPrefix ?? group.apiKeyId}` : undefined,
     formatSpan(group),

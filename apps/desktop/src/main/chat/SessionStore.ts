@@ -1,3 +1,16 @@
+import {
+  inheritancePolicy,
+  MAX_RESOLVED_DECISIONS,
+  MAX_TASK_ATTEMPTS,
+  rolePolicySchema,
+  rootPolicySchema,
+  modelSelectionSchema,
+  workerTaskSchema,
+  type RolePolicy,
+  type RootPolicy,
+  type WorkerTask,
+  type ModelSelection,
+} from '@shared/orchestration';
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -72,6 +85,9 @@ function normalizeApprovalMode(value: unknown, stamp: unknown, launchId: string)
 
 /** Everything about a new session other than its model. */
 export interface CreateOptions {
+  orchestrationPolicy?: RootPolicy;
+  workerSelection?: ModelSelection;
+  workerTask?: WorkerTask;
   /**
    * Fixed at creation rather than settable later for a Chat session, because the working
    * directory it names is what the tools have been running in. A Code session CAN arrive
@@ -103,7 +119,7 @@ export interface CreateOptions {
  */
 const SUMMARY_INDEX = '.summary-index';
 // Bump whenever summarizeSession derives a field differently, or cached summaries keep the old value.
-const SUMMARY_INDEX_VERSION = 5;
+const SUMMARY_INDEX_VERSION = 6;
 /** Per-session write records (see tools/sessionScripts), in a folder `list` skips as it is not a `.json` name. */
 const SESSION_WRITES = '.session-writes';
 const LIST_READ_CONCURRENCY = 16;
@@ -413,6 +429,11 @@ export class SessionStore implements SessionWritesStore {
       ...(project && mode === 'code' ? { project } : {}),
       ...(options.grantedDirectories?.length ? { grantedDirectories: [...options.grantedDirectories] } : {}),
       ...(origin ? { origin } : {}),
+      ...(options.orchestrationPolicy
+        ? { orchestrationPolicy: rootPolicySchema.parse(options.orchestrationPolicy) }
+        : {}),
+      ...(options.workerSelection ? { workerSelection: modelSelectionSchema.parse(options.workerSelection) } : {}),
+      ...(options.workerTask ? { workerTask: workerTaskSchema.parse(options.workerTask) } : {}),
       messages: [],
     };
     await this.write(directory, session);
@@ -424,6 +445,102 @@ export class SessionStore implements SessionWritesStore {
     if (!this.scope) return 'default';
     const scope = this.scope();
     return scope ? sessionScopeKey(scope) : null;
+  }
+
+  async getRolePolicy(): Promise<RolePolicy> {
+    const directory = await this.directoryFor(true);
+    if (!directory) throw new Error('Choose an account or device-local environment first.');
+    try {
+      return rolePolicySchema.parse(JSON.parse(await readFile(join(directory, '.role-policy'), 'utf8')));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return inheritancePolicy();
+      if (error instanceof SyntaxError || error instanceof z.ZodError) {
+        console.warn('Ignoring unreadable role policy; using inheritance defaults.');
+        return inheritancePolicy();
+      }
+      throw error;
+    }
+  }
+
+  async setRolePolicy(value: RolePolicy): Promise<RolePolicy> {
+    const policy = rolePolicySchema.parse(value);
+    const scope = this.scopeKey();
+    const directory = await this.directoryFor(true);
+    if (!directory || this.scopeKey() !== scope) throw new Error('Account changed. Reopen orchestration settings.');
+    const temporary = join(directory, `.role-policy-${randomUUID()}.tmp`);
+    await writeFile(temporary, JSON.stringify(policy), 'utf8');
+    await rename(temporary, join(directory, '.role-policy'));
+    return policy;
+  }
+
+  setOrchestrationPolicy(
+    id: string,
+    policy: RootPolicy | undefined,
+    expectedScope?: string | null
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        if (policy) session.orchestrationPolicy = rootPolicySchema.parse(policy);
+        else delete session.orchestrationPolicy;
+        return true;
+      },
+      expectedScope
+    );
+  }
+
+  setWorkerModel(id: string, model: string, expectedScope: string | null): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        if (!session.workerSelection) return null;
+        if (session.workerTask?.state.status === 'canceled') {
+          throw new Error('Canceled tasks cannot restart. Create a new task.');
+        }
+        session.model = model;
+        session.workerSelection = { ...session.workerSelection, effectiveModel: model, source: 'escalation' };
+        if (session.workerTask) {
+          const task = session.workerTask;
+          session.workerTask = workerTaskSchema.parse({
+            ...task,
+            state: { status: 'queued' },
+            attempts: [
+              ...task.attempts,
+              { id: randomUUID(), model, startedAt: new Date().toISOString(), trigger: 'user-upgrade' },
+            ],
+          });
+        }
+        return true;
+      },
+      expectedScope
+    );
+  }
+
+  updateWorkerTask(
+    id: string,
+    change: (task: WorkerTask) => WorkerTask,
+    expectedScope?: string | null,
+    model?: string
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        if (!session.workerTask) return null;
+        const changed = change(session.workerTask);
+        const attempts =
+          changed.attempts.length > MAX_TASK_ATTEMPTS
+            ? [changed.attempts[0], ...changed.attempts.slice(1 - MAX_TASK_ATTEMPTS)]
+            : changed.attempts;
+        const resolvedDecisions = changed.resolvedDecisions.slice(-MAX_RESOLVED_DECISIONS);
+        session.workerTask = workerTaskSchema.parse({ ...changed, attempts, resolvedDecisions });
+        if (model && session.workerSelection) {
+          session.model = model;
+          session.workerSelection = { ...session.workerSelection, effectiveModel: model, source: 'escalation' };
+        }
+        return true;
+      },
+      expectedScope
+    );
   }
 
   async get(id: string): Promise<ChatSession | null> {
@@ -1209,6 +1326,20 @@ export class SessionStore implements SessionWritesStore {
     const importOrigin = normalizeImportOrigin(parsed.importOrigin);
     const suggestions = normalizeSuggestions(parsed.spawnSuggestions);
     const generation = normalizeGeneration(parsed.generation);
+    const orchestrationPolicy = rootPolicySchema.safeParse(parsed.orchestrationPolicy);
+    const workerSelection = modelSelectionSchema.safeParse(parsed.workerSelection);
+    const workerTask = workerTaskSchema.safeParse(parsed.workerTask);
+    for (const [field, result] of [
+      ['orchestrationPolicy', orchestrationPolicy],
+      ['workerSelection', workerSelection],
+      ['workerTask', workerTask],
+    ] as const) {
+      if (!result.success && parsed[field] !== undefined)
+        console.warn(`Dropping unreadable ${field} from session ${parsed.id ?? id}.`);
+    }
+    // A root's snapshot is only reused while its orchestrate flag is; workers keep theirs.
+    const orchestrateExpired =
+      parsed.orchestrate === true && (parsed as StoredSession).orchestrateLaunch !== this.launchId;
     // Absolute only: a relative entry would resolve against wherever the app was launched from.
     const grantedDirectories = Array.isArray(parsed.grantedDirectories)
       ? parsed.grantedDirectories.filter((entry): entry is string => typeof entry === 'string' && isAbsolute(entry))
@@ -1244,6 +1375,11 @@ export class SessionStore implements SessionWritesStore {
         : {}),
       ...(parsed.archived ? { archived: true } : {}),
       ...(parsed.historyEnabled ? { historyEnabled: true } : {}),
+      ...(orchestrationPolicy.success && !(orchestrateExpired && !origin)
+        ? { orchestrationPolicy: orchestrationPolicy.data }
+        : {}),
+      ...(workerSelection.success ? { workerSelection: workerSelection.data } : {}),
+      ...(workerTask.success ? { workerTask: workerTask.data } : {}),
       ...(origin ? { origin } : {}),
       ...(importOrigin ? { importOrigin } : {}),
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],

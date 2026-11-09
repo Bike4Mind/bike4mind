@@ -239,6 +239,7 @@ describe('readDesktopModelServers', () => {
     await put('@bike4mind/desktop', JSON.stringify(body));
     const result = await readDesktopModelServers(opts());
     expect(result.servers.map(s => s.name)).toEqual(['kept']);
+    expect(result.unusable?.map(s => s.id)).toEqual(['ssh1']);
   });
 
   it('lists SSH servers with the rest, an old one without a port as Ollama on 11434', async () => {
@@ -264,6 +265,46 @@ describe('readDesktopModelServers', () => {
       ['kept', 'ollama', { type: 'http', baseUrl: 'http://10.0.0.5:11434' }],
     ]);
     expect(JSON.stringify(result)).not.toContain(SECRET);
+  });
+
+  it('lists an SSH server saved with a port or destination it cannot use, or none, with why, apart from the usable ones', async () => {
+    const ports: unknown[] = [0, 65_536, -1, 1.5, null, 'abc', '', '22 -oProxyCommand=x', { port: 22 }];
+    const body = {
+      servers: [
+        ...ports.map((port, index) =>
+          stored({ id: `p${index}`, name: `port-${index}`, transport: { type: 'ssh', destination: 'me@lab', port } })
+        ),
+        stored({ id: 'd1', name: 'dest', transport: { type: 'ssh', destination: '-oProxyCommand=x', port: 8080 } }),
+        stored({ id: 'ssh1', name: 'none', transport: { type: 'ssh', host: 'box' } }),
+        stored({ id: 'ssh2', name: 'number', transport: { type: 'ssh', destination: 42, port: 8080 } }),
+        stored({ id: 'ok1', name: 'kept' }),
+      ],
+    };
+    await put('@bike4mind/desktop', JSON.stringify(body));
+    const result = await readDesktopModelServers(opts());
+    expect(result.servers.map(s => s.name)).toEqual(['kept']);
+    const missing = { transport: { type: 'ssh', destination: null }, problem: 'It has no saved SSH destination.' };
+    expect(result.unusable).toEqual([
+      ...ports.map((_port, index) => ({
+        id: `p${index}`,
+        name: `port-${index}`,
+        kind: 'ollama',
+        access: 'manage',
+        auth: { type: 'bearer' },
+        addedAt: '2026-10-01T00:00:00.000Z',
+        transport: { type: 'ssh', destination: 'me@lab' },
+        problem: 'Its saved SSH port is not a number from 1 to 65535.',
+      })),
+      expect.objectContaining({
+        id: 'd1',
+        transport: { type: 'ssh', destination: null },
+        problem: 'Its saved SSH destination is not one ssh can be given safely.',
+      }),
+      expect.objectContaining({ id: 'ssh1', name: 'none', ...missing }),
+      expect.objectContaining({ id: 'ssh2', name: 'number', ...missing }),
+    ]);
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+    expect(JSON.stringify(result)).not.toContain('ProxyCommand');
   });
 
   it('reads a newer version as it is and never writes the file', async () => {

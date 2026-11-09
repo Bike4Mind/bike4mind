@@ -1,3 +1,4 @@
+import { TaskDecisionPanel } from './TaskDecisionPanel';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
@@ -315,6 +316,7 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
         </IconButton>
       </Box>
 
+      <TaskDecisionPanel agent={agent} />
       {pending.length > 0 && <PendingRequests calls={pending} />}
 
       <Typography

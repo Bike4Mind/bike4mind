@@ -5,6 +5,7 @@ import { adminSupportAccessAuditLogRepository, sessionRepository, userRepository
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { requireAdminPermission } from '@server/middlewares/adminApi';
 
 /**
  * Shared gate for the admin support READ endpoints (`/api/admin/sessions/...`).
@@ -12,7 +13,7 @@ import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
  * These are the first admin reads of customer content with a MANDATORY reason
  * code and a blocking audit write, so the rules live in one place:
  *
- * - platform admin only;
+ * - full admins and `support:read` delegates only;
  * - a `supportCase` reference is required, so the audit log says *why* the read
  *   happened without needing a second system to cross-reference;
  * - every read is recorded, and the audit write is awaited before the content is
@@ -29,12 +30,8 @@ import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
  * Read-only by construction: nothing here grants an admin write path. Support
  * remediation needs a separate, consent-aware mechanism (see the sibling issue).
  *
- * Gated on `isAdmin` rather than a narrower support role. If that is tightened
- * later, follow the existing tag-plus-predicate primitive rather than inventing
- * one: `canAccessTavern` / `hasTavernUserTag` in `@bike4mind/common` is a single
- * predicate consumed by BOTH the client guard and the server guards so the two
- * cannot drift (`hasDeveloperUserTag` is a second instance). A
- * `canPerformSupportRead` predicate would drop straight into the check below.
+ * Gated on the `support:read` admin permission, the same one the routes declare
+ * through `adminApi`; checked here too so this helper stays a gate on its own.
  * (`User.role` and `InternalTeamMember.role` are NOT authz sources - neither is
  * read by any access check.)
  *
@@ -61,9 +58,9 @@ export interface SupportReadContext {
 
 interface SupportReadRequest {
   query: unknown;
-  user?: { id: string; isAdmin?: boolean };
+  user?: { id: string; isAdmin?: boolean | null; adminPermissions?: readonly string[] | null };
   headers?: Record<string, string | string[] | undefined>;
-  apiKeyInfo?: { keyId: string };
+  apiKeyInfo?: { keyId: string; scopes: readonly string[] };
 }
 
 /**
@@ -75,9 +72,7 @@ export async function authorizeSupportRead(req: SupportReadRequest): Promise<Sup
   if (!req.user) {
     throw new ForbiddenError('Authentication required');
   }
-  if (!req.user.isAdmin) {
-    throw new ForbiddenError('Admin access required');
-  }
+  requireAdminPermission(req, 'support:read');
 
   const { id, supportCase } = SupportReadQuerySchema.parse(req.query);
 

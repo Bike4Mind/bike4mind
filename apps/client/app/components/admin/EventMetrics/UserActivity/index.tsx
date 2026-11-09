@@ -4,7 +4,7 @@ import { UserActivityTab } from './UserActivityTab';
 import { useUserActivityData } from './useUserActivityData';
 import { useAnalyticsStore } from './store';
 
-/** Overview > Events, "By user": the paged CounterLog grid per day, action and user. */
+/** Overview > Event metrics, "By user": the paged CounterLog grid per day, action and user. */
 export function UserActivityView() {
   const refreshDefaultDateFilters = useAnalyticsStore(state => state.refreshDefaultDateFilters);
 

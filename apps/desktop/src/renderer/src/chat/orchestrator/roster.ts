@@ -1,3 +1,4 @@
+import type { ModelSelection, WorkerTask, RootPolicy } from '@shared/orchestration';
 import type { ChildOutcome } from '@shared/agentOutcome';
 import type { ChatSessionStatus, ChatSessionSummary, SessionSetupStep } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
@@ -36,6 +37,9 @@ export interface AgentView {
   createdAt: string;
   updatedAt: string;
   model: string;
+  workerSelection?: ModelSelection;
+  workerTask?: WorkerTask;
+  orchestrationPolicy?: RootPolicy;
   state: AgentState;
   /** Working, but still being prepared: the setup step it is on. Stays 'working' for every count. */
   preparing?: SessionSetupStep;
@@ -68,6 +72,17 @@ const OUTCOME_STATE: Record<ChildOutcome, AgentState> = {
   'no-reply': 'idle',
 };
 
+export function deriveTaskAgentState(
+  session: Pick<ChatSessionSummary, 'workerTask' | 'lastOutcome'>,
+  status: ChatSessionStatus | undefined
+): AgentState {
+  const runtimeState = deriveAgentState(status, session.lastOutcome);
+  const task = session.workerTask?.state;
+  if (runtimeState === 'working' || runtimeState === 'needs-you' || !task) return runtimeState;
+  if (task.status === 'completed' && task.accepted) return 'done';
+  return task.status === 'canceled' ? 'stopped' : 'needs-you';
+}
+
 /** The live status wins; a stored outcome only speaks for a session that is neither running nor waiting. */
 export function deriveAgentState(status: ChatSessionStatus | undefined, outcome: ChildOutcome | undefined): AgentState {
   if (status === 'needs-action') return 'needs-you';
@@ -88,9 +103,7 @@ export function agentStates(
   rootId: string | null
 ): AgentState[] {
   if (rootId === null) return [];
-  return descendantsOf(sessions, rootId).map(({ session }) =>
-    deriveAgentState(statuses.get(session.id), session.lastOutcome)
-  );
+  return descendantsOf(sessions, rootId).map(({ session }) => deriveTaskAgentState(session, statuses.get(session.id)));
 }
 
 /**
@@ -119,7 +132,7 @@ export function buildRoster(input: {
   const views: AgentView[] = [];
 
   for (const { session, depth } of descendantsOf(sessions, rootId)) {
-    const state = deriveAgentState(statuses.get(session.id), session.lastOutcome);
+    const state = deriveTaskAgentState(session, statuses.get(session.id));
     const setup = state === 'working' ? preparing?.get(session.id) : undefined;
     views.push({
       id: session.id,
@@ -130,6 +143,9 @@ export function buildRoster(input: {
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
       model: session.model,
+      workerSelection: session.workerSelection,
+      workerTask: session.workerTask,
+      orchestrationPolicy: session.orchestrationPolicy,
       state,
       ...(setup && { preparing: setup }),
       outcome: session.lastOutcome,

@@ -2,6 +2,7 @@ import type { ChatAutomaticOrigin, ChatToolCall } from '@shared/chat';
 import type { AutomaticTurnResult } from '../chat/ChatService';
 import {
   isExplicitBinding,
+  isBindingCommand,
   isFinishedState,
   isPrNumber,
   parsePullRequestTarget,
@@ -59,6 +60,9 @@ const UNOPENED_JITTER_MS = 60_000;
 
 const PUSH_COMMAND = /(^|[\s;&|(])git\s+push\b/;
 
+/** formatOutcome's footer for a command that exited 0; see shellTools. */
+const EXITED_CLEANLY = /\n\[exit 0\](?:\n\[no output\])?\s*$/;
+
 export interface PrTimers {
   set(callback: () => void, ms: number): unknown;
   clear(handle: unknown): void;
@@ -76,8 +80,14 @@ const realTimers: PrTimers = {
 export interface PrChatHooks {
   /** Whether the conversation is a Code session; a pasted PR binds only there. */
   isCode(sessionId: string): Promise<boolean>;
-  /** Where a Code session runs and the branch checked out there; null for anything else. */
-  project(sessionId: string): Promise<{ workingDirectory: string; branch: string | null } | null>;
+  /**
+   * Where a Code session runs and the branch checked out there; null for anything else. `live`
+   * reads the checkout before the recorded branch, which the agent may have renamed since.
+   */
+  project(
+    sessionId: string,
+    options?: { live?: boolean }
+  ): Promise<{ workingDirectory: string; branch: string | null } | null>;
   /** Move the conversation to the sidebar's Archived section. */
   archive(sessionId: string): Promise<void>;
   /** Whether a turn is running in the conversation. */
@@ -257,6 +267,9 @@ export class PrMonitor {
       return;
     }
     if (PUSH_COMMAND.test(command) && this.live.has(sessionId)) this.nudge(sessionId, AFTER_PUSH_MS);
+    if (isBindingCommand(command) && EXITED_CLEANLY.test(call.preview ?? '')) {
+      void this.lookUpAfterShell(sessionId).catch(err => this.deps.logger.warn(`PR: branch lookup failed: ${err}`));
+    }
   }
 
   /** The user pasted a URL. Always replaces what was there, unless auto-merge is armed on it. */
@@ -683,6 +696,36 @@ export class PrMonitor {
     } catch (err) {
       this.noteGhFailure(err);
     }
+  }
+
+  /**
+   * A push or `gh pr create` succeeded but its output, cut for length, carried no PR URL. Asks
+   * for the branch's PR at once, past the TTL. Skipped while an unfinished PR is bound: a push
+   * to it prints no URL, and asking would only find it again.
+   */
+  protected async lookUpAfterShell(sessionId: string): Promise<void> {
+    if (this.gh !== 'ok') return;
+    const before = await this.deps.store.get(sessionId);
+    if (before && !this.finished(sessionId, before)) return;
+    this.branchLookups.set(sessionId, this.now());
+    const project = await this.deps.chat.project(sessionId, { live: true }).catch(() => null);
+    const branch = project?.branch;
+    if (!project || !branch || UNOWNED_BRANCHES.has(branch)) return;
+    try {
+      const url = await this.withGh(() => this.deps.github.findOpenForBranch(project.workingDirectory, branch));
+      const ref = url ? parsePullRequestUrl(url) : null;
+      if (!ref) return;
+      // Another bind may have landed while gh ran; bind keeps its own guards for the rest.
+      const current = await this.deps.store.get(sessionId);
+      if (current && !samePullRequest(current, before) && !this.finished(sessionId, current)) return;
+      await this.bind(sessionId, ref, 'branch');
+    } catch (err) {
+      this.noteGhFailure(err);
+    }
+  }
+
+  private finished(sessionId: string, binding: PrBinding): boolean {
+    return isFinishedState(this.live.get(sessionId)?.snapshot?.state ?? binding.lastState);
   }
 
   /** One gh process per conversation at a time, and a small cap across all of them. */

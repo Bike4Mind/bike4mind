@@ -6,26 +6,34 @@ import { createMocks } from 'node-mocks-http';
  * The session lookup inside listFabFilesBySession casts, so it resolves under any hex
  * casing, but the chat-history query behind it hits `sessionId: { type: String }` and does
  * byte equality. The route has to hand the service the canonical lowercase id, or an
- * uppercase request silently returns a partial list instead of a 400.
+ * uppercase request silently returns a partial list.
  */
 
-const mockRefs = vi.hoisted(() => ({
-  getHandler: null as null | ((req: any, res: any) => unknown),
-}));
-
-vi.mock('@server/middlewares/baseApi', () => {
-  const chain: any = {
-    use: () => chain,
-    get: (fn: any) => {
-      mockRefs.getHandler = fn;
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: () => {
+    type Mw = (req: unknown, res: unknown, next: () => void) => unknown;
+    const used: Mw[] = [];
+    const compose =
+      (...handlers: Mw[]) =>
+      async (req: unknown, res: unknown) => {
+        for (const handler of [...used, ...handlers]) {
+          let advanced = false;
+          await handler(req, res, () => {
+            advanced = true;
+          });
+          if (!advanced) return;
+        }
+      };
+    const chain: Record<string, unknown> = {};
+    chain.use = (mw: Mw) => {
+      used.push(mw);
       return chain;
-    },
-    post: () => chain,
-    put: () => chain,
-    delete: () => chain,
-  };
-  return { baseApi: () => chain };
-});
+    };
+    chain.get = compose;
+    return chain;
+  },
+  methodNotAllowedHandler: () => () => undefined,
+}));
 
 const listFabFilesBySession = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/services', () => ({ fabFilesService: { listFabFilesBySession } }));
@@ -40,14 +48,17 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getSignedUrl: browserSigner }),
 }));
 
-import '@pages/api/sessions/[id]/files';
+const { default: handler } = await import('@pages/api/sessions/[id]/files');
 
 const SESSION_ID = '507f1f77bcf86cd799439011';
 
 const call = (id?: string) => {
   const { req, res } = createMocks({ method: 'GET', query: id === undefined ? {} : { id } });
-  (req as any).user = { id: 'user1' };
-  return { res, result: mockRefs.getHandler!(req, res) };
+  Object.assign(req, {
+    user: { id: 'user1' },
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  });
+  return { res, result: (handler as any)(req, res) as Promise<unknown> };
 };
 
 beforeEach(() => {
@@ -55,7 +66,7 @@ beforeEach(() => {
   listFabFilesBySession.mockResolvedValue([{ id: 'file1' }]);
 });
 
-describe('GET /api/sessions/[id]/files', () => {
+describe('GET /api/sessions/[id]/files (legacy alias of /api/v1/sessions/{id}/files)', () => {
   it('lists the files for a lowercase-hex session id', async () => {
     const { res, result } = call(SESSION_ID);
     await result;
@@ -72,14 +83,9 @@ describe('GET /api/sessions/[id]/files', () => {
     expect(listFabFilesBySession).toHaveBeenCalledWith('user1', { sessionId: SESSION_ID }, expect.anything());
   });
 
-  it('rejects a missing or malformed session id', async () => {
-    const malformed = call('not-a-session-id');
-    await malformed.result;
-    expect(malformed.res._getStatusCode()).toBe(400);
-
-    const missing = call();
-    await missing.result;
-    expect(missing.res._getStatusCode()).toBe(400);
+  it('answers 404 for a malformed session id and rejects a missing one', async () => {
+    await expect(call('not-a-session-id').result).rejects.toMatchObject({ statusCode: 404 });
+    await expect(call().result).rejects.toBeDefined();
 
     expect(listFabFilesBySession).not.toHaveBeenCalled();
   });

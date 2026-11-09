@@ -80,6 +80,18 @@ describe('SIDEBAR_SECTIONS', () => {
     expect(allItems.find(i => i.tab === AdminTab.Waitlist)?.label).toBe('Invite Center');
   });
 
+  it('labels the secrets items with their page titles', () => {
+    expect(allItems.find(i => i.tab === AdminTab.SystemSecrets)?.label).toBe('System secrets');
+    expect(allItems.find(i => i.tab === AdminTab.SecretsRotation)?.label).toBe('Secrets rotation');
+  });
+
+  it('names the event, Slack and help metrics items like their page titles', () => {
+    const labelOf = (tab: AdminTab) => allItems.find(i => i.tab === tab)?.label;
+    expect(labelOf(AdminTab.EventMetrics)).toBe('Event metrics');
+    expect(labelOf(AdminTab.SlackMetrics)).toBe('Slack metrics');
+    expect(labelOf(AdminTab.HelpAnalytics)).toBe('Help analytics');
+  });
+
   it('only badges the Waitlist, Subscriptions and Audit log tabs', () => {
     const badged = allItems.filter(i => i.badge).map(i => [i.tab, i.badge]);
     expect(badged).toEqual([

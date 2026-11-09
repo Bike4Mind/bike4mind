@@ -1,140 +1,127 @@
-import React, { useState } from 'react';
-import { Box, Typography, LinearProgress, Alert, Button } from '@mui/joy';
-import Warning from '@mui/icons-material/Warning';
+import React, { useState, type ReactNode } from 'react';
+import { Button, Stack } from '@mui/joy';
+import RefreshIcon from '@mui/icons-material/Refresh';
 
-import { useEventMetrics } from '../EventMetrics/hooks/useEventMetrics';
-import { useEventMetricsState } from '../EventMetrics/hooks/useEventMetricsState';
+import { useEventMetrics, type MetricsFilters } from '../EventMetrics/hooks/useEventMetrics';
+import { useApplyPickedFilters, useEventMetricsState } from '../EventMetrics/hooks/useEventMetricsState';
 import { processChartData } from '../EventMetrics/utils/chartDataProcessor';
 import { ControlPanel } from '../EventMetrics/components/ControlPanel';
+import { EventMetricsStats } from '../EventMetrics/components/EventMetricsStats';
+import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { AdminPageHeader, ErrorState, LoadingState, UpdatingBar } from '../shared';
+import { ADMIN_REGION_GAP } from '../shared/adminStyles';
 import { SlackMetricsTab } from './SlackMetricsTab';
 
+// Every request is scoped to Slack events; the category filter is hidden on this page.
+const SLACK_CATEGORY = 'Slack';
+
 const SlackMetricsPage: React.FC = () => {
-  // Applied filters state (used for API calls)
-  const [appliedFilters, setAppliedFilters] = useState<{
-    dateFrom?: string;
-    dateTo?: string;
-    userFilter?: string;
-    eventFilter?: string;
-    eventCategoryFilter?: string;
-  }>({
-    eventCategoryFilter: 'Slack',
-  });
+  const [appliedFilters, setAppliedFilters] = useState<MetricsFilters>({ eventCategoryFilter: SLACK_CATEGORY });
 
-  // Always force Slack category filter in API calls
-  const filtersForApi = {
-    ...appliedFilters,
-    eventCategoryFilter: 'Slack',
-  };
-
-  const { data: metrics = [], isLoading, isFetching, isError, error, forceRefresh } = useEventMetrics(filtersForApi);
+  const { data: metrics = [], isLoading, isFetching, isError, error, forceRefresh } = useEventMetrics(appliedFilters);
 
   const {
-    // Filter states
+    dateRange,
     dateFrom,
     dateTo,
     userFilter,
     eventFilter,
-    // eventCategoryFilter, // Ignored in UI since we hide the selector
     setDateFrom,
     setDateTo,
     setUserFilter,
     setEventFilter,
     setEventCategoryFilter,
-    // Computed data
     filteredAndSortedMetrics,
-    // Helper functions
+    hasFilters,
     clearFilters,
     setDateRange,
   } = useEventMetricsState(metrics);
+
+  useApplyPickedFilters(
+    { dateFrom, dateTo, userFilter, eventFilter, eventCategoryFilter: SLACK_CATEGORY },
+    setAppliedFilters
+  );
 
   const handleRefresh = () => {
     forceRefresh();
   };
 
-  const handleApplyFilters = () => {
-    setAppliedFilters({
-      dateFrom: dateFrom || undefined,
-      dateTo: dateTo || undefined,
-      userFilter: userFilter || undefined,
-      eventFilter: eventFilter || undefined,
-      eventCategoryFilter: 'Slack',
-    });
-  };
-
-  const handleClearFilters = () => {
-    clearFilters();
-    setAppliedFilters({
-      eventCategoryFilter: 'Slack',
-    });
-  };
-
   const chartData = processChartData(filteredAndSortedMetrics);
+  const errorState = isError && (
+    <ErrorState
+      message={`Slack metrics failed to load. ${error instanceof Error ? error.message : ''}`.trim()}
+      onRetry={handleRefresh}
+      retrying={isFetching}
+    />
+  );
+
+  const emptyAction = hasFilters ? (
+    <Button variant="outlined" onClick={clearFilters} data-testid="slack-metrics-empty-clear-filters-btn">
+      Clear filters
+    </Button>
+  ) : (
+    <Button variant="outlined" onClick={handleRefresh} data-testid="slack-metrics-empty-refresh-btn">
+      Refresh metrics
+    </Button>
+  );
+
+  // LoadingState only on a first load: a filter change keeps the previous metrics (placeholder data)
+  // and refetches under the UpdatingBar.
+  let body: ReactNode;
+  if (isLoading) body = <LoadingState label="Loading Slack metrics" />;
+  else if (isError && metrics.length === 0) body = errorState;
+  else
+    body = (
+      <>
+        <UpdatingBar active={isFetching} testId="slack-metrics-updating" />
+        {errorState}
+        <EventMetricsStats metrics={metrics} filteredMetrics={filteredAndSortedMetrics} />
+        <SlackMetricsTab chartData={chartData} filtered={hasFilters} emptyAction={emptyAction} />
+      </>
+    );
 
   return (
-    <Box>
-      <Box sx={{ mb: 4 }}>
-        <Typography level="h2">Slack Metrics</Typography>
-        <Typography level="body-md" color="neutral">
-          Analytics and insights for Slack integration usage.
-        </Typography>
-      </Box>
-
-      {/* Error State */}
-      {isError && (
-        <Alert
-          color="danger"
-          variant="soft"
-          startDecorator={<Warning />}
-          endDecorator={
-            <Button variant="soft" color="danger" size="sm" onClick={handleRefresh}>
-              Retry
+    <Stack gap={ADMIN_REGION_GAP}>
+      <AdminPageHeader
+        title="Slack metrics"
+        description="Usage of the Slack integration: events, agents, intents and exports."
+        actions={
+          <>
+            <Button
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              startDecorator={<RefreshIcon />}
+              loading={isFetching}
+              onClick={handleRefresh}
+              data-testid="slack-metrics-refresh-btn"
+            >
+              Refresh
             </Button>
-          }
-          sx={{ mb: 2 }}
-        >
-          <Box>
-            <Typography level="title-sm">Failed to load metrics</Typography>
-            <Typography level="body-sm">{error instanceof Error ? error.message : 'Unknown error'}</Typography>
-          </Box>
-        </Alert>
-      )}
-
-      {/* Loading indicator */}
-      {isLoading && (
-        <Box sx={{ mb: 2 }}>
-          <LinearProgress />
-          <Typography level="body-sm" sx={{ mt: 1, color: 'text.secondary' }}>
-            Loading metrics...
-          </Typography>
-        </Box>
-      )}
-
-      {/* Control Panel */}
+            <ContextHelpButton helpId="admin/metrics" tooltipText="Slack metrics help" />
+          </>
+        }
+      />
       <ControlPanel
         metrics={metrics}
-        filteredMetrics={filteredAndSortedMetrics}
+        dateRange={dateRange}
         dateFrom={dateFrom}
         dateTo={dateTo}
         userFilter={userFilter}
         eventFilter={eventFilter}
-        eventCategoryFilter="Slack" // Display as Slack (though hidden)
+        eventCategoryFilter={SLACK_CATEGORY}
         setDateFrom={setDateFrom}
         setDateTo={setDateTo}
         setUserFilter={setUserFilter}
         setEventFilter={setEventFilter}
         setEventCategoryFilter={setEventCategoryFilter}
-        onRefresh={handleRefresh}
-        onClearFilters={handleClearFilters}
+        onClearFilters={clearFilters}
         onSetDateRange={setDateRange}
-        onApplyFilters={handleApplyFilters}
-        isFetching={isFetching}
-        hideCategoryFilter={true}
+        hasFilters={hasFilters}
+        hideCategoryFilter
       />
-
-      <Box sx={{ mt: 2 }}>
-        <SlackMetricsTab chartData={chartData} />
-      </Box>
-    </Box>
+      {body}
+    </Stack>
   );
 };
 

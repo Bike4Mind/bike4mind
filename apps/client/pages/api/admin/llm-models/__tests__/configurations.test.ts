@@ -32,9 +32,9 @@ vi.mock('@bike4mind/utils', () => ({ invalidateSettingsCache: vi.fn() }));
 
 import '../configurations';
 
-function put(config: Record<string, unknown>) {
+function put(config: Record<string, unknown>, user: Record<string, unknown> = { isAdmin: true }) {
   const req = {
-    user: { isAdmin: true },
+    user,
     ability: {},
     body: { configurations: [{ id: 'model-a', enabled: true, allowedUserTags: [], ...config }] },
   };
@@ -111,5 +111,26 @@ describe('PUT /api/admin/llm-models/configurations - admin audit', () => {
 
     await expect(captured.put!(req, res)).rejects.toThrow(/audit down/);
     expect(res.json).not.toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/admin/llm-models/configurations - permission', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindOneAndUpdate.mockResolvedValue({});
+    mockStored.mockResolvedValue(null);
+    mockAudit.mockResolvedValue(null);
+  });
+
+  it('lets a settings:manage delegate save', async () => {
+    await put({}, { isAdmin: false, adminPermissions: ['settings:manage'] });
+    expect(mockFindOneAndUpdate).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a delegate without settings:manage before writing', async () => {
+    await expect(put({}, { isAdmin: false, adminPermissions: ['support:read'] })).rejects.toThrow(
+      'Missing permission: settings:manage'
+    );
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
   });
 });

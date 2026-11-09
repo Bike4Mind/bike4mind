@@ -1,4 +1,5 @@
 import type { ModelBuildReport, ModelLighting, ModelPose, ModelView, ModelViewState } from '@shared/model3d';
+import type { SpawnOptions, TaskAction } from '@shared/orchestration';
 import type { CustomCommand } from '@bike4mind/cli/skills';
 import type { VideoModel } from '@bike4mind/common';
 import type { BrowserSnapshot } from '@shared/browserPage';
@@ -17,6 +18,7 @@ import type {
   SpawnRefusal,
 } from '@shared/chat';
 
+import { HEAD_SHARE } from './cappedOutput';
 import type { ScrollTarget } from '../browser/pageScripts';
 import type { CompletionRequest } from '../completions';
 import type { CompletionStreamEvent } from '../streamEvents';
@@ -573,7 +575,13 @@ export interface HostContext {
    * Refused rather than queued when a cap is hit; see SpawnRefusal for which caps and why the
    * model is told them apart.
    */
-  spawn(prompt: string, title: string | undefined, placement: SpawnPlacement): Promise<SpawnOutcome>;
+  spawn(
+    prompt: string,
+    title: string | undefined,
+    placement: SpawnPlacement,
+    options?: SpawnOptions
+  ): Promise<SpawnOutcome>;
+  taskAction?(sessionId: string, action: TaskAction): Promise<string>;
   /**
    * What a worktree child's new branch is cut from: the branch this session is on. Resolved once,
    * for the approval card, and carried from there in the placement, so the base the card names
@@ -822,7 +830,7 @@ export function capOutput(text: string, limit = MAX_TOOL_OUTPUT_CHARS): string {
  * where the failure and the exit line are at the bottom and a head-only cut discards both.
  * The result never exceeds `limit`, so a later capOutput at the same limit leaves it alone.
  */
-export function capOutputMiddle(text: string, limit = MAX_TOOL_OUTPUT_CHARS, headShare = 0.25): string {
+export function capOutputMiddle(text: string, limit = MAX_TOOL_OUTPUT_CHARS, headShare = HEAD_SHARE): string {
   if (text.length <= limit) return text;
   const marker = (dropped: number) => `\n\n[... ${dropped} characters omitted from the middle ...]\n\n`;
   const room = limit - marker(text.length).length;

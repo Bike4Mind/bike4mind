@@ -3,7 +3,7 @@ import type { FetchLike } from '@bike4mind/local-models';
 import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
 import { ServerCredentialsError, ServerUnreachableError } from './errors';
 import type { ChatModelOption } from '@shared/chat';
-import type { ModelServerProbeInput, ModelServerProbeResult } from '@shared/modelServers';
+import type { ModelServerProbeInput, ModelServerProbeResult, ModelServerUpdateInput } from '@shared/modelServers';
 import {
   foundServers,
   LISTED_FRESH_MS,
@@ -1884,6 +1884,29 @@ describe('ModelServerRegistry SSH servers', () => {
       expect(sent.every(request => request.authorization === null)).toBe(true);
     });
 
+    it('does not suggest the name of a saved server it cannot use, which the store would refuse', async () => {
+      const file = memoryFile();
+      await file.write(
+        JSON.stringify({
+          version: 1,
+          servers: [
+            {
+              id: 'a1',
+              name: 'gpu',
+              kind: 'ollama',
+              transport: { type: 'ssh', destination: 'me@gpu', port: 0 },
+              access: 'chat',
+              auth: { type: 'none' },
+            },
+          ],
+        })
+      );
+      const { registry: servers } = sshSetup(file, { 8080: { owner: 'llamacpp', models: 2 } });
+      const result = await probeSsh(servers);
+      expect(result.suggestedName).not.toBe('gpu');
+      expect(result.found?.[0].suggestedName).toBe(result.suggestedName);
+    });
+
     it('suggests names no saved server or other row has, so every row saves as suggested', async () => {
       const { registry: servers } = sshSetup(memoryFile(), {
         11434: 'ollama',
@@ -2143,6 +2166,113 @@ describe('ModelServerRegistry SSH servers', () => {
     await servers.update(lab.id, { name: 'lab' });
     const saved = JSON.parse((await file.read()) as string) as { servers: { transport: unknown }[] };
     expect(saved.servers[0].transport).toEqual({ type: 'ssh', destination: 'me@gpu' });
+  });
+
+  it('keeps this computer editable when a broken SSH record uses its reserved id', async () => {
+    const file = memoryFile();
+    await file.write(
+      JSON.stringify({
+        version: 1,
+        servers: [
+          {
+            id: 'local',
+            name: 'broken',
+            kind: 'ollama',
+            transport: { type: 'ssh' },
+            access: 'chat',
+            auth: { type: 'none' },
+            models: [],
+            addedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      })
+    );
+    const { registry: servers, store } = sshSetup(file);
+    const specs = { ramGiB: 64, gpuMemoryGiB: null, bandwidthGBps: null, unified: false };
+    expect((await servers.update('local', { specs }))[0].specs).toEqual(specs);
+    await expect(servers.update('local', { launch: { flashAttention: 'on' } })).resolves.toBeDefined();
+    expect(await store.localLaunch()).toMatchObject({ flashAttention: 'on' });
+  });
+
+  it('shows an SSH server saved with a port or destination it cannot use as refused, and lets it be removed', async () => {
+    const file = memoryFile();
+    const saved = (id: string, name: string, transport: Record<string, unknown>) => ({
+      id,
+      name,
+      kind: 'openai-compatible',
+      transport,
+      access: 'chat',
+      auth: { type: 'bearer' },
+      secret: Buffer.from(`enc:${TOKEN}`).toString('base64'),
+      models: ['qwen'],
+      addedAt: '2026-01-01T00:00:00.000Z',
+    });
+    await file.write(
+      JSON.stringify({
+        version: 1,
+        servers: [
+          saved('a1', 'typo', { type: 'ssh', destination: 'me@gpu', port: 0 }),
+          saved('a2', 'text', { type: 'ssh', destination: 'me@gpu', port: '80 80' }),
+          saved('a3', 'hostile', { type: 'ssh', destination: '-oProxyCommand=x', port: 8080 }),
+          saved('a4', 'other', { type: 'ssh', host: 'gpu' }),
+        ],
+      })
+    );
+    const { registry: servers, sshCalls, sent } = sshSetup(file);
+    const views = await servers.views();
+    expect(views.map(view => view.name)).toEqual(['This computer', 'typo', 'text', 'hostile', 'other']);
+    expect(views.map(view => view.unusable)).toEqual([undefined, true, true, true, true]);
+    const port = 'Its saved SSH port is not a number from 1 to 65535. Remove this server and add it again.';
+    expect(views[1]).toMatchObject({
+      id: 'a1',
+      kind: 'openai-compatible',
+      transport: 'ssh',
+      address: 'me@gpu',
+      access: 'chat',
+      auth: { type: 'bearer' },
+      models: [],
+      launch: null,
+      health: { state: 'refused', error: port },
+      unusable: true,
+    });
+    expect(views[1].port).toBeUndefined();
+    expect(views[2].health.error).toBe(port);
+    expect(views[3]).toMatchObject({
+      address: 'unusable address',
+      health: {
+        state: 'refused',
+        error: 'Its saved SSH destination is not one ssh can be given safely. Remove this server and add it again.',
+      },
+    });
+    expect(views[4]).toMatchObject({
+      address: 'unusable address',
+      health: { state: 'refused', error: 'It has no saved SSH destination. Remove this server and add it again.' },
+    });
+    expect(JSON.stringify(views)).not.toContain('ProxyCommand');
+    expect(JSON.stringify(views)).not.toContain(TOKEN);
+    await servers.check();
+    await servers.check('a1');
+    expect(await servers.models()).toEqual([]);
+    const hub = servers.hubServer('a1');
+    expect(await hub?.runtime.health()).toEqual({ ok: false, version: null, error: port });
+    await expect(hub?.runtime.list()).rejects.toThrow(port);
+    const patches: ModelServerUpdateInput[] = [
+      { name: 'fixed' },
+      { kind: 'ollama' },
+      { access: 'manage' },
+      { credential: { type: 'none' } },
+      { specs: null },
+      { launch: { flashAttention: 'on' } },
+      { launch: { kvCacheType: 'q8_0' }, kind: 'ollama' },
+    ];
+    for (const patch of patches) await expect(servers.update('a1', patch)).rejects.toThrow(port);
+    expect(sshCalls).toEqual([]);
+    expect(sent).toEqual([]);
+
+    const left = await servers.remove('a1');
+    expect(left.map(view => view.name)).toEqual(['This computer', 'text', 'hostile', 'other']);
+    const stored = JSON.parse((await file.read()) as string) as { servers: { id: string }[] };
+    expect(stored.servers.map(server => server.id)).toEqual(['a2', 'a3', 'a4']);
   });
 
   it('refuses a destination starting with "-" before running ssh', async () => {

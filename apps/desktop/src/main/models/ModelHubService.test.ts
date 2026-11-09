@@ -336,7 +336,9 @@ describe('curated draft integrity', () => {
 describe('ModelHubService pulls', () => {
   it('verifies the ref, then pulls it with progress, and reports the model installed', async () => {
     const { service, runtime, hub, pulls, pushed, installedChanged } = harness();
+    expect(service.runningCount()).toBe(0);
     const result = service.pull(request);
+    expect(service.runningCount()).toBe(1);
     await vi.waitFor(() => expect(pulls).toHaveLength(1));
 
     expect(hub.verifyOllamaRef).toHaveBeenCalledTimes(1);
@@ -344,10 +346,12 @@ describe('ModelHubService pulls', () => {
     expect(pulls[0].options?.runner).toBeUndefined();
     pulls[0].options?.onProgress?.({ status: 'pulling abc', completedBytes: 100, totalBytes: 491_400_032 });
     expect(service.pulls()[0]).toMatchObject({ phase: 'downloading', completedBytes: 100, label: 'Q4_K_M' });
+    expect(service.runningCount()).toBe(1);
 
     pulls[0].resolve();
     await expect(result).resolves.toEqual({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
     expect(service.pulls()).toEqual([]);
+    expect(service.runningCount()).toBe(0);
     expect(pushed.at(-1)).toEqual([]);
     expect(installedChanged).toHaveBeenCalledTimes(1);
   });
@@ -359,6 +363,7 @@ describe('ModelHubService pulls', () => {
     expect(result).toMatchObject({ ok: false, error: { kind: 'unverified' } });
     expect(runtime.pull).not.toHaveBeenCalled();
     expect(service.pulls()[0]).toMatchObject({ phase: 'failed', error: { kind: 'unverified' } });
+    expect(service.runningCount()).toBe(0);
   });
 
   it('cancels a running pull and leaves nothing behind', async () => {
@@ -2947,10 +2952,12 @@ describe('ModelHubService curated pulls to a saved server', () => {
     await vi.waitFor(() => expect(remote.a.pulls).toHaveLength(1));
     remote.a.pulls[0].reject(new ServerUnreachableError('box a', 'connection reset'));
     await expect(first).resolves.toMatchObject({ ok: false, error: { kind: 'connection-lost' }, listed: true });
+    expect(service.runningCount()).toBe(0);
     expect(remote.a.runtime.inspect).not.toHaveBeenCalled();
 
     const resumed = service.resume(service.pulls()[0].key);
     await vi.waitFor(() => expect(remote.a.pulls).toHaveLength(2));
+    expect(service.runningCount()).toBe(1);
     remote.a.pulls[1].resolve();
 
     await expect(resumed).resolves.toEqual({ ok: true, ref: IQ3_REF });

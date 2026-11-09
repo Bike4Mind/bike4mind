@@ -1,0 +1,258 @@
+import { z } from 'zod';
+import { isLocalModel, modelSupportsTools, type ChatModelOption } from './chat';
+
+const text = z.string().trim().min(1).max(2000);
+const entries = z.array(text).max(32);
+export const workerRoleSchema = z.enum(['implementation', 'exploration', 'review']);
+export type WorkerRole = z.infer<typeof workerRoleSchema>;
+export const WORKER_ROLES = workerRoleSchema.options;
+const modelId = z.string().trim().min(1).max(300);
+export const rolePolicySchema = z.strictObject({
+  version: z.literal(1),
+  roles: z.strictObject({ implementation: modelId, exploration: modelId, review: modelId }),
+  allowedOverrides: z.array(modelId).max(32),
+  escalation: z.strictObject({
+    mode: z.enum(['ask', 'automatic']),
+    allowedModels: z.array(modelId).max(32),
+    allowedRoles: z.array(workerRoleSchema).max(3),
+    maxAutomaticUpgrades: z.union([z.literal(0), z.literal(1)]),
+  }),
+});
+export type RolePolicy = z.infer<typeof rolePolicySchema>;
+export const inheritancePolicy = (): RolePolicy => ({
+  version: 1,
+  roles: { implementation: 'inherit', exploration: 'inherit', review: 'inherit' },
+  allowedOverrides: [],
+  escalation: { mode: 'ask', allowedModels: [], allowedRoles: [], maxAutomaticUpgrades: 0 },
+});
+export const rootPolicySchema = z.strictObject({
+  rootSessionId: z.string().min(1),
+  rootRunId: z.string().min(1),
+  policy: rolePolicySchema,
+});
+export type RootPolicy = z.infer<typeof rootPolicySchema>;
+
+export const taskContractSchema = z
+  .strictObject({
+    version: z.literal(1),
+    outcome: text,
+    rationale: text,
+    role: workerRoleSchema,
+    paths: entries,
+    contextReferences: entries,
+    ownedChanges: entries,
+    coordinationConstraints: entries,
+    nonGoals: entries,
+    acceptanceCriteria: entries.min(1),
+    verification: entries,
+    assumptions: entries,
+    escalationConditions: entries,
+  })
+  .refine(value => new TextEncoder().encode(JSON.stringify(value)).length <= 24000, 'Task contract exceeds 24 KB');
+export type TaskContract = z.infer<typeof taskContractSchema>;
+export const workerRequirementsSchema = z.strictObject({
+  vision: z.boolean().optional(),
+  contextTokens: z.number().int().positive().max(10000000).optional(),
+});
+export const spawnOptionsSchema = z
+  .strictObject({
+    role: workerRoleSchema.optional(),
+    requestedModelId: modelId.optional(),
+    contract: taskContractSchema.optional(),
+    requirements: workerRequirementsSchema.optional(),
+  })
+  .refine(
+    value => !value.role || !value.contract || value.role === value.contract.role,
+    'Role must match the contract'
+  );
+export type SpawnOptions = z.infer<typeof spawnOptionsSchema>;
+export const modelSelectionSchema = z.strictObject({
+  role: workerRoleSchema.optional(),
+  requestedModelId: modelId.optional(),
+  effectiveModel: modelId,
+  source: z.enum(['override', 'role-policy', 'parent', 'escalation']),
+  rootRunId: z.string().min(1),
+  requirements: workerRequirementsSchema.optional(),
+});
+export type ModelSelection = z.infer<typeof modelSelectionSchema>;
+
+export function resolveWorkerModel(
+  parentModel: string,
+  policy: RolePolicy,
+  options: SpawnOptions
+): Omit<ModelSelection, 'rootRunId'> {
+  const role = options.role ?? options.contract?.role;
+  const requested = options.requestedModelId;
+  const selected = role ? policy.roles[role] : 'inherit';
+  const effectiveDefault = selected === 'inherit' ? parentModel : selected;
+  if (requested && requested !== effectiveDefault && !policy.allowedOverrides.includes(requested)) {
+    throw new Error(
+      'Model override needs an explicit user model-change decision. Choose an allowed override in orchestration settings.'
+    );
+  }
+  return {
+    ...(role ? { role } : {}),
+    ...(requested ? { requestedModelId: requested } : {}),
+    ...(options.requirements ? { requirements: options.requirements } : {}),
+    effectiveModel: requested ?? effectiveDefault,
+    source: requested ? 'override' : selected !== 'inherit' ? 'role-policy' : 'parent',
+  };
+}
+
+export function validateWorkerModel(
+  model: string,
+  models: readonly ChatModelOption[],
+  requirements: { localOnly: boolean; vision?: boolean; contextTokens?: number }
+): void {
+  const option = models.find(entry => entry.id === model);
+  const problem = !option
+    ? 'not in the connected catalog'
+    : (option.unavailable ??
+      (option.disabled
+        ? 'access is disabled'
+        : !modelSupportsTools(model, option)
+          ? 'does not support tools'
+          : requirements.vision && option.supportsVision !== true
+            ? 'cannot read required images'
+            : requirements.contextTokens && (!option.contextWindow || option.contextWindow < requirements.contextTokens)
+              ? 'context window is too small'
+              : null));
+  if (problem || (requirements.localOnly && !isLocalModel(model))) {
+    throw new Error(
+      `Worker model ${model} is blocked: ${problem ?? 'device-local work cannot use a hosted model'}. Choose a replacement explicitly; no fallback was started.`
+    );
+  }
+}
+
+export function renderTaskBrief(contract: TaskContract): string {
+  const sections: [string, string | string[]][] = [
+    ['Outcome', contract.outcome],
+    ['Rationale', contract.rationale],
+    ['Role', contract.role],
+    ['Relevant paths', contract.paths],
+    ['Context references', contract.contextReferences],
+    ['Owned changes', contract.ownedChanges],
+    ['Coordination constraints', contract.coordinationConstraints],
+    ['Non-goals', contract.nonGoals],
+    ['Acceptance criteria', contract.acceptanceCriteria],
+    ['Verification', contract.verification],
+    ['Assumptions to check', contract.assumptions],
+    ['Escalation conditions', contract.escalationConditions],
+  ];
+  return (
+    sections
+      .map(
+        ([name, value]) =>
+          `${name}:\n${Array.isArray(value) ? value.map(item => `- ${item}`).join('\n') || '(none)' : value}`
+      )
+      .join('\n\n') +
+    '\n\nDecide locally within scope. Filesystem permissions remain authoritative. Report disproven assumptions with evidence using task_report; ask for the smallest missing decision. Do not widen scope or start more agents to bypass a block. A stopped turn is not accepted completion. Report changed paths, verification and unmet criteria. Skills cannot authorize model, permission or spending changes.'
+  );
+}
+
+const verificationSchema = z.strictObject({
+  criterion: text,
+  command: text,
+  outcome: z.enum(['passed', 'failed', 'not-run']),
+  evidence: text,
+});
+const evidenceFields = {
+  changedPaths: entries,
+  verification: z.array(verificationSchema).max(32),
+  unmetCriteria: entries,
+  handoff: text,
+};
+export const taskReportSchema = z.discriminatedUnion('status', [
+  z.strictObject({ status: z.literal('completed'), ...evidenceFields }),
+  z.strictObject({ status: z.literal('blocked'), reason: text, evidence: entries.min(1) }),
+  z.strictObject({
+    status: z.literal('escalation-requested'),
+    reason: text,
+    evidence: entries.min(1),
+    requestedModelId: modelId.optional(),
+    decisionId: z.string().min(1).max(100),
+  }),
+]);
+export type TaskReport = z.infer<typeof taskReportSchema>;
+const taskStateSchema = z.discriminatedUnion('status', [
+  z.strictObject({ status: z.literal('queued') }),
+  z.strictObject({ status: z.literal('running') }),
+  z.strictObject({
+    status: z.literal('completed'),
+    ...evidenceFields,
+    accepted: z.boolean(),
+    assessment: text.optional(),
+  }),
+  z.strictObject({ status: z.literal('blocked'), reason: text, evidence: entries.min(1) }),
+  z.strictObject({
+    status: z.literal('escalation-requested'),
+    reason: text,
+    evidence: entries.min(1),
+    requestedModelId: modelId.optional(),
+    decisionId: z.string().min(1).max(100),
+  }),
+  z.strictObject({ status: z.literal('canceled'), reason: text }),
+  z.strictObject({ status: z.literal('budget-paused'), reason: text }),
+]);
+export const MAX_TASK_ATTEMPTS = 32;
+export const MAX_RESOLVED_DECISIONS = 32;
+export const workerTaskSchema = z.strictObject({
+  version: z.literal(1),
+  contract: taskContractSchema,
+  attempts: z
+    .array(
+      z.strictObject({
+        id: z.string().min(1),
+        model: modelId,
+        startedAt: z.string(),
+        trigger: z.enum(['initial', 'revision', 'user-upgrade', 'automatic-upgrade']),
+      })
+    )
+    .min(1)
+    .max(MAX_TASK_ATTEMPTS),
+  automaticUpgrades: z.number().int().min(0).max(1),
+  resolvedDecisions: z.array(z.string().min(1).max(100)).max(MAX_RESOLVED_DECISIONS),
+  state: taskStateSchema,
+});
+export type WorkerTask = z.infer<typeof workerTaskSchema>;
+export const taskActionSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('report'), report: taskReportSchema }),
+  z.strictObject({ kind: z.literal('accept'), assessment: text }),
+  z.strictObject({ kind: z.literal('revise'), contract: taskContractSchema, instruction: text }),
+  z.strictObject({ kind: z.literal('upgrade'), modelId, decisionId: z.string().min(1).max(100) }),
+  z.strictObject({ kind: z.literal('deny'), reason: text, decisionId: z.string().min(1).max(100) }),
+  z.strictObject({ kind: z.literal('cancel'), reason: text }),
+]);
+export type TaskAction = z.infer<typeof taskActionSchema>;
+
+export function acceptTask(task: WorkerTask, assessment: string): WorkerTask {
+  const state = task.state;
+  if (
+    state.status !== 'completed' ||
+    state.unmetCriteria.length ||
+    state.verification.some(check => check.outcome !== 'passed') ||
+    task.contract.acceptanceCriteria.some(
+      criterion => !state.verification.some(check => check.criterion === criterion && check.outcome === 'passed')
+    )
+  ) {
+    throw new Error('Acceptance requires passing evidence for every criterion and no failed checks or unmet criteria.');
+  }
+  return { ...task, state: { ...state, accepted: true, assessment } };
+}
+
+/** Admission belongs to the future root budget service, never a skill or model assertion. */
+export function automaticUpgradeAllowed(
+  task: WorkerTask,
+  policy: RolePolicy,
+  model: string,
+  budgetAdmitted: boolean
+): boolean {
+  return (
+    budgetAdmitted &&
+    task.state.status === 'escalation-requested' &&
+    policy.escalation.mode === 'automatic' &&
+    policy.escalation.allowedRoles.includes(task.contract.role) &&
+    policy.escalation.allowedModels.includes(model) &&
+    task.automaticUpgrades < policy.escalation.maxAutomaticUpgrades
+  );
+}

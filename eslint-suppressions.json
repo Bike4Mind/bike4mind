@@ -1,15 +1,1146 @@
 {
+  "apps/client/__tests__/api-unit.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "apps/client/__tests__/api/auth/refreshToken.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 38
+    }
+  },
+  "apps/client/__tests__/api/files-delete-all.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/__tests__/api/integrations/rotate-token.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 53
+    }
+  },
+  "apps/client/__tests__/api/oauth/ai-token.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 90
+    }
+  },
+  "apps/client/__tests__/api/oauth/federated-admin.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 14
+    }
+  },
+  "apps/client/__tests__/api/user/accept-policies.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/__tests__/channel.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/__tests__/chat-demo.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/__tests__/chat-e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/__tests__/chat.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 22
+    }
+  },
+  "apps/client/__tests__/execute.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "apps/client/__tests__/integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/__tests__/organizations-create-dev.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 14
+    }
+  },
+  "apps/client/__tests__/otc-verify.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/__tests__/ping.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/__tests__/quest-plans.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 72
+    }
+  },
+  "apps/client/__tests__/sessions.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/__tests__/team-manager.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/__tests__/tool-definitions.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 63
+    }
+  },
+  "apps/client/__tests__/users.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/AdminToolModals/AdminModalPreview.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/AdminToolModals/AdminToolIndicator.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/AdminToolModals/ModalListPopup.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/AdminToolModals/ModalListRenderer.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Agent/AgentAvatar.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/app/components/Agent/AgentCreditManagement.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/Agent/AgentForm.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/Agent/AgentPageHeader.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/Agent/CapabilitiesSection.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Agent/MainInformationSection.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/components/Charts/RechartsChart.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/Charts/RechartsRenderer.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/components/Files/Browser/Item.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/Files/Browser/ItemActions.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Knowledge/CreateKnowledge.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Knowledge/CreateKnowledgeFromUrl.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Knowledge/KnowledgeChunkControls.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Knowledge/KnowledgeViewer.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/Knowledge/PythonArtifactViewer.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Knowledge/ReactArtifactViewer.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/ProfileModal/CreditAnalyticsTabContent.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/components/ProfileModal/ImportHistoryJobsList.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/ProfileModal/NotebookCurationModal.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/ProfileModal/NotebookExportModal.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/components/ProfileModal/NotebookImportModal.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/components/ProfileModal/SettingsTabContent/ApprovedAppsSection.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/components/ProfileModal/SettingsTabContent/BlogIntegrationSection.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/ProfileModal/SettingsTabContent/GitHubIntegrationSection.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/app/components/Project/AddMembersModal.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/Project/CreateModal.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Project/EditModal.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Register.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/ResearchTasks/Detail/Info.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/ResearchTasks/Form.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/ResearchTasks/PopularTargetsModal.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/AISettings/FilesSection.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/app/components/Session/AISettings/ImageGenerationModelSelectionModal.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 14
+    }
+  },
+  "apps/client/app/components/Session/AISettings/InspectableSettingsButton.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/AISettings/ToolsSection.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/AttachFileButton.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/Session/CodeBlockPlugin.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/FallbackModelBadge.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/FilePond.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/GoogleDoc.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/Session/ImageContainer.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/Session/ImageTemplates/ImageTemplateControls.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/ImageTemplates/ImageTemplatePanel.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/ImageTemplates/settingsSnapshot.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/Session/ImageTemplates/useRecordImageTemplateUse.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/LayoutControl.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/NotebookSplashFeed/index.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/PromptMetaInspector.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/ResearchModeResponseDisplay.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/SearchBar.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/SessionBottom/SessionBottom.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/SessionBottom/SessionBottomModals.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/Session/SessionBottom/SessionFilePond.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/app/components/Session/SessionBottom/SessionToolbar.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/SessionBottom/useModalState.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/app/components/Session/SessionBottom/useSendMessage.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/components/Session/SessionBottom/useSessionFiles.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/components/Session/SessionContainer.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/SessionMiddle.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/ThoughtBubbles.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/Session/UserPrompt.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/Session/VideoContainer.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/__tests__/codeBlockUtils.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/app/components/Session/hooks/useStreamingMessageMerge.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/Session/types/UserPromptTypes.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Tag/Form.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/TimeOut.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/VerifyEmail.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/VerifyEmailChange.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/AdminModalTab.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/admin/AdminModalTabNew.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/admin/AdminSettingsTab.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/DocumentationTab/components/DocSection.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/DocumentationTab/index.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/DocumentationTab/utils/docData.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/EmbedKeysTab.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/EventMetrics/hooks/useEventMetricsState.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/admin/EventMetrics/types.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/FilesTab/index.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/admin/IdentityProvidersTab.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/admin/ModelMetrics/components/AnalyticsTab.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/ModelMetrics/components/AnalyticsTab.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/ModelMetrics/components/RawDataTab.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/ModelMetrics/components/SpendTab.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/ModelMetrics/hooks/useModelMetricsState.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/admin/ModelMetrics/utils/chartDataProcessor.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/ModelMetrics/utils/formatters.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/OrganizationProfile.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/OrganizationProfileUpdated.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/RapidReplyMetrics.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/admin/RapidReplyTab.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "apps/client/app/components/admin/SlackWorkspacesTab.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/admin/SystemPromptsManager.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/admin/Users/CreateUserModal.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/admin/__tests__/SlackExportModal.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/email/EmailJobsPanel.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/email/EmailTemplateEditor.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/admin/email/EmailTemplatesPanel.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/app/components/artifacts/ArtifactCreator.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/artifacts/ArtifactEditor.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/artifacts/ArtifactGallery.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/app/components/artifacts/ArtifactGallery.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/auth/MFAEnforcementWrapper.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/commands/CreateAgentCommand.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/commands/ImageGenerationCommand.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/commands/LLMCommand.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/commands/SetKeyCommand.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/common/FileStorageBar.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/common/MFAModal.passkey.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/common/MFAModal.rememberDevice.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/common/MFAModal.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/inbox/InboxTabs.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/inbox/Invites.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/inbox/Messages.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/app/components/layouts/Notebook/Sidenav/NotebookRow.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/components/layouts/Notebook/Sidenav/NotebookRow.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/layouts/Notebook/Sidenav/types.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/modals/__tests__/WhatsNewSliderModal.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/organizations/Member.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/profile/UserApiKeysTab.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/svgs/icons/FileViewerIcon.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/svgs/icons/ImageGenerationIcon.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/svgs/icons/MessageIcon.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/svgs/icons/WebSearchIcon.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/contexts/LLMContext.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/contexts/SessionsContext.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/hooks/__tests__/useBlogImageGeneration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/hooks/__tests__/useStreamingQueryUpdates.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/app/hooks/agent/useAgentGeneration.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/hooks/agent/useAvatarGeneration.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/hooks/agent/useFormHandlers.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/hooks/agent/useFormSections.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/hooks/data/__tests__/invites.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/hooks/data/agentProactiveMessaging.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/hooks/data/artifacts.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/hooks/data/auth.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/hooks/data/fabFileMutations.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/hooks/data/importHistoryJobs.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/hooks/data/inbox.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/hooks/data/llmModelConfig.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/hooks/data/mfa.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/hooks/data/researchTasks.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/hooks/data/user.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/hooks/data/userApiKeys.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/hooks/useAdminTools.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/hooks/useAudioAnalyzer.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/hooks/useBlogContentEnhancement.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/hooks/useIsPWA.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/hooks/useModalListRestore.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/hooks/useModelLogs.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/hooks/useSelectedArtifactContentSync.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/hooks/useStreamingArtifactPersistence.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/hooks/useStreamingMetrics.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/hooks/useStreamingQueryUpdates.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/hooks/useSubscribeChatCompletion.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/mocks/largeScaleNotebooks.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/mocks/mockProjects.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/routes/activate.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/routes/admin-emergency.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/routes/auth/$strategy/callback.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/routes/email/unsubscribe.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/routes/integrations/atlassian/select-site.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/routes/subscribe.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/routes/verify-change.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/routes/verify-email.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/services/adminTools/AdminToolService.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/types/agentForm.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/utils/agentFormUtils.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/utils/artifactPersistence.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/app/utils/commands.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/utils/disableServiceWorker.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/utils/fabFileUtils.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/app/utils/filesAPICalls.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/utils/form.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/utils/invitesAPICalls.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/utils/knowledgeViewerSorting.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/utils/performanceLogger.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 14
+    }
+  },
+  "apps/client/app/utils/promise.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/utils/react-query.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/app/utils/suppressSerwistWarnings.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/utils/themes/customizations/input.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/utils/toolMapping.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/[type]/[id]/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 22
+    }
+  },
+  "apps/client/pages/api/[type]/[id]/__tests__/revokeSharing.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/[type]/[id]/__tests__/revokeSharing.zod-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/[type]/[id]/__tests__/updateSharing.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/[type]/[id]/invites/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 39
+    }
+  },
   "apps/client/pages/api/[type]/[id]/revokeSharing.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
     }
   },
+  "apps/client/pages/api/__tests__/chat.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/__tests__/external-image.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/__tests__/identify.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/__tests__/logout.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/__tests__/object-authz.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/__tests__/resourceIdCastGuards.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 16
+    }
+  },
+  "apps/client/pages/api/__tests__/search-image.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/__tests__/unmatchedApiPath.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/__tests__/updateBodyCastGuards.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "apps/client/pages/api/account/__tests__/deletion.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/admin/__tests__/emergency-login.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 15
+    }
+  },
+  "apps/client/pages/api/admin/__tests__/help-analytics.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
   "apps/client/pages/api/admin/agent-ops-settings.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    },
     "b4m/no-raw-entity-response": {
       "count": 4
     }
   },
   "apps/client/pages/api/admin/agent-ops-settings/repair.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    },
     "b4m/no-raw-entity-response": {
       "count": 1
     }
@@ -24,9 +1155,34 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/admin/analytics.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/admin/api-keys/__tests__/scope-preflight.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/admin/bulk-create-users.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
   "apps/client/pages/api/admin/context-telemetry/[id].ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/create-user.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/admin/email/__tests__/whats-new-content.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
     }
   },
   "apps/client/pages/api/admin/email/attempts/[id].ts": {
@@ -64,8 +1220,18 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/admin/email/templates/[id]/test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
   "apps/client/pages/api/admin/email/templates/index.ts": {
     "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/event-metrics.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },
@@ -94,6 +1260,26 @@
       "count": 2
     }
   },
+  "apps/client/pages/api/admin/llm-models/configurations.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/admin/mementos/__tests__/reembed-ledger.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/admin/mementos/__tests__/reembed.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 25
+    }
+  },
+  "apps/client/pages/api/admin/modal-tool.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
   "apps/client/pages/api/admin/modals/variants.ts": {
     "b4m/no-raw-entity-response": {
       "count": 3
@@ -104,9 +1290,19 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/admin/model-metrics.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
   "apps/client/pages/api/admin/model-prices.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/overwatch/__tests__/backfill-first-seen.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 14
     }
   },
   "apps/client/pages/api/admin/partner-signup-rules/[id].ts": {
@@ -135,8 +1331,16 @@
     }
   },
   "apps/client/pages/api/admin/rapid-reply/mappings/[id].ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    },
     "b4m/no-raw-entity-response": {
       "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/rapid-reply/mappings/bulk.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
     }
   },
   "apps/client/pages/api/admin/rapid-reply/mappings/index.ts": {
@@ -145,6 +1349,9 @@
     }
   },
   "apps/client/pages/api/admin/rapid-reply/prompts/[id].ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    },
     "b4m/no-raw-entity-response": {
       "count": 3
     }
@@ -155,8 +1362,16 @@
     }
   },
   "apps/client/pages/api/admin/rapid-reply/prompts/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    },
     "b4m/no-raw-entity-response": {
       "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/rapid-reply/test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
     }
   },
   "apps/client/pages/api/admin/rate-limits.ts": {
@@ -204,6 +1419,16 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/admin/security-scan-schedule/__tests__/scanType.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/pages/api/admin/slack-app/__tests__/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
   "apps/client/pages/api/admin/slack-audit-logs/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
@@ -214,8 +1439,68 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/admin/system-health/__tests__/audit.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
   "apps/client/pages/api/admin/system-prompts/index.ts": {
     "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/tools/execute.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/upload-logo.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/user-api-keys/[id]/__tests__/analytics-failure.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 17
+    }
+  },
+  "apps/client/pages/api/admin/user-api-keys/[id]/__tests__/rate-limit.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "apps/client/pages/api/admin/user-api-keys/[id]/__tests__/reset-rate-limit.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 14
+    }
+  },
+  "apps/client/pages/api/admin/users/[userId]/__tests__/generate-api-key.analytics-failure.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "apps/client/pages/api/admin/users/[userId]/__tests__/generate-api-key.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 30
+    }
+  },
+  "apps/client/pages/api/admin/users/[userId]/subscriptions/[subscriptionId]/credits.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/users/[userId]/subscriptions/[subscriptionId]/remove.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/users/__tests__/email-verification.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/admin/users/email-verification.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },
@@ -240,13 +1525,99 @@
     }
   },
   "apps/client/pages/api/agents/create-from-context.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    },
     "b4m/no-raw-entity-response": {
       "count": 1
     }
   },
   "apps/client/pages/api/agents/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    },
     "b4m/no-raw-entity-response": {
       "count": 1
+    }
+  },
+  "apps/client/pages/api/ai/__tests__/audio-providers.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/ai/__tests__/elevenlabs-voices.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/ai/__tests__/generate-video.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/ai/__tests__/llm.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/ai/__tests__/refineText.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 26
+    }
+  },
+  "apps/client/pages/api/ai/__tests__/spaOnlyAiRoutes.jwtOnly.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/ai/barkeep-chat.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/ai/optimize-input.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/ai/rapid-reply.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/ai/tavern-conversation.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/ai/test-realtime-voice.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/ai/voice-sessions/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/analytics/__tests__/aggregate.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/analytics/aggregate.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/api-keys/[id]/__tests__/analytics-failure.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "apps/client/pages/api/api-keys/__tests__/create.analytics-failure.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
     }
   },
   "apps/client/pages/api/api-keys/create.ts": {
@@ -259,14 +1630,212 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/app-files/__tests__/get-file-url.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/app-files/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
   "apps/client/pages/api/app-files/update-tags.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
     }
   },
+  "apps/client/pages/api/artifacts/[id]/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
   "apps/client/pages/api/artifacts/[id]/versions.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    },
     "b4m/no-raw-entity-response": {
       "count": 1
+    }
+  },
+  "apps/client/pages/api/artifacts/[id]/versions/[version].ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/artifacts/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "apps/client/pages/api/artifacts/__tests__/version-content.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/artifacts/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/artifacts/search.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/auth/[strategy]/__tests__/callback.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "apps/client/pages/api/auth/[strategy]/callback.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/auth/__tests__/refreshToken.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/auth/__tests__/returnToAdmin.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 37
+    }
+  },
+  "apps/client/pages/api/auth/__tests__/unlink.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/auth/github/__tests__/disconnect.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "apps/client/pages/api/auth/github/__tests__/mcp-callback.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/auth/github/mcp-callback.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/auth/mfa/__tests__/disable.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/auth/mfa/__tests__/regenerateBackupCodes.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/auth/mfa/__tests__/setup.emergency.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/auth/mfa/__tests__/status.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/auth/mfa/__tests__/trustedDeviceRevocation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 32
+    }
+  },
+  "apps/client/pages/api/auth/mfa/__tests__/verify-setup.signIn.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/auth/mfa/__tests__/verify.respondBoundary.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/auth/mfa/__tests__/verifySetup.respondBoundary.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/auth/mfa/cancel-setup.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/auth/mfa/disable.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/auth/mfa/force-reset.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/auth/mfa/passkey/__tests__/passkeyRoutes.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 40
+    }
+  },
+  "apps/client/pages/api/auth/mfa/regenerate-backup-codes.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/auth/mfa/setup.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/auth/mfa/status.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/auth/okta/__tests__/callback.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 30
+    }
+  },
+  "apps/client/pages/api/auth/saml/callback.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/pages/api/blog-integration/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/blog/__tests__/presign-image-upload.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/blog/__tests__/publish.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/blog/generate-featured-image.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/blog/publish.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/briefcase/__tests__/prompts.api.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
     }
   },
   "apps/client/pages/api/briefcase/prompts/[id].ts": {
@@ -284,9 +1853,24 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/business-links/__tests__/[id].test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/business-links/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
   "apps/client/pages/api/business-links/category/[id].ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
+    }
+  },
+  "apps/client/pages/api/business-links/category/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
     }
   },
   "apps/client/pages/api/business-links/category/index.ts": {
@@ -295,7 +1879,15 @@
     }
   },
   "apps/client/pages/api/business-links/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    },
     "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/chat.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },
@@ -319,9 +1911,39 @@
       "count": 2
     }
   },
+  "apps/client/pages/api/email/__tests__/verify-change.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "apps/client/pages/api/email/__tests__/verify.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 23
+    }
+  },
+  "apps/client/pages/api/email/send.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
   "apps/client/pages/api/fabfiles/[id]/apply-auto-rename.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
+    }
+  },
+  "apps/client/pages/api/fabfiles/[id]/edit.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/feedback/[id]/__tests__/update.content.e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/feedback/[id]/__tests__/update.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
     }
   },
   "apps/client/pages/api/feedback/index.ts": {
@@ -329,8 +1951,78 @@
       "count": 2
     }
   },
+  "apps/client/pages/api/files/__tests__/getFabFileNameById.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/files/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 20
+    }
+  },
+  "apps/client/pages/api/files/__tests__/search.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "apps/client/pages/api/files/byIds.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/files/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/files/search.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/files/tags/__tests__/counts.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/files/tags/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 14
+    }
+  },
+  "apps/client/pages/api/files/tags/__tests__/zod-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
   "apps/client/pages/api/friends/by-user/[id].ts": {
     "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/google-drive/__tests__/callback.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 38
+    }
+  },
+  "apps/client/pages/api/google-drive/__tests__/estimate-folder.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "apps/client/pages/api/google-drive/__tests__/list-folder.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/google-drive/__tests__/token.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/help/chat.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },
@@ -344,12 +2036,30 @@
       "count": 2
     }
   },
+  "apps/client/pages/api/image-templates/__tests__/routes.api.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
   "apps/client/pages/api/image-templates/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 2
     }
   },
+  "apps/client/pages/api/import-history-jobs/[id]/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/import-history-jobs/[id]/retry.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
   "apps/client/pages/api/import-history-jobs/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    },
     "b4m/no-raw-entity-response": {
       "count": 1
     }
@@ -364,7 +2074,70 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/invites/[id]/__tests__/accept.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 14
+    }
+  },
+  "apps/client/pages/api/invites/[id]/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 17
+    }
+  },
+  "apps/client/pages/api/invites/[id]/__tests__/refuse.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/invites/__tests__/batch.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "apps/client/pages/api/invites/__tests__/bulk.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "apps/client/pages/api/invites/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/lattice/chat.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/lattice/models/[id]/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/mcp-servers/atlassian/finalize.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/mcp/confirm.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/mcp/delete-attachment.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/mcp/download-attachment.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
   "apps/client/pages/api/mementos/[id]/update.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    },
     "b4m/no-raw-entity-response": {
       "count": 1
     }
@@ -384,14 +2157,329 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/modals/[id]/__tests__/delete.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/modals/[id]/__tests__/update.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
   "apps/client/pages/api/modals/[id]/delete.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
     }
   },
+  "apps/client/pages/api/modals/__tests__/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/modals/__tests__/delegateAccess.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/modals/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
   "apps/client/pages/api/modals/create.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
+    }
+  },
+  "apps/client/pages/api/notebooks/export.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/oauth/__tests__/nativeClientPkceFlow.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/oauth/code.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/oauth/device/__tests__/initiate.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/oauth/device/__tests__/token.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/oauth/grants/__tests__/[clientId].test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/oauth/grants/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/oauth/userinfo.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/ollama/__tests__/models.auth.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/ollama/models.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/__tests__/addUser.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/__tests__/admins.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/__tests__/delete.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/__tests__/feedback-report.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/__tests__/member-credit-budget.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/__tests__/members.zod-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 18
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/__tests__/zod-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/feedback-report/__tests__/drilldown.authz.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/groups/[groupId]/members/[userId]/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/groups/[groupId]/members/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/groups/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/members/[userId]/__tests__/credit-budget.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/members/[userId]/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/members/[userId]/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/members/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 18
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/members/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/webhooks/__tests__/github.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/organizations/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "apps/client/pages/api/organizations/__tests__/stats.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/organizations/__tests__/users.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/organizations/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/otc/__tests__/form-token.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/otc/__tests__/send.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 15
+    }
+  },
+  "apps/client/pages/api/otc/__tests__/verify.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 50
+    }
+  },
+  "apps/client/pages/api/otc/__tests__/verify.trustedDevice.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 21
+    }
+  },
+  "apps/client/pages/api/overwatch/v1/__tests__/events.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/overwatch/v1/__tests__/events.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/pages/api/partners/__tests__/bedrocknews-claims.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/partners/__tests__/rewards-grant.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/projects/[id]/__tests__/files.zod-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "apps/client/pages/api/projects/[id]/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/projects/[id]/__tests__/invites.outboundGate.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/projects/[id]/__tests__/invites.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 21
+    }
+  },
+  "apps/client/pages/api/projects/[id]/__tests__/zod-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "apps/client/pages/api/projects/[id]/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/projects/[id]/invites.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/projects/[id]/systemPrompts/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/projects/__tests__/zod-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/projects/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/projects/removeNonExistintFiles.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/publish/__tests__/reply.outboundGate.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/quest-plans/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/quests/[id]/__tests__/check-timeout.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/quests/[id]/__tests__/client-timing.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/quests/[id]/__tests__/context.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/quests/[id]/__tests__/files.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/reg-invites/__tests__/refer.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 36
     }
   },
   "apps/client/pages/api/reg-invites/create.ts": {
@@ -410,8 +2498,61 @@
     }
   },
   "apps/client/pages/api/research/agents/[id]/files.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    },
     "b4m/no-raw-entity-response": {
       "count": 1
+    }
+  },
+  "apps/client/pages/api/research/agents/[id]/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/pages/api/research/agents/[id]/tasks/[taskId]/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/research/agents/[id]/tasks/[taskId]/__tests__/zod-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "apps/client/pages/api/research/agents/[id]/tasks/[taskId]/data/[dataId].tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/research/agents/[id]/tasks/[taskId]/data/__tests__/[dataId].test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/research/agents/[id]/tasks/[taskId]/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/research/agents/[id]/tasks/[taskId]/retry.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/research/agents/[id]/tasks/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/research/agents/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/research/data/__tests__/files.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
     }
   },
   "apps/client/pages/api/research/data/files.ts": {
@@ -424,9 +2565,89 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/secret-rotations/__tests__/secretRotations.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "apps/client/pages/api/security/__tests__/blocked-ips.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "apps/client/pages/api/security/__tests__/user-recent.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
   "apps/client/pages/api/security/blocked-ips.ts": {
     "b4m/no-raw-entity-response": {
       "count": 3
+    }
+  },
+  "apps/client/pages/api/security/blocked-ips/__tests__/evaluate.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/sessions/[id]/__tests__/correction-pairs.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "apps/client/pages/api/sessions/[id]/__tests__/files.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/sessions/[id]/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/sessions/[id]/__tests__/tool-approvals.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/sessions/[id]/chat/[messageId]/__tests__/index.choices.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/sessions/[id]/chat/[messageId]/__tests__/index.redaction.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/sessions/[id]/chat/__tests__/stop-reply.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/sessions/[id]/questmaster-plans/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/sessions/__tests__/auth-behavior.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/sessions/__tests__/bulk.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/sessions/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/settings/logo.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
     }
   },
   "apps/client/pages/api/settings/update.ts": {
@@ -446,6 +2667,41 @@
   },
   "apps/client/pages/api/skills/index.ts": {
     "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/slack/commands.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "apps/client/pages/api/slack/events.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/slack/export/async.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/slack/export/channel-info.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/slack/export/channel.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/slack/oauth/user-link/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/slack/oauth/user-link/initiate.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },
@@ -469,9 +2725,2104 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/tools/__tests__/billing.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/tools/__tests__/tools.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/transforms/__tests__/batchSubmit.cacheControl.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "apps/client/pages/api/transforms/batch/__tests__/batchPoll.tokenUsage.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "apps/client/pages/api/user-api-keys/[id]/__tests__/callback-secret.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/user-api-keys/[id]/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 19
+    }
+  },
+  "apps/client/pages/api/user-api-keys/[id]/__tests__/rate-limit.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "apps/client/pages/api/user-api-keys/[id]/__tests__/revoke.analytics-failure.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/user-api-keys/[id]/__tests__/rotate-revoke.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "apps/client/pages/api/user-api-keys/__tests__/contributedScopes.e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "apps/client/pages/api/user-api-keys/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 21
+    }
+  },
+  "apps/client/pages/api/user-api-keys/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/users/[id]/__tests__/friends.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/users/[id]/__tests__/loginAs.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 19
+    }
+  },
+  "apps/client/pages/api/users/[id]/__tests__/organization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "apps/client/pages/api/users/[id]/__tests__/projects.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/users/[id]/__tests__/recalculate-storage.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/users/[id]/__tests__/userInvites.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/users/[id]/collections/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/users/[id]/email-settings.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/users/[id]/organizations/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/users/__tests__/counterLogs.e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/users/__tests__/index.organization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "apps/client/pages/api/users/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 21
+    }
+  },
+  "apps/client/pages/api/users/__tests__/report.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/users/me/__tests__/sessions.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/users/me/sessions/__tests__/revoke-others.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/v1/__tests__/image-edits.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/v1/__tests__/image-generations.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/v1/agents/[id]/__tests__/authoring.scopes.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/v1/agents/__tests__/scopes.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/v1/artifacts/__tests__/scopes.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/v1/files/__tests__/index.storageLimit.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/v1/files/__tests__/operations.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/v1/files/__tests__/scopes.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
   "apps/client/pages/api/v1/image-edits.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
+    }
+  },
+  "apps/client/pages/api/v1/projects/[id]/__tests__/projectContent.scopes.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/v1/projects/__tests__/scopes.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/v1/quests/[id]/__tests__/files.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/v1/quests/[id]/__tests__/index.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/v1/sessions/__tests__/index.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/v1/skills/market/__tests__/listings.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/v1/skills/market/__tests__/review.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/pages/api/v1/transcriptions/__tests__/scopes.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/webhooks/github.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/webhooks/jira/[token].ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/websocket/__tests__/ticket.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/work-items/__tests__/workItems.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/scripts/test-slack-search.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/server/admin/creditGrants/grantSubscription.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/server/agents/authoring/generateAgentAvatar.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/analytics/userActivityQuery.e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/server/api/jupyter/__tests__/execute.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 20
+    }
+  },
+  "apps/client/server/auth/__tests__/requireNonSystemUser.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/auth/appleStrategy.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/auth/auth.deletionPending.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/server/auth/auth.mfaEnrollment.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/server/auth/auth.mfaPending.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "apps/client/server/auth/auth.samlDomainBind.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/server/auth/auth.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/auth/auth.unauthenticated.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/server/auth/completeMfaLogin.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/server/auth/endUserSessions.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/auth/endUserSessions.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/server/auth/githubStrategy.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/server/auth/oktaOidcClient.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 36
+    }
+  },
+  "apps/client/server/auth/refreshAccountGate.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/auth/signInSecondFactor.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "apps/client/server/auth/trustedDevice.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/server/auth/verifyFederatedIdToken.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/auth/verifyJwtPayload.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/server/dataLakes/queryDataLakeArticles.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 15
+    }
+  },
+  "apps/client/server/dataLakes/queryDataLakeTagCounts.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/server/edgeLamdas/removeServerHeader.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/server/generations/__test__/routeHarness.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/server/integrations/slack/slackPackageInit.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/server/managers/countersManager.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/server/managers/inviteManager.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "apps/client/server/managers/regInviteManager.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/server/managers/sessionCrud.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/middlewares/__tests__/requireStripeWebhook.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 26
+    }
+  },
+  "apps/client/server/middlewares/baseApi.ipBlock.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/middlewares/baseApi.oauthGate.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/middlewares/baseApi.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "apps/client/server/middlewares/errorHandler.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/server/middlewares/idempotency.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/middlewares/logging.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/server/models/UserSubscription.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/queueHandlers/questProcessor.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/server/services/acceptGroupInvite.e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/server/services/deleteOrganizationTransaction.e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/server/services/groupInviteAuth.e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "apps/client/server/services/prefixArmLakeMembership.e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/server/services/projectInviteAuth.e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/server/services/publish/reactArtifact.dom.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 22
+    }
+  },
+  "apps/client/server/tools/modalManagement.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/server/tools/modalOperations.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/server/utils/auth/verifyCallback.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/server/utils/auth/verifyCallback.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/server/utils/authAudit.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/server/utils/cacheExternalImage.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/utils/chatCompletionDefaults.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/server/utils/logCompletionAnalytics.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 14
+    }
+  },
+  "apps/client/server/websocket/__tests__/dataSubscribeRequest.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 48
+    }
+  },
+  "apps/client/server/websocket/__tests__/dataUnsubscribeRequest.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 18
+    }
+  },
+  "apps/client/server/websocket/__tests__/jupyterNotebookProgress.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 30
+    }
+  },
+  "apps/client/server/websocket/agentExecute.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 19
+    }
+  },
+  "apps/client/server/websocket/connect.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/services/MementoGroomingService.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/types/api.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/cli/tools.handler.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/cli/tools.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 23
+    }
+  },
+  "apps/workers/src/cron/spendReconciliation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/events/sessionSummarization.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/events/sessionTagging.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/events/spider.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/workers/src/events/stripe/customerSubscriptionUpdated.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 81
+    }
+  },
+  "apps/workers/src/events/stripe/invoicePaymentSucceeded.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "apps/workers/src/integrations/sre/escalation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "apps/workers/src/lib/userSubscriptions/serverUtils.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 37
+    }
+  },
+  "apps/workers/src/lib/userSubscriptions/serverUtils.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/media/imageProcessor.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/workers/src/queueHandlers/emailJobOrchestrator.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/queueHandlers/notebookCuration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/workers/src/queueHandlers/notebookCuration.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/workers/src/queueHandlers/researchEngineQueue.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/queueHandlers/slackExport.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/workers/src/queueHandlers/slackQuestProcessor.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/workers/src/queueHandlers/whatsNewHighlights.model.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/workers/src/queueHandlers/whatsNewHighlights.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/utils/eventContext.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/workers/src/utils/loadAgentMcpTools.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 23
+    }
+  },
+  "b4m-core/agents/src/ReActAgent.parallel.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 23
+    }
+  },
+  "b4m-core/agents/src/rlm/replSandboxMetrics.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/common/src/confluence/__tests__/deletePage.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "b4m-core/common/src/confluence/__tests__/format.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 19
+    }
+  },
+  "b4m-core/common/src/confluence/__tests__/formatErrors.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/common/src/jira/__tests__/bulkOperations.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/common/src/jira/__tests__/deleteIssue.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/common/src/jira/__tests__/projectMembers.format.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/common/src/jira/api.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/common/src/modelHub/curatedV2.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/common/src/openapi/deployment.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/common/src/retry.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/common/src/schemas/modelHubV3.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/common/src/utils/artifactHelpers.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/db-core/src/models/BaseModel.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/db-core/src/utils/mongo.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/fab-pipeline/src/chunk.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 43
+    }
+  },
+  "b4m-core/fab-pipeline/src/chunk.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/fab-pipeline/src/dataLake/BaseSearchIndex.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/fab-pipeline/src/dataLake/atlasSearchIndex.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "b4m-core/fab-pipeline/src/dataLake/config.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/fab-pipeline/src/dataLake/opensearchClient.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "b4m-core/fab-pipeline/src/storage/BaseStorage.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/hearth/src/log.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/llm-adapters/src/anthropicBackend.toolsOffStripsBlocks.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/llm-adapters/src/anthropicBatchService.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "b4m-core/llm-adapters/src/bedrockBackend/base.toolsOffStripsBlocks.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/llm-adapters/src/endUserIdAttachment.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/llm-adapters/src/geminiBackend.imageUrl.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/llm-adapters/src/geminiBackend.replayedToolHistory.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 20
+    }
+  },
+  "b4m-core/llm-adapters/src/geminiBackend.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/llm-adapters/src/getLlmByModel.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 33
+    }
+  },
+  "b4m-core/llm-adapters/src/kimiBackend.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/llm-adapters/src/modelSunsetMetrics.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/llm-adapters/src/ollamaBackend.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 20
+    }
+  },
+  "b4m-core/llm-adapters/src/ollamaBackend.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/llm-adapters/src/openaiBackend.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/llm-adapters/src/responseFormat.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/llm-adapters/src/syncModelDescriptions.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/llm-adapters/src/xaiBackend.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/mcp/src/github/__tests__/tools/labels.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/services/src/artifactService/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/services/src/artifactService/delete.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/artifactService/get.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/artifactService/list.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/artifactService/update.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "b4m-core/services/src/artifactService/update.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/services/src/briefcaseService/briefcaseService.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/cliCompletions.abortedOutput.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/services/src/cliCompletions.admission.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/services/src/cliCompletions.caching.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/services/src/cliCompletions.creditCap.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/services/src/cliCompletions.creditEvents.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/services/src/cliCompletions.effort.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "b4m-core/services/src/cliCompletions.ledgerRow.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/services/src/cliCompletions.maxTokens.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "b4m-core/services/src/cliCompletions.modelAlias.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "b4m-core/services/src/cliCompletions.multimodal.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/services/src/cliCompletions.orgBilling.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "b4m-core/services/src/cliCompletions.reservation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/services/src/cliCompletions.serverTools.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "b4m-core/services/src/cliCompletions.shadowTier.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/services/src/cliCompletions.thinking.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "b4m-core/services/src/cliCompletions.turnUsage.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/services/src/cliTools/executeServerTool.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/countersService/agnosticAiInsights.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/dataLakeService/applyTaxonomySuggestions.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 24
+    }
+  },
+  "b4m-core/services/src/dataLakeService/dataLakeSearchMetrics.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/dataLakeService/dataLakeService.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 71
+    }
+  },
+  "b4m-core/services/src/dataLakeService/dismissTaxonomySuggestion.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/services/src/dataLakeService/scanTruncationMetrics.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/emailAnalysisService/analyzeEmail.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 23
+    }
+  },
+  "b4m-core/services/src/emailIngestionService/integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/emailIngestionService/processAttachments.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/emailIngestionService/processAttachments.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/emailIngestionService/processEmailBody.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/emailIngestionService/processIngestedEmail.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/services/src/emailIngestionService/validateSender.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 44
+    }
+  },
+  "b4m-core/services/src/fabFileService/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/services/src/fabFileService/get.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/fabFileService/reconcileLakeTags.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "b4m-core/services/src/fabFileService/search.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/services/src/fabFileService/toggleTags.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/services/src/fabFileService/update.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "b4m-core/services/src/imageTemplateService/imageTemplateService.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/jupyterExecutionService/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/llm/ChatCompletion.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 620
+    }
+  },
+  "b4m-core/services/src/llm/ChatCompletionInvoke.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 75
+    }
+  },
+  "b4m-core/services/src/llm/ChatCompletionInvoke.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/llm/ImageGeneration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 52
+    }
+  },
+  "b4m-core/services/src/llm/ImageGeneration.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 15
+    }
+  },
+  "b4m-core/services/src/llm/QuestMasterHistoryBudget.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 18
+    }
+  },
+  "b4m-core/services/src/llm/QuestMasterStatus.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 39
+    }
+  },
+  "b4m-core/services/src/llm/ResearchModeService.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 14
+    }
+  },
+  "b4m-core/services/src/llm/ResearchModeService.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/services/src/llm/features/AgentDetectionFeature.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/services/src/llm/intentClassifier.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/services/src/llm/modelAdmission.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/llm/tools/ToolValidator.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/llm/tools/implementation/blogEdit/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/llm/tools/implementation/excelGeneration/index.characterization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/llm/tools/implementation/excelGeneration/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/llm/tools/implementation/knowledgeBaseRetrieve/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "b4m-core/services/src/llm/tools/implementation/knowledgeBaseSearch/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "b4m-core/services/src/llm/tools/implementation/recharts/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/llm/tools/implementation/websearch/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/llm/tools/implementation/wikipediaOnThisDay/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/llm/tools/toolGenerators.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/services/src/notebookCurationService/index.cache.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/notebookCurationService/llmMarkdownGenerator.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/notebookCurationService/llmMarkdownGenerator.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "b4m-core/services/src/notebookCurationService/markdownGenerator.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "b4m-core/services/src/organizationService/addMember.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/organizationService/applyPartnerRuleMembership.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/organizationService/clearActiveOrganization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/organizationService/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/organizationService/delete.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/organizationService/getUsers.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/services/src/organizationService/groupMembership.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/organizationService/leave.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/organizationService/revokeAccess.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/organizationService/search.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/organizationService/setOrganizationGroupTypes.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/organizationService/update.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/projectService/addFiles.authorization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/services/src/projectService/addSessions.authorization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/services/src/projectService/addSystemPrompts.authorization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/services/src/projectService/listInvites.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/projectService/removeFiles.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/projectService/removeSystemPrompts.authorization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/projectService/toggleSystemPrompt.authorization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/promptService/promptService.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "b4m-core/services/src/researchAgentService/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/researchAgentService/get.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/researchAgentService/list.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/researchAgentService/remove.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/researchAgentService/update.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/researchData/remove.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/researchTaskService/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "b4m-core/services/src/researchTaskService/downloadRelevantLinks.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "b4m-core/services/src/researchTaskService/get.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/researchTaskService/process.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 17
+    }
+  },
+  "b4m-core/services/src/researchTaskService/process.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/researchTaskService/processDiscoveredLinks.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "b4m-core/services/src/researchTaskService/search.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/researchTaskService/update.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/researchTaskService/utils.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "b4m-core/services/src/sessionService/delete.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/sharingService/accept.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 28
+    }
+  },
+  "b4m-core/services/src/sharingService/authorizeByInviteType.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 27
+    }
+  },
+  "b4m-core/services/src/sharingService/cancel.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "b4m-core/services/src/sharingService/cancelInviteById.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "b4m-core/services/src/sharingService/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 49
+    }
+  },
+  "b4m-core/services/src/sharingService/listForDocument.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "b4m-core/services/src/sharingService/listOwnPending.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/sharingService/refuse.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/sharingService/refuseWholeInvite.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 16
+    }
+  },
+  "b4m-core/services/src/sharingService/revoke.authorization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/sharingService/revoke.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "b4m-core/services/src/sharingService/updateDocumentSharing.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "b4m-core/services/src/sreAgentService/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 114
+    }
+  },
+  "b4m-core/services/src/telemetry/contextBreakdown.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/userApiKeyService/__tests__/callbackSigningSecret.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/userApiKeyService/__tests__/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 35
+    }
+  },
+  "b4m-core/services/src/userApiKeyService/__tests__/revoke.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "b4m-core/services/src/userApiKeyService/__tests__/rotate.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/services/src/userApiKeyService/__tests__/validate.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "b4m-core/services/src/userApiKeyService/updateEmbedKey.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/userService/adminEmailManagement.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/userService/adminUpdate.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/userService/cancelEmailChange.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/userService/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "b4m-core/services/src/userService/emailChange.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/userService/emailVerification.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/userService/recalculateUserStorage.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/userService/recordPolicyAcceptance.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/userService/register.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "b4m-core/services/src/userService/requestEmailChange.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/userService/resendEmailVerification.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/userService/sendEmailVerification.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/userService/update.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "b4m-core/services/src/userService/updateLogoutTime.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/services/src/userService/verifyEmailChange.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/userService/verifyEmailToken.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/voiceService/getVoiceId.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/slack/src/CommandHandler.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "b4m-core/slack/src/SlackClient.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "b4m-core/slack/src/SlackEvent.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/slack/src/SlackMessageEnricher.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/slack/src/__tests__/channel-manager.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/slack/src/__tests__/globalShortcutHandlers.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/slack/src/__tests__/search-handler.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/slack/src/__tests__/workflowErrors.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/slack/src/commands/configCommands.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/slack/src/constants/slack-model-options.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/slack/src/github/GitHubSlackNotifier.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/slack/src/handlers/WorkflowStepHandler.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/slack/src/handlers/__tests__/WorkflowStepHandler.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 31
+    }
+  },
+  "b4m-core/slack/src/handlers/channel-manager.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/slack/src/handlers/globalShortcutHandlers.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "b4m-core/slack/src/handlers/modelConfigHandlers.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/slack/src/handlers/notebook-manager.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 17
+    }
+  },
+  "b4m-core/slack/src/handlers/notebook-messaging.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/slack/src/handlers/slack-github-mapper.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/slack/src/handlers/user-lookup.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/slack/src/installer.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/slack/src/manifestComparator.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/slack/src/resources/ConfluenceResource.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/slack/src/resources/GitHubResource.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/slack/src/resources/InternalResource.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/slack/src/resources/JiraResource.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/slack/src/services/AppHomeDataService.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/slack/src/services/SlackAuditLogger.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 17
+    }
+  },
+  "b4m-core/slack/src/services/SlackAuditLogger.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/slack/src/stateNonceBinding.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/slack/src/user-link-helpers.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/slack/src/views/AppHomeBuilder.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 38
+    }
+  },
+  "b4m-core/slack/src/workflowErrors.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/utils/src/adminSettings/fallback.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/utils/src/llm/audioAttachmentGuard.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/utils/src/llm/upstreamTruncation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 36
+    }
+  },
+  "b4m-core/utils/src/llm/utils.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 119
+    }
+  },
+  "b4m-core/utils/src/llm/utils.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/utils/src/promptModeration/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/utils/src/questMaster.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/utils/src/slack.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "infra/__tests__/wafPolicy.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 40
+    }
+  },
+  "packages/cli/src/session/turnController.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/cli/src/storage/ImageStore.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/cli/src/tools/gateway/gateway.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "packages/cli/src/utils/StreamLogger.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "packages/cli/src/utils/formatStep.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/cli/src/utils/tokenCounter.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/database/src/__test__/artifactModels.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/database/src/__tests__/UserApiKeyAuditLogModel.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/__tests__/collation-compatibility.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/database/src/__tests__/fabFilePullTags.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/__tests__/facet-compatibility.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "packages/database/src/__tests__/flag-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "packages/database/src/__tests__/lookup-compatibility.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "packages/database/src/__tests__/mfa-secret-select.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "packages/database/src/__tests__/real-world-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/ai/RapidReplyAuditLogModel.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/auth/PartnerSignupRuleModel.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/auth/UserApiKeyModel.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/auth/VoiceIdModel.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/billing/UsageEventModel.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/database/src/models/content/ActivityModel.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/database/src/models/content/ArtifactContentModel.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/database/src/models/content/ArtifactModel.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/database/src/models/content/ArtifactVersionModel.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/content/FabFileModel.countDataLakeUniqueFilesByPrefix.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "packages/database/src/models/content/FabFileModel.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/content/ImageGenerationTemplateModel.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/content/TagModel.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/infra/email/EmailSendAttemptModel.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/social/FeedbackReportQueries.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/scripts/generateUserActivity.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/scripts/generateWeeklyUserActivity.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/scripts/listUsers.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/scripts/migrate/migrations/20251008130737_delete-deprecated-chunks.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/scripts/migrate/migrations/20251023120000_add-email-verification-indexes.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/scripts/migrate/migrations/20260120142227_migrate-usersubscription-to-subscription.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/scripts/migrate/migrations/20260702000000_hash-mfa-backup-codes.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/scripts/migrate/migrations/20260709130000_base-entitlement-on-default-models.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "packages/scripts/migrate/migrations/20260710160000_base-entitlement-cover-drifted-seed-configs.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "packages/scripts/migrate/migrations/20260921235970_ensure-fabfile-owner-organization-index.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/scripts/seeders/AgentSeeder.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "packages/scripts/src/curatedCatalog/curatedSchema.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/scripts/src/curatedCatalog/curatedV2.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/scripts/syncTranslations.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/artifacts/artifactAccess.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "packages/server-utils/src/auth/ability.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/cli/toolsHandler.shared.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "packages/server-utils/src/entitlements/partnerRules.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/integrations/integrationAuditLogger.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 43
+    }
+  },
+  "packages/server-utils/src/models/Subscription.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/s3/historyUploadComplete.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/s3/moderateUploadedFile.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/server-utils/src/services/operationsModelService.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/services/organizationService.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 30
+    }
+  },
+  "packages/server-utils/src/utils/analyticsLog.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/utils/auditLog.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/utils/cloudwatch.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/server-utils/src/utils/getMcpClientAdapter.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/utils/mcpCall.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/utils/persistAgentArtifacts.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "packages/server-utils/src/utils/sessionAccess.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
     }
   }
 }

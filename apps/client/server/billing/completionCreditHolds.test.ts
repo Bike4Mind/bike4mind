@@ -1,6 +1,6 @@
 import { CreditHolderType } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { record, claim, markSettled, findSettlement, transaction, findUser, assertSpendCap } = vi.hoisted(() => ({
   findUser: vi.fn(),
@@ -31,6 +31,7 @@ const hold = {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.spyOn(console, 'info').mockImplementation(() => {});
   transaction.mockImplementation(async callback => callback());
   record.mockResolvedValue({ ...hold, id: 'pending', balanceAfterHold: 70 });
   markSettled.mockResolvedValue(true);
@@ -38,6 +39,7 @@ beforeEach(() => {
   findUser.mockResolvedValue({ id: 'user' });
   assertSpendCap.mockResolvedValue(undefined);
 });
+afterEach(() => vi.restoreAllMocks());
 
 describe('new-account spend cap at reservation', () => {
   const logger = new Logger({ metadata: { test: 'spend cap' } });
@@ -50,6 +52,14 @@ describe('new-account spend cap at reservation', () => {
       newAccountSpendCapAdaptersWithAlert
     );
     expect(assertSpendCap.mock.invocationCallOrder[0]).toBeLessThan(debit.mock.invocationCallOrder[0]);
+    expect(vi.mocked(console.info).mock.calls.map(([event]) => JSON.parse(event))).toContainEqual(
+      expect.objectContaining({
+        ownerId: 'user',
+        lifecycle: 'completion',
+        outcome: 'held',
+        HoldLatency: expect.any(Number),
+      })
+    );
   });
 
   it('refuses with nothing debited or recorded when the cap is reached', async () => {
@@ -93,5 +103,28 @@ describe('completion settlement commit recovery', () => {
     const settle = vi.fn(async () => {});
     expect(await lifecycle.settle(10, settle)).toBe(true);
     expect(settle).not.toHaveBeenCalled();
+    expect(
+      vi
+        .mocked(console.info)
+        .mock.calls.map(([event]) => JSON.parse(event))
+        .some(event => event.SettlementsAfterSweep)
+    ).toBe(false);
+  });
+
+  it('counts a missing-hold settlement once, outside transaction retries', async () => {
+    const lifecycle = createCompletionCreditHolds(new Logger());
+    await lifecycle.reserve(hold, async () => ({ id: 'user', currentCredits: 70 }));
+    markSettled.mockResolvedValue(false);
+    transaction.mockImplementationOnce(async callback => {
+      await callback();
+      return callback();
+    });
+    const settle = vi.fn();
+    expect(await lifecycle.settle(10, settle)).toBe(false);
+    expect(settle).not.toHaveBeenCalled();
+    const events = vi.mocked(console.info).mock.calls.map(([event]) => JSON.parse(event));
+    expect(events.filter(event => event.SettlementsAfterSweep === 1)).toEqual([
+      expect.objectContaining({ ownerId: 'user', lifecycle: 'completion', holdId: 'pending' }),
+    ]);
   });
 });

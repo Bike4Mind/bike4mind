@@ -21,11 +21,17 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
 
 const PRESETS = ['Spam or bot account', 'Billing correction'];
 
-const Harness = () => {
+const Harness = ({ audited }: { audited?: boolean } = {}) => {
   const [value, setValue] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
   return (
     <>
-      <ReasonPicker presets={PRESETS} value={value} onChange={setValue} data-testid="test-reason-input" />
+      <ReasonPicker
+        presets={PRESETS}
+        value={value}
+        onChange={setValue}
+        audited={audited}
+        data-testid="test-reason-input"
+      />
       <output data-testid="composed-reason">{composeAdminReason(value)}</output>
     </>
   );
@@ -64,6 +70,28 @@ describe('composeAdminReason', () => {
 });
 
 describe('ReasonPicker', () => {
+  it('drops the audit-log promise from the placeholder when the reason is not stored', () => {
+    const { unmount } = render(<Harness />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('test-reason-input')).toHaveAttribute(
+      'placeholder',
+      'Why are you doing this? Recorded in the audit log.'
+    );
+    unmount();
+
+    render(
+      <ReasonPicker
+        presets={PRESETS}
+        value={EMPTY_ADMIN_REASON}
+        onChange={() => {}}
+        audited={false}
+        data-testid="test-reason-input"
+      />,
+      { wrapper: TestWrapper }
+    );
+    expect(screen.getByTestId('test-reason-input')).toHaveAttribute('placeholder', 'Why are you doing this?');
+    expect(screen.getByTestId('test-reason-input-helper')).not.toHaveTextContent('Recorded in the audit log');
+  });
+
   it('toggles a preset chip with aria-pressed and records the preset alone', () => {
     render(<Harness />, { wrapper: TestWrapper });
     const chip = screen.getByTestId('test-reason-input-preset-0');
@@ -97,6 +125,25 @@ describe('ReasonPicker', () => {
     expect(composedReason()).toBe('Billing correction: ticket 42');
     expect(screen.getByTestId('test-reason-input-helper')).toHaveTextContent(
       'Recorded in the audit log as "Billing correction: ticket 42".'
+    );
+  });
+
+  it('drops the audit-log promise from the placeholder when the action is not audited', () => {
+    render(<Harness audited={false} />, { wrapper: TestWrapper });
+
+    expect(screen.getByTestId('test-reason-input')).toHaveAttribute('placeholder', 'Why are you doing this?');
+    expect(screen.getByTestId('test-reason-input-helper')).toHaveTextContent(
+      'Not stored yet: the audit entry for this action has no reason field.'
+    );
+    expect(screen.getByTestId('test-reason-input-helper')).not.toHaveTextContent('Recorded in the audit log');
+  });
+
+  it('promises the audit log in the placeholder only while the action is audited', () => {
+    render(<Harness />, { wrapper: TestWrapper });
+
+    expect(screen.getByTestId('test-reason-input')).toHaveAttribute(
+      'placeholder',
+      'Why are you doing this? Recorded in the audit log.'
     );
   });
 

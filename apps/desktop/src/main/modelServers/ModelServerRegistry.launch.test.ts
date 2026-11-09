@@ -148,11 +148,13 @@ describe('ModelServerRegistry launching servers', () => {
   it("starts this computer's Ollama with its saved settings, sizes with them, and owns it until stopped", async () => {
     const { registry, launchers, localSpecsChanged, saved } = setup();
     await registry.check('local');
+    expect(registry.runningLocalServerCount()).toBe(0);
     expect((await local(registry)).launch).toMatchObject({ owner: 'none', canStart: true, sizingKvCacheType: 'f16' });
 
     await registry.update('local', { launch: { kvCacheType: 'q8_0' } });
     expect(registry.localKvCacheType()).toBeUndefined();
     const views = await registry.startServer('local');
+    expect(registry.runningLocalServerCount()).toBe(1);
     expect(launchers.start).toHaveBeenCalledWith(
       '/opt/fake/bin',
       { runtime: 'ollama', port: 11434, settings: { kvCacheType: 'q8_0' } },

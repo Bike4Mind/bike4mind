@@ -63,6 +63,8 @@ export interface ModelServerView {
   toolsHint?: string;
   /** Who runs the server and the settings it starts with. */
   launch: ModelServerLaunchView | null;
+  /** Unusable saved SSH address: disable settings while keeping Check and Remove available. */
+  unusable?: true;
 }
 
 /** OLLAMA_KV_CACHE_TYPE values besides f16 that fit.ts can price; must match the copy in local-models servers. */

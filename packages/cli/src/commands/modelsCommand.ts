@@ -69,6 +69,7 @@ import {
   resolveServerTarget,
   serverFetch,
   serverRedactor,
+  unusableStatus,
   validateSecret,
   withSignal,
   type CliModelServer,
@@ -980,25 +981,47 @@ export async function listServers(deps: ModelsDeps, opts: ModelsOptions): Promis
     Promise.all(loaded.servers.map(server => describeServer(server, ctx, Boolean(opts.checkTools)))),
     deps.signal
   );
+  const unusable = (loaded.unusable ?? []).map(server => ({
+    server,
+    product: productLabel(server.kind, null),
+    address: server.transport.destination ? `ssh ${server.transport.destination}` : 'unusable address',
+    credentials: server.auth.type === 'none' ? 'none' : ctx.secret(server.id) ? 'set' : 'needed',
+    status: { state: 'refused', latencyMs: null, text: clean(unusableStatus(server)) },
+  }));
   if (opts.json) {
     deps.log(
       JSON.stringify(
         {
           problem: loaded.problem,
           toolsChecked: Boolean(opts.checkTools),
-          servers: rows.map(({ server, product, credentials, status, notes }) => ({
-            id: server.id,
-            name: server.name,
-            kind: server.kind,
-            product,
-            transport: server.transport.type,
-            address: serverAddressLabel(server),
-            access: server.access,
-            source: server.source,
-            credentials,
-            status,
-            notes,
-          })),
+          servers: [
+            ...rows.map(({ server, product, credentials, status, notes }) => ({
+              id: server.id,
+              name: server.name,
+              kind: server.kind,
+              product,
+              transport: server.transport.type,
+              address: serverAddressLabel(server),
+              access: server.access,
+              source: server.source,
+              credentials,
+              status,
+              notes,
+            })),
+            ...unusable.map(({ server, product, address, credentials, status }) => ({
+              id: server.id,
+              name: server.name,
+              kind: server.kind,
+              product,
+              transport: server.transport.type,
+              address,
+              access: server.access,
+              source: 'desktop',
+              credentials,
+              status,
+              notes: [],
+            })),
+          ],
         },
         null,
         2
@@ -1006,21 +1029,32 @@ export async function listServers(deps: ModelsDeps, opts: ModelsOptions): Promis
     );
     return 0;
   }
-  if (rows.length === 0) {
+  if (rows.length === 0 && unusable.length === 0) {
     deps.log(loaded.problem ?? 'No model servers are saved in Desktop. Add one in Desktop under Settings.');
     return 0;
   }
   if (loaded.problem) deps.log(loaded.problem);
+  const access = (server: { access: CliModelServer['access'] }) =>
+    server.access === 'manage' ? 'Manage' : 'Chat only';
   const lines = table([
     ['NAME', 'KIND', 'ADDRESS', 'ACCESS', 'CREDENTIALS', 'STATUS', 'NOTE'],
     ...rows.map(({ server, product, credentials, status, notes }) => [
       clean(server.name),
       product,
       clean(serverAddressLabel(server)),
-      server.access === 'manage' ? 'Manage' : 'Chat only',
+      access(server),
       credentials === 'needed' ? `needed: ${loginHint(server)}` : credentials,
       status.text,
       notes.map(clean).join(' '),
+    ]),
+    ...unusable.map(({ server, product, address, credentials, status }) => [
+      clean(server.name),
+      product,
+      clean(address),
+      access(server),
+      credentials,
+      status.text,
+      '',
     ]),
   ]);
   for (const line of lines) deps.log(line);
@@ -1054,8 +1088,8 @@ export async function loginServer(name: string, deps: ModelsDeps, opts: { tokenS
   }
   const secret = validateSecret(server, entered);
   const refused = () => new Error(`${label} refused these credentials. Nothing was saved.`);
-  const fetch = serverFetch(server, secret, ctx.sshFetchFor);
-  const target = await resolveServerTarget(server, secret, fetch).catch((error: unknown) => {
+  const fetch = withSignal(serverFetch(server, secret, ctx.sshFetchFor), deps.signal);
+  const target = await abortable(resolveServerTarget(server, secret, fetch), deps.signal).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     if (/refused the saved credentials|needs credentials/.test(message)) throw refused();
     throw error;
@@ -1075,7 +1109,7 @@ export async function loginServer(name: string, deps: ModelsDeps, opts: { tokenS
 export async function logoutServer(name: string, deps: ModelsDeps): Promise<number> {
   const ctx = requireServers(deps);
   const loaded = await abortable(ctx.load(), deps.signal);
-  const known = findModelServer(loaded.servers, name);
+  const known = findModelServer(loaded.servers, name) ?? findModelServer(loaded.unusable ?? [], name);
   // A server removed in Desktop leaves its credential behind under the old id; that id removes it.
   const id = known?.id ?? (ctx.secret(name) !== undefined ? name : null);
   if (id === null) throw noSuchServer(loaded, name);

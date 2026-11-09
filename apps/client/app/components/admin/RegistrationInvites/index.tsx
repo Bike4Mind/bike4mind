@@ -1,19 +1,5 @@
 import React, { useMemo, useEffect, useState } from 'react';
-import {
-  Box,
-  Button,
-  CircularProgress,
-  IconButton,
-  LinearProgress,
-  Sheet,
-  Stack,
-  Tab,
-  TabList,
-  TabPanel,
-  Tabs,
-  Tooltip,
-  Typography,
-} from '@mui/joy';
+import { Button, CircularProgress, IconButton, Stack, Tooltip } from '@mui/joy';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import CircleIcon from '@mui/icons-material/Circle';
 import CloseFullscreenIcon from '@mui/icons-material/CloseFullscreen';
@@ -33,62 +19,30 @@ import {
 import { useRegistrationInvitesStore } from './store';
 import { RegInviteData, CreateInviteFormData } from './types';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
-import PaginationControls from '@client/app/components/admin/Subscriptions/components/PaginationControls';
+import { BulkActionBar } from '../shared/BulkActionBar';
+import { EmptyState } from '../shared/EmptyState';
+import { ErrorState } from '../shared/ErrorState';
+import { LoadingState } from '../shared/LoadingState';
+import { ViewTabs } from '../shared/ViewTabs';
+import { ADMIN_REGION_GAP } from '../shared/adminStyles';
 import { InviteTable } from './components/InviteTable';
 import { CreateInviteModal } from './components/CreateInviteModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 
+const BULK_STATUS_ACTIONS = [
+  { status: RegInviteStatusType.open, label: 'Set Multiple Open', icon: <CircleIcon /> },
+  { status: RegInviteStatusType.waiting, label: 'Set Multiple Waiting', icon: <HourglassBottomIcon /> },
+  { status: RegInviteStatusType.used, label: 'Set Multiple Used', icon: <CloseFullscreenIcon /> },
+];
+
 const ActionControls: React.FC<{
-  multiSelected: string[];
-  onUpdate: (ids: string[], status: RegInviteStatusType) => void;
-  operating: boolean;
-  onOpenDeleteWarning: () => void;
   onRefetch: () => void;
   isFetching: boolean;
   onOpenCreate: () => void;
-}> = ({ multiSelected, onUpdate, operating, onOpenDeleteWarning, onRefetch, isFetching, onOpenCreate }) => {
+}> = ({ onRefetch, isFetching, onOpenCreate }) => {
   const isMobile = useIsMobile();
   return (
     <Stack direction="row" spacing={1} alignItems="center">
-      {multiSelected.length > 0 && (
-        <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: '5px' }}>
-          <Tooltip color="primary" title="Set Multiple Open">
-            <IconButton
-              onClick={() => onUpdate(multiSelected, RegInviteStatusType.open)}
-              color="primary"
-              disabled={operating}
-              size="sm"
-            >
-              <CircleIcon />
-            </IconButton>
-          </Tooltip>
-          <Tooltip color="warning" title="Set Multiple Waiting">
-            <IconButton
-              onClick={() => onUpdate(multiSelected, RegInviteStatusType.waiting)}
-              color="warning"
-              disabled={operating}
-              size="sm"
-            >
-              <HourglassBottomIcon />
-            </IconButton>
-          </Tooltip>
-          <Tooltip color="success" title="Set Multiple Used">
-            <IconButton
-              onClick={() => onUpdate(multiSelected, RegInviteStatusType.used)}
-              color="success"
-              disabled={operating}
-              size="sm"
-            >
-              <CloseFullscreenIcon />
-            </IconButton>
-          </Tooltip>
-          <Tooltip color="danger" title="Delete Multiple">
-            <IconButton color="danger" size="sm" onClick={onOpenDeleteWarning}>
-              {operating ? <CircularProgress size="sm" /> : <DeleteForeverIcon />}
-            </IconButton>
-          </Tooltip>
-        </Box>
-      )}
       <ContextHelpButton helpId="admin/invite-codes" tooltipText="Invite Codes Help" />
       {isMobile ? (
         <>
@@ -108,8 +62,8 @@ const ActionControls: React.FC<{
             <IconButton
               data-testid="invite-create-btn"
               size="sm"
-              variant="solid"
-              color="success"
+              variant="outlined"
+              color="neutral"
               onClick={onOpenCreate}
             >
               <AddCircleOutlineIcon />
@@ -121,6 +75,8 @@ const ActionControls: React.FC<{
           <Button
             data-testid="invite-codes-refresh-btn"
             size="sm"
+            variant="outlined"
+            color="neutral"
             startDecorator={<RefreshIcon />}
             onClick={onRefetch}
             disabled={isFetching}
@@ -130,7 +86,8 @@ const ActionControls: React.FC<{
           </Button>
           <Button
             data-testid="invite-create-btn"
-            color="success"
+            variant="outlined"
+            color="neutral"
             size="sm"
             startDecorator={<AddCircleOutlineIcon />}
             onClick={onOpenCreate}
@@ -151,10 +108,6 @@ const RegistrationInvitesTab: React.FC = () => {
     setOperating,
     activeTab,
     setActiveTab,
-    currentPage,
-    setCurrentPage,
-    itemsPerPage,
-    setItemsPerPage,
     unusedSelected,
     setUnusedSelected,
     usedSelected,
@@ -264,11 +217,6 @@ const RegistrationInvitesTab: React.FC = () => {
     };
   }, [query.data, unusedSortDirection, usedSortDirection, now]);
 
-  const currentTabData = activeTab === 'available' ? sortedInvites.unused : sortedInvites.used;
-  const totalPages = Math.ceil(currentTabData.length / itemsPerPage);
-  const indexOfLastItem = currentPage * itemsPerPage;
-  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-  const currentItems = currentTabData.slice(indexOfFirstItem, indexOfLastItem);
   const hasInvites = (query?.data ?? []).length > 0;
 
   const handleSubmit = async (data: CreateInviteFormData) => {
@@ -321,150 +269,131 @@ const RegistrationInvitesTab: React.FC = () => {
     }
   }, [activeTab, unusedSelected, usedSelected, setMultiSelected]);
 
-  return (
-    <Sheet sx={{ width: '100%', p: '10px' }}>
-      {query.isLoading && <LinearProgress />}
+  const actionControls = (
+    <ActionControls
+      onRefetch={() => query.refetch()}
+      isFetching={query.isFetching}
+      onOpenCreate={() => setOpenCreate(true)}
+    />
+  );
+  const createAction = (
+    <Button size="sm" onClick={() => setOpenCreate(true)} data-testid="invite-empty-create-btn">
+      Create invite
+    </Button>
+  );
+  const isAvailableTab = activeTab === 'available';
+  const tabInvites = isAvailableTab ? sortedInvites.unused : sortedInvites.used;
+  const setTabSelected = isAvailableTab ? setUnusedSelected : setUsedSelected;
+  const tableProps = {
+    copyToClipboard,
+    handleUpdate,
+    handleDelete,
+    operating,
+    copied,
+    formatDate,
+  };
 
-      {!query.isLoading && !hasInvites && (
-        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ my: 2 }}>
-          <Typography level="h3">No Registration Invites found.</Typography>
-          <ActionControls
-            multiSelected={multiSelected}
-            onUpdate={handleUpdate}
-            operating={operating}
-            onOpenDeleteWarning={() => setOpenDeleteWarning(true)}
-            onRefetch={() => query.refetch()}
-            isFetching={query.isFetching}
-            onOpenCreate={() => setOpenCreate(true)}
+  return (
+    <Stack gap={ADMIN_REGION_GAP} sx={{ width: '100%' }}>
+      {query.isLoading && <LoadingState label="Loading invites" />}
+
+      {!query.isLoading && query.isError && !hasInvites && (
+        <ErrorState
+          message="Could not load registration invites."
+          onRetry={() => void query.refetch()}
+          retrying={query.isFetching}
+        />
+      )}
+
+      {!query.isLoading && !query.isError && !hasInvites && (
+        <>
+          <Stack direction="row" justifyContent="flex-end">
+            {actionControls}
+          </Stack>
+          <EmptyState
+            title="No registration invites yet"
+            description="Create an invite code to let someone register."
+            action={createAction}
           />
-        </Stack>
+        </>
       )}
 
       {hasInvites && (
-        <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as 'available' | 'used')}>
-          <Box
-            sx={{
-              display: 'flex',
-              flexDirection: 'row',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-            }}
-          >
-            <TabList>
-              <Tab data-testid="invite-available-tab" value="available">
-                Available ({sortedInvites.availableCount})
-              </Tab>
-              <Tab data-testid="invite-used-tab" value="used">
-                Used ({sortedInvites.usedCount})
-              </Tab>
-            </TabList>
-            <ActionControls
-              multiSelected={multiSelected}
-              onUpdate={handleUpdate}
-              operating={operating}
-              onOpenDeleteWarning={() => setOpenDeleteWarning(true)}
-              onRefetch={() => query.refetch()}
-              isFetching={query.isFetching}
-              onOpenCreate={() => setOpenCreate(true)}
+        <>
+          <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
+            <ViewTabs
+              views={[
+                {
+                  id: 'available',
+                  label: 'Available',
+                  count: sortedInvites.availableCount,
+                  testId: 'invite-available-tab',
+                },
+                { id: 'used', label: 'Used', count: sortedInvites.usedCount, testId: 'invite-used-tab' },
+              ]}
+              activeId={activeTab}
+              onSelect={id => setActiveTab(id as 'available' | 'used')}
+              aria-label="Invite status"
+              data-testid="invite-status-tabs"
             />
-          </Box>
+            {actionControls}
+          </Stack>
 
-          <TabPanel value="available" sx={{ px: 0 }}>
-            {sortedInvites.unused.length > 0 ? (
-              <>
-                <PaginationControls
-                  currentPage={currentPage}
-                  onPageChange={setCurrentPage}
-                  totalPages={totalPages}
-                  totalItems={sortedInvites.unused.length}
-                  itemsPerPage={itemsPerPage}
-                  onItemsPerPageChange={setItemsPerPage}
-                  showTotal={false}
-                  pageLimitOptions={[5, 10, 20]}
-                />
-                <InviteTable
-                  invites={activeTab === 'available' ? currentItems : []}
-                  allInvites={sortedInvites.unused}
-                  borderColor="#4caf50"
-                  selected={unusedSelected}
-                  setSelected={setUnusedSelected}
-                  sortDirection={unusedSortDirection}
-                  toggleSortDirection={toggleUnusedSortDirection}
-                  handleUpdate={handleUpdate}
-                  handleDelete={handleDelete}
-                  copyToClipboard={copyToClipboard}
-                  operating={operating}
-                  copied={copied}
-                  formatDate={formatDate}
-                />
-                <PaginationControls
-                  currentPage={currentPage}
-                  onPageChange={setCurrentPage}
-                  totalPages={totalPages}
-                  totalItems={sortedInvites.unused.length}
-                  itemsPerPage={itemsPerPage}
-                  onItemsPerPageChange={setItemsPerPage}
-                  showTotal={false}
-                  pageLimitOptions={[5, 10, 20]}
-                />
-              </>
-            ) : (
-              <Typography level="body-md" sx={{ textAlign: 'center', py: 4 }}>
-                No available registration codes found.
-              </Typography>
-            )}
-          </TabPanel>
+          <BulkActionBar
+            selection={{ mode: 'explicit', ids: multiSelected }}
+            totalMatching={tabInvites.length}
+            onSelectAllMatching={() => setTabSelected(tabInvites.map(i => i.id))}
+            onClear={() => setTabSelected([])}
+          >
+            {BULK_STATUS_ACTIONS.map(({ status, label, icon }) => (
+              <Tooltip key={status} title={label}>
+                <IconButton
+                  aria-label={label}
+                  variant="outlined"
+                  color="neutral"
+                  size="sm"
+                  disabled={operating}
+                  onClick={() => handleUpdate(multiSelected, status)}
+                >
+                  {icon}
+                </IconButton>
+              </Tooltip>
+            ))}
+            <Tooltip title="Delete Multiple">
+              <IconButton
+                aria-label="Delete Multiple"
+                variant="outlined"
+                color="neutral"
+                size="sm"
+                data-testid="invite-bulk-delete-btn"
+                onClick={() => setOpenDeleteWarning(true)}
+              >
+                {operating ? <CircularProgress size="sm" /> : <DeleteForeverIcon />}
+              </IconButton>
+            </Tooltip>
+          </BulkActionBar>
 
-          <TabPanel value="used" sx={{ px: 0 }}>
-            {sortedInvites.used.length > 0 ? (
-              <>
-                <PaginationControls
-                  currentPage={currentPage}
-                  onPageChange={setCurrentPage}
-                  totalPages={totalPages}
-                  totalItems={sortedInvites.used.length}
-                  itemsPerPage={itemsPerPage}
-                  onItemsPerPageChange={setItemsPerPage}
-                  showTotal={false}
-                  pageLimitOptions={[5, 10, 20]}
-                />
-                <InviteTable
-                  invites={activeTab === 'used' ? currentItems : []}
-                  allInvites={sortedInvites.used}
-                  borderColor="#9e9e9e"
-                  selected={usedSelected}
-                  setSelected={setUsedSelected}
-                  sortDirection={usedSortDirection}
-                  toggleSortDirection={toggleUsedSortDirection}
-                  handleUpdate={handleUpdate}
-                  handleDelete={handleDelete}
-                  copyToClipboard={copyToClipboard}
-                  operating={operating}
-                  copied={copied}
-                  formatDate={formatDate}
-                />
-                <PaginationControls
-                  currentPage={currentPage}
-                  onPageChange={setCurrentPage}
-                  totalPages={totalPages}
-                  totalItems={sortedInvites.used.length}
-                  itemsPerPage={itemsPerPage}
-                  onItemsPerPageChange={setItemsPerPage}
-                  showTotal={false}
-                  pageLimitOptions={[5, 10, 20]}
-                />
-              </>
-            ) : (
-              <Typography level="body-md" sx={{ textAlign: 'center', py: 4 }}>
-                No used registration codes found.
-              </Typography>
-            )}
-          </TabPanel>
-        </Tabs>
+          <InviteTable
+            key={activeTab}
+            {...tableProps}
+            label={isAvailableTab ? 'Available registration invites' : 'Used registration invites'}
+            allInvites={tabInvites}
+            selected={isAvailableTab ? unusedSelected : usedSelected}
+            setSelected={setTabSelected}
+            sortDirection={isAvailableTab ? unusedSortDirection : usedSortDirection}
+            toggleSortDirection={isAvailableTab ? toggleUnusedSortDirection : toggleUsedSortDirection}
+            empty={
+              <EmptyState
+                title={isAvailableTab ? 'No available registration codes' : 'No used registration codes'}
+                action={isAvailableTab ? createAction : null}
+              />
+            }
+          />
+        </>
       )}
       <CreateInviteModal onSubmit={handleSubmit} isLoading={regInviteCreate.isPending} />
       <DeleteConfirmModal onConfirm={handleMultiDelete} />
-    </Sheet>
+    </Stack>
   );
 };
 

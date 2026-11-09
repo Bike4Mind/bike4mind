@@ -51,4 +51,28 @@ describe('ApiKeyAlertService sensitive-endpoint check', () => {
     await detect('/api/files/[id]', '/api/files/abc');
     expect(createAlertMock).not.toHaveBeenCalled();
   });
+
+  it.each([{}, { lastCalculatedAt: new Date('invalid') }])(
+    'treats an uninitialized baseline as unavailable: %j',
+    async incomplete => {
+      findByIdMock.mockResolvedValue({ userId: 'u1', metadata: { baseline: incomplete } });
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      await ApiKeyAlertService.detectAnomalies(
+        {
+          userId: 'u1',
+          keyId: 'k1',
+          ipAddress: '1.2.3.4',
+          endpoint: '/api/v1/me',
+          timestamp: new Date(),
+        },
+        logger as never
+      );
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.debug).toHaveBeenCalledWith('No baseline available for anomaly detection', {
+        userId: 'u1',
+        keyId: 'k1',
+      });
+      expect(createAlertMock).not.toHaveBeenCalled();
+    }
+  );
 });

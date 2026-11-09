@@ -7,28 +7,28 @@ tags: [admin, analytics, help-center, feedback]
 
 # Help Center Analytics
 
-The Help Center Analytics dashboard gives administrators visibility into how the help system is being used. It surfaces which articles are popular, where documentation gaps exist, and what users think about both articles and AI chat responses. Access it from the **AI** section in the Admin sidebar.
+The Help Center Analytics dashboard gives administrators visibility into how the help system is being used. It surfaces which articles are popular, where documentation gaps exist, and what users think about both articles and AI chat responses. Access it from the **Overview** section in the Admin sidebar.
 
 ## Date Range Filter
 
-At the top of the dashboard, use the **From** and **To** date inputs to narrow all data to a specific period. When no dates are set, all-time data is shown. Events are automatically expired after 90 days.
+At the top of the dashboard, pick **Last week** (the default), **Last month**, **Last year** or **All time** to narrow all data to that period. For other dates, open the **Range** chip, pick **Custom**, and set the **From** and **To** dates. Events are automatically expired after 90 days.
 
-## Overview Cards
+## Key numbers
 
-Six summary cards display at the top:
+One row of six numbers displays at the top:
 
-| Card | Description |
-|------|-------------|
-| Total Views | Total number of article views across all users |
-| Unique Articles | Count of distinct articles that have been viewed |
-| Total Searches | Number of searches performed in the help center |
-| Article Feedback | Total thumbs-up and thumbs-down ratings on articles |
-| Chat Queries | Number of questions asked to the AI help assistant |
-| Chat Feedback | Total thumbs-up and thumbs-down ratings on AI chat responses |
+| Number | Description |
+|--------|-------------|
+| Total views | Total number of article views across all users |
+| Unique articles | Count of distinct articles that have been viewed |
+| Total searches | Number of searches performed in the help center |
+| Article feedback | Total thumbs-up and thumbs-down ratings on articles |
+| Chat queries | Number of questions asked to the AI help assistant |
+| Chat feedback | Total thumbs-up and thumbs-down ratings on AI chat responses |
 
 ## Tabs
 
-Each tab includes a summary description explaining its purpose. Long text in any table cell can be hovered to reveal the full content in a tooltip.
+Each tab includes a summary description explaining its purpose. Long text in any table cell can be hovered to reveal the full content in a tooltip. When a tab has no rows, it says **Nothing was recorded in this date range.** with a **Clear date range** button that switches to All time; on All time it shows a **Refresh** button instead.
 
 ### Popular Articles
 
@@ -61,10 +61,10 @@ Most common AI chat questions, grouped by query text with a count and last-asked
 
 User feedback on AI chat responses — helps improve the system prompt and RAG lookups. Each row shows the user's question, a **View** button for the answer, the rating (Good/Bad), any comment, and the date.
 
-Clicking **View** opens a detail modal with:
+Clicking **View** opens a dialog that scrolls as a whole. It shows:
 
-- The full question (scrollable if long)
-- The full AI answer rendered as markdown (with independent scrolling)
-- A fixed footer showing the rating, comment, and date
+- The rating and date, then any comment
+- The full question
+- The full AI answer rendered as markdown
 
 Use this to identify cases where the AI gave poor answers, which can inform improvements to the system prompt or the articles behind the RAG lookups.
