@@ -153,8 +153,9 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
 
   // A message delete that committed while this publish was in flight ran its take-down before this
   // page existed, so re-check the message after the write and take the page back down if it is gone.
-  // Pairs with the post-commit sweep in pages/api/v1/sessions/[id]/messages/[messageId].ts.
-  const stillLive = await Quest.findOne({ _id: quest._id, sessionId: source.sessionId }).select('_id').lean();
+  // Pairs with the post-commit sweep in pages/api/v1/sessions/[id]/messages/[messageId].ts. Matches
+  // Quest.sessionId (a plain String) exactly as the lookup above did, so a live message never misses.
+  const stillLive = await Quest.findOne({ _id: quest._id, sessionId: body.sessionId }).select('_id').lean();
   if (!stillLive) {
     await unpublishUserArtifactsBySource(
       userId,
