@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HardwareProbeOptions, HardwareProfile } from '@bike4mind/local-models';
 import { AUTO_LOCAL_CONTEXT } from '@shared/localContextSetting';
 import type { ModelServerView } from '@shared/modelServers';
@@ -36,6 +39,11 @@ const machine: HardwareProfile = {
 const qwen = { name: 'qwen2.5:0.5b', modelInfo: qwenInfo, sizeBytes: 397_821_000, digest: 'a' };
 const hybrid = { name: 'granite', modelInfo: hybridInfo, sizeBytes: 1_942_572_096, digest: 'g' };
 const verbose = { model_info: { ...hybridInfo, 'granitehybrid.attention.head_count_kv': [0, 8, 0, 8] } };
+
+const intelCard: HardwareProfile = { ...machine, memoryKind: 'discrete', gpuVendor: 'intel', gpuCount: 1 };
+const settled = () => new Promise(resolve => setTimeout(resolve, 0));
+// A binary's identity as its path alone, so a test moves it by changing the path.
+const byPath = async (path: string) => path;
 
 describe('HardwareProbe', () => {
   it('probes once, whoever asks first, and reports nothing until it finishes', async () => {
@@ -167,13 +175,15 @@ describe('HardwareProbe', () => {
     for (const probed of machines) {
       for (const llamaServerSaved of [true, false]) {
         const probe = vi.fn(async (_options: HardwareProbeOptions) => probed);
-        const hardware = new HardwareProbe(probe);
+        const hardware = new HardwareProbe(probe, undefined, byPath);
         let path = '/opt/sycl/llama-server';
-        hardware.setLlamaServer(async () => ({ path }));
+        const locate = vi.fn(async () => ({ path }));
+        hardware.setLlamaServer(locate);
         await hardware.profile();
         path = '/usr/local/bin/llama-server';
         hardware.relistLlamaServer(llamaServerSaved);
         await new Promise(resolve => setTimeout(resolve, 0));
+        expect(locate).not.toHaveBeenCalled();
         expect(probe).toHaveBeenCalledTimes(1);
         expect(hardware.known()).toBe(probed);
       }
@@ -186,7 +196,6 @@ describe('HardwareProbe', () => {
       await options.llamaServer?.();
       return intel;
     });
-    const settled = () => new Promise(resolve => setTimeout(resolve, 0));
     const unset = new HardwareProbe(probe);
     await unset.profile();
     unset.relistLlamaServer(false);
@@ -196,7 +205,7 @@ describe('HardwareProbe', () => {
     probe.mockClear();
     let path: string | null = '/opt/sycl/llama-server';
     const locate = vi.fn(async () => (path ? { path } : null));
-    const hardware = new HardwareProbe(probe);
+    const hardware = new HardwareProbe(probe, undefined, byPath);
     hardware.setLlamaServer(locate);
     await hardware.profile();
     hardware.relistLlamaServer(false);
@@ -235,7 +244,7 @@ describe('HardwareProbe', () => {
         return intel;
       });
     let path = '/opt/old/llama-server';
-    const hardware = new HardwareProbe(probe);
+    const hardware = new HardwareProbe(probe, undefined, byPath);
     hardware.setLlamaServer(async () => ({ path }));
     const first = hardware.probed();
     await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
@@ -247,6 +256,134 @@ describe('HardwareProbe', () => {
     hardware.relistLlamaServer(false);
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(probe).toHaveBeenCalledTimes(2);
+  });
+
+  describe('on a save that is not a llama-server', () => {
+    let dir: string;
+    beforeEach(async () => {
+      dir = await mkdtemp(join(tmpdir(), 'llama-identity-'));
+    });
+    afterEach(async () => {
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    const listing = () =>
+      vi.fn(async (options: HardwareProbeOptions) => {
+        await options.llamaServer?.();
+        return intelCard;
+      });
+    const listedFrom = async (path: string, probe = listing(), timeoutMs?: number) => {
+      const locate = vi.fn(async () => ({ path }));
+      const hardware = new HardwareProbe(probe, undefined, undefined, timeoutMs);
+      hardware.setLlamaServer(locate);
+      await hardware.profile();
+      return { hardware, probe, locate };
+    };
+
+    it('lists again when the binary is replaced in place, and not while it is unchanged', async () => {
+      const binary = join(dir, 'llama-server');
+      await writeFile(binary, 'build one');
+      const { hardware, probe } = await listedFrom(binary);
+      hardware.relistLlamaServer(false);
+      await settled();
+      expect(probe).toHaveBeenCalledTimes(1);
+      await writeFile(binary, 'build two, a different size');
+      hardware.relistLlamaServer(false);
+      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+      await writeFile(binary, 'build two, a different size');
+      await utimes(binary, new Date(1_000_000), new Date(1_000_000));
+      hardware.relistLlamaServer(false);
+      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(3));
+    });
+
+    it('lists again when the symlink it found now points at another binary', async () => {
+      await writeFile(join(dir, 'sycl'), 'sycl');
+      await writeFile(join(dir, 'cpu'), 'cpu build');
+      const link = join(dir, 'llama-server');
+      await symlink(join(dir, 'sycl'), link);
+      const { hardware, probe } = await listedFrom(link);
+      await rm(link);
+      await symlink(join(dir, 'cpu'), link);
+      hardware.relistLlamaServer(false);
+      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+    });
+
+    it('warns and lists again when the binary cannot be read', async () => {
+      const binary = join(dir, 'llama-server');
+      await writeFile(binary, 'build');
+      const { hardware, probe } = await listedFrom(binary);
+      await rm(binary);
+      const warn = vi.fn();
+      hardware.relistLlamaServer(false, warn);
+      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+      expect(warn).toHaveBeenCalledOnce();
+    });
+
+    it('warns and lists again when the lookup does not answer in time', async () => {
+      const binary = join(dir, 'llama-server');
+      await writeFile(binary, 'build');
+      const probe = vi.fn(async (_options: HardwareProbeOptions) => intelCard);
+      const { hardware } = await listedFrom(binary, probe, 20);
+      hardware.setLlamaServer(() => new Promise(() => undefined));
+      await hardware.profile();
+      probe.mockClear();
+      const warn = vi.fn();
+      hardware.relistLlamaServer(false, warn);
+      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('timed out'));
+    });
+  });
+
+  it('never looks up the llama-server on a save when there is no Linux Intel card', async () => {
+    const machines: HardwareProfile[] = [
+      machine,
+      { ...machine, memoryKind: 'discrete', gpuVendor: 'nvidia', gpuCount: 1 },
+      { ...intelCard, platform: 'darwin' },
+      { ...intelCard, platform: 'win32' },
+    ];
+    for (const probed of machines) {
+      const locate = vi.fn(async () => ({ path: '/opt/sycl/llama-server' }));
+      const probe = vi.fn(async (options: HardwareProbeOptions) => {
+        await options.llamaServer?.();
+        return probed;
+      });
+      const hardware = new HardwareProbe(probe, undefined, byPath);
+      hardware.setLlamaServer(locate);
+      await hardware.profile();
+      locate.mockClear();
+      hardware.relistLlamaServer(false);
+      hardware.relistLlamaServer(true);
+      await settled();
+      expect(locate).not.toHaveBeenCalled();
+      expect(probe).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('does not let a save that finds nothing changed hide the relist another save needs', async () => {
+    let gate: Promise<void> = Promise.resolve();
+    let open: () => void = () => undefined;
+    const probe = vi.fn(async (options: HardwareProbeOptions) => {
+      await options.llamaServer?.();
+      return intelCard;
+    });
+    const hardware = new HardwareProbe(probe, undefined, byPath);
+    const locate = vi.fn(async () => {
+      await gate;
+      return { path: '/opt/sycl/llama-server' };
+    });
+    hardware.setLlamaServer(locate);
+    await hardware.profile();
+    gate = new Promise(resolve => (open = resolve));
+    locate.mockClear();
+    hardware.relistLlamaServer(false);
+    await vi.waitFor(() => expect(locate).toHaveBeenCalledTimes(1));
+    hardware.relistLlamaServer(true);
+    await vi.waitFor(() => expect(locate).toHaveBeenCalledTimes(2));
+    open();
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+    await settled();
+    expect(probe.mock.calls[1][0].llamaServerMaxAgeMs).toBe(0);
+    expect(await hardware.profile()).toBe(intelCard);
   });
 
   it('keeps a probe that finishes after forget from overwriting the newer one', async () => {
@@ -347,22 +484,20 @@ describe('relistAfterSave', () => {
       relist.mockClear();
       saved(id);
       await vi.waitFor(() => expect(relist).toHaveBeenCalledOnce());
-      expect(relist).toHaveBeenCalledWith(llamaServerSaved);
+      expect(relist).toHaveBeenCalledWith(llamaServerSaved, expect.any(Function));
     }
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it('warns and lists nothing when the saved servers cannot be read', async () => {
+  it('warns and lists again when the saved servers cannot be read', async () => {
     const hardware = new HardwareProbe(async () => machine);
-    const relist = vi.spyOn(hardware, 'relistLlamaServer');
+    const relist = vi.spyOn(hardware, 'relistLlamaServer').mockImplementation(() => undefined);
     const warn = vi.fn();
     relistAfterSave(hardware, () => Promise.reject(new Error('store unreadable')), { warn })('llama');
-    await vi.waitFor(() =>
-      expect(warn).toHaveBeenCalledWith(
-        'MODEL SERVERS: could not read the saved servers after a save: Error: store unreadable'
-      )
+    await vi.waitFor(() => expect(relist).toHaveBeenCalledWith(true, expect.any(Function)));
+    expect(warn).toHaveBeenCalledWith(
+      "MODEL SERVERS: could not read the saved servers after a save, so listing the llama-server's devices again: Error: store unreadable"
     );
-    expect(relist).not.toHaveBeenCalled();
   });
 });
 

@@ -316,8 +316,9 @@ describe('LocalServerSupervisor after Desktop exits without stopping its servers
     await first.instance.start('a', { runtime: 'llama-server', port: 8090, settings: { modelsDir: '/m' } });
     expect(listed(file)[0].warning).toBe(warning);
 
-    const { instance } = adopter(file, running.probe);
+    const { instance, warn } = adopter(file, running.probe);
     await instance.adopt(() => true);
+    expect(warn).toHaveBeenCalledWith(`MODEL SERVERS: ${warning}`);
     expect(instance.warning('a')).toBe(warning);
     expect(listed(file)[0].warning).toBe(warning);
     await instance.stop('a');

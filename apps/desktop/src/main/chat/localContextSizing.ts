@@ -1,7 +1,10 @@
 import {
+  LISTING_TIMEOUT_MS,
   archFromModelInfo,
+  binaryIdentity,
   modelBlobsOf,
   probeHardware,
+  withTimeout,
   type HardwareProbeOptions,
   type HardwareProfile,
   type LlamaServerLocation,
@@ -20,14 +23,16 @@ export class HardwareProbe {
   private retryAt = 0;
   private override: (probed: HardwareProfile) => HardwareProfile = probed => probed;
   private llamaServer: HardwareProbeOptions['llamaServer'];
-  /** The llama-server path the current result's probe found; undefined when it looked for none. */
-  private listedPath: string | null | undefined;
+  /** The identity of the llama-server the current result's probe found: null for none, undefined when unknown. */
+  private listedBinary: string | null | undefined;
   private relist = false;
 
   constructor(
     private readonly probe: (options: HardwareProbeOptions) => Promise<HardwareProfile> = options =>
       probeHardware(options),
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    private readonly identify: (path: string) => Promise<string> = binaryIdentity,
+    private readonly locateTimeoutMs: number = LISTING_TIMEOUT_MS
   ) {}
 
   /** What sizing reads in place of the probe, such as hardware entered in Settings. */
@@ -53,21 +58,34 @@ export class HardwareProbe {
    * with the devices listed afresh when the saved server is a llama-server on this computer (`llamaServerSaved`), or
    * when the llama-server Desktop would list is no longer the one listed. The last result stays readable until replaced.
    */
-  relistLlamaServer(llamaServerSaved: boolean): void {
+  relistLlamaServer(llamaServerSaved: boolean, warn: (message: string) => void = () => undefined): void {
     void this.probed().then(async profile => {
       if (profile?.platform !== 'linux' || profile.memoryKind !== 'discrete' || profile.gpuVendor !== 'intel') return;
-      if (!llamaServerSaved && !(await this.locatesAnother())) return;
+      if (!llamaServerSaved && !(await this.locatesAnother(warn))) return;
       this.pending = undefined;
       this.relist = true;
       void this.probed();
     });
   }
 
-  private async locatesAnother(): Promise<boolean> {
-    if (!this.llamaServer) return false;
-    // A lookup that fails cannot tell, so it lists again.
-    const found = await this.llamaServer().catch(() => undefined);
-    return found === undefined || (found?.path ?? null) !== this.listedPath;
+  /** Whether the llama-server Desktop would list now differs from the one listed; a check that cannot tell says yes. */
+  private async locatesAnother(warn: (message: string) => void): Promise<boolean> {
+    const locate = this.llamaServer;
+    if (!locate) return false;
+    try {
+      const outcome = await withTimeout(
+        locate().then(found => ({ found })),
+        this.locateTimeoutMs
+      );
+      if (!outcome) throw new Error('the lookup timed out');
+      const now = outcome.found ? await this.identify(outcome.found.path) : null;
+      return now !== this.listedBinary;
+    } catch (error) {
+      warn(
+        `MODEL SERVERS: could not tell which llama-server is in use, so listing its devices again: ${String(error)}`
+      );
+      return true;
+    }
   }
 
   /** The probe with any override applied; null after a failed probe, which is tried again a minute later. */
@@ -87,7 +105,7 @@ export class HardwareProbe {
         ? {
             llamaServer: async () => {
               const found = await locate();
-              located = found?.path ?? null;
+              located = found ? await this.identify(found.path).catch(() => undefined) : null;
               return found;
             },
           }
@@ -100,7 +118,7 @@ export class HardwareProbe {
       profile => {
         if (this.pending === pending) {
           this.result = profile;
-          this.listedPath = located;
+          this.listedBinary = located;
         }
         return profile;
       },
@@ -136,9 +154,20 @@ export function relistAfterSave(
   logger: { warn(message: string): void }
 ): (id: string) => void {
   return id => {
+    const warn = (message: string) => logger.warn(message);
     void views().then(
-      saved => hardware.relistLlamaServer(saved.some(view => view.id === id && launchesLocalLlamaServer(view))),
-      error => logger.warn(`MODEL SERVERS: could not read the saved servers after a save: ${String(error)}`)
+      saved =>
+        hardware.relistLlamaServer(
+          saved.some(view => view.id === id && launchesLocalLlamaServer(view)),
+          warn
+        ),
+      error => {
+        // Unknown what was saved, so list again, as a failed check does.
+        warn(
+          `MODEL SERVERS: could not read the saved servers after a save, so listing the llama-server's devices again: ${String(error)}`
+        );
+        hardware.relistLlamaServer(true, warn);
+      }
     );
   };
 }
