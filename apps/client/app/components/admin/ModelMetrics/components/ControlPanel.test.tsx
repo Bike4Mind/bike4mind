@@ -74,6 +74,33 @@ describe('ControlPanel', () => {
     expect(onUserChange).toHaveBeenCalledWith('user-2');
   });
 
+  it('keeps earlier model and user options once the server narrows the rows', () => {
+    const props = {
+      modelInfos: [],
+      state: { query: '', view: '', filters: { period: '', model: '', status: '' } },
+      onChange: vi.fn(),
+      userFilter: '',
+      onUserChange: vi.fn(),
+      simplifiedNames: false,
+      onSimplifiedNamesChange: vi.fn(),
+    };
+    const { rerender } = render(
+      <ControlPanel {...props} metrics={[metric('model-a', 'user-1'), metric('model-b', 'user-2')]} />,
+      { wrapper: TestWrapper }
+    );
+    rerender(
+      <ControlPanel
+        {...props}
+        state={{ ...props.state, filters: { ...props.state.filters, model: 'model-a' } }}
+        metrics={[metric('model-a', 'user-1')]}
+      />
+    );
+    fireEvent.click(screen.getByTestId('admin-filter-model'));
+    expect(screen.getByTestId('admin-filter-model-model-b')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('admin-filter-user'));
+    expect(screen.getByTestId('admin-filter-user-user-2')).toBeInTheDocument();
+  });
+
   it('toggles short and full names', () => {
     const { onSimplifiedNamesChange } = renderPanel();
     fireEvent.click(screen.getByTestId('model-metrics-names-full'));

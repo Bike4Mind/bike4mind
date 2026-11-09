@@ -5,11 +5,8 @@ import { resolvePeriod } from './modelMetricsSearch';
 const now = dayjs('2026-11-09T15:30:00.000Z');
 
 describe('resolvePeriod', () => {
-  it('spans the last 24 hours up to now', () => {
-    expect(resolvePeriod('24h', now)).toEqual({
-      dateFrom: '2026-11-08T15:30:00.000Z',
-      dateTo: '2026-11-09T15:30:00.000Z',
-    });
+  it('starts 24 hours back and leaves the end open so Refresh sees newer calls', () => {
+    expect(resolvePeriod('24h', now)).toEqual({ dateFrom: '2026-11-08T15:30:00.000Z' });
   });
 
   it('spans 7 and 30 days', () => {

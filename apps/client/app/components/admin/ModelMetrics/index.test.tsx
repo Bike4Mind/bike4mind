@@ -104,7 +104,7 @@ describe('ModelMetricsTab - Spend wiring', () => {
     const spendFilters = lastUseSpendCall()[0] as Record<string, unknown>;
     expect(spendFilters).toStrictEqual({
       dateFrom: expect.any(String),
-      dateTo: expect.any(String),
+      dateTo: undefined,
       userFilter: undefined,
       modelFilter: 'model-a',
     });
@@ -216,7 +216,7 @@ describe('ModelMetricsTab - filters', () => {
     const first = lastMetricsFilters();
     expect(first).toMatchObject({ modelFilter: 'model-a', statusFilter: 'error', userFilter: undefined });
     expect(first.dateFrom).toBe('2026-03-09T12:00:00.000Z');
-    expect(first.dateTo).toBe('2026-03-10T12:00:00.000Z');
+    expect(first.dateTo).toBeUndefined();
 
     rerender(<ModelMetricsTab />);
     // Same reference: a memo-less dayjs() per render would churn the react-query key.
