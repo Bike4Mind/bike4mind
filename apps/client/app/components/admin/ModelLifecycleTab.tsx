@@ -3,15 +3,20 @@ import {
   Alert,
   Box,
   Button,
+  Dropdown,
   FormControl,
   FormLabel,
   IconButton,
   Input,
   Link,
+  Menu,
+  MenuButton,
+  MenuItem,
   Stack,
   Textarea,
   Typography,
 } from '@mui/joy';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import type { PerMTokRate } from '@bike4mind/common';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
@@ -31,7 +36,7 @@ import {
   UpdatingBar,
   type DataColumn,
 } from './shared';
-import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
 
 /** Wire shapes of /api/admin/model-deprecation-status (dates arrive as strings). */
 interface QueueItem {
@@ -92,6 +97,12 @@ const PROBLEM_TONE: Record<StaleReference['problem'], AdminStatusTone> = {
   unknown: 'neutral',
 };
 
+const Dash = () => (
+  <Box component="span" sx={{ color: 'admin.inkMuted' }}>
+    -
+  </Box>
+);
+
 const SectionTitle = ({ children }: { children: React.ReactNode }) => (
   <Typography level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
     {children}
@@ -148,7 +159,8 @@ function horizonRows(status: LifecycleStatus): ExpiringRow[] {
  */
 export const ModelLifecycleTab: React.FC = () => {
   const [status, setStatus] = useState<LifecycleStatus | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  // True from the first render, so the tables open on skeletons rather than empty states.
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [acceptTarget, setAcceptTarget] = useState<QueueItem | null>(null);
@@ -271,14 +283,14 @@ export const ModelLifecycleTab: React.FC = () => {
         </Typography>
       ),
     },
-    { id: 'suggested', label: 'Suggested', width: '8rem', render: item => item.suggestion?.status ?? '-' },
+    { id: 'suggested', label: 'Suggested', width: '8rem', render: item => item.suggestion?.status ?? <Dash /> },
     {
       id: 'dates',
       label: 'Dates',
       width: '12rem',
       render: item => (
         <>
-          {item.suggestion?.deprecationDate ?? '-'}
+          {item.suggestion?.deprecationDate ?? <Dash />}
           {item.suggestion?.retirementDate ? ` / ${item.suggestion.retirementDate}` : ''}
         </>
       ),
@@ -288,7 +300,7 @@ export const ModelLifecycleTab: React.FC = () => {
       label: 'Successor',
       render: item => (
         <>
-          {item.suggestion?.replacedBy ?? '-'}
+          {item.suggestion?.replacedBy ?? <Dash />}
           {item.suggestion?.replacedBy && (
             <Box sx={{ mt: 0.25 }}>
               <SuccessorCostChip modelId={item.modelId} successorId={item.suggestion.replacedBy} rates={rates} />
@@ -314,36 +326,39 @@ export const ModelLifecycleTab: React.FC = () => {
         </Stack>
       ),
     },
-    {
-      // The queue's own job, so both decisions stay on the row instead of behind a menu.
-      id: 'decision',
-      label: 'Decision',
-      width: '11rem',
-      render: item => (
-        <Stack direction="row" gap={0.5}>
-          <Button
-            size="sm"
-            variant="outlined"
-            onClick={() => openAccept(item)}
-            disabled={pendingDismissId === item.modelId}
-            data-testid={`model-lifecycle-accept-${item.modelId}`}
-          >
-            Accept
-          </Button>
-          <Button
-            size="sm"
-            variant="plain"
-            color="neutral"
-            onClick={() => openDismiss(item)}
-            disabled={pendingDismissId === item.modelId}
-            data-testid={`model-lifecycle-dismiss-${item.modelId}`}
-          >
-            Dismiss
-          </Button>
-        </Stack>
-      ),
-    },
   ];
+
+  const queueMenu = (item: QueueItem) => (
+    <Dropdown>
+      <MenuButton
+        slots={{ root: IconButton }}
+        slotProps={{
+          root: {
+            size: 'sm',
+            variant: 'plain',
+            disabled: pendingDismissId === item.modelId,
+            'aria-label': `Actions for ${item.modelId}`,
+            sx: { ...adminFocus, color: 'admin.inkMuted' },
+          },
+        }}
+        data-testid={`model-lifecycle-queue-actions-${item.modelId}`}
+      >
+        <MoreHorizIcon sx={{ fontSize: 18 }} />
+      </MenuButton>
+      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+        <MenuItem onClick={() => openAccept(item)} data-testid={`model-lifecycle-accept-${item.modelId}`}>
+          Accept suggestion
+        </MenuItem>
+        <MenuItem
+          color="danger"
+          onClick={() => openDismiss(item)}
+          data-testid={`model-lifecycle-dismiss-${item.modelId}`}
+        >
+          Dismiss suggestion
+        </MenuItem>
+      </Menu>
+    </Dropdown>
+  );
 
   const horizonColumns: DataColumn<ExpiringRow>[] = [
     {
@@ -355,10 +370,15 @@ export const ModelLifecycleTab: React.FC = () => {
         </Typography>
       ),
     },
-    { id: 'status', label: 'Status', width: '9rem', render: row => row.status ?? '-' },
-    { id: 'deprecation', label: 'Deprecation', width: '9rem', render: row => row.deprecationDate ?? '-' },
-    { id: 'retirement', label: 'Retirement', width: '9rem', render: row => row.retirementDate ?? '-' },
-    { id: 'when', label: 'When', width: '7rem', render: row => formatDays(row.daysRemaining) },
+    { id: 'status', label: 'Status', width: '9rem', render: row => row.status ?? <Dash /> },
+    { id: 'deprecation', label: 'Deprecation', width: '9rem', render: row => row.deprecationDate ?? <Dash /> },
+    { id: 'retirement', label: 'Retirement', width: '9rem', render: row => row.retirementDate ?? <Dash /> },
+    {
+      id: 'when',
+      label: 'When',
+      width: '7rem',
+      render: row => (row.daysRemaining === undefined ? <Dash /> : formatDays(row.daysRemaining)),
+    },
   ];
 
   const staleColumns: DataColumn<StaleReference>[] = [
@@ -397,6 +417,8 @@ export const ModelLifecycleTab: React.FC = () => {
   ];
 
   const firstLoad = isLoading && !status;
+  // No count until there is data: a "(0)" while loading reads as an empty list.
+  const count = (n: number | undefined) => (n === undefined ? '' : ` (${n})`);
 
   return (
     <Stack sx={{ gap: ADMIN_REGION_GAP, minWidth: 0 }} data-testid="model-lifecycle-panel">
@@ -405,11 +427,8 @@ export const ModelLifecycleTab: React.FC = () => {
         description={
           <>
             Detected deprecations awaiting a verdict; accepting one appends an operator catalog row. Prices live in the{' '}
-            {/* Prices live in a different sidebar section, so settling a flagged
-                price meant hunting for it. Already inside /admin: setting the tab
-                is the whole navigation. component="button" because a Joy Link with
-                an onClick and no href renders an <a> with no href, which is not
-                focusable and unreachable by keyboard. */}
+            {/* Already inside /admin, so setting the tab is the whole navigation. component="button":
+                a Joy Link with an onClick and no href is an <a> without href, which no keyboard reaches. */}
             <Link
               component="button"
               onClick={() => {
@@ -455,7 +474,7 @@ export const ModelLifecycleTab: React.FC = () => {
           <UpdatingBar active={isLoading && !!status} testId="model-lifecycle-updating" />
           <Stack sx={{ gap: ADMIN_REGION_GAP }}>
             <Stack component="section" gap={1}>
-              <SectionTitle>Deprecation queue ({status?.queue.length ?? 0})</SectionTitle>
+              <SectionTitle>Deprecation queue{count(status?.queue.length)}</SectionTitle>
               <DataTable
                 label="Deprecation queue"
                 testId="model-lifecycle-queue-table"
@@ -465,8 +484,9 @@ export const ModelLifecycleTab: React.FC = () => {
                 rowTestId={item => `model-lifecycle-queue-row-${item.modelId}`}
                 loading={firstLoad}
                 onRetry={fetchStatus}
-                // Fixed columns total 55rem; the successor takes the rest.
-                minWidth="66rem"
+                rowActions={queueMenu}
+                // Fixed columns total 44rem plus the 3.5rem actions column; the successor takes the rest.
+                minWidth="62rem"
                 maxHeight="none"
                 pagination={false}
                 empty={
@@ -482,7 +502,7 @@ export const ModelLifecycleTab: React.FC = () => {
             </Stack>
 
             <Stack component="section" gap={1}>
-              <SectionTitle>Expired and expiring ({horizon.length})</SectionTitle>
+              <SectionTitle>Expired and expiring{count(status ? horizon.length : undefined)}</SectionTitle>
               <DataTable
                 label="Expired and expiring models"
                 testId="model-lifecycle-horizon-table"
@@ -513,7 +533,7 @@ export const ModelLifecycleTab: React.FC = () => {
 
             <Stack component="section" gap={1}>
               <Box>
-                <SectionTitle>Stale references ({status?.staleReferences?.length ?? 0})</SectionTitle>
+                <SectionTitle>Stale references{count(status?.staleReferences?.length)}</SectionTitle>
                 <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
                   A report: these model ids are hardcoded, so fixing one takes a code change.
                 </Typography>
