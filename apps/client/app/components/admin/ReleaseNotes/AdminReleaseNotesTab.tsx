@@ -159,20 +159,11 @@ const ReleaseNoteRow: React.FC<{
 const AdminReleaseNotesTab: React.FC = () => {
   const [status, setStatus] = useState<ReleaseNoteState>('scheduled');
   const [editing, setEditing] = useState<AdminReleaseNote | null>(null);
-  const {
-    data,
-    isLoading,
-    error,
-    refetch,
-    isFetching,
-    isRefetching,
-    hasNextPage,
-    fetchNextPage,
-    isFetchingNextPage,
-    dataUpdatedAt,
-  } = useReleaseNotes(status);
+  const { data, isLoading, error, refetch, isFetching, isRefetching, hasNextPage, fetchNextPage, isFetchingNextPage } =
+    useReleaseNotes(status);
   const statusMutation = useReleaseNoteStatus();
   const notes = data?.pages.flatMap(page => page.data) ?? [];
+  const fetchedAt = data?.pages.reduce((latest, page) => Math.max(latest, page.fetchedAt), 0) ?? 0;
   const filter = FILTERS.find(entry => entry.value === status) ?? FILTERS[0];
   // The empty state's next step: look at the list a note would have moved to.
   const fallback = FILTERS.find(entry => entry.value === (status === 'published' ? 'scheduled' : 'published'));
@@ -276,7 +267,7 @@ const AdminReleaseNotesTab: React.FC = () => {
                     onAction={onAction}
                     onEdit={setEditing}
                     busy={statusMutation.isPending}
-                    now={dataUpdatedAt}
+                    now={fetchedAt}
                   />
                 ))}
               </>

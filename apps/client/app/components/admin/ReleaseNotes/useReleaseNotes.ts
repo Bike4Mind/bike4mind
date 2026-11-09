@@ -38,12 +38,13 @@ const PAGE_SIZE = 20;
 export function useReleaseNotes(status: ReleaseNoteState) {
   return useInfiniteQuery({
     queryKey: [...LIST_KEY, status],
-    queryFn: async ({ pageParam }) =>
-      (
-        await api.get<ReleaseNotePage>('/api/admin/release-notes', {
-          params: { status, limit: PAGE_SIZE, cursor: pageParam },
-        })
-      ).data,
+    queryFn: async ({ pageParam }) => {
+      const response = await api.get<ReleaseNotePage>('/api/admin/release-notes', {
+        params: { status, limit: PAGE_SIZE, cursor: pageParam },
+      });
+      // Keep the clock with the rows: placeholder queries reset dataUpdatedAt to zero.
+      return { ...response.data, fetchedAt: Date.now() };
+    },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: page => page.next_cursor ?? undefined,
     // A filter switch keeps the previous rows on screen (under an UpdatingBar) until the new list lands.

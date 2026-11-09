@@ -1,6 +1,6 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -128,6 +128,23 @@ describe('ReleaseNoteEditDialog', () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByTestId('release-note-edit-headline')).toHaveValue('Edited headline');
     await waitFor(() => expect(screen.getByTestId('release-note-edit-cancel-btn')).not.toBeDisabled());
+  });
+
+  it.each(['success', 'error'] as const)('reports save %s even after the dialog unmounts', async outcome => {
+    const request = Promise.withResolvers<{ data: AdminReleaseNote }>();
+    mockPatch.mockReturnValue(request.promise);
+    const { unmount } = renderDialog(note);
+    fireEvent.click(screen.getByTestId('release-note-edit-save-btn'));
+    await waitFor(() => expect(mockPatch).toHaveBeenCalledTimes(1));
+    unmount();
+
+    await act(async () => {
+      if (outcome === 'success') request.resolve({ data: note });
+      else request.reject(new Error('Service unavailable'));
+    });
+
+    if (outcome === 'success') expect(mockToastSuccess).toHaveBeenCalledWith('Release note saved');
+    else expect(mockToastError).toHaveBeenCalledWith('Service unavailable');
   });
 
   it('sends the video when one is pasted', async () => {

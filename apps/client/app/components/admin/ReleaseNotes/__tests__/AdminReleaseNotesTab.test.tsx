@@ -1,5 +1,5 @@
 import React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -70,6 +70,10 @@ const lastBlocker = () => mockUseBlocker.mock.lastCall?.[0];
 beforeEach(() => {
   vi.clearAllMocks();
   fakeAdminRouter.reset({ tab: 'release-notes' });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('AdminReleaseNotesTab', () => {
@@ -237,16 +241,40 @@ describe('AdminReleaseNotesTab', () => {
     renderTab();
     expect(await screen.findByText('Scheduled one')).toBeTruthy();
     expect(screen.queryByTestId('release-notes-updating')).toBeNull();
+    expect(screen.getByText('Goes live in 5h')).toBeTruthy();
 
     fireEvent.click(screen.getByTestId('release-notes-filter-published-btn'));
     expect(await screen.findByTestId('release-notes-updating')).toBeTruthy();
     expect(screen.getByText('Scheduled one')).toBeTruthy();
+    expect(screen.getByText('Goes live in 5h')).toBeTruthy();
     expect(screen.queryByTestId('release-notes-loading')).toBeNull();
 
     releasePublished();
     expect(await screen.findByText('Published one')).toBeTruthy();
     expect(screen.queryByText('Scheduled one')).toBeNull();
     await waitFor(() => expect(screen.queryByTestId('release-notes-updating')).toBeNull());
+  });
+
+  it('refreshes countdowns for all retained rows when another page arrives', async () => {
+    const initialTime = new Date('2026-11-09T00:00:00Z').getTime();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(initialTime);
+    const firstNote = note({});
+    mockGet.mockImplementation(async (url: string, opts?: { params?: { cursor?: string } }) => {
+      if (url.endsWith('/config')) return { data: { config, malformed: false } };
+      if (opts?.params?.cursor === 'c2') {
+        return { data: { data: [note({ id: 'n2' })], next_cursor: null } };
+      }
+      return { data: { data: [firstNote], next_cursor: 'c2' } };
+    });
+    renderTab();
+    expect(await screen.findByText('Goes live in 5h')).toBeTruthy();
+
+    clock.mockReturnValue(initialTime + 2 * 60 * 60 * 1000);
+    fireEvent.click(screen.getByTestId('release-notes-load-more-btn'));
+
+    expect(await screen.findByText('Goes live in 3h')).toBeTruthy();
+    expect(screen.getByText('Goes live in 5h')).toBeTruthy();
+    expect(screen.getAllByTestId('release-notes-row')).toHaveLength(2);
   });
 
   it('keeps the rows and shows the error above them when a later page fails to load', async () => {
