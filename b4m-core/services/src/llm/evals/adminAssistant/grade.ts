@@ -48,7 +48,7 @@ function callFailed(call: AdminFunctionCall): boolean {
   }
 }
 
-function calledNames(calls: readonly AdminFunctionCall[]): string[] {
+export function calledNames(calls: readonly AdminFunctionCall[]): string[] {
   return calls.map(c => c.name).filter((n): n is string => typeof n === 'string');
 }
 

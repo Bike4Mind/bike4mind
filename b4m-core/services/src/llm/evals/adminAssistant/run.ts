@@ -8,7 +8,14 @@ import { ADMIN_ASSISTANT_SURFACE } from '@bike4mind/common';
 import { call, LakeRagHttpError, pollUntil, type Json } from '../lakeRag/http';
 import type { LakeRagApi } from '../lakeRag/provision';
 import type { AdminEvalCase, AdminEvalCategory } from './cases';
-import { fillTarget, gradeAdminCase, gradeAdminEmpty, type AdminEvalGrade, type AdminFunctionCall } from './grade';
+import {
+  calledNames,
+  fillTarget,
+  gradeAdminCase,
+  gradeAdminEmpty,
+  type AdminEvalGrade,
+  type AdminFunctionCall,
+} from './grade';
 
 const TERMINAL_QUEST_STATUSES: ReadonlySet<string> = new Set(['done', 'stopped']);
 
@@ -124,7 +131,7 @@ export async function runAdminEval(
         );
         const reply = typeof quest.reply === 'string' ? quest.reply : '';
         const calls = functionCallsOf(quest);
-        const toolsCalled = calls.map(c => String(c.name));
+        const toolsCalled = calledNames(calls);
         const grade =
           quest.type === 'error'
             ? gradeAdminEmpty(`quest error: ${reply.slice(0, 200)}`)
