@@ -166,13 +166,53 @@ describe('RetrievalRateTab page frame', () => {
     expect(screen.queryByTestId('admin-stat-strip')).toBeNull();
 
     const startInput = screen.getByLabelText('Start date');
+    const cutoffInput = screen.getByLabelText('Answerable cutoff');
     fireEvent.change(startInput, { target: { value: '2026-08-01' } });
-    fireEvent.click(screen.getByTestId('retrieval-rate-apply-btn'));
-    await waitFor(() => expect(mockGet).toHaveBeenLastCalledWith('/api/admin/retrieval-rate?startDate=2026-08-01'));
+    fireEvent.change(cutoffInput, { target: { value: '0.6' } });
+    await waitFor(() =>
+      expect(mockGet).toHaveBeenLastCalledWith('/api/admin/retrieval-rate?startDate=2026-08-01&answerableMinScore=0.6')
+    );
 
+    // Clearing the dates keeps the cutoff, and the reload asks for the default window at once.
     fireEvent.click(await screen.findByTestId('retrieval-rate-clear-dates-btn'));
+    await waitFor(() => expect(mockGet).toHaveBeenLastCalledWith('/api/admin/retrieval-rate?answerableMinScore=0.6'));
     await waitFor(() => expect(screen.queryByTestId('retrieval-rate-clear-dates-btn')).toBeNull());
     expect(startInput).toHaveValue('');
+    expect(cutoffInput).toHaveValue(0.6);
+  });
+
+  it('applies the dates and the cutoff as they change, with no Apply button', async () => {
+    renderTab();
+    await screen.findByText('25.0%');
+    expect(mockGet).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('retrieval-rate-apply-btn')).toBeNull();
+    expect(within(screen.getByTestId('retrieval-rate-filter-bar')).queryByRole('button')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-08-28' } });
+    await waitFor(() => expect(mockGet).toHaveBeenLastCalledWith('/api/admin/retrieval-rate?endDate=2026-08-28'));
+
+    // Typing a cutoff runs one fold for the finished number, not one per keystroke.
+    const cutoff = screen.getByLabelText('Answerable cutoff');
+    for (const value of ['0', '0.', '0.3', '0.35']) fireEvent.change(cutoff, { target: { value } });
+    await waitFor(() =>
+      expect(mockGet).toHaveBeenLastCalledWith('/api/admin/retrieval-rate?endDate=2026-08-28&answerableMinScore=0.35')
+    );
+    expect(mockGet).toHaveBeenCalledTimes(3);
+  });
+
+  it('spins only the header Refresh while a refresh is in flight', async () => {
+    renderTab();
+    await screen.findByText('25.0%');
+    const refresh = screen.getByTestId('retrieval-rate-refresh-btn');
+    expect(refresh).not.toHaveClass('MuiButton-loading');
+
+    mockGet.mockReturnValueOnce(new Promise(() => undefined));
+    fireEvent.click(refresh);
+    await waitFor(() => expect(refresh).toHaveClass('MuiButton-loading'));
+    const spinners = Array.from(document.querySelectorAll('.MuiCircularProgress-root'));
+    expect(spinners.length).toBeGreaterThan(0);
+    for (const spinner of spinners) expect(refresh).toContainElement(spinner as HTMLElement);
+    expect(screen.getByText('25.0%')).toBeTruthy();
   });
 });
 

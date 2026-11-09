@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
@@ -10,6 +10,7 @@ import Typography from '@mui/joy/Typography';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import type { OptionalPathRetrievalRate, RateArm } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { AdminPageHeader, EmptyState, ErrorState, LoadingState, StatStrip, StatTile } from './shared';
 import { ADMIN_REGION_GAP, adminFocusScope } from './shared/adminStyles';
 
@@ -108,13 +109,19 @@ const filterLabel = (text: string) => (
   </Typography>
 );
 
+// A blank cutoff means "let the server pick", which pins it to the live forced-retrieval floor
+// rather than to a number this component invented. Kept as a string so the field can be cleared.
+const NO_FILTERS = { startDate: '', endDate: '', answerableMinScore: '' };
+
 export default function RetrievalRateTab() {
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  // Blank means "let the server pick", which pins the cutoff to the live forced-retrieval floor
-  // rather than to a number this component invented. Kept as a string so the field can be cleared.
-  const [answerableMinScore, setAnswerableMinScore] = useState('');
-  const [appliedFilters, setAppliedFilters] = useState({ startDate: '', endDate: '', answerableMinScore: '' });
+  // Filters apply as they change. The pause keeps a typed cutoff or year from running one fold per
+  // keystroke, since each fold scans up to maxTurnsScanned turns.
+  const {
+    value: filters,
+    debouncedValue: appliedFilters,
+    setValue: setFilters,
+    setValueImmediately: applyFilters,
+  } = useDebounceValue(NO_FILTERS, 400);
 
   const { data, isLoading, isFetching, error, refetch } = useQuery<RetrievalRateResponse>({
     queryKey: ['retrievalRate', appliedFilters],
@@ -144,11 +151,7 @@ export default function RetrievalRateTab() {
     ? `Could not load the retrieval rate: ${error instanceof Error ? error.message : 'unknown error'}`
     : '';
   const datesApplied = Boolean(appliedFilters.startDate || appliedFilters.endDate);
-  const clearDates = () => {
-    setStartDate('');
-    setEndDate('');
-    setAppliedFilters({ startDate: '', endDate: '', answerableMinScore: appliedFilters.answerableMinScore });
-  };
+  const clearDates = () => applyFilters({ ...filters, startDate: '', endDate: '' });
 
   return (
     <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="admin-retrieval-rate-tab">
@@ -161,6 +164,7 @@ export default function RetrievalRateTab() {
             variant="outlined"
             startDecorator={<RefreshIcon />}
             onClick={() => refetch()}
+            loading={isFetching}
             data-testid="retrieval-rate-refresh-btn"
           >
             Refresh
@@ -177,15 +181,15 @@ export default function RetrievalRateTab() {
         sx={{
           ...adminFocusScope,
           // One height for every control so the row reads as a single toolbar when it wraps.
-          '& .MuiInput-root, & .MuiButton-root': { minHeight: 32 },
+          '& .MuiInput-root': { minHeight: 32 },
         }}
       >
         <Input
           size="sm"
           type="date"
           startDecorator={filterLabel('From')}
-          value={startDate}
-          onChange={e => setStartDate(e.target.value)}
+          value={filters.startDate}
+          onChange={e => setFilters({ ...filters, startDate: e.target.value })}
           slotProps={{ input: { 'aria-label': 'Start date' } }}
           data-testid="retrieval-rate-start-input"
         />
@@ -193,8 +197,8 @@ export default function RetrievalRateTab() {
           size="sm"
           type="date"
           startDecorator={filterLabel('To')}
-          value={endDate}
-          onChange={e => setEndDate(e.target.value)}
+          value={filters.endDate}
+          onChange={e => setFilters({ ...filters, endDate: e.target.value })}
           slotProps={{ input: { 'aria-label': 'End date' } }}
           data-testid="retrieval-rate-end-input"
         />
@@ -204,18 +208,10 @@ export default function RetrievalRateTab() {
           startDecorator={filterLabel('Answerable cutoff')}
           slotProps={{ input: { min: 0, max: 1, step: 0.05, 'aria-label': 'Answerable cutoff' } }}
           placeholder="default"
-          value={answerableMinScore}
-          onChange={e => setAnswerableMinScore(e.target.value)}
+          value={filters.answerableMinScore}
+          onChange={e => setFilters({ ...filters, answerableMinScore: e.target.value })}
           data-testid="retrieval-rate-cutoff-input"
         />
-        <Button
-          size="sm"
-          onClick={() => setAppliedFilters({ startDate, endDate, answerableMinScore })}
-          loading={isFetching}
-          data-testid="retrieval-rate-apply-btn"
-        >
-          Apply
-        </Button>
       </Stack>
 
       {isLoading && <LoadingState label="Folding turns" testId="retrieval-rate-loading" />}
