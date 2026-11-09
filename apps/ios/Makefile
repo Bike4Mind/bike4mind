@@ -1,4 +1,5 @@
-# Bike4Mind iOS. Simulator-only until a team id is configured; override SIMULATOR to pick another device.
+# Bike4Mind iOS. Simulator-only until a team id is configured; override SIMULATOR to pick another device,
+# or DESTINATION for a full xcodebuild destination (CI passes one by simulator id).
 SIMULATOR ?= iPhone 17
 DESTINATION ?= platform=iOS Simulator,name=$(SIMULATOR),OS=latest
 PROJECT := Bike4Mind.xcodeproj
