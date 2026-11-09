@@ -16,15 +16,18 @@ const mockRefs = vi.hoisted(() => ({
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
-  // any: next-connect chain stub, only get/put/post/delete are exercised
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const chain: any = {};
-  for (const m of ['get', 'put', 'post', 'delete']) {
-    chain[m] = (fn: (req: NextApiRequest, res: NextApiResponse) => Promise<unknown>) => {
-      mockRefs.handlers[`${m}:${mockRefs.current ?? ''}`] = fn;
-      return chain;
-    };
-  }
+  type Method = 'get' | 'put' | 'post' | 'delete';
+  type Chain = Record<Method, (handler: Handler) => Chain>;
+  const register = (method: Method) => (handler: Handler) => {
+    mockRefs.handlers[`${method}:${mockRefs.current ?? ''}`] = handler;
+    return chain;
+  };
+  const chain: Chain = {
+    get: register('get'),
+    put: register('put'),
+    post: register('post'),
+    delete: register('delete'),
+  };
   return { baseApi: () => chain };
 });
 
@@ -50,7 +53,7 @@ const stored = {
   status: 'draft',
   tags: [],
   visibility: 'public',
-  metadata: {},
+  metadata: { language: 'html', addedLater: 'private', questId: 'q' },
   contentHash: 'h',
   contentSize: 4,
   createdAt: new Date('2026-01-01'),
@@ -87,6 +90,7 @@ describe('artifact readers', () => {
     const body = await run(byId, who);
     expect(body.artifact.userId).toBe('owner');
     expect(body.artifact.permissions).toBeDefined();
+    expect(body.artifact.metadata).toEqual(stored.metadata);
     expect(body.content.content).toBe('body');
     expect((await run(versions, who)).data[0].createdBy).toBe('owner');
   });
@@ -94,7 +98,14 @@ describe('artifact readers', () => {
   it('a public stranger sees the viewer shape only', async () => {
     const { byId, versions } = await load();
     const body = await run(byId, 'stranger');
-    expect(body.artifact).toMatchObject({ id: 'a1', title: 'T', type: 'html', version: 1, metadata: {} });
+    expect(body.artifact).toMatchObject({
+      id: 'a1',
+      title: 'T',
+      type: 'html',
+      version: 1,
+      metadata: { language: 'html' },
+    });
+    expect(body.artifact.metadata).toEqual({ language: 'html' });
     expect(body.artifact.updatedAt).toBeDefined();
     expect(body.content.content).toBe('body');
     for (const k of ['_id', 'userId', 'permissions', 'organizationId', 'sessionId', 'projectId'])

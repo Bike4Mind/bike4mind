@@ -38,12 +38,23 @@ interface GetArtifactAdapters {
  */
 export type ArtifactReadAccess = 'owner' | 'shared' | 'public';
 
-export interface GetArtifactResult {
-  access: ArtifactReadAccess;
-  artifact: IArtifactDocument | ArtifactViewerView;
+type ArtifactContentResult = {
   content?: IArtifactContentDocument | null;
-  versions?: (IArtifactVersionDocument | ArtifactViewerVersion<IArtifactVersionDocument>)[];
-}
+};
+
+export type GetArtifactResult = ArtifactContentResult &
+  (
+    | {
+        access: 'owner' | 'shared';
+        artifact: IArtifactDocument;
+        versions?: IArtifactVersionDocument[];
+      }
+    | {
+        access: 'public';
+        artifact: ArtifactViewerView;
+        versions?: ArtifactViewerVersion<IArtifactVersionDocument>[];
+      }
+  );
 
 /**
  * Retrieves an artifact with optional content and version information
@@ -72,10 +83,8 @@ export const get = async (
     throw new UnauthorizedError('Access denied');
   }
 
-  const result: GetArtifactResult = {
-    access,
-    artifact: access === 'public' ? toArtifactViewerView(artifact) : artifact,
-  };
+  const result: GetArtifactResult =
+    access === 'public' ? { access, artifact: toArtifactViewerView(artifact) } : { access, artifact };
 
   // Include content if requested
   if (includeContent) {
@@ -92,7 +101,11 @@ export const get = async (
   // Include version history if requested
   if (includeVersions) {
     const versions = await db.artifactVersions.findByArtifactId(artifact.id);
-    result.versions = access === 'public' ? versions.map(toArtifactViewerVersion) : versions;
+    if (result.access === 'public') {
+      result.versions = versions.map(toArtifactViewerVersion);
+    } else {
+      result.versions = versions;
+    }
   }
 
   return result;

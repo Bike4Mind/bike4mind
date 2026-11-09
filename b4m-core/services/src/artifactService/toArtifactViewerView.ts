@@ -1,4 +1,4 @@
-import type { IArtifactDocument } from '@bike4mind/common';
+import type { ArtifactType, IArtifactDocument } from '@bike4mind/common';
 
 /** What a reader who has no grant on an artifact (it is only public) may see. No owner, org or permission data. */
 export type ArtifactViewerView = Pick<
@@ -35,14 +35,32 @@ const VIEWER_VERSION_KEYS = [
 
 export type ArtifactViewerVersion<T> = Pick<T, Extract<(typeof VIEWER_VERSION_KEYS)[number], keyof T>>;
 
-/** Chat and agent writers copy the source quest id (and the desktop publisher a session id) into metadata. */
-function omitQuestIds<M extends object>(metadata: M): M {
-  const {
-    questId: _q,
-    desktopSessionId: _s,
-    ...rest
-  } = metadata as M & { questId?: unknown; desktopSessionId?: unknown };
-  return rest as unknown as M;
+const VIEWER_METADATA_KEYS: Partial<Record<ArtifactType, readonly string[]>> = {
+  react: ['hasDefaultExport', 'errorBoundary'],
+  html: ['allowedScripts', 'cspPolicy', 'sanitized'],
+  svg: ['viewBox', 'width', 'height', 'sanitized'],
+  mermaid: ['chartType', 'description'],
+  recharts: ['chartType', 'description', 'dataPoints', 'width', 'height', 'xAxis', 'yAxis', 'colors'],
+  python: ['packages', 'hasOutput', 'executionState', 'lastExecutionTime'],
+  chess: ['fen', 'turn', 'lastMove', 'isCheck', 'isCheckmate', 'isDraw', 'isGameOver', 'moveNumber'],
+  lattice: ['modelType', 'periodGrain', 'currency', 'entityCount', 'ruleCount', 'lastComputedAt'],
+};
+
+function toViewerMetadata(artifact: IArtifactDocument): IArtifactDocument['metadata'] {
+  if (!artifact.metadata) return undefined;
+  const metadata: Record<string, unknown> = {};
+  // Free-form settings/props are not read by the viewer; only display fields cross this boundary.
+  const keys = ['language', 'dependencies', ...(VIEWER_METADATA_KEYS[artifact.type] ?? [])];
+  for (const key of keys) {
+    if (Object.hasOwn(artifact.metadata, key)) metadata[key] = artifact.metadata[key];
+  }
+  if (artifact.type === 'chess' && typeof metadata.lastMove === 'object' && metadata.lastMove !== null) {
+    const lastMove = metadata.lastMove as Record<string, unknown>;
+    metadata.lastMove = Object.fromEntries(
+      ['from', 'to', 'san'].filter(key => Object.hasOwn(lastMove, key)).map(key => [key, lastMove[key]])
+    );
+  }
+  return metadata;
 }
 
 /** Built field by field, never spread, so a field added to the document later stays private by default. */
@@ -58,7 +76,7 @@ export function toArtifactViewerView(artifact: IArtifactDocument): ArtifactViewe
     tags: artifact.tags,
     visibility: artifact.visibility,
     identifier: artifact.identifier,
-    metadata: artifact.metadata && omitQuestIds(artifact.metadata),
+    metadata: toViewerMetadata(artifact),
     contentHash: artifact.contentHash,
     contentSize: artifact.contentSize,
     createdAt: artifact.createdAt,
