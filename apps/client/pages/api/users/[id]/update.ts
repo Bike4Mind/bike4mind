@@ -268,7 +268,9 @@ const handler = baseApi().put(
       }
 
       // Parse with the admin schema -- includes email, tags, credits, etc.
-      const { deferLinkPropagation, ...adminBody } = rawBody;
+      // Request flags, not user fields: deferLinkPropagation (see linked-suspend-propagation.ts) and
+      // undoSuspension (an Undo of the admin's own suspend; see gradeDetectionsForStatusChange).
+      const { deferLinkPropagation, undoSuspension, ...adminBody } = rawBody;
       // Zod strips unknown keys, so a misnamed admin field (the `adminNote` vs
       // `creditReason` mix-up in useUpdateUserCredits was exactly this) parses away
       // and the 200 reads as "fully applied" when a credit grant, tag, or role
@@ -438,6 +440,7 @@ const handler = baseApi().put(
             wasSuspended: !!blockSnapshot.isBanned,
             isSuspended: !!blockUpdated.isBanned,
             reason: statusChangeReason,
+            undo: undoSuspension === true,
           },
           { writeAudit: requestAuditWriter(req), logger: req.logger }
         );

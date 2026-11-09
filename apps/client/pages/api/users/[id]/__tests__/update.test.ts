@@ -1199,8 +1199,32 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
       await promise;
 
       expect(mockGradeDetections).toHaveBeenCalledExactlyOnceWith(
-        { userId: 'other-user', adminId: ADMIN.id, wasSuspended: before, isSuspended: after, reason: STATUS_REASON },
+        {
+          userId: 'other-user',
+          adminId: ADMIN.id,
+          wasSuspended: before,
+          isSuspended: after,
+          reason: STATUS_REASON,
+          undo: false,
+        },
         expect.objectContaining({ writeAudit: expect.any(Function) })
+      );
+    });
+
+    it('marks a reinstatement flagged as an undo so grading removes the suspension grades', async () => {
+      mockUserFindById.mockReturnValue(target({ isBanned: true }));
+      mockAdminUpdateUser.mockResolvedValue({ user: target({ isBanned: false }), creditAdjustment: undefined });
+      const { res, promise } = run({
+        user: ADMIN,
+        userId: 'other-user',
+        body: { isBanned: false, statusChangeReason: STATUS_REASON, undoSuspension: true },
+      });
+      await promise;
+
+      expect(res._getJSONData().ignoredFields).toBeUndefined();
+      expect(mockGradeDetections).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ wasSuspended: true, isSuspended: false, undo: true }),
+        expect.anything()
       );
     });
 

@@ -362,6 +362,7 @@ describe('shadowDetectionRepository', () => {
           reviewerId: 'admin1',
           reviewedAt: expect.any(Date),
           source: 'suspension',
+          accountId: userId,
         },
       ]);
       expect(await stored(spend)).toMatchObject({ verdict: 'confirmed_abuse', revision: 1 });
@@ -389,6 +390,50 @@ describe('shadowDetectionRepository', () => {
         ['confirmed_abuse', 'suspension'],
         ['legitimate_human', 'reinstatement'],
       ]);
+    });
+
+    describe('undoing a suspension', () => {
+      const undo = (account = userId) =>
+        shadowDetectionRepository.revertSuspensionGrades({ userId: account, reason: REINSTATED, reviewerId: 'admin1' });
+
+      it('removes the grade the suspension recorded and leaves the detection unreviewed', async () => {
+        const id = await shadowDetectionRepository.record(detection({ userIds: [userId, peerId] }));
+        await suspend();
+
+        const reverted = await undo();
+
+        expect(reverted.map(item => item.id)).toEqual([id]);
+        expect(await stored(id)).toMatchObject({ verdict: null, verdicts: [], revision: 2 });
+      });
+
+      it('restores the verdict an earlier reinstatement recorded', async () => {
+        const id = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
+        await suspend();
+        await reinstate();
+        await suspend();
+
+        await undo();
+
+        const item = await stored(id);
+        expect(item.verdict).toBe('legitimate_human');
+        expect(item.verdicts.map(entry => entry.source)).toEqual(['suspension', 'reinstatement']);
+      });
+
+      it("leaves a grade another account's suspension recorded", async () => {
+        const id = await shadowDetectionRepository.record(detection({ userIds: [userId, peerId] }));
+        await shadowDetectionRepository.gradeForSuspension({ userId: peerId, reason: SUSPENDED, reviewerId: 'admin1' });
+
+        expect(await undo()).toEqual([]);
+        expect(await stored(id)).toMatchObject({ verdict: 'confirmed_abuse', revision: 1 });
+      });
+
+      it('never removes a reviewer verdict', async () => {
+        const id = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
+        await grade(id, 0, 'confirmed_abuse');
+
+        expect(await undo()).toEqual([]);
+        expect(await stored(id)).toMatchObject({ verdict: 'confirmed_abuse', revision: 1 });
+      });
     });
 
     it('grades an ungraded detection legitimate human use on reinstatement', async () => {

@@ -92,6 +92,7 @@ const VerdictEntrySchema = new Schema<ShadowDetectionVerdictEntry>(
     reviewerId: { type: String, required: true },
     reviewedAt: { type: Date, required: true },
     source: { type: String, enum: SHADOW_DETECTION_VERDICT_SOURCES },
+    accountId: { type: String },
   },
   { _id: false }
 );
@@ -264,6 +265,7 @@ const toItem = (doc: LeanShadowDetection): ShadowDetectionItem => ({
     reviewerId: entry.reviewerId,
     reviewedAt: entry.reviewedAt,
     ...(entry.source ? { source: entry.source } : {}),
+    ...(entry.accountId ? { accountId: entry.accountId } : {}),
   })),
   revision: doc.revision ?? 0,
 });
@@ -572,6 +574,34 @@ class ShadowDetectionRepository {
   }
 
   /**
+   * An admin undid this account's suspension: removes the confirmed_abuse grade that suspension recorded and
+   * restores the verdict the record had before it (null when it had none), so an undone mis-click neither
+   * stands as confirmed abuse nor reads as reviewed legitimate. Acts only on a record whose latest entry is
+   * this account's own suspension grade; a reviewer's verdict or another account's grade is left alone.
+   * Returns the records it changed.
+   */
+  async revertSuspensionGrades(input: AccountStatusVerdictInput): Promise<ShadowDetectionItem[]> {
+    const candidates = await ShadowDetectionModel.find({
+      userIds: input.userId,
+      verdict: 'confirmed_abuse',
+      $nor: [HAS_REVIEW_VERDICT],
+    }).lean<LeanShadowDetection[]>();
+    const reverted: ShadowDetectionItem[] = [];
+    for (const doc of candidates) {
+      const entries = doc.verdicts ?? [];
+      const latest = entries.at(-1);
+      if (latest?.source !== 'suspension' || latest.accountId !== input.userId) continue;
+      const updated = await ShadowDetectionModel.findOneAndUpdate(
+        { _id: doc._id, revision: doc.revision },
+        { $pop: { verdicts: 1 }, $set: { verdict: entries.at(-2)?.verdict ?? null }, $inc: { revision: 1 } },
+        { new: true }
+      ).lean<LeanShadowDetection>();
+      if (updated) reverted.push(toItem(updated));
+    }
+    return reverted;
+  }
+
+  /**
    * Appends one verdict per record, each conditional on the revision it was read at and on `stillOpen`,
    * so a reviewer grading the same record in between keeps their verdict.
    */
@@ -590,6 +620,7 @@ class ShadowDetectionRepository {
         reviewerId: input.reviewerId,
         reviewedAt: new Date(),
         source,
+        accountId: input.userId,
       };
       const updated = await ShadowDetectionModel.findOneAndUpdate(
         { _id: doc._id, revision: doc.revision, ...stillOpen },

@@ -111,6 +111,24 @@ describe('DetectionLinkedAccountsCard', () => {
     });
   });
 
+  it('undoes by reinstating each account as an undo, so the suspend grades are removed rather than flipped', async () => {
+    setup();
+    openDialog();
+    fireEvent.click(screen.getByTestId('suspend-linked-dialog-confirm-btn'));
+    await screen.findByTestId('undo-toast-message');
+
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+
+    await waitFor(() => expect(mocks.updateUser).toHaveBeenCalledTimes(4));
+    for (const id of ['one', 'two']) {
+      expect(mocks.updateUser).toHaveBeenCalledWith(id, {
+        isBanned: false,
+        statusChangeReason: 'Undo: Abuse / automated signups',
+        undoSuspension: true,
+      });
+    }
+  });
+
   it('keeps the dialog open on a partial failure and retries only the accounts that failed', async () => {
     mocks.updateUser.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('network'));
     setup();

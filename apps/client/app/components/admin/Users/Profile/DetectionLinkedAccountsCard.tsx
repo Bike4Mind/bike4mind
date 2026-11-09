@@ -40,11 +40,12 @@ async function setSuspended(
   // One at a time: the first request may ask for step-up, and the rest reuse it.
   for (const account of accounts) {
     try {
-      // A suspend defers its linked-account alert; propagateOnce sends one for the whole action.
+      // A suspend defers its linked-account alert; propagateOnce sends one for the whole action. A
+      // reinstate here is only ever the Undo of this action, so it removes the suspend's detection grades.
       const update: AdminUserUpdate & { deferLinkPropagation?: boolean } = {
         isBanned,
         statusChangeReason: reason,
-        ...(isBanned && { deferLinkPropagation: true }),
+        ...(isBanned ? { deferLinkPropagation: true } : { undoSuspension: true }),
       };
       await updateUserToServer(account.id, update);
       done.push(account);

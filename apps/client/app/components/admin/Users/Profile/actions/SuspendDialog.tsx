@@ -52,6 +52,7 @@ export const SuspendDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onA
         update({
           isBanned: false,
           statusChangeReason: undoAdminReason(reason),
+          undoSuspension: true,
           ...(removed > 0 && { creditDelta: removed, creditReason: undoAdminReason(reason) }),
         }),
       onViewAudit: onAudit,
