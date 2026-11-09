@@ -111,6 +111,15 @@ describe('ShadowDetectionsTab', () => {
     m.useShadowDetections.mockReturnValue(queryResult(list()));
   });
 
+  it('leaves the outer padding to the admin page frame', () => {
+    renderTab();
+    const root = screen.getByTestId('admin-shadow-detections-tab');
+    const style = getComputedStyle(root);
+    for (const side of [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft]) {
+      expect(parseFloat(side || '0')).toBe(0);
+    }
+  });
+
   it('defaults to unreviewed detections and renders rows and stats', () => {
     renderTab();
 
