@@ -72,6 +72,7 @@ describe('SecopsTriageTab', () => {
     Object.assign(mocks.settingsQuery, { data: [], isLoading: false, isError: false, isFetching: false });
     mocks.settingsQuery.refetch.mockReset();
     mocks.update.mutateAsync.mockReset().mockResolvedValue({});
+    mocks.update.isPending = false;
     vi.mocked(toast.success).mockReset();
     vi.mocked(toast.error).mockReset();
     mocks.router.navigate.mockReset();
@@ -102,8 +103,10 @@ describe('SecopsTriageTab', () => {
     for (const [testId, title] of SECTIONS) {
       const section = screen.getByTestId(testId);
       expect(within(section).getByRole('heading', { level: 2 })).toHaveTextContent(title);
-      expect(section.closest('.MuiCard-root')).toBeNull();
+      // Nothing wraps a section: it sits in the form column, which sits directly in the page.
+      expect(section.parentElement?.parentElement).toBe(tab);
     }
+    // Joy's Card has no role or test id, so "no card inside a settings card" is checked by its class.
     expect(tab.querySelectorAll('.MuiCard-root')).toHaveLength(0);
   });
 
@@ -194,6 +197,19 @@ describe('SecopsTriageTab', () => {
     expect(within(screen.getByTestId('secops-triage-enabled-switch')).getByRole('switch')).toBeChecked();
   });
 
+  it('locks Save and Discard while a save is in flight', () => {
+    mocks.update.isPending = true;
+    renderTab();
+    toggle('secops-triage-enabled-switch');
+
+    const save = screen.getByTestId('admin-save-confirm-btn');
+    expect(save).toBeDisabled();
+    expect(within(save).getByRole('progressbar')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-save-discard-btn')).toBeDisabled();
+    fireEvent.keyDown(window, { key: 's', metaKey: true });
+    expect(mocks.update.mutateAsync).not.toHaveBeenCalled();
+  });
+
   it('still refuses to save LLM enrichment without a model', () => {
     renderTab();
     toggle('secops-triage-llm-enrichment-switch');
@@ -228,6 +244,19 @@ describe('SecopsTriageTab', () => {
     expect(screen.queryByTestId('secops-triage-section-master')).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
     expect(mocks.settingsQuery.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the form editable when a background refetch fails over loaded settings', () => {
+    mocks.rawConfig = { githubRepo: 'example-org/stored' };
+    Object.assign(mocks.settingsQuery, { data: [], isError: true });
+    renderTab();
+
+    expect(screen.queryByTestId('admin-error-state')).not.toBeInTheDocument();
+    expect(within(screen.getByTestId('secops-triage-github-repo-input')).getByRole('textbox')).toHaveValue(
+      'example-org/stored'
+    );
+    toggle('secops-triage-enabled-switch');
+    expect(screen.getByTestId('admin-save-bar')).toHaveTextContent('1 unsaved change');
   });
 });
 
