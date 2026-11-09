@@ -145,8 +145,8 @@ function storedTransport(transport: StoredServer['transport']): ModelServerTrans
 }
 
 /**
- * A saved SSH server whose destination or port cannot be used (a hand edit), so it is never connected to. It is
- * listed with its problem so the user can see it and remove it.
+ * A saved SSH server whose destination is missing or cannot be used, or whose port cannot (a hand edit), so it is
+ * never connected to. It is listed with its problem so the user can see it and remove it.
  */
 export interface UnusableServerRecord extends Omit<ModelServerRecord, 'transport' | 'models' | 'specs'> {
   transport: { type: 'ssh'; destination: string | null };
@@ -156,14 +156,17 @@ export interface UnusableServerRecord extends Omit<ModelServerRecord, 'transport
 /** The unusable record for a stored SSH server that hydrate turns down; null for any other record. */
 export function unusableServer(stored: StoredServer): UnusableServerRecord | null {
   const { transport } = stored;
-  if (transport.type !== 'ssh' || typeof transport.destination !== 'string' || storedTransport(transport)) return null;
-  const destination = parseSshDestination(transport.destination);
+  if (transport.type !== 'ssh' || storedTransport(transport)) return null;
+  const saved = typeof transport.destination === 'string';
+  const destination = saved ? parseSshDestination(transport.destination as string) : null;
   return {
     ...recordFields(stored),
     transport: { type: 'ssh', destination },
     problem: destination
       ? 'Its saved SSH port is not a number from 1 to 65535.'
-      : 'Its saved SSH destination is not one ssh can be given safely.',
+      : saved
+        ? 'Its saved SSH destination is not one ssh can be given safely.'
+        : 'It has no saved SSH destination.',
   };
 }
 
