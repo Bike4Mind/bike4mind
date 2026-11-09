@@ -5530,16 +5530,17 @@ export async function scanShell(
           }
           const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg;
           if (value.startsWith('-')) continue;
+          const words = operandWords(value, scope());
+          // Braces the scan cannot expand as bash does may make any name, so whatever their shape they are unread.
+          if (words === null) {
+            unreadOperands++;
+            continue;
+          }
           const reach = reachAt(index);
           // An expansion is an unread path where a path is expected: an option's folder or file, a tree
           // operand, or a word with a separator outside the expansion (`"$X"/f`, but not `"$PAT"`).
           const option = PATH_OPTION_VALUE.test(wordValue(arg)) || PATH_OPTIONS.has(wordValue(rest[index - 1] ?? ''));
           const pattern = patterns.has(index - wrapperWordCount);
-          const words = operandWords(value, scope());
-          if (words === null) {
-            if (counts && (option || reach || (!pattern && value.includes('/')))) unreadOperands++;
-            continue;
-          }
           for (const word of words) {
             const pathLike = option || reach !== null || (!pattern && /[\\/]/.test(word.text));
             await checkArgument(word, reach, pathLike, counts);
@@ -5562,7 +5563,9 @@ export async function scanShell(
         const budget = { entries: WALK_ENTRIES };
         const operands = wrappedRest.filter(arg => !unquote(arg).startsWith('-'));
         for (const arg of trees.cwd ? [...operands, '.'] : operands) {
-          for (const word of operandWords(arg, scope()) ?? []) {
+          const words = operandWords(arg, scope());
+          if (words === null) unreadOperands++;
+          for (const word of words ?? []) {
             const operand = readOperand(word, posix.dirname);
             if (operand.unread) continue;
             const links = await linksUnder(
@@ -5579,7 +5582,9 @@ export async function scanShell(
       if (target?.glued) await check(target.value, state.cwd, false, 'program', trees.glued);
       if (UNPACKS.has(name)) {
         for (const tree of inPlace.trees) {
-          for (const word of operandWords(tree, scope()) ?? []) await checkArgument(word, 'write', true);
+          const words = operandWords(tree, scope());
+          if (words === null) unreadOperands++;
+          for (const word of words ?? []) await checkArgument(word, 'write', true);
         }
       }
       if (name === 'ln') await noteLinks(wrappedRest);
@@ -5676,7 +5681,9 @@ export async function scanShell(
       const place = directory ?? (single ? '.' : operands.at(-1));
       if (place === undefined) return;
       const text = (raw: string): string | null => {
-        const [word] = operandWords(raw, scope()) ?? [];
+        const words = operandWords(raw, scope());
+        if (words === null) unreadOperands++;
+        const [word] = words ?? [];
         return word && word.expandAt === null ? word.text : null;
       };
       const at = text(place);

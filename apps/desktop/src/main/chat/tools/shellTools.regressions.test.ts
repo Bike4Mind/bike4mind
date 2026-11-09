@@ -553,6 +553,79 @@ describe('commands main ran unasked', () => {
     expect(await judge(command)).toMatchObject(asks);
   });
 
+  // bash 4 and later pass each as `.claude`, the last beside `x}a`; bash 3.2 keeps a step as written.
+  const claudeBraceWords = [
+    '.clau{d..d..1}e',
+    '.claud{e..e..2}',
+    '.cl{a..a..1}ude',
+    '.clau{d..d..-1}e',
+    '{x}a,.claude}',
+  ];
+
+  it.each(claudeBraceWords)('reads %s as a word host bash 4 or later passes as .claude', word => {
+    const [major, ...printed] = execFileSync('bash', ['-c', `printf '%s\\n' "\${BASH_VERSINFO[0]}" ${word}`], {
+      encoding: 'utf8',
+    }).split('\n');
+    if (Number(major) >= 4) expect(printed).toContain('.claude');
+  });
+
+  it.each(
+    claudeBraceWords.flatMap(word =>
+      [
+        'git checkout --',
+        'git restore',
+        'git rm -r',
+        'git rm -rf --cached',
+        'git clean -fdx',
+        'git add',
+        'git reset --',
+        'npx prettier --write',
+      ].map(command => `${command} ${word}`)
+    )
+  )('asks in every mode for %s, whose braces the scan leaves unread', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each(
+    [
+      ['a step', '.clau{d..d..1}e', '.clau{d..d..1}e/settings.json'],
+      ['a signed step', '.clau{d..d..-1}e', '.clau{d..d..-1}e/settings.json'],
+      ['a signed bound', '.claude{+1..1}', '.claude/x{+1..1}'],
+      ['zero padding', '.claude{01..1}', '.claude/x{01..1}'],
+      ['a bound past 32 bits', '.claude{2147483648..2147483648}', '.claude/x{2147483648..2147483648}'],
+      ['a `..` that makes no sequence', '.clau{d..dd}e', '.clau{d..dd}e/settings.json'],
+      ['unbalanced braces around a comma', '{x}a,.claude}', '{x}a,.claude}/settings.json'],
+      ['unbalanced braces around a `..`', '.clau{d..d}e}', '.clau{d..d}e}/settings.json'],
+    ].flatMap(([form, bare, slashed]) =>
+      [
+        'git checkout --',
+        'git restore',
+        'git rm -r',
+        'git clean -fdx',
+        'git add',
+        'git reset --',
+        'npx prettier --write',
+        'npx eslint --fix',
+        'rm -rf',
+        'mv src/a.ts',
+        'cp src/a.ts',
+      ].flatMap(command => [
+        [`${command} ${bare}`, form],
+        [`${command} ${slashed}`, form],
+      ])
+    )
+  )('asks in every mode for %s, a word with %s', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each(
+    ['grep -R a', 'ls -L', 'ln -s src/a.ts', 'tar -xf clean.tar -C', 'cp -rL src'].map(
+      command => `${command} .clau{d..d..1}e`
+    )
+  )('asks in every mode for %s, whose walked, linked or unpacked tree the scan leaves unread', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
   it.each([
     'git diff --name-only \\--output=.claude/settings.json',
     'git diff --outp\\ut=.claude/settings.json HEAD~1',
