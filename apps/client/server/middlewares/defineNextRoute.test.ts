@@ -103,7 +103,7 @@ import { baseApi, methodNotAllowedHandler } from './baseApi';
 import { nextRouteForContract } from './defineNextRoute';
 
 type RouteArgs = Parameters<ReturnType<typeof nextRouteForContract>>;
-type RateLimitHandler = NonNullable<Parameters<typeof nextRouteForContract>[1]>['rateLimit'];
+type RateLimitHandler = NonNullable<NonNullable<Parameters<typeof nextRouteForContract>[1]>['rateLimit']>;
 
 const BodySchema = z.object({ message: z.string(), count: z.number().positive().default(1) });
 const OkSchema = z.object({ ok: z.boolean() });
