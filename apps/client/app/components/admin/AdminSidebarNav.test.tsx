@@ -500,4 +500,9 @@ describe('filterSidebarSections', () => {
     const items = filterSidebarSections(SIDEBAR_SECTIONS, allOpen, 'waitlist').flatMap(section => section.items);
     expect(items.map(item => item.label)).toEqual(['Invite Center']);
   });
+
+  it('still finds Webhook audit logs by its former name', () => {
+    const items = filterSidebarSections(SIDEBAR_SECTIONS, allOpen, 'webhook logs').flatMap(section => section.items);
+    expect(items.map(item => item.label)).toEqual(['Webhook audit logs']);
+  });
 });

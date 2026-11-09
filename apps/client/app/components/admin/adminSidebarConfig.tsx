@@ -356,7 +356,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         label: 'GitHub connection',
         testid: 'admin-github-connection-btn',
       },
-      { Icon: Webhook, tab: AdminTab.WebhookAuditLogs, label: 'Webhook audit logs' },
+      { Icon: Webhook, tab: AdminTab.WebhookAuditLogs, label: 'Webhook audit logs', aliases: ['Webhook logs'] },
       { Icon: MessagesSquare, tab: AdminTab.SlackMetrics, label: 'Slack metrics' },
       {
         Icon: TrendingUp,
