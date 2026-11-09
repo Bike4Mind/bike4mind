@@ -46,11 +46,13 @@ export async function loadArenaUser(userId: string): Promise<ArenaUser | null> {
 }
 
 /** The ledger's credits, else a queued or paused reward's (both can still pay); a voided reward owes nothing. */
-export async function findOwedArenaCredits(transactionId: string): Promise<number | null> {
+export async function findOwedArenaCredits(
+  transactionId: string
+): Promise<{ credits: number; queued: boolean } | null> {
   const paid = await creditTransactionRepository.findOne({ transactionId });
-  if (paid) return paid.credits;
+  if (paid) return { credits: paid.credits, queued: false };
   const [held] = await heldCreditRewardRepository.findByTransactionIds([transactionId]);
-  return held && (held.status === 'held' || held.status === 'paused') ? held.credits : null;
+  return held && (held.status === 'held' || held.status === 'paused') ? { credits: held.credits, queued: true } : null;
 }
 
 export function getArenaService(logger: Pick<Logger, 'error' | 'warn'>) {

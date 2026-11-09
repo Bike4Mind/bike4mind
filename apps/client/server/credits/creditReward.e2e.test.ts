@@ -369,9 +369,9 @@ describe('payCreditReward', () => {
     const vote = { ...reward(rater.id, 'vote'), transactionId: 'arena-vote:v3', source: 'preference_arena' as const };
     expect(await findOwedArenaCredits('arena-vote:v3')).toBeNull();
     await creditService.payCreditReward(vote, adapters);
-    expect(await findOwedArenaCredits('arena-vote:v3')).toBe(100);
+    expect(await findOwedArenaCredits('arena-vote:v3')).toEqual({ credits: 100, queued: true });
     await heldCreditRewardRepository.pauseForUser(rater.id);
-    expect(await findOwedArenaCredits('arena-vote:v3')).toBe(100);
+    expect(await findOwedArenaCredits('arena-vote:v3')).toEqual({ credits: 100, queued: true });
     await HeldCreditRewardModel.updateOne({ transactionId: 'arena-vote:v3' }, { $set: { status: 'void' } });
     expect(await findOwedArenaCredits('arena-vote:v3')).toBeNull();
   });
