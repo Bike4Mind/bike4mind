@@ -14,18 +14,17 @@ import {
 } from '@mui/joy';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
-import { toast } from 'sonner';
+import { copyTextWithToast } from '@client/app/utils/copyToClipboard';
 import { SKILL_IMPORT_CLAUDE_CODE_PROMPT, SKILL_IMPORT_RULES } from './skillImportRules';
 
 export const SkillImportHelp: FC = () => {
   const [open, setOpen] = useState(false);
 
-  const copyPrompt = () => {
-    navigator.clipboard
-      .writeText(SKILL_IMPORT_CLAUDE_CODE_PROMPT)
-      .then(() => toast.success('Copied - paste it into Claude Code and replace <name> with your skill'))
-      .catch(() => toast.error('Could not copy to the clipboard'));
-  };
+  const copyPrompt = () =>
+    void copyTextWithToast(
+      SKILL_IMPORT_CLAUDE_CODE_PROMPT,
+      'Copied - paste it into Claude Code and replace <name> with your skill'
+    );
 
   return (
     <>
