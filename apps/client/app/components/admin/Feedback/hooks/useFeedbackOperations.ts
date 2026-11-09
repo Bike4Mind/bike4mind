@@ -156,6 +156,7 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
     total,
     totalSettled,
     loading: (hasStatusSelection && listQuery.isFetching) || organizationsQuery.isFetching,
+    isError: hasStatusSelection && listQuery.isError,
     refreshFeedback,
     handleStatusChange,
     handleDeleteFeedbackClick,

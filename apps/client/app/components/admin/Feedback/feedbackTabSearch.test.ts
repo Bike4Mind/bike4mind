@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { FEEDBACK_LIST_DEFAULT_LIMIT, FeedbackStatus } from '@bike4mind/common';
+import { FeedbackStatus } from '@bike4mind/common';
+import { FEEDBACK_DEFAULT_PAGE_SIZE } from './constants';
 import {
   DEFAULT_FEEDBACK_VIEW,
   FEEDBACK_SEARCH_PARSERS,
@@ -66,7 +67,7 @@ describe('feedbackViewFromSearch', () => {
       statusFilters: statusFilters(FeedbackStatus.New),
       sortAscending: false,
       page: 1,
-      limit: FEEDBACK_LIST_DEFAULT_LIMIT,
+      limit: FEEDBACK_DEFAULT_PAGE_SIZE,
     });
   });
 

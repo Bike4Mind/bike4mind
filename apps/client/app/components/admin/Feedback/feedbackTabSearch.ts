@@ -1,12 +1,6 @@
-import {
-  FEEDBACK_ID_PARAM,
-  FEEDBACK_LIST_DEFAULT_LIMIT,
-  FEEDBACK_SUBJECTS,
-  FeedbackStatus,
-  type FeedbackSubject,
-} from '@bike4mind/common';
+import { FEEDBACK_ID_PARAM, FEEDBACK_SUBJECTS, FeedbackStatus, type FeedbackSubject } from '@bike4mind/common';
 import { oneOf, parseObjectId, parsePage, parseStringList, toNumber } from '../adminSearchValues';
-import { FEEDBACK_PAGE_SIZE_OPTIONS } from './constants';
+import { FEEDBACK_DEFAULT_PAGE_SIZE, FEEDBACK_PAGE_SIZE_OPTIONS, FEEDBACK_STATUS_ORDER } from './constants';
 
 /**
  * The Feedback tab's `/admin` search params and their coercion. Pure and React-free: adminTabParams.ts
@@ -34,9 +28,6 @@ const FEEDBACK_VIEW_PARAMS = [
 ] as const;
 
 export const FEEDBACK_TAB_PARAMS = [...FEEDBACK_VIEW_PARAMS, FEEDBACK_ID_PARAM] as const;
-
-/** Checkbox order in the filter bar, and the order statuses are written to the URL in. */
-const FEEDBACK_STATUS_ORDER = [FeedbackStatus.New, FeedbackStatus.InProgress, FeedbackStatus.Closed] as const;
 
 // `feedbackStatus` is the checked statuses joined with commas (`New,Closed`). No box checked is a real
 // state distinct from the default (it matches nothing; useFeedbackOperations skips the list query),
@@ -83,7 +74,7 @@ export const DEFAULT_FEEDBACK_VIEW: FeedbackView = {
   organizations: [],
   sortAscending: false,
   page: 1,
-  limit: FEEDBACK_LIST_DEFAULT_LIMIT,
+  limit: FEEDBACK_DEFAULT_PAGE_SIZE,
 };
 
 const isFeedbackStatus = (value: string): value is FeedbackStatus =>

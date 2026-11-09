@@ -21,6 +21,7 @@ export const ADMIN_REASON_PRESETS = {
   limitedTier: ['Abuse / automated signups', 'Suspicious usage', 'Under investigation'],
   limitedTierLift: ['Reviewed, not abusive', 'Appeal accepted', 'Applied in error'],
   emailVerification: ['Ownership confirmed by support', 'Bounced or invalid address', 'Internal testing'],
+  feedbackDeletion: ['Spam or abuse', 'Duplicate report', 'Test submission'],
   profileEdit: ['Customer request', 'Correcting a typo', 'Account recovery, identity verified'],
   apiKeyTrust: ['Known integration', 'Partner access', 'Suspicious usage'],
   newAccountSpendCap: ['Verified customer', 'Known high-volume user', 'Suspicious usage'],

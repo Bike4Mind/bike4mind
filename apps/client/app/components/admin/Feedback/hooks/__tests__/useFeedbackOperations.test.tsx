@@ -69,3 +69,30 @@ describe('useFeedbackOperations totalSettled', () => {
     expect(result.current.totalSettled).toBe(true);
   });
 });
+
+describe('useFeedbackOperations isError', () => {
+  beforeEach(() => {
+    mocks.getFeedbackFromServer.mockReset();
+  });
+
+  it('reports a failed list request', async () => {
+    mocks.getFeedbackFromServer.mockImplementation((params: FeedbackListParams) =>
+      params.includeOrganizations
+        ? Promise.resolve({ items: [], total: 0, organizations: [] })
+        : Promise.reject(new Error('list failed'))
+    );
+
+    const { result } = renderOperations(listParams(1));
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+  });
+
+  it('stays false with no status checked, since no list request is made', async () => {
+    mocks.getFeedbackFromServer.mockRejectedValue(new Error('list failed'));
+
+    const { result } = renderOperations({ sort: 'desc', page: 1, limit: 25 });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.isError).toBe(false);
+  });
+});

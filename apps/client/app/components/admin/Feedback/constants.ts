@@ -1,28 +1,31 @@
-import { FEEDBACK_LIST_MAX_LIMIT, FeedbackSubject } from '@bike4mind/common';
+import { FEEDBACK_LIST_MAX_LIMIT, FEEDBACK_SUBJECTS, FeedbackStatus, FeedbackSubject } from '@bike4mind/common';
 
 /**
- * Page sizes offered for the feedback list, passed explicitly rather than left to
- * PaginationControls' own defaults: that component is shared with other admin tabs, and a size
- * above FEEDBACK_LIST_MAX_LIMIT is rejected by GET /api/feedback outright. Deriving the top option
- * from the cap means the two cannot drift into a list that 4xxs on its largest page size.
+ * Page sizes offered for the feedback list. Must match DataTable's page-size select (25, 50, 100),
+ * which is the list's only pager; the top size is FEEDBACK_LIST_MAX_LIMIT because GET /api/feedback
+ * rejects a larger limit outright, so the two cannot drift into a size that 4xxs.
  */
-export const FEEDBACK_PAGE_SIZE_OPTIONS = [10, 20, 50, FEEDBACK_LIST_MAX_LIMIT];
+export const FEEDBACK_PAGE_SIZE_OPTIONS = [25, 50, FEEDBACK_LIST_MAX_LIMIT];
+
+export const FEEDBACK_DEFAULT_PAGE_SIZE = FEEDBACK_PAGE_SIZE_OPTIONS[0];
+
+/** Triage order: the status filter and each row's status select list them in it, and `feedbackStatus` is written in it. */
+export const FEEDBACK_STATUS_ORDER = [FeedbackStatus.New, FeedbackStatus.InProgress, FeedbackStatus.Closed] as const;
+
+/** Sentence-case labels; the stored values are bare tokens (`InProgress`). */
+export const FEEDBACK_STATUS_LABELS: Record<FeedbackStatus, string> = {
+  [FeedbackStatus.New]: 'New',
+  [FeedbackStatus.InProgress]: 'In progress',
+  [FeedbackStatus.Closed]: 'Closed',
+};
 
 /**
- * Sentinel for the subject filter's "no filter" entry. Not a FeedbackSubject, so it cannot collide
- * with a real one, and it exists as a menu entry rather than a placeholder so an operator who
- * picked a subject has a visible way back to all of them.
+ * Translates the subject filter chip's value back into the filter. Clearing the chip hands back
+ * undefined, which the server reads as every subject; a value that is not a subject means the same,
+ * so nothing the server does not know is ever sent as a filter.
  */
-export const FEEDBACK_SUBJECT_ANY = 'all';
-
-export type FeedbackSubjectOption = FeedbackSubject | typeof FEEDBACK_SUBJECT_ANY;
-
-/**
- * Translates the Select's value back into the filter. The sentinel and a null (Joy hands one back
- * when a Select is cleared) both mean no filter, which the server reads as every subject.
- */
-export const toSubjectFilter = (option: FeedbackSubjectOption | null): FeedbackSubject | undefined =>
-  option && option !== FEEDBACK_SUBJECT_ANY ? option : undefined;
+export const toSubjectFilter = (value: string | undefined): FeedbackSubject | undefined =>
+  FEEDBACK_SUBJECTS.find(subject => subject === value);
 
 /**
  * Operator-facing name for each subject, which is stored as a bare lowercase token. The wording
