@@ -554,7 +554,7 @@ describe('image usage recording', () => {
       } as unknown as Parameters<typeof recordImageUsage>[0]['job'],
       creditsCharged: 5,
       costUsd: 0.05,
-      status: 'success',
+      status: 'refusal',
     } as unknown as Parameters<typeof recordImageUsage>[0]);
 
   beforeEach(() => {
@@ -577,6 +577,7 @@ describe('image usage recording', () => {
         units: 1,
         costUsd: 0.05,
         creditsCharged: 5,
+        status: 'refusal',
       })
     );
   });
