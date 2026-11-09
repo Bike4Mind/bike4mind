@@ -711,11 +711,7 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
 
   // Show success state
   if (results && results.every(r => r.success)) {
-    return (
-      <Box sx={{ px: 3 }}>
-        <BulkInviteSuccess results={results} onReset={handleReset} />
-      </Box>
-    );
+    return <BulkInviteSuccess results={results} onReset={handleReset} />;
   }
 
   const nonEmptyRows = rows.filter(r => r.email);
@@ -723,7 +719,7 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
   const allSelected = nonEmptyRows.length > 0 && selectedIds.size === nonEmptyRows.length;
 
   return (
-    <Box sx={{ px: 3, py: 1 }}>
+    <Box>
       <CsvPastePanel open={showCsvPanel} onClose={() => setShowCsvPanel(false)} onAddRows={addCsvRows} />
 
       {selectedIds.size > 0 && (
