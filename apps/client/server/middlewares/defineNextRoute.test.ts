@@ -15,6 +15,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import { z } from 'zod';
+import type { RequestHandler } from 'express';
 
 const { mockValidate, mockFindById, mockApiKeyRateLimit, mockCheckClientVersion } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
@@ -459,10 +460,9 @@ describe('nextRouteForContract', () => {
     it('answers 426 with the envelope before the rate limit option or validation runs', async () => {
       validKey([ApiKeyScope.AI_CHAT]);
       mockCheckClientVersion.mockResolvedValue(new UpgradeRequiredError('b4m-sdk-ts', '2.0.0', '2.1.0'));
-      const limiter = vi.fn();
+      const limiter = vi.fn<RequestHandler>();
       const handler = vi.fn();
-      // any: the fixture limiter isn't typed as the adapter's ValidatedReq handler.
-      const route = nextRouteForContract(makeContract(), { rateLimit: limiter as any }).post(handler);
+      const route = nextRouteForContract(makeContract(), { rateLimit: limiter }).post(handler);
       const { req, res } = fire({ apiKey: 'b4m_live_x', body: { message: 1 }, headers: clientHeaders });
       await route(req, res);
       expect(res._getStatusCode()).toBe(426);
