@@ -8,7 +8,6 @@ const componentsByFile = {
   'AdminSettingInputField.tsx': ['Card', 'Modal'],
   'AdminSystemHealthTab.tsx': ['Card'],
   'AdminWhatsNewModalsTab.tsx': ['Card', 'Modal', 'Table'],
-  'AgentExecutionsTab.tsx': ['Table'],
   'ContextInspectorTab.tsx': ['Card', 'Table', 'Modal'],
   'CreateSlackAppModal.tsx': ['Modal'],
   'CreditAnalysis/components/CreditAdjustmentModal.tsx': ['Modal'],
