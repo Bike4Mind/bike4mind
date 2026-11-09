@@ -131,10 +131,16 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
         {typedConfirm && (
           <FormControl required>
             <FormLabel htmlFor={typedInputId}>
-              {/* One inline span: FormLabel is a flex row, which drops bare space text nodes around the code. */}
+              {/* One inline span: FormLabel is a flex row, which drops bare space text nodes around the code.
+                  Typography renders as a block, so the code is forced inline to stay on the sentence's line. */}
               <span>
                 This cannot be undone. Type{' '}
-                <Typography component="code" fontFamily="code" data-testid={`${testId}-typed-expected`}>
+                <Typography
+                  component="code"
+                  fontFamily="code"
+                  sx={{ display: 'inline' }}
+                  data-testid={`${testId}-typed-expected`}
+                >
                   {typedConfirm.expected}
                 </Typography>{' '}
                 to confirm.

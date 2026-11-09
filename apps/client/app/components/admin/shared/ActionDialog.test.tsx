@@ -102,6 +102,7 @@ describe('ActionDialog', () => {
     expect(screen.getByTestId('adjust-dialog-typed-expected')).toHaveTextContent('ada@example.com');
     // the sentence sits in one inline span so the spaces around the name survive the label's flex row
     expect(screen.getByTestId('adjust-dialog-typed-expected').parentElement?.tagName).toBe('SPAN');
+    expect(screen.getByTestId('adjust-dialog-typed-expected')).toHaveStyle({ display: 'inline' });
     expect(screen.getByText(/This cannot be undone/)).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('adjust-dialog-reason-input-preset-0'));
     expect(confirm).toBeDisabled();
