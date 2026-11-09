@@ -8,8 +8,7 @@ describe('formatLastChecked', () => {
     expect(formatLastChecked(null, NOW)).toBe('never');
   });
 
-  it('says never for the epoch and for an unreadable timestamp', () => {
-    expect(formatLastChecked('1970-01-01T00:00:00.000Z', NOW)).toBe('never');
+  it('says never for an unreadable timestamp', () => {
     expect(formatLastChecked('not a date', NOW)).toBe('never');
   });
 
@@ -44,6 +43,13 @@ describe('integrationStatusView', () => {
 
   it('shows a never-checked integration as not checked, not down', () => {
     expect(integrationStatusView({ status: 'unhealthy', lastCheckedAt: null })).toEqual({
+      tone: 'neutral',
+      label: 'Not checked',
+    });
+  });
+
+  it('treats an unreadable timestamp as not checked, matching formatLastChecked', () => {
+    expect(integrationStatusView({ status: 'unhealthy', lastCheckedAt: 'not a date' })).toEqual({
       tone: 'neutral',
       label: 'Not checked',
     });

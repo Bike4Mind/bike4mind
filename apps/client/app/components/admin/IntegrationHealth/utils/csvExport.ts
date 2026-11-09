@@ -1,10 +1,6 @@
 import { toCsv } from '@client/app/utils/csv';
-import type { HealthSummaryStatus, IntegrationDashboardResponse } from '../types';
-
-const CSV_STATUS_LABELS: Partial<Record<HealthSummaryStatus, string>> = {
-  unhealthy: 'down',
-  no_data: 'no data',
-};
+import type { IntegrationDashboardResponse } from '../types';
+import { integrationStatusView } from './integrationStatus';
 
 export function exportDashboardCsv(data: IntegrationDashboardResponse): void {
   const rows: string[][] = [];
@@ -27,7 +23,7 @@ export function exportDashboardCsv(data: IntegrationDashboardResponse): void {
   for (const entry of data.integrations) {
     rows.push([
       entry.name,
-      CSV_STATUS_LABELS[entry.status] ?? entry.status,
+      integrationStatusView(entry).label.toLowerCase(),
       String(entry.latencyMs),
       `${(entry.successRate * 100).toFixed(1)}%`,
       String(entry.consecutiveFailures),

@@ -102,7 +102,8 @@ const AdminIntegrationHealthTab: React.FC = () => {
         description="Probe results, circuit breakers and rate limits for Slack, GitHub, Jira and Confluence."
         actions={
           <>
-            {runProbesButton('integration-health-run-probes-btn')}
+            {/* On the empty page the EmptyState carries the one Run probes button. */}
+            {(hasData || isLoading || isError) && runProbesButton('integration-health-run-probes-btn')}
             <Button
               size="sm"
               variant="outlined"

@@ -131,6 +131,30 @@ describe('exportDashboardCsv', () => {
     expect(capturedCsv).toContain('""timeout""');
   });
 
+  it('writes a never-probed integration as not checked, never checked', () => {
+    const data = makeResponse({
+      integrations: [
+        {
+          name: 'jira',
+          status: 'unhealthy',
+          latencyMs: 0,
+          lastCheckedAt: null,
+          successRate: 0,
+          consecutiveFailures: 0,
+          error: null,
+          circuitBreaker: { available: true, reason: null, mode: 'auto', autoTripped: false },
+          rateLimit: null,
+          recentErrors: [],
+        },
+      ],
+    });
+
+    exportDashboardCsv(data);
+    expect(capturedCsv).toContain('"not checked"');
+    expect(capturedCsv).toContain('"never"');
+    expect(capturedCsv).not.toContain('"down"');
+  });
+
   it('prefixes formula-injection characters with a single quote', () => {
     const data = makeResponse({
       integrations: [

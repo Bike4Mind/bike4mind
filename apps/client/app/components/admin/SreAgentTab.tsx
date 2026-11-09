@@ -1943,7 +1943,7 @@ function ScanSection({ repoSlugs }: { repoSlugs: string[] }) {
         </Button>
         {mutation.isPending && (
           <Typography level="body-xs" color="neutral">
-            Scanning… this may take a moment.
+            Scanning... this may take a moment.
           </Typography>
         )}
         {mutation.data && <ScanResults data={mutation.data} />}

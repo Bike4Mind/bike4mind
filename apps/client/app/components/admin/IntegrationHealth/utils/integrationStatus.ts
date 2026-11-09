@@ -11,19 +11,25 @@ const STATUS_VIEW: Record<IntegrationDashboardEntry['status'], IntegrationStatus
 
 export const NOT_CHECKED: IntegrationStatusView = { tone: 'neutral', label: 'Not checked' };
 
+/** The one rule for "has been probed": a readable timestamp. A missing or unreadable one counts as never. */
+export function lastCheckedTime(lastCheckedAt: string | null): number | null {
+  const time = lastCheckedAt ? new Date(lastCheckedAt).getTime() : NaN;
+  return Number.isFinite(time) ? time : null;
+}
+
 /**
  * The server reports a never-probed integration as 'unhealthy' with no last check, so it shows as
  * not checked rather than down.
  */
 export function integrationStatusView(entry: Pick<IntegrationDashboardEntry, 'status' | 'lastCheckedAt'>) {
-  if (!entry.lastCheckedAt) return NOT_CHECKED;
-  return STATUS_VIEW[entry.status] ?? { tone: 'neutral', label: 'Unknown' };
+  if (lastCheckedTime(entry.lastCheckedAt) === null) return NOT_CHECKED;
+  return STATUS_VIEW[entry.status];
 }
 
-/** "never" for no check (or an unreadable timestamp), else "42s ago", "5m ago", "3h ago", "2d ago". */
+/** "never" when `lastCheckedTime` finds no check, else "42s ago", "5m ago", "3h ago", "2d ago". */
 export function formatLastChecked(lastCheckedAt: string | null, now: number = Date.now()): string {
-  const time = lastCheckedAt ? new Date(lastCheckedAt).getTime() : NaN;
-  if (!Number.isFinite(time) || time <= 0) return 'never';
+  const time = lastCheckedTime(lastCheckedAt);
+  if (time === null) return 'never';
   const seconds = Math.max(0, Math.floor((now - time) / 1000));
   if (seconds < 60) return `${seconds}s ago`;
   const minutes = Math.floor(seconds / 60);

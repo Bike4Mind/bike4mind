@@ -45,7 +45,7 @@ vi.mock('@bike4mind/server-utils/services/mcpCircuitBreakers', () => ({
 
 await import('../integration-health-dashboard');
 
-const summary = (integration: string, lastCheckedAt: Date) => ({
+const summary = (integration: string, lastCheckedAt: Date | null) => ({
   integration,
   status: 'unhealthy',
   latencyMs: 0,
@@ -63,7 +63,7 @@ describe('GET /api/admin/integration-health-dashboard', () => {
   it('reports a never-checked integration with a null lastCheckedAt', async () => {
     h.getHealthSummary.mockResolvedValue([
       summary('github', new Date('2026-11-09T10:00:00.000Z')),
-      summary('slack', new Date(0)),
+      summary('slack', null),
     ]);
     const { req, res } = createMocks({ method: 'GET', query: { timeRange: '24h' } });
 

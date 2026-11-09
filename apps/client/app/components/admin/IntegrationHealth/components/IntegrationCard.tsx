@@ -2,7 +2,7 @@ import React from 'react';
 import { Accordion, AccordionDetails, AccordionSummary, Stack, Typography } from '@mui/joy';
 import { StatusChip } from '@client/app/components/admin/shared';
 import { IntegrationDetailPanel } from './IntegrationDetailPanel';
-import { formatLastChecked, integrationStatusView } from '../utils/integrationStatus';
+import { formatLastChecked, integrationStatusView, lastCheckedTime } from '../utils/integrationStatus';
 import type { IntegrationDashboardEntry, CircuitBreakerMode, IntegrationName, InMemoryBreakerState } from '../types';
 
 interface IntegrationCardProps {
@@ -31,7 +31,8 @@ export const IntegrationCard: React.FC<IntegrationCardProps> = ({
   isUpdatingOverride,
 }) => {
   const { tone, label } = integrationStatusView(entry);
-  const checked = !!entry.lastCheckedAt;
+  const checkedTime = lastCheckedTime(entry.lastCheckedAt);
+  const checked = checkedTime !== null;
 
   return (
     <Accordion expanded={isExpanded} onChange={onToggle} data-testid={`integration-card-${entry.name}`}>
@@ -69,7 +70,7 @@ export const IntegrationCard: React.FC<IntegrationCardProps> = ({
             <Typography
               level="body-xs"
               sx={{ color: 'admin.inkMuted' }}
-              title={entry.lastCheckedAt ? new Date(entry.lastCheckedAt).toUTCString() : undefined}
+              title={checkedTime !== null ? new Date(checkedTime).toUTCString() : undefined}
               data-testid={`integration-last-checked-${entry.name}`}
             >
               {checked ? `Checked ${formatLastChecked(entry.lastCheckedAt)}` : 'Never checked'}

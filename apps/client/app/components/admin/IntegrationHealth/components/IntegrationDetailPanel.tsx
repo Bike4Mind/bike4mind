@@ -184,7 +184,10 @@ export const IntegrationDetailPanel: React.FC<IntegrationDetailPanelProps> = ({
           <Typography level="body-sm" sx={{ color: 'admin.inkSecondary' }}>
             Override:
           </Typography>
-          <StatusChip tone={entry.circuitBreaker.available ? 'good' : 'bad'} label={entry.circuitBreaker.mode} />
+          <StatusChip
+            tone={entry.circuitBreaker.available ? 'good' : 'bad'}
+            label={MODE_LABEL[entry.circuitBreaker.mode] ?? entry.circuitBreaker.mode}
+          />
           {entry.circuitBreaker.autoTripped && <StatusChip tone="bad" label="Auto-tripped" />}
           {entry.circuitBreaker.reason && (
             <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
@@ -194,20 +197,24 @@ export const IntegrationDetailPanel: React.FC<IntegrationDetailPanelProps> = ({
         </Stack>
 
         <Stack direction="row" gap={1} flexWrap="wrap">
-          {(['auto', 'force_open', 'force_block'] as const).map(mode => (
-            <Button
-              key={mode}
-              size="sm"
-              variant={entry.circuitBreaker.mode === mode ? 'solid' : 'outlined'}
-              color="neutral"
-              onClick={() => onOverride(entry.name, mode)}
-              loading={isUpdatingOverride}
-              title={mode === 'auto' ? 'Also resets the in-memory MCP breakers for all users' : undefined}
-              data-testid={`circuit-breaker-${mode}-btn-${entry.name}`}
-            >
-              {MODE_LABEL[mode]}
-            </Button>
-          ))}
+          {(['auto', 'force_open', 'force_block'] as const).map(mode => {
+            const selected = entry.circuitBreaker.mode === mode;
+            return (
+              <Button
+                key={mode}
+                size="sm"
+                variant={selected ? 'solid' : 'outlined'}
+                // Force block cuts the integration off for every user, so it reads as destructive until it is the active mode.
+                color={mode === 'force_block' && !selected ? 'danger' : 'neutral'}
+                onClick={() => onOverride(entry.name, mode)}
+                loading={isUpdatingOverride}
+                title={mode === 'auto' ? 'Also resets the in-memory MCP breakers for all users' : undefined}
+                data-testid={`circuit-breaker-${mode}-btn-${entry.name}`}
+              >
+                {MODE_LABEL[mode]}
+              </Button>
+            );
+          })}
         </Stack>
 
         {(readBreaker || writeBreaker) && (
