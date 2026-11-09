@@ -1117,12 +1117,17 @@ export function useConversation(
     if (!result.ok) setSendError(result.error);
   }, [sessionId]);
 
+  // Main just wrote this chat, so a read of it still in flight may predate the write and is done again.
+  const outdateOpenRead = useCallback((id: string) => {
+    const read = openRead.current;
+    if (read && read.sessionId === id) read.stale = true;
+  }, []);
+
   // A summary main just wrote, folded into both the open conversation and the sidebar row. The
   // open conversation only when it is that session: a share can return after the user moved on.
   const applySummary = useCallback(
     (updated: ChatSessionSummary) => {
-      const read = openRead.current;
-      if (read && read.sessionId === updated.id) read.stale = true;
+      outdateOpenRead(updated.id);
       setSession(current =>
         current?.id === updated.id
           ? { ...current, project: updated.project, grantedDirectories: updated.grantedDirectories }
@@ -1130,7 +1135,7 @@ export function useConversation(
       );
       onSummaryChanged(updated);
     },
-    [onSummaryChanged]
+    [onSummaryChanged, outdateOpenRead]
   );
 
   // One main-side share for the chip's picker (no `path`), /add-dir and Add folder; `confirm` echoes a typed addition.
@@ -1256,6 +1261,7 @@ export function useConversation(
       try {
         const updated = await save(sessionId);
         if (!updated) return;
+        outdateOpenRead(sessionId);
         if (clearsNotice && activeSessionId.current === sessionId) setNotice(null);
         setSession(current => (current?.id === sessionId ? { ...current, ...apply(updated) } : current));
         onSummaryChanged(updated);
@@ -1265,7 +1271,7 @@ export function useConversation(
         }
       }
     },
-    [sessionId, onSummaryChanged]
+    [sessionId, onSummaryChanged, outdateOpenRead]
   );
 
   const rename = useCallback(
@@ -1300,11 +1306,13 @@ export function useConversation(
       }
       return;
     }
-    if (!settled || activeSessionId.current !== sessionId) return;
+    if (!settled) return;
+    outdateOpenRead(sessionId);
+    if (activeSessionId.current !== sessionId) return;
     if (settled.notice) setNotice(settled.notice);
     setSession(current => (current?.id === sessionId ? { ...current, model: settled.session.model } : current));
     onSummaryChanged(settled.session);
-  }, [sessionId, onSummaryChanged]);
+  }, [sessionId, onSummaryChanged, outdateOpenRead]);
 
   const setHistory = useCallback(
     async (enabled: boolean) => {
@@ -1312,7 +1320,9 @@ export function useConversation(
       const version = historyVersion.current;
       try {
         const updated = await window.b4m.chat.setSessionHistory(sessionId, enabled);
-        if (!updated || version !== historyVersion.current) return;
+        if (!updated) return;
+        outdateOpenRead(sessionId);
+        if (version !== historyVersion.current) return;
         setSession(current =>
           current?.id === sessionId ? { ...current, historyEnabled: updated.historyEnabled } : current
         );
@@ -1323,7 +1333,7 @@ export function useConversation(
         }
       }
     },
-    [sessionId, session?.id, onSummaryChanged]
+    [sessionId, session?.id, onSummaryChanged, outdateOpenRead]
   );
 
   const setReasoningEffort = useCallback(
@@ -1356,6 +1366,7 @@ export function useConversation(
       try {
         const updated = await window.b4m.chat.setSessionGeneration(sessionId, generation);
         if (!updated) throw new Error('The conversation could not be found.');
+        outdateOpenRead(sessionId);
         if (!latest()) return true;
         setSession(current => (current?.id === sessionId ? { ...current, generation: updated.generation } : current));
         onSummaryChanged(updated);
@@ -1373,7 +1384,7 @@ export function useConversation(
         return false;
       }
     },
-    [sessionId, session?.id, onSummaryChanged]
+    [sessionId, session?.id, onSummaryChanged, outdateOpenRead]
   );
 
   const setApprovalMode = useCallback(
@@ -1396,6 +1407,7 @@ export function useConversation(
         return null;
       });
       if (!updated) return;
+      outdateOpenRead(sessionId);
       // The reply can land after a switch to another conversation, which must keep its own flag.
       setSession(current => {
         if (current?.id !== sessionId) return current;
@@ -1408,7 +1420,7 @@ export function useConversation(
       });
       onSummaryChanged(updated);
     },
-    [sessionId, onSummaryChanged]
+    [sessionId, onSummaryChanged, outdateOpenRead]
   );
 
   const respondToApproval = useCallback((approvalId: string, answer: ChatApprovalAnswer) => {
