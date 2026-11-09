@@ -94,7 +94,7 @@ Given the agent metadata below, create a detailed system prompt that:
 
 Provide only the final system prompt text (do not include additional explanations or meta-commentary). The prompt should be ready to use directly as a system message for the AI agent.`;
 
-/** The fields PUT /api/admin/agent-ops-settings takes, in the order it has always been sent. */
+/** The fields PUT /api/admin/agent-ops-settings takes. */
 type SettingsForm = Pick<AgentOpsSettings, 'generationLlmModel' | 'rateLimitSeconds' | 'isEnabled'>;
 
 const SectionTitle = ({ children }: { children: React.ReactNode }) => (
@@ -172,9 +172,13 @@ function GenerationSettings({
 const AgentOpsTab: React.FC = () => {
   const [settings, setSettings] = useState<AgentOpsSettings | null>(null);
   const [versions, setVersions] = useState<MetaPromptVersion[]>([]);
+  // Settings answer first and render the page; until the versions request has answered too, its
+  // table shows skeleton rows rather than "No meta-prompt versions".
+  const [versionsLoaded, setVersionsLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [versionsFailed, setVersionsFailed] = useState(false);
 
   const { data: catalogModels } = useModelInfo();
   const modelOptions = React.useMemo(() => agentOpsModelOptions(catalogModels ?? []), [catalogModels]);
@@ -188,15 +192,20 @@ const AgentOpsTab: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     setLoadError(null);
+    setVersionsFailed(false);
+    let loadingVersions = false;
     try {
       const settingsResponse = await api.get('/api/admin/agent-ops-settings');
       setSettings(settingsResponse.data);
 
+      loadingVersions = true;
       const versionsResponse = await api.get('/api/admin/agent-ops-settings/versions');
       setVersions(versionsResponse.data);
+      setVersionsLoaded(true);
     } catch (error) {
       console.error('Error loading AgentOps data:', error);
       setLoadError('Agent settings could not be loaded.');
+      setVersionsFailed(loadingVersions);
     } finally {
       setLoading(false);
     }
@@ -210,6 +219,8 @@ const AgentOpsTab: React.FC = () => {
   const handleSaveSettings = async (form: SettingsForm) => {
     await api.put('/api/admin/agent-ops-settings', form);
     toast.success('Settings saved successfully');
+    // The provider drops the draft once this resolves; a failed reload must not show the old values.
+    setSettings(previous => previous && { ...previous, ...form });
     await loadData();
   };
 
@@ -401,7 +412,8 @@ const AgentOpsTab: React.FC = () => {
             getRowId={version => String(version.versionNumber)}
             rowTestId={version => `agent-ops-version-row-${version.versionNumber}`}
             rowActions={versionMenu}
-            error={loadError && versions.length === 0 ? 'Meta-prompt versions could not be loaded.' : undefined}
+            loading={!versionsLoaded}
+            error={versionsFailed && versions.length === 0 ? 'Meta-prompt versions could not be loaded.' : undefined}
             onRetry={() => void loadData()}
             // Fixed columns total 29.5rem with the actions column; the description takes the rest.
             minWidth="44rem"

@@ -210,6 +210,22 @@ describe('AgentOpsTab', () => {
     await waitFor(() => expect(settingsLoads()).toBe(2));
   });
 
+  it('clears the SaveBar once the save lands and shows the saved values as the new baseline', async () => {
+    mocks.put.mockImplementation(async (_url: string, body: Record<string, unknown>) => {
+      settingsResponse = { ...SETTINGS, ...body };
+      return { data: {} };
+    });
+    renderTab();
+    fireEvent.change(await screen.findByTestId('agent-ops-rate-limit-input'), { target: { value: '120' } });
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+
+    await waitFor(() => expect(settingsLoads()).toBe(2));
+    await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
+    expect(screen.getByTestId('agent-ops-rate-limit-input')).toHaveValue(120);
+    expect(screen.getByTestId('admin-stat-strip')).toHaveTextContent('Rate limit120s');
+    expect(mocks.useBlocker.mock.lastCall?.[0].enableBeforeUnload).toBe(false);
+  });
+
   it('keeps the staged settings and shows the failure in the SaveBar when the save fails', async () => {
     mocks.put.mockRejectedValueOnce(new Error('Invalid LLM model specified'));
     renderTab();
@@ -238,6 +254,18 @@ describe('AgentOpsTab', () => {
     expect(screen.getByTestId('agent-ops-loading')).toHaveTextContent('Loading agent settings');
   });
 
+  it('shows skeleton rows in the versions table, not its empty state, until the versions answer', async () => {
+    mocks.get.mockImplementation((url: string) =>
+      url === '/api/admin/agent-ops-settings' ? Promise.resolve({ data: SETTINGS }) : new Promise(() => {})
+    );
+    renderTab();
+
+    await screen.findByTestId('agent-ops-service-status');
+    const table = screen.getByTestId('agent-ops-versions-table-frame');
+    expect(within(table).getAllByTestId('admin-table-skeleton-row').length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('agent-ops-versions-empty')).toBeNull();
+  });
+
   it('shows an ErrorState with Try again when the settings fail to load', async () => {
     mocks.get.mockRejectedValueOnce(new Error('network down'));
     renderTab();
@@ -256,5 +284,55 @@ describe('AgentOpsTab', () => {
 
     await waitFor(() => expect(mocks.post).toHaveBeenCalledWith('/api/admin/agent-ops-settings/repair'));
     await waitFor(() => expect(mocks.success).toHaveBeenCalledWith('Database repaired! pointer fixed'));
+  });
+
+  it('discards the staged settings back to the loaded values without a request', async () => {
+    renderTab();
+    fireEvent.change(await screen.findByTestId('agent-ops-rate-limit-input'), { target: { value: '300' } });
+    fireEvent.click(screen.getByTestId('admin-save-discard-btn'));
+
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    expect(screen.getByTestId('agent-ops-rate-limit-input')).toHaveValue(60);
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unsaved settings edit through a repair and an activation', async () => {
+    renderTab();
+    fireEvent.change(await screen.findByTestId('agent-ops-rate-limit-input'), { target: { value: '120' } });
+
+    fireEvent.click(screen.getByTestId('agent-ops-repair-btn'));
+    await waitFor(() => expect(settingsLoads()).toBe(2));
+    fireEvent.click(screen.getByTestId('agent-ops-version-actions-1'));
+    fireEvent.click(await screen.findByTestId('agent-ops-activate-1'));
+    await waitFor(() => expect(settingsLoads()).toBe(3));
+
+    expect(screen.getByTestId('agent-ops-rate-limit-input')).toHaveValue(120);
+    expect(screen.getByTestId('admin-save-bar')).toHaveTextContent('1 unsaved change');
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+
+  it('shows the saved values, not the old ones, when the reload after a save fails', async () => {
+    renderTab();
+    fireEvent.change(await screen.findByTestId('agent-ops-rate-limit-input'), { target: { value: '120' } });
+    mocks.get.mockRejectedValueOnce(new Error('network down'));
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+
+    await screen.findByTestId('agent-ops-refresh-error');
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    expect(screen.getByTestId('agent-ops-rate-limit-input')).toHaveValue(120);
+    expect(screen.getByTestId('admin-stat-strip')).toHaveTextContent('Rate limit120s');
+  });
+
+  it('shows only the banner, not a versions error, when a settings reload fails', async () => {
+    versionsResponse = [];
+    renderTab();
+    await screen.findByTestId('agent-ops-versions-empty');
+    mocks.get.mockRejectedValueOnce(new Error('network down'));
+
+    fireEvent.click(screen.getByTestId('agent-ops-repair-btn'));
+
+    await screen.findByTestId('agent-ops-refresh-error');
+    expect(screen.queryByTestId('admin-error-state')).toBeNull();
+    expect(screen.getByTestId('agent-ops-versions-empty')).toBeInTheDocument();
   });
 });
