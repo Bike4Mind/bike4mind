@@ -78,11 +78,11 @@ The configured files are listed in one table:
 The row actions are in the "..." menu at the end of each row:
 
 - **View file** opens the file in the Knowledge Modal viewer in read-only mode.
-- **Remove from list** removes the file from the global knowledge files (it does not delete the file itself).
+- **Remove from list** opens a "Remove knowledge file" confirmation, because the file stops being included in AI conversations for every user. Pick a reason or write one (it is not stored yet), then click **Remove file**. The file is removed from the global knowledge files; the file itself is not deleted.
 
 ### Missing Files
 
-If a configured file ID no longer exists in the system (404), its row shows a red "Missing" chip and "File not found". A banner above the table gives the number of missing files. Remove a missing file reference with **Remove from list** in its row menu.
+If a configured file ID no longer exists in the system (404), its row shows a red "Missing" chip and "File not found". A banner above the table gives the number of missing files. Remove a missing file reference with **Remove from list** in its row menu, then confirm with **Remove file**.
 
 ### Empty State
 
@@ -92,7 +92,7 @@ When no files are configured, the table shows "No knowledge files yet" with an *
 
 Click **Add files** to open the "Add system files" dialog:
 
-1. **Search** -- Type in the search field to filter available files by name (debounced at 300ms)
+1. **Search** -- Type in the search field to filter available files by name. The list updates once you pause typing for 300ms
 2. **Browse** -- Scroll through the list of available files in the system
 3. **Select** -- Click "Select" on one or more files to mark them for addition. Files already configured show an "Already added" chip and cannot be selected again
 4. **Confirm** -- Click "Add selected files" to add the selected files to the global knowledge files

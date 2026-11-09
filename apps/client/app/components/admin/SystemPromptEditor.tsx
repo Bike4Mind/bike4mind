@@ -48,6 +48,7 @@ import {
   type DataColumn,
 } from './shared';
 import { adminFocus } from './shared/adminStyles';
+import { Dash, DialogFooter, Field, TruncatedText } from './promptAndToolParts';
 
 /** Extended type for prompts returned by the API (includes computed fields) */
 interface ISystemPromptWithMeta extends Omit<IAdminSystemPrompt, 'activeVersion'> {
@@ -110,42 +111,6 @@ const toEnabledFilter = (value: string | undefined): EnabledFilter =>
   value === 'true' || value === 'false' ? value : 'all';
 
 const HIDDEN_TAGS = ['system-message', 'user-message', 'main-prompt', 'behavior-config'];
-
-const dash = (
-  <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
-    -
-  </Typography>
-);
-
-/** One line that truncates with an ellipsis, the full text on hover. */
-const TruncatedText = ({ text, testId }: { text: string; testId?: string }) => (
-  <Tooltip title={text} placement="top-start">
-    <Typography level="body-sm" noWrap data-testid={testId} sx={{ color: 'admin.ink', minWidth: 0 }}>
-      {text}
-    </Typography>
-  </Tooltip>
-);
-
-const DialogFooter = ({ children }: { children: ReactNode }) => (
-  <Stack
-    direction="row"
-    justifyContent="flex-end"
-    flexWrap="wrap"
-    gap={1}
-    sx={{ pt: 2, mt: 1, borderTop: '1px solid', borderColor: 'admin.border' }}
-  >
-    {children}
-  </Stack>
-);
-
-const Field = ({ label, children }: { label: string; children: ReactNode }) => (
-  <Box>
-    <Typography level="body-xs" sx={{ color: 'admin.inkMuted', mb: 0.5 }}>
-      {label}
-    </Typography>
-    {children}
-  </Box>
-);
 
 function PromptRowMenu({
   prompt,
@@ -751,10 +716,10 @@ const SystemPromptEditor: React.FC<SystemPromptEditorProps> = ({ renderHeader })
 
   const getRoleBadge = (role: 'system-message' | 'user-message' | null) => {
     if (role === 'system-message') {
-      return { label: 'System', tooltip: 'System Message: Sets AI behavior and constraints' };
+      return { label: 'System', tooltip: 'System message: sets AI behavior and constraints' };
     }
     if (role === 'user-message') {
-      return { label: 'Main', tooltip: 'Main Prompt: Contains data and instructions' };
+      return { label: 'Main', tooltip: 'Main prompt: contains data and instructions' };
     }
     return null;
   };
@@ -875,7 +840,7 @@ const SystemPromptEditor: React.FC<SystemPromptEditorProps> = ({ renderHeader })
     {
       id: 'description',
       label: 'Description',
-      render: prompt => (prompt.description ? <TruncatedText text={prompt.description} /> : dash),
+      render: prompt => (prompt.description ? <TruncatedText text={prompt.description} /> : <Dash />),
     },
     {
       id: 'category',
@@ -901,13 +866,13 @@ const SystemPromptEditor: React.FC<SystemPromptEditorProps> = ({ renderHeader })
       id: 'latest',
       label: 'Latest',
       width: '4.5rem',
-      render: prompt => (prompt.source === 'db' ? `v${prompt.version}` : dash),
+      render: prompt => (prompt.source === 'db' ? `v${prompt.version}` : <Dash />),
     },
     {
       id: 'active',
       label: 'Active',
       width: '5rem',
-      render: prompt => (prompt.source === 'db' ? formatVersion(getActiveVersion(prompt)) : dash),
+      render: prompt => (prompt.source === 'db' ? formatVersion(getActiveVersion(prompt)) : <Dash />),
     },
     {
       id: 'usage',
@@ -915,14 +880,14 @@ const SystemPromptEditor: React.FC<SystemPromptEditorProps> = ({ renderHeader })
       width: '5rem',
       numeric: true,
       sortValue: prompt => (prompt.source === 'db' ? (prompt.usageCount ?? 0) : -1),
-      render: prompt => (prompt.source === 'db' ? (prompt.usageCount ?? 0).toLocaleString() : dash),
+      render: prompt => (prompt.source === 'db' ? (prompt.usageCount ?? 0).toLocaleString() : <Dash />),
     },
     {
       id: 'success',
       label: 'Success',
       width: '5rem',
       numeric: true,
-      render: prompt => (prompt.source === 'db' ? getSuccessRate(prompt) : dash),
+      render: prompt => (prompt.source === 'db' ? getSuccessRate(prompt) : <Dash />),
     },
     {
       id: 'status',
@@ -955,7 +920,12 @@ const SystemPromptEditor: React.FC<SystemPromptEditorProps> = ({ renderHeader })
         </Stack>
       </Alert>
 
-      <FilterBar state={filterState} filters={filters} searchLabel="Search prompts" onChange={handleFilterChange} />
+      <FilterBar
+        state={filterState}
+        filters={filters}
+        searchLabel="Search name, description or tags"
+        onChange={handleFilterChange}
+      />
 
       <Stack gap={1} sx={{ minWidth: 0 }}>
         <UpdatingBar active={isFetching && !isLoading} testId="system-prompts-updating-bar" />
@@ -1003,7 +973,10 @@ const SystemPromptEditor: React.FC<SystemPromptEditorProps> = ({ renderHeader })
 
       <AdminDialog
         open={deletingPrompt !== null}
-        onClose={() => setDeletingPrompt(null)}
+        // Esc, the X and the backdrop wait for an in-flight delete, like the disabled Cancel.
+        onClose={() => {
+          if (!deletePrompt.isPending) setDeletingPrompt(null);
+        }}
         title="Delete prompt"
         role="alertdialog"
         data-testid="system-prompt-delete-dialog"
@@ -1392,7 +1365,7 @@ const SystemPromptEditor: React.FC<SystemPromptEditorProps> = ({ renderHeader })
             </Typography>
           </FormControl>
 
-          <Alert variant="soft" color={selectedVersion === '0' ? 'primary' : hasActualEdits ? 'warning' : 'neutral'}>
+          <Alert variant="soft" color="neutral" data-testid="system-prompt-edit-status">
             <Typography level="body-sm">
               {isCreating
                 ? 'Creating a new prompt will make it immediately available in production.'

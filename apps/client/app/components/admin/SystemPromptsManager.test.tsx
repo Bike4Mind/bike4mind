@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   setOpen: vi.fn(),
   setSelectedFabFileId: vi.fn(),
   setViewOnly: vi.fn(),
-  fabFiles: vi.fn(),
+  settingsPending: false,
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
 }));
@@ -22,7 +22,7 @@ vi.mock('@client/app/contexts/AdminSettingsContext', () => ({
   useAdminSettings: () => ({ getSetting: mocks.getSetting }),
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useUpdateSettings: () => ({ mutateAsync: mocks.updateSettings }),
+  useUpdateSettings: () => ({ mutateAsync: mocks.updateSettings, isPending: mocks.settingsPending }),
 }));
 vi.mock('../Knowledge/KnowledgeModal', () => ({
   useKnowledgeModal: () => ({
@@ -31,7 +31,6 @@ vi.mock('../Knowledge/KnowledgeModal', () => ({
     setViewOnly: mocks.setViewOnly,
   }),
 }));
-vi.mock('@client/app/hooks/data/fabFiles', () => ({ useGetFabFiles: mocks.fabFiles }));
 vi.mock('sonner', () => ({ toast: { success: mocks.toastSuccess, error: mocks.toastError } }));
 
 import { SystemPromptsManager } from './SystemPromptsManager';
@@ -46,6 +45,13 @@ const STYLE_GUIDE = {
   updatedAt: '2026-10-01T00:00:00.000Z',
 };
 const TONE = { id: 'file-b', fileName: 'tone.md', mimeType: 'text/markdown', fileSize: 512 };
+
+const FILES_URL = '/api/files';
+// The real file-picker query runs against the mocked api, so these are the requests it sends.
+const pickerSearches = () =>
+  mocks.get.mock.calls
+    .filter(([url]) => url === FILES_URL)
+    .map(([, config]) => (config as { params: { search: string } }).params.search);
 
 const renderManager = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -62,13 +68,14 @@ describe('SystemPromptsManager', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getSetting.mockReturnValue('file-a,file-missing');
+    mocks.settingsPending = false;
     mocks.get.mockImplementation((url: string) => {
+      if (url === FILES_URL) return Promise.resolve({ data: { data: [TONE, STYLE_GUIDE], hasMore: false, total: 2 } });
       if (url === '/api/files/file-a') return Promise.resolve({ data: STYLE_GUIDE });
       if (url === '/api/files/file-missing') return Promise.reject({ response: { status: 404 } });
       return Promise.reject(new Error(`unexpected GET ${url}`));
     });
     mocks.updateSettings.mockResolvedValue({});
-    mocks.fabFiles.mockReturnValue({ data: { pages: [{ data: [TONE, STYLE_GUIDE] }] }, isFetching: false });
   });
 
   it('is a titled section with the files in one table, never a card per file', async () => {
@@ -97,11 +104,25 @@ describe('SystemPromptsManager', () => {
     expect(banner).toHaveClass('MuiAlert-colorWarning');
   });
 
-  it('removes a file from its row menu with the same settings update', async () => {
+  it('confirms Remove from list in a danger dialog, then sends the same settings update', async () => {
     renderManager();
 
     fireEvent.click(await screen.findByTestId('system-files-row-actions-file-missing'));
     fireEvent.click(await screen.findByTestId('system-files-row-remove-file-missing'));
+
+    const dialog = await screen.findByTestId('system-files-remove-dialog');
+    expect(within(dialog).getByRole('heading', { level: 2 })).toHaveTextContent('Remove knowledge file');
+    expect(dialog).toHaveTextContent('file-missing');
+    expect(within(dialog).getByTestId('system-files-remove-dialog-reason-input-helper')).toHaveTextContent(
+      'Not stored yet'
+    );
+    const confirm = within(dialog).getByTestId('system-files-remove-dialog-confirm-btn');
+    expect(confirm).toHaveTextContent('Remove file');
+    expect(confirm).toBeDisabled();
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByTestId('system-files-remove-dialog-reason-input-preset-0'));
+    fireEvent.click(confirm);
 
     await waitFor(() =>
       expect(mocks.updateSettings).toHaveBeenCalledWith(
@@ -110,6 +131,56 @@ describe('SystemPromptsManager', () => {
       )
     );
     expect(mocks.toastSuccess).toHaveBeenCalledWith('System file removed successfully');
+    await waitFor(() => expect(screen.queryByTestId('system-files-remove-dialog')).toBeNull());
+  });
+
+  it('keeps the remove confirm open when the update fails, and while it is in flight', async () => {
+    mocks.updateSettings.mockRejectedValue(new Error('boom'));
+    const { unmount } = renderManager();
+
+    fireEvent.click(await screen.findByTestId('system-files-row-actions-file-a'));
+    fireEvent.click(await screen.findByTestId('system-files-row-remove-file-a'));
+    let dialog = await screen.findByTestId('system-files-remove-dialog');
+    fireEvent.click(within(dialog).getByTestId('system-files-remove-dialog-reason-input-preset-0'));
+    fireEvent.click(within(dialog).getByTestId('system-files-remove-dialog-confirm-btn'));
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('Failed to remove system file'));
+    expect(screen.getByTestId('system-files-remove-dialog')).toBeInTheDocument();
+    unmount();
+
+    mocks.settingsPending = true;
+    renderManager();
+    fireEvent.click(await screen.findByTestId('system-files-row-actions-file-a'));
+    fireEvent.click(await screen.findByTestId('system-files-row-remove-file-a'));
+    dialog = await screen.findByTestId('system-files-remove-dialog');
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    fireEvent.click(within(dialog).getByTestId('system-files-remove-dialog-close-btn'));
+    expect(screen.getByTestId('system-files-remove-dialog')).toBeInTheDocument();
+  });
+
+  it('searches the picker once typing pauses for 300 ms, with only the last term', async () => {
+    renderManager();
+    await screen.findByTestId('system-files-row-file-a');
+    fireEvent.click(screen.getByTestId('system-files-add-btn'));
+    const dialog = await screen.findByTestId('system-files-add-dialog');
+    await within(dialog).findByTestId('system-files-pick-file-b');
+    expect(pickerSearches()).toEqual(['']);
+
+    vi.useFakeTimers();
+    try {
+      const input = within(dialog).getByTestId('system-files-search-input');
+      fireEvent.change(input, { target: { value: 's' } });
+      await act(() => vi.advanceTimersByTimeAsync(100));
+      fireEvent.change(input, { target: { value: 'st' } });
+      await act(() => vi.advanceTimersByTimeAsync(100));
+      fireEvent.change(input, { target: { value: 'sty' } });
+      await act(() => vi.advanceTimersByTimeAsync(299));
+      expect(pickerSearches()).toEqual(['']);
+
+      await act(() => vi.advanceTimersByTimeAsync(1));
+      expect(pickerSearches()).toEqual(['', 'sty']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('opens a file read-only from its row menu, and offers no view for a missing one', async () => {
@@ -159,6 +230,7 @@ describe('SystemPromptsManager', () => {
     expect(empty).toHaveTextContent('No knowledge files yet');
     fireEvent.click(within(empty).getByTestId('system-files-empty-add-btn'));
     expect(await screen.findByTestId('system-files-add-dialog')).toBeInTheDocument();
-    expect(mocks.get).not.toHaveBeenCalled();
+    // No file is configured, so no file is looked up; only the picker's list query runs.
+    expect(mocks.get.mock.calls.filter(([url]) => String(url).startsWith('/api/files/'))).toHaveLength(0);
   });
 });

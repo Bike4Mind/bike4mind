@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Alert,
   Box,
@@ -16,7 +16,6 @@ import {
   MenuButton,
   MenuItem,
   Stack,
-  Tooltip,
   Typography,
 } from '@mui/joy';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -30,8 +29,18 @@ import SearchIcon from '@mui/icons-material/Search';
 import { useKnowledgeModal } from '../Knowledge/KnowledgeModal';
 import { useGetFabFiles } from '@client/app/hooks/data/fabFiles';
 import debounce from 'lodash/debounce';
-import { AdminDialog, DataTable, EmptyState, LoadingState, StatusChip, type DataColumn } from './shared';
+import {
+  ActionDialog,
+  ADMIN_REASON_PRESETS,
+  AdminDialog,
+  DataTable,
+  EmptyState,
+  LoadingState,
+  StatusChip,
+  type DataColumn,
+} from './shared';
 import { adminFocus } from './shared/adminStyles';
+import { Dash, TruncatedText } from './promptAndToolParts';
 
 interface SystemFile {
   id: string;
@@ -50,26 +59,6 @@ interface SystemFileWithStatus {
   status: 'loaded' | 'missing';
 }
 
-const dash = (
-  <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
-    -
-  </Typography>
-);
-
-/** One line that truncates with an ellipsis, the full text on hover. */
-const TruncatedText = ({ text, mono, testId }: { text: string; mono?: boolean; testId?: string }) => (
-  <Tooltip title={text} placement="top-start">
-    <Typography
-      level="body-sm"
-      noWrap
-      data-testid={testId}
-      sx={{ color: 'admin.ink', minWidth: 0, ...(mono && { fontFamily: 'code' }) }}
-    >
-      {text}
-    </Typography>
-  </Tooltip>
-);
-
 function FileRowMenu({
   item,
   onView,
@@ -77,7 +66,7 @@ function FileRowMenu({
 }: {
   item: SystemFileWithStatus;
   onView: (fileId: string) => void;
-  onRemove: (fileId: string) => void;
+  onRemove: (item: SystemFileWithStatus) => void;
 }) {
   return (
     <Dropdown>
@@ -104,7 +93,7 @@ function FileRowMenu({
             <ListDivider />
           </>
         )}
-        <MenuItem onClick={() => onRemove(item.id)} data-testid={`system-files-row-remove-${item.id}`}>
+        <MenuItem onClick={() => onRemove(item)} data-testid={`system-files-row-remove-${item.id}`}>
           Remove from list
         </MenuItem>
       </Menu>
@@ -121,6 +110,7 @@ export const SystemPromptsManager: React.FC = () => {
   const [showFilePicker, setShowFilePicker] = useState(false);
   const [search, setSearch] = useState('');
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+  const [removingFile, setRemovingFile] = useState<SystemFileWithStatus | null>(null);
 
   const systemFileIds = useMemo(() => {
     const settingValue = getSetting('SystemFiles', '');
@@ -179,18 +169,12 @@ export const SystemPromptsManager: React.FC = () => {
     [availableFilesData]
   );
 
-  const handleSearch = useMemo(() => {
-    const debounced = debounce((value: string) => {
-      setSearch(value);
-    }, 300);
+  // Searches once typing pauses for 300 ms.
+  const handleSearch = useMemo(() => debounce((value: string) => setSearch(value), 300), []);
+  useEffect(() => () => handleSearch.cancel(), [handleSearch]);
 
-    // Cleanup on unmount
-    return () => {
-      debounced.cancel();
-    };
-  }, []);
-
-  const handleRemoveFile = async (fileId: string) => {
+  /** Resolves true once the settings write succeeds; a failure is reported by toast and rolled back. */
+  const handleRemoveFile = async (fileId: string): Promise<boolean> => {
     // Store the current data for potential rollback
     const previousData = queryClient.getQueryData(['system-files', systemFileIds]);
 
@@ -220,11 +204,13 @@ export const SystemPromptsManager: React.FC = () => {
       );
 
       toast.success('System file removed successfully');
+      return true;
     } catch (error) {
       // Revert the optimistic update on error
       queryClient.setQueryData(['system-files', systemFileIds], previousData);
       toast.error('Failed to remove system file');
       console.error(error);
+      return false;
     }
   };
 
@@ -310,7 +296,7 @@ export const SystemPromptsManager: React.FC = () => {
       width: '10rem',
       render: item => {
         const type = item.file?.fileType || item.file?.mimeType;
-        return type ? <TruncatedText text={type} /> : dash;
+        return type ? <TruncatedText text={type} /> : <Dash />;
       },
     },
     {
@@ -318,13 +304,13 @@ export const SystemPromptsManager: React.FC = () => {
       label: 'Size',
       width: '6rem',
       numeric: true,
-      render: item => (item.file ? formatFileSize(item.file.fileSize || 0) : dash),
+      render: item => (item.file ? formatFileSize(item.file.fileSize || 0) : <Dash />),
     },
     {
       id: 'updated',
       label: 'Updated',
       width: '7.5rem',
-      render: item => (item.file?.updatedAt ? new Date(item.file.updatedAt).toLocaleDateString() : dash),
+      render: item => (item.file?.updatedAt ? new Date(item.file.updatedAt).toLocaleDateString() : <Dash />),
     },
     {
       id: 'status',
@@ -395,13 +381,36 @@ export const SystemPromptsManager: React.FC = () => {
             }
           />
         }
-        rowActions={item => (
-          <FileRowMenu item={item} onView={handleViewFile} onRemove={fileId => void handleRemoveFile(fileId)} />
-        )}
+        rowActions={item => <FileRowMenu item={item} onView={handleViewFile} onRemove={setRemovingFile} />}
         pagination={false}
         // Wide enough that every column keeps one line; below it the table scrolls inside its frame.
         minWidth="60rem"
         maxHeight="none"
+      />
+
+      <ActionDialog
+        open={removingFile !== null}
+        // The settings write is already in flight; closing now would hide its outcome.
+        onClose={() => {
+          if (!updateSettingsMutation.isPending) setRemovingFile(null);
+        }}
+        title="Remove knowledge file"
+        description={
+          <>
+            Removes <strong>{removingFile?.file?.fileName ?? removingFile?.id}</strong> from the global knowledge files,
+            so it is no longer included in AI conversations for any user. The file itself is not deleted.
+          </>
+        }
+        reasonPresets={ADMIN_REASON_PRESETS.knowledgeFileRemoval}
+        // PUT /api/settings/update records the change in the audit log but takes no reason.
+        reasonAudited={false}
+        confirmLabel="Remove file"
+        tone="danger"
+        pending={updateSettingsMutation.isPending}
+        onConfirm={async () => {
+          if (removingFile && (await handleRemoveFile(removingFile.id))) setRemovingFile(null);
+        }}
+        data-testid="system-files-remove-dialog"
       />
 
       <AdminDialog
@@ -417,7 +426,8 @@ export const SystemPromptsManager: React.FC = () => {
             <Input
               placeholder="Search by file name..."
               startDecorator={<SearchIcon />}
-              onChange={e => handleSearch()}
+              onChange={e => handleSearch(e.target.value)}
+              slotProps={{ input: { 'data-testid': 'system-files-search-input' } }}
             />
           </FormControl>
 

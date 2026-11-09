@@ -86,7 +86,10 @@ const PROMPTS = [
 
 const LIST_URL = '/api/admin/system-prompts?';
 const listResponse = (data: unknown[]) => ({ data: { success: true, data, count: data.length } });
-const historyResponse = { data: { success: true, data: { history: [], defaultPrompt: null, currentVersion: 3 } } };
+const CODE_DEFAULT = { ...PROMPTS[0], content: 'The code default.', version: 0 };
+const historyResponse = {
+  data: { success: true, data: { history: [], defaultPrompt: CODE_DEFAULT, currentVersion: 3 } },
+};
 
 const respondWith = (list: () => Promise<unknown> = () => Promise.resolve(listResponse(PROMPTS))) =>
   mocks.get.mockImplementation((url: string) => {
@@ -122,11 +125,18 @@ describe('SystemPromptEditor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     respondWith();
-    mocks.post.mockResolvedValue({ data: { success: true, data: {}, message: 'ok' } });
+    mocks.post.mockImplementation((url: string) =>
+      Promise.resolve({
+        data: { success: true, message: 'ok', data: url.endsWith('/create-version') ? { version: 4 } : {} },
+      })
+    );
+    mocks.put.mockImplementation((url: string, body: object) =>
+      Promise.resolve({ data: { success: true, message: 'ok', data: { promptId: url.split('/').pop(), ...body } } })
+    );
     mocks.delete.mockResolvedValue({ data: { success: true, message: 'deleted' } });
   });
 
-  it('lists the prompts in a DataTable wide enough that no column crushes at 768 px', async () => {
+  it('lists the prompts in a DataTable with a 70rem minWidth and one-line names', async () => {
     const { container } = renderEditor();
 
     const table = await screen.findByTestId('system-prompts-table');
@@ -215,6 +225,90 @@ describe('SystemPromptEditor', () => {
     expect(mocks.toastSuccess).toHaveBeenCalledWith('System prompt "Custom prompt" deleted');
   });
 
+  it('keeps the delete confirm open on Esc and the X while the delete is in flight', async () => {
+    mocks.delete.mockReturnValue(new Promise(() => {}));
+    renderEditor();
+    await openRowMenu('custom_db_only');
+    fireEvent.click(await screen.findByTestId('system-prompt-delete-btn-custom_db_only'));
+    const dialog = await screen.findByTestId('system-prompt-delete-dialog');
+    fireEvent.click(within(dialog).getByTestId('system-prompt-delete-confirm-btn'));
+    await waitFor(() => expect(mocks.delete).toHaveBeenCalledTimes(1));
+
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    fireEvent.click(within(dialog).getByTestId('system-prompt-delete-dialog-close-btn'));
+    expect(screen.getByTestId('system-prompt-delete-dialog')).toBeInTheDocument();
+    expect(within(dialog).getByTestId('system-prompt-delete-cancel-btn')).toBeDisabled();
+  });
+
+  it('saves an edit as a new version and switches back to the code default with the same requests', async () => {
+    renderEditor();
+    await openRowMenu('optimizer_system');
+    fireEvent.click(await screen.findByTestId('system-prompt-row-edit-optimizer_system'));
+    const dialog = await screen.findByTestId('system-prompt-edit-dialog');
+
+    fireEvent.change(within(dialog).getByTestId('system-prompt-content-input'), {
+      target: { value: 'You are the optimizer, revised.' },
+    });
+    const status = within(dialog).getByTestId('system-prompt-edit-status');
+    expect(status).toHaveTextContent('You have unsaved changes');
+    expect(status).toHaveClass('MuiAlert-colorNeutral');
+    fireEvent.click(within(dialog).getByTestId('system-prompt-new-version-btn'));
+
+    await waitFor(() =>
+      expect(mocks.post).toHaveBeenCalledWith('/api/admin/system-prompts/optimizer_system/create-version', {
+        content: 'You are the optimizer, revised.',
+        name: 'Optimizer system prompt',
+        description: 'Sets how the optimizer behaves',
+        category: 'system',
+        tags: ['system-message', 'optimizer', 'scheduling', 'extra'],
+        variables: ['userName'],
+        enabled: true,
+        setAsActive: true,
+      })
+    );
+
+    const viewDefault = within(dialog).getByTestId('system-prompt-view-default-btn');
+    await waitFor(() => expect(viewDefault).not.toBeDisabled());
+    fireEvent.click(viewDefault);
+    expect(within(dialog).getByTestId('system-prompt-content-input')).toHaveValue('The code default.');
+    expect(within(dialog).getByTestId('system-prompt-edit-status')).toHaveClass('MuiAlert-colorNeutral');
+    fireEvent.click(within(dialog).getByTestId('system-prompt-use-default-btn'));
+
+    await waitFor(() =>
+      expect(mocks.post).toHaveBeenCalledWith('/api/admin/system-prompts/optimizer_system/switch-version', {
+        targetVersion: 0,
+      })
+    );
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+  });
+
+  it('creates the first override of a code-only prompt with the same PUT', async () => {
+    renderEditor();
+    await openRowMenu('briefing_main');
+    const edit = await screen.findByTestId('system-prompt-row-edit-briefing_main');
+    expect(edit).toHaveTextContent('Create override');
+    fireEvent.click(edit);
+    const dialog = await screen.findByTestId('system-prompt-edit-dialog');
+
+    fireEvent.change(within(dialog).getByTestId('system-prompt-content-input'), {
+      target: { value: 'Summarize {{data}} in three bullets.' },
+    });
+    fireEvent.click(within(dialog).getByTestId('system-prompt-create-override-btn'));
+
+    await waitFor(() =>
+      expect(mocks.put).toHaveBeenCalledWith('/api/admin/system-prompts/briefing_main', {
+        name: 'Briefing main prompt',
+        description: 'Carries the briefing data',
+        content: 'Summarize {{data}} in three bullets.',
+        category: 'automation',
+        tags: ['user-message'],
+        variables: ['data'],
+        enabled: false,
+      })
+    );
+    await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledWith('System prompt updated successfully'));
+  });
+
   it('narrows with a FilterBar, search first, and sends the same query parameters', async () => {
     renderEditor();
     await screen.findByTestId('system-prompt-row-optimizer_system');
@@ -222,6 +316,10 @@ describe('SystemPromptEditor', () => {
 
     const bar = screen.getByTestId('admin-filter-bar');
     expect(bar.firstElementChild).toContainElement(screen.getByTestId('admin-filter-search-input'));
+    expect(screen.getByTestId('admin-filter-search-input')).toHaveAttribute(
+      'aria-label',
+      'Search name, description or tags'
+    );
 
     fireEvent.click(screen.getByTestId('admin-filter-prompt-status'));
     fireEvent.click(await screen.findByTestId('admin-filter-prompt-status-false'));
@@ -255,12 +353,10 @@ describe('SystemPromptEditor', () => {
 
     fireEvent.click(screen.getByTestId('admin-filter-prompt-status'));
     fireEvent.click(await screen.findByTestId('admin-filter-prompt-status-true'));
-    const filtered = await screen.findByText('No prompts match these filters');
-    fireEvent.click(
-      within(filtered.closest('[data-testid="admin-empty-state"]') as HTMLElement).getByTestId(
-        'system-prompts-empty-clear-btn'
-      )
+    await waitFor(() =>
+      expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No prompts match these filters')
     );
+    fireEvent.click(within(screen.getByTestId('admin-empty-state')).getByTestId('system-prompts-empty-clear-btn'));
     await waitFor(() => expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No system prompts yet'));
     expect(screen.getByTestId('admin-filter-prompt-status')).toHaveAttribute('aria-label', 'Filter by Status');
   });
