@@ -44,7 +44,10 @@ export interface OpenAICompatibleServer {
   hasCredentials(): boolean;
   /** Removes the server's credential from text it sent, such as an error inside a streamed reply. */
   redact: (text: string, response: Response) => string;
-  /** Tools went off or came back on, or a model first replied with reasoning, so the model list changed. */
+  /**
+   * Tools went off or came back on, a model first replied with reasoning, or a template turned out to take effort
+   * levels, so the model list changed.
+   */
   toolsChanged?: () => void;
   /** The models that replied with reasoning on an earlier run; see ModelServerStore.thinkers. */
   learnedThinkers?: {
@@ -217,6 +220,18 @@ function takesReasoningEffort(model: { name: string; baseModel?: string; aliases
 }
 
 /**
+ * gpt-oss's harmony template, whatever name serves it: llama.cpp picks its gpt-oss handler on `<|channel|>`, and the
+ * template reads its level from `reasoning_effort`.
+ */
+export function isEffortTemplate(template: string): boolean {
+  return template.includes('<|channel|>') && template.includes('reasoning_effort');
+}
+
+const PROPS_TIMEOUT_MS = 5_000;
+/** How long a listing waits to ask again for a template the server could not name; a reply asks at once. */
+export const TEMPLATE_RETRY_MS = 5 * 60_000;
+
+/**
  * What the listing says about the weights behind a name (llama-server's file size, LM Studio's
  * arch and quantization), so a learned thinker is forgotten when other weights take its name.
  * Undefined when the listing says nothing, as vLLM's does not.
@@ -288,6 +303,12 @@ export class OpenAICompatibleChat implements LocalChat {
   private recalled: Promise<void> | null = null;
   /** Served names, aliases included, of the gpt-oss models in the last listing. */
   private readonly effortModels = new Set<string>();
+  /** What llama-server's `/props` said of each listed model's template, with the identity of its weights then. */
+  private readonly templates = new Map<string, { effort: boolean; identity: string | undefined }>();
+  /** Names whose template is being asked for. */
+  private readonly askingTemplates = new Set<string>();
+  /** When each name's last ask got no template (Date.now()), as from a router that has not loaded the model. */
+  private readonly unansweredTemplates = new Map<string, number>();
 
   constructor(private readonly server: OpenAICompatibleServer) {
     this.runtime = new OpenAICompatibleRuntime({
@@ -308,6 +329,9 @@ export class OpenAICompatibleChat implements LocalChat {
     this.listed = chat.map(model => model.name);
     this.smallChanged(before);
     this.learnIdentities(models);
+    this.keepTemplates(chat);
+    // Not awaited: a router answers only for loaded models; a template that takes levels relists via toolsChanged.
+    void this.learnTemplates(chat.map(model => model.name));
     this.effortModels.clear();
     this.listedNames.clear();
     for (const model of chat) for (const alias of model.aliases ?? []) this.listedNames.set(alias, model.name);
@@ -318,7 +342,7 @@ export class OpenAICompatibleChat implements LocalChat {
       const thinks = this.thinkers.has(model.name);
       const served = this.contexts.get(model.name);
       const window = served === undefined ? undefined : Math.min(served, budgets[index] ?? served);
-      const effortLevels = takesReasoningEffort(model);
+      const effortLevels = takesReasoningEffort(model) || this.templateTakesEffort(model.name);
       if (effortLevels) for (const name of [model.name, ...(model.aliases ?? [])]) this.effortModels.add(name);
       const controls = openAICompatibleControls(this.server.product, {
         ...(this.contexts.has(model.name) ? { contextWindow: this.contexts.get(model.name) } : {}),
@@ -497,6 +521,8 @@ export class OpenAICompatibleChat implements LocalChat {
       text => this.server.redact(text, response),
       () => this.learnThinking(model)
     );
+    // A router has the model loaded now, so it can name the template a listing could not.
+    void this.learnTemplates([this.listedNames.get(model) ?? model], true);
   }
 
   /**
@@ -504,7 +530,11 @@ export class OpenAICompatibleChat implements LocalChat {
    * vLLM other templates take Off as `chat_template_kwargs.enable_thinking`. Thinking left on sends nothing.
    */
   private thinkingFields(model: string, request: CompletionRequest): Record<string, unknown> {
-    if (this.effortModels.has(model) || takesReasoningEffort({ name: model })) {
+    const effort =
+      this.effortModels.has(model) ||
+      takesReasoningEffort({ name: model }) ||
+      this.templateTakesEffort(this.listedNames.get(model) ?? model);
+    if (effort) {
       const level = request.reasoningEffort;
       if (!level || !OPENAI_COMPATIBLE_EFFORT_LEVELS.includes(level)) return {};
       // llama-server builds before mid-2026 read the level only from the template kwargs.
@@ -559,6 +589,76 @@ export class OpenAICompatibleChat implements LocalChat {
     this.thinkers.set(model, identity);
     void this.server.learnedThinkers?.add(model, identity).catch(() => undefined);
     this.server.toolsChanged?.();
+  }
+
+  private templateTakesEffort(name: string): boolean {
+    return this.templates.get(name)?.effort === true;
+  }
+
+  /** As learnIdentities does for thinkers: forgets a template whose name is gone or now serves other weights. */
+  private keepTemplates(listed: readonly InstalledModel[]): void {
+    const names = new Set(listed.map(model => model.name));
+    for (const [name, learned] of this.templates) {
+      const identity = this.identities.get(name);
+      const moved = learned.identity !== undefined && identity !== undefined && learned.identity !== identity;
+      if (!names.has(name) || moved) this.templates.delete(name);
+      else learned.identity ??= identity;
+    }
+    for (const name of this.unansweredTemplates.keys()) if (!names.has(name)) this.unansweredTemplates.delete(name);
+  }
+
+  /**
+   * Asks llama-server for each template not yet known, and for one it could not name only after TEMPLATE_RETRY_MS
+   * unless `afterReply`; one that takes effort levels changes the listing.
+   */
+  private async learnTemplates(names: readonly string[], afterReply = false): Promise<void> {
+    if (this.server.product !== 'llama-server') return;
+    const now = Date.now();
+    const asking = [...new Set(names)].filter(name => {
+      if (this.templates.has(name) || this.askingTemplates.has(name)) return false;
+      const unanswered = this.unansweredTemplates.get(name);
+      return afterReply || unanswered === undefined || now - unanswered >= TEMPLATE_RETRY_MS;
+    });
+    for (const name of asking) this.askingTemplates.add(name);
+    const found = await Promise.all(
+      asking.map(async name => {
+        const identity = this.identities.get(name);
+        const template = await this.servedTemplate(name);
+        this.askingTemplates.delete(name);
+        if (template === undefined) {
+          this.unansweredTemplates.set(name, Date.now());
+          return false;
+        }
+        this.unansweredTemplates.delete(name);
+        const effort = isEffortTemplate(template);
+        this.templates.set(name, { effort, identity });
+        return effort;
+      })
+    );
+    if (found.includes(true)) this.server.toolsChanged?.();
+  }
+
+  /**
+   * The template `/props` names for the model, asked with autoload off so a router never loads a model to answer;
+   * undefined when it cannot say, as a router cannot for a model it has not loaded.
+   */
+  private async servedTemplate(name: string): Promise<string | undefined> {
+    try {
+      const response = await this.server.fetch(
+        `${this.server.baseUrl}/props?model=${encodeURIComponent(name)}&autoload=false`,
+        { signal: AbortSignal.timeout(PROPS_TIMEOUT_MS) }
+      );
+      if (!response.ok) {
+        await response.body?.cancel();
+        return undefined;
+      }
+      const body: unknown = await response.json();
+      const template =
+        body && typeof body === 'object' ? (body as { chat_template?: unknown }).chat_template : undefined;
+      return typeof template === 'string' ? template : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private async readStream(
