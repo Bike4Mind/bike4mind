@@ -71,7 +71,6 @@ export default {
   'SlackWorkspacesTab.tsx': [[2, '533bd942dfb864f5']],
   'SreAgentTab.tsx': [[11, '5feea0e0c55f7cf4']],
   'Team/index.tsx': [[1, '78a3901c08799aeb']],
-  'ToolDefinitionsTab.tsx': [[2, '562c6807618929aa']],
   'Users/BulkAbuseResponseModal.tsx': [[22, 'c70df252992eb367']],
   'Users/ComplianceModal.tsx': [[1, '8e6086deb2b73718']],
   'Users/CreateUserModal.tsx': [[2, '616ffa1b9b560954']],

@@ -70,7 +70,6 @@ const componentsByFile = {
   'SlackWorkspacesTab.tsx': ['Card', 'Modal', 'Table'],
   'SreAgentTab.tsx': ['Card', 'Modal', 'Table'],
   'Team/index.tsx': ['Card', 'Modal'],
-  'ToolDefinitionsTab.tsx': ['Card', 'Modal', 'Table'],
   'Users/BulkAbuseResponseModal.tsx': ['Modal'],
   'Users/ComplianceModal.tsx': ['Modal', 'Table'],
   'Users/CreateUserModal.tsx': ['Modal'],
