@@ -90,6 +90,7 @@ describe('globNames', () => {
   describe('matching', () => {
     let folder: string;
     let long: string;
+    const longNames = ['a'.repeat(56), 'component-library-settings-panel-test.md'];
 
     beforeAll(async () => {
       folder = join(base, 'm');
@@ -97,9 +98,7 @@ describe('globNames', () => {
       await mkdir(folder);
       await mkdir(long);
       for (const name of ['a', 'ab', 'a\nb.ts', 'README.md', '.x']) await writeFile(join(folder, name), '');
-      for (const name of ['a'.repeat(56), 'component-library-settings-panel-test.md']) {
-        await writeFile(join(long, name), '');
-      }
+      for (const name of longNames) await writeFile(join(long, name), '');
     });
 
     it.each([
@@ -115,15 +114,24 @@ describe('globNames', () => {
       expect((await globNames(folder, pattern, never))?.sort()).toEqual(names);
     });
 
-    it.each([['********.ts'], ['*a*a*a*a*a*a*a*a*b']])(
-      'matches %s in linear time',
-      async pattern => {
-        const started = performance.now();
-        expect(await globNames(long, pattern, never)).toEqual([]);
-        expect(performance.now() - started).toBeLessThan(2000);
-      },
-      2000
-    );
+    it.each([
+      ['********.ts', 0],
+      ['*a*a*a*a*a*a*a*a*b', 0],
+      ['*a*a*a*a*a*a*a*a*b*', 1],
+    ])('matches %s searching each name once per part between stars', async (pattern, least) => {
+      const search = vi.spyOn(String.prototype, 'indexOf');
+      let searches = 0;
+      const names = await globNames(long, pattern, never).finally(() => {
+        // Only searches within a listed name count, not ones the test runner makes meanwhile.
+        searches = search.mock.contexts.filter(name => longNames.includes(String(name))).length;
+        search.mockRestore();
+      });
+      expect(names).toEqual([]);
+      const between = Math.max(0, pattern.replace(/\*+/g, '*').split('*').length - 2);
+      // Each name is matched as written and case-folded; a backtracking match would search it far more often.
+      expect(searches).toBeLessThanOrEqual(longNames.length * 2 * between);
+      expect(searches).toBeGreaterThanOrEqual(least);
+    });
   });
 
   it('stops when the scan is stopped', async () => {

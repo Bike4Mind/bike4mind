@@ -390,11 +390,9 @@ describe('commands main ran unasked', () => {
     expect(await judge(command, folder)).toEqual(expected);
   });
 
-  it('reads a glob of many stars against a long name in linear time', async () => {
-    const started = performance.now();
+  // shellScan.globWalk.test.ts bounds how often the matcher searches a name.
+  it('reads a glob of many stars against a long name', async () => {
     expect(await judge('git diff --name-only -- *a*a*a*a*a*a*a*a*b | xargs wc -l', 'nrepo')).toEqual(unasked);
-    // Room for the git runs on a loaded host; the matching alone took minutes when it backtracked.
-    expect(performance.now() - started).toBeLessThan(10000);
   });
 
   it.each([
