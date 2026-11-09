@@ -30,22 +30,23 @@ export interface IAutoContainmentDecisionDocument extends Document {
 const RETENTION_SECONDS = 365 * 24 * 60 * 60;
 const DUPLICATE_KEY = 11000;
 
-export const AutoContainmentDecisionSchema: Schema<IAutoContainmentDecisionDocument> = new Schema<IAutoContainmentDecisionDocument>(
-  {
-    detectionId: { type: String, required: true },
-    revision: { type: Number, required: true },
-    assessmentId: { type: String, required: true },
-    mode: { type: String, enum: ['shadow', 'enforce'], required: true },
-    outcome: { type: String, enum: AUTO_CONTAINMENT_OUTCOMES, required: true },
-    userIds: { type: [String], default: [] },
-    confidence: { type: Number, required: true },
-    reason: { type: String, required: true },
-    batchId: { type: String, default: null },
-    error: { type: String, default: null },
-    decidedAt: { type: Date, required: true },
-  },
-  { timestamps: true, versionKey: false, collection: 'AutoContainmentDecision' }
-);
+export const AutoContainmentDecisionSchema: Schema<IAutoContainmentDecisionDocument> =
+  new Schema<IAutoContainmentDecisionDocument>(
+    {
+      detectionId: { type: String, required: true },
+      revision: { type: Number, required: true },
+      assessmentId: { type: String, required: true },
+      mode: { type: String, enum: ['shadow', 'enforce'], required: true },
+      outcome: { type: String, enum: AUTO_CONTAINMENT_OUTCOMES, required: true },
+      userIds: { type: [String], default: [] },
+      confidence: { type: Number, required: true },
+      reason: { type: String, required: true },
+      batchId: { type: String, default: null },
+      error: { type: String, default: null },
+      decidedAt: { type: Date, required: true },
+    },
+    { timestamps: true, versionKey: false, collection: 'AutoContainmentDecision' }
+  );
 
 AutoContainmentDecisionSchema.index({ detectionId: 1, revision: 1 }, { unique: true });
 AutoContainmentDecisionSchema.index({ decidedAt: 1 }, { expireAfterSeconds: RETENTION_SECONDS });
