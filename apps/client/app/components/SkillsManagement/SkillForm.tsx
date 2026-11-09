@@ -28,6 +28,8 @@ import {
   type DroppedFsEntry,
   type SkillFolderResult,
 } from './skillImport';
+import { MAX_DESCRIPTION_LENGTH, MAX_SKILL_NAME_LENGTH } from './skillImportRules';
+import { SkillImportHelp } from './SkillImportHelp';
 import { SkillFormInput } from '@client/app/hooks/data/skills';
 
 export interface SkillFormProps {
@@ -41,7 +43,6 @@ export interface SkillFormProps {
 }
 
 const SKILL_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
-const MAX_DESCRIPTION_LENGTH = 500;
 
 /** A picked skill folder (`webkitRelativePath` is `<folder>/...`), read by the Choose folder path. */
 export const readSkillFolder = (picked: File[]) => readSkillEntries(entriesFromPickedFolder(picked));
@@ -220,8 +221,8 @@ export const SkillForm: FC<SkillFormProps> = ({
   const nameError =
     name.length === 0
       ? 'Name is required'
-      : name.length > 64
-        ? 'Name must be 64 characters or fewer'
+      : name.length > MAX_SKILL_NAME_LENGTH
+        ? `Name must be ${MAX_SKILL_NAME_LENGTH} characters or fewer`
         : !SKILL_NAME_PATTERN.test(name)
           ? 'Use lowercase letters, digits, and hyphens (e.g. summarize, review-pr)'
           : null;
@@ -279,6 +280,7 @@ export const SkillForm: FC<SkillFormProps> = ({
           >
             <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
               <Typography level="title-sm">Import SKILL.md</Typography>
+              <SkillImportHelp />
               <input
                 ref={fileInputRef}
                 type="file"
