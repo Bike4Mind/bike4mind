@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { Epithet } from '@shared/agentPersona';
 import type { AgentState, AgentView } from '../roster';
 import {
   BAR_COUNTER,
@@ -8,7 +9,8 @@ import {
   NAME_LABEL_MAX_WIDTH,
   NAME_LABEL_MIN_WIDTH,
   TAVERN_SLOTS,
-  characterFor,
+  assignCharacters,
+  type CastSubject,
   hiddenByCounter,
   nameLabelLayout,
   placeAgents,
@@ -18,6 +20,7 @@ import {
   type Placement,
   type SlotPoint,
 } from './scene';
+import { CHARACTER_COUNT, characterSprite } from './tavernArt';
 
 // testUtils needs a DOM; placement only reads id and state.
 const agentFixture = (id: string, state: AgentState): AgentView => ({
@@ -70,27 +73,56 @@ describe('TAVERN_SLOTS', () => {
   });
 });
 
-describe('characterFor', () => {
-  it('is stable for the same id and within 1..4', () => {
-    for (const id of ['a', 'session-123', 'x'.repeat(40), '']) {
-      const character = characterFor(id);
-      expect(characterFor(id)).toBe(character);
-      expect([1, 2, 3, 4]).toContain(character);
-    }
+describe('assignCharacters', () => {
+  const subject = (id: string, minute: number, epithet?: Epithet): CastSubject => ({
+    id,
+    createdAt: `2026-01-01T00:${String(minute).padStart(2, '0')}:00.000Z`,
+    epithet,
+  });
+  const crafts: Record<number, Epithet> = { 1: 'Tinkerer', 2: 'Scribe', 3: 'Seeker', 4: 'Tinkerer' };
+  const craftOf = (character: number) => crafts[character] ?? 'Wanderer';
+
+  it('never repeats a character while unused sheets remain, even when every agent does the same work', () => {
+    const scribes = ['a', 'b', 'c', 'd'].map((id, index) => subject(`session-${id}`, index, 'Scribe'));
+    const characters = assignCharacters(scribes, 4, craftOf);
+    expect(new Set(characters.values()).size).toBe(4);
   });
 
-  it('maps epithets to a fixed sprite and keeps the id pick for Wanderer', () => {
-    expect(characterFor('x', 'Scribe')).toBe(2);
-    expect(characterFor('x', 'Seeker')).toBe(2);
-    expect(characterFor('x', 'Warden')).toBe(3);
-    expect(characterFor('x', 'Tinkerer')).toBe(4);
-    expect(characterFor('x', 'Cartographer')).toBe(1);
-    expect(characterFor('agent-7', 'Wanderer')).toBe(characterFor('agent-7'));
+  it('is the same on every call and whatever order the roster arrives in', () => {
+    const roster = Array.from({ length: 6 }, (_, index) => subject(`agent-${index}`, index, 'Scribe'));
+    const first = assignCharacters(roster, 4, craftOf);
+    expect(assignCharacters([...roster].reverse(), 4, craftOf)).toEqual(first);
+    expect(assignCharacters(roster, 4, craftOf)).toEqual(first);
   });
 
-  it('spreads ids over more than one character', () => {
-    const characters = new Set(Array.from({ length: 20 }, (_, index) => characterFor(`agent-${index}`)));
-    expect(characters.size).toBeGreaterThan(1);
+  it('gives the oldest agent the character that looks the part of its work', () => {
+    const characters = assignCharacters([subject('x', 0, 'Scribe'), subject('y', 1, 'Seeker')], 4, craftOf);
+    expect(characters.get('x')).toBe(2);
+    expect(characters.get('y')).toBe(3);
+  });
+
+  it('keeps existing agents in their characters when a newer agent joins', () => {
+    const before = [subject('one', 0), subject('two', 1), subject('three', 2)];
+    const first = assignCharacters(before, 4, craftOf);
+    const after = assignCharacters([...before, subject('four', 3)], 4, craftOf);
+    for (const agent of before) expect(after.get(agent.id)).toBe(first.get(agent.id));
+  });
+
+  it('repeats only once the cast is used up, then spreads the repeats', () => {
+    const roster = Array.from({ length: 8 }, (_, index) => subject(`agent-${index}`, index));
+    const characters = [...assignCharacters(roster, 4, craftOf).values()];
+    expect(new Set(characters.slice(0, 4)).size).toBe(4);
+    expect(new Set(characters.slice(4)).size).toBe(4);
+  });
+
+  it('covers the real cast with distinct sheets for a full roster', () => {
+    const roster = Array.from({ length: CHARACTER_COUNT }, (_, index) => subject(`s-${index}`, index, 'Scribe'));
+    const characters = assignCharacters(roster);
+    expect(new Set(characters.values()).size).toBe(CHARACTER_COUNT);
+    expect(new Set([...characters.values()].map(character => characterSprite(character, 'idle'))).size).toBe(
+      CHARACTER_COUNT
+    );
+    for (const character of characters.values()) expect(characterSprite(character, 'idle')).toBeTruthy();
   });
 });
 

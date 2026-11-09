@@ -33,6 +33,8 @@ import {
   type DroppedFsEntry,
   type SkillFolderResult,
 } from './skillImport';
+import { MAX_BODY_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_SKILL_NAME_LENGTH } from './skillImportRules';
+import { SkillImportHelp } from './SkillImportHelp';
 import { SkillFormInput } from '@client/app/hooks/data/skills';
 import { diffSkillUpdate, type SkillUpdatePreviewData } from './skillUpdatePreview';
 
@@ -51,7 +53,6 @@ export interface SkillFormProps {
 type SkillFolderBundle = { files: ISkillFile[]; skipped: string[] };
 
 const SKILL_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
-const MAX_DESCRIPTION_LENGTH = 500;
 
 /** A picked skill folder (`webkitRelativePath` is `<folder>/...`), read by the Choose folder path. */
 export const readSkillFolder = (picked: File[]) => readSkillEntries(entriesFromPickedFolder(picked));
@@ -251,8 +252,8 @@ export const SkillForm: FC<SkillFormProps> = ({
   const nameError =
     name.length === 0
       ? 'Name is required'
-      : name.length > 64
-        ? 'Name must be 64 characters or fewer'
+      : name.length > MAX_SKILL_NAME_LENGTH
+        ? `Name must be ${MAX_SKILL_NAME_LENGTH} characters or fewer`
         : !SKILL_NAME_PATTERN.test(name)
           ? 'Use lowercase letters, digits, and hyphens (e.g. summarize, review-pr)'
           : null;
@@ -267,8 +268,8 @@ export const SkillForm: FC<SkillFormProps> = ({
   const bodyError =
     body.trim().length === 0
       ? 'Body is required'
-      : body.length > 50_000
-        ? 'Body must be 50000 characters or fewer'
+      : body.length > MAX_BODY_LENGTH
+        ? `Body must be ${MAX_BODY_LENGTH} characters or fewer`
         : null;
 
   const isValid = !nameError && !descriptionError && !bodyError;
@@ -310,6 +311,7 @@ export const SkillForm: FC<SkillFormProps> = ({
           >
             <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
               <Typography level="title-sm">{updateFromSkillMd ? 'Update from SKILL.md' : 'Import SKILL.md'}</Typography>
+              <SkillImportHelp />
               <input
                 ref={fileInputRef}
                 type="file"

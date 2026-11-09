@@ -1,5 +1,5 @@
 import { toolDefinitionOverrideRepository } from '@bike4mind/database';
-import { ApiKeyScope, B4MLLMToolsList, MCP_PROVIDER_METADATA } from '@bike4mind/common';
+import { ApiKeyScope, B4MLLMToolsList, MCP_PROVIDER_METADATA, SETTINGS_PAGE_READ } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
@@ -62,7 +62,7 @@ function findCodeTool(toolId: string): { toolName: string; description: string; 
 }
 
 const handler = adminApi({
-  adminPermissions: { GET: 'support:read', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  adminPermissions: { GET: SETTINGS_PAGE_READ, PUT: 'settings:manage', DELETE: 'settings:manage' },
   requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(async (req, res) => {

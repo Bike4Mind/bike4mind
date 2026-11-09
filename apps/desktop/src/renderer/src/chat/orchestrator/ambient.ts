@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 export const AMBIENT_IDLE_MS = 45_000;
 
 /**
- * Marks something open that the user is in the middle of (the peek drawer, the order slip), so the
+ * Marks something open that the user is in the middle of (the order slip), so the
  * chrome never settles out from under it.
  */
 export const AMBIENT_HOLD_ATTR = 'data-ambient-hold';

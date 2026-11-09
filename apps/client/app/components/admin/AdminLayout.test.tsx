@@ -122,8 +122,20 @@ describe('AdminLayoutRoute', () => {
       expect(within(sidebar).getByText('Delegated admin')).toBeInTheDocument();
     });
 
-    it('whose permissions open no tab is sent to /new', async () => {
+    it('with support:read enters the console and sees the support tabs', async () => {
       mockUseUser.mockReturnValue(delegate(['support:read']));
+
+      await renderAt('/admin');
+
+      await screen.findByTestId('admin-layout');
+      const sidebar = desktopSidebar();
+      expect(within(sidebar).getByTestId('admin-approvals-btn')).toBeInTheDocument();
+      expect(within(sidebar).queryByTestId('admin-modals-tab-btn')).toBeNull();
+      expect(within(sidebar).queryByTestId('admin-users-tab-btn')).toBeNull();
+    });
+
+    it('whose permissions open no tab is sent to /new', async () => {
+      mockUseUser.mockReturnValue(delegate(['users:impersonate']));
 
       const router = await renderAt('/admin');
 
@@ -136,8 +148,10 @@ describe('AdminLayoutRoute', () => {
 
       const router = await renderAt('/admin/users/0123456789abcdef01234567');
 
-      await waitFor(() => expect(router.state.location.pathname).toBe('/admin'));
-      // Never rendered, not just gone after the redirect: a mounted profile fires admin requests.
+      const state = await screen.findByTestId('admin-missing-permission-state');
+      expect(state).toHaveTextContent('Full admin access required');
+      expect(router.state.location.pathname).toBe('/admin/users/0123456789abcdef01234567');
+      // Never rendered, not just hidden: a mounted profile fires admin requests.
       expect(profileRendered).not.toHaveBeenCalled();
     });
   });
