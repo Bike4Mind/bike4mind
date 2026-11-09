@@ -3892,6 +3892,633 @@
           ]
         }
       },
+      "getClientConfigResponse200": {
+        "type": "object",
+        "properties": {
+          "server": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "live",
+                  "maintenance",
+                  "offline"
+                ]
+              },
+              "app_url": {
+                "type": "string"
+              },
+              "support_email": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "status",
+              "app_url",
+              "support_email"
+            ]
+          },
+          "features": {
+            "type": "object",
+            "properties": {
+              "agents": {
+                "type": "boolean"
+              },
+              "agent_mode": {
+                "type": "boolean"
+              },
+              "artifacts": {
+                "type": "boolean"
+              },
+              "data_lakes": {
+                "type": "boolean"
+              },
+              "deep_research": {
+                "type": "boolean"
+              },
+              "knowledge_base_search": {
+                "type": "boolean"
+              },
+              "mcp_server": {
+                "type": "boolean"
+              },
+              "custom_mcp_connectors": {
+                "type": "boolean"
+              },
+              "mementos": {
+                "type": "boolean"
+              },
+              "quest_master": {
+                "type": "boolean"
+              },
+              "rapid_reply": {
+                "type": "boolean"
+              },
+              "research_engine": {
+                "type": "boolean"
+              },
+              "team_plan": {
+                "type": "boolean"
+              },
+              "voice_sessions": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "agents",
+              "agent_mode",
+              "artifacts",
+              "data_lakes",
+              "deep_research",
+              "knowledge_base_search",
+              "mcp_server",
+              "custom_mcp_connectors",
+              "mementos",
+              "quest_master",
+              "rapid_reply",
+              "research_engine",
+              "team_plan",
+              "voice_sessions"
+            ]
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "max_upload_size_mb": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "credits_enforced": {
+                "type": "boolean"
+              },
+              "low_credits_threshold": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "max_upload_size_mb",
+              "credits_enforced",
+              "low_credits_threshold"
+            ]
+          },
+          "models": {
+            "type": "object",
+            "properties": {
+              "default_id": {
+                "type": "string"
+              },
+              "recommended_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "available": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "Pass as `model` on the generation endpoints."
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "text",
+                        "image",
+                        "speech-to-text",
+                        "video"
+                      ]
+                    },
+                    "backend": {
+                      "type": "string",
+                      "enum": [
+                        "openai",
+                        "bedrock",
+                        "anthropic",
+                        "gemini",
+                        "ollama",
+                        "openai-compatible",
+                        "bfl",
+                        "xai",
+                        "kimi",
+                        "deepseek",
+                        "voyageai",
+                        "aws",
+                        "local-image"
+                      ],
+                      "description": "The provider that serves the model."
+                    },
+                    "description": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "context_window": {
+                      "type": "integer",
+                      "description": "Input context, in tokens."
+                    },
+                    "max_output_tokens": {
+                      "type": "integer"
+                    },
+                    "supports_streaming": {
+                      "type": "boolean"
+                    },
+                    "supports_thinking": {
+                      "type": "boolean"
+                    },
+                    "reasons_within_output_budget": {
+                      "type": "boolean",
+                      "description": "Whether reasoning tokens are spent inside `max_output_tokens` on every turn. When true, a small `max_tokens` can be used up by reasoning alone and return an empty reply, so leave room above the answer you expect."
+                    },
+                    "reasoning_efforts": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "minimal",
+                          "low",
+                          "medium",
+                          "high",
+                          "xhigh"
+                        ]
+                      },
+                      "description": "The `reasoningEffort` levels this model acts on, lowest first; empty when it ignores the option. `none` is listed only where it turns reasoning off. Each level is mapped to the nearest one the provider offers. A listed level can still be dropped on one request: some OpenAI models drop it on tool turns, and Claude models with a fixed thinking budget drop it when `max_tokens` leaves no room for the budget plus the answer."
+                    },
+                    "supports_tools": {
+                      "type": "boolean"
+                    },
+                    "supports_tool_search": {
+                      "type": "boolean",
+                      "description": "Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, so a large tool catalog is searched on demand instead of loaded into context up front. Describes the model: `/api/ai/v1/completions` honours it for every model with this flag set, whether its `backend` is `anthropic` or `bedrock`."
+                    },
+                    "supports_tool_changes": {
+                      "type": "boolean",
+                      "description": "Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model: `/api/ai/v1/completions` honours it only for models whose `backend` is `anthropic`; a `bedrock` model with this flag set is refused there with `errorCode: \"tool_changes_unsupported\"`."
+                    },
+                    "supports_assistant_prefill": {
+                      "type": "boolean",
+                      "description": "Whether `/api/ai/v1/completions` accepts a final assistant message for the model to continue. When false, a text prefill returns `400` with `errorCode: \"assistant_prefill_unsupported\"`; server-tool continuations are allowed. On Claude models that accept assistant prefill, it cannot be combined with `thinking`."
+                    },
+                    "supports_vision": {
+                      "type": "boolean"
+                    },
+                    "deprecation_date": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "`YYYY-MM-DD`; null when no retirement is scheduled."
+                    },
+                    "replaced_by": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "The id of the recommended successor, when there is one."
+                    },
+                    "image": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "sizing": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "presets"
+                                  ]
+                                },
+                                "presets": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "description": "Accepted `size` values, as `WxH`."
+                                },
+                                "default_size": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "presets",
+                                "default_size"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "constrained"
+                                  ]
+                                },
+                                "presets": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "description": "Suggested `size` values; any `WxH` meeting `constraints` is accepted."
+                                },
+                                "default_size": {
+                                  "type": "string"
+                                },
+                                "auto_size": {
+                                  "type": "string",
+                                  "description": "The `size` value that lets the provider choose."
+                                },
+                                "constraints": {
+                                  "type": "object",
+                                  "properties": {
+                                    "max_edge": {
+                                      "type": "integer"
+                                    },
+                                    "min_total_pixels": {
+                                      "type": "integer"
+                                    },
+                                    "max_total_pixels": {
+                                      "type": "integer"
+                                    },
+                                    "edge_multiple": {
+                                      "type": "integer",
+                                      "description": "Both edges must be a multiple of this."
+                                    },
+                                    "max_aspect_ratio": {
+                                      "type": "number",
+                                      "description": "Longest edge divided by shortest edge."
+                                    }
+                                  },
+                                  "required": [
+                                    "max_edge",
+                                    "min_total_pixels",
+                                    "max_total_pixels",
+                                    "edge_multiple",
+                                    "max_aspect_ratio"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "presets",
+                                "default_size",
+                                "auto_size",
+                                "constraints"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "dimensions"
+                                  ]
+                                },
+                                "presets": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "default_size": {
+                                  "type": "string"
+                                },
+                                "min_width": {
+                                  "type": "integer"
+                                },
+                                "max_width": {
+                                  "type": "integer"
+                                },
+                                "min_height": {
+                                  "type": "integer"
+                                },
+                                "max_height": {
+                                  "type": "integer"
+                                },
+                                "step": {
+                                  "type": "integer",
+                                  "description": "`width` and `height` are rounded to the nearest multiple of this."
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "presets",
+                                "default_size",
+                                "min_width",
+                                "max_width",
+                                "min_height",
+                                "max_height",
+                                "step"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "aspect_ratio"
+                                  ],
+                                  "description": "Takes an `aspect_ratio` such as `16:9`, not a `size`."
+                                }
+                              },
+                              "required": [
+                                "kind"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "input_image"
+                                  ],
+                                  "description": "Sized by the input image; takes no `size`."
+                                },
+                                "aspect_ratio": {
+                                  "type": "boolean",
+                                  "description": "Whether an `aspect_ratio` override is honoured."
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "aspect_ratio"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "fixed"
+                                  ],
+                                  "description": "The provider takes no size at all."
+                                }
+                              },
+                              "required": [
+                                "kind"
+                              ]
+                            }
+                          ]
+                        },
+                        "supports": {
+                          "type": "object",
+                          "properties": {
+                            "transparent_background": {
+                              "type": "boolean",
+                              "description": "`background: 'transparent'` yields real alpha."
+                            },
+                            "seed": {
+                              "type": "boolean"
+                            },
+                            "qualities": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "enum": [
+                                  "standard",
+                                  "hd",
+                                  "low",
+                                  "medium",
+                                  "high",
+                                  "xhigh",
+                                  "max",
+                                  "auto"
+                                ]
+                              },
+                              "description": "Accepted `quality` tiers; empty when none is taken."
+                            },
+                            "max_images": {
+                              "type": "integer",
+                              "description": "Most images one request may ask for via `n`."
+                            },
+                            "max_reference_images": {
+                              "type": "integer",
+                              "description": "Most `referenceImageFabFileIds` honoured on generation; 0 when the model takes none. FLUX.2 edits take one fewer, as the source uses a slot."
+                            },
+                            "edit": {
+                              "type": "boolean",
+                              "description": "Accepted by `POST /api/v1/image-edits`."
+                            },
+                            "requires_input_image": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "transparent_background",
+                            "seed",
+                            "qualities",
+                            "max_images",
+                            "max_reference_images",
+                            "edit",
+                            "requires_input_image"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "sizing",
+                        "supports"
+                      ],
+                      "description": "Size rules and supported parameters. Present on image models only; null for every other type."
+                    },
+                    "credits_per_1m_tokens": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "input": {
+                          "type": "number",
+                          "description": "Credits per 1M input tokens."
+                        },
+                        "output": {
+                          "type": "number",
+                          "description": "Credits per 1M output tokens."
+                        },
+                        "cached_input": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "description": "Credits per 1M input tokens served from the provider prompt cache. Null where cached tokens are not billed separately, so they cost the `input` rate."
+                        }
+                      },
+                      "required": [
+                        "input",
+                        "output",
+                        "cached_input"
+                      ],
+                      "description": "What a call is billed, in credits per 1M tokens, at the base context tier. Use it to compare models by cost. Null on non-text models and on any model with no published price; never 0 for an unpriced model."
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "type",
+                    "backend",
+                    "description",
+                    "context_window",
+                    "max_output_tokens",
+                    "supports_streaming",
+                    "supports_thinking",
+                    "reasons_within_output_budget",
+                    "reasoning_efforts",
+                    "supports_tools",
+                    "supports_tool_search",
+                    "supports_tool_changes",
+                    "supports_assistant_prefill",
+                    "supports_vision",
+                    "deprecation_date",
+                    "replaced_by",
+                    "image",
+                    "credits_per_1m_tokens"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "default_id",
+              "recommended_ids",
+              "available"
+            ]
+          }
+        },
+        "required": [
+          "server",
+          "features",
+          "limits",
+          "models"
+        ],
+        "example": {
+          "server": {
+            "status": "live",
+            "app_url": "https://app.example.com",
+            "support_email": "support@example.com"
+          },
+          "features": {
+            "agents": true,
+            "agent_mode": true,
+            "artifacts": true,
+            "data_lakes": false,
+            "deep_research": true,
+            "knowledge_base_search": true,
+            "mcp_server": false,
+            "custom_mcp_connectors": false,
+            "mementos": false,
+            "quest_master": true,
+            "rapid_reply": true,
+            "research_engine": true,
+            "team_plan": false,
+            "voice_sessions": false
+          },
+          "limits": {
+            "max_upload_size_mb": 30,
+            "credits_enforced": true,
+            "low_credits_threshold": 1000
+          },
+          "models": {
+            "default_id": "claude-sonnet-5",
+            "recommended_ids": [
+              "claude-sonnet-5"
+            ],
+            "available": [
+              {
+                "id": "claude-sonnet-5",
+                "name": "Claude Sonnet 5",
+                "type": "text",
+                "backend": "anthropic",
+                "description": null,
+                "context_window": 1000000,
+                "max_output_tokens": 128000,
+                "supports_streaming": true,
+                "supports_thinking": true,
+                "reasons_within_output_budget": true,
+                "reasoning_efforts": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh"
+                ],
+                "supports_tools": true,
+                "supports_tool_search": true,
+                "supports_tool_changes": false,
+                "supports_assistant_prefill": false,
+                "supports_vision": true,
+                "deprecation_date": null,
+                "replaced_by": null,
+                "image": null,
+                "credits_per_1m_tokens": {
+                  "input": 4000,
+                  "output": 20000,
+                  "cached_input": 400
+                }
+              }
+            ]
+          }
+        }
+      },
       "registerPushTokenRequest": {
         "type": "object",
         "properties": {
@@ -23751,6 +24378,216 @@
             "lang": "Python",
             "label": "requests",
             "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/me\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/client-config": {
+      "get": {
+        "operationId": "getClientConfig",
+        "summary": "Get client configuration",
+        "description": "Returns what a client needs to configure itself in one call: whether the deployment is live, which product features are switched on deployment-wide, upload and credit limits, the default and recommended model ids, and every model the caller can use right now (the same list `GET /api/v1/models` pages through, unpaginated here). A feature flag says whether the deployment offers the feature, not whether this caller has opted in. The caller's identity, plan and entitlements are not repeated here - read them from `GET /api/v1/me`. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, `ai:chat` or `ai:generate`, or a JWT.",
+        "tags": [
+          "Account"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deployment status, feature switches, limits, and the models available to the caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/getClientConfigResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key does not hold any of the required scopes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "me:read",
+          "ai:chat",
+          "ai:generate"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X GET \"https://your-deployment.example.com/api/v1/client-config\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/client-config\", {\n  method: \"GET\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/client-config\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
           }
         ]
       }

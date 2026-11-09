@@ -45,6 +45,7 @@ export * from './promptMeta';
 export * from './analytics';
 export * from './llm';
 export * from './me';
+export * from './clientConfig';
 export * from './pushToken';
 export * from './pushNotification';
 export * from './creditBalance';
