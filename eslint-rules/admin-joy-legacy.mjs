@@ -75,7 +75,6 @@ const componentsByFile = {
   'ReleaseNotes/ReleaseNoteEditDialog.tsx': ['Modal'],
   'RetrievalRateTab.tsx': ['Card'],
   'ScopedOverridesByScope.tsx': ['Card'],
-  'SecopsTriageTab.tsx': ['Card'],
   'SecretsRotationTab.tsx': ['Table', 'Modal'],
   'SlackMetrics/SlackMetricsTab.tsx': ['Card'],
   'SlackWorkspacesTab.tsx': ['Card', 'Modal', 'Table'],

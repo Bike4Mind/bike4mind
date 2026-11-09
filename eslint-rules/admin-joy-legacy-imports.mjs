@@ -76,7 +76,6 @@ export default {
   'ReleaseNotes/ReleaseNoteEditDialog.tsx': [[2, '6d20bb54ca3d32c4']],
   'RetrievalRateTab.tsx': [[6, '130f229ebde1eb16']],
   'ScopedOverridesByScope.tsx': [[9, '3599e2aac9a178b8']],
-  'SecopsTriageTab.tsx': [[10, '50bebb0fffebdd6d']],
   'SecretsRotationTab.tsx': [[2, '643a8ed5e319a1fa']],
   'SlackMetrics/SlackMetricsTab.tsx': [[2, 'e2ae0a0feb2b939a']],
   'SlackWorkspacesTab.tsx': [[2, '533bd942dfb864f5']],
