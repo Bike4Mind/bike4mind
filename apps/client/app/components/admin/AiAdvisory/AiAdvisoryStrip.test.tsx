@@ -114,7 +114,7 @@ describe('AiAdvisoryStrip', () => {
     });
     render(<AiAdvisoryStrip />, { wrapper: Wrapper });
     const section = screen.getByTestId('ai-advisory-linked-accounts');
-    expect(section).toHaveTextContent('1 linked accounts to review - not AI abuse verdicts');
+    expect(section).toHaveTextContent('1 linked account to review - not AI abuse verdicts');
     expect(section).toHaveTextContent('login IP 198.51.100.10');
     expect(section).toHaveTextContent('No name-only or JA4-only matches');
     expect(screen.getByText('Example candidate')).toHaveAttribute('href', `/admin/users/${'2'.repeat(24)}`);
@@ -124,6 +124,23 @@ describe('AiAdvisoryStrip', () => {
     );
     expect(screen.getByTestId('admin-dashboard-ai-advisory-summary')).toHaveTextContent('1 account likely abuse');
   });
+  it('shows only the failed alert when the linked-account check failed', () => {
+    mocks.data = summary({ advisories: [advisory('1'.repeat(24), 'accountCampaign')], linkedAccountsStatus: 'failed' });
+    render(<AiAdvisoryStrip />, { wrapper: Wrapper });
+    expect(screen.getByText('Linked accounts could not be checked.', { exact: false })).toBeInTheDocument();
+    expect(screen.queryByText('The linked-account scan reached a cap.', { exact: false })).not.toBeInTheDocument();
+  });
+
+  it('shows only the cap alert when the linked-account scan was truncated', () => {
+    mocks.data = summary({
+      advisories: [advisory('1'.repeat(24), 'accountCampaign')],
+      linkedAccountsStatus: 'truncated',
+    });
+    render(<AiAdvisoryStrip />, { wrapper: Wrapper });
+    expect(screen.getByText('The linked-account scan reached a cap.', { exact: false })).toBeInTheDocument();
+    expect(screen.queryByText('Linked accounts could not be checked.', { exact: false })).not.toBeInTheDocument();
+  });
+
   it('navigates within the SPA when either related-account link is clicked', () => {
     const candidateId = '2'.repeat(24);
     const sourceId = '1'.repeat(24);

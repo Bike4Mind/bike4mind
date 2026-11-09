@@ -77,7 +77,8 @@ export function AiAdvisoryStrip() {
         {(data?.linkedAccounts?.length ?? 0) > 0 && (
           <Box component="details" data-testid="ai-advisory-linked-accounts">
             <Box component="summary" sx={{ cursor: 'pointer' }}>
-              {data?.linkedAccounts.length} linked accounts to review - not AI abuse verdicts
+              {data?.linkedAccounts.length} linked {data?.linkedAccounts.length === 1 ? 'account' : 'accounts'} to
+              review - not AI abuse verdicts
             </Box>
             <Stack gap={1.5} sx={{ pt: 1 }}>
               <Typography level="body-sm">
