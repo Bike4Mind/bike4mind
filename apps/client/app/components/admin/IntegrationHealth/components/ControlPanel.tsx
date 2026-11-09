@@ -31,6 +31,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const healthyCt = data?.integrations.filter(i => i.status === 'healthy').length ?? 0;
   const degradedCt = data?.integrations.filter(i => i.status === 'degraded').length ?? 0;
   const unhealthyCt = data?.integrations.filter(i => i.status === 'unhealthy').length ?? 0;
+  const noDataCt = data?.integrations.filter(i => i.status === 'no_data').length ?? 0;
 
   return (
     <Box data-testid="integration-health-control-panel" sx={{ mb: 3 }}>
@@ -58,6 +59,11 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               {unhealthyCt > 0 && (
                 <Chip size="sm" color="danger" variant="soft">
                   {unhealthyCt} Down
+                </Chip>
+              )}
+              {noDataCt > 0 && (
+                <Chip size="sm" color="neutral" variant="soft">
+                  {noDataCt} No data
                 </Chip>
               )}
             </Stack>

@@ -3,6 +3,9 @@ import type { Logger } from '@bike4mind/observability';
 
 const h = vi.hoisted(() => ({
   recordCheck: vi.fn(),
+  getRecentByIntegration: vi.fn(),
+  getSuccessRate: vi.fn(),
+  getLastNChecks: vi.fn(),
   fetch: vi.fn(),
   emitMetrics: vi.fn(),
 }));
@@ -10,16 +13,21 @@ const h = vi.hoisted(() => ({
 // Only what the probes may touch: no user, MCP server or workspace repository is exported, so a
 // probe that went looking for a tenant's credential would fail here.
 vi.mock('@bike4mind/database', () => ({
-  integrationHealthCheckRepository: { recordCheck: h.recordCheck },
+  integrationHealthCheckRepository: {
+    recordCheck: h.recordCheck,
+    getRecentByIntegration: h.getRecentByIntegration,
+    getSuccessRate: h.getSuccessRate,
+    getLastNChecks: h.getLastNChecks,
+  },
   INTEGRATION_HEALTH_INTEGRATIONS: ['slack', 'github', 'jira', 'confluence'],
-  INTEGRATION_HEALTH_THRESHOLDS: { LATENCY_WARNING_MS: 2_000, LATENCY_CRITICAL_MS: 5_000 },
+  INTEGRATION_HEALTH_THRESHOLDS: { LATENCY_WARNING_MS: 2_000, LATENCY_CRITICAL_MS: 5_000, FAILURE_ALERT_THRESHOLD: 3 },
 }));
 
 vi.mock('../utils/cloudwatch', () => ({
   emitMetrics: h.emitMetrics,
 }));
 
-import { runAllProbes, runProbe } from './integrationHealthService';
+import { getHealthSummary, runAllProbes, runProbe } from './integrationHealthService';
 
 const logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() } as unknown as Logger;
 
@@ -182,5 +190,41 @@ describe('integrationHealthService metrics', () => {
     expect(recorded).toHaveLength(4);
     expect(h.recordCheck).toHaveBeenCalledTimes(4);
     expect(h.emitMetrics).not.toHaveBeenCalled();
+  });
+});
+
+describe('getHealthSummary', () => {
+  beforeEach(() => {
+    h.getRecentByIntegration.mockReset().mockResolvedValue([]);
+    h.getSuccessRate.mockReset().mockResolvedValue({ rate: 0 });
+    h.getLastNChecks.mockReset().mockResolvedValue([]);
+  });
+
+  it('reports a never-checked integration as no_data with a null lastCheckedAt', async () => {
+    const summaries = await getHealthSummary(logger);
+
+    expect(summaries).toHaveLength(4);
+    for (const summary of summaries) {
+      expect(summary).toMatchObject({ status: 'no_data', lastCheckedAt: null, latencyMs: 0, consecutiveFailures: 0 });
+    }
+  });
+
+  it('reports the latest stored check when there is one', async () => {
+    const checkedAt = new Date('2026-11-05T10:00:00.000Z');
+    h.getRecentByIntegration.mockResolvedValue([{ status: 'unhealthy', latencyMs: 42, checkedAt, error: 'HTTP 503' }]);
+    h.getSuccessRate.mockResolvedValue({ rate: 0.5 });
+    h.getLastNChecks.mockResolvedValue([{ status: 'unhealthy' }, { status: 'healthy' }]);
+
+    const [slack] = await getHealthSummary(logger);
+
+    expect(slack).toEqual({
+      integration: 'slack',
+      status: 'unhealthy',
+      latencyMs: 42,
+      lastCheckedAt: checkedAt,
+      successRate: 0.5,
+      consecutiveFailures: 1,
+      error: 'HTTP 503',
+    });
   });
 });
