@@ -118,7 +118,7 @@ export const censusLabel = (field: CensusField): string =>
   `${field.collection}.${field.array ? field.path.replace(`${field.array}.`, `${field.array}[].`) : field.path}`;
 
 const ciphertext = new RegExp(ciphertextPatternSource, 'i');
-const unprefixed = new RegExp(`^${escapeRegExp(ciphertextVersionPrefix)}`);
+const boundPrefix = new RegExp(`^${escapeRegExp(ciphertextVersionPrefix)}`);
 
 // The value is a non-empty string; mirrors the backfills' `if (!value)` guards.
 const present = (path: string): Document => ({ [path]: { $type: 'string', $ne: '' } });
@@ -136,7 +136,7 @@ function notProtected(path: string, format: CensusFormat): Document {
 
 // Ciphertext that lacks the context-bound `v2:` prefix.
 const unbound = (path: string): Document => ({
-  $and: [{ [path]: { $regex: ciphertext.source, $options: 'i' } }, { [path]: { $not: unprefixed } }],
+  $and: [{ [path]: { $regex: ciphertext.source, $options: 'i' } }, { [path]: { $not: boundPrefix } }],
 });
 
 /** Counts server-side so no stored value ever reaches this process. */

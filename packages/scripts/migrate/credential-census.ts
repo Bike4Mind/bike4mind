@@ -35,7 +35,7 @@ const usage = (): string =>
 
 Usage: pnpm --filter @bike4mind/scripts audit:credential-census [--help]
 
-Exit codes: 0 nothing pending, 1 values pending, 2 error.
+Exit codes: 0 nothing pending, 1 values pending, 2 error or no credential values found.
 
 Field -> backfill:
 ${formatFieldMap()}`;
