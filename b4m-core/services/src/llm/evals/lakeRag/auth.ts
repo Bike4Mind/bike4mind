@@ -5,12 +5,19 @@
  */
 import { bodyExcerpt, lakeRagUrl, type LakeRagCredential } from './http';
 
+export type E2eUserOverrides = { isAdmin?: boolean; initialCredits?: number };
+
+/** A second throwaway user minted under the same testId, so `cleanup()` removes it too. */
+export type E2eTargetUser = { username: string; email: string };
+
 export type LakeRagAuthOptions = {
   baseUrl: string;
   apiKey?: string;
   e2eCleanupSecret?: string;
   /** Scopes the throwaway user and its cleanup; generated when omitted. Letters and digits only. */
   testId?: string;
+  /** Extra create-user fields for the eval's own user, e.g. `isAdmin` for the admin assistant eval. */
+  userOverrides?: E2eUserOverrides;
   fetch?: typeof fetch;
   now?: () => number;
 };
@@ -19,6 +26,8 @@ export type LakeRagAuth = {
   /** The header for an API key; a renewing credential for the e2e user's short-lived JWT. */
   authorization: string | LakeRagCredential;
   source: 'api-key' | 'e2e-user';
+  /** Mints another user under the same testId (e2e only; throws for an API key). */
+  mintUser(overrides?: E2eUserOverrides): Promise<E2eTargetUser>;
   /**
    * Deletes the throwaway user and its data, lakes included, and resolves to the number of lakes
    * it deleted; a no-op resolving 0 for an API key. Runs at most once.
@@ -67,7 +76,14 @@ export async function resolveLakeRagAuth(opts: LakeRagAuthOptions): Promise<Lake
   const apiKey = opts.apiKey?.trim();
   if (apiKey) {
     if (!apiKey.startsWith(API_KEY_PREFIX)) throw new Error(`LakeRag auth: API key must start with ${API_KEY_PREFIX}`);
-    return { authorization: `Bearer ${apiKey}`, source: 'api-key', cleanup: async () => 0 };
+    return {
+      authorization: `Bearer ${apiKey}`,
+      source: 'api-key',
+      mintUser: async () => {
+        throw new Error('LakeRag auth: mintUser needs the E2E cleanup secret, not an API key');
+      },
+      cleanup: async () => 0,
+    };
   }
 
   const secret = opts.e2eCleanupSecret?.trim();
@@ -95,17 +111,21 @@ export async function resolveLakeRagAuth(opts: LakeRagAuthOptions): Promise<Lake
       return typeof cleaned?.dataLakes === 'number' ? cleaned.dataLakes : 0;
     })());
 
+  const createUser = (handle: string, overrides: E2eUserOverrides | undefined) =>
+    fetchImpl(createUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', [SECRET_HEADER]: secret },
+      body: JSON.stringify({
+        username: handle,
+        email: `${handle}@test.com`,
+        name: 'Lake RAG eval',
+        password: globalThis.crypto.randomUUID(),
+        ...overrides,
+      }),
+    });
+
   const handle = `lakerag-${testId}-${digits}-e2e`;
-  const res = await fetchImpl(createUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', [SECRET_HEADER]: secret },
-    body: JSON.stringify({
-      username: handle,
-      email: `${handle}@test.com`,
-      name: 'Lake RAG eval',
-      password: globalThis.crypto.randomUUID(),
-    }),
-  });
+  const res = await createUser(handle, opts.userOverrides);
   const text = await res.text();
   if (!res.ok) {
     // The route commits the user before issuing the session, so a 5xx can leave one behind.
@@ -154,5 +174,14 @@ export async function resolveLakeRagAuth(opts: LakeRagAuthOptions): Promise<Lake
       return renewNow();
     },
   };
-  return { authorization, source: 'e2e-user', cleanup };
+  let minted = 0;
+  const mintUser = async (overrides?: E2eUserOverrides): Promise<E2eTargetUser> => {
+    // The digit run keeps the handle inside the testId-scoped cleanup pattern.
+    const target = `lakerag-${testId}-${digits + ++minted}-e2e`;
+    const out = await createUser(target, overrides);
+    const body = await out.text();
+    if (!out.ok) throw new Error(`LakeRag auth: create-user -> ${out.status}: ${bodyExcerpt(body)}`);
+    return { username: target, email: `${target}@test.com` };
+  };
+  return { authorization, source: 'e2e-user', mintUser, cleanup };
 }
