@@ -29,6 +29,7 @@ export interface SkillMdFields {
   body?: string;
   disableModelInvocation?: boolean;
   claudeCodeAllowedTools?: string[];
+  claudeCodeModel?: string;
 }
 
 export interface SkillMdSkill {
@@ -38,6 +39,18 @@ export interface SkillMdSkill {
   argumentHint?: string;
   disableModelInvocation?: boolean;
   claudeCodeAllowedTools?: string[];
+  claudeCodeModel?: string;
+}
+
+export const CLAUDE_CODE_MODEL_MAX_LENGTH = 64;
+const CLAUDE_CODE_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9.:_-]*$/;
+
+/** Trimmed `model` value when it is a plausible Claude Code alias or model id; no closed alias list. */
+export function normalizeClaudeCodeModel(value: unknown): string | undefined {
+  const model = typeof value === 'string' ? value.trim() : '';
+  return model.length > 0 && model.length <= CLAUDE_CODE_MODEL_MAX_LENGTH && CLAUDE_CODE_MODEL_PATTERN.test(model)
+    ? model
+    : undefined;
 }
 
 export interface ToSkillMdOptions {
@@ -68,7 +81,7 @@ export type ParseSkillMdResult =
 
 /**
  * Serializes a skill to SKILL.md. allowedTools is never written (B4M tool names are not Claude Code
- * tools); claudeCodeAllowedTools, the imported `allowed-tools`, is.
+ * tools); claudeCodeAllowedTools and claudeCodeModel, the imported `allowed-tools` and `model`, are.
  */
 export function toSkillMd(skill: SkillMdSkill, opts: ToSkillMdOptions = {}): string {
   const comments: string[] = [];
@@ -81,6 +94,7 @@ export function toSkillMd(skill: SkillMdSkill, opts: ToSkillMdOptions = {}): str
   if (skill.argumentHint) data['argument-hint'] = skill.argumentHint;
   if (skill.disableModelInvocation) data['disable-model-invocation'] = true;
   if (skill.claudeCodeAllowedTools?.length) data['allowed-tools'] = skill.claudeCodeAllowedTools.join(', ');
+  if (skill.claudeCodeModel) data.model = skill.claudeCodeModel;
 
   // lineWidth 0 disables folding so a long description stays on one line. The body always gets one
   // trailing newline, which parseSkillMd strips, so the round trip is lossless.
@@ -236,6 +250,12 @@ export function parseSkillMd(input: string): ParseSkillMdResult {
         else if (value != null && value !== '' && !(Array.isArray(value) && value.length === 0)) dropped.push(key);
         break;
       }
+      case 'model': {
+        const model = normalizeClaudeCodeModel(value);
+        if (model) fields.claudeCodeModel = model;
+        else if (value != null && value !== '') dropped.push(key);
+        break;
+      }
       default:
         dropped.push(key);
     }
@@ -260,6 +280,13 @@ const MARKDOWN_LINK_TARGET = /!?\[[^\]\n]*\]\(\s*<?([^)\s>]+)/g;
 const BARE_FILE_PATH =
   /(?<![\w/.:-])(?:\.{1,2}\/)?[\w-]+(?:[./][\w-]+)*\.(?:sh|py|js|ts|mjs|md|json|ya?ml|txt)\b(?![\w/-])/g;
 
+// Repo-level docs live in the user's project, not the skill folder (README.md can ship in one).
+const REPO_LEVEL_DOC = /(?:^|\/)(?:CLAUDE|AGENTS|CONTRIBUTING)\.md$/i;
+// Example paths in prose: `path/to/file.ts`, `src/foo.ts`, `src/foo*`.
+const PLACEHOLDER_PATH = /(?:^|\/)path\/to\/|(?:^|\/)src\/(?:foo|bar|baz)(?:[.*]|$)|\*/i;
+
+const isShippablePath = (path: string): boolean => !REPO_LEVEL_DOC.test(path) && !PLACEHOLDER_PATH.test(path);
+
 /**
  * Relative paths a skill body references, e.g. `scripts/run.sh` or `[guide](reference.md)`: files a
  * Claude Code skill folder ships beside its SKILL.md, which an import of the SKILL.md alone loses.
@@ -270,12 +297,14 @@ export function referencedRelativePaths(body: string): string[] {
   const paths = new Set<string>();
   for (const match of body.matchAll(MARKDOWN_LINK_TARGET)) {
     const target = match[1].split('#')[0];
-    if (target && !/^[a-z][a-z0-9+.-]*:/i.test(target) && !target.startsWith('/')) paths.add(target);
+    if (target && !/^[a-z][a-z0-9+.-]*:/i.test(target) && !target.startsWith('/') && isShippablePath(target)) {
+      paths.add(target);
+    }
   }
   // URLs are removed first so `https://x.test/a/install.sh` is not read as a relative path.
   for (const match of body.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, ' ').matchAll(BARE_FILE_PATH)) {
     // Without a directory, only script/doc names: `package.json` or `Node.js` in prose is not a sibling file.
-    if (match[0].includes('/') || /\.(?:sh|py|md)$/.test(match[0])) paths.add(match[0]);
+    if ((match[0].includes('/') || /\.(?:sh|py|md)$/.test(match[0])) && isShippablePath(match[0])) paths.add(match[0]);
   }
   return [...paths];
 }

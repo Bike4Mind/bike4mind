@@ -188,6 +188,22 @@ describe('SkillForm SKILL.md import', () => {
     expect(onSubmit.mock.calls[0][0]).not.toHaveProperty('allowedTools');
   });
 
+  it('submits an imported model as claudeCodeModel and clears it on remove', () => {
+    const onSubmit = vi.fn();
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <SkillForm submitLabel="Create" onSubmit={onSubmit} onCancel={vi.fn()} enableSkillMdImport />
+      </CssVarsProvider>
+    );
+    paste('---\nname: commit\ndescription: Commit\nmodel: haiku\n---\nCommit it.');
+    expect(screen.getByTestId('skill-form-claude-code-model')).toHaveTextContent('haiku');
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ claudeCodeModel: 'haiku' }));
+    fireEvent.click(screen.getByTestId('skill-form-claude-code-model-remove'));
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ claudeCodeModel: '' }));
+  });
+
   it('removes imported Claude Code tools, submitting an empty list', () => {
     const onSubmit = vi.fn();
     render(

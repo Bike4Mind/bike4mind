@@ -70,6 +70,7 @@ const EditSkillPage: FC = () => {
             body: skill.body,
             argumentHint: skill.argumentHint,
             claudeCodeAllowedTools: skill.claudeCodeAllowedTools,
+            claudeCodeModel: skill.claudeCodeModel,
             disableModelInvocation: skill.disableModelInvocation,
             files: skill.files,
           }}

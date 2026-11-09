@@ -7,7 +7,11 @@
 
 import { BadRequestError } from '@bike4mind/utils';
 import { checkSkillFiles, type ISkillFile } from '@bike4mind/common';
-import { splitAllowedTools } from '@bike4mind/common/utils/skillMd';
+import {
+  normalizeClaudeCodeModel,
+  CLAUDE_CODE_MODEL_MAX_LENGTH,
+  splitAllowedTools,
+} from '@bike4mind/common/utils/skillMd';
 import { validateToolList } from './agentValidation';
 
 const SKILL_NAME_MAX = 64;
@@ -86,4 +90,18 @@ export function validateSkillFiles(value: unknown): ISkillFile[] | undefined {
  */
 export function validateSkillClaudeCodeAllowedTools(value: unknown): string[] | undefined {
   return validateToolList(value, 'claudeCodeAllowedTools')?.flatMap(splitAllowedTools);
+}
+
+/** A Claude Code model alias or id, trimmed. `''` clears it; `undefined` leaves it unchanged. */
+export function validateSkillClaudeCodeModel(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') throw new BadRequestError('claudeCodeModel must be a string');
+  if (!value.trim()) return '';
+  const model = normalizeClaudeCodeModel(value);
+  if (!model) {
+    throw new BadRequestError(
+      `claudeCodeModel must be ${CLAUDE_CODE_MODEL_MAX_LENGTH} characters or fewer and use only letters, digits, dots, dashes, colons and underscores`
+    );
+  }
+  return model;
 }
