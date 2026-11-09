@@ -372,7 +372,7 @@ export const MarginDashboard: React.FC = () => {
                 stickyHeader
                 hoverRow
                 size="sm"
-                sx={{ minWidth: '84rem' }}
+                sx={{ minWidth: '88rem' }}
                 data-testid="margin-provider-month-table"
               >
                 <thead>
