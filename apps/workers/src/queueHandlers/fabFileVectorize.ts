@@ -60,6 +60,7 @@ import {
 } from '@bike4mind/server-utils/dataLakes/dataLakeBatchProgress';
 import { notifySlackIndexingComplete } from '@workers/queueHandlers/notifySlackIndexingComplete';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
+import { returnRecordForRedelivery } from '@bike4mind/server-utils/utils/sqsRedelivery';
 import {
   dispatchWithLogger,
   MARK_PAUSED_MAX_ATTEMPTS,
@@ -83,6 +84,15 @@ const VectorizePayload = z.object({
   // => user work, which is never halted.
   ...provenancePayloadShape,
 });
+
+/** Redelivery delay for a rate-window denial that did not say when its window resets: one window. */
+const RATE_DENIAL_FALLBACK_DELAY_MS = 60_000;
+/**
+ * Spread for that redelivery. The subscription runs up to its reserved concurrency in parallel, so
+ * a saturated window denies a herd at once; a window's worth of jitter keeps them from re-arriving
+ * together and saturating it again.
+ */
+const RATE_DENIAL_JITTER_SECONDS = 60;
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
@@ -807,6 +817,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         logger,
       }))
     ) {
+      // A saturated rate window drains within the minute: hand the message back with a short,
+      // jittered delay instead of throwing, so expected back-pressure retries quietly (the warn
+      // above) rather than paging. The final attempt still falls through to the failure
+      // accounting below, so a file that never gets a slot lands visibly failed, not stuck.
+      if (err instanceof dataLakeService.EmbeddingSpendDeniedError && err.retryable) {
+        return returnRecordForRedelivery(event, {
+          delaySeconds: Math.ceil((err.retryAfterMs ?? RATE_DENIAL_FALLBACK_DELAY_MS) / 1000),
+          jitterSeconds: RATE_DENIAL_JITTER_SECONDS,
+          logger,
+        });
+      }
       throw err; // Re-throw so SQS retries
     }
 
