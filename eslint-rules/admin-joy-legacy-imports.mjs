@@ -39,7 +39,6 @@ export default {
   'IntegrationDemandTab.tsx': [[3, '33c84625c2e68e9d']],
   'IntegrationHealth/components/IntegrationDetailPanel.tsx': [[2, 'b7900285fffe06e6']],
   'MigrateUsersTab.tsx': [[4, '655b890fff77d8be']],
-  'ModelLifecycleTab.tsx': [[2, '6753494454310b67']],
   'ModelLogsTab.tsx': [[2, '9e6b044a23acfa7f']],
   'ModelMetrics/components/MetricsInfoModal.tsx': [[2, 'c6c6ac7ed5b077e5']],
   'ModelMetrics/components/RawDataTab.tsx': [[2, '75a9a9612e03580f']],

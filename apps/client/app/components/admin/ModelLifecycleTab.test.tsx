@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -326,5 +326,147 @@ describe('ModelLifecycleTab', () => {
     mockGet.mockResolvedValue({ data: { ...STATUS, queue: [] } });
     renderTab();
     expect(await screen.findByTestId('model-lifecycle-queue-empty')).toBeInTheDocument();
+  });
+});
+
+describe('ModelLifecycleTab page layout', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGet.mockResolvedValue({ data: STATUS });
+    mockPost.mockResolvedValue({ data: {} });
+    useAdminModal.setState({ activeTab: AdminTab.ModelLifecycle });
+    useCreditAnalysisStore.setState({ activeTab: 'users', pricingModelId: null });
+  });
+
+  it('opens with the page header: a sentence-case h1 with no icon, the pricing link and Refresh in the actions', async () => {
+    renderTab();
+    await screen.findByTestId('model-lifecycle-queue-row-gpt-sunset');
+
+    const header = screen.getByTestId('admin-page-header');
+    expect(screen.getByTestId('model-lifecycle-panel').firstElementChild).toBe(header);
+    const title = within(header).getByRole('heading', { level: 1 });
+    expect(title).toHaveTextContent(/^Model lifecycle$/);
+    expect(title.querySelector('svg')).toBeNull();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(within(header).getByTestId('model-lifecycle-model-pricing-link')).toBeInTheDocument();
+    expect(within(header).getByTestId('model-lifecycle-refresh-btn')).toBeInTheDocument();
+  });
+
+  it('puts each list in its own DataTable under a section heading, scrolling sideways below its min width', async () => {
+    renderTab();
+    await screen.findByTestId('model-lifecycle-queue-row-gpt-sunset');
+
+    expect(screen.getAllByRole('heading', { level: 2 }).map(heading => heading.textContent)).toEqual([
+      'Deprecation queue (1)',
+      'Expired and expiring (2)',
+      'Stale references (3)',
+    ]);
+    expect(screen.getByTestId('model-lifecycle-queue-table')).toHaveStyle({ minWidth: '66rem' });
+    expect(screen.getByTestId('model-lifecycle-horizon-table')).toHaveStyle({ minWidth: '48rem' });
+    expect(screen.getByTestId('model-lifecycle-stale-table')).toHaveStyle({ minWidth: '48rem' });
+    expect(screen.getByTestId('model-lifecycle-queue-table-frame')).toBeInTheDocument();
+    expect(screen.getByTestId('model-lifecycle-panel').querySelectorAll('.MuiCard-root')).toHaveLength(0);
+
+    const model = within(screen.getByTestId('model-lifecycle-queue-row-gpt-sunset')).getByTitle('gpt-sunset');
+    expect(getComputedStyle(model).whiteSpace).toBe('nowrap');
+  });
+
+  it('maps each stale-reference problem to one status tone', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        ...STATUS,
+        staleReferences: [
+          ...STATUS.staleReferences,
+          { surface: 'agent-default', key: 'agent', referencedId: 'gpt-gone', problem: 'retired' },
+        ],
+      },
+    });
+    renderTab();
+    await screen.findByTestId('model-lifecycle-stale-row-agent-default-gpt-gone');
+
+    const tone = (surface: string, id: string) =>
+      screen.getByTestId(`model-lifecycle-stale-problem-${surface}-${id}`).getAttribute('data-tone');
+    expect(tone('fallback-chain', 'gpt-sunset')).toBe('warn');
+    expect(tone('fallback-chain', 'gpt-metadata-only')).toBe('warn');
+    expect(tone('agent-default', 'gpt-gone')).toBe('bad');
+    expect(tone('fallback-default', 'gpt-ghost')).toBe('neutral');
+  });
+
+  it('shows the empty lists as EmptyStates in place of their tables', async () => {
+    mockGet.mockResolvedValue({
+      data: { ...STATUS, queue: [], expired: [], expiringOrExpired: [], staleReferences: [] },
+    });
+    renderTab();
+
+    const queue = await screen.findByTestId('model-lifecycle-queue-empty');
+    expect(within(queue).getByTestId('admin-empty-state')).toHaveTextContent('Nothing awaiting a decision');
+    expect(
+      within(screen.getByTestId('model-lifecycle-horizon-empty')).getByTestId('admin-empty-state')
+    ).toHaveTextContent('Nothing reaches its deprecation date in the next 90 days.');
+    expect(screen.getByTestId('model-lifecycle-stale-empty')).toHaveTextContent('No stale references');
+    fireEvent.click(within(queue).getByTestId('model-lifecycle-queue-refresh-btn'));
+    await waitFor(() => expect(mockGet).toHaveBeenCalledTimes(2));
+  });
+
+  it('shows an ErrorState with Try again when the first load fails', async () => {
+    mockGet.mockRejectedValueOnce({ response: { data: { message: 'catalog unavailable' } } });
+    renderTab();
+
+    const error = await screen.findByTestId('model-lifecycle-error');
+    expect(within(error).getByTestId('admin-error-state')).toHaveTextContent('catalog unavailable');
+    expect(screen.queryByTestId('model-lifecycle-queue-table')).not.toBeInTheDocument();
+    fireEvent.click(within(error).getByTestId('admin-error-retry-btn'));
+    expect(await screen.findByTestId('model-lifecycle-queue-row-gpt-sunset')).toBeInTheDocument();
+  });
+
+  it('keeps the loaded lists and shows a toned banner when a refresh fails', async () => {
+    renderTab();
+    await screen.findByTestId('model-lifecycle-queue-row-gpt-sunset');
+    mockGet.mockRejectedValueOnce({ message: 'Network Error' });
+
+    fireEvent.click(screen.getByTestId('model-lifecycle-refresh-btn'));
+
+    const banner = await screen.findByTestId('model-lifecycle-error');
+    expect(banner).toHaveTextContent('Network Error. Showing the last loaded status.');
+    expect(within(banner).queryByTestId('admin-error-state')).not.toBeInTheDocument();
+    expect(screen.getByTestId('model-lifecycle-queue-row-gpt-sunset')).toBeInTheDocument();
+  });
+
+  it('shows table skeleton rows on the first load', async () => {
+    mockGet.mockReturnValue(new Promise(() => {}));
+    renderTab();
+
+    expect(screen.getByTestId('admin-page-header')).toBeInTheDocument();
+    expect((await screen.findAllByTestId('admin-table-skeleton-row')).length).toBeGreaterThan(0);
+  });
+
+  it('says so in place when the stale-reference report could not be built', async () => {
+    mockGet.mockResolvedValue({
+      data: { ...STATUS, staleReferences: null, staleReferencesError: 'catalog read failed' },
+    });
+    renderTab();
+
+    const stale = await screen.findByTestId('model-lifecycle-stale-error');
+    expect(within(stale).getByTestId('admin-error-state')).toHaveTextContent('catalog read failed');
+    expect(screen.getByTestId('model-lifecycle-queue-row-gpt-sunset')).toBeInTheDocument();
+  });
+
+  it('opens accept and dismiss in admin dialogs with an h2 title and a close button', async () => {
+    renderTab();
+    fireEvent.click(await screen.findByTestId('model-lifecycle-accept-gpt-sunset'));
+
+    const accept = screen.getByTestId('model-lifecycle-accept-modal');
+    expect(within(accept).getByRole('heading', { level: 2 })).toHaveTextContent(
+      'Accept lifecycle change for gpt-sunset'
+    );
+    fireEvent.click(within(accept).getByTestId('model-lifecycle-accept-modal-close-btn'));
+    await waitFor(() => expect(screen.queryByTestId('model-lifecycle-accept-modal')).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('model-lifecycle-dismiss-gpt-sunset'));
+    const dismiss = screen.getByTestId('model-lifecycle-dismiss-modal');
+    expect(dismiss).toHaveAttribute('role', 'alertdialog');
+    expect(within(dismiss).getByRole('heading', { level: 2 })).toHaveTextContent(
+      'Dismiss the suggestion for gpt-sunset?'
+    );
   });
 });

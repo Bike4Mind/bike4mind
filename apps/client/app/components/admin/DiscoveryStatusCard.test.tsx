@@ -566,3 +566,52 @@ describe('DiscoveryStatusCard load failure', () => {
     expect(screen.getByTestId('discovery-status-error')).toHaveTextContent('500');
   });
 });
+
+describe('DiscoveryStatusCard layout', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('is a titled section card whose short statuses are tone chips and whose long lists are plain text', async () => {
+    mockGet.mockResolvedValue({
+      data: statusWith(
+        runLike({
+          skippedSources: [
+            { name: 'vertex', reason: 'not-configured' },
+            { name: 'openrouter-with-a-long-name', reason: 'egress-disabled' },
+          ],
+        }),
+        { mode: 'write', selfHost: true }
+      ),
+    });
+    renderCard();
+
+    const card = await screen.findByTestId('discovery-status-card');
+    expect(card.tagName).toBe('SECTION');
+    expect(screen.getByRole('heading', { name: 'Discovery' })).toBeInTheDocument();
+
+    await waitFor(() => expect(screen.getByTestId('discovery-status-mode-chip')).toHaveTextContent('write'));
+    expect(screen.getByTestId('discovery-status-mode-chip')).toHaveAttribute('data-tone', 'warn');
+    expect(screen.getByTestId('discovery-status-autoenable-chip')).toHaveAttribute('data-tone', 'neutral');
+    expect(screen.getByTestId('discovery-status-selfhost-chip')).toHaveAttribute('data-tone', 'neutral');
+    expect(screen.getByTestId('discovery-status-run-chip')).toHaveAttribute('data-tone', 'warn');
+    // Chips keep their full label on one line and the row wraps whole pills instead.
+    expect(getComputedStyle(screen.getByTestId('discovery-status-autoenable-chip')).whiteSpace).toBe('nowrap');
+    expect(screen.getByTestId('discovery-status-chips')).toHaveStyle({ flexWrap: 'wrap' });
+
+    const skipped = screen.getByTestId('discovery-status-skipped');
+    expect(skipped).toHaveTextContent('2 skipped: vertex, openrouter-with-a-long-name');
+    expect(skipped.closest('[data-tone]')).toBeNull();
+    expect(getComputedStyle(skipped).whiteSpace).not.toBe('nowrap');
+    expect(screen.getByTestId('discovery-status-coverage-models.dev').closest('[data-tone]')).toBeNull();
+  });
+
+  it('marks the safe report mode good and a failed run bad', async () => {
+    mockGet.mockResolvedValue({ data: statusWith(runLike({ status: 'failed' })) });
+    renderCard();
+
+    await waitFor(() => expect(screen.getByTestId('discovery-status-mode-chip')).toHaveTextContent('report'));
+    expect(screen.getByTestId('discovery-status-mode-chip')).toHaveAttribute('data-tone', 'good');
+    expect(screen.getByTestId('discovery-status-run-chip')).toHaveAttribute('data-tone', 'bad');
+  });
+});
