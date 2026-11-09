@@ -42,7 +42,14 @@ vi.mock('@client/app/hooks/data/user', () => ({
 
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 
-import LLMDashboardTab, { llmDashboardRootSx } from './LLMDashboardTab';
+// The SaveBar's leave-page guards need a router; these tests never navigate.
+vi.mock('@tanstack/react-router', async importOriginal => ({
+  ...(await importOriginal<typeof import('@tanstack/react-router')>()),
+  useBlocker: () => ({ status: 'idle' }),
+  useRouter: () => null,
+}));
+
+import LLMDashboardTab from './LLMDashboardTab';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderTab = () =>
@@ -72,15 +79,15 @@ const search = (value: string) => {
   settle();
 };
 
-const setStatusFilter = (label: string) => {
-  fireEvent.click(within(screen.getByTestId('llm-dashboard-status-filter')).getByRole('combobox'));
-  fireEvent.click(screen.getByRole('option', { name: label }));
+const setStatusFilter = (value: string) => {
+  fireEvent.click(within(screen.getByTestId('llm-dashboard-status-filter')).getByTestId('admin-filter-status'));
+  fireEvent.click(screen.getByTestId(`admin-filter-status-${value}`));
 };
 
 const visibleModelIds = () =>
   screen
-    .getAllByTestId(/^llm-dashboard-select-(?!all$)/)
-    .map(node => node.getAttribute('data-testid')?.replace('llm-dashboard-select-', ''));
+    .getAllByTestId(/^llm-dashboard-row-/)
+    .map(node => node.getAttribute('data-testid')?.replace('llm-dashboard-row-', ''));
 
 // The search filter is debounced, so every test drives the clock rather than
 // waiting on it.
@@ -127,34 +134,34 @@ describe('LLMDashboardTab bulk selection', () => {
     renderTab();
     search('preview');
 
-    fireEvent.click(inputIn('llm-dashboard-select-all'));
+    fireEvent.click(inputIn('admin-table-select-page'));
 
     expect(screen.getByTestId('llm-dashboard-bulk-bar')).toHaveTextContent('2 selected');
 
     search('');
-    expect(inputIn('llm-dashboard-select-gpt-5-preview')).toBeChecked();
-    expect(inputIn('llm-dashboard-select-claude-opus-preview')).toBeChecked();
-    expect(inputIn('llm-dashboard-select-gpt-5')).not.toBeChecked();
-    expect(inputIn('llm-dashboard-select-all')).not.toBeChecked();
+    expect(inputIn('admin-table-select-gpt-5-preview')).toBeChecked();
+    expect(inputIn('admin-table-select-claude-opus-preview')).toBeChecked();
+    expect(inputIn('admin-table-select-gpt-5')).not.toBeChecked();
+    expect(inputIn('admin-table-select-page')).not.toBeChecked();
   });
 
   it('bulk disable flips only the selected rows and marks the dashboard dirty', () => {
     renderTab();
 
-    fireEvent.click(inputIn('llm-dashboard-select-gpt-5-preview'));
-    fireEvent.click(inputIn('llm-dashboard-select-claude-opus-preview'));
+    fireEvent.click(inputIn('admin-table-select-gpt-5-preview'));
+    fireEvent.click(inputIn('admin-table-select-claude-opus-preview'));
     fireEvent.click(screen.getByTestId('llm-dashboard-bulk-disable-btn'));
 
     expect(inputIn('llm-dashboard-toggle-gpt-5-preview')).not.toBeChecked();
     expect(inputIn('llm-dashboard-toggle-claude-opus-preview')).not.toBeChecked();
     expect(inputIn('llm-dashboard-toggle-gpt-5')).toBeChecked();
-    expect(screen.getByText('Save Changes')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-save-confirm-btn')).toBeInTheDocument();
   });
 
   it('bulk enable flips the selected rows back on', () => {
     renderTab();
 
-    fireEvent.click(inputIn('llm-dashboard-select-flux-pro'));
+    fireEvent.click(inputIn('admin-table-select-flux-pro'));
     fireEvent.click(screen.getByTestId('llm-dashboard-bulk-enable-btn'));
 
     expect(inputIn('llm-dashboard-toggle-flux-pro')).toBeChecked();
@@ -164,10 +171,10 @@ describe('LLMDashboardTab bulk selection', () => {
     renderTab();
     search('preview');
 
-    fireEvent.click(inputIn('llm-dashboard-select-all'));
+    fireEvent.click(inputIn('admin-table-select-page'));
     fireEvent.click(screen.getByTestId('llm-dashboard-bulk-disable-btn'));
     search('');
-    fireEvent.click(screen.getByText('Save Changes'));
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
 
     expect(h.saveMutate).toHaveBeenCalledTimes(1);
     const saved = h.saveMutate.mock.calls[0][0] as LLMModelConfig[];
@@ -182,8 +189,8 @@ describe('LLMDashboardTab bulk selection', () => {
   it('keeps the selection across a search change and says how much of it the filter shows', () => {
     renderTab();
 
-    fireEvent.click(inputIn('llm-dashboard-select-all'));
-    expect(screen.getByTestId('llm-dashboard-bulk-count')).toHaveTextContent('4 selected');
+    fireEvent.click(inputIn('admin-table-select-page'));
+    expect(screen.getByTestId('llm-dashboard-bulk-bar')).toHaveTextContent('4 selected');
 
     search('preview');
     expect(screen.getByTestId('llm-dashboard-bulk-count')).toHaveTextContent(
@@ -192,14 +199,14 @@ describe('LLMDashboardTab bulk selection', () => {
 
     // Nothing was thrown away, so the hidden rows come back still selected.
     search('');
-    expect(screen.getByTestId('llm-dashboard-bulk-count')).toHaveTextContent('4 selected');
-    expect(inputIn('llm-dashboard-select-gpt-5')).toBeChecked();
+    expect(screen.getByTestId('llm-dashboard-bulk-bar')).toHaveTextContent('4 selected');
+    expect(inputIn('admin-table-select-gpt-5')).toBeChecked();
   });
 
   it('a bulk action under a filter only touches the visible half of the selection', () => {
     renderTab();
 
-    fireEvent.click(inputIn('llm-dashboard-select-all'));
+    fireEvent.click(inputIn('admin-table-select-page'));
     search('preview');
     fireEvent.click(screen.getByTestId('llm-dashboard-bulk-disable-btn'));
     search('');
@@ -212,25 +219,25 @@ describe('LLMDashboardTab bulk selection', () => {
   it('unchecking select-all under a filter releases only the visible rows', () => {
     renderTab();
 
-    fireEvent.click(inputIn('llm-dashboard-select-all'));
+    fireEvent.click(inputIn('admin-table-select-page'));
     search('preview');
-    fireEvent.click(inputIn('llm-dashboard-select-all'));
+    fireEvent.click(inputIn('admin-table-select-page'));
 
     expect(screen.queryByTestId('llm-dashboard-bulk-count')).toHaveTextContent(
       '0 of 2 selected models match this filter'
     );
     search('');
-    expect(inputIn('llm-dashboard-select-gpt-5')).toBeChecked();
-    expect(inputIn('llm-dashboard-select-gpt-5-preview')).not.toBeChecked();
+    expect(inputIn('admin-table-select-gpt-5')).toBeChecked();
+    expect(inputIn('admin-table-select-gpt-5-preview')).not.toBeChecked();
   });
 
   it('reports how many rows a bulk action moved out of the current status filter', () => {
     renderTab();
 
-    fireEvent.click(inputIn('llm-dashboard-select-gpt-5-preview'));
-    fireEvent.click(inputIn('llm-dashboard-select-gpt-5'));
-    // "Enabled Only": disabling the selection empties those rows out of the table.
-    setStatusFilter('Enabled Only');
+    fireEvent.click(inputIn('admin-table-select-gpt-5-preview'));
+    fireEvent.click(inputIn('admin-table-select-gpt-5'));
+    // Status "Enabled": disabling the selection empties those rows out of the table.
+    setStatusFilter('enabled');
     fireEvent.click(screen.getByTestId('llm-dashboard-bulk-disable-btn'));
 
     expect(screen.getByTestId('llm-dashboard-bulk-notice')).toHaveTextContent(
@@ -243,52 +250,10 @@ describe('LLMDashboardTab bulk selection', () => {
     renderTab();
     expect(screen.queryByTestId('llm-dashboard-bulk-bar')).not.toBeInTheDocument();
 
-    fireEvent.click(inputIn('llm-dashboard-select-gpt-5'));
+    fireEvent.click(inputIn('admin-table-select-gpt-5'));
     expect(screen.getByTestId('llm-dashboard-bulk-bar')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId('llm-dashboard-bulk-clear-btn'));
+    fireEvent.click(screen.getByTestId('admin-clear-selection-btn'));
     expect(screen.queryByTestId('llm-dashboard-bulk-bar')).not.toBeInTheDocument();
-  });
-});
-
-describe('llmDashboardRootSx', () => {
-  const sx: Record<string, unknown> = llmDashboardRootSx(appTheme);
-  const pinnedQueries = Object.keys(sx).filter(key => key.startsWith('@media'));
-
-  // jsdom cannot evaluate media queries, so match the min-width/min-height pairs by hand.
-  const pinsAt = (width: number, height: number) =>
-    pinnedQueries.some(query => {
-      const minWidth = Number(/min-width:\s*(\d+)px/.exec(query)?.[1] ?? 0);
-      const minHeight = Number(/min-height:\s*(\d+)px/.exec(query)?.[1] ?? 0);
-      return width >= minWidth && height >= minHeight;
-    });
-
-  it('scrolls the whole tab by default and pins only under width and height queries', () => {
-    expect(sx).not.toHaveProperty('height');
-    expect(sx).not.toHaveProperty('overflow');
-    expect(pinnedQueries.length).toBeGreaterThan(0);
-    for (const query of pinnedQueries) {
-      expect(query).toMatch(/min-width:\s*\d+px/);
-      expect(query).toMatch(/min-height:\s*\d+px/);
-      expect(sx[query]).toEqual({ height: '100%', overflow: 'hidden' });
-    }
-  });
-
-  it.each([
-    [412, 915],
-    [915, 412],
-    [932, 430],
-    [768, 1000],
-    [1180, 820],
-  ])('lets a %ix%i viewport scroll instead of pinning a header taller than the screen', (width, height) => {
-    expect(pinsAt(width, height)).toBe(false);
-  });
-
-  it.each([
-    [1280, 800],
-    [1440, 800],
-    [1000, 1000],
-  ])('keeps the pinned header and inner table scroll at %ix%i', (width, height) => {
-    expect(pinsAt(width, height)).toBe(true);
   });
 });

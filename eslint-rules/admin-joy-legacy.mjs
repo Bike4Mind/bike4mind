@@ -44,7 +44,6 @@ const componentsByFile = {
   'IdentityProvidersTab.tsx': ['Card', 'Modal', 'Table'],
   'IntegrationDemandTab.tsx': ['Table'],
   'IntegrationHealth/components/IntegrationDetailPanel.tsx': ['Card', 'Table'],
-  'LLMDashboardTab.tsx': ['Card', 'Table'],
   'ManageGearsTab.tsx': ['Table'],
   'MigrateUsersTab.tsx': ['Card', 'Modal'],
   'ModelLifecycleTab.tsx': ['Modal', 'Table'],
