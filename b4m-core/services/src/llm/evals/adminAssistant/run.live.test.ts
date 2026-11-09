@@ -10,7 +10,7 @@ import type { LakeRagApi } from '../lakeRag/provision';
 import { ADMIN_EVAL_CASES, TARGET_CREDITS } from './cases';
 import { buildAdminEvalReport, formatAdminEvalReport } from './report';
 import { writeAdminEvalReport } from './reportFile';
-import { runAdminEval, type AdminEvalTurn } from './run';
+import { DEFAULT_TURN_TIMEOUT_MS, runAdminEval, type AdminEvalTurn } from './run';
 
 const baseUrl = process.env.ADMIN_EVAL_BASE_URL;
 const model = process.env.ADMIN_EVAL_MODEL;
@@ -24,9 +24,11 @@ if (enabled && (!Number.isInteger(samples) || samples < 1)) {
   throw new Error(`ADMIN_EVAL_SAMPLES must be a positive integer, got: ${process.env.ADMIN_EVAL_SAMPLES}`);
 }
 
-// Per turn: a session, a chat and a quest poll capped at the driver's default, each call allowed one 429 backoff.
-const PER_TURN_MS = 2 * 60 * 1000 + MAX_429_WAIT_MS;
-const TIMEOUT_MS = ADMIN_EVAL_CASES.length * samples * PER_TURN_MS;
+// Per turn: the poll is capped at the driver's default, and session create and the chat POST can each spend one
+// full 429 backoff budget.
+const PER_TURN_MS = DEFAULT_TURN_TIMEOUT_MS + 3 * MAX_429_WAIT_MS;
+const expectedTurns = ADMIN_EVAL_CASES.length * samples;
+const TIMEOUT_MS = expectedTurns * PER_TURN_MS;
 
 describe.skipIf(!enabled)('admin assistant eval (live deployment)', () => {
   let auth: LakeRagAuth | undefined;
@@ -47,7 +49,8 @@ describe.skipIf(!enabled)('admin assistant eval (live deployment)', () => {
       const done: AdminEvalTurn[] = [];
       const onTurn = (turn: AdminEvalTurn) => {
         done.push(turn);
-        if (reportPath) writeAdminEvalReport(reportPath, buildAdminEvalReport(done, { model: model!, samples }));
+        if (reportPath)
+          writeAdminEvalReport(reportPath, buildAdminEvalReport(done, { model: model!, samples, expectedTurns }));
       };
       const turns = await runAdminEval(api, ADMIN_EVAL_CASES, {
         model: model!,
@@ -55,7 +58,7 @@ describe.skipIf(!enabled)('admin assistant eval (live deployment)', () => {
         target: target.email,
         onTurn,
       });
-      const report = buildAdminEvalReport(turns, { model: model!, samples });
+      const report = buildAdminEvalReport(turns, { model: model!, samples, expectedTurns });
       // stdout directly: vitest can drop console output from a passing test.
       process.stdout.write(`\n${formatAdminEvalReport(report)}\n`);
     },

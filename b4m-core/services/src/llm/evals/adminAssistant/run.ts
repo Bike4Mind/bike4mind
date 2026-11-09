@@ -44,7 +44,7 @@ export type AdminEvalRunOptions = {
   onTurn?: (turn: AdminEvalTurn) => void;
 };
 
-const DEFAULT_TURN_TIMEOUT_MS = 2 * 60 * 1000;
+export const DEFAULT_TURN_TIMEOUT_MS = 2 * 60 * 1000;
 
 /** A 401 that survives a token renewal aborts the whole run: every later turn would fail too. */
 export class AdminEvalUnauthorizedError extends Error {
@@ -113,6 +113,7 @@ export async function runAdminEval(
   for (const row of rows) {
     for (let sample = 0; sample < samples; sample++) {
       const base = { rowId: row.id, category: row.category, sample };
+      let turn: AdminEvalTurn;
       try {
         const { questId, quest } = await askOnce(
           api,
@@ -130,12 +131,13 @@ export async function runAdminEval(
             : !reply.trim() && calls.length === 0
               ? gradeAdminEmpty('empty reply')
               : gradeAdminCase(row, { reply, functionCalls: calls });
-        record({ ...base, questId, grade, toolsCalled });
+        turn = { ...base, questId, grade, toolsCalled };
       } catch (error) {
         if (error instanceof LakeRagHttpError && error.status === 401) throw new AdminEvalUnauthorizedError(error);
         const reason = error instanceof Error ? error.message : String(error);
-        record({ ...base, grade: gradeAdminEmpty(`turn failed: ${reason}`), toolsCalled: [] });
+        turn = { ...base, grade: gradeAdminEmpty(`turn failed: ${reason}`), toolsCalled: [] };
       }
+      record(turn);
     }
   }
   return turns;

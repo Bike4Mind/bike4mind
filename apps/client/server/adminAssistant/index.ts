@@ -14,7 +14,7 @@ export type { AdminToolResult } from './defineAdminTool';
 type AdminToolRegistry = Partial<Record<AdminAssistantToolName, ToolDefinition>>;
 
 // Each admin tool registers itself here, and adds a `data` case to
-// b4m-core/services/src/llm/evals/adminAssistant/cases.ts (and drops it from UNREGISTERED_ADMIN_TOOLS there).
+// b4m-core/services/src/llm/evals/adminAssistant/cases.ts (and drops it from UNREGISTERED_ADMIN_ASSISTANT_TOOL_NAMES in @bike4mind/common).
 const ADMIN_TOOL_REGISTRY: AdminToolRegistry = {
   admin_get_org: getOrgTool,
   admin_get_org_usage: getOrgUsageTool,

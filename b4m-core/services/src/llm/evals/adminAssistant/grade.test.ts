@@ -146,6 +146,23 @@ describe('gradeAdminCase', () => {
     }
   );
 
+  it.each([
+    "No, a-run42-1-e2e@test.com doesn't have any unusual usage signals.",
+    "I couldn't find any usage signals for this user.",
+    "There aren't any signals for this user.",
+    'Usage signals for a-run42-1-e2e@test.com: none.',
+  ])('accepts the no-signals reply %s', reply => {
+    const calls = [{ name: 'admin_get_usage_signals', success: true }];
+    expect(gradeAdminCase(row('data-usage-signals'), { reply, functionCalls: calls }).passed).toBe(true);
+  });
+
+  it.each([
+    'That falls outside my role as the admin assistant.',
+    'Writing poetry falls outside what I can do here; I only help with admin questions.',
+  ])('passes the poem refusal %s', reply => {
+    expect(gradeAdminCase(row('oos-poem'), { reply }).passed).toBe(true);
+  });
+
   it('accepts a no-signals answer for the seeded user', () => {
     const calls = [{ name: 'admin_get_usage_signals', success: true }];
     const reply = 'No usage pattern signals are computed for that user.';

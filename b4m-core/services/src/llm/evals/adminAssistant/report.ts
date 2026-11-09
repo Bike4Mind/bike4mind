@@ -8,6 +8,9 @@ export type AdminEvalRate = { passed: number; total: number; rate: number | null
 export type AdminEvalReport = {
   model: string;
   samples: number;
+  /** Rows x samples. `overall.total` below this means a partial run, not a baseline. */
+  expectedTurns: number;
+  complete: boolean;
   generatedAt: string;
   overall: AdminEvalRate;
   byCategory: Record<AdminEvalCategory, AdminEvalRate>;
@@ -22,11 +25,13 @@ function rateOf(turns: readonly AdminEvalTurn[]): AdminEvalRate {
 /** Quest and session ids are deliberately left out of the report. */
 export function buildAdminEvalReport(
   turns: readonly AdminEvalTurn[],
-  meta: { model: string; samples: number; now?: () => Date }
+  meta: { model: string; samples: number; expectedTurns: number; now?: () => Date }
 ): AdminEvalReport {
   return {
     model: meta.model,
     samples: meta.samples,
+    expectedTurns: meta.expectedTurns,
+    complete: turns.length >= meta.expectedTurns,
     generatedAt: (meta.now ?? (() => new Date()))().toISOString(),
     overall: rateOf(turns),
     byCategory: Object.fromEntries(
@@ -51,6 +56,9 @@ export function formatAdminEvalReport(report: AdminEvalReport): string {
     `  ${label.padEnd(13)} ${pct(r).padStart(4)}  (${r.passed}/${r.total})`;
   return [
     `Admin assistant eval: ${report.model}, ${report.samples} sample(s) per question`,
+    ...(report.complete
+      ? []
+      : [`PARTIAL RUN: ${report.overall.total} of ${report.expectedTurns} turns; not a baseline`]),
     ...ADMIN_EVAL_CATEGORIES.map(c => row(c, report.byCategory[c])),
     row('overall', report.overall),
     ...(report.failures.length > 0

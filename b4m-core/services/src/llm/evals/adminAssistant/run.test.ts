@@ -94,7 +94,7 @@ describe('runAdminEval', () => {
 
   it('records a stopped quest with no reply as an empty reply', async () => {
     const { api } = server([{ status: 'stopped', reply: '' }]);
-    const turns = await runAdminEval(api, [rows[0]], { model: 'm' });
+    const turns = await runAdminEval(api, [rows[0]], { model: 'm', turnTimeoutMs: 50 });
     expect(turns[0].grade.reason).toBe('empty reply');
   });
 
@@ -121,6 +121,21 @@ describe('runAdminEval', () => {
     expect(turns[0].grade.reason).toMatch(/turn failed: quest q1: still running after 5000ms/);
     expect(turns[1].grade.passed).toBe(true);
     expect(seen).toHaveLength(2);
+  });
+
+  it('records a turn once when onTurn throws, and rejects', async () => {
+    const { api } = server([navQuest]);
+    const seen: string[] = [];
+    await expect(
+      runAdminEval(api, [rows[0]], {
+        model: 'm',
+        onTurn: t => {
+          seen.push(t.grade.reason);
+          throw new Error('EACCES');
+        },
+      })
+    ).rejects.toThrow('EACCES');
+    expect(seen).toHaveLength(1);
   });
 
   it('records an empty reply and a quest error as failures', async () => {

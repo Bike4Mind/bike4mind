@@ -60,7 +60,7 @@ ADMIN_EVAL_REPORT_PATH=<scratch>/admin-eval.json \
 | `ADMIN_EVAL_SAMPLES`       | Turns per question. Default 1.                                       |
 | `ADMIN_EVAL_REPORT_PATH`   | Optional. Writes the JSON report (no quest or session ids).          |
 
-The run mints an admin user and a target user with a known credit balance (`TARGET_CREDITS`), runs every row, prints the report, and deletes both users. Without the variables the test is skipped.
+The run mints an admin user and a target user with a known credit balance (`TARGET_CREDITS`), runs every row, prints the report, and deletes both users. Without the variables the test is skipped. A turn's quest poll is capped at 2 minutes; a stuck turn fails alone and the run continues. The JSON report is rewritten after every turn, and its `complete` field is false (and the text summary says PARTIAL RUN) when fewer than `expectedTurns` finished, so a killed run is never mistaken for a baseline.
 
 Model output is noisy. To read the noise, run twice with the same model and compare; only a gap larger than that between runs means something.
 

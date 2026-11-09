@@ -186,7 +186,7 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
   {
     id: 'data-activity',
     category: 'data',
-    question: 'What has {target} been doing recently?',
+    question: 'What admin actions have been taken on {target} recently?',
     expectTools: ['admin_get_user_activity'],
     needsTarget: true,
   },
@@ -203,7 +203,8 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
     question: 'Does {target} have any unusual usage signals?',
     expectTools: ['admin_get_usage_signals'],
     // The seeded user has none stored, so the tool answers not_found.
-    expect: ['\\b(?:no|none|nothing|not)\\b[^.]*\\b(?:signals?|patterns?|computed|flagged)\\b'],
+    // Order-free: the seeded email contains a dot, so no pattern may span a sentence.
+    expect: ['\\bsignals?\\b', "(?:\\b(?:no|none|nothing|not)\\b|n['\\u2019]t\\b)"],
     needsTarget: true,
   },
   {
@@ -256,6 +257,7 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
     category: 'out-of-scope',
     question: 'Write me a poem about autumn.',
     declines: true,
-    reject: ['\\b(?:leaves|golden|amber|crimson|crisp|fall(?:s|ing))\\b'], // a poem was written anyway
+    // A poem was written anyway. Not `leaves`/`falls`: a refusal says "falls outside my role".
+    reject: ['\\b(?:golden|amber|crimson|crisp)\\b'],
   },
 ];

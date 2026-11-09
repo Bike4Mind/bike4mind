@@ -15,6 +15,7 @@ describe('admin eval report', () => {
   const report = buildAdminEvalReport([turn('where-is', true), turn('where-is', false, 'w2'), turn('data', true)], {
     model: 'm',
     samples: 1,
+    expectedTurns: 5,
     now: () => new Date('2026-01-01T00:00:00Z'),
   });
 
@@ -23,6 +24,14 @@ describe('admin eval report', () => {
     expect(report.byCategory.data).toEqual({ passed: 1, total: 1, rate: 1 });
     expect(report.byCategory['out-of-scope']).toEqual({ passed: 0, total: 0, rate: null });
     expect(report.overall.rate).toBeCloseTo(2 / 3);
+  });
+
+  it('marks a run with fewer turns than expected as partial', () => {
+    expect(report).toMatchObject({ expectedTurns: 5, complete: false });
+    expect(formatAdminEvalReport(report)).toContain('PARTIAL RUN: 3 of 5 turns');
+    const full = buildAdminEvalReport([turn('data', true)], { model: 'm', samples: 1, expectedTurns: 1 });
+    expect(full.complete).toBe(true);
+    expect(formatAdminEvalReport(full)).not.toContain('PARTIAL');
   });
 
   it('lists failures without quest ids', () => {
