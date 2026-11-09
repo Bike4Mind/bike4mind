@@ -16,30 +16,12 @@ import {
   creditLotRepository,
   heldCreditRewardRepository,
   referralSubscriptionRewardRepository,
+  userRepository,
 } from '@bike4mind/database';
 import { creditService } from '@bike4mind/services';
 import { buildCreditRewardAdapters } from '../credits/creditRewardAdapters';
 import { releaseDueSubscriptionRewards, reverseSubscriptionRewardForRefund } from './subscriptionReward';
 
-const grantFailure = vi.hoisted(() => ({ next: false }));
-
-// Wraps the real payout so one call can fail after the claim has been written inside the transaction.
-vi.mock('@bike4mind/services', async importActual => {
-  const actual = await importActual<typeof import('@bike4mind/services')>();
-  return {
-    ...actual,
-    creditService: {
-      ...actual.creditService,
-      payCreditReward: (...args: Parameters<typeof actual.creditService.payCreditReward>) => {
-        if (grantFailure.next) {
-          grantFailure.next = false;
-          throw new Error('grant failed');
-        }
-        return actual.creditService.payCreditReward(...args);
-      },
-    },
-  };
-});
 vi.mock('../integrations/stripe/stripe', () => ({ getStripe: vi.fn() }));
 vi.mock('../integrations/slack/slack', () => ({
   postMessageToSlack: vi.fn(),
@@ -150,13 +132,18 @@ describe('releaseDueSubscriptionRewards against a real replica set', () => {
 
   it('rolls the claim back when the grant fails, then pays once on the next run', async () => {
     const inviter = await seedDueReward();
-    grantFailure.next = true;
+    const incrementCredits = vi
+      .spyOn(userRepository, 'incrementCredits')
+      .mockRejectedValueOnce(new Error('grant failed'));
 
     const failedRun = await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid });
 
     expect(failedRun).toMatchObject({ released: 0, failed: 1 });
+    expect(incrementCredits).toHaveBeenCalledOnce();
     expect(await referralSubscriptionRewardRepository.findByInvoiceId('in_1')).toMatchObject({ status: 'pending' });
     expect((await User.findById(inviter.id))?.currentCredits).toBe(0);
+    expect(await CreditTransaction.countDocuments({ ownerId: inviter.id })).toBe(0);
+    expect(await SignupGrantBudgetDayModel.findOne().lean()).toMatchObject({ spent: 0, reservedIds: [] });
 
     expect(await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid })).toMatchObject({
       released: 1,
@@ -201,18 +188,38 @@ describe('releaseDueSubscriptionRewards against a real replica set', () => {
       expect(await reward()).toMatchObject({ status: 'released' });
     });
 
-    it('keeps the reward pending while the inviter has forfeited the signup unlock', async () => {
+    it('cancels a forfeited inviter reward so a capped run can reach the next reward', async () => {
       const { inviter } = await seedPair();
       await User.updateOne(
         { _id: inviter.id },
         { $set: { 'signupGrant.unlockForfeited': { cause: 'refund', at: NOW } } }
       );
+      const nextInviter = await newUser('next-inviter');
+      const nextPayer = await newUser('next-friend');
+      await referralSubscriptionRewardRepository.create(
+        {
+          invoiceId: 'in_2',
+          paymentIntentId: 'pi_2',
+          inviterId: nextInviter.id,
+          payerId: nextPayer.id,
+          step: 'first_payment',
+          credits: REWARD_CREDITS,
+          releaseAt: new Date(NOW.getTime() - 30_000),
+        },
+        NOW
+      );
 
-      const run = await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid });
+      const run = await releaseDueSubscriptionRewards({ now: NOW, limit: 1, paymentOutcome: stillPaid });
 
-      expect(run).toMatchObject({ candidates: 1, released: 0, cancelled: 0, failed: 0 });
-      expect(await reward()).toMatchObject({ status: 'pending' });
+      expect(run).toMatchObject({ candidates: 1, released: 0, cancelled: 1, failed: 0 });
+      expect(await reward()).toMatchObject({ status: 'cancelled', closeReason: 'inviter_blocked' });
       expect((await User.findById(inviter.id))?.currentCredits).toBe(0);
+      expect(await releaseDueSubscriptionRewards({ now: NOW, limit: 1, paymentOutcome: stillPaid })).toMatchObject({
+        candidates: 1,
+        released: 1,
+        failed: 0,
+      });
+      expect((await User.findById(nextInviter.id))?.currentCredits).toBe(REWARD_CREDITS);
     });
 
     it('still pays the inviter when only the payer is grant-blocked', async () => {

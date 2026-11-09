@@ -226,7 +226,7 @@ export async function releaseDueSubscriptionRewards({
         User.findById(candidate.payerId).select(PARTY_FIELDS).lean<RewardParty>(),
       ]);
       const blocked: ReferralRewardCloseReason | null =
-        !inviter || creditService.isRewardPartyBlocked(inviter)
+        !inviter || creditService.isRewardPartyBlocked(inviter) || inviter.signupGrant?.unlockForfeited
           ? 'inviter_blocked'
           : !payer || creditService.isRewardPartyBlocked(payer)
             ? 'payer_blocked'
@@ -235,7 +235,7 @@ export async function releaseDueSubscriptionRewards({
         if (await referralSubscriptionRewardRepository.cancelPending(candidate.id, blocked, now)) result.cancelled++;
         continue;
       }
-      // An admin can lift a grant block or a forfeited unlock, so the reward stays pending instead of closing for good.
+      // An admin can lift a grant block, so the reward stays pending instead of closing for good.
       if (inviter && creditService.isRewardRecipientBlocked(inviter)) continue;
 
       // A Stripe failure throws into the catch below, so the reward is retried next run rather than paid.

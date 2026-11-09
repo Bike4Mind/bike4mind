@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   ARENA_QUALITY_DEFAULTS,
+  ARENA_LEGACY_UNLOCK_REASONS,
+  arenaLegacyUnlockTransactionId,
   arenaRaterStanding,
   isArenaVerifiedUser,
   judgeArenaVote,
@@ -87,6 +89,13 @@ describe('isArenaVerifiedUser', () => {
   it('does not count a retired GitHub or work-email unlock as verified', () => {
     for (const unlockedBy of ['github_verified', 'work_email_verified'] as const) {
       expect(isArenaVerifiedUser({ emailVerified: true, signupGrant: { stage: 'unlocked', unlockedBy } })).toBe(false);
+    }
+  });
+
+  it('keeps historical ledger helpers compatible without counting them as verification', () => {
+    for (const reason of ARENA_LEGACY_UNLOCK_REASONS) {
+      expect(arenaLegacyUnlockTransactionId(reason, 'u1')).toBe(`unlock-grant:${reason}:u1`);
+      expect(isArenaVerifiedUser({ emailVerified: true, noCardUnlocks: [reason] })).toBe(false);
     }
   });
 

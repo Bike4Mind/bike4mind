@@ -211,6 +211,13 @@ export function createArenaService(deps: ArenaServiceDeps) {
     }
   }
 
+  async function settledVoteResponse(row: IArenaVoteDocument | null): Promise<ArenaVoteResponse> {
+    if (row?.status !== 'voted') return { creditsAwarded: 0 };
+    if (row.creditsAwarded <= 0) return { creditsAwarded: row.creditsAwarded };
+    const owed = await deps.findOwedCredits(arenaVoteTransactionId(row.id));
+    return { creditsAwarded: row.creditsAwarded, ...(owed?.queued ? { queued: true as const } : {}) };
+  }
+
   async function submitVote(userId: string, request: ArenaVoteRequest): Promise<ArenaVoteResponse> {
     const settings = await deps.loadSettings();
     if (await ineligibleReason(userId, settings)) throw new ForbiddenError('Preference arena is not available');
@@ -218,7 +225,7 @@ export function createArenaService(deps: ArenaServiceDeps) {
     const pairId = request.pairId.toLowerCase();
     const row = await votes.findForPair(userId, pairId);
     if (!row) throw new NotFoundError('Pair was not served to this user');
-    if (row.status === 'voted') return { creditsAwarded: row.creditsAwarded };
+    if (row.status === 'voted') return settledVoteResponse(row);
 
     const pair = await pairs.findById(pairId);
     if (!pair?.active) {
@@ -239,7 +246,7 @@ export function createArenaService(deps: ArenaServiceDeps) {
     );
     if (!claimed) {
       const settled = await votes.findForPair(userId, pairId);
-      return { creditsAwarded: settled?.status === 'voted' ? settled.creditsAwarded : 0 };
+      return settledVoteResponse(settled);
     }
 
     // A crashed or failed submit may have paid or queued its reward before dying; honor it instead of judging again.
@@ -325,7 +332,7 @@ export function createArenaService(deps: ArenaServiceDeps) {
       voteId: row.id,
     });
     const settled = await votes.findForPair(userId, pairId);
-    return { creditsAwarded: settled?.creditsAwarded ?? 0 };
+    return settledVoteResponse(settled);
   }
 
   // Append-only: no dedupe, so re-importing a file duplicates pairs; admins retire duplicates.

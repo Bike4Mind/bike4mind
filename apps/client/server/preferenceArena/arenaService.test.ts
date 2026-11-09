@@ -321,6 +321,27 @@ describe('submitVote', () => {
     expect(payReward).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { reward: { credits: 2, queued: true }, expected: { creditsAwarded: 2, queued: true } },
+    { reward: { credits: 2, queued: false }, expected: { creditsAwarded: 2 } },
+    { reward: null, expected: { creditsAwarded: 2 } },
+  ])('reports the current reward state on an already-voted retry: $reward', async ({ reward, expected }) => {
+    const { service, votes, payReward, findOwedCredits } = build();
+    votes.findForPair.mockResolvedValue(servedRow({ status: 'voted', creditsAwarded: 2 }));
+    findOwedCredits.mockResolvedValue(reward);
+    expect(await service.submitVote('u1', vote)).toEqual(expected);
+    expect(findOwedCredits).toHaveBeenCalledExactlyOnceWith('arena-vote:vote1');
+    expect(votes.claim).not.toHaveBeenCalled();
+    expect(payReward).not.toHaveBeenCalled();
+  });
+
+  it('does not look up a reward for an already-voted rejected vote', async () => {
+    const { service, votes, findOwedCredits } = build();
+    votes.findForPair.mockResolvedValue(servedRow({ status: 'voted' }));
+    expect(await service.submitVote('u1', vote)).toEqual({ creditsAwarded: 0 });
+    expect(findOwedCredits).not.toHaveBeenCalled();
+  });
+
   it('claims the row before judging and records against that claim', async () => {
     const { service, votes } = build();
     await service.submitVote('u1', vote);
@@ -354,6 +375,18 @@ describe('submitVote', () => {
     expect(payReward).not.toHaveBeenCalled();
   });
 
+  it.each([true, false])('preserves the winner reward state after losing a claim: queued=%s', async queued => {
+    const { service, votes, payReward, findOwedCredits } = build();
+    votes.claim.mockResolvedValue(null);
+    votes.findForPair
+      .mockResolvedValueOnce(servedRow())
+      .mockResolvedValueOnce(servedRow({ status: 'voted', creditsAwarded: 2 }));
+    findOwedCredits.mockResolvedValue({ credits: 2, queued });
+    expect(await service.submitVote('u1', vote)).toEqual({ creditsAwarded: 2, ...(queued ? { queued: true } : {}) });
+    expect(findOwedCredits).toHaveBeenCalledExactlyOnceWith('arena-vote:vote1');
+    expect(payReward).not.toHaveBeenCalled();
+  });
+
   it('logs a claim taken over before recording and returns the settled award', async () => {
     const { service, votes, logger } = build();
     votes.recordVote.mockResolvedValue(null);
@@ -362,6 +395,17 @@ describe('submitVote', () => {
       .mockResolvedValueOnce(servedRow({ status: 'voted', creditsAwarded: 2 }));
     expect(await service.submitVote('u1', vote)).toEqual({ creditsAwarded: 2 });
     expect(logger.error).toHaveBeenCalled();
+  });
+
+  it.each([true, false])('reads the settled reward after a recording takeover: queued=%s', async queued => {
+    const { service, votes, findOwedCredits } = build();
+    votes.recordVote.mockResolvedValue(null);
+    votes.findForPair
+      .mockResolvedValueOnce(servedRow())
+      .mockResolvedValueOnce(servedRow({ status: 'voted', creditsAwarded: 2 }));
+    findOwedCredits.mockResolvedValueOnce(null).mockResolvedValueOnce({ credits: 2, queued });
+    expect(await service.submitVote('u1', vote)).toEqual({ creditsAwarded: 2, ...(queued ? { queued: true } : {}) });
+    expect(findOwedCredits).toHaveBeenNthCalledWith(2, 'arena-vote:vote1');
   });
 
   it('passes the rater cap counts to the judge', async () => {

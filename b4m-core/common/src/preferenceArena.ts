@@ -19,6 +19,15 @@ export type ArenaPairSource = (typeof ARENA_PAIR_SOURCES)[number];
  */
 export const ARENA_VERIFIED_UNLOCK_REASONS: readonly SignupGrantUnlockReason[] = ['card_verified', 'phone_verified'];
 
+/** @deprecated Retained for source compatibility; retired unlocks do not establish arena eligibility. */
+export const ARENA_LEGACY_UNLOCK_REASONS = ['github_verified', 'work_email_verified'] as const;
+export type ArenaLegacyUnlockReason = (typeof ARENA_LEGACY_UNLOCK_REASONS)[number];
+
+/** @deprecated Retained for reading historical ledger rows only. */
+export function arenaLegacyUnlockTransactionId(reason: ArenaLegacyUnlockReason, userId: string): string {
+  return `unlock-grant:${reason}:${userId}`;
+}
+
 export type ArenaIneligibleReason = 'disabled' | 'unverified' | 'blocked';
 
 export type ArenaRejectReason =
@@ -107,6 +116,8 @@ export interface ArenaEligibilityFields {
   isSynthetic?: boolean | null;
   deletedAt?: Date | null;
   signupGrant?: Pick<SignupGrant, 'stage' | 'unlockedBy'> | null;
+  /** @deprecated Ignored for eligibility; retained for source compatibility. */
+  noCardUnlocks?: readonly ArenaLegacyUnlockReason[];
 }
 
 /** Account-block checks are the caller's, via creditService.isRewardRecipientBlocked. */

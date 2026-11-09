@@ -447,6 +447,42 @@ describe('payCreditReward in its own transaction', () => {
     metadata: { [creditService.REFERRED_USER_ID_METADATA_KEY]: friendId },
   });
 
+  it.each([
+    ['AI access revoked', { isModerated: true }],
+    ['a pending risk review', { 'riskScore.reviewState': 'pending' }],
+  ])('defers an arena payout when the rater gains %s before its transaction starts', async (_label, state) => {
+    const rater = await makeUser();
+    const vote = {
+      ...reward(rater.id, 'vote'),
+      transactionId: `arena-vote:${rater.id}`,
+      source: 'preference_arena' as const,
+    };
+    await heldCreditRewardRepository.hold(vote);
+    const racing: creditService.PayCreditRewardAdapters = {
+      ...txAdapters,
+      withTransaction: async fn => {
+        await User.updateOne({ _id: rater.id }, { $set: state });
+        return withTransaction(() => fn());
+      },
+    };
+
+    expect(await creditService.releaseHeldCreditRewards(racing, { limit: 10 })).toMatchObject({
+      paid: 0,
+      deferred: 1,
+      failed: 0,
+    });
+    expect(await balance(rater.id)).toBe(0);
+    expect(await CreditTransaction.countDocuments({ transactionId: vote.transactionId })).toBe(0);
+    expect(await signupGrantBudgetRepository.getSpent(trickleKey())).toBe(0);
+    expect(await HeldCreditRewardModel.findOne({ transactionId: vote.transactionId }).lean()).toMatchObject({
+      status: 'held',
+    });
+
+    await User.updateOne({ _id: rater.id }, { $set: { isModerated: false, 'riskScore.reviewState': 'approved' } });
+    expect(await creditService.releaseHeldCreditRewards(txAdapters, { limit: 10 })).toMatchObject({ paid: 1 });
+    expect(await balance(rater.id)).toBe(100);
+  });
+
   it('rolls back the ledger row and refunds the draw when the referral balance credit throws, then pays once on retry', async () => {
     const inviter = await makeUser();
     const friend = await makeUser();

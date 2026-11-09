@@ -118,11 +118,13 @@ const partyBlock = (party: RewardPartyFields | null, isRecipient = false): Party
 const arenaRecipientBlocked = (party: RewardPartyFields) =>
   isAiAccessRevoked(party) || party.riskScore?.reviewState === 'pending';
 
+const recipientBlock = (party: RewardPartyFields | null, source: CreditRewardSource): PartyBlock =>
+  partyBlock(party, true) ??
+  (source === 'preference_arena' && party && arenaRecipientBlocked(party) ? 'transient' : null);
+
 async function partiesBlock(reward: HeldCreditRewardInput, adapters: PayCreditRewardAdapters): Promise<PartyBlock> {
   const recipient = await adapters.users.findById(reward.userId);
-  const userBlock =
-    partyBlock(recipient, true) ??
-    (reward.source === 'preference_arena' && recipient && arenaRecipientBlocked(recipient) ? 'transient' : null);
+  const userBlock = recipientBlock(recipient, reward.source);
   if (userBlock === 'terminal') return userBlock;
   const friendId = reward.metadata?.[REFERRED_USER_ID_METADATA_KEY];
   const isReferral = reward.source === 'referral_first_answer' || reward.source === 'referral_subscription';
@@ -163,7 +165,7 @@ async function payNow(
   const credit = async () => {
     // Read inside the payout transaction: a block that commits after the caller's check conflicts with this
     // write, and the retry then sees the flag. Without an owned transaction this narrows the window only.
-    if (isRewardRecipientBlocked((await adapters.users.findById(reward.userId)) ?? {})) return null;
+    if (recipientBlock(await adapters.users.findById(reward.userId), reward.source)) return null;
     const credited = await addCreditsWithLedgerRow(
       {
         ownerId: reward.userId,

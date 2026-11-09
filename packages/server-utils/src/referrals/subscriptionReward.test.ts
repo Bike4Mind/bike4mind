@@ -394,6 +394,14 @@ describe('releaseDueSubscriptionRewards', () => {
     expect(mockPayReward).not.toHaveBeenCalled();
   });
 
+  it('cancels instead of retrying when the inviter has forfeited the signup unlock', async () => {
+    givenUsers({}, { signupGrant: { unlockForfeited: { cause: 'refund', at: NOW } } });
+    const result = await releaseDueSubscriptionRewards({ now: NOW });
+    expect(result).toMatchObject({ released: 0, cancelled: 1 });
+    expect(mockRepo.cancelPending).toHaveBeenCalledWith('r1', 'inviter_blocked', NOW);
+    expect(mockPayReward).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['is banned', { isBanned: true }],
     ['has a chargeback pending', { disputePending: true }],
