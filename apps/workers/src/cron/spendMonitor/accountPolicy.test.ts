@@ -66,6 +66,12 @@ describe('selectSpendAccountPolicy', () => {
   ])('keeps automatic limits standard with %j', patch => {
     expect(select({ ...context, ...patch }).tier).toBe('standard');
   });
+  it('names a reopened review as the reason when the review is not approved', () => {
+    expect(select({ ...context, reviewReopened: true })).toMatchObject({
+      tier: 'standard',
+      reasons: ['review_reopened'],
+    });
+  });
   it('applies the age boundary exactly and honors an explicit review approval over the numeric score', () => {
     expect(select({ ...context, accountAgeDays: 7, responsibleAccountAgeDays: 7 }).tier).toBe('paid');
     expect(select({ ...context, riskScore: 90, reviewState: 'approved', reviewReopened: true }).tier).toBe('paid');

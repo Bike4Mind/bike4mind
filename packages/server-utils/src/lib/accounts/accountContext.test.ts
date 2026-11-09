@@ -262,14 +262,20 @@ describe('defaultAccountContextDeps', () => {
   });
 
   it('reads a bounded retained payment window and returns only aggregated facts', async () => {
-    database.paymentAggregate.mockResolvedValue([
-      { _id: 'user', succeeded: 2, failed: 1, radarBlocked: 1, elevatedRisk: 0, latestSucceededAt: ago(2) },
-    ]);
+    const option = vi
+      .fn()
+      .mockResolvedValue([
+        { _id: 'user', succeeded: 2, failed: 1, radarBlocked: 1, elevatedRisk: 0, latestSucceededAt: ago(2) },
+      ]);
+    database.paymentAggregate.mockReturnValue({ option });
     await expect(defaultAccountContextDeps().findPaymentHistory(['user'], ago(90), NOW)).resolves.toEqual([
       { userId: 'user', succeeded: 2, failed: 1, radarBlocked: 1, elevatedRisk: 0, latestSucceededAt: ago(2) },
     ]);
     const [pipeline] = database.paymentAggregate.mock.calls.at(-1) ?? [];
-    expect(pipeline[0]).toEqual({ $match: { userId: { $in: ['user'] }, createdAt: { $gte: ago(90), $lte: NOW } } });
+    expect(pipeline[0]).toEqual({
+      $match: { userId: { $in: ['user'] }, createdAt: { $gte: ago(90), $lte: NOW }, paymentIntentId: { $not: /^cs_/ } },
+    });
+    expect(option).toHaveBeenCalledWith({ maxTimeMS: 2000 });
     expect(Object.keys(pipeline[1].$group)).toEqual([
       '_id',
       'succeeded',

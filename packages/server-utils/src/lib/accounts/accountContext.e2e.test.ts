@@ -144,6 +144,7 @@ describe('account context database adapters', () => {
       payment('pi_started', ago(3), 'started', null),
       payment('pi_too_old', new Date(since.getTime() - 1), 'succeeded', 'highest', true),
       payment('pi_future', new Date(NOW.getTime() + 1), 'succeeded', 'highest', true),
+      payment('cs_test_visit_only', ago(1), 'failed', 'highest', true),
       payment('pi_other', ago(1), 'failed', 'highest', true, String(CREATOR_ID)),
     ]);
 

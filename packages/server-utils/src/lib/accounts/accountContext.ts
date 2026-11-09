@@ -178,7 +178,14 @@ export function defaultAccountContextDeps(): AccountContextDeps {
     findPaymentHistory: async (userIds, since, until) => {
       if (userIds.length === 0) return [];
       const rows = await PaymentAttemptModel.aggregate<Omit<AccountPaymentHistory, 'userId'> & { _id: string }>([
-        { $match: { userId: { $in: [...userIds] }, createdAt: { $gte: since, $lte: until } } },
+        // A recordCheckoutStart row is visit-only; its real attempt arrives later under the payment intent id.
+        {
+          $match: {
+            userId: { $in: [...userIds] },
+            createdAt: { $gte: since, $lte: until },
+            paymentIntentId: { $not: /^cs_/ },
+          },
+        },
         {
           $group: {
             _id: '$userId',
@@ -189,7 +196,7 @@ export function defaultAccountContextDeps(): AccountContextDeps {
             latestSucceededAt: { $max: { $cond: [{ $eq: ['$outcome', 'succeeded'] }, '$createdAt', null] } },
           },
         },
-      ]);
+      ]).option({ maxTimeMS: 2000 });
       return rows.map(({ _id, ...row }) => ({ ...row, userId: _id }));
     },
   };

@@ -21,7 +21,7 @@ entitlement resolver and its handling of delayed billing updates.
 
 Paid usage remains included in platform spike detection. Only explicitly trusted accounts use the
 existing trusted-spend exclusion. If subscription classification fails, the monitor logs the error and applies no subscription
-standing; credit-purchase standing and explicit trust are evaluated independently.
+standing; credit-purchase standing and explicit trust are evaluated independently. Unavailable account context (for example an API key whose payer cannot be resolved) suppresses all of them, including explicit trust and its trusted-spend exclusion.
 
 Operators can tune `spendMonitorPaidAccountSpikeFloorCredits` and
 `spendMonitorPaidAccountCeilingCredits`, and `spendMonitorPaidAccountMinAgeDays` in the admin credit settings under SecOps. No account list
