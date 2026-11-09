@@ -348,6 +348,7 @@ const WebhookAuditLogsTab: React.FC = () => {
   const {
     data: stats,
     isLoading: statsLoading,
+    isPlaceholderData: isStatsPlaceholder,
     error: statsError,
     isError: isStatsError,
     refetch: refetchStats,
@@ -362,7 +363,11 @@ const WebhookAuditLogsTab: React.FC = () => {
   const rangeLabel = WEBHOOK_DATE_PRESET_LABELS[datePreset];
 
   const statValue = (value: string) =>
-    statsLoading ? <Skeleton variant="text" sx={{ width: '3rem' }} data-testid="webhook-logs-stat-skeleton" /> : value;
+    statsLoading || isStatsPlaceholder ? (
+      <Skeleton variant="text" sx={{ width: '3rem' }} data-testid="webhook-logs-stat-skeleton" />
+    ) : (
+      value
+    );
   const successRate = stats?.successRate;
 
   return (

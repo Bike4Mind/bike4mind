@@ -235,6 +235,19 @@ describe('WebhookAuditLogsTab page anatomy', () => {
     expect(precedes(screen.getByTestId('admin-page-header'), strip)).toBe(true);
   });
 
+  it('shows skeletons while stats contain placeholder data', () => {
+    mocks.useWebhookAuditStats.mockReturnValue({
+      data: STATS,
+      isLoading: false,
+      isPlaceholderData: true,
+      error: null,
+      isError: false,
+    });
+    renderTab();
+
+    expect(screen.getAllByTestId('webhook-logs-stat-skeleton').length).toBeGreaterThan(0);
+  });
+
   it('shows a failed stats load as an error with Try again in place of the strip', () => {
     const refetchStats = vi.fn();
     mocks.useWebhookAuditStats.mockReturnValue({
