@@ -112,9 +112,10 @@ export const contentHolders = {
   Prompt: { kind: 'noUserData', note: 'Shared prompt catalogue with no owner field.' },
   PublishedArtifact: {
     kind: 'holder',
-    // These hand an organization page a colleague published to that colleague and remove thumbnails and
-    // CDN copies, which deleting the rows would not.
-    beforeErasure: ['purgeOwnerPublishedArtifacts', 'purgeUserPublishedArtifacts'],
+    // This hands an organization page a colleague published to that colleague and removes thumbnails and
+    // CDN copies, which deleting the rows would not. It calls `purgeOwnerPublishedArtifacts` itself and
+    // uses its result for the CDN and thumbnails, so running that one first would leave it nothing to do.
+    beforeErasure: ['purgeUserPublishedArtifacts'],
     references: [
       // Only personal pages go. A project or organization page the purge could not transfer is only
       // soft-deleted and keeps `ownerId`, so the owner is cleared (precedence is in types.ts).

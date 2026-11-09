@@ -263,9 +263,9 @@ export const infraHolders = {
     references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
     secretPaths: ['routingToken', 'secret'],
   },
-  // `userId` is the owner, but the schema cannot tell a personal organization from a team one, and deleting a team
-  // organization would remove its members' workspace. So the owner link is anonymized; deleting a personal
-  // organization belongs to the erasure flow, which can see the member count.
+  // `userId` is the owner. Deleting a team organization would remove its members' workspace, so the owner link is
+  // anonymized here. Deleting the person's personal organizations (the `personal` flag, which
+  // `purgeAccountContent` filters on) is deferred to the erasure flow.
   // `userDetails.email` and `.name` are removed with the element that `userDetails.id` pulls.
   Organization: {
     kind: 'holder',
