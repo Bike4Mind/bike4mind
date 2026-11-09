@@ -1,5 +1,11 @@
 import { z } from 'zod';
 import { DECISION_MODEL_IDS } from '../decisions/catalog';
+import {
+  ACCOUNT_CAMPAIGN_AXES,
+  ACCOUNT_CAMPAIGN_IGNORED_REASONS,
+  ACCOUNT_CAMPAIGN_MEMBERSHIPS,
+  ACCOUNT_CAMPAIGN_RELATIONSHIPS,
+} from './accountCampaign';
 import { RISK_EVIDENCE_MISSING_REASONS, RISK_EVIDENCE_VERSION, riskEvidenceFactValueSchemas } from './riskEvidence';
 import { SHADOW_DETECTION_VERDICTS, SHADOW_DETECTORS } from './shadowDetection';
 
@@ -13,7 +19,7 @@ import { SHADOW_DETECTION_VERDICTS, SHADOW_DETECTORS } from './shadowDetection';
  */
 
 /** Bump when the question, its choices or the summary's meaning changes; cached results key on it. */
-export const ABUSE_ASSESSMENT_POLICY_VERSION = 1;
+export const ABUSE_ASSESSMENT_POLICY_VERSION = 3;
 
 /** What the model may answer. */
 export const ABUSE_ASSESSMENT_JUDGMENTS = ['abuse', 'legitimate_automation', 'insufficient_evidence'] as const;
@@ -81,6 +87,25 @@ export const abuseAssessmentAccountEvidenceSchema = z.strictObject({
 });
 export type AbuseAssessmentAccountEvidence = z.infer<typeof abuseAssessmentAccountEvidenceSchema>;
 
+export const abuseAssessmentRequestActivitySchema = z.discriminatedUnion('status', [
+  z.strictObject({
+    status: z.literal('observed'),
+    coverage: z.literal('partial_api_key_log'),
+    windowDays: z.number().int().positive(),
+    sampleCount: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+    successful: z.number().int().nonnegative(),
+    unauthorized: z.number().int().nonnegative(),
+    forbidden: z.number().int().nonnegative(),
+    rateLimited: z.number().int().nonnegative(),
+    serverErrors: z.number().int().nonnegative(),
+    successfulIdentityChecks: z.number().int().nonnegative(),
+    adminRequests: z.number().int().nonnegative(),
+  }),
+  z.strictObject({ status: z.literal('failed') }),
+]);
+export type AbuseAssessmentRequestActivity = z.infer<typeof abuseAssessmentRequestActivitySchema>;
+
 export const abuseAssessmentAccountSchema = z.strictObject({
   /** Pseudonymous and per assessment: acct_1 here says nothing about acct_1 elsewhere. */
   ref: accountRefSchema,
@@ -88,6 +113,7 @@ export const abuseAssessmentAccountSchema = z.strictObject({
   /** Hours between the evidence being computed and the detection; null with no evidence. */
   evidenceAgeHours: z.number().int().nullable(),
   evidence: abuseAssessmentAccountEvidenceSchema.nullable(),
+  requests: abuseAssessmentRequestActivitySchema.optional(),
 });
 export type AbuseAssessmentAccount = z.infer<typeof abuseAssessmentAccountSchema>;
 
@@ -106,6 +132,38 @@ export const abuseAssessmentGroupEvidenceSchema = z.strictObject({
 });
 export type AbuseAssessmentGroupEvidence = z.infer<typeof abuseAssessmentGroupEvidenceSchema>;
 
+const assessmentCampaignSchema = z.strictObject({
+  members: z
+    .array(
+      z.strictObject({
+        ref: accountRefSchema,
+        membership: z.enum(ACCOUNT_CAMPAIGN_MEMBERSHIPS),
+      })
+    )
+    .max(ABUSE_ASSESSMENT_MAX_ACCOUNTS),
+  evidence: z
+    .array(
+      z.strictObject({
+        relationship: z.enum(ACCOUNT_CAMPAIGN_RELATIONSHIPS),
+        axis: z.enum(ACCOUNT_CAMPAIGN_AXES),
+        population: z.number().int().nonnegative(),
+        memberRefs: z.array(accountRefSchema).max(ABUSE_ASSESSMENT_MAX_ACCOUNTS),
+      })
+    )
+    .max(ABUSE_ASSESSMENT_MAX_SIGNALS),
+  ignored: z
+    .array(
+      z.strictObject({
+        relationship: z.enum(ACCOUNT_CAMPAIGN_RELATIONSHIPS),
+        reason: z.enum(ACCOUNT_CAMPAIGN_IGNORED_REASONS),
+        population: z.number().int().nonnegative(),
+        memberCount: z.number().int().nonnegative(),
+      })
+    )
+    .max(ABUSE_ASSESSMENT_MAX_SIGNALS),
+  truncated: z.boolean(),
+});
+
 /** Exactly what the provider receives. Strict, so a field added upstream never rides along. */
 export const abuseAssessmentFeatureSummarySchema = z.strictObject({
   evidenceVersion: z.literal(RISK_EVIDENCE_VERSION),
@@ -119,6 +177,8 @@ export const abuseAssessmentFeatureSummarySchema = z.strictObject({
         z.strictObject({ key: featureKeySchema, observed: finiteNumber.nullable(), threshold: finiteNumber.nullable() })
       )
       .max(ABUSE_ASSESSMENT_MAX_SIGNALS),
+    /** Optional so stored summaries from earlier policy versions remain readable. */
+    campaign: assessmentCampaignSchema.optional(),
   }),
   accounts: z.array(abuseAssessmentAccountSchema).max(ABUSE_ASSESSMENT_MAX_ACCOUNTS),
   /** Accounts on the detection beyond the cap. */
@@ -188,6 +248,8 @@ export const ABUSE_ASSESSMENT_SKIP_REASONS = [
   'in_flight',
   'attempts_exhausted',
   'detection_not_found',
+  /** The detector records its own Decisions verdict (SELF_ASSESSED_SHADOW_DETECTORS). */
+  'self_assessed',
   /** A replay ran out of its request time; rerun the remaining examples. */
   'time_budget',
 ] as const;

@@ -1,9 +1,10 @@
+import { RefusedFetchTargetError } from './errors';
 import { Logger } from '@bike4mind/observability';
 import type { ToolResultValidator } from '@bike4mind/llm-adapters';
 import { ToolDefinition, ToolContext } from '../../base/types';
 import { FAILED_RESULT_SCORE } from '../../base/resultValidators';
 import { GetEffectiveApiKeyAdapters, getFirecrawlConfig } from '../../../../apiKeyService';
-import { CitableSource, UnprocessableEntityError } from '@bike4mind/common';
+import { CitableSource, ExpectedToolError, UnprocessableEntityError } from '@bike4mind/common';
 import { FirecrawlError } from '@mendable/firecrawl-js';
 import { createFirecrawlApp, type FirecrawlClient, type FirecrawlScrapeParams } from './firecrawlApp';
 import { NoExtractableContentError, plainFetchScrape } from './plainFetch';
@@ -594,6 +595,18 @@ export const webFetchTool: ToolDefinition = {
           });
           await context.statusUpdate({}, 'WebFetch: network error');
           return WEB_FETCH_UNREACHABLE_MSG;
+        }
+
+        // Runs after the network-pattern return so a matching message keeps the friendly result.
+        // Still a failed tool call, so a Firecrawl outage stays visible to the model; only the log
+        // level changes. ExpectedToolError keeps the message and lets the adapter warn, not error.
+        if (error instanceof RefusedFetchTargetError || firecrawlStatus === 500) {
+          // Refused targets are already logged by the SSRF guard.
+          if (!(error instanceof RefusedFetchTargetError)) {
+            context.logger.warn('WebFetch expected upstream failure', { url: params.url, error: errorMessage });
+          }
+          await context.statusUpdate({}, `WebFetch failed: ${errorMessage}`);
+          throw new ExpectedToolError(errorMessage);
         }
 
         // Unexpected errors - log as error and rethrow

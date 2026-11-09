@@ -576,3 +576,61 @@ describe('messaging a session from the sidebar', () => {
     expect(el('session-row-message-action').getAttribute('aria-disabled')).toBe('true');
   });
 });
+
+describe('finding a session by issue or PR number', () => {
+  const typeSearch = (text: string) => {
+    const input = el('chat-search-input') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    act(() => {
+      setter?.call(input, text);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    return input;
+  };
+  const refSessions = () => [
+    summary('plain', 'Mentions 1234 in passing', { updatedAt: '2026-10-05T00:00:00.000Z' }),
+    summary('linked', '#1234 | PR#5678 | sidebar search'),
+    summary('mentioned', 'Reading around', { githubRefs: [{ kind: 'pr', number: 1234, repo: 'acme/widgets' }] }),
+  ];
+
+  it('lists ref matches first with a chip, then title matches', async () => {
+    await mount(refSessions());
+    typeSearch('1234');
+    const refRows = el('sidebar-ref-matches');
+    const refTitles = Array.from(refRows.querySelectorAll('[data-testid="chat-session-title-text"]')).map(
+      node => node.textContent
+    );
+    expect(refTitles).toEqual(['#1234 | PR#5678 | sidebar search', 'Reading around']);
+    expect(
+      Array.from(refRows.querySelectorAll('[data-testid="chat-session-ref-chip"]')).map(n => n.textContent)
+    ).toEqual(['Issue #1234', 'PR widgets#1234']);
+    expect(titles()).toEqual(['#1234 | PR#5678 | sidebar search', 'Reading around', 'Mentions 1234 in passing']);
+  });
+
+  it('opens the top hit on Enter', async () => {
+    await mount(refSessions());
+    const input = typeSearch('PR#5678');
+    act(() => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+    expect(onSelect).toHaveBeenCalledWith('linked');
+  });
+
+  it('clears the search on Escape', async () => {
+    await mount(refSessions());
+    const input = typeSearch('1234');
+    act(() => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(input.value).toBe('');
+    expect(query('sidebar-ref-matches')).toBeNull();
+  });
+
+  it('focuses the search on the modifier plus K', async () => {
+    await mount(refSessions());
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+    });
+    expect(document.activeElement).toBe(el('chat-search-input'));
+  });
+});

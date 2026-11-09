@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IMessage, ModelInfo } from '@bike4mind/common';
 import { OllamaBackend, OpenAICompatibleBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
-import { readDesktopModelServers } from '@bike4mind/local-models/servers';
+import { readDesktopModelServers, SSH_PROBE_TIMEOUT_MS } from '@bike4mind/local-models/servers';
 import {
   json,
   startFakeServer,
@@ -15,10 +15,18 @@ import {
   type FakeVllm,
   type Handler,
 } from '@bike4mind/local-models/testing';
-import { loadModelServers } from '../models/modelServers.js';
+import { loadModelServers, type SshFetchFor } from '../models/modelServers.js';
 import { MultiLlmBackend } from '../llm/MultiLlmBackend.js';
 import { createMockConfig } from '../test-utils/mocks.js';
-import { attachLocalModels, type AttachLocalModelsOptions, type BuildLlmBackendDeps } from './buildLlmBackend.js';
+import {
+  attachLocalModels,
+  buildLlmBackend,
+  SAVED_OLLAMA_LISTING_TIMEOUT_MS,
+  savedServerListingMs,
+  type AttachLocalModelsOptions,
+  type BuildLlmBackendDeps,
+} from './buildLlmBackend.js';
+import { NoLocalModelsError, SignedOutCloudBackend, signedOutDefaultReplacedMessage } from './signedOutLocal.js';
 
 const TOKEN = 'tok-5e4d3c2b1a0f9e8d7c6b';
 const silent = { debug() {}, info() {}, warn() {}, error() {} } as never;
@@ -453,6 +461,127 @@ describe('attachLocalModels with saved model servers', () => {
     await vi.waitFor(() => expect(stalled.open()).toBe(0));
   });
 
+  it('starts no ssh request after the startup deadline that the deadline has not ended', async () => {
+    await writeServers([
+      record({ id: 'o1', name: 'gpu', transport: { type: 'ssh', destination: 'me@gpu', port: 11434 } }),
+    ]);
+    let pastDeadline = false;
+    const requests: { path: string; signal: AbortSignal | undefined; pastDeadline: boolean }[] = [];
+    const sshFetchFor: SshFetchFor = () => async (input, init) => {
+      const url = new URL(input);
+      requests.push({ path: url.pathname, signal: init?.signal ?? undefined, pastDeadline });
+      init?.signal?.throwIfAborted();
+      if (url.pathname === '/api/version') return Response.json({ version: '0.12.0' });
+      const signal = init?.signal;
+      if (!signal) throw new Error('a request no deadline can end');
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    };
+    let listed = false;
+    const attaching = attachLocalModels(
+      serverBackend() as never,
+      createMockConfig({ defaultModel: 'local:srv-o1:tiny:1b' }),
+      { servers: 'all', defaultServerTimeoutMs: 200, onNotice: text => notices.push(text) },
+      {
+        ...deps,
+        sshFetchFor,
+        createOllamaBackend: (host, options) =>
+          ({
+            currentModel: '',
+            getModelInfo: async () => {
+              await vi.waitFor(() => expect(pastDeadline).toBe(true));
+              await options?.fetch?.(`${host}/api/tags`).catch(() => undefined);
+              listed = true;
+              return [];
+            },
+          }) as never,
+      }
+    );
+    await expect(attaching).rejects.toThrow('Cannot chat with tiny:1b on gpu');
+    pastDeadline = true;
+    await vi.waitFor(() => expect(listed).toBe(true));
+    expect(requests.filter(request => request.pastDeadline).map(request => request.path)).toEqual(['/api/tags']);
+    expect(requests.every(request => request.signal?.aborted === true)).toBe(true);
+  });
+
+  it('says why when the default is on a saved SSH server whose port cannot be used', async () => {
+    await writeServers([
+      record({ id: 'o1', name: 'gpu', transport: { type: 'ssh', destination: 'me@gpu', port: 'x' } }),
+    ]);
+    await expect(attach({ defaultModel: 'local:srv-o1:tiny:1b' }, { servers: 'default' })).rejects.toThrow(
+      'Cannot chat with tiny:1b on gpu: Its saved SSH port is not a number from 1 to 65535. Remove it in Desktop and add it again.'
+    );
+  });
+
+  it('ends the ssh requests still running when attaching fails before the deadline', async () => {
+    await writeServers([
+      record({ id: 'o1', name: 'gpu', transport: { type: 'ssh', destination: 'me@gpu', port: 11434 } }),
+    ]);
+    const pending: AbortSignal[] = [];
+    const sshFetchFor: SshFetchFor = () => async (input, init) => {
+      const { pathname } = new URL(input);
+      if (pathname === '/api/version') return Response.json({ version: '0.12.0' });
+      if (pathname === '/api/tags') return Response.json({ models: [] });
+      const signal = init?.signal;
+      if (!signal) throw new Error('a request no deadline can end');
+      pending.push(signal);
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    };
+    const attaching = attachLocalModels(
+      serverBackend() as never,
+      createMockConfig({ defaultModel: 'local:srv-o1:tiny:1b' }),
+      { servers: 'all', defaultServerTimeoutMs: 30_000, onNotice: text => notices.push(text) },
+      {
+        ...deps,
+        sshFetchFor,
+        createOllamaBackend: (host, options) =>
+          ({
+            currentModel: '',
+            getModelInfo: async () => {
+              void options?.fetch?.(`${host}/api/show`, { method: 'POST' }).catch(() => undefined);
+              throw new Error('listing failed');
+            },
+          }) as never,
+      }
+    );
+    await expect(attaching).rejects.toThrow('Cannot chat with tiny:1b on gpu: listing failed');
+    expect(pending).toHaveLength(1);
+    await vi.waitFor(() => expect(pending[0].aborted).toBe(true), { timeout: 1_000 });
+  });
+
+  it('leaves a chat after a successful attach to run past the startup deadline', async () => {
+    const fake = await ollama(undefined, {
+      'POST /api/chat': (_request, response) => {
+        setTimeout(() => {
+          response.writeHead(200, { 'content-type': 'application/x-ndjson' });
+          response.end(
+            `${JSON.stringify({ model: 'tiny:1b', message: { role: 'assistant', content: 'Late.' }, done: true, done_reason: 'stop', prompt_eval_count: 3, eval_count: 2 })}\n`
+          );
+        }, 500);
+      },
+    });
+    await writeServers([
+      record({ id: 'o1', name: 'gpu', transport: { type: 'ssh', destination: 'me@gpu', port: 11434 } }),
+    ]);
+    const chats: AbortSignal[] = [];
+    const sshFetchFor: SshFetchFor = () => (input, init) => {
+      const url = new URL(input);
+      if (url.pathname === '/api/chat' && init?.signal) chats.push(init.signal);
+      return fetch(`${fake.baseUrl}${url.pathname}${url.search}`, init);
+    };
+    const { llm } = await attachLocalModels(
+      serverBackend() as never,
+      createMockConfig({ defaultModel: 'local:srv-o1:tiny:1b' }),
+      { servers: 'default', defaultServerTimeoutMs: 200, onNotice: text => notices.push(text) },
+      { ...deps, sshFetchFor }
+    );
+    expect(await chat(llm, 'local:srv-o1:tiny:1b')).toBe('Late.');
+    expect(chats.some(signal => signal.aborted)).toBe(false);
+  });
+
   it('gives the default model server longer than the others to answer', async () => {
     const slow = await ollama(undefined, {
       'GET /api/version': (_request, response) => {
@@ -530,5 +659,85 @@ describe('attachLocalModels with saved model servers', () => {
     );
     expect(load).not.toHaveBeenCalled();
     expect(attached.models).toEqual([hosted]);
+  });
+});
+
+describe('attachLocalModels with saved model servers while signed out', () => {
+  const signedOut = (opts: Partial<AttachLocalModelsOptions> = {}) =>
+    attach(
+      { defaultModel: 'claude-opus-4' },
+      { servers: 'all', signedOut: true, ...opts },
+      new SignedOutCloudBackend('claude-opus-4') as never
+    );
+
+  it('waits for the other saved servers at startup and lists the ones that answer', async () => {
+    const fake = await vllm();
+    const port = await closedPort();
+    await writeServers([vllmRecord('s1', 'vllm', fake), downRecord('o2', 'gone', port)]);
+
+    const attached = await signedOut();
+
+    expect(attached.servers).toEqual([{ name: 'vllm', modelCount: 2 }]);
+    expect(attached.models.map(model => model.id)).toEqual(VLLM_IDS);
+    expect(await chat(attached.llm, 'local:srv-s1:qwen-small')).toBe('Hello.');
+  });
+
+  it('stops waiting on a saved server that never answers, then says no local model was found', async () => {
+    const stalled = await silentServer();
+    await writeServers([record({ id: 'o1', name: 'gpu-box', transport: { type: 'http', baseUrl: stalled.baseUrl } })]);
+    const started = performance.now();
+
+    const failure = signedOut({ listingTimeoutMs: 300 });
+
+    await expect(failure).rejects.toBeInstanceOf(NoLocalModelsError);
+    await expect(failure).rejects.toThrow('No local model found. Start Ollama');
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+
+  it('says at startup why the saved local default is not used when its saved server is down', async () => {
+    const plain = await ollama();
+    await writeServers([downRecord('o2', 'gone', await closedPort())]);
+    const startupLog: string[] = [];
+
+    const result = await buildLlmBackend(
+      {
+        config: createMockConfig({ defaultModel: 'claude-opus-4', localDefaultModel: 'local:srv-o2:qwen' }),
+        apiClient: { signedOut: true } as never,
+        tokenGetter: async () => null,
+        startupLog,
+        ollamaHost: plain.baseUrl,
+      },
+      {
+        ...deps,
+        connectWebSocket: vi.fn(),
+        clearWebSocketToolExecutor: vi.fn(),
+        createServerBackend: vi.fn(),
+        detectOllama: vi.fn(async () => null),
+      }
+    );
+
+    expect(result.modelInfo.id).toBe('tiny:1b');
+    expect(startupLog).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /^The saved local default qwen is on the model server gone, which could not be reached or listed: .+\. Fix that and try again, or pick another model with: b4m models use <name>\.$/
+        ),
+        signedOutDefaultReplacedMessage('claude-opus-4', 'tiny:1b'),
+      ])
+    );
+  });
+});
+
+describe('savedServerListingMs', () => {
+  const ssh = { transport: { type: 'ssh', destination: 'me@gpu', port: 8080 } } as never;
+  const direct = { transport: { type: 'http', baseUrl: 'http://10.0.0.5:11434' } } as never;
+
+  it('gives an SSH server the time an ssh login can take, and a direct one the saved-host limit', () => {
+    expect(savedServerListingMs(ssh, undefined)).toBe(SSH_PROBE_TIMEOUT_MS);
+    expect(savedServerListingMs(direct, undefined)).toBe(SAVED_OLLAMA_LISTING_TIMEOUT_MS);
+  });
+
+  it('keeps a limit passed for this run', () => {
+    expect(savedServerListingMs(ssh, 300)).toBe(300);
   });
 });

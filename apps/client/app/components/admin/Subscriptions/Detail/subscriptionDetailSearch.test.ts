@@ -4,6 +4,7 @@ import { parseSubscriptionDetailSearch } from './subscriptionDetailSearch';
 describe('parseSubscriptionDetailSearch', () => {
   it('keeps a known non-default tab', () => {
     expect(parseSubscriptionDetailSearch({ tab: 'admin' })).toEqual({ tab: 'admin' });
+    expect(parseSubscriptionDetailSearch({ tab: 'timeline' })).toEqual({ tab: 'timeline' });
   });
 
   it('leaves the default tab out of the URL', () => {

@@ -19,7 +19,7 @@ import {
   toAdminUserNoteRevision,
 } from '@bike4mind/database';
 import { requireAdminPermission } from '@server/middlewares/adminApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 export const noteSubject = async (req: Request, permission: 'support:read' | 'users:moderate' | 'settings:manage') => {
   requireAdminPermission(req, permission);

@@ -86,3 +86,41 @@ describe('AdminSettingsRepository.getSettingsValue - enforceCredits hosted lock'
     expect(await adminSettingsRepository.getSettingsValue('enforceCredits')).toBe(false);
   });
 });
+
+describe('AdminSettingsRepository.getSettingsValueWithSource', () => {
+  setupMongoTest();
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('reports a valid stored row as stored', async () => {
+    await AdminSettings.create({ settingName: 'MaxFileSize', settingValue: '50' });
+    expect(await adminSettingsRepository.getSettingsValueWithSource('MaxFileSize')).toEqual({
+      value: 50,
+      source: 'stored',
+    });
+  });
+
+  it('reports the default when no row exists or the stored value fails the schema', async () => {
+    expect(await adminSettingsRepository.getSettingsValueWithSource('MaxFileSize')).toEqual({
+      value: 30,
+      source: 'default',
+    });
+
+    await AdminSettings.create({ settingName: 'MaxFileSize', settingValue: 'not-a-number' });
+    expect(await adminSettingsRepository.getSettingsValueWithSource('MaxFileSize')).toEqual({
+      value: 30,
+      source: 'default',
+    });
+  });
+
+  it('reports a hosted enforceCredits as locked even when a valid row is stored', async () => {
+    vi.stubEnv('B4M_SELF_HOST', undefined);
+    await AdminSettings.create({ settingName: 'enforceCredits', settingValue: false });
+    expect(await adminSettingsRepository.getSettingsValueWithSource('enforceCredits')).toEqual({
+      value: true,
+      source: 'locked',
+    });
+  });
+});

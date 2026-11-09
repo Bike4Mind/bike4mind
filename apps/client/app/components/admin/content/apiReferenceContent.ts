@@ -124,11 +124,16 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 
 - Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/quests/{id}/files\`,
   \`/api/v1/agent-executions[/{id}]\`
-- Sessions: \`/api/v1/sessions\`, \`/api/sessions/{id}\`, \`/api/v1/sessions/{id}/clone\`
+- Sessions: \`/api/v1/sessions\`, \`/api/sessions/{id}\`, \`/api/v1/sessions/{id}/clone\`,
+  \`/api/v1/sessions/{id}/files\`, \`/api/v1/sessions/semantic-search\`,
+  \`/api/v1/sessions/{id}/messages/{messageId}\`
 - Artifacts: \`/api/v1/artifacts\` (list, create), \`/api/v1/artifacts/{id}\` (get, update, delete),
-  \`/api/v1/artifacts/{id}/versions[/{version}]\`
+  \`/api/v1/artifacts/{id}/versions[/{version}]\` (list, create, get), \`/api/v1/artifacts/search\`,
+  \`/api/v1/artifacts/types\`
 - Agents: \`/api/v1/agents\`, \`/api/v1/agents/{id}\`
-- Projects: \`/api/v1/projects\`, \`/api/v1/projects/{id}\`
+- Projects: \`/api/v1/projects\`, \`/api/v1/projects/{id}\`, \`/api/v1/projects/{id}/files[/{file_id}]\`,
+  \`/api/v1/projects/{id}/sessions[/{session_id}]\`, \`/api/v1/projects/{id}/members/{user_id}\`,
+  \`/api/v1/projects/{id}/invites\`, \`/api/v1/projects/{id}/system-prompts[/{file_id}]\`
 - Files and data lakes: \`/api/v1/files[?search=]\` (list, upload), \`/api/v1/files/{id}\` (get, update,
   delete), \`/api/v1/files/{id}/chunk\`, \`/api/v1/files/search\`, \`/api/v1/files/by-ids\`,
   \`/api/v1/files/bulk-delete\`, \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
@@ -136,10 +141,10 @@ use to build a typed client). They are deliberately not repeated here, so the tw
   \`/api/v1/music-*\`, \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/sound-effects\`,
   \`/api/ai/music\` (deprecated, sunset 2027-01-15; use \`/api/v1/music-generations\`)
 - Transcription: \`/api/v1/transcriptions/uploads\`, \`/api/v1/transcriptions\`
-- Completions, embeddings, text refinement and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`,
+- Completions, embeddings, text refinement and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`, \`/api/v1/embedding-models\`,
   \`/api/v1/text-refinements\`
 - Decisions (typed questions answered with probabilities): \`/api/v1/decisions\`, \`/api/v1/decision-models\`
-- Account and models: \`/api/v1/me\`, \`/api/v1/credits\`, \`/api/v1/models\`
+- Account and models: \`/api/v1/me\`, \`/api/v1/client-config\`, \`/api/v1/credits\`, \`/api/v1/models\`
 - Skill Market as a Claude Code plugin marketplace: \`/api/v1/skills/market/claude-marketplace.json\`,
   \`/api/v1/skills/market/{id}/claude-plugin.zip\`
 - Skill Market listings: \`/api/v1/skills/market/listings\`, \`/api/v1/skills/market/listings/mine\`,
@@ -160,38 +165,6 @@ Image, video, music and chat work is asynchronous; the Async jobs section of the
 The sections below are still hand-written. Each row was checked against its route file, but
 treat the handler as authoritative.
 
-### Sessions (Notebooks)
-
-Session create, list, get, update, delete and clone are covered by the generated docs (see above). The routes
-below are still hand-written.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/sessions/[id]/files | List session files |
-| POST | /api/sessions/semantic-search | Semantic search across sessions |
-| GET | /api/sessions/[id]/chat/[messageId] | Get a specific message |
-| PUT | /api/sessions/[id]/chat/[messageId] | Update a message |
-| DELETE | /api/sessions/[id]/chat/[messageId] | Delete a message |
-
----
-
-### Projects
-
-Project create, list, get, update and delete are covered by the generated docs (see above). The routes below are
-still hand-written.
-
-**Required API-key scope:** \`projects:read\` (or \`projects:write\`) for the GET routes, \`projects:write\` for the rest.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/projects/[id]/files | List project files |
-| GET | /api/projects/[id]/sessions | List project sessions |
-| DELETE | /api/projects/[id]/members | Remove a project member (send \`userId\` in the body), or leave the project when omitted |
-| GET | /api/projects/[id]/invites | List project invites (requires share permission) |
-| POST | /api/projects/[id]/systemPrompts | Add system prompt files to a project (\`fileIds\` in the body) |
-| DELETE | /api/projects/[id]/systemPrompts | Remove system prompt files from a project (\`fileIds\`, or legacy single \`fileId\`, in the body) |
-| POST | /api/projects/[id]/systemPrompts/toggle | Toggle system prompt |
-| DELETE | /api/projects/removeNonExistintFiles | Clean up orphan file references |
 
 ---
 
@@ -242,19 +215,6 @@ POST   /api/v1/agents/[id]/enhance-field
 | DELETE | /api/agents/[id] | Delete agent |
 | POST | /api/agents/[id]/transfer-credits | Transfer credits to agent |
 | POST | /api/agents/create-from-context | Create agent from conversation context |
-
----
-
-### Artifacts
-
-Artifact list, create, get, update, delete and version reads are covered by the generated docs (see above).
-The routes below are still hand-written.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/artifacts/[id]/versions | Add an artifact version |
-| GET | /api/artifacts/search | Search artifacts |
-| GET | /api/artifacts/types | List artifact types |
 
 ---
 

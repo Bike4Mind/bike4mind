@@ -16,6 +16,7 @@ import {
   IChatHistoryItem,
   isTerminalCreditRefusal,
 } from '@bike4mind/common';
+import { isAiAccessRefusal } from '../userService/accountState';
 import type { CurationTokenUsage, LLMContext } from './llmMarkdownGenerator';
 import type { CurationMessage } from './artifactExtractor';
 import { prepareFabFile, CreateFabFileAdapters } from '../fabFileService/create';
@@ -323,9 +324,9 @@ export class NotebookCurationService {
       if (error instanceof BadRequestError) {
         return { success: false, error: error.message, retryable: false };
       }
-      // The owner cannot pay for the summary (no credits, or the free-tier daily cap); a redelivery
-      // would be refused the same way.
-      if (isTerminalCreditRefusal(error)) {
+      // The owner cannot pay for the summary (no credits, or the free-tier daily cap) or may not use AI;
+      // a redelivery would be refused the same way.
+      if (isTerminalCreditRefusal(error) || isAiAccessRefusal(error)) {
         return { success: false, error: (error as Error).message, retryable: false };
       }
       if (error instanceof NotebookCurationError) {

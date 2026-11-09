@@ -1,40 +1,38 @@
-import React, { useState } from 'react';
-import {
-  Box,
-  Button,
-  Card,
-  Chip,
-  DialogTitle,
-  Divider,
-  Input,
-  LinearProgress,
-  Link,
-  Modal,
-  ModalClose,
-  ModalDialog,
-  Sheet,
-  Tab,
-  TabList,
-  TabPanel,
-  Table,
-  Tabs,
-  Tooltip,
-  Typography,
-} from '@mui/joy';
+import React, { useMemo, useState, type ReactNode } from 'react';
+import { Box, Button, Input, Link, Sheet, Stack, Tab, TabList, TabPanel, Tabs, Tooltip, Typography } from '@mui/joy';
 import type { SxProps } from '@mui/joy/styles/types';
-import VisibilityIcon from '@mui/icons-material/Visibility';
-import SearchIcon from '@mui/icons-material/Search';
-import ThumbsUpDownIcon from '@mui/icons-material/ThumbsUpDown';
-import ChatIcon from '@mui/icons-material/Chat';
-import ArticleIcon from '@mui/icons-material/Article';
-import SmartToyIcon from '@mui/icons-material/SmartToy';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import {
   useHelpAnalyticsData,
-  HelpAnalyticsFilters,
-  HelpAnalyticsChatFeedback,
+  type HelpAnalyticsChatFeedback,
+  type HelpAnalyticsChatTopic,
+  type HelpAnalyticsFeedbackSummary,
+  type HelpAnalyticsFilters,
+  type HelpAnalyticsRecentFeedback,
+  type HelpAnalyticsSearchGap,
+  type HelpAnalyticsTopArticle,
 } from '@client/app/hooks/data/helpAnalytics';
+import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
+import {
+  AdminDialog,
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  ErrorState,
+  FilterChip,
+  LoadingState,
+  SEARCH_TERM_URL_DEBOUNCE_MS,
+  SegmentedControl,
+  StatStrip,
+  StatTile,
+  StatusChip,
+  UpdatingBar,
+  type DataColumn,
+  type SegmentedOption,
+} from '../shared';
+import { ADMIN_REGION_GAP, adminFocusScope, adminTabStrip } from '../shared/adminStyles';
 
 /** Truncated text with a tooltip showing the full content on hover */
 const HoverText: React.FC<{
@@ -60,75 +58,58 @@ const HoverText: React.FC<{
   </Tooltip>
 );
 
-/** Modal for viewing full chat Q&A with rendered markdown */
-const ChatDetailModal: React.FC<{
-  item: HelpAnalyticsChatFeedback | null;
-  open: boolean;
-  onClose: () => void;
-}> = ({ item, open, onClose }) => {
+const NoValue = () => (
+  <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+    -
+  </Typography>
+);
+
+const RatingChip: React.FC<{ rating: HelpAnalyticsChatFeedback['rating'] }> = ({ rating }) => (
+  <StatusChip tone={rating === 'helpful' ? 'good' : 'bad'} label={rating === 'helpful' ? 'Good' : 'Bad'} />
+);
+
+const formatDay = (value: string) => new Date(value).toLocaleDateString();
+
+/** Full chat Q&A with the answer rendered as markdown; the dialog scrolls as a whole. */
+const ChatDetailDialog: React.FC<{ item: HelpAnalyticsChatFeedback | null; onClose: () => void }> = ({
+  item,
+  onClose,
+}) => {
   if (!item) return null;
   return (
-    <Modal open={open} onClose={onClose}>
-      <ModalDialog sx={{ maxWidth: 700, height: '80vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <ModalClose />
-        <DialogTitle sx={{ flexShrink: 0 }}>Chat Feedback Detail</DialogTitle>
-
-        {/* Scrollable Q&A body - question gets a capped region, answer gets the rest */}
-        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', gap: 1.5, py: 1 }}>
-          {/* Question - scrolls independently, capped at ~4 lines */}
-          <Box sx={{ flexShrink: 0 }}>
-            <Typography level="title-sm" sx={{ mb: 0.5 }}>
-              Question
-            </Typography>
-            <Sheet variant="soft" sx={{ p: 1.5, borderRadius: 'sm', maxHeight: '6em', overflow: 'auto' }}>
-              <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap' }}>
-                {item.chatQuestion}
-              </Typography>
-            </Sheet>
-          </Box>
-
-          {/* Answer - takes remaining space, scrolls independently */}
-          <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            <Typography level="title-sm" sx={{ mb: 0.5, flexShrink: 0 }}>
-              Answer
-            </Typography>
-            <Sheet variant="soft" sx={{ p: 1.5, borderRadius: 'sm', flex: 1, overflow: 'auto', minHeight: 0 }}>
-              <MarkdownViewer content={item.chatAnswer} />
-            </Sheet>
-          </Box>
-        </Box>
-
-        {/* Fixed footer - rating, comment, date */}
-        <Divider sx={{ flexShrink: 0 }} />
-        <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap', flexShrink: 0, pt: 1 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-              Rating:
-            </Typography>
-            <Chip
-              size="sm"
-              color={item.rating === 'helpful' ? 'success' : 'danger'}
-              variant={item.rating === 'helpful' ? 'soft' : 'outlined'}
-            >
-              {item.rating === 'helpful' ? 'Good' : 'Bad'}
-            </Chip>
-          </Box>
-          {item.comment && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flex: 1, minWidth: 0 }}>
-              <Typography level="body-xs" sx={{ color: 'text.secondary', flexShrink: 0 }}>
-                Comment:
-              </Typography>
-              <Typography level="body-xs" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {item.comment}
-              </Typography>
-            </Box>
-          )}
-          <Typography level="body-xs" sx={{ color: 'text.tertiary', flexShrink: 0 }}>
-            {new Date(item.createdAt).toLocaleDateString()}
+    <AdminDialog title="Chat feedback" width={700} onClose={onClose} data-testid="help-analytics-chat-dialog">
+      <Stack gap={1.5}>
+        <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+          <RatingChip rating={item.rating} />
+          <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+            {formatDay(item.createdAt)}
           </Typography>
+        </Stack>
+        {item.comment && (
+          <Typography level="body-sm" sx={{ color: 'admin.ink' }}>
+            Comment: {item.comment}
+          </Typography>
+        )}
+        <Box>
+          <Typography level="title-sm" sx={{ mb: 0.5 }}>
+            Question
+          </Typography>
+          <Sheet variant="soft" sx={{ p: 1.5, borderRadius: 'sm' }}>
+            <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap' }}>
+              {item.chatQuestion}
+            </Typography>
+          </Sheet>
         </Box>
-      </ModalDialog>
-    </Modal>
+        <Box>
+          <Typography level="title-sm" sx={{ mb: 0.5 }}>
+            Answer
+          </Typography>
+          <Sheet variant="soft" sx={{ p: 1.5, borderRadius: 'sm' }}>
+            <MarkdownViewer content={item.chatAnswer} />
+          </Sheet>
+        </Box>
+      </Stack>
+    </AdminDialog>
   );
 };
 
@@ -141,13 +122,22 @@ function toDateString(d: Date): string {
 }
 
 type DatePreset = 'week' | 'month' | 'year' | 'all';
+type DateRange = DatePreset | 'custom';
 
-const DATE_PRESETS: { key: DatePreset; label: string }[] = [
-  { key: 'week', label: 'Last Week' },
-  { key: 'month', label: 'Last Month' },
-  { key: 'year', label: 'Last Year' },
-  { key: 'all', label: 'All Time' },
+// Four segments at most (DESIGN_GUIDE "Toolkit"), so Custom sits in a Range chip, as on the event
+// metrics filter row. While Custom is active no segment is selected.
+const RANGE_SEGMENTS: readonly SegmentedOption<DateRange>[] = [
+  { value: 'week', label: 'Last week' },
+  { value: 'month', label: 'Last month' },
+  { value: 'year', label: 'Last year' },
+  { value: 'all', label: 'All time' },
 ];
+const RANGE_CHIP_OPTIONS = [{ value: 'custom', label: 'Custom' }] as const;
+
+// Native date inputs accept 5- and 6-digit years, for which the server finds no data; these bounds
+// keep the picker to four-digit years.
+const MIN_DAY = '2000-01-01';
+const MAX_DAY = '9999-12-31';
 
 function getPresetRange(preset: DatePreset): HelpAnalyticsFilters {
   if (preset === 'all') return {};
@@ -159,503 +149,370 @@ function getPresetRange(preset: DatePreset): HelpAnalyticsFilters {
   return { dateFrom: toDateString(from), dateTo: toDateString(now) };
 }
 
+type Indexed<Row> = Row & { rowId: string };
+/** For lists with no unique field: the server's order is the identity. */
+const withRowIds = <Row,>(rows: readonly Row[] | undefined): Indexed<Row>[] =>
+  (rows ?? []).map((row, index) => ({ ...row, rowId: String(index) }));
+
+const POPULAR_COLUMNS: DataColumn<HelpAnalyticsTopArticle>[] = [
+  {
+    id: 'article',
+    label: 'Article',
+    render: article => (
+      <Box sx={{ minWidth: 0 }}>
+        <HoverText text={article.title || article.slug} level="body-sm" sx={{ fontWeight: 'md' }} />
+        <HoverText text={article.slug} sx={{ color: 'admin.inkMuted' }} />
+      </Box>
+    ),
+  },
+  { id: 'views', label: 'Views', numeric: true, width: '8rem', render: article => article.viewCount.toLocaleString() },
+];
+
+const SEARCH_GAP_COLUMNS: DataColumn<HelpAnalyticsSearchGap>[] = [
+  { id: 'query', label: 'Search query', render: gap => <HoverText text={gap.query} level="body-sm" /> },
+  { id: 'count', label: 'Count', numeric: true, width: '6rem', render: gap => gap.count.toLocaleString() },
+  { id: 'last', label: 'Last searched', width: '9rem', render: gap => formatDay(gap.lastSearched) },
+];
+
+const FEEDBACK_COLUMNS: DataColumn<HelpAnalyticsFeedbackSummary>[] = [
+  { id: 'article', label: 'Article', render: item => <HoverText text={item.slug} level="body-sm" /> },
+  { id: 'helpful', label: 'Helpful', numeric: true, width: '7rem', render: item => item.helpful.toLocaleString() },
+  {
+    id: 'not-helpful',
+    label: 'Not helpful',
+    numeric: true,
+    width: '7rem',
+    render: item => item.notHelpful.toLocaleString(),
+  },
+  { id: 'outdated', label: 'Outdated', numeric: true, width: '7rem', render: item => item.outdated.toLocaleString() },
+  { id: 'total', label: 'Total', numeric: true, width: '6rem', render: item => item.totalFeedback.toLocaleString() },
+];
+
+const reportLabel = (reportType: string) => reportType.charAt(0).toUpperCase() + reportType.slice(1);
+
+const COMMENT_COLUMNS: DataColumn<Indexed<HelpAnalyticsRecentFeedback>>[] = [
+  { id: 'article', label: 'Article', render: item => <HoverText text={item.slug} level="body-sm" /> },
+  {
+    id: 'rating',
+    label: 'Rating',
+    width: '6rem',
+    render: item => (item.rating ? <RatingChip rating={item.rating} /> : <NoValue />),
+  },
+  {
+    id: 'report',
+    label: 'Report',
+    width: '7rem',
+    render: item => (item.reportType ? <StatusChip tone="warn" label={reportLabel(item.reportType)} /> : <NoValue />),
+  },
+  { id: 'comment', label: 'Comment', render: item => (item.comment ? <HoverText text={item.comment} /> : <NoValue />) },
+  { id: 'date', label: 'Date', width: '8rem', render: item => formatDay(item.createdAt) },
+];
+
+const QUESTION_COLUMNS: DataColumn<Indexed<HelpAnalyticsChatTopic>>[] = [
+  { id: 'question', label: 'Question', render: topic => <HoverText text={topic.question} level="body-sm" /> },
+  { id: 'count', label: 'Count', numeric: true, width: '6rem', render: topic => topic.count.toLocaleString() },
+  { id: 'last', label: 'Last asked', width: '9rem', render: topic => formatDay(topic.lastAsked) },
+];
+
+const chatFeedbackColumns = (
+  onView: (item: HelpAnalyticsChatFeedback) => void
+): DataColumn<Indexed<HelpAnalyticsChatFeedback>>[] => [
+  { id: 'question', label: 'Question', render: item => <HoverText text={item.chatQuestion} maxWidth={200} /> },
+  {
+    id: 'answer',
+    label: 'Answer',
+    width: '6rem',
+    render: item => (
+      <Link component="button" level="body-xs" onClick={() => onView(item)} data-testid="chat-feedback-view-btn">
+        View
+      </Link>
+    ),
+  },
+  { id: 'rating', label: 'Rating', width: '6rem', render: item => <RatingChip rating={item.rating} /> },
+  { id: 'comment', label: 'Comment', render: item => (item.comment ? <HoverText text={item.comment} /> : <NoValue />) },
+  { id: 'date', label: 'Date', width: '8rem', render: item => formatDay(item.createdAt) },
+];
+
+const TAB_PANEL_SX = { p: 0, pt: 2 };
+
+const PanelDescription: React.FC<{ children: ReactNode }> = ({ children }) => (
+  <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+    {children}
+  </Typography>
+);
+
+const orderRange = ({ dateFrom, dateTo }: HelpAnalyticsFilters): HelpAnalyticsFilters =>
+  dateFrom && dateTo && dateFrom > dateTo ? { dateFrom: dateTo, dateTo: dateFrom } : { dateFrom, dateTo };
+
 const HelpAnalyticsTab: React.FC = () => {
-  // Default to last 7 days
-  const [activePreset, setActivePreset] = useState<DatePreset | null>('week');
-  const [filters, setFilters] = useState<HelpAnalyticsFilters>(() => getPresetRange('week'));
-  const { data, isLoading } = useHelpAnalyticsData(filters);
+  const [range, setRange] = useState<DateRange>('week');
+  const {
+    value: filters,
+    debouncedValue: appliedFilters,
+    setValue: setFilters,
+    setValueImmediately: applyFilters,
+  } = useDebounceValue<HelpAnalyticsFilters>(getPresetRange('week'), SEARCH_TERM_URL_DEBOUNCE_MS);
+  const orderedFilters = useMemo(() => orderRange(appliedFilters), [appliedFilters]);
+  const { data, isLoading, isError, isFetching, refetch } = useHelpAnalyticsData(orderedFilters);
   const [chatDetailItem, setChatDetailItem] = useState<HelpAnalyticsChatFeedback | null>(null);
   const [activeTab, setActiveTab] = useState(0);
 
+  const pickRange = (next: DateRange) => {
+    setRange(next);
+    if (next !== 'custom') applyFilters(getPresetRange(next));
+  };
+  const refresh = () => void refetch();
+  const errorState = isError && (
+    <ErrorState message="Help analytics failed to load." onRetry={refresh} retrying={isFetching} />
+  );
+
+  const emptyState = (title: string) =>
+    range === 'all' ? (
+      <EmptyState
+        title={title}
+        action={
+          <Button variant="outlined" onClick={refresh} data-testid="help-analytics-empty-refresh-btn">
+            Refresh
+          </Button>
+        }
+      />
+    ) : (
+      <EmptyState
+        title={title}
+        description="Nothing was recorded in this date range."
+        action={
+          <Button variant="outlined" onClick={() => pickRange('all')} data-testid="help-analytics-clear-range-btn">
+            Clear date range
+          </Button>
+        }
+      />
+    );
+
   const overview = data?.overview;
 
+  // LoadingState only on a first load: a range change keeps the previous numbers (placeholder data)
+  // and refetches under the UpdatingBar.
+  let body: ReactNode;
+  if (isLoading) body = <LoadingState label="Loading help analytics" />;
+  else if (isError && !data) body = errorState;
+  else
+    body = (
+      <>
+        <UpdatingBar active={isFetching} testId="help-analytics-updating" />
+        {errorState}
+        {overview && (
+          <StatStrip aria-label="Help usage totals">
+            <StatTile label="Total views" value={overview.totalViews} />
+            <StatTile label="Unique articles" value={overview.uniqueArticlesViewed} />
+            <StatTile label="Total searches" value={overview.totalSearches} />
+            <StatTile label="Article feedback" value={overview.totalFeedback} />
+            <StatTile label="Chat queries" value={overview.totalChatQueries} />
+            <StatTile label="Chat feedback" value={overview.totalChatFeedback} />
+          </StatStrip>
+        )}
+
+        <Tabs value={activeTab} onChange={(_event, value) => setActiveTab(value as number)}>
+          <TabList sx={adminTabStrip}>
+            <Tab data-testid="help-analytics-tab-popular">Popular articles</Tab>
+            <Tab data-testid="help-analytics-tab-search-gaps">Search gaps</Tab>
+            <Tab data-testid="help-analytics-tab-article-feedback">Article feedback</Tab>
+            <Tab data-testid="help-analytics-tab-article-comments">Article comments</Tab>
+            <Tab data-testid="help-analytics-tab-recent-questions">Recent questions</Tab>
+            <Tab data-testid="help-analytics-tab-chat-feedback">Chat feedback</Tab>
+          </TabList>
+
+          <TabPanel value={0} sx={TAB_PANEL_SX}>
+            <Stack gap={1}>
+              <PanelDescription>Most viewed help articles, ranked by views</PanelDescription>
+              <DataTable
+                rows={data?.topArticles ?? []}
+                columns={POPULAR_COLUMNS}
+                getRowId={article => article.slug}
+                label="Popular articles"
+                onRetry={refresh}
+                pagination={false}
+                empty={emptyState('No article views')}
+                testId="help-analytics-popular-table"
+              />
+            </Stack>
+          </TabPanel>
+
+          <TabPanel value={1} sx={TAB_PANEL_SX}>
+            <Stack gap={1}>
+              <PanelDescription>Searches that returned no results, which point to documentation gaps</PanelDescription>
+              <DataTable
+                rows={data?.searchGaps ?? []}
+                columns={SEARCH_GAP_COLUMNS}
+                getRowId={gap => gap.query}
+                label="Search gaps"
+                onRetry={refresh}
+                pagination={false}
+                empty={emptyState('No searches without results')}
+                testId="help-analytics-search-gaps-table"
+              />
+            </Stack>
+          </TabPanel>
+
+          <TabPanel value={2} sx={TAB_PANEL_SX}>
+            <Stack gap={1}>
+              <PanelDescription>
+                Ratings per article; start with articles that have many Not helpful or Outdated votes
+              </PanelDescription>
+              <DataTable
+                rows={data?.feedbackSummary ?? []}
+                columns={FEEDBACK_COLUMNS}
+                getRowId={item => item.slug}
+                label="Article feedback"
+                onRetry={refresh}
+                pagination={false}
+                empty={emptyState('No article feedback')}
+                testId="help-analytics-article-feedback-table"
+              />
+            </Stack>
+          </TabPanel>
+
+          <TabPanel value={3} sx={TAB_PANEL_SX}>
+            <Stack gap={1}>
+              <PanelDescription>Recent individual feedback with comments and outdated reports</PanelDescription>
+              <DataTable
+                rows={withRowIds(data?.recentFeedback)}
+                columns={COMMENT_COLUMNS}
+                getRowId={item => item.rowId}
+                label="Article comments"
+                onRetry={refresh}
+                pagination={false}
+                empty={emptyState('No article comments')}
+                testId="help-analytics-article-comments-table"
+              />
+            </Stack>
+          </TabPanel>
+
+          <TabPanel value={4} sx={TAB_PANEL_SX}>
+            <Stack gap={1}>
+              <PanelDescription>
+                Most common help chat questions; frequent topics may need their own article
+              </PanelDescription>
+              <DataTable
+                rows={withRowIds(data?.chatTopics)}
+                columns={QUESTION_COLUMNS}
+                getRowId={topic => topic.rowId}
+                label="Recent questions"
+                onRetry={refresh}
+                pagination={false}
+                empty={emptyState('No chat questions')}
+                testId="help-analytics-recent-questions-table"
+              />
+            </Stack>
+          </TabPanel>
+
+          <TabPanel value={5} sx={TAB_PANEL_SX}>
+            <Stack gap={1}>
+              <PanelDescription>
+                Feedback on help chat answers, to improve the system prompt and retrieval
+              </PanelDescription>
+              <DataTable
+                rows={withRowIds(data?.chatFeedback)}
+                columns={chatFeedbackColumns(setChatDetailItem)}
+                getRowId={item => item.rowId}
+                label="Chat feedback"
+                onRetry={refresh}
+                pagination={false}
+                empty={emptyState('No chat feedback')}
+                testId="help-analytics-chat-feedback-table"
+              />
+            </Stack>
+          </TabPanel>
+        </Tabs>
+      </>
+    );
+
   return (
-    <Box sx={{ p: 3 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-        <Typography level="h3">Help Center Analytics</Typography>
-        <ContextHelpButton helpId="admin/help-analytics" tooltipText="Help Analytics Help" />
-      </Box>
-
-      {/* Date filters */}
-      <Box
-        sx={{
-          display: 'flex',
-          flexDirection: { xs: 'column', sm: 'row' },
-          alignItems: { xs: 'stretch', sm: 'center' },
-          gap: { xs: 1, sm: 2 },
-          mb: 3,
-          flexWrap: 'wrap',
-        }}
-      >
-        <Typography level="body-sm" sx={{ color: 'text.secondary', fontWeight: 'md' }}>
-          Date range:
-        </Typography>
-        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-          {DATE_PRESETS.map(({ key, label }) => (
+    <Stack gap={ADMIN_REGION_GAP}>
+      <AdminPageHeader
+        title="Help analytics"
+        description="Help article views, searches and feedback, and questions asked in the help chat."
+        actions={
+          <>
             <Button
-              key={key}
               size="sm"
-              variant={activePreset === key ? 'solid' : 'outlined'}
-              color={activePreset === key ? 'primary' : 'neutral'}
-              onClick={() => {
-                setActivePreset(key);
-                setFilters(getPresetRange(key));
-              }}
-              data-testid={`help-analytics-preset-${key}`}
+              variant="outlined"
+              color="neutral"
+              startDecorator={<RefreshIcon />}
+              loading={isFetching}
+              onClick={refresh}
+              data-testid="help-analytics-refresh-btn"
             >
-              {label}
+              Refresh
             </Button>
-          ))}
-        </Box>
-        <Input
-          type="date"
-          size="sm"
-          startDecorator={<Typography level="body-xs">From</Typography>}
-          value={filters.dateFrom || ''}
-          onChange={e => {
-            setActivePreset(null);
-            setFilters(f => ({ ...f, dateFrom: e.target.value || undefined }));
-          }}
-          data-testid="help-analytics-date-from"
-          sx={{ width: { xs: '100%', sm: 'auto' } }}
+            <ContextHelpButton helpId="admin/help-analytics" tooltipText="Help analytics help" />
+          </>
+        }
+      />
+
+      <Stack
+        direction="row"
+        flexWrap="wrap"
+        alignItems="center"
+        gap={1}
+        sx={adminFocusScope}
+        data-testid="help-analytics-filter-row"
+      >
+        <SegmentedControl
+          options={RANGE_SEGMENTS}
+          value={range}
+          onChange={pickRange}
+          aria-label="Date range"
+          data-testid="help-analytics-range"
         />
-        <Input
-          type="date"
-          size="sm"
-          startDecorator={<Typography level="body-xs">To</Typography>}
-          value={filters.dateTo || ''}
-          onChange={e => {
-            setActivePreset(null);
-            setFilters(f => ({ ...f, dateTo: e.target.value || undefined }));
-          }}
-          data-testid="help-analytics-date-to"
-          sx={{ width: { xs: '100%', sm: 'auto' } }}
+        <FilterChip
+          id="help-range"
+          label="Range"
+          value={range === 'custom' ? 'custom' : undefined}
+          options={RANGE_CHIP_OPTIONS}
+          onChange={value => pickRange(value === 'custom' ? 'custom' : 'all')}
         />
-      </Box>
+        {range === 'custom' && (
+          <>
+            <Input
+              size="sm"
+              type="date"
+              value={filters.dateFrom ?? ''}
+              onChange={event => setFilters({ ...filters, dateFrom: event.target.value || undefined })}
+              slotProps={{
+                input: {
+                  'aria-label': 'From',
+                  min: MIN_DAY,
+                  max: filters.dateTo || MAX_DAY,
+                  'data-testid': 'help-analytics-date-from',
+                },
+              }}
+            />
+            <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+              to
+            </Typography>
+            <Input
+              size="sm"
+              type="date"
+              value={filters.dateTo ?? ''}
+              onChange={event => setFilters({ ...filters, dateTo: event.target.value || undefined })}
+              slotProps={{
+                input: {
+                  'aria-label': 'To',
+                  min: filters.dateFrom || MIN_DAY,
+                  max: MAX_DAY,
+                  'data-testid': 'help-analytics-date-to',
+                },
+              }}
+            />
+          </>
+        )}
+      </Stack>
 
-      {isLoading && <LinearProgress sx={{ mb: 2 }} />}
+      {body}
 
-      {/* Overview stat cards - click to jump to the corresponding tab */}
-      {overview && (
-        <Box sx={{ display: 'flex', gap: 2, mb: 3, flexWrap: 'wrap' }}>
-          <StatCard
-            icon={<VisibilityIcon />}
-            label="Total Views"
-            value={overview.totalViews}
-            onClick={() => setActiveTab(0)}
-            active={activeTab === 0}
-          />
-          <StatCard
-            icon={<ArticleIcon />}
-            label="Unique Articles"
-            value={overview.uniqueArticlesViewed}
-            onClick={() => setActiveTab(0)}
-            active={activeTab === 0}
-          />
-          <StatCard
-            icon={<SearchIcon />}
-            label="Total Searches"
-            value={overview.totalSearches}
-            onClick={() => setActiveTab(1)}
-            active={activeTab === 1}
-          />
-          <StatCard
-            icon={<ThumbsUpDownIcon />}
-            label="Article Feedback"
-            value={overview.totalFeedback}
-            onClick={() => setActiveTab(2)}
-            active={activeTab === 2}
-          />
-          <StatCard
-            icon={<ChatIcon />}
-            label="Chat Queries"
-            value={overview.totalChatQueries}
-            onClick={() => setActiveTab(4)}
-            active={activeTab === 4}
-          />
-          <StatCard
-            icon={<SmartToyIcon />}
-            label="Chat Feedback"
-            value={overview.totalChatFeedback}
-            onClick={() => setActiveTab(5)}
-            active={activeTab === 5}
-          />
-        </Box>
-      )}
-
-      {/* Sub-tabs */}
-      <Tabs value={activeTab} onChange={(_e, val) => setActiveTab(val as number)}>
-        <TabList sx={{ overflowX: { xs: 'auto', sm: 'unset' }, flexWrap: { xs: 'nowrap', sm: 'wrap' } }}>
-          <Tab data-testid="help-analytics-tab-popular" sx={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
-            Popular Articles
-          </Tab>
-          <Tab data-testid="help-analytics-tab-search-gaps" sx={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
-            Search Gaps
-          </Tab>
-          <Tab data-testid="help-analytics-tab-article-feedback" sx={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
-            Article Feedback
-          </Tab>
-          <Tab data-testid="help-analytics-tab-article-comments" sx={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
-            Article Comments
-          </Tab>
-          <Tab data-testid="help-analytics-tab-recent-questions" sx={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
-            Recent Questions
-          </Tab>
-          <Tab data-testid="help-analytics-tab-chat-feedback" sx={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
-            Chat Feedback
-          </Tab>
-        </TabList>
-
-        {/* Popular Articles */}
-        <TabPanel value={0}>
-          <Typography level="body-sm" sx={{ mb: 1, color: 'text.secondary' }}>
-            Most-viewed help articles ranked by total views
-          </Typography>
-          <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'auto' }}>
-            <Table stripe="odd" size="sm" sx={{ minWidth: { xs: '480px', sm: 'auto' } }}>
-              <thead>
-                <tr>
-                  <th>Article</th>
-                  <th style={{ width: 100 }}>Views</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data?.topArticles?.length ? (
-                  data.topArticles.map(article => (
-                    <tr key={article.slug}>
-                      <td>
-                        <HoverText text={article.title || article.slug} level="body-sm" sx={{ fontWeight: 'md' }} />
-                        <HoverText text={article.slug} sx={{ color: 'text.tertiary' }} />
-                      </td>
-                      <td>
-                        <Typography level="body-sm">{article.viewCount}</Typography>
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={2}>
-                      <Typography level="body-sm" sx={{ color: 'text.tertiary', textAlign: 'center', py: 2 }}>
-                        No article views yet
-                      </Typography>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </Table>
-          </Sheet>
-        </TabPanel>
-
-        {/* Search Gaps */}
-        <TabPanel value={1}>
-          <Typography level="body-sm" sx={{ mb: 1, color: 'text.secondary' }}>
-            Searches that returned 0 results — identifies documentation gaps
-          </Typography>
-          <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'auto' }}>
-            <Table stripe="odd" size="sm" sx={{ minWidth: { xs: '560px', sm: 'auto' } }}>
-              <thead>
-                <tr>
-                  <th>Search Query</th>
-                  <th style={{ width: 80 }}>Count</th>
-                  <th style={{ width: 140 }}>Last Searched</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data?.searchGaps?.length ? (
-                  data.searchGaps.map(gap => (
-                    <tr key={gap.query}>
-                      <td>
-                        <HoverText text={gap.query} level="body-sm" />
-                      </td>
-                      <td>
-                        <Typography level="body-sm">{gap.count}</Typography>
-                      </td>
-                      <td>
-                        <Typography level="body-xs">{new Date(gap.lastSearched).toLocaleDateString()}</Typography>
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={3}>
-                      <Typography level="body-sm" sx={{ color: 'text.tertiary', textAlign: 'center', py: 2 }}>
-                        No search gaps found
-                      </Typography>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </Table>
-          </Sheet>
-        </TabPanel>
-
-        {/* Article Feedback */}
-        <TabPanel value={2}>
-          <Typography level="body-sm" sx={{ mb: 1, color: 'text.secondary' }}>
-            Per-article rating breakdown &mdash; prioritize articles with high &ldquo;Not Helpful&rdquo; or
-            &ldquo;Outdated&rdquo; counts
-          </Typography>
-          <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'auto' }}>
-            <Table stripe="odd" size="sm" sx={{ minWidth: { xs: '700px', sm: 'auto' } }}>
-              <thead>
-                <tr>
-                  <th>Article</th>
-                  <th style={{ width: 80 }}>Helpful</th>
-                  <th style={{ width: 100 }}>Not Helpful</th>
-                  <th style={{ width: 80 }}>Outdated</th>
-                  <th style={{ width: 80 }}>Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data?.feedbackSummary?.length ? (
-                  data.feedbackSummary.map(item => (
-                    <tr key={item.slug}>
-                      <td>
-                        <HoverText text={item.slug} level="body-sm" />
-                      </td>
-                      <td>
-                        <Chip size="sm" color="success" variant="soft">
-                          {item.helpful}
-                        </Chip>
-                      </td>
-                      <td>
-                        <Chip size="sm" color="danger" variant="outlined">
-                          {item.notHelpful}
-                        </Chip>
-                      </td>
-                      <td>
-                        <Chip size="sm" color="warning" variant="soft">
-                          {item.outdated}
-                        </Chip>
-                      </td>
-                      <td>
-                        <Typography level="body-sm">{item.totalFeedback}</Typography>
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={5}>
-                      <Typography level="body-sm" sx={{ color: 'text.tertiary', textAlign: 'center', py: 2 }}>
-                        No article feedback yet
-                      </Typography>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </Table>
-          </Sheet>
-        </TabPanel>
-
-        {/* Article Comments */}
-        <TabPanel value={3}>
-          <Typography level="body-sm" sx={{ mb: 1, color: 'text.secondary' }}>
-            Recent individual feedback entries with comments and outdated reports
-          </Typography>
-          <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'auto' }}>
-            <Table stripe="odd" size="sm" sx={{ minWidth: { xs: '720px', sm: 'auto' } }}>
-              <thead>
-                <tr>
-                  <th>Article</th>
-                  <th style={{ width: 80 }}>Rating</th>
-                  <th style={{ width: 80 }}>Report</th>
-                  <th>Comment</th>
-                  <th style={{ width: 120 }}>Date</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data?.recentFeedback?.length ? (
-                  data.recentFeedback.map(item => (
-                    <tr key={`${item.slug}-${item.createdAt}`}>
-                      <td>
-                        <HoverText text={item.slug} level="body-sm" />
-                      </td>
-                      <td>
-                        {item.rating && (
-                          <Chip size="sm" color={item.rating === 'helpful' ? 'success' : 'danger'} variant="soft">
-                            {item.rating === 'helpful' ? 'Good' : 'Bad'}
-                          </Chip>
-                        )}
-                      </td>
-                      <td>
-                        {item.reportType && (
-                          <Chip size="sm" color="warning" variant="soft">
-                            {item.reportType}
-                          </Chip>
-                        )}
-                      </td>
-                      <td>
-                        {item.comment ? <HoverText text={item.comment} /> : <Typography level="body-xs">-</Typography>}
-                      </td>
-                      <td>
-                        <Typography level="body-xs">{new Date(item.createdAt).toLocaleDateString()}</Typography>
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={5}>
-                      <Typography level="body-sm" sx={{ color: 'text.tertiary', textAlign: 'center', py: 2 }}>
-                        No article comments yet
-                      </Typography>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </Table>
-          </Sheet>
-        </TabPanel>
-
-        {/* Recent Questions */}
-        <TabPanel value={4}>
-          <Typography level="body-sm" sx={{ mb: 1, color: 'text.secondary' }}>
-            Most common AI chat questions — frequent topics may need dedicated help articles
-          </Typography>
-          <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'auto' }}>
-            <Table stripe="odd" size="sm" sx={{ minWidth: { xs: '560px', sm: 'auto' } }}>
-              <thead>
-                <tr>
-                  <th>Question</th>
-                  <th style={{ width: 80 }}>Count</th>
-                  <th style={{ width: 140 }}>Last Asked</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data?.chatTopics?.length ? (
-                  data.chatTopics.map((topic, idx) => (
-                    <tr key={`${topic.question}-${idx}`}>
-                      <td>
-                        <HoverText text={topic.question} level="body-sm" />
-                      </td>
-                      <td>
-                        <Typography level="body-sm">{topic.count}</Typography>
-                      </td>
-                      <td>
-                        <Typography level="body-xs">{new Date(topic.lastAsked).toLocaleDateString()}</Typography>
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={3}>
-                      <Typography level="body-sm" sx={{ color: 'text.tertiary', textAlign: 'center', py: 2 }}>
-                        No chat queries yet
-                      </Typography>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </Table>
-          </Sheet>
-        </TabPanel>
-
-        {/* Chat Feedback */}
-        <TabPanel value={5}>
-          <Typography level="body-sm" sx={{ mb: 1, color: 'text.secondary' }}>
-            User feedback on AI chat responses — helps improve the system prompt and RAG lookups
-          </Typography>
-          <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'auto' }}>
-            <Table stripe="odd" size="sm" sx={{ minWidth: { xs: '720px', sm: 'auto' } }}>
-              <thead>
-                <tr>
-                  <th>Question</th>
-                  <th style={{ width: 80 }}>Answer</th>
-                  <th style={{ width: 80 }}>Rating</th>
-                  <th>Comment</th>
-                  <th style={{ width: 120 }}>Date</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data?.chatFeedback?.length ? (
-                  data.chatFeedback.map(item => (
-                    <tr key={`${item.chatQuestion}-${item.createdAt}`}>
-                      <td>
-                        <HoverText text={item.chatQuestion} maxWidth={200} />
-                      </td>
-                      <td>
-                        <Link
-                          component="button"
-                          level="body-xs"
-                          onClick={() => setChatDetailItem(item)}
-                          data-testid="chat-feedback-view-btn"
-                        >
-                          View
-                        </Link>
-                      </td>
-                      <td>
-                        <Chip
-                          size="sm"
-                          color={item.rating === 'helpful' ? 'success' : 'danger'}
-                          variant={item.rating === 'helpful' ? 'soft' : 'outlined'}
-                        >
-                          {item.rating === 'helpful' ? 'Good' : 'Bad'}
-                        </Chip>
-                      </td>
-                      <td>
-                        {item.comment ? <HoverText text={item.comment} /> : <Typography level="body-xs">-</Typography>}
-                      </td>
-                      <td>
-                        <Typography level="body-xs">{new Date(item.createdAt).toLocaleDateString()}</Typography>
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={5}>
-                      <Typography level="body-sm" sx={{ color: 'text.tertiary', textAlign: 'center', py: 2 }}>
-                        No chat feedback yet
-                      </Typography>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </Table>
-          </Sheet>
-        </TabPanel>
-      </Tabs>
-
-      <ChatDetailModal item={chatDetailItem} open={chatDetailItem !== null} onClose={() => setChatDetailItem(null)} />
-    </Box>
+      <ChatDetailDialog item={chatDetailItem} onClose={() => setChatDetailItem(null)} />
+    </Stack>
   );
 };
-
-/** Stat card, optionally clickable to jump to a tab */
-const StatCard: React.FC<{
-  icon: React.ReactNode;
-  label: string;
-  value: number;
-  onClick?: () => void;
-  active?: boolean;
-}> = ({ icon, label, value, onClick, active }) => (
-  <Card
-    variant="outlined"
-    sx={{
-      minWidth: 140,
-      flex: '1 1 140px',
-      cursor: onClick ? 'pointer' : 'default',
-      transition: 'border-color 0.15s, box-shadow 0.15s',
-      ...(active && {
-        borderColor: 'primary.400',
-        boxShadow: 'sm',
-      }),
-      '&:hover': onClick
-        ? {
-            borderColor: 'primary.300',
-            boxShadow: 'sm',
-          }
-        : {},
-    }}
-    onClick={onClick}
-    data-testid={`help-analytics-stat-${label.toLowerCase().replace(/\s+/g, '-')}`}
-  >
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-      <Box sx={{ color: 'primary.500', display: 'flex' }}>{icon}</Box>
-      <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-        {label}
-      </Typography>
-    </Box>
-    <Typography level="h3">{value.toLocaleString()}</Typography>
-  </Card>
-);
 
 export default HelpAnalyticsTab;

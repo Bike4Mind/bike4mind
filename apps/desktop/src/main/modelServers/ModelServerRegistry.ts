@@ -16,19 +16,23 @@ import {
   createServerFetch,
   createSshFetch,
   describeFailure,
+  discoverSshServers,
   DROP_CODES,
   errorCode,
   leastTrusted,
   parseServerAddress,
+  parseSshPort,
   probeServer,
   redactServerResponse,
   scopeOfIp,
   parseSshDestination,
   ServerRedirectError,
   ServerTransportError,
-  SSH_OLLAMA_URL,
+  SSH_DEFAULT_PORT,
   SSH_PROBE_TIMEOUT_MS,
   sshDestinationProblem,
+  SSH_PORT_PROBLEM,
+  sshServerUrl,
   suggestServerName,
   suggestSshName,
   transportVerdict,
@@ -36,8 +40,10 @@ import {
   type ParsedAddress,
   type ServerEndpoint,
   type SshEndpoint,
+  type SshFoundServer,
 } from '@bike4mind/local-models/servers';
 import { localBackend, localModelId, type ChatModelOption } from '@shared/chat';
+import { own } from '@shared/ownKeys';
 import {
   launchLockedMessage,
   launchSettingsProblem,
@@ -47,12 +53,15 @@ import {
   serverIdOfRuntime,
   serverManagement,
   sizesWithSavedLaunch,
+  OLLAMA_NOT_RUNNING,
   serverRuntimeId,
   WINDOWS_ORPHAN_HINT,
   type FlashAttention,
   type LaunchOwner,
   type LaunchRuntime,
   type ModelServerAddInput,
+  type ModelServerCredentialInput,
+  type ModelServerFound,
   type ModelServerHealth,
   type ModelServerLaunchSettings,
   type ModelServerLaunchView,
@@ -72,7 +81,14 @@ import { ServerCredentialsError, ServerForbiddenError, ServerUnreachableError } 
 import { LocalServerSupervisor, type Launchers } from './LocalServerSupervisor';
 import { withLocalNetworkHint } from './localNetworkHint';
 import { loopbackLaunchPort, loopbackPortFree, loopbackPortListening } from './loopbackPort';
-import { credentialHeaders, type ModelServerRecord, type ModelServerStore } from './ModelServerStore';
+import {
+  credentialHeaders,
+  MAX_NAME_CHARS,
+  normalizeServerName,
+  type ModelServerRecord,
+  type ModelServerStore,
+  type UnusableServerRecord,
+} from './ModelServerStore';
 import { observedFlashAttention, observedKvCacheType, observedLaunchVars, observedPrefill } from './observedOllama';
 import { OpenAICompatibleChat } from './OpenAICompatibleChat';
 
@@ -82,6 +98,12 @@ const LOCAL_TIMEOUT_MS = 1_500;
 export const HEALTH_INTERVAL_MS = 60_000;
 const RECHECK_AFTER_MS = 10_000;
 const OBSERVE_TTL_MS = 5 * 60_000;
+/** How often an Ollama Desktop could start is looked for on this computer, and how long a check waits on it. */
+const PROGRAM_TTL_MS = 30_000;
+const PROGRAM_WAIT_MS = 2_000;
+/** A user check looks again only this long after the last look began, so a click loop cannot rescan the disk per click. */
+const LOOK_AGAIN_MIN_MS = 2_000;
+const MAX_LOOKS_OUTSTANDING = 2;
 /** `dns.lookup` has no timeout of its own and can hang on a slow resolver. */
 const RESOLVE_TIMEOUT_MS = 5_000;
 /** How long a picker load waits on a down server's check before listing its last models. */
@@ -102,7 +124,7 @@ interface ServerClient extends LocalChat {
 
 interface Entry {
   record: ModelServerRecord;
-  /** For an SSH server, the far end's loopback Ollama. */
+  /** For an SSH server, its port on the far end's loopback. */
   parsed: ParsedAddress;
   /** The SSH destination; null for a server reached by address. */
   ssh: string | null;
@@ -164,8 +186,8 @@ export interface ModelServerRegistryDeps {
   platform?: NodeJS.Platform;
   /** Each model's load settings from the Models screen, which every request for it carries. */
   loadSettings?: LoadSettingsReader;
-  /** How Desktop finds and starts the servers it runs; defaults to this computer's own (hostLaunchers). */
-  launchers?: Launchers;
+  /** How Desktop finds and starts the servers it runs: hostLaunchers in the app; tests pass inertLaunchers. */
+  launchers: Launchers;
   /** The launch variables of the Ollama at `url` on this computer; null when they cannot be read, as without this. */
   readOllamaEnv?(url: string): Promise<OllamaEnvironment | null>;
   /** Whether a loopback port is free; defaults to binding for an address probe and connecting for observation. */
@@ -200,6 +222,15 @@ interface LaunchState {
   lastObserved: Record<string, string> | null;
   /** The cache type and flash attention sizing last used, so a change can expire what was sized with the old ones. */
   sizedWith: string;
+  /** Why Desktop has no Ollama program to start: null when it found one, undefined until it has looked. */
+  missingOllama: string | null | undefined;
+  programAt: number;
+  /** Counts looks, so one that settles after a newer one started is dropped. */
+  programLook: number;
+  /** When the look still running started; null when none runs. */
+  lookingSince: number | null;
+  /** Looks not settled yet, given-up ones included. */
+  looksOutstanding: number;
 }
 
 const UNKNOWN_HEALTH: ModelServerHealth = {
@@ -217,6 +248,7 @@ const UNKNOWN_HEALTH: ModelServerHealth = {
  */
 export class ModelServerRegistry {
   private readonly entries = new Map<string, Entry>();
+  private readonly unusable = new Map<string, UnusableServerRecord>();
   private localHealth: ModelServerHealth = { ...UNKNOWN_HEALTH };
   private localSpecs: ModelServerSpecs | null = null;
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -281,7 +313,11 @@ export class ModelServerRegistry {
       specs: this.localSpecs,
       launch: this.launchView(LOCAL_SERVER_ID),
     };
-    return [local, ...[...this.entries.values()].map(entry => this.view(entry))];
+    return [
+      local,
+      ...[...this.entries.values()].map(entry => this.view(entry)),
+      ...[...this.unusable.values()].map(record => this.unusableView(record)),
+    ];
   }
 
   /** Hardware entered in Settings for a server or this computer; null before the list loads. */
@@ -387,9 +423,13 @@ export class ModelServerRegistry {
     return this.supervisor.stopAll();
   }
 
+  runningLocalServerCount(): number {
+    return this.supervisor.runningCount();
+  }
+
   /** Tests an address or SSH destination without saving it. */
   async probe(input: ModelServerProbeInput): Promise<ModelServerProbeResult> {
-    if (input.transport === 'ssh') return this.probeSsh(input.address);
+    if (input.transport === 'ssh') return this.probeSsh(input);
     const parsed = parseServerAddress(input.address);
     if (!parsed) {
       return failed(
@@ -469,33 +509,89 @@ export class ModelServerRegistry {
     };
   }
 
-  /** An SSH server is always Ollama on the far end's loopback, so only the connection is in question. */
-  private async probeSsh(address: string): Promise<ModelServerProbeResult> {
-    const problem = sshDestinationProblem(address);
+  /**
+   * Finds the servers on the far end's loopback: at `input.port`, or on every usual port. A token goes only to a
+   * named port, so discovery never hands one to a server the user did not pick.
+   */
+  private async probeSsh(input: ModelServerProbeInput): Promise<ModelServerProbeResult> {
+    const problem = sshDestinationProblem(input.address);
     if (problem) return failed(problem);
-    const destination = address.trim();
+    const destination = input.address.trim();
     const base = { address: destination, suggestedName: suggestSshName(destination) };
-    const fetch = this.sshFetchFor({ destination, label: destination, app: 'Desktop' });
-    const outcome = await probeServer(fetch, SSH_OLLAMA_URL, destination, this.now, 'ollama', SSH_PROBE_TIMEOUT_MS);
-    if (outcome.kind !== 'ollama') {
-      return failed(outcome.error ?? `${destination} did not answer as Ollama at 127.0.0.1:11434.`, base);
+    const port = sshPortInput(input.port);
+    if (port === null) return failed(SSH_PORT_PROBLEM, base);
+    let headers: Record<string, string> | null;
+    try {
+      headers = sshCredentialHeaders(input.credential);
+    } catch (err) {
+      return failed(err instanceof Error ? err.message : String(err), base);
     }
-    return {
-      ok: true,
+    if (headers && port === undefined) {
+      return failed('Enter the port of the server this token is for, then test again.', base);
+    }
+    const discovery = await discoverSshServers({
+      destination,
+      port,
+      now: this.now,
+      fetchFor: farPort =>
+        this.sshFetchFor({
+          destination,
+          port: farPort,
+          label: destination,
+          app: 'Desktop',
+          credentialHeaders: () => headers,
+        }),
+    });
+    if (discovery.found.length === 0) return failed(discovery.error ?? `${destination} did not answer.`, base);
+    await this.load();
+    // The store refuses a name an unusable server still holds, so never suggest one.
+    const saved = [
+      LOCAL_SERVER_NAME,
+      ...[...this.entries.values()].map(entry => entry.record.name),
+      ...[...this.unusable.values()].map(record => record.name),
+    ];
+    const found = foundServers(destination, discovery.found, saved);
+    const settled = { unencrypted: false, openToAnyone: false };
+    if (found.length > 1) {
+      return {
+        ok: true,
+        ...base,
+        ...settled,
+        found,
+        kind: null,
+        version: null,
+        latencyMs: null,
+        models: null,
+        needsCredentials: found.some(server => server.needsCredentials),
+        error: null,
+      };
+    }
+    const [only] = found;
+    const single = {
       ...base,
-      kind: 'ollama',
-      version: outcome.version,
-      latencyMs: outcome.latencyMs,
-      models: outcome.models,
-      needsCredentials: false,
-      unencrypted: false,
-      openToAnyone: false,
-      error: null,
+      ...settled,
+      suggestedName: only.suggestedName,
+      found,
+      port: only.port,
+      kind: only.kind,
+      version: only.version,
+      latencyMs: only.latencyMs,
+      models: only.models,
     };
+    if (only.needsCredentials) {
+      return failed(
+        headers
+          ? `The server at 127.0.0.1:${only.port} on ${destination} refused this token.`
+          : `The server at 127.0.0.1:${only.port} on ${destination} asks for an API key. Enter it as a token, then test again.`,
+        { ...single, needsCredentials: true }
+      );
+    }
+    return { ok: true, ...single, needsCredentials: false, error: null };
   }
 
   async add(input: ModelServerAddInput): Promise<ModelServerView[]> {
     await this.load();
+    if (input.transport === 'ssh') return this.addSsh(input);
     const probe = await this.probe(input);
     // Nothing answers yet at an address Desktop can start a server on.
     const launching = input.launch === true && probe.launchable === true;
@@ -503,16 +599,40 @@ export class ModelServerRegistry {
     if (probe.openToAnyone && !input.acceptOpen) {
       throw new Error('This server answers anyone on the internet. Confirm that before saving it.');
     }
-    const ssh = input.transport === 'ssh';
+    const record = await this.deps.store.add(
+      { name: input.name, kind: input.kind, transport: { type: 'http', baseUrl: probe.address }, access: input.access },
+      input.credential
+    );
+    return this.added(record);
+  }
+
+  /** Saves the server at `input.port`, 11434 when none is given, once it answers as `input.kind` can use. */
+  private async addSsh(input: ModelServerAddInput): Promise<ModelServerView[]> {
+    const typed = sshPortInput(input.port);
+    if (typed === null) throw new Error(SSH_PORT_PROBLEM);
+    const port = typed ?? SSH_DEFAULT_PORT;
+    if (input.kind === 'ollama' && input.credential.type !== 'none') throw new Error(SSH_OLLAMA_TOKEN);
+    const probe = await this.probe({ ...input, port });
+    if (!probe.ok || !probe.address) throw new Error(probe.error ?? 'The server did not answer.');
+    // Ollama also serves the OpenAI API, so only the other way round cannot work.
+    if (input.kind === 'ollama' && probe.kind !== 'ollama') {
+      throw new Error(
+        `${probe.address} answers at 127.0.0.1:${port} as an OpenAI-compatible server, not Ollama. Choose OpenAI-compatible, then save again.`
+      );
+    }
     const record = await this.deps.store.add(
       {
         name: input.name,
-        kind: ssh ? 'ollama' : input.kind,
-        transport: ssh ? { type: 'ssh', destination: probe.address } : { type: 'http', baseUrl: probe.address },
+        kind: input.kind,
+        transport: { type: 'ssh', destination: probe.address, port },
         access: input.access,
       },
-      ssh ? { type: 'none' } : input.credential
+      input.credential
     );
+    return this.added(record);
+  }
+
+  private async added(record: ModelServerRecord): Promise<ModelServerView[]> {
     const entry = this.build(record);
     this.entries.set(record.id, entry);
     this.deps.edited?.();
@@ -522,6 +642,8 @@ export class ModelServerRegistry {
 
   async update(id: string, input: ModelServerUpdateInput): Promise<ModelServerView[]> {
     await this.load();
+    const unusable = this.unusable.get(id);
+    if (unusable && id !== LOCAL_SERVER_ID) throw new Error(unusableProblem(unusable));
     if (input.launch) this.assertLaunchable(id, input.launch, input.kind);
     if (id === LOCAL_SERVER_ID) {
       if (input.specs === undefined && input.launch === undefined)
@@ -540,11 +662,10 @@ export class ModelServerRegistry {
     if (input.kind && input.kind !== entry.record.kind && (this.supervisor.owned(id) || this.supervisor.busy(id))) {
       throw new Error('Stop the server Desktop started here before changing its kind.');
     }
-    if (entry.ssh && input.kind && input.kind !== 'ollama') {
-      throw new Error('An SSH server reaches Ollama on that machine, so its kind stays Ollama.');
-    }
-    if (entry.ssh && input.credential && input.credential.type !== 'none') {
-      throw new Error('An SSH server signs in with your SSH keys and takes no token or header.');
+    if (entry.ssh) {
+      if (input.credential) sshCredentialHeaders(input.credential);
+      const auth = input.credential?.type ?? entry.record.auth.type;
+      if ((input.kind ?? entry.record.kind) === 'ollama' && auth !== 'none') throw new Error(SSH_OLLAMA_TOKEN);
     }
     if (input.credential) {
       const hasCredentials = !!credentialHeaders(input.credential);
@@ -569,6 +690,7 @@ export class ModelServerRegistry {
     await this.supervisor.stop(id);
     await this.deps.store.remove(id);
     this.launchStates.delete(id);
+    this.unusable.delete(id);
     const entry = this.entries.get(id);
     this.entries.delete(id);
     this.deps.edited?.();
@@ -578,12 +700,21 @@ export class ModelServerRegistry {
     return this.views();
   }
 
-  /** Rechecks one server, or every server and this computer when `id` is omitted. */
-  async check(id?: string): Promise<ModelServerView[]> {
+  /**
+   * Rechecks one server, or every server and this computer when `id` is omitted. `lookAgain`: a user asked, so look for
+   * the Ollama program now rather than waiting out PROGRAM_TTL_MS, unless a look began within LOOK_AGAIN_MIN_MS.
+   */
+  async check(id?: string, options: { lookAgain?: boolean } = {}): Promise<ModelServerView[]> {
     await this.load();
     if (id === undefined) return this.checkAll();
-    if (id === LOCAL_SERVER_ID) await this.checkLocal();
-    else {
+    if (id === LOCAL_SERVER_ID) {
+      const state = this.launchState(id);
+      if (options.lookAgain && Date.now() - state.programAt >= LOOK_AGAIN_MIN_MS) {
+        state.programAt = 0;
+        state.lookingSince = null;
+      }
+      await this.checkLocal();
+    } else {
       const entry = this.entries.get(id);
       if (entry) await this.checkEntry(entry);
     }
@@ -809,6 +940,8 @@ export class ModelServerRegistry {
    * registry's check, and failures update the server's health and name it, as chat's do.
    */
   hubServer(id: string): ModelHubServer | null {
+    const unusable = this.unusable.get(id);
+    if (unusable) return unusableHubServer(unusable);
     const entry = this.entries.get(id);
     if (!entry) return null;
     const { record } = entry;
@@ -816,7 +949,7 @@ export class ModelServerRegistry {
       name: record.name,
       management: serverManagement({ local: false, kind: record.kind, access: record.access }),
       runtime: {
-        baseUrl: entry.ssh ? `ssh://${entry.ssh}` : entry.parsed.baseUrl,
+        baseUrl: sshLabel(record) ?? entry.parsed.baseUrl,
         health: async () => {
           const health = (await this.check(id)).find(server => server.id === id)?.health;
           return health?.state === 'online'
@@ -900,7 +1033,7 @@ export class ModelServerRegistry {
         version: null,
         latencyMs: null,
         checkedAt: new Date().toISOString(),
-        error: 'Ollama is not running on this computer.',
+        error: OLLAMA_NOT_RUNNING,
       };
     }
     await this.observe(LOCAL_SERVER_ID);
@@ -963,19 +1096,28 @@ export class ModelServerRegistry {
     const busy = this.supervisor.busy(id);
     const settingsProblem = launchSettingsProblem(settings, target.runtime);
     const lastObserved = target.runtime === 'ollama' ? (this.launchStates.get(id)?.lastObserved ?? null) : null;
+    // Only "This computer": a saved loopback address may be a tunnel to another machine's Ollama.
+    const missingOllama = id === LOCAL_SERVER_ID && owner === 'none' ? this.launchStates.get(id)?.missingOllama : null;
     return {
       runtime: target.runtime,
       owner,
       busy,
       settings,
       pendingRestart: !!owned && !sameLaunch(owned.settings, settings),
-      canStart: owner === 'none' && target.health.state === 'unreachable' && !settingsProblem,
+      canStart: owner === 'none' && target.health.state === 'unreachable' && !settingsProblem && missingOllama === null,
       problem:
         owner === 'remote'
           ? null
           : owner === 'other' && target.port !== null && this.launchStates.get(id)?.portHeld
             ? portHeldMessage(target.port)
-            : (this.supervisor.problem(id) ?? settingsProblem),
+            : (this.supervisor.problem(id) ?? settingsProblem ?? this.supervisor.warning(id)),
+      ...(missingOllama ? { programMissing: missingOllama } : {}),
+      // At the cap no new look can start, so stop waiting and let the Models screen offer Install.
+      ...(missingOllama === undefined &&
+      (target.health.state === 'unreachable' || target.health.state === 'unknown') &&
+      (this.launchStates.get(id)?.looksOutstanding ?? 0) < MAX_LOOKS_OUTSTANDING
+        ? { programPending: true }
+        : {}),
       observed: owner === 'other' ? (this.launchStates.get(id)?.observed ?? null) : null,
       sizingKvCacheType: this.kvCacheType(id) ?? 'f16',
       sizingFlashAttention: this.flashAttention(id) ?? 'auto',
@@ -1034,7 +1176,46 @@ export class ModelServerRegistry {
       state.observedAt = Date.now();
       state.observedVersion = target.health.version;
     }
+    if (id === LOCAL_SERVER_ID && owner === 'none' && target.health.state === 'unreachable') {
+      await this.findOllama(id, state);
+    }
     this.sizingChanged(id);
+  }
+
+  /**
+   * Looks for the Ollama program Start would run, at most every PROGRAM_TTL_MS and one look at a time; a look stuck
+   * past PROGRAM_TTL_MS is given up on, but never more than MAX_LOOKS_OUTSTANDING run at once. The check emits what a
+   * look finds in time; a slower look emits once when it settles, unless a newer look has started since.
+   */
+  private async findOllama(id: string, state: LaunchState): Promise<void> {
+    const now = Date.now();
+    if (state.looksOutstanding >= MAX_LOOKS_OUTSTANDING) return;
+    if (state.lookingSince !== null && now - state.lookingSince < PROGRAM_TTL_MS) return;
+    if (now - state.programAt < PROGRAM_TTL_MS) return;
+    state.programAt = now;
+    state.lookingSince = now;
+    state.looksOutstanding += 1;
+    const look = ++state.programLook;
+    // A synchronous throw takes the same path as a rejected look, so it never escapes into check().
+    const settled = Promise.resolve()
+      .then(() => this.supervisor.program('ollama', this.launchSettings(id)))
+      .then(
+        found => ('problem' in found ? found.problem : null),
+        (error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          this.deps.logger.warn(`MODEL SERVERS: looking for Ollama failed: ${message}`);
+          return `Desktop could not check for Ollama: ${message}`;
+        }
+      )
+      .then(missing => {
+        state.looksOutstanding -= 1;
+        if (look === state.programLook) state.lookingSince = null;
+        if (look !== state.programLook || state.missingOllama === missing) return false;
+        state.missingOllama = missing;
+        return true;
+      });
+    if ((await within(settled, PROGRAM_WAIT_MS, 'late' as const)) !== 'late') return;
+    void settled.then(changed => changed && this.emit());
   }
 
   private launchState(id: string): LaunchState {
@@ -1047,6 +1228,11 @@ export class ModelServerRegistry {
         observedVersion: null,
         lastObserved: null,
         sizedWith: sizingKey(undefined, undefined),
+        missingOllama: undefined,
+        programAt: 0,
+        programLook: 0,
+        lookingSince: null,
+        looksOutstanding: 0,
       };
       this.launchStates.set(id, state);
     }
@@ -1164,18 +1350,26 @@ export class ModelServerRegistry {
   }
 
   private build(record: ModelServerRecord, previous?: Entry): Entry {
-    const ssh = record.transport.type === 'ssh' ? record.transport.destination : null;
+    const { transport } = record;
+    const ssh = transport.type === 'ssh' ? transport.destination : null;
     const parsed = parseServerAddress(
-      record.transport.type === 'ssh' ? SSH_OLLAMA_URL : record.transport.baseUrl
+      transport.type === 'ssh' ? sshServerUrl(transport.port) : transport.baseUrl
     ) as ParsedAddress;
-    const fetch = ssh
-      ? this.sshFetchFor({ destination: ssh, label: record.name, app: 'Desktop' })
-      : this.fetchFor({
-          origin: parsed.origin,
-          label: record.name,
-          app: 'Desktop',
-          credentialHeaders: () => this.supervisor.headers(record.id) ?? this.deps.store.headers(record),
-        });
+    const fetch =
+      transport.type === 'ssh'
+        ? this.sshFetchFor({
+            destination: transport.destination,
+            port: transport.port,
+            label: record.name,
+            app: 'Desktop',
+            credentialHeaders: () => (record.kind === 'ollama' ? null : this.deps.store.headers(record)),
+          })
+        : this.fetchFor({
+            origin: parsed.origin,
+            label: record.name,
+            app: 'Desktop',
+            credentialHeaders: () => this.supervisor.headers(record.id) ?? this.deps.store.headers(record),
+          });
     const runtimeId = serverRuntimeId(record.id);
     const hasCredentials = () => !!this.deps.store.headers(record);
     const product = previous?.record.kind === record.kind ? previous.product : null;
@@ -1242,6 +1436,7 @@ export class ModelServerRegistry {
       kind: record.kind,
       transport: record.transport.type,
       address: entry.ssh ?? entry.parsed.baseUrl,
+      ...(record.transport.type === 'ssh' ? { port: record.transport.port } : {}),
       access: record.access,
       auth:
         record.auth.type === 'header' ? { type: 'header', headerName: record.auth.name } : { type: record.auth.type },
@@ -1255,14 +1450,37 @@ export class ModelServerRegistry {
     };
   }
 
+  private unusableView(record: UnusableServerRecord): ModelServerView {
+    return {
+      id: record.id,
+      name: record.name,
+      local: false,
+      kind: record.kind,
+      transport: 'ssh',
+      address: record.transport.destination ?? 'unusable address',
+      access: record.access,
+      auth:
+        record.auth.type === 'header' ? { type: 'header', headerName: record.auth.name } : { type: record.auth.type },
+      credentialsPersisted: record.auth.type === 'none' || this.deps.store.credentialPersisted(),
+      credentialsMissing: false,
+      unencrypted: false,
+      health: { ...UNKNOWN_HEALTH, state: 'refused', error: unusableProblem(record) },
+      models: [],
+      specs: null,
+      launch: null,
+      unusable: true,
+    };
+  }
+
   private load(): Promise<void> {
-    this.loaded ??= Promise.all([this.deps.store.list(), this.deps.store.localSpecs()])
-      .then(([records, specs]) => {
+    this.loaded ??= Promise.all([this.deps.store.list(), this.deps.store.localSpecs(), this.deps.store.unusable()])
+      .then(([records, specs, unusable]) => {
         for (const record of records) {
           if (record.transport.type === 'ssh' || parseServerAddress(record.transport.baseUrl)) {
             this.entries.set(record.id, this.build(record));
           }
         }
+        for (const record of unusable) this.unusable.set(record.id, record);
         this.localSpecs = specs;
         if (specs) this.deps.localSpecsChanged?.();
       })
@@ -1323,7 +1541,101 @@ const PRODUCT_NOUNS: Record<OpenAICompatibleProduct, string> = {
   'llama-server': 'llama-server',
   lmstudio: 'LM Studio server',
   vllm: 'vLLM server',
+  'llama-swap': 'llama-swap server',
 };
+
+const PRODUCT_LABELS: Record<OpenAICompatibleProduct, string> = {
+  'llama-server': 'llama-server',
+  lmstudio: 'LM Studio',
+  vllm: 'vLLM',
+  'llama-swap': 'llama-swap',
+};
+
+const SSH_OLLAMA_TOKEN =
+  'Ollama takes no token over SSH: ssh signs in with your keys. Remove the token, or choose OpenAI-compatible if the server asks for one.';
+
+function unusableProblem(record: UnusableServerRecord): string {
+  return `${record.problem} Remove this server and add it again.`;
+}
+
+/** The Models screen's handle on a server that cannot be used: every call says why. */
+function unusableHubServer(record: UnusableServerRecord): ModelHubServer {
+  const refuse = () => Promise.reject(new Error(unusableProblem(record)));
+  return {
+    name: record.name,
+    management: serverManagement({ local: false, kind: record.kind, access: record.access }),
+    runtime: {
+      baseUrl: record.transport.destination ? `ssh://${record.transport.destination}` : 'unusable address',
+      health: async () => ({ ok: false, version: null, error: unusableProblem(record) }),
+      list: refuse,
+      loaded: refuse,
+      inspect: refuse,
+      pull: refuse,
+      remove: refuse,
+    },
+  };
+}
+
+/** Only undefined is no port, as in the CLI; anything else must be a port, or null. */
+function sshPortInput(value: number | string | undefined): number | null | undefined {
+  return value === undefined ? undefined : parseSshPort(value);
+}
+
+/** ssh signs in with the user's keys; the only credential is a server's own API key, as a bearer token. */
+function sshCredentialHeaders(credential: ModelServerCredentialInput): Record<string, string> | null {
+  if (credential.type === 'header') {
+    throw new Error('A server reached over SSH takes a bearer token or nothing: ssh signs in with your keys.');
+  }
+  return credentialHeaders(credential);
+}
+
+/** Where the Models screen says an SSH server is: the port only when it is not Ollama's. */
+function sshLabel(record: ModelServerRecord): string | null {
+  const { transport } = record;
+  if (transport.type !== 'ssh') return null;
+  const port = transport.port === SSH_DEFAULT_PORT ? '' : ` port ${transport.port}`;
+  return `ssh://${transport.destination}${port}`;
+}
+
+/**
+ * Names each server found so several from one machine stay apart: the host, then what runs there, then the port.
+ * A name already saved, or given to an earlier row, gets the port and then a number, as the store refuses repeats.
+ * A long host is cut to fit the store's length, never what follows it, so what is checked is what gets saved.
+ */
+export function foundServers(
+  destination: string,
+  servers: SshFoundServer[],
+  saved: string[],
+  maxChars = MAX_NAME_CHARS
+): ModelServerFound[] {
+  const host = suggestSshName(destination);
+  const labels = servers.map(server =>
+    server.kind === 'ollama'
+      ? 'Ollama'
+      : ((server.product && own(PRODUCT_LABELS, server.product)) ?? `port ${server.port}`)
+  );
+  const taken = new Set(saved.map(name => normalizeServerName(name).toLowerCase()));
+  return servers.map((server, index) => {
+    const label = labels[index];
+    const port = ` ${server.port}`;
+    const labelPart = servers.length === 1 ? '' : label;
+    const shared = label !== `port ${server.port}` && labels.filter(other => other === label).length > 1;
+    const suffix = shared ? port : '';
+    const named = (end: string) => {
+      const tail = `${labelPart ? ` ${labelPart}` : ''}${end}`;
+      return normalizeServerName(`${host.slice(0, Math.max(0, maxChars - tail.length))}${tail}`.slice(0, maxChars));
+    };
+    const ported = `${labelPart}${suffix}`.endsWith(port);
+    const numbered = ported ? suffix : `${suffix}${port}`;
+    let name = named(suffix);
+    // A suffix longer than the room left repeats the same cut name; the store then names the clash on save.
+    for (let n = ported ? 2 : 1; taken.has(name.toLowerCase()) && n <= taken.size + 2; n++) {
+      name = named(n === 1 ? numbered : `${numbered} ${n}`);
+    }
+    taken.add(name.toLowerCase());
+    return { ...server, suggestedName: name };
+  });
+}
 
 function nounOf(target: Pick<LaunchTarget, 'runtime' | 'product'>): string {
   if (target.runtime === 'ollama') return 'Ollama server';

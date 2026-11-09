@@ -1,6 +1,7 @@
 export * from './types';
 export * from './defineEndpoint';
 export * from './deprecation';
+export * from './clientVersion';
 export { chatContract } from './contracts/chat.contract';
 export { startAgentExecutionContract, getAgentExecutionContract } from './contracts/agentExecutions.contract';
 export { sessionUpdateContract } from './contracts/sessionUpdate.contract';
@@ -13,6 +14,7 @@ export { synthesizeSpeechContract } from './contracts/tts.contract';
 export { generateMusicContract } from './contracts/music.contract';
 export { generateSoundEffectContract } from './contracts/soundEffects.contract';
 export { getMeContract } from './contracts/me.contract';
+export { getClientConfigContract } from './contracts/clientConfig.contract';
 export { registerPushTokenContract, unregisterPushTokenContract } from './contracts/pushTokens.contract';
 export { getCreditBalanceContract } from './contracts/credits.contract';
 export { listModelsContract } from './contracts/models.contract';
@@ -29,7 +31,7 @@ export {
   getFilesByIdsContract,
   bulkDeleteFilesContract,
 } from './contracts/files.contract';
-export { createEmbeddingsContract } from './contracts/embeddings.contract';
+export { createEmbeddingsContract, listEmbeddingModelsContract } from './contracts/embeddings.contract';
 export { postSlackMessageContract } from './contracts/slackMessages.contract';
 export { createTextRefinementContract } from './contracts/textRefinement.contract';
 export { createDecisionContract, listDecisionModelsContract } from './contracts/decisions.contract';
@@ -42,11 +44,21 @@ export {
   deleteArtifactContract,
   listArtifactVersionsContract,
   getArtifactVersionContract,
+  createArtifactVersionContract,
+  searchArtifactsContract,
+  listArtifactTypesContract,
 } from './contracts/artifacts.contract';
 export { createTranscriptionUploadContract, createTranscriptionContract } from './contracts/transcription.contract';
 export { createSessionContract } from './contracts/sessionCreate.contract';
 export { listSessionsContract } from './contracts/sessionList.contract';
 export { listSessionQuestsContract } from './contracts/sessionQuests.contract';
+export { listSessionFilesContract } from './contracts/sessionFiles.contract';
+export { searchSessionsContract } from './contracts/sessionSemanticSearch.contract';
+export {
+  getSessionMessageContract,
+  updateSessionMessageContract,
+  deleteSessionMessageContract,
+} from './contracts/sessionMessages.contract';
 export { listCreditTransactionsContract } from './contracts/creditTransactions.contract';
 export { getWhatsNewMediaContract, listWhatsNewContract } from './contracts/whatsNew.contract';
 export {
@@ -79,6 +91,22 @@ export {
   updateProjectContract,
   deleteProjectContract,
 } from './contracts/projects.contract';
+export {
+  listProjectFilesContract,
+  addProjectFilesContract,
+  removeProjectFileContract,
+  listProjectSessionsContract,
+  addProjectSessionsContract,
+  removeProjectSessionContract,
+} from './contracts/projectContent.contract';
+export {
+  removeProjectMemberContract,
+  listProjectInvitesContract,
+  createProjectInviteContract,
+  addProjectSystemPromptsContract,
+  updateProjectSystemPromptContract,
+  removeProjectSystemPromptContract,
+} from './contracts/projectSharing.contract';
 export {
   listAgentsContract,
   getAgentContract,

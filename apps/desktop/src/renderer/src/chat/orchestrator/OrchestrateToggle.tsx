@@ -4,7 +4,7 @@ import { useTheme } from '@mui/joy/styles';
 import Tooltip from '@mui/joy/Tooltip';
 import { keyframes } from '@mui/system';
 import { useEffect, useRef, type ReactNode } from 'react';
-import { AgentsIcon, ConversationIcon } from '../icons';
+import { AgentStageIcon, ConversationIcon } from '../icons';
 import { isMac } from '../platform';
 import type { SessionSurface } from './orchestratorPrefs';
 import { AGENT_STATE_LABEL, AGENT_STATE_PRIORITY, type AgentState } from './roster';
@@ -14,8 +14,6 @@ interface OrchestrateToggleProps {
   states: readonly AgentState[];
   surface: SessionSurface;
   onSurfaceChange(surface: SessionSurface): void;
-  /** A Code session, whose agents view opens (on an empty stage) before it has any agents. */
-  canStart: boolean;
 }
 
 const pulse = keyframes`
@@ -92,13 +90,15 @@ function Segment({
 }
 
 /**
- * Header switch between the conversation and its agents' stage, icon-only and sized like the sidebar's
- * ModeSwitcher. View only: the Orchestrate behaviour is the composer's OrchestratePill. Absent for a
- * Chat session that has spawned no agents.
+ * Header switch between the conversation and its agents' stage, sized like the sidebar's ModeSwitcher.
+ * View only: the Orchestrate behaviour is the composer's OrchestratePill, which is why this one draws
+ * AgentStageIcon rather than its AgentsIcon. Absent until the session has an agent: an empty stage is
+ * nothing to navigate to. The conversation segment stays icon-only, since "Chat" already names the
+ * sidebar's Chat/Code mode and would misread in a Code session.
  */
-export function OrchestrateToggle({ states, surface, onSurfaceChange, canStart }: OrchestrateToggleProps) {
+export function OrchestrateToggle({ states, surface, onSurfaceChange }: OrchestrateToggleProps) {
   const dark = useTheme().palette.mode === 'dark';
-  const available = states.length > 0 || canStart;
+  const available = states.length > 0;
 
   const select = (next: SessionSurface) => {
     if (next !== surface) onSurfaceChange(next);
@@ -123,11 +123,12 @@ export function OrchestrateToggle({ states, surface, onSurfaceChange, canStart }
   const working = !needsYou && !failed && states.includes('working');
   const raisedBg = dark ? 'background.level2' : 'background.surface';
   const badgeColor = needsYou ? 'warning' : failed ? 'danger' : 'neutral';
+  const description = describeAgentStates(states);
 
   return (
     <Box
       role="group"
-      aria-label="Show the conversation or its agents"
+      aria-label="Conversation or agents view"
       data-testid="chat-surface-toggle"
       // Dark inverts Joy's ramp (surface is darker than level1), so the track and the raised fill swap.
       sx={{
@@ -142,8 +143,8 @@ export function OrchestrateToggle({ states, surface, onSurfaceChange, canStart }
       <Segment
         selected={surface === 'chat'}
         raisedBg={raisedBg}
-        label="Conversation"
-        hint={`Conversation \u00B7 ${SHORTCUT_HINT}`}
+        label="Show conversation"
+        hint={`Show conversation \u00B7 ${SHORTCUT_HINT}`}
         icon={<ConversationIcon />}
         testId="chat-surface-toggle-chat"
         onClick={() => select('chat')}
@@ -151,12 +152,15 @@ export function OrchestrateToggle({ states, surface, onSurfaceChange, canStart }
       <Segment
         selected={surface === 'orchestrate'}
         raisedBg={raisedBg}
-        label={states.length > 0 ? `Agents, ${describeAgentStates(states)}` : 'Agents'}
-        hint={`${states.length > 0 ? describeAgentStates(states) : 'Agents'} \u00B7 ${SHORTCUT_HINT}`}
-        icon={<AgentsIcon />}
+        label={`Show agents, ${description}`}
+        hint={`Show agents (${description}) \u00B7 ${SHORTCUT_HINT}`}
+        icon={<AgentStageIcon />}
         testId="chat-surface-toggle-orchestrate"
         onClick={() => select('orchestrate')}
       >
+        <Box component="span" data-testid="chat-orchestrate-label" sx={{ fontSize: 'xs', lineHeight: 1 }}>
+          Agents
+        </Box>
         {working && (
           <Box
             aria-hidden
@@ -164,28 +168,26 @@ export function OrchestrateToggle({ states, surface, onSurfaceChange, canStart }
             sx={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0, bgcolor: 'primary.solidBg' }}
           />
         )}
-        {states.length > 0 && (
-          <Box
-            component="span"
-            data-testid="chat-orchestrate-count"
-            data-tone={badgeColor}
-            aria-hidden
-            sx={{
-              px: 0.625,
-              borderRadius: 'lg',
-              fontSize: '11px',
-              lineHeight: '15px',
-              bgcolor: `${badgeColor}.${needsYou ? 'solidBg' : 'softBg'}`,
-              color: `${badgeColor}.${needsYou ? 'solidColor' : 'softColor'}`,
-              ...(needsYou && {
-                animation: `${pulse} 1.6s ease-in-out infinite`,
-                '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
-              }),
-            }}
-          >
-            {states.length}
-          </Box>
-        )}
+        <Box
+          component="span"
+          data-testid="chat-orchestrate-count"
+          data-tone={badgeColor}
+          aria-hidden
+          sx={{
+            px: 0.625,
+            borderRadius: 'lg',
+            fontSize: '11px',
+            lineHeight: '15px',
+            bgcolor: `${badgeColor}.${needsYou ? 'solidBg' : 'softBg'}`,
+            color: `${badgeColor}.${needsYou ? 'solidColor' : 'softColor'}`,
+            ...(needsYou && {
+              animation: `${pulse} 1.6s ease-in-out infinite`,
+              '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
+            }),
+          }}
+        >
+          {states.length}
+        </Box>
       </Segment>
     </Box>
   );

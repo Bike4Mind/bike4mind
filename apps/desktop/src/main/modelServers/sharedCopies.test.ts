@@ -6,6 +6,7 @@ import {
   serverManagement,
   serverRuntimeId,
 } from '@bike4mind/local-models/servers';
+import type { OpenAICompatibleProduct } from '@bike4mind/local-models';
 import * as chat from '@shared/chat';
 import * as shared from '@shared/modelServers';
 import { describe, expect, it } from 'vitest';
@@ -73,5 +74,16 @@ describe('the local-models copies of the shared server helpers', () => {
 
   it('take the same KV cache types', () => {
     expect(QUANTIZED_KV_CACHE_TYPES).toEqual(shared.QUANTIZED_KV_CACHE_TYPES);
+  });
+
+  it('name the same OpenAI-compatible products', () => {
+    // Fails the typecheck, not the run, when one side gains a product the other lacks.
+    type Same = [OpenAICompatibleProduct] extends [shared.ModelServerProduct]
+      ? [shared.ModelServerProduct] extends [OpenAICompatibleProduct]
+        ? true
+        : false
+      : false;
+    const same: Same = true;
+    expect(same).toBe(true);
   });
 });

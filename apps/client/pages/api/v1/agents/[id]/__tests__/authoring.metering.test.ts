@@ -4,12 +4,12 @@
  * a credit refusal. The helpers are stubbed; the meter wiring and the error mapping are the real route code.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { insufficientCreditsError } from '@bike4mind/common';
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, insufficientCreditsError, TooManyRequestsError } from '@bike4mind/common';
 
 vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
   assertOutboundActionAllowed: async () => undefined,
 }));
-vi.mock('@server/auth/assertAiAccessAllowed', () => ({ assertAiAccessAllowed: vi.fn() }));
+vi.mock('@bike4mind/server-utils/auth/assertAiAccessAllowed', () => ({ assertAiAccessAllowed: vi.fn() }));
 vi.mock('@server/utils/withRequestCompletionQuota', () => ({
   withRequestCompletionQuota: (fn: unknown) => fn,
 }));
@@ -102,5 +102,19 @@ describe.each(ROUTES)('POST /api/v1/agents/{id}/%s metering', (route, helper, bo
     const { done } = call(route, { ...body });
 
     await expect(done).rejects.toMatchObject({ statusCode: 422 });
+  });
+
+  it('keeps the 429 of the free-tier daily cap and does not log it as an error', async () => {
+    helper.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+
+    const { req, done } = call(route, { ...body });
+
+    await expect(done).rejects.toMatchObject({ statusCode: 429 });
+    expect(req.logger.error).not.toHaveBeenCalled();
   });
 });

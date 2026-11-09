@@ -24,7 +24,7 @@ import { dispatch as imageEditDispatch } from '@workers/queueHandlers/imageEdit'
 import { dispatch as generationCallbackDispatch } from '@workers/queueHandlers/generationCallback';
 import { dispatch as generationJobDispatch } from '@workers/queueHandlers/generationJob';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@bike4mind/server-utils/modelDiscovery/scheduledRun';
-import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
+import { isDiscoveryDriver, startDiscoveryOnStartup } from '@bike4mind/server-utils/modelDiscovery/startupLeg';
 import { runStuckBatchSweep } from '@workers/cron/dataLakeBatchReconcile';
 import { runResearchScheduleTick } from '@workers/cron/dataLakeResearchSchedule';
 import { SelfHostWorker } from './selfHostWorker';
@@ -56,6 +56,7 @@ import { registerAccountDeletionSweep } from './accountDeletionSweep';
 import { registerRealtimeConnectionSweep } from './realtimeConnectionSweep';
 import { registerIntegrationHealthCheck } from './integrationHealthCheck';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
+import { registerHelpDatalakeIngest } from './helpDatalakeIngest';
 import { registerDriveLakeResyncPoll } from './driveLakeResyncPoll';
 import { registerStorageReconciliation } from './storageReconciliation';
 import { registerGitHubLakeReconcile } from './githubLakeReconcile';
@@ -139,6 +140,7 @@ async function main() {
   registerRealtimeConnectionSweep(worker);
   registerIntegrationHealthCheck(worker, bootLogger);
   registerLakeHealthSweep(worker);
+  registerHelpDatalakeIngest(worker);
   registerDriveLakeResyncPoll(worker);
   registerStorageReconciliation(worker);
   registerGitHubLakeReconcile(worker);

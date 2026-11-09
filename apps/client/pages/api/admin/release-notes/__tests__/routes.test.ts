@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * Route tests for the admin release-notes API. `baseApi` is stubbed to a method dispatcher; the
+ * Route tests for the admin release-notes API. `baseApi` is stubbed to a method dispatcher that runs `.use` middlewares (so the real adminApi gate runs); the
  * repository mutations themselves (editedAt stamping, emptyItems rules) are covered in ReleaseNoteModel.test.ts.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -27,7 +27,15 @@ const m = vi.hoisted(() => ({
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
-    const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => unknown> = [];
+    const chain = async (req: { method: string }, res: unknown) => {
+      for (const middleware of middlewares) await middleware(req, res, () => undefined);
+      return handlers[req.method](req, res);
+    };
+    (chain as unknown as Record<string, unknown>).use = (fn: (typeof middlewares)[number]) => {
+      middlewares.push(fn);
+      return chain;
+    };
     for (const method of ['get', 'post', 'patch', 'put']) {
       (chain as unknown as Record<string, unknown>)[method] = (fn: (typeof handlers)[string]) => {
         handlers[method.toUpperCase()] = fn;
@@ -55,7 +63,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/database/infra', () => ({
   AdminSettings: { findOneAndUpdate: m.upsert, findOne: () => ({ lean: () => m.findSetting() }) },
 }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: m.audit,
   definedKeys: (data: Record<string, unknown>) => Object.keys(data).filter(key => data[key] !== undefined),
 }));
@@ -91,6 +99,7 @@ async function call(
   opts: {
     method: string;
     isAdmin?: boolean;
+    adminPermissions?: string[];
     withheldAdmin?: boolean;
     query?: Record<string, string>;
     body?: unknown;
@@ -102,7 +111,7 @@ async function call(
     query: opts.query ?? {},
     body: opts.body as object,
   });
-  const user = { id: 'admin-1', isAdmin: opts.isAdmin ?? true };
+  const user = { id: 'admin-1', isAdmin: opts.isAdmin ?? true, adminPermissions: opts.adminPermissions };
   Object.assign(req, { user: opts.withheldAdmin ? withholdAdminRole(user) : user, logger: { warn: vi.fn() } });
   if (opts.keyScopes) Object.assign(req, { apiKeyInfo: { scopes: opts.keyScopes } });
   const error = await (handler as Handler)(req, res).then(
@@ -133,6 +142,27 @@ describe('admin guard', () => {
     const { error } = await call(handler, { method, isAdmin: false, query: { id: ID }, body });
     expect(error?.statusCode).toBe(403);
     for (const fn of [m.adminList, m.edit, m.hide, m.upsert]) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['list', listHandler, 'GET', undefined],
+    ['edit', editHandler, 'PATCH', { headline: 'x' }],
+  ])('%s refuses a delegate without settings:manage', async (_name, handler, method, body) => {
+    const { error } = await call(handler, {
+      method,
+      isAdmin: false,
+      adminPermissions: ['support:read'],
+      query: { id: ID },
+      body,
+    });
+    expect(error?.message).toBe('Missing permission: settings:manage');
+  });
+
+  it('serves the list to a settings:manage delegate', async () => {
+    m.adminList.mockResolvedValue({ items: [], hasMore: false });
+    const { error } = await call(listHandler, { method: 'GET', isAdmin: false, adminPermissions: ['settings:manage'] });
+    expect(error).toBeUndefined();
+    expect(m.adminList).toHaveBeenCalledOnce();
   });
 });
 

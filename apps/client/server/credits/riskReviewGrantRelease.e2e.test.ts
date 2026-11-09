@@ -18,7 +18,7 @@ import {
 
 // Domain-burst protection is covered by its own suites; it is off unless a test installs a hold.
 const protection = vi.hoisted(() => ({ current: undefined as unknown }));
-vi.mock('@server/auth/signupProtection', () => ({
+vi.mock('@bike4mind/server-utils/auth/signupProtection', () => ({
   get signupProtection() {
     return protection.current;
   },
@@ -29,9 +29,8 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 let server: Awaited<ReturnType<typeof createMongoReplSet>>;
 const config: Record<string, string> = {
-  stagedSignupGrantEnabled: 'true',
-  signupGrantCredits: '12',
-  verifiedUnlockCredits: '28',
+  signupGrantInitialCredits: '12',
+  signupGrantDripCap: '28',
   signupGrantRiskPolicy: JSON.stringify({
     enabled: true,
     version: 'synthetic',

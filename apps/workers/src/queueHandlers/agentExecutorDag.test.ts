@@ -693,20 +693,34 @@ describe('subagent permission-list producer hops in agentExecutor', () => {
   it('copies the run lists onto Lambda-dispatched subagent rows', () => {
     const baseFields = source.match(/const baseFields = \{[\s\S]*?\n {8}\};/);
     expect(baseFields, 'baseFields literal not found in agentExecutor.ts').not.toBeNull();
-    expect(baseFields![0]).toContain('approvedTools: [...approvedTools],');
+    expect(baseFields![0]).toContain('approvedTools: [...approvedToolsForDispatch],');
     expect(baseFields![0]).toContain('deniedTools: [...deniedTools],');
+  });
+
+  it('applies automatic approvals and current policy to the top-level run', () => {
+    expect(source).toContain(
+      'const approvedTools = withAutoApprovedCustomTools(\n      execution.approvedTools,\n      autoApprovedCustomToolNames,\n      approvalRequiredCustomToolNames\n    );'
+    );
+  });
+
+  it('does not persist snapshot-derived approvals onto dispatched children', () => {
+    expect(execPart).toContain(
+      'const approvedToolsForDispatch = withAutoApprovedCustomTools(\n      execution.approvedTools,\n      [],\n      approvalRequiredCustomToolNames\n    );'
+    );
   });
 
   it('hands the run lists to the DAG dispatcher', () => {
     const call = source.match(/makeDagDispatcher\(\{[\s\S]*?\n {4}\}\);/);
     expect(call, 'makeDagDispatcher call site not found in agentExecutor.ts').not.toBeNull();
-    expect(call![0]).toMatch(/\n\s+approvedTools,\n\s+deniedTools,\n/);
+    expect(call![0]).toMatch(/\n\s+approvedTools: approvedToolsForDispatch,\n\s+deniedTools,\n/);
   });
 
   it('gates a dispatched child on its own row, in both its tool deps and its orchestrator', () => {
+    expect(source).toContain('const childToolPermissions = {');
     expect(source).toContain(
-      'const childToolPermissions = { approvedTools: child.approvedTools ?? [], deniedTools: child.deniedTools ?? [] };'
+      'approvedTools: withAutoApprovedCustomTools(\n        child.approvedTools,\n        autoApprovedCustomToolNames,\n        approvalRequiredCustomToolNames\n      ),'
     );
+    expect(source).toContain('deniedTools: child.deniedTools ?? [],');
     const childDeps = dispatchPart.match(toolDepsRe);
     expect(childDeps, 'dispatched child toolDeps literal not found in agentExecutor.ts').not.toBeNull();
     expect(childDeps![0]).toContain('toolPermissions: childToolPermissions,');

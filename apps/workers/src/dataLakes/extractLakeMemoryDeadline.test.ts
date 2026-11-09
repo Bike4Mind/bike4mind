@@ -72,14 +72,6 @@ vi.mock('@bike4mind/services/llm', () => ({
     evaluate = (...a: unknown[]) => evaluateMock(...a);
   },
 }));
-// `resolveEmbeddingConfig` is called unconditionally, so it must return a real shape. Reporting
-// `missing: true` takes the documented no-key path: facts are written WITHOUT vectors, which keeps these
-// tests off the embedding provider entirely while still exercising the append.
-vi.mock('@bike4mind/fab-pipeline', () => ({
-  EmbeddingFactory: { create: vi.fn() },
-  getProviderFromModel: () => 'openai',
-  resolveEmbeddingConfig: () => ({ config: undefined, missing: true }),
-}));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@bike4mind/server-utils/memory/mementoLedgerMirror', () => ({
   createLedgerAppendSession: async () => ({ append: (...a: unknown[]) => appendMock(...a) }),
@@ -426,3 +418,7 @@ describe('extractLakeMemoryForBatch continuation + concurrency guard (#1501)', (
     expect(releaseLakeMemoryExtractionMock).toHaveBeenCalledTimes(1);
   });
 });
+
+vi.mock('@bike4mind/server-utils/memory/mementoEmbedder', () => ({
+  createMementoEmbedder: () => async () => undefined,
+}));

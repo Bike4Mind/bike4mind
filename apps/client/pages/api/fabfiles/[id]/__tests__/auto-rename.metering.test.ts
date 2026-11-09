@@ -6,7 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { insufficientCreditsError } from '@bike4mind/common';
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError, insufficientCreditsError } from '@bike4mind/common';
 
 const { quotaAdmission, quotaRelease } = vi.hoisted(() => {
   const release = vi.fn().mockResolvedValue(undefined);
@@ -124,6 +124,18 @@ describe('POST /api/fabfiles/{id}/auto-rename metering', () => {
     m.hold.mockRejectedValue(insufficientCreditsError('You do not have enough credits.'));
 
     await expect(call()).rejects.toMatchObject({ statusCode: 422 });
+    expect(m.complete).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the free-tier daily cap as its 429 instead of a 400', async () => {
+    m.hold.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+
+    await expect(call()).rejects.toMatchObject({ statusCode: 429 });
     expect(m.complete).not.toHaveBeenCalled();
   });
 

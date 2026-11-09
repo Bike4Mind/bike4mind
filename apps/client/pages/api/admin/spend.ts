@@ -1,20 +1,22 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { usageEventRepository, cacheRepository } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { cacheService } from '@bike4mind/services';
 import {
   ApiKeyScope,
   CreditHolderType,
+  SPEND_ACCOUNT_FLAG_THRESHOLDS,
   SPEND_DEFAULT_WINDOW_DAYS,
   type CostByModelRow,
   type DailyCostPoint,
+  type ISpendAccountBucket,
   type ISpendSummary,
+  type SpendAccountFlag,
   type SpendByAccountRow,
   type SpendKpi,
   type SpendServerPayload,
 } from '@bike4mind/common';
 import { CacheKeys } from '@server/utils/cacheKeys';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { resolveUserNames } from '@server/utils/resolveUserNames';
 import { Request } from 'express';
 import { z } from 'zod';
@@ -191,8 +193,24 @@ function buildKpis(current: ISpendSummary, prior: ISpendSummary): SpendKpi[] {
   ];
 }
 
+/**
+ * Which SPEND_ACCOUNT_FLAG_THRESHOLDS an account crossed. Cost averages over the
+ * window's length in days (floored at one, so a sub-day window isn't scaled up).
+ */
+function accountFlags(a: ISpendAccountBucket, windowMs: number): SpendAccountFlag[] {
+  const t = SPEND_ACCOUNT_FLAG_THRESHOLDS;
+  const flags: SpendAccountFlag[] = [];
+  const windowDays = Math.max(windowMs / DAY_MS, 1);
+  if (a.cogsUsd / windowDays > t.dailyCostUsd) flags.push('dailyCost');
+  if (a.requests >= t.minRequests) {
+    if (a.failures / a.requests > t.errorRate) flags.push('errorRate');
+    if (a.p95LatencyMs > t.p95LatencyMs) flags.push('p95Latency');
+  }
+  return flags;
+}
+
 /** Resolve each account's ownerId to a display name (org name or user name), keyed by owner type. */
-async function resolveAccountRows(current: ISpendSummary): Promise<SpendByAccountRow[]> {
+async function resolveAccountRows(current: ISpendSummary, windowMs: number): Promise<SpendByAccountRow[]> {
   const accounts = current.byAccount;
   const userOwnerIds = accounts.filter(a => a.ownerType === CreditHolderType.User).map(a => a.ownerId);
   const orgOwnerIds = [
@@ -215,6 +233,9 @@ async function resolveAccountRows(current: ISpendSummary): Promise<SpendByAccoun
       requests: a.requests,
       creditsUsed: a.creditsCharged,
       costPerRequest: a.requests > 0 ? a.cogsUsd / a.requests : 0,
+      errorRate: a.requests > 0 ? a.failures / a.requests : 0,
+      p95LatencyMs: a.p95LatencyMs,
+      flags: accountFlags(a, windowMs),
     };
   });
 }
@@ -231,7 +252,7 @@ async function buildSpendData(query: Omit<SpendQuery, 'recache'>): Promise<Spend
     usageEventRepository.spendSummary({ ...prior, ...baseFilters }),
   ]);
 
-  const byAccount = await resolveAccountRows(currentSummary);
+  const byAccount = await resolveAccountRows(currentSummary, current.to.getTime() - current.from.getTime());
 
   const totalCogs = currentSummary.totals.cogsUsd;
   const byModel: CostByModelRow[] = currentSummary.byModel.map(m => ({
@@ -267,14 +288,10 @@ async function buildSpendData(query: Omit<SpendQuery, 'recache'>): Promise<Spend
  * requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
  * before req.user is set, so a key issued for a narrow integration can't read org
  * spend just because its owner is an admin. JWT/browser admins skip that check and
- * still pass the isAdmin gate below.
+ * still pass the admin permission gate.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
   async (req: Request<{}, {}, {}, SpendQuery>, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const { recache, ...query } = QuerySchema.parse(req.query);
 
     const cacheKey = CacheKeys.spend(query);

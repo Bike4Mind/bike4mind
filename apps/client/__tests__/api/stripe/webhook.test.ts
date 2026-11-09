@@ -109,6 +109,8 @@ vi.mock('@server/billing/paymentFailureNotice', () => ({
   notifyPaymentFailed: (...args: unknown[]) => mockNotifyPaymentFailed(...args),
   notifyCanceledForNonPayment: vi.fn(),
 }));
+// The BillingEvent store has its own suite (server/billing/billingEventStore.test.ts).
+vi.mock('@server/billing/billingEventStore', () => ({ recordBillingEvent: vi.fn() }));
 
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postMessageToSlack: (...args: unknown[]) => mockPostMessageToSlack(...args),
@@ -165,6 +167,11 @@ vi.mock('@server/billing/paymentRisk', () => ({
   radarRiskLine: (...args: unknown[]) => mockRadarRiskLine(...args),
 }));
 
+const mockAutoApproveAfterPayment = vi.fn();
+vi.mock('@server/security/riskReviewAutoApproval', () => ({
+  autoApproveRiskReviewAfterPayment: (...args: unknown[]) => mockAutoApproveAfterPayment(...args),
+}));
+
 // The forfeit helpers have their own suite (server/credits/paymentUnlockForfeit.test.ts); here only the wiring.
 const mockForfeitHeldUnlockForFraudWarning = vi.fn();
 vi.mock('@server/credits/paymentUnlockForfeit', () => ({
@@ -176,7 +183,9 @@ vi.mock('@server/credits/paymentUnlockForfeit', () => ({
 // (server/billing/earlyFraudWarning.test.ts, linkedAccounts.test.ts); here only the wiring.
 const mockRespondToEarlyFraudWarning = vi.fn();
 const mockPropagateAccountRisk = vi.fn();
-vi.mock('@server/referrals/subscriptionReward', () => ({ reverseSubscriptionRewardForRefund: vi.fn() }));
+vi.mock('@bike4mind/server-utils/referrals/subscriptionReward', () => ({
+  reverseSubscriptionRewardForRefund: vi.fn(),
+}));
 const mockReversePurchaseStanding = vi.fn();
 vi.mock('@server/billing/purchaseReversal', () => ({
   reversePurchaseStanding: (...args: unknown[]) => mockReversePurchaseStanding(...args),
@@ -212,7 +221,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   isDevelopment: vi.fn().mockReturnValue(true),
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   StripeEvents: { InvoicePaymentSucceeded: { publish: vi.fn() } },
 }));
 
@@ -242,7 +251,7 @@ vi.mock('@bike4mind/common', async importOriginal => {
 
 // Imports after mocks
 import { CreditPurchaseEvents, CreditPurchaseStatus } from '@bike4mind/common';
-import { stableEventId } from '@server/analytics/signupEvents';
+import { stableEventId } from '@bike4mind/server-utils/analytics/signupEvents';
 
 // Load the module to trigger mock capture
 // This import triggers `baseApi().post(handler)` which populates capturedHandler
@@ -392,11 +401,18 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
         },
         expect.anything()
       );
+      expect(mockAutoApproveAfterPayment).toHaveBeenCalledWith('user123', expect.anything());
+      // Auto-approval reads the Radar outcome and card fingerprint that screening records.
+      expect(mockAutoApproveAfterPayment.mock.invocationCallOrder[0]).toBeGreaterThan(
+        mockScreenPaymentOutcome.mock.invocationCallOrder[0]
+      );
 
       mockScreenPaymentOutcome.mockClear();
+      mockAutoApproveAfterPayment.mockClear();
       mockGrantCreditPurchase.mockResolvedValue('already_granted');
       await invokeWebhookWithEvent(event);
       expect(mockScreenPaymentOutcome).not.toHaveBeenCalled();
+      expect(mockAutoApproveAfterPayment).not.toHaveBeenCalled();
     });
 
     it("screens a subscription's payment intent as a subscription payment", async () => {
@@ -422,6 +438,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
         expect.objectContaining({ paymentIntentId: 'pi_sub', kind: 'subscription', outcome: 'succeeded' }),
         expect.anything()
       );
+      expect(mockAutoApproveAfterPayment).toHaveBeenCalledWith('user123', expect.anything());
     });
 
     it('alerts on and records a failed card attempt', async () => {

@@ -1,4 +1,11 @@
-import { buildUsagePriceStamp, getTextModelCost, getTurnsCost, IUserDocument, ModelInfo } from '@bike4mind/common';
+import {
+  buildUsagePriceStamp,
+  getTextModelCost,
+  getTurnsCost,
+  IUserDocument,
+  ModelInfo,
+  type UsageEventOperation,
+} from '@bike4mind/common';
 import { recordOperationalUsage } from '@bike4mind/services';
 import {
   adminSettingsRepository,
@@ -9,7 +16,7 @@ import {
 } from '@bike4mind/database';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
-import { activePlanResolver } from '@server/entitlements/activeSubscriptions';
+import { activePlanResolver } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 
 export interface RecordSessionOperationalUsageArgs {
   /** Owner of the session; attribution rolls up to their org when they have one. */
@@ -17,6 +24,8 @@ export interface RecordSessionOperationalUsageArgs {
   /** Preloaded user doc, if the caller already fetched it - avoids a redundant read. */
   user?: IUserDocument;
   sessionId: string;
+  /** The job making the call, named on the admin usage receipt. */
+  operation: UsageEventOperation;
   modelId: string;
   modelInfo: ModelInfo;
   /** Token usage reported by the LLM callback; some backends leave it undefined. */
@@ -93,6 +102,7 @@ export async function recordSessionOperationalUsage(args: RecordSessionOperation
         latencyMs: Date.now() - args.startTime,
         source: 'system',
         finishReason: completionInfo?.stopReason,
+        operation: args.operation,
       },
       {
         db: {

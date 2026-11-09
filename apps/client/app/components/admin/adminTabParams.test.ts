@@ -11,10 +11,13 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { SHADOW_DETECTION_SEARCH_KEYS } from './shadowDetectionSearch';
 import { SIGNUP_RISK_REVIEW_SEARCH_KEYS } from './signupRiskReviewSearch';
+import { SIGNUP_DOMAIN_HOLDS_SEARCH_KEYS } from './signupDomainHoldsSearch';
 import { EVENTS_SEARCH_KEYS } from './EventMetrics/eventsTabSearch';
 import { INTEGRATION_DEMAND_SEARCH_KEYS } from './integrationDemandSearch';
 import { ANALYTICS_SEARCH_KEYS } from './Analytics/analyticsTabSearch';
+import { PENDING_SEARCH_KEYS } from './inviteCenterSearch';
 import { STRIPE_DISPUTE_SEARCH_KEYS } from './stripeDisputeSearch';
+import { MODEL_METRICS_SEARCH_KEYS } from './ModelMetrics/modelMetricsSearch';
 import type { AdminListSearchKeys } from './shared/useAdminListUrlState';
 
 describe('ADMIN_TAB_PARAMS', () => {
@@ -369,10 +372,13 @@ describe('useAdminListUrlState keys', () => {
   const LIST_SEARCH_KEYS: Readonly<Record<string, AdminListSearchKeys>> = {
     SHADOW_DETECTION_SEARCH_KEYS,
     SIGNUP_RISK_REVIEW_SEARCH_KEYS,
+    SIGNUP_DOMAIN_HOLDS_SEARCH_KEYS,
     EVENTS_SEARCH_KEYS,
     INTEGRATION_DEMAND_SEARCH_KEYS,
     ANALYTICS_SEARCH_KEYS,
+    PENDING_SEARCH_KEYS,
     STRIPE_DISPUTE_SEARCH_KEYS,
+    MODEL_METRICS_SEARCH_KEYS,
   };
   // Left out of the registry on purpose, so validateSearch strips them: free-text searches that can
   // hold personal data, saved-view names that are not shareable yet, and query/view keys a tab never writes.
@@ -381,12 +387,18 @@ describe('useAdminListUrlState keys', () => {
     'detectionView',
     'riskQuery',
     'riskView',
+    'holdQuery',
+    'holdView',
     'eventsQuery',
     'eventsSavedView',
     'analyticsQuery',
     'analyticsView',
+    'pendingQuery',
+    'pendingView',
     'disputeQuery',
     'disputeView',
+    'metricsQuery',
+    'metricsView',
   ]);
   const registered = new Set<string>(Object.values(ADMIN_TAB_PARAMS).flat());
 

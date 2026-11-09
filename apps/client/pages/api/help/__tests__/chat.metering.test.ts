@@ -10,7 +10,15 @@ vi.mock('@server/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
 }));
 import { createMocks } from 'node-mocks-http';
-import { getEmbeddingModelCost, getTextModelCost, insufficientCreditsError, usdToCredits } from '@bike4mind/common';
+import {
+  CREDITS_PER_USD_COST,
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  TooManyRequestsError,
+  getEmbeddingModelCost,
+  getTextModelCost,
+  insufficientCreditsError,
+  usdToCredits,
+} from '@bike4mind/common';
 
 const m = vi.hoisted(() => ({
   enforce: true,
@@ -22,6 +30,8 @@ const m = vi.hoisted(() => ({
   search: vi.fn(),
   recordOperationalUsage: vi.fn(),
   findOrg: vi.fn(),
+  substitute: vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined),
+  getLlm: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -79,6 +89,7 @@ vi.mock('@server/billing/meterPlatformCompletion', async importOriginal => {
   const real = await importOriginal<typeof import('@server/billing/meterPlatformCompletion')>();
   return {
     ...real,
+    resolveShadowSubstitute: (...args: unknown[]) => m.substitute(...args),
     settleCompletion: (...args: Parameters<typeof real.settleCompletion>) => {
       m.settle(args[2]);
       return real.settleCompletion(...args);
@@ -97,7 +108,7 @@ const MODEL = {
 vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
   getAvailableModels: async () => [MODEL],
-  getLlmByModel: () => ({ complete: m.complete }),
+  getLlmByModel: (...args: unknown[]) => (m.getLlm(...args), { complete: m.complete }),
 }));
 vi.mock('@server/help/retrieval', () => ({ searchHelpContext: m.search }));
 
@@ -117,6 +128,7 @@ async function call(extra: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  m.substitute.mockResolvedValue(undefined);
   m.enforce = true;
   MODEL.backend = 'openai';
   MODEL.can_think = false;
@@ -192,6 +204,23 @@ describe('POST /api/help/chat metering', () => {
     expect(m.complete).not.toHaveBeenCalled();
   });
 
+  it('surfaces the free-tier daily cap as its 429 without logging an error', async () => {
+    m.hold.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+    const { req, res } = createMocks({ method: 'POST', body: { question: 'How do I share a notebook?' } });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() };
+    Object.assign(req, { user: { id: 'u1' }, logger });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
+    await expect((handler as any)(req, res)).rejects.toMatchObject({ statusCode: 429 });
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(m.complete).not.toHaveBeenCalled();
+  });
+
   it('charges a funded caller the priced usage once', async () => {
     const res = await call();
 
@@ -202,10 +231,84 @@ describe('POST /api/help/chat metering', () => {
       model: 'ops-model',
       provider: 'openai',
       usd: expect.closeTo(200 * 1e-6 + 10 * 2e-6, 12),
+      costUsd: expect.closeTo(200 * 1e-6 + 10 * 2e-6, 12),
+      executed: expect.objectContaining({ id: 'ops-model' }),
       inputTokens: 200,
       outputTokens: 10,
     });
     expect(m.settleHold).toHaveBeenCalledOnce();
+    expect(m.complete.mock.calls[0][2]).not.toHaveProperty('modelIdentityId');
+  });
+
+  describe('for a restricted caller whose model is substituted', () => {
+    const CHEAP = {
+      ...MODEL,
+      id: 'cheap-model',
+      backend: 'gemini',
+      pricing: { 200_000: { input: 1e-7, output: 2e-7 } },
+    };
+
+    it('runs the substitute, bills the requested model and returns the requested id', async () => {
+      m.substitute.mockResolvedValue(CHEAP);
+
+      const res = await call();
+
+      expect(m.getLlm).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ modelInfo: CHEAP }));
+      expect(m.complete.mock.calls[0][0]).toBe('cheap-model');
+      expect(m.complete.mock.calls[0][2]).toMatchObject({ modelIdentityId: 'ops-model' });
+      expect(m.settle).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          model: 'ops-model',
+          provider: 'openai',
+          usd: expect.closeTo(200 * 1e-6 + 10 * 2e-6, 12),
+          costUsd: expect.closeTo(200 * 1e-7 + 10 * 2e-7, 12),
+          executed: CHEAP,
+        })
+      );
+      expect(res._getJSONData().model).toBe('ops-model');
+    });
+
+    it('charges credits at the requested price', async () => {
+      m.substitute.mockResolvedValue(CHEAP);
+
+      await call();
+
+      const raw = (200 * 1e-6 + 10 * 2e-6) * CREDITS_PER_USD_COST;
+      expect(m.settleHold).toHaveBeenCalledOnce();
+      expect([Math.floor(raw), Math.ceil(raw)]).toContain(m.settleHold.mock.calls[0][1]);
+    });
+
+    it('splits credits and cost on the ceilings when no usage is reported', async () => {
+      m.substitute.mockResolvedValue(CHEAP);
+      m.complete.mockImplementation(async (_model, _messages, _opts, cb) => {
+        await cb(['hello'], {});
+      });
+
+      await call();
+
+      const charge = m.settle.mock.calls[0][0];
+      expect(charge).toMatchObject({ model: 'ops-model', executed: CHEAP });
+      expect(charge.usd).toBeGreaterThan(0);
+      expect(charge.costUsd).toBeCloseTo(charge.usd * 0.1, 9);
+    });
+
+    it('splits credits and cost when the provider throws after reporting usage', async () => {
+      m.substitute.mockResolvedValue(CHEAP);
+      m.complete.mockImplementation(async (_model, _messages, _opts, callback) => {
+        await callback(['Partial answer'], { inputTokens: 200, outputTokens: 10 });
+        throw new Error('stream disconnected');
+      });
+
+      await call();
+
+      expect(m.settle).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          usd: expect.closeTo(200 * 1e-6 + 10 * 2e-6, 12),
+          costUsd: expect.closeTo(200 * 1e-7 + 10 * 2e-7, 12),
+          executed: CHEAP,
+        })
+      );
+    });
   });
 
   it('refunds the hold when the provider throws', async () => {
@@ -232,6 +335,8 @@ describe('POST /api/help/chat metering', () => {
       model: 'ops-model',
       provider: 'openai',
       usd: expect.closeTo(200 * 1e-6 + 10 * 2e-6, 12),
+      costUsd: expect.closeTo(200 * 1e-6 + 10 * 2e-6, 12),
+      executed: expect.objectContaining({ id: 'ops-model' }),
       inputTokens: 200,
       outputTokens: 10,
     });

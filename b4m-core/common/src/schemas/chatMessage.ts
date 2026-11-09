@@ -9,6 +9,7 @@ import { passthroughShape } from './responseShape';
  * - `callback`: the caller's webhook URL and API key id (already `select: false` on QuestModel).
  * - `embedding`: the message's search vector, internal to retrieval and heavy on list reads.
  * - `slackNotification`: the Slack thread the reply is posted back to.
+ * - `signupActivity`: retired turn provenance a quest may still hold until its drop migration runs.
  */
 export const CHAT_MESSAGE_WITHHELD_FIELDS = ['callback', 'embedding', 'slackNotification', 'signupActivity'] as const;
 
@@ -72,3 +73,10 @@ const CHAT_MESSAGE_RESPONSE_FIELDS = {
  * as given, so routes must still apply redactPromptMetaForViewer for share viewers first.
  */
 export const chatMessageResponseSchema = z.object(passthroughShape(CHAT_MESSAGE_RESPONSE_FIELDS));
+
+/** Response for PUT /api/v1/sessions/{id}/messages/{messageId}. */
+export const updateChatMessageResponseSchema = z.object({
+  success: z.literal(true),
+  message: z.string(),
+  data: chatMessageResponseSchema,
+});

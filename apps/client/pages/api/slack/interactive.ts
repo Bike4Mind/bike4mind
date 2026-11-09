@@ -7,7 +7,7 @@ import { randomUUID } from 'crypto';
 import { verifySlackRequest } from '@server/integrations/slack/slackWebhookVerification';
 import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { cleanupConfluencePageContent } from '@server/integrations/atlassian/confluenceAttachmentCleanup';
-import { WebClient } from '@slack/web-api';
+import { WebClient, type Block, type KnownBlock } from '@slack/web-api';
 import { User, Quest, Session, connectDB, sessionRepository } from '@bike4mind/database';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { SlackDevWorkspace } from '@bike4mind/database/infra';
@@ -46,6 +46,7 @@ import {
   parseConfirmationButtonValue,
   type ViewSubmissionPayload,
   type ViewSubmissionResponse,
+  type GlobalShortcutPayload,
 } from '@bike4mind/slack';
 import { JIRA_DELETE_ATTACHMENT, CONFLUENCE_DELETE_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 import {
@@ -53,7 +54,7 @@ import {
   cancelPendingActionOnQuest,
   isPendingActionRequester,
   MCP_DISABLED_MESSAGE,
-} from '@server/utils/pendingActionExecutor';
+} from '@bike4mind/server-utils/utils/pendingActionExecutor';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
@@ -116,7 +117,7 @@ const SlackInteractivePayloadSchema = z.object({
       callback_id: z.string(),
       private_metadata: z.string().optional(),
       state: z.object({
-        values: z.record(z.string(), z.any()),
+        values: z.record(z.string(), z.unknown()),
       }),
     })
     .optional(),
@@ -136,6 +137,18 @@ async function getRawBody(req: NextApiRequest): Promise<string> {
   });
 }
 
+type SlackInteractivePayload = z.infer<typeof SlackInteractivePayloadSchema>;
+type SlackInteractiveResult = Record<string, unknown>;
+type AttachmentDownloadResult = {
+  content?: string | { text?: string }[];
+  error?: string;
+  filename?: string;
+};
+type SlackViewStateValues = Record<
+  string,
+  Record<string, { value?: string; selected_option?: { value: string } } | undefined> | undefined
+>;
+
 async function findUserBySlackId(slackUserId: string) {
   const user = await User.findOne({
     'slackSettings.slackUserId': slackUserId,
@@ -144,11 +157,13 @@ async function findUserBySlackId(slackUserId: string) {
   return user;
 }
 
-async function updateUserSlackSettings(userId: string, slackSettings: any) {
+type SlackDbUser = NonNullable<Awaited<ReturnType<typeof findUserBySlackId>>>;
+
+async function updateUserSlackSettings(userId: string, slackSettings: IUserDocument['slackSettings']) {
   await User.findByIdAndUpdate(userId, { $set: { slackSettings } }, { new: true, upsert: false });
 }
 
-async function sendSlackResponse(responseUrl: string, message: any) {
+async function sendSlackResponse(responseUrl: string, message: unknown) {
   if (!responseUrl) return;
 
   try {
@@ -176,8 +191,8 @@ async function openAppHomeModal(
   triggerId: string,
   botToken: string,
   title: string,
-  blocks: any[]
-): Promise<{ success: boolean; error?: any }> {
+  blocks: (KnownBlock | Block)[]
+): Promise<{ success: boolean; error?: unknown }> {
   try {
     const client = new WebClient(botToken);
     await client.views.open({
@@ -406,12 +421,12 @@ async function handleScheduleMessageSubmission(
 
 // Handler for different interactive actions
 async function handleInteractiveAction(
-  payload: any,
+  payload: SlackInteractivePayload,
   botToken?: string,
-  prefetchedUser?: any,
+  prefetchedUser?: SlackDbUser | null,
   appName?: string,
   workspaceId?: string
-): Promise<any> {
+): Promise<object> {
   const { type, user, actions, view, response_url, trigger_id } = payload;
 
   // A message posted through POST /api/v1/slack/messages is caller-authored: it must never be able to
@@ -427,12 +442,18 @@ async function handleInteractiveAction(
 
   // Handle view_submission (modal form submissions)
   if (type === 'view_submission' && view?.callback_id) {
-    return await handleViewSubmission(payload, botToken, workspaceId);
+    return await handleViewSubmission(payload as unknown as ViewSubmissionPayload, botToken, workspaceId);
   }
 
   // Handle global shortcuts (/ menu)
   if (type === 'shortcut') {
-    return await handleGlobalShortcut(payload, botToken, prefetchedUser, appName, workspaceId);
+    return await handleGlobalShortcut(
+      payload as unknown as GlobalShortcutPayload,
+      botToken,
+      prefetchedUser,
+      appName,
+      workspaceId
+    );
   }
 
   // Handle App Home actions first (these work even without linked account)
@@ -740,7 +761,7 @@ async function handleInteractiveAction(
           userId: dbUser.id,
         });
         // view comes from the modal payload (block_actions inside a modal)
-        const viewMeta = (payload as any).view;
+        const viewMeta = payload.view;
         const viewId = viewMeta?.id;
         await handleAttachmentDeleteFromModal(dbUser, viewMeta?.private_metadata, viewId, botToken);
         return {};
@@ -827,7 +848,7 @@ async function handleInteractiveAction(
   }
 
   if (view && view.callback_id === 'notebook_settings_modal') {
-    return await handleNotebookSettingsSubmission(dbUser, user.id, view.state.values);
+    return await handleNotebookSettingsSubmission(dbUser, user.id, view.state.values as SlackViewStateValues);
   }
 
   return {
@@ -839,7 +860,7 @@ async function handleInteractiveAction(
 /**
  * Handle App Home refresh button click
  */
-async function handleAppHomeRefresh(dbUser: any, slackUserId: string, botToken?: string, appName?: string) {
+async function handleAppHomeRefresh(dbUser: SlackDbUser, slackUserId: string, botToken?: string, appName?: string) {
   if (!botToken) {
     return {
       text: '❌ Unable to refresh - missing bot token',
@@ -901,7 +922,7 @@ async function handleAppHomeRefresh(dbUser: any, slackUserId: string, botToken?:
   }
 }
 
-async function handleCreateNotebook(dbUser: any, slackUserId: string, responseUrl?: string, botToken?: string) {
+async function handleCreateNotebook(dbUser: SlackDbUser, slackUserId: string, responseUrl?: string, botToken?: string) {
   try {
     const notebookName = `Slack Chat - ${new Date().toLocaleDateString('en-US', {
       year: 'numeric',
@@ -915,7 +936,7 @@ async function handleCreateNotebook(dbUser: any, slackUserId: string, responseUr
     const newSession = await createSession(
       dbUser.id,
       { name: notebookName, origin: { channel: 'slack' } },
-      ability as any,
+      ability as unknown as Parameters<typeof createSession>[2],
       {
         setLastNotebook: true,
       }
@@ -1010,13 +1031,14 @@ async function handleCreateNotebook(dbUser: any, slackUserId: string, responseUr
     // For interactive components, return the response directly (not via response_url)
     // Slack will display it immediately without duplication
     return responseMessage;
-  } catch (error: any) {
+  } catch (error) {
+    const { code, message } = error as { code?: number; message?: string };
     // DocumentDB doesn't support sparse unique indexes properly - it enforces uniqueness on
     // null slackMetadata, so a user can have only one notebook without it.
-    if (error.code === 11000 && error.message?.includes('slackMetadata')) {
+    if (code === 11000 && message?.includes('slackMetadata')) {
       Logger.warn('[Slack Interactive] DocumentDB sparse index limitation - user already has manual notebook', {
         userId: dbUser.id,
-        errorCode: error.code,
+        errorCode: code,
       });
 
       const errorResponse = {
@@ -1066,7 +1088,7 @@ async function handleCreateNotebook(dbUser: any, slackUserId: string, responseUr
   }
 }
 
-async function handleSetDefaultNotebook(dbUser: any, slackUserId: string, notebookId?: string) {
+async function handleSetDefaultNotebook(dbUser: SlackDbUser, slackUserId: string, notebookId?: string) {
   if (!notebookId) {
     return {
       text: '❌ No notebook ID provided',
@@ -1107,7 +1129,7 @@ async function handleSetDefaultNotebook(dbUser: any, slackUserId: string, notebo
   }
 }
 
-async function handleToggleAutoCreate(dbUser: any, slackUserId: string) {
+async function handleToggleAutoCreate(dbUser: SlackDbUser, slackUserId: string) {
   try {
     const slackSettings = dbUser.slackSettings || {};
     const newAutoCreate = !slackSettings.autoCreateNotebook;
@@ -1131,7 +1153,11 @@ async function handleToggleAutoCreate(dbUser: any, slackUserId: string) {
   }
 }
 
-async function handleNotebookSettingsSubmission(dbUser: any, slackUserId: string, values: any) {
+async function handleNotebookSettingsSubmission(
+  dbUser: SlackDbUser,
+  slackUserId: string,
+  values: SlackViewStateValues
+) {
   try {
     const notebookId = values.notebook_block?.notebook_input?.value;
     const autoCreate = values.auto_create_block?.auto_create_select?.selected_option?.value === 'true';
@@ -1320,10 +1346,10 @@ const NOT_REQUESTER_RESPONSE = {
  * Handle confirm button click - execute the action from questId
  */
 async function handleConfirmAction(
-  dbUser: any,
+  dbUser: SlackDbUser,
   { questId, pendingActionTs }: { questId: string; pendingActionTs?: number },
-  clickedDestination: { slackTeamId: string; channelId: string }
-): Promise<any> {
+  { slackTeamId, channelId }: { slackTeamId?: string; channelId?: string }
+): Promise<SlackInteractiveResult> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-confirm' } });
 
   logger.info('[Slack Interactive] Processing confirm action', {
@@ -1349,6 +1375,8 @@ async function handleConfirmAction(
     };
   }
 
+  // A click without both ids cannot match the pending action's destination, so it is refused downstream.
+  const clickedDestination = slackTeamId && channelId ? { slackTeamId, channelId } : undefined;
   const result = await executePendingAction(questId, dbUser, logger, pendingActionTs, clickedDestination);
 
   return {
@@ -1362,9 +1390,9 @@ async function handleConfirmAction(
  * Handle cancel button click - clears pendingAction from the Quest
  */
 async function handleCancelAction(
-  dbUser: any,
+  dbUser: SlackDbUser,
   { questId, pendingActionTs }: { questId: string; pendingActionTs?: number }
-): Promise<any> {
+): Promise<SlackInteractiveResult> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-cancel' } });
 
   if (!(await isPendingActionRequester(questId, dbUser.id))) {
@@ -1389,11 +1417,11 @@ async function handleCancelAction(
  * Downloads file from Jira/Confluence and uploads it directly to Slack
  */
 async function handleAttachmentDownload(
-  dbUser: any,
+  dbUser: SlackDbUser,
   buttonValue: string | undefined,
   botToken?: string,
   _responseUrl?: string
-): Promise<any> {
+): Promise<SlackInteractiveResult> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-attachment-download' } });
 
   if (!(await isFeatureEnabled('EnableMCPServer'))) {
@@ -1419,12 +1447,8 @@ async function handleAttachmentDownload(
 
   // Look up Quest to get attachment data
   const quest = await Quest.findById(questId);
-  // any: attachmentList is defined in the schema but not yet typed on the interface
-  const questAny = quest as any;
-  const attachmentEntry = questAny?.attachmentList?.attachments?.find(
-    (candidate: any) => candidate.id === attachmentId
-  );
-  if (!quest || !questAny?.attachmentList || !attachmentEntry) {
+  const attachmentEntry = quest?.attachmentList?.attachments?.find(candidate => candidate.id === attachmentId);
+  if (!quest || !quest.attachmentList || !attachmentEntry) {
     logger.error('[Slack Interactive] Quest or attachment not found', { questId, attachmentId });
     return {
       text: '❌ Attachment data expired. Please list attachments again.',
@@ -1432,7 +1456,7 @@ async function handleAttachmentDownload(
     };
   }
 
-  const { source } = questAny.attachmentList;
+  const { source } = quest.attachmentList;
   const { filename, emoji, sizeFormatted } = attachmentEntry;
   const sessionId = quest.sessionId;
 
@@ -1482,7 +1506,7 @@ async function handleAttachmentDownload(
     });
 
     // Download the attachment via MCP
-    const result = await invokeMcpHandler<any>({
+    const result = await invokeMcpHandler<unknown>({
       envVariables,
       name: 'atlassian',
       toolName,
@@ -1492,7 +1516,7 @@ async function handleAttachmentDownload(
     });
 
     // Parse result
-    let fileData: any = result;
+    let fileData: AttachmentDownloadResult = result as AttachmentDownloadResult;
     if (typeof result === 'string') {
       try {
         fileData = JSON.parse(result);
@@ -1502,15 +1526,16 @@ async function handleAttachmentDownload(
     }
 
     // Handle nested content structure from MCP
-    if (fileData?.content?.[0]?.text) {
+    const nestedText = Array.isArray(fileData?.content) ? fileData.content[0]?.text : undefined;
+    if (nestedText) {
       try {
-        fileData = JSON.parse(fileData.content[0].text);
+        fileData = JSON.parse(nestedText);
       } catch {
         fileData = { error: 'Failed to parse download result' };
       }
     }
 
-    if (fileData?.error || !fileData?.content) {
+    if (fileData?.error || !fileData?.content || typeof fileData.content !== 'string') {
       logger.error('[Slack Interactive] Attachment download failed', {
         error: fileData?.error,
         hasContent: !!fileData?.content,
@@ -1578,14 +1603,12 @@ async function openAttachmentDeleteModal(
   }
 
   const quest = await Quest.findById(questId);
-  // any: attachmentList is defined in the schema but not yet typed on the interface
-  const questAny = quest as any;
-  const att = questAny?.attachmentList?.attachments?.find((candidate: any) => candidate.id === attachmentId);
-  if (!quest || !questAny?.attachmentList || !att) {
+  const att = quest?.attachmentList?.attachments?.find(candidate => candidate.id === attachmentId);
+  if (!quest || !quest.attachmentList || !att) {
     return { text: '❌ Attachment data expired. Please list attachments again.', response_type: 'ephemeral' };
   }
 
-  const { source, pageId, pageTitle, issueKey } = questAny.attachmentList;
+  const { source, pageId, pageTitle, issueKey } = quest.attachmentList;
   const confluenceLabel = pageTitle ? `Confluence page "${pageTitle}"` : `Confluence page ${pageId || 'unknown'}`;
   const sourceContext = source === 'jira' ? `Jira ticket ${issueKey || 'unknown'}` : confluenceLabel;
 
@@ -1633,8 +1656,7 @@ async function openAttachmentDeleteModal(
  * Updates the modal to show progress, processes deletion, and refreshes the attachment list.
  */
 async function handleAttachmentDeleteFromModal(
-  // any: dbUser is IUserDocument from Mongoose
-  dbUser: any,
+  dbUser: SlackDbUser,
   privateMetadata: string | undefined,
   viewId: string | undefined,
   botToken?: string
@@ -1712,15 +1734,11 @@ async function handleAttachmentDeleteFromModal(
     try {
       const [questId, deletedAttachmentId] = buttonValue.split(':');
       const quest = await Quest.findById(questId);
-      // any: attachmentList is defined in the schema but not yet typed on the interface
-      const questAny = quest as any;
 
-      if (quest && questAny?.attachmentList?.attachments) {
+      if (quest?.attachmentList?.attachments) {
         // Remove the deleted attachment by id. The $pull is atomic so it does not overwrite a
         // concurrent removal of the same list (the web delete button prunes it the same way).
-        const remainingAttachments = questAny.attachmentList.attachments.filter(
-          (att: any) => att.id !== deletedAttachmentId
-        );
+        const remainingAttachments = quest.attachmentList.attachments.filter(att => att.id !== deletedAttachmentId);
         await Quest.updateOne(
           { _id: questId },
           { $pull: { 'attachmentList.attachments': { id: deletedAttachmentId } } }
@@ -1728,8 +1746,8 @@ async function handleAttachmentDeleteFromModal(
 
         if (remainingAttachments.length > 0) {
           // Rebuild attachment list blocks
-          const { source, issueKey, pageId } = questAny.attachmentList;
-          const attachmentInfos: AttachmentDownloadInfo[] = remainingAttachments.map((att: any) => ({
+          const { source, issueKey, pageId } = quest.attachmentList;
+          const attachmentInfos: AttachmentDownloadInfo[] = remainingAttachments.map(att => ({
             source,
             attachmentId: att.id,
             filename: att.filename,
@@ -1775,8 +1793,10 @@ async function handleAttachmentDeleteFromModal(
   }
 }
 
-// any: dbUser is IUserDocument from Mongoose, matching handleAttachmentDownload's signature
-async function handleAttachmentDelete(dbUser: any, buttonValue: string | undefined): Promise<Record<string, unknown>> {
+async function handleAttachmentDelete(
+  dbUser: SlackDbUser,
+  buttonValue: string | undefined
+): Promise<Record<string, unknown>> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-attachment-delete' } });
 
   if (!(await isFeatureEnabled('EnableMCPServer'))) {
@@ -1916,7 +1936,13 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
   }
 
   // Parse payload JSON to get team_id for workspace lookup
-  let parsedPayload: any;
+  let parsedPayload: {
+    team?: { id?: string };
+    api_app_id?: string;
+    actions?: { action_id?: string }[];
+    user?: { id?: string };
+    type?: string;
+  };
   try {
     parsedPayload = JSON.parse(payloadString);
   } catch (e) {
@@ -2069,7 +2095,7 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
       // Awaited (not fire-and-forget) so the promise completes before
       // the Lambda handler returns - prevents Lambda freeze from
       // orphaning the refresh.
-      if (isModelConfigChange(validatedPayload.data, response)) {
+      if (isModelConfigChange(validatedPayload.data, response as Record<string, unknown>)) {
         const slackUserId = validatedPayload.data.user?.id;
         const slackTeamId = validatedPayload.data.team?.id;
         if (slackUserId && slackTeamId && botToken) {

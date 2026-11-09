@@ -3,9 +3,16 @@ import type { FetchLike } from '@bike4mind/local-models';
 import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
 import { ServerCredentialsError, ServerUnreachableError } from './errors';
 import type { ChatModelOption } from '@shared/chat';
-import type { ModelServerProbeResult } from '@shared/modelServers';
-import { LISTED_FRESH_MS, ModelServerRegistry, PICKER_CHECK_WAIT_MS, PICKER_LIST_WAIT_MS } from './ModelServerRegistry';
+import type { ModelServerProbeInput, ModelServerProbeResult, ModelServerUpdateInput } from '@shared/modelServers';
+import {
+  foundServers,
+  LISTED_FRESH_MS,
+  ModelServerRegistry,
+  PICKER_CHECK_WAIT_MS,
+  PICKER_LIST_WAIT_MS,
+} from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';
+import { inertLaunchers } from './testLaunchers';
 import {
   describeSshFailure,
   SshConnectionError,
@@ -98,6 +105,7 @@ function registry(
   const listedLate = vi.fn();
   const edited = vi.fn();
   const instance = new ModelServerRegistry({
+    launchers: inertLaunchers(),
     store,
     logger: options.logger ?? { debug: () => undefined, warn: () => undefined },
     platform: options.platform,
@@ -155,6 +163,7 @@ describe('ModelServerRegistry', () => {
     const quiet = { debug: () => undefined, warn: () => undefined };
     const localSpecsChanged = vi.fn();
     const servers = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store: new ModelServerStore(cipher, file, quiet),
       logger: { debug: () => undefined, warn: () => undefined },
       fetchFor: fake.fetchFor,
@@ -189,6 +198,7 @@ describe('ModelServerRegistry', () => {
     // A restart reads this computer's specs back and says so, since sizing may have run on the probe alone.
     const restarted = vi.fn();
     const again = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store: new ModelServerStore(cipher, file, quiet),
       logger: quiet,
       fetchFor: fake.fetchFor,
@@ -307,6 +317,7 @@ describe('ModelServerRegistry', () => {
       { type: 'bearer', token: TOKEN }
     );
     const servers = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store: new ModelServerStore(noKeyring, file, silent),
       logger: silent,
       fetchFor: fake.fetchFor,
@@ -426,6 +437,7 @@ describe('ModelServerRegistry', () => {
     };
     const holder: { catalog?: ModelCatalog } = {};
     const servers = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store: new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined }),
       logger: { debug: () => undefined, warn: () => undefined },
       changed: () => holder.catalog?.expireLocal(),
@@ -1480,6 +1492,7 @@ describe('ModelServerRegistry', () => {
     };
     const store = new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined });
     const servers = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store,
       logger: { debug: () => undefined, warn: () => undefined },
       fetchFor,
@@ -1517,6 +1530,7 @@ describe('ModelServerRegistry', () => {
     };
     const store = new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined });
     const servers = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store,
       logger: { debug: () => undefined, warn: () => undefined },
       fetchFor,
@@ -1579,6 +1593,7 @@ describe('ModelServerRegistry', () => {
     const quiet = { debug: () => undefined, warn: () => undefined };
     const open = () =>
       new ModelServerRegistry({
+        launchers: inertLaunchers(),
         store: new ModelServerStore(cipher, file, quiet),
         logger: quiet,
         fetchFor,
@@ -1673,18 +1688,60 @@ describe('ModelServerRegistry', () => {
   });
 });
 
+/** An OpenAI-compatible server listing `models` models owned by `owner`, wanting `token` when one is set. */
+interface FakeOpenAI {
+  owner: string;
+  models?: number;
+  token?: string;
+}
+
+function openAIAnswer(server: FakeOpenAI, path: string, headers: Record<string, string> | null): Response {
+  if (server.token && headers?.authorization !== `Bearer ${server.token}`) {
+    return json({ error: { message: 'Invalid API Key', type: 'authentication_error' } }, 401);
+  }
+  if (path === '/v1/models') {
+    return json({
+      object: 'list',
+      data: Array.from({ length: server.models ?? 1 }, (_, index) => ({
+        id: `model-${index}`,
+        object: 'model',
+        owned_by: server.owner,
+      })),
+    });
+  }
+  if (path === '/v1/chat/completions') {
+    const chunk = (content: string) => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`;
+    const done = { choices: [{ delta: {}, finish_reason: 'stop' }] };
+    return new Response(`${chunk('Hello')}${chunk(' over SSH')}data: ${JSON.stringify(done)}\n\ndata: [DONE]\n\n`, {
+      headers: { 'content-type': 'text/event-stream' },
+    });
+  }
+  return json({ error: 'not found' }, 404);
+}
+
 describe('ModelServerRegistry SSH servers', () => {
   type Mode = 'up' | 'down' | 'unknown-host-key';
+  type FarEnd = Record<number, 'ollama' | FakeOpenAI>;
 
-  /** Each destination answers as the fake Ollama over SSH, or fails the way ssh does in `modes`. */
-  function sshSetup(file: StoreFile = memoryFile()) {
+  /**
+   * Each destination answers with the servers `farEnd` puts on its loopback ports, the fake Ollama on 11434 by
+   * default, or fails the way ssh does in `modes`. A port with nothing on it fails as ssh's forward does.
+   */
+  function sshSetup(file: StoreFile = memoryFile(), farEnd: FarEnd = { 11434: 'ollama' }) {
     const fake = fakeOllama();
     const modes: Record<string, Mode> = {};
     const sshCalls: string[] = [];
+    const sent: { port: number; path: string; authorization: string | null }[] = [];
+    const warnings: string[] = [];
     const sshFetchFor =
       (endpoint: SshEndpoint): FetchLike =>
       async (input, init) => {
-        sshCalls.push(`${endpoint.destination} ${new URL(String(input)).pathname}`);
+        const url = new URL(String(input));
+        const port = endpoint.port ?? 11434;
+        sshCalls.push(`${endpoint.destination} ${url.pathname}`);
+        const headers = endpoint.credentialHeaders?.() ?? null;
+        sent.push({ port, path: url.pathname, authorization: headers?.authorization ?? null });
+        if (url.origin !== `http://127.0.0.1:${port}`) throw new Error(`${url.origin} is not the forwarded port`);
         const mode = modes[endpoint.destination] ?? 'up';
         if (mode === 'down') {
           throw new TypeError('fetch failed', {
@@ -1696,41 +1753,58 @@ describe('ModelServerRegistry SSH servers', () => {
         if (mode === 'unknown-host-key') {
           throw describeSshFailure('Host key verification failed.\n', 255, endpoint.destination);
         }
-        return fake.fetchFor({
-          origin: 'http://127.0.0.1:11434',
-          label: endpoint.label,
-          credentialHeaders: () => null,
-        })(input, init);
+        const server = farEnd[port];
+        if (!server) {
+          throw new TypeError('fetch failed', {
+            cause: describeSshFailure(
+              'channel 0: open failed: connect failed: Connection refused\nstdio forwarding failed\n',
+              255,
+              endpoint.destination,
+              'Desktop',
+              'linux',
+              port
+            ),
+          });
+        }
+        if (server !== 'ollama') return openAIAnswer(server, url.pathname, headers);
+        return fake.fetchFor({ origin: url.origin, label: endpoint.label, credentialHeaders: () => headers })(
+          input,
+          init
+        );
       };
-    const store = new ModelServerStore(cipher, file, { debug: () => undefined, warn: () => undefined });
+    const logger = {
+      debug: (message: string) => warnings.push(message),
+      warn: (message: string) => warnings.push(message),
+    };
+    const store = new ModelServerStore(cipher, file, logger);
     const instance = new ModelServerRegistry({
+      launchers: inertLaunchers(),
       store,
-      logger: { debug: () => undefined, warn: () => undefined },
+      logger,
       fetchFor: fake.fetchFor,
       sshFetchFor,
       localFetch: async () => json({ version: '0.12.0' }),
       resolve: async () => [],
     });
-    return { registry: instance, store, fake, modes, sshCalls };
+    return { registry: instance, store, fake, modes, sshCalls, sent, warnings };
   }
 
   const addSsh = (servers: ModelServerRegistry, destination = 'me@gpu', name = 'lab') =>
     servers.add({ address: destination, transport: 'ssh', credential: none, name, kind: 'ollama', access: 'chat' });
 
-  it('adds a server by SSH destination under its own id, as Ollama with no credential', async () => {
-    const { registry: servers, store } = sshSetup();
-    await servers.add({
-      address: ' me@gpu ',
-      transport: 'ssh',
-      credential: { type: 'bearer', token: TOKEN },
-      name: 'lab',
-      kind: 'openai-compatible',
-      access: 'chat',
-    });
+  const probeSsh = (servers: ModelServerRegistry, extra: Partial<ModelServerProbeInput> = {}) =>
+    servers.probe({ address: 'me@gpu', transport: 'ssh', credential: none, ...extra });
+
+  const bearer = (token = TOKEN) => ({ type: 'bearer' as const, token });
+
+  it('adds a server by SSH destination under its own id, as Ollama on 11434 with no credential', async () => {
+    const { registry: servers, store, sent } = sshSetup();
+    await addSsh(servers, ' me@gpu ');
     const [, lab] = await servers.views();
     expect(lab).toMatchObject({
       transport: 'ssh',
       address: 'me@gpu',
+      port: 11434,
       kind: 'ollama',
       auth: { type: 'none' },
       unencrypted: false,
@@ -1739,7 +1813,466 @@ describe('ModelServerRegistry SSH servers', () => {
     });
     expect(lab.id).toMatch(/^[0-9a-f]{12}$/);
     const [record] = await store.list();
-    expect(record.transport).toEqual({ type: 'ssh', destination: 'me@gpu' });
+    expect(record.transport).toEqual({ type: 'ssh', destination: 'me@gpu', port: 11434 });
+    expect(new Set(sent.map(request => request.port))).toEqual(new Set([11434]));
+  });
+
+  it('refuses a token for Ollama over SSH, and a header for any server over SSH', async () => {
+    const { registry: servers, sent } = sshSetup();
+    await expect(
+      servers.add({
+        address: 'me@gpu',
+        transport: 'ssh',
+        credential: bearer(),
+        name: 'lab',
+        kind: 'ollama',
+        access: 'chat',
+      })
+    ).rejects.toThrow('Ollama takes no token over SSH: ssh signs in with your keys.');
+    const header = await probeSsh(servers, {
+      port: 8080,
+      credential: { type: 'header', name: 'x-api-key', value: TOKEN },
+    });
+    expect(header).toMatchObject({
+      ok: false,
+      error: 'A server reached over SSH takes a bearer token or nothing: ssh signs in with your keys.',
+    });
+    expect(sent).toEqual([]);
+  });
+
+  describe('finding the servers on the far end', () => {
+    it('says what to do when no server answers on the usual ports', async () => {
+      const { registry: servers } = sshSetup(memoryFile(), {});
+      const result = await probeSsh(servers);
+      expect(result).toMatchObject({ ok: false, address: 'me@gpu', suggestedName: 'gpu' });
+      expect(result.found).toBeUndefined();
+      expect(result.error).toBe(
+        'SSH to me@gpu works, but no model server answers on the usual ports there (Ollama 11434, LM Studio 1234, llama-server 8080, vLLM 8000). Start the server on that machine, or enter the port it listens on.'
+      );
+    });
+
+    it('describes the one server it finds, named after the host', async () => {
+      const { registry: servers } = sshSetup(memoryFile(), { 8080: { owner: 'llamacpp', models: 2 } });
+      expect(await probeSsh(servers)).toMatchObject({
+        ok: true,
+        address: 'me@gpu',
+        port: 8080,
+        kind: 'openai-compatible',
+        models: 2,
+        needsCredentials: false,
+        suggestedName: 'gpu',
+        found: [{ port: 8080, kind: 'openai-compatible', product: 'llama-server', models: 2, suggestedName: 'gpu' }],
+        error: null,
+      });
+    });
+
+    it('lists several servers with names that stay apart, and sends no token while looking', async () => {
+      const { registry: servers, sent } = sshSetup(memoryFile(), {
+        11434: 'ollama',
+        8080: { owner: 'llama-swap', models: 40 },
+        8000: { owner: 'vllm', token: TOKEN },
+      });
+      const result = await probeSsh(servers);
+      expect(result).toMatchObject({ ok: true, kind: null, needsCredentials: true, error: null });
+      expect(result.port).toBeUndefined();
+      expect(result.found?.map(server => [server.port, server.kind, server.product, server.suggestedName])).toEqual([
+        [11434, 'ollama', null, 'gpu Ollama'],
+        [8080, 'openai-compatible', 'llama-swap', 'gpu llama-swap'],
+        [8000, 'openai-compatible', null, 'gpu port 8000'],
+      ]);
+      expect(result.found?.find(server => server.port === 8000)?.needsCredentials).toBe(true);
+      expect(sent.every(request => request.authorization === null)).toBe(true);
+    });
+
+    it('does not suggest the name of a saved server it cannot use, which the store would refuse', async () => {
+      const file = memoryFile();
+      await file.write(
+        JSON.stringify({
+          version: 1,
+          servers: [
+            {
+              id: 'a1',
+              name: 'gpu',
+              kind: 'ollama',
+              transport: { type: 'ssh', destination: 'me@gpu', port: 0 },
+              access: 'chat',
+              auth: { type: 'none' },
+            },
+          ],
+        })
+      );
+      const { registry: servers } = sshSetup(file, { 8080: { owner: 'llamacpp', models: 2 } });
+      const result = await probeSsh(servers);
+      expect(result.suggestedName).not.toBe('gpu');
+      expect(result.found?.[0].suggestedName).toBe(result.suggestedName);
+    });
+
+    it('suggests names no saved server or other row has, so every row saves as suggested', async () => {
+      const { registry: servers } = sshSetup(memoryFile(), {
+        11434: 'ollama',
+        8080: { owner: 'llama-swap', models: 2 },
+        8000: { owner: 'vllm' },
+      });
+      for (const [destination, name] of [
+        ['me@a', 'gpu'],
+        ['me@b', 'GPU Ollama'],
+        ['me@c', 'gpu llama-swap'],
+        ['me@d', 'gpu llama-swap 8080'],
+      ]) {
+        await addSsh(servers, destination, name);
+      }
+      const several = await probeSsh(servers);
+      expect(several.found?.map(server => server.suggestedName)).toEqual([
+        'gpu Ollama 11434',
+        'gpu llama-swap 8080 2',
+        'gpu vLLM',
+      ]);
+      expect((await probeSsh(servers, { port: 8000 })).suggestedName).toBe('gpu 8000');
+      for (const server of several.found ?? []) {
+        await servers.add({
+          address: 'me@gpu',
+          transport: 'ssh',
+          port: server.port,
+          credential: none,
+          name: server.suggestedName,
+          kind: server.kind,
+          access: 'chat',
+        });
+      }
+      expect((await servers.views()).map(view => view.name)).toEqual(
+        expect.arrayContaining(['gpu Ollama 11434', 'gpu llama-swap 8080 2', 'gpu vLLM'])
+      );
+    });
+
+    it('cuts a long host, not what runs there, to the stored length before keeping names apart', async () => {
+      const alias = `gpu-${'x'.repeat(68)}`;
+      const { registry: servers } = sshSetup(memoryFile(), {
+        11434: 'ollama',
+        8080: { owner: 'llama-swap' },
+        8000: { owner: 'llamacpp' },
+      });
+      await addSsh(servers, 'me@a', `${alias} Ollama`);
+      const result = await probeSsh(servers, { address: `me@${alias}` });
+      const names = result.found?.map(server => server.suggestedName) ?? [];
+      expect(names).toEqual([
+        `${alias.slice(0, 67)} Ollama 11434`,
+        `${alias.slice(0, 69)} llama-swap`,
+        `${alias.slice(0, 67)} llama-server`,
+      ]);
+      expect(names.every(name => name.length <= 80)).toBe(true);
+      for (const server of result.found ?? []) {
+        await servers.add({
+          address: `me@${alias}`,
+          transport: 'ssh',
+          port: server.port,
+          credential: none,
+          name: server.suggestedName,
+          kind: server.kind,
+          access: 'chat',
+        });
+      }
+      expect((await servers.views()).map(view => view.name)).toEqual(expect.arrayContaining(names));
+    });
+
+    it('stops numbering when a suffix no longer fits, instead of trying the same cut name forever', () => {
+      const server = (port: number, kind: 'ollama' | 'openai-compatible') => ({
+        port,
+        kind,
+        product: kind === 'ollama' ? null : ('llama-swap' as const),
+        version: null,
+        models: null,
+        latencyMs: null,
+        needsCredentials: false,
+      });
+      const found = foundServers(
+        'me@gpu',
+        [server(11434, 'ollama'), server(8080, 'openai-compatible')],
+        ['g Ollama', 'Ollama'],
+        8
+      );
+      expect(found.map(row => row.suggestedName)).toEqual(['Ollama', 'llama-s']);
+      expect(found.every(row => row.suggestedName.length <= 8)).toBe(true);
+    });
+
+    it('looks only at a port the user names', async () => {
+      const { registry: servers, sent } = sshSetup(memoryFile(), { 11434: 'ollama', 9001: { owner: 'vllm' } });
+      expect(await probeSsh(servers, { port: ' 9001 ' })).toMatchObject({
+        ok: true,
+        port: 9001,
+        kind: 'openai-compatible',
+      });
+      expect(new Set(sent.map(request => request.port))).toEqual(new Set([9001]));
+      const empty = await probeSsh(servers, { port: 9002 });
+      expect(empty.error).toBe(
+        'SSH to me@gpu works, but nothing answers at 127.0.0.1:9002 there. Start the model server on that machine, or check its port.'
+      );
+    });
+
+    it('refuses a bad port before running ssh', async () => {
+      const { registry: servers, sent } = sshSetup();
+      for (const port of ['', '   ', 0, 65_536, '0', 'abc', '8080;id', '-W', '1e3']) {
+        expect(await probeSsh(servers, { port }), String(port)).toMatchObject({
+          ok: false,
+          error: 'Enter the port the server listens on, on that machine: a number from 1 to 65535.',
+        });
+        await expect(
+          servers.add({
+            address: 'me@gpu',
+            transport: 'ssh',
+            port,
+            credential: none,
+            name: 'x',
+            kind: 'ollama',
+            access: 'chat',
+          })
+        ).rejects.toThrow('a number from 1 to 65535');
+      }
+      expect(sent).toEqual([]);
+    });
+
+    it('sends a token only to the port it is for, and says when it is refused', async () => {
+      const { registry: servers, sent } = sshSetup(memoryFile(), { 8080: { owner: 'llamacpp', token: TOKEN } });
+      expect(await probeSsh(servers, { credential: bearer() })).toMatchObject({
+        ok: false,
+        error: 'Enter the port of the server this token is for, then test again.',
+      });
+      expect(sent).toEqual([]);
+      const without = await probeSsh(servers, { port: 8080 });
+      expect(without).toMatchObject({ ok: false, needsCredentials: true, port: 8080 });
+      expect(without.error).toBe(
+        'The server at 127.0.0.1:8080 on me@gpu asks for an API key. Enter it as a token, then test again.'
+      );
+      const wrong = await probeSsh(servers, { port: 8080, credential: bearer('tok-wrong-zz') });
+      expect(wrong).toMatchObject({
+        ok: false,
+        needsCredentials: true,
+        error: 'The server at 127.0.0.1:8080 on me@gpu refused this token.',
+      });
+      expect(await probeSsh(servers, { port: 8080, credential: bearer() })).toMatchObject({
+        ok: true,
+        found: [expect.objectContaining({ product: 'llama-server', needsCredentials: false })],
+      });
+    });
+  });
+
+  it('saves an OpenAI-compatible server on its port with its token, and streams a chat over SSH', async () => {
+    const { registry: servers, store, sent } = sshSetup(memoryFile(), { 8080: { owner: 'llamacpp', token: TOKEN } });
+    await servers.add({
+      address: 'me@gpu',
+      transport: 'ssh',
+      port: '8080',
+      credential: bearer(),
+      name: 'llama',
+      kind: 'openai-compatible',
+      access: 'chat',
+    });
+    const [, llama] = await servers.views();
+    expect(llama).toMatchObject({
+      transport: 'ssh',
+      address: 'me@gpu',
+      port: 8080,
+      kind: 'openai-compatible',
+      auth: { type: 'bearer' },
+      health: { state: 'online' },
+      models: ['model-0'],
+    });
+    expect(JSON.stringify(llama)).not.toContain(TOKEN);
+    expect((await store.list())[0].transport).toEqual({ type: 'ssh', destination: 'me@gpu', port: 8080 });
+    expect(servers.hubServer(llama.id)?.runtime.baseUrl).toBe('ssh://me@gpu port 8080');
+
+    sent.length = 0;
+    const events: unknown[] = [];
+    await servers
+      .chatFor(`srv-${llama.id}`)!
+      .stream({ model: `local:srv-${llama.id}:model-0`, messages: [{ role: 'user', content: 'hi' }] }, event =>
+        events.push(event)
+      );
+    expect(JSON.stringify(events)).toContain('Hello');
+    expect(JSON.stringify(events)).toContain(' over SSH');
+    const chat = sent.filter(request => request.path === '/v1/chat/completions');
+    expect(chat.length).toBeGreaterThan(0);
+    expect(chat.every(request => request.port === 8080 && request.authorization === `Bearer ${TOKEN}`)).toBe(true);
+  });
+
+  it('lists every model of a server that serves many, over SSH and over an address', async () => {
+    const swap = { owner: 'llama-swap', models: 300 };
+    const { registry: servers } = sshSetup(memoryFile(), { 8080: swap });
+    await servers.add({
+      address: 'me@gpu',
+      transport: 'ssh',
+      port: 8080,
+      credential: none,
+      name: 'swap',
+      kind: 'openai-compatible',
+      access: 'chat',
+    });
+    expect((await servers.models()).filter(model => model.server?.name === 'swap')).toHaveLength(300);
+
+    const fetchFor = (): FetchLike => async input => openAIAnswer(swap, new URL(String(input)).pathname, null);
+    const { registry: http } = registry({ fetchFor } as unknown as ReturnType<typeof fakeOllama>);
+    await http.add({
+      address: 'http://192.168.1.20:8080',
+      credential: none,
+      name: 'swap',
+      kind: 'openai-compatible',
+      access: 'chat',
+    });
+    expect((await http.models()).filter(model => model.server?.name === 'swap')).toHaveLength(300);
+  });
+
+  it('refuses to save an OpenAI-compatible server as Ollama, naming the kind to choose', async () => {
+    const { registry: servers } = sshSetup(memoryFile(), { 8000: { owner: 'vllm' } });
+    await expect(
+      servers.add({
+        address: 'me@gpu',
+        transport: 'ssh',
+        port: 8000,
+        credential: none,
+        name: 'v',
+        kind: 'ollama',
+        access: 'chat',
+      })
+    ).rejects.toThrow(
+      'me@gpu answers at 127.0.0.1:8000 as an OpenAI-compatible server, not Ollama. Choose OpenAI-compatible, then save again.'
+    );
+    expect((await servers.views()).length).toBe(1);
+  });
+
+  it('loads an SSH server saved before ports as Ollama on 11434', async () => {
+    const file = memoryFile();
+    await file.write(
+      JSON.stringify({
+        version: 1,
+        servers: [
+          {
+            id: 'a1b2c3d4e5f6',
+            name: 'old lab',
+            kind: 'ollama',
+            transport: { type: 'ssh', destination: 'me@gpu' },
+            access: 'chat',
+            auth: { type: 'none' },
+            models: ['qwen2.5:0.5b'],
+            addedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      })
+    );
+    const { registry: servers, sent } = sshSetup(file);
+    const [, lab] = await servers.views();
+    expect(lab).toMatchObject({ id: 'a1b2c3d4e5f6', name: 'old lab', kind: 'ollama', port: 11434, address: 'me@gpu' });
+    await servers.check(lab.id);
+    expect((await servers.views())[1].health.state).toBe('online');
+    expect(sent.some(request => request.port === 11434 && request.path === '/api/version')).toBe(true);
+    await servers.update(lab.id, { name: 'lab' });
+    const saved = JSON.parse((await file.read()) as string) as { servers: { transport: unknown }[] };
+    expect(saved.servers[0].transport).toEqual({ type: 'ssh', destination: 'me@gpu' });
+  });
+
+  it('keeps this computer editable when a broken SSH record uses its reserved id', async () => {
+    const file = memoryFile();
+    await file.write(
+      JSON.stringify({
+        version: 1,
+        servers: [
+          {
+            id: 'local',
+            name: 'broken',
+            kind: 'ollama',
+            transport: { type: 'ssh' },
+            access: 'chat',
+            auth: { type: 'none' },
+            models: [],
+            addedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      })
+    );
+    const { registry: servers, store } = sshSetup(file);
+    const specs = { ramGiB: 64, gpuMemoryGiB: null, bandwidthGBps: null, unified: false };
+    expect((await servers.update('local', { specs }))[0].specs).toEqual(specs);
+    await expect(servers.update('local', { launch: { flashAttention: 'on' } })).resolves.toBeDefined();
+    expect(await store.localLaunch()).toMatchObject({ flashAttention: 'on' });
+  });
+
+  it('shows an SSH server saved with a port or destination it cannot use as refused, and lets it be removed', async () => {
+    const file = memoryFile();
+    const saved = (id: string, name: string, transport: Record<string, unknown>) => ({
+      id,
+      name,
+      kind: 'openai-compatible',
+      transport,
+      access: 'chat',
+      auth: { type: 'bearer' },
+      secret: Buffer.from(`enc:${TOKEN}`).toString('base64'),
+      models: ['qwen'],
+      addedAt: '2026-01-01T00:00:00.000Z',
+    });
+    await file.write(
+      JSON.stringify({
+        version: 1,
+        servers: [
+          saved('a1', 'typo', { type: 'ssh', destination: 'me@gpu', port: 0 }),
+          saved('a2', 'text', { type: 'ssh', destination: 'me@gpu', port: '80 80' }),
+          saved('a3', 'hostile', { type: 'ssh', destination: '-oProxyCommand=x', port: 8080 }),
+          saved('a4', 'other', { type: 'ssh', host: 'gpu' }),
+        ],
+      })
+    );
+    const { registry: servers, sshCalls, sent } = sshSetup(file);
+    const views = await servers.views();
+    expect(views.map(view => view.name)).toEqual(['This computer', 'typo', 'text', 'hostile', 'other']);
+    expect(views.map(view => view.unusable)).toEqual([undefined, true, true, true, true]);
+    const port = 'Its saved SSH port is not a number from 1 to 65535. Remove this server and add it again.';
+    expect(views[1]).toMatchObject({
+      id: 'a1',
+      kind: 'openai-compatible',
+      transport: 'ssh',
+      address: 'me@gpu',
+      access: 'chat',
+      auth: { type: 'bearer' },
+      models: [],
+      launch: null,
+      health: { state: 'refused', error: port },
+      unusable: true,
+    });
+    expect(views[1].port).toBeUndefined();
+    expect(views[2].health.error).toBe(port);
+    expect(views[3]).toMatchObject({
+      address: 'unusable address',
+      health: {
+        state: 'refused',
+        error: 'Its saved SSH destination is not one ssh can be given safely. Remove this server and add it again.',
+      },
+    });
+    expect(views[4]).toMatchObject({
+      address: 'unusable address',
+      health: { state: 'refused', error: 'It has no saved SSH destination. Remove this server and add it again.' },
+    });
+    expect(JSON.stringify(views)).not.toContain('ProxyCommand');
+    expect(JSON.stringify(views)).not.toContain(TOKEN);
+    await servers.check();
+    await servers.check('a1');
+    expect(await servers.models()).toEqual([]);
+    const hub = servers.hubServer('a1');
+    expect(await hub?.runtime.health()).toEqual({ ok: false, version: null, error: port });
+    await expect(hub?.runtime.list()).rejects.toThrow(port);
+    const patches: ModelServerUpdateInput[] = [
+      { name: 'fixed' },
+      { kind: 'ollama' },
+      { access: 'manage' },
+      { credential: { type: 'none' } },
+      { specs: null },
+      { launch: { flashAttention: 'on' } },
+      { launch: { kvCacheType: 'q8_0' }, kind: 'ollama' },
+    ];
+    for (const patch of patches) await expect(servers.update('a1', patch)).rejects.toThrow(port);
+    expect(sshCalls).toEqual([]);
+    expect(sent).toEqual([]);
+
+    const left = await servers.remove('a1');
+    expect(left.map(view => view.name)).toEqual(['This computer', 'text', 'hostile', 'other']);
+    const stored = JSON.parse((await file.read()) as string) as { servers: { id: string }[] };
+    expect(stored.servers.map(server => server.id)).toEqual(['a2', 'a3', 'a4']);
   });
 
   it('refuses a destination starting with "-" before running ssh', async () => {
@@ -1817,14 +2350,29 @@ describe('ModelServerRegistry SSH servers', () => {
     expect(lab?.health.error).toMatch(/ssh me@gpu failed: .*Connection refused/);
   });
 
-  it('keeps an SSH server on Ollama with no credential', async () => {
-    const { registry: servers } = sshSetup();
+  it('takes a token on an SSH server only while it is OpenAI-compatible', async () => {
+    const { registry: servers, sent } = sshSetup();
     await addSsh(servers);
     const [, lab] = await servers.views();
-    await expect(servers.update(lab.id, { kind: 'openai-compatible' })).rejects.toThrow(/kind stays Ollama/);
-    await expect(servers.update(lab.id, { credential: { type: 'bearer', token: TOKEN } })).rejects.toThrow(/SSH keys/);
-    const views = await servers.update(lab.id, { access: 'manage' });
-    expect(views[1]).toMatchObject({ access: 'manage', transport: 'ssh' });
+    await expect(servers.update(lab.id, { credential: bearer() })).rejects.toThrow('Ollama takes no token over SSH');
+    await expect(
+      servers.update(lab.id, { kind: 'openai-compatible', credential: { type: 'header', name: 'x-key', value: TOKEN } })
+    ).rejects.toThrow('takes a bearer token or nothing');
+    const views = await servers.update(lab.id, { kind: 'openai-compatible', credential: bearer() });
+    expect(views[1]).toMatchObject({
+      kind: 'openai-compatible',
+      auth: { type: 'bearer' },
+      transport: 'ssh',
+      port: 11434,
+    });
+    expect(sent.at(-1)?.authorization).toBe(`Bearer ${TOKEN}`);
+    await expect(servers.update(lab.id, { kind: 'ollama' })).rejects.toThrow('Remove the token');
+    const back = await servers.update(lab.id, { kind: 'ollama', credential: none });
+    expect(back[1]).toMatchObject({ kind: 'ollama', auth: { type: 'none' } });
+    sent.length = 0;
+    await servers.check(lab.id);
+    expect(sent.length).toBeGreaterThan(0);
+    expect(sent.every(request => request.authorization === null)).toBe(true);
   });
 
   it('loads a saved SSH server back after a restart', async () => {

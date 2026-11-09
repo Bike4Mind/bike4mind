@@ -152,15 +152,14 @@ describe('SessionActivity', () => {
   it('pushes each setup step, ignoring a repeat and a session that is not preparing', () => {
     const { activity, events } = track();
 
-    activity.preparingStep('b', 'dependencies');
+    activity.preparingStep('b', 'starting');
     activity.preparingStarted('a', 'worktree');
-    activity.preparingStep('a', 'dependencies');
-    activity.preparingStep('a', 'dependencies');
+    activity.preparingStep('a', 'worktree');
+    activity.preparingStep('a', 'starting');
     activity.preparingStep('a', 'starting');
 
     expect(events).toEqual([
       { sessionId: 'a', status: 'processing', preparing: 'worktree' },
-      { sessionId: 'a', status: 'processing', preparing: 'dependencies' },
       { sessionId: 'a', status: 'processing', preparing: 'starting' },
     ]);
     expect(activity.statusOf('b')).toBe('done');

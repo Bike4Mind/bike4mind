@@ -2,6 +2,7 @@ import {
   ApiKeyScope,
   abuseAssessmentReplayRequestSchema,
   abuseAssessmentReplayResponseSchema,
+  SELF_ASSESSED_SHADOW_DETECTORS,
   type ShadowDetectionItem,
 } from '@bike4mind/common';
 import { shadowDetectionRepository } from '@bike4mind/database';
@@ -14,7 +15,7 @@ import {
   replayAbuseAssessments,
   summarizeDetection,
 } from '@server/security/abuseAssessment/abuseAssessment';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { respond } from '@server/utils/respond';
 
 const ONE_MINUTE_MS = 60_000;
@@ -56,8 +57,11 @@ const handler = adminApi({
       }
       const ids = [...new Set(parsed.data.detectionIds)];
       const found = await Promise.all(ids.map(id => shadowDetectionRepository.findById(id)));
-      const detections = found.filter((detection): detection is ShadowDetectionItem => detection !== null);
-      const missing = ids.filter((_, index) => found[index] === null);
+      // A self-assessed detection carries its own verdict and summary shape, so it is not replayable.
+      const replayable = (detection: ShadowDetectionItem | null): detection is ShadowDetectionItem =>
+        detection !== null && !SELF_ASSESSED_SHADOW_DETECTORS.includes(detection.detector);
+      const detections = found.filter(replayable);
+      const missing = ids.filter((_, index) => !replayable(found[index]));
 
       const deadline = Date.now() + REPLAY_TIME_BUDGET_MS;
       const examples = [];

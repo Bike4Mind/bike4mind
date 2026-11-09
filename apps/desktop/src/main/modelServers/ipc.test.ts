@@ -47,6 +47,16 @@ describe('specsInput', () => {
   });
 });
 
+describe('registerModelServersIpc check', () => {
+  it('marks a check the renderer asks for as a user check, so Desktop looks for Ollama again', async () => {
+    const { registry, invoke } = register();
+    await invoke(IPC_CHANNELS.modelServersCheck, 'local');
+    await invoke(IPC_CHANNELS.modelServersCheck);
+    expect(registry.check).toHaveBeenNthCalledWith(1, 'local', { lookAgain: true });
+    expect(registry.check).toHaveBeenNthCalledWith(2, undefined, { lookAgain: true });
+  });
+});
+
 describe('registerModelServersIpc launch', () => {
   it('passes launch settings through their shape and drops anything else', async () => {
     const { registry, invoke } = register();
@@ -101,6 +111,28 @@ describe('registerModelServersIpc transport', () => {
     expect(registry.probe).toHaveBeenNthCalledWith(1, expect.objectContaining({ address: 'me@gpu', transport: 'ssh' }));
     expect(registry.probe).toHaveBeenNthCalledWith(2, expect.objectContaining({ transport: 'http' }));
     expect(registry.add).toHaveBeenCalledWith(expect.objectContaining({ address: 'me@gpu', transport: 'ssh' }));
+  });
+
+  it('passes a port through as typed for the registry to check, and one of any other type as invalid', async () => {
+    const { registry, invoke } = register();
+    await invoke(IPC_CHANNELS.modelServersProbe, { address: 'me@gpu', transport: 'ssh', port: 8080 });
+    await invoke(IPC_CHANNELS.modelServersProbe, { address: 'me@gpu', transport: 'ssh', port: '8080;id' });
+    await invoke(IPC_CHANNELS.modelServersProbe, { address: 'me@gpu', transport: 'ssh', port: { toString: 'x' } });
+    await invoke(IPC_CHANNELS.modelServersProbe, { address: 'me@gpu', transport: 'ssh', port: null });
+    await invoke(IPC_CHANNELS.modelServersProbe, { address: 'me@gpu', transport: 'ssh' });
+    await invoke(IPC_CHANNELS.modelServersAdd, { address: 'me@gpu', transport: 'ssh', port: '1234', name: 'gpu' });
+    expect(registry.probe).toHaveBeenNthCalledWith(1, expect.objectContaining({ port: 8080 }));
+    expect(registry.probe).toHaveBeenNthCalledWith(2, expect.objectContaining({ port: '8080;id' }));
+    expect(registry.probe).toHaveBeenNthCalledWith(3, expect.objectContaining({ port: 'invalid' }));
+    expect(registry.probe).toHaveBeenNthCalledWith(4, expect.objectContaining({ port: 'invalid' }));
+    expect(registry.probe).toHaveBeenNthCalledWith(5, expect.not.objectContaining({ port: expect.anything() }));
+    expect(registry.add).toHaveBeenCalledWith(expect.objectContaining({ port: '1234' }));
+  });
+
+  it('passes text too long to be a port as invalid, not cut down to the port it starts with', async () => {
+    const { registry, invoke } = register();
+    await invoke(IPC_CHANNELS.modelServersProbe, { address: 'me@gpu', transport: 'ssh', port: '8080            x' });
+    expect(registry.probe).toHaveBeenCalledWith(expect.objectContaining({ port: 'invalid' }));
   });
 });
 

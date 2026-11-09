@@ -226,7 +226,11 @@ export default defineConfig({
         storageState: adminAuthFile,
       },
       dependencies: ['setup-core', 'unauthenticated'],
-      testMatch: [/(?:^|\/)admin\.spec\.ts$/, /(?:^|\/)admin-settings-secrets\.spec\.ts$/],
+      testMatch: [
+        /(?:^|\/)admin\.spec\.ts$/,
+        /(?:^|\/)admin-settings-secrets\.spec\.ts$/,
+        /(?:^|\/)admin-approvals\.spec\.ts$/,
+      ],
     },
     // Per-spec test projects (each depends only on its own setup)
     ...specProjects.map(({ name, testMatch, auth }) => ({

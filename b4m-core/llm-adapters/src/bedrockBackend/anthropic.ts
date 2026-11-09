@@ -36,7 +36,9 @@ import { DispatchModel } from '../dispatchModel';
 import {
   applyAnthropicOutputCeiling,
   buildThinkingParams,
+  continuesToolTurnWithoutThinking,
   effortForComplexity,
+  isAdaptiveThinkingByDefault,
   planReasoningEffort,
   resolveAnthropicEffort,
 } from '../thinkingParams';
@@ -44,6 +46,20 @@ import { toAnthropicContent } from '../anthropicContent';
 import { ensureToolPairingIntegrity } from '../toolPairingUtils';
 import { TOOL_CHANGES_BETA } from '../toolChanges';
 import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from '../identityReminder';
+
+/**
+ * The completion loop logs a safety refusal only at debug and leaves the warning to the backend
+ * (the direct Anthropic backend warns the same way), so warn here before the throw.
+ */
+function safetyRefusalError(model: string): Error {
+  Logger.globalInstance.warn(
+    '[AnthropicBedrockBackend] Safety classifier refusal - falling back to an alternative model',
+    {
+      model,
+    }
+  );
+  return new Error(`Anthropic safety classifier refusal for ${model} - falling back to an alternative model`);
+}
 
 enum ClaudeChunkTypes {
   MESSAGE_START = 'message_start',
@@ -1114,6 +1130,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           ? Math.min(Math.floor(maxTokens * 0.25), 4096)
           : (options.thinking?.budget_tokens ?? 16000);
         const effort = resolveAnthropicEffort({
+          model,
           questMaster: isQuestMaster,
           anthropicEffort: options.anthropicEffort,
           reasoningEffort: options.reasoningEffort,
@@ -1146,7 +1163,13 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         }
       }
     }
-    applyAnthropicOutputCeiling(body, options.outputTokenCeiling);
+    applyAnthropicOutputCeiling(
+      body,
+      options.outputTokenCeiling,
+      currentModelInfo !== undefined &&
+        !continuesToolTurnWithoutThinking(filteredMessages as unknown as IMessage[]) &&
+        isAdaptiveThinkingByDefault(model, currentModelInfo)
+    );
 
     // Log the complete payload for debugging
     console.log(
@@ -1331,7 +1354,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
       const stopReason = (response as { stop_reason?: string }).stop_reason;
       if (stopReason === 'refusal' && REFUSAL_FALLBACK_MODELS.has(model)) {
-        throw new Error(`Anthropic safety classifier refusal for ${model} - falling back to an alternative model`);
+        throw safetyRefusalError(model);
       }
 
       // Extract text content from the response
@@ -1573,7 +1596,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
     // Thrown outside the try: the catch above swallows errors.
     if (refused) {
-      throw new Error(`Anthropic safety classifier refusal for ${model} - falling back to an alternative model`);
+      throw safetyRefusalError(model);
     }
 
     return {

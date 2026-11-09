@@ -36,7 +36,7 @@ import {
   ICompletionOptions,
 } from './backend';
 import { appendCacheInclusiveTurn, splitCacheInclusiveInput } from './cacheInclusiveUsage';
-import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
 import {
   appendIdentityReminderToMessages,
   buildIdentityReminder,
@@ -507,6 +507,12 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
       } else {
         if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
         const message = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+        // The tool layer leaves the failure log to the adapter, as the other backends do.
+        this.logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed', {
+          backend: this.options.label,
+          toolName: target.name,
+          error: message,
+        });
         const observation = stripToolArtifactMarkup(
           `Error processing ${target.name} tool: ${message}`,
           ARTIFACT_REMOVED_PLACEHOLDER

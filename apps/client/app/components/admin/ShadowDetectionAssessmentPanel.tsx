@@ -46,6 +46,7 @@ const SKIP_MESSAGES: Record<AbuseAssessmentSkipReason, string> = {
   in_flight: 'An assessment of this detection is already running.',
   attempts_exhausted: 'This evidence has failed too many times to be retried.',
   detection_not_found: 'This detection no longer exists.',
+  self_assessed: 'This detection carries its own advisory verdict.',
   time_budget: 'The assessment ran out of time. Try again.',
 };
 

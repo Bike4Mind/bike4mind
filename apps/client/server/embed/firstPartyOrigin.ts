@@ -1,5 +1,5 @@
 import { isOriginPermitted } from '@bike4mind/common';
-import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
+import { PUBLISH_HOST } from '@bike4mind/server-utils/services/publish/validateBundle';
 
 /**
  * Whether a browser Origin is our own serving host, i.e. the embed widget page

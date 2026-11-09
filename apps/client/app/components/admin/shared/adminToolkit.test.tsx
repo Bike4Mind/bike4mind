@@ -39,6 +39,29 @@ describe('admin layout primitives', () => {
     expect(screen.getByTestId('create-account')).toBeVisible();
   });
 
+  it('keeps the actions at their own width so a long description wraps instead of a button label', () => {
+    renderToolkit(
+      <AdminPageHeader
+        title="OAuth clients"
+        description="Apps registered to use sign in. Each client authenticates at the token endpoint with its secret, and may only redirect to its registered URIs."
+        actions={<button data-testid="register-client">Register client</button>}
+      />
+    );
+    expect(screen.getByTestId('admin-page-header-actions')).toHaveStyle({ flexShrink: '0' });
+    expect(screen.getByTestId('admin-page-header-actions')).toHaveStyle({ alignItems: 'flex-start' });
+  });
+
+  it('renders the page title as the h1 and a nested sub-view title as an h2', () => {
+    renderToolkit(
+      <>
+        <AdminPageHeader title="Security" />
+        <AdminPageHeader title="Active defense" level="section" />
+      </>
+    );
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Security');
+    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Active defense');
+  });
+
   it('renders statistic values, comparisons and optional sparklines', () => {
     renderToolkit(
       <StatStrip>

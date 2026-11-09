@@ -435,6 +435,15 @@ Every request to a `baseApi` route that authenticates with an API key writes one
 | Client IP      | `ipAddress`, resolved server-side | 90 days (TTL index) | Abuse and security investigation, anomaly alerts |
 | Key and owner  | `keyId` and `userId`              | 90 days (TTL index) | Attribute usage to a key and its owner           |
 
+## Client usage
+
+Every authenticated request to a `baseApi` route records which client the account used on the user record (`clientUsage`): the web app, the desktop app, the CLI, or the API (an API key or an OAuth token without a first-party client header). The desktop app and the CLI name themselves in their `User-Agent` and `X-B4M-Client` headers, so the value is a claim the caller makes, used only for statistics and for hiding the desktop app prompt, never for access decisions. A record is written at most once a day per client, or sooner when the client reports a new version. Impersonation sessions, sign-ins still waiting on MFA, system accounts and accounts pending deletion write nothing. The account owner and admins can see it, and it is deleted with the account.
+
+| Data           | Storage                                                         | Lifetime                                    | Purpose                                         |
+| -------------- | --------------------------------------------------------------- | ------------------------------------------- | ----------------------------------------------- |
+| Client seen    | `clientUsage.<web, desktop, cli or api>.firstSeenAt`, `lastSeenAt` | Account lifetime; deleted with the account | Usage statistics, hiding the desktop app prompt |
+| Client version | `clientUsage.<desktop or cli>.version`, at most 32 characters   | Account lifetime; deleted with the account | Usage statistics                                |
+
 ## Usage pattern signals
 
 A scheduled job, off by default behind the `usagePatternSignalsEnabled` admin setting, derives a usage profile for recently active free-tier accounts and stores the latest result per user in the `UserUsagePatternSignals` collection. It collects no new raw data: every input already exists in `UsageEvent`, `ApiKeyUsageLog` or `UserApiKey`. The result is for admin review only and triggers no automatic action on the account, its keys or its balance. Paid accounts get a marker with no signals.
@@ -446,6 +455,13 @@ A scheduled job, off by default behind the `usagePatternSignalsEnabled` admin se
 
 ## Advisory abuse assessments
 
+The per-account summary can also include bounded request counts from the retained
+API-key log: successful responses, identity checks, admin-route requests, selected
+refusal statuses and server errors. The summary records its window, partial coverage,
+sample size and truncation, or a failed read. It sends no raw endpoints, request IPs
+or key identifiers. An empty partial log is not proof that no attempts occurred.
+These derived fields use the assessment summary's existing retention policy.
+
 Off by default behind the `abuseAssessmentEnabled` and `abuseAssessmentConfig` admin settings, an admin action or an hourly job can ask a Decisions model to judge a shadow detection as abuse, legitimate automation or insufficient evidence. The model receives only a pseudonymous summary built from an allowlist: detector name, window, a hosting-network flag, per-signal counts and thresholds, and per-account ages and counts from the stored behavioral evidence, with accounts named `acct_1`, `acct_2` and so on. It never receives an IP, network number, country, email, user id, prompt, document or free text. Calls use the platform's provider key and a platform budget, never the assessed account's credits or keys. The result is for admin review only and triggers no automatic action on the account, its access, its credits or its review state.
 
 | Data              | Storage                                                                                                | Lifetime                       | Purpose                              |
@@ -453,6 +469,17 @@ Off by default behind the `abuseAssessmentEnabled` and `abuseAssessmentConfig` a
 | Summary sent      | `AbuseAssessment.featureSummary`, the exact pseudonymous summary the model received                    | 365 days (TTL on `assessedAt`) | Admin review, audit of what was sent |
 | Judgment          | `result`, probabilities, confidence, or an `unknown` result with a failure code                        | 365 days (TTL on `assessedAt`) | Admin review                         |
 | Versions and cost | Model id and reported version, policy and evidence versions, cost in USD, trigger, requesting admin id | 365 days (TTL on `assessedAt`) | Admin review, budget accounting      |
+
+## Advisory signup domain hold assessments
+
+Off by default behind the `signupDomainHoldAssessmentEnabled` and `signupDomainHoldAssessmentConfig` admin settings, a scheduled job can ask a Decisions model to judge a signup domain hold placed on a recently registered domain as abuse, legitimate or insufficient evidence. The model receives only a summary computed by the platform: the domain's age in days, a mail-provider class, whether the domain's website answers and has content, signup counts and timing, and counts of distinct networks, network operators and countries across the held signups, with a hosting-network share. It never receives the domain name, an email, an IP, a network number, a user id or any text from the domain's website. Calls use the platform's provider key and a platform budget. A confident abuse judgment can only confirm the hold, which keeps the signups' free credits held; it never releases a hold, and an admin can still release it.
+
+| Data       | Storage                                                                                       | Lifetime                  | Purpose                 |
+| ---------- | --------------------------------------------------------------------------------------------- | ------------------------- | ----------------------- |
+| Judgment   | `SignupDomainReview.assessment`: judgment and confidence, or a failure code and attempt count | Lifetime of the hold row  | Admin review            |
+| Versions   | Model id, policy version, assessment time                                                     | Lifetime of the hold row  | Admin review            |
+| Detection  | A shadow detection per judged hold, with the held account ids and the summary's counts        | Shadow detection lifetime | Admin review, precision |
+| Call count | The domain name and a count of model calls for it, in the platform cache                      | 24 hours                  | Per-domain call cap     |
 
 ## Signup and login network metadata
 
@@ -472,6 +499,22 @@ The ASN, country and hosting flag are also copied to Stripe as `signup_asn`, `si
 `signupMeta.challengeVerified` records `true` only after a real server-verified challenge pass; skipped or unavailable checks remain null or absent. It shares the other non-IP signup metadata's admin-only access, account lifetime, and account-deletion behavior. Signed signup tokens carry this observation only to preserve it through verification; public test secrets and fail-open checks do not establish proof. On email sign-up the proof is single-use, because the signed token is consumed. On OAuth sign-up it is per-flow: the signed state is not consumed, so every callback that reuses the same state within its 5-minute lifetime records the same pass.
 
 Signup grant assessments also emit one of the `signup-grant-assessed-full`, `signup-grant-assessed-reduced`, or `signup-grant-assessed-review` log markers after commit. These markers contain only the outcome band, without account identifiers, policy weights, network observations, or challenge tokens. CloudWatch metric filters count them for monitoring and an optional review-volume alarm. The markers follow the server log group's retention; metric counts follow CloudWatch retention. Emission is best effort, so counts are operational monitoring rather than an exact grant ledger.
+
+`signupGrantAssessment.signals` stores the numeric and boolean values the signup risk collector observed (for example a datacenter flag and recent signup counts from the same network), recorded once at email verification so candidate policies can be replayed offline. It holds no IP address or other free text, is visible only to admins, and is kept for the account lifetime and deleted with the account. It is absent when no collector ran or the collector failed.
+
+## Waitlist signup network metadata
+
+A waitlist request (the public subscribe form, or a sign-up attempt while registration is closed) stores a smaller copy of the same network capture on the `Subscriber` row as `signupNetwork`. These people have no account yet, so the full IP is never stored: only its /24 (IPv4) or /48 (IPv6) prefix is kept. The daily `signupIpRetention` job clears the whole `signupNetwork` object once it is 90 days old. The waitlist row itself stays until an admin deletes it. The data is shown only to admins, in the network column of the Invite Center waitlist.
+
+| Field              | Stored as                                                                         | Retention | Purpose                                           |
+| ------------------ | --------------------------------------------------------------------------------- | --------- | ------------------------------------------------- |
+| IP prefix          | `signupNetwork.ipPrefix`, /24 or /48 only                                         | 90 days   | Attribute probing and repeat signups to a network |
+| User agent         | `signupNetwork.userAgent`, first 512 characters                                   | 90 days   | Abuse investigation                               |
+| Network and region | `asn`, operator for hosting ASNs, ISO country code, `isDatacenter`                | 90 days   | Spot signups from one network or a host           |
+| Edge signals       | `ja4` TLS fingerprint, WAF anonymous-IP and bot labels (null when not forwarded)  | 90 days   | Tie waitlist probes to other traffic              |
+| Challenge outcome  | `challengeVerified`: `true` after a server-verified Turnstile pass, otherwise null | 90 days   | Tell challenged signups from unchallenged ones    |
+
+A waitlist name that contains HTML or script markup, starts with a spreadsheet-formula character (`=`, `+`, `-`, `@`), or contains control characters is stored with `suspicious.reasons` listing which. Such a row gets the same response as any other signup and no Slack alert. The flag stays for the life of the row.
 
 ## Account behavioral evidence
 
@@ -548,3 +591,44 @@ message. You use these records to identify broken model references and review
 lifecycle changes. Metrics follow CloudWatch retention, and logs follow the
 deployment's configured log retention. This operational monitoring does not send
 product usage events to third-party analytics services.
+
+## Credit hold monitoring
+
+Credit reservations write structured operational logs with the billing owner id
+and type, feature label, lifecycle (`request` or `completion`), outcome, and
+transaction duration in milliseconds. The duration includes transaction retries,
+not provider work or preflight checks. Failed reservation transactions are also
+recorded; requests that reserve no credits do not emit a latency sample.
+
+Hosted logs publish `HoldLatency` (milliseconds) and `SettlementsAfterSweep`
+(count) through CloudWatch embedded metrics. `HoldLatency` carries `Stage`,
+`Lifecycle` and `Outcome` (`held` or `error`) dimensions, so failed reservations
+do not share a series with successful holds; `SettlementsAfterSweep` carries only
+`Stage` and `Lifecycle`. Owner ids and hold ids stay in logs, not metric
+dimensions. Self-host installations write the same observations without embedded
+CloudWatch metrics. Metrics follow CloudWatch retention; logs follow the
+deployment's configured log retention. No prompts, responses, credentials, or
+third-party analytics events are included.
+
+`SettlementsAfterSweep` counts settlement attempts whose pending hold and completed
+receipt are both absent. This is a missing-hold signal, not proof that the sweep
+removed it: an earlier explicit refund or an expired settlement receipt can also
+cause it. Completed receipt retries do not increment it. Repeated late settlement
+calls each increment the count; use distinct hold ids to count affected holds,
+and correlate them with the sweep's refund logs to confirm sweep attribution.
+
+To find per-owner p99 reservation latency, select the relevant runtime log groups
+and time range in CloudWatch Logs Insights:
+
+```text
+filter event = "creditHoldTelemetry" and ispresent(HoldLatency)
+| stats count(*) as samples, pct(HoldLatency, 99) as p99Ms by Stage, ownerType, ownerId, lifecycle, outcome
+| sort p99Ms desc
+```
+
+To count late settlement attempts and affected holds:
+
+```text
+filter event = "creditHoldTelemetry" and SettlementsAfterSweep = 1
+| stats sum(SettlementsAfterSweep) as attempts, count_distinct(holdId) as holds by Stage, lifecycle
+```

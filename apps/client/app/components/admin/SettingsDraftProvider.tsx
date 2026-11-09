@@ -1,20 +1,8 @@
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-  type SetStateAction,
-} from 'react';
-import { useRouter } from '@tanstack/react-router';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode, type SetStateAction } from 'react';
 import { SaveBar } from './shared/SaveBar';
 import { SettingsWarningDialog, UnsavedChangesGuard } from './shared/UnsavedChangesGuard';
 import { getErrorMessage } from '@client/app/utils/error';
-import { useAdminModal } from './useAdminModal';
-import { adminTabToSlug } from './adminTabSlugs';
-import { adminSearchForTab } from './adminTabParams';
+import { leavesAdminSettingsPage, useRouteAdminTabSwitches } from './shared/adminTabSwitches';
 
 type Draft = {
   dirty: boolean;
@@ -23,7 +11,7 @@ type Draft = {
   value: unknown;
   save(value: unknown): Promise<unknown>;
   blocked?: string;
-  warning?: string;
+  warnings?(value: unknown): string[];
 };
 type DraftContext = {
   drafts: Record<string, Draft>;
@@ -33,7 +21,6 @@ type DraftContext = {
 const Context = createContext<DraftContext | null>(null);
 
 export function SettingsDraftProvider({ children }: { children: ReactNode }) {
-  const router = useRouter();
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [pending, setPending] = useState(false);
   const saving = useRef(false);
@@ -43,28 +30,8 @@ export function SettingsDraftProvider({ children }: { children: ReactNode }) {
   const blockedDraft = entries.find(([, draft]) => draft.blocked)?.[1];
   const blockedReason = blockedDraft ? `${blockedDraft.name}: ${blockedDraft.blocked}` : undefined;
   const dirty = entries.length > 0 || pending;
-  useLayoutEffect(() => {
-    if (!dirty) return;
-    // Store-first switches would unmount this provider before the router could block them.
-    // Route the request first; URL-to-store sync can commit it only after the guard permits it.
-    const guard = (tab: Parameters<typeof adminTabToSlug>[0]) => {
-      const location = router.state.location;
-      const slug = adminTabToSlug(tab);
-      if (slug === undefined) return false;
-      if (location.pathname !== '/admin' || location.search.tab === slug) return true;
-      void router.navigate({
-        to: '/admin',
-        search: previous => adminSearchForTab(previous, slug),
-        replace: true,
-      });
-      return false;
-    };
-    useAdminModal.getState().setTabChangeGuard(guard);
-    return () => {
-      if (useAdminModal.getState().tabChangeGuard === guard) useAdminModal.getState().setTabChangeGuard(null);
-    };
-  }, [dirty, router]);
-  const warnings = entries.flatMap(([, draft]) => (draft.warning ? [draft.warning] : []));
+  useRouteAdminTabSwitches(dirty);
+  const [confirmWarnings, setConfirmWarnings] = useState<string[]>([]);
   const save = async () => {
     if (saving.current || blockedReason) return;
     saving.current = true;
@@ -119,20 +86,18 @@ export function SettingsDraftProvider({ children }: { children: ReactNode }) {
           setDrafts({});
           setError(undefined);
         }}
-        onSave={() => (warnings.length ? setConfirming(true) : void save())}
+        onSave={() => {
+          const current = entries.flatMap(([, draft]) => draft.warnings?.(draft.value) ?? []);
+          if (current.length) {
+            setConfirmWarnings(current);
+            setConfirming(true);
+          } else void save();
+        }}
       />
-      <UnsavedChangesGuard
-        dirty={dirty}
-        pending={pending}
-        isLeaving={(current, next) =>
-          current.pathname !== next.pathname ||
-          ('tab' in current.search ? current.search.tab : undefined) !==
-            ('tab' in next.search ? next.search.tab : undefined)
-        }
-      />
+      <UnsavedChangesGuard dirty={dirty} pending={pending} isLeaving={leavesAdminSettingsPage} />
       <SettingsWarningDialog
         open={confirming}
-        warnings={warnings}
+        warnings={confirmWarnings}
         onClose={() => setConfirming(false)}
         onSave={() => void save()}
       />
@@ -148,7 +113,8 @@ export function useSettingsDraft<T>(
     save(value: T): Promise<unknown>;
     blocked?(value: T): string | undefined;
     equals?(left: T, right: T): boolean;
-    warning?: string;
+    /** Shown in the confirm dialog before the SaveBar saves this draft; a function reads the draft value. */
+    warning?: string | ((value: T) => string[]);
   }
 ) {
   const context = useContext(Context);
@@ -182,7 +148,10 @@ export function useSettingsDraft<T>(
             value: next,
             save: value => optionsRef.current.save(value as T),
             blocked: options.blocked?.(next),
-            warning: options.warning,
+            warnings: draftValue => {
+              const warning = optionsRef.current.warning;
+              return typeof warning === 'function' ? warning(draftValue as T) : warning ? [warning] : [];
+            },
           }
     );
   };

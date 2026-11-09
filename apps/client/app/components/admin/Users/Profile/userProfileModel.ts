@@ -1,6 +1,9 @@
 import {
+  CLIENT_SURFACES,
   DEVELOPER_USER_TAGS,
   hasDeveloperUserTag,
+  type AccountDeletionSource,
+  type ClientSurface,
   type ILoginRecord,
   type IUserDocument,
   type OrganizationMemberRole,
@@ -14,7 +17,17 @@ import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
  * list projection leaves out (signup channel, internal notes) are there too. List rows lack them.
  */
 export type AdminUserProfile = AdminUserListItem &
-  Partial<Pick<IUserDocument, 'acquisition' | 'userNotes' | 'emailVerifiedAt'>>;
+  Partial<Pick<IUserDocument, 'acquisition' | 'userNotes' | 'emailVerifiedAt' | 'deletion'>>;
+
+export const DELETION_SOURCE_LABELS: Readonly<Record<AccountDeletionSource, string>> = {
+  self: 'Self-serve',
+  support: 'Support',
+  admin: 'Admin',
+};
+
+/** A calendar day in UTC, matching the (UTC) dates the user is emailed. */
+export const formatDeletionDay = (value: Date | string): string =>
+  `${new Date(value).toLocaleDateString('en-US', { dateStyle: 'medium', timeZone: 'UTC' })} (UTC)`;
 
 export type AccountStatus = { label: 'Active' | 'Suspended' | 'Restricted'; tone: AdminStatusTone };
 
@@ -87,3 +100,18 @@ export const LEVEL_LABELS: Readonly<Record<string, string>> = {
 export const latestSignIn = (user: Pick<AdminUserListItem, 'loginRecords'>): ILoginRecord | null =>
   [...(user.loginRecords ?? [])].sort((a, b) => new Date(b.loginTime).getTime() - new Date(a.loginTime).getTime())[0] ??
   null;
+
+export const CLIENT_SURFACE_LABELS: Readonly<Record<ClientSurface, string>> = {
+  web: 'Web',
+  desktop: 'Desktop',
+  cli: 'CLI',
+  api: 'API',
+};
+
+/** Just the client names, for a narrow column, e.g. "Web \u00b7 Desktop"; null when none are recorded. */
+export const clientSurfacesSummary = (user: Pick<AdminUserProfile, 'clientUsage'>): string | null => {
+  const names = CLIENT_SURFACES.filter(surface => user.clientUsage?.[surface]).map(
+    surface => CLIENT_SURFACE_LABELS[surface]
+  );
+  return names.length > 0 ? names.join(' \u00b7 ') : null;
+};

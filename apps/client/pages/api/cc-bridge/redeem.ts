@@ -12,7 +12,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { CcBridgeDeviceLabelSchema } from '@server/utils/ccBridgeDeviceLabel';
-import { resolveApiKeyTrust } from '@server/utils/apiKeyTrust';
+import { resolveApiKeyTrust } from '@bike4mind/server-utils/utils/apiKeyTrust';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';

@@ -77,9 +77,9 @@ const resolveUntrustedKeyLimits = vi.hoisted(() =>
     ownerUntrusted: false,
   }))
 );
-vi.mock('@server/utils/apiKeyTrust', () => ({ resolveUntrustedKeyLimits }));
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({ resolveUntrustedKeyLimits }));
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', () => ({
   extractApiKeyFromHeaders: vi.fn(),
   checkApiKeyRateLimit: vi.fn(),
 }));
@@ -95,7 +95,7 @@ import {
 } from './auth';
 import { cacheService, userApiKeyService } from '@bike4mind/services';
 import { User } from '@bike4mind/database';
-import { checkApiKeyRateLimit, extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
+import { checkApiKeyRateLimit, extractApiKeyFromHeaders } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 import { ACCOUNT_DELETION_PENDING_CODE, ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 
 const userId = 'user-abc';

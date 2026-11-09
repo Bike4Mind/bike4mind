@@ -2,7 +2,7 @@
 import { act, type ComponentProps } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type { ModelServerView } from '@shared/modelServers';
+import { OLLAMA_NOT_RUNNING, type ModelServerLaunchView, type ModelServerView } from '@shared/modelServers';
 import {
   pullKey,
   type CuratedBuildView,
@@ -90,6 +90,24 @@ function server(id: string, name: string, extra: Partial<ModelServerView> = {}):
     models: [],
     specs: null,
     launch: null,
+    ...extra,
+  };
+}
+
+function launchView(extra: Partial<ModelServerLaunchView> = {}): ModelServerLaunchView {
+  return {
+    runtime: 'ollama',
+    owner: 'none',
+    busy: null,
+    settings: {},
+    pendingRestart: false,
+    canStart: true,
+    problem: null,
+    observed: null,
+    sizingKvCacheType: 'f16',
+    sizingFlashAttention: 'auto',
+    prefill: null,
+    noun: 'Ollama server',
     ...extra,
   };
 }
@@ -327,6 +345,8 @@ const calls = {
   clearHfToken: vi.fn(),
   checkCuratedList: vi.fn(),
   getStoreLocation: vi.fn(),
+  checkServers: vi.fn(),
+  launchServer: vi.fn(),
 };
 
 beforeEach(() => {
@@ -349,6 +369,8 @@ beforeEach(() => {
   window.localStorage.clear();
   installedCache.clear();
   calls.getHfToken.mockImplementation(async () => bridge.token);
+  calls.checkServers.mockImplementation(async () => bridge.servers);
+  calls.launchServer.mockImplementation(async () => ({ ok: true, servers: bridge.servers }));
   calls.pull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
   calls.resumePull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
   calls.remove.mockResolvedValue({ ok: true });
@@ -364,6 +386,8 @@ beforeEach(() => {
     shell: { openExternal: vi.fn() },
     modelServers: {
       list: async () => bridge.servers,
+      check: calls.checkServers,
+      launch: calls.launchServer,
       onChanged: (listener: (servers: ModelServerView[]) => void) => {
         pushServers = listener;
         return () => {};
@@ -674,6 +698,90 @@ describe('ModelsScreen curated', () => {
       'unified memory whose GPU budget could not be measured',
       { memoryKind: 'unified', totalMemoryBytes: 62 * GIB, gpuMemoryBytes: null, gpuName: null, confidence: 'low' },
       'This computer has 62 GiB of memory, shared with its GPU. How much of it the GPU can use could not be determined.',
+    ],
+    [
+      'an NVIDIA GB10 by name, with no memory figure for its GPU',
+      {
+        memoryKind: 'unified',
+        totalMemoryBytes: 128 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'NVIDIA GB10',
+        confidence: 'high',
+        gpuVendor: 'nvidia',
+      },
+      'This computer has 128 GiB of memory, shared with its GPU (NVIDIA GB10).',
+    ],
+    [
+      'Intel integrated graphics on Linux by name, sharing the RAM',
+      {
+        memoryKind: 'unified',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'Intel Lunar Lake [Intel Arc Graphics 130V / 140V]',
+        confidence: 'high',
+        gpuVendor: 'intel',
+      },
+      'This computer has 32 GiB of memory, shared with its GPU (Intel Lunar Lake [Intel Arc Graphics 130V / 140V]). Ollama does not use Intel integrated graphics, so picks and badges assume the CPU.',
+    ],
+    [
+      'Intel integrated graphics on Windows by the half of RAM it can share',
+      {
+        memoryKind: 'unified',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: 16 * GIB,
+        gpuName: 'Intel(R) Iris(R) Xe Graphics',
+        confidence: 'high',
+        gpuVendor: 'intel',
+      },
+      'This computer has 32 GiB of RAM, and its GPU (Intel(R) Iris(R) Xe Graphics) can use 16 GiB of memory. Ollama does not use Intel integrated graphics, so picks and badges assume the CPU.',
+    ],
+    [
+      'an Intel card on Linux of unknown memory, with what makes it readable',
+      {
+        memoryKind: 'discrete',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'Intel GPU [8086:e223]',
+        confidence: 'low',
+        vramNeedsLlamaServer: true,
+      },
+      "This computer has 32 GiB of RAM and an Intel GPU [8086:e223] of unknown memory, so badges assume models run on the CPU. Linux does not report an Intel card's memory. Install a llama.cpp SYCL or Vulkan build of llama-server, with its ggml-sycl or ggml-vulkan library in the same folder, or enter its path for a llama-server model server, then save it (or restart Desktop) to read it.",
+    ],
+    [
+      'a named Intel card on Linux of unknown memory',
+      {
+        memoryKind: 'discrete',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'Intel Battlemage G31 [Arc Pro B70]',
+        confidence: 'low',
+        vramNeedsLlamaServer: true,
+      },
+      'This computer has 32 GiB of RAM and an Intel Battlemage G31 [Arc Pro B70] of unknown memory, so badges',
+    ],
+    [
+      'an Intel card named without a leading Intel',
+      {
+        memoryKind: 'discrete',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'NVIDIA GeForce RTX 4090 (Intel host)',
+        confidence: 'low',
+        vramNeedsLlamaServer: true,
+      },
+      'This computer has 32 GiB of RAM and an Intel GPU (NVIDIA GeForce RTX 4090 (Intel host)) of unknown memory, so badges',
+    ],
+    [
+      'any other GPU of unknown memory as no GPU memory',
+      {
+        memoryKind: 'discrete',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'NVIDIA GPU [10de:2684]',
+        confidence: 'low',
+        vramNeedsLlamaServer: false,
+      },
+      'This computer has 32 GiB of RAM and no GPU memory was detected, so badges assume models run on the CPU.',
     ],
   ] satisfies [string, MachineView, string][])('describes %s', async (_label, machine, text) => {
     bridge.curated.machine = machine;
@@ -1336,7 +1444,7 @@ describe('ModelsScreen installed', () => {
     bridge.status = DOWN;
     await mount();
     expect(q('models-runtime-status')?.dataset.state).toBe('down');
-    expect(q('models-installed-runtime-down')?.textContent).toContain('Ollama is not running');
+    expect(q('models-installed-runtime-down')?.textContent).toContain(OLLAMA_NOT_RUNNING);
 
     await openExplore();
     await click(q('models-explore-result-row'));
@@ -1362,6 +1470,100 @@ describe('ModelsScreen installed', () => {
 
     await click(q('models-point-at-server-btn'));
     expect(openModelServers).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers Start in place of Install when Desktop can start Ollama, and lists models once it has', async () => {
+    bridge.status = DOWN;
+    bridge.servers = [{ ...THIS_COMPUTER, launch: launchView() }];
+    calls.launchServer.mockImplementation(async () => {
+      bridge.status = RUNNING;
+      return { ok: true, servers: bridge.servers };
+    });
+    await mount(undefined, 'curated');
+    expect(q('models-install-ollama-btn')).toBeNull();
+    expect(q('models-no-runtime-text')?.textContent).not.toContain('install');
+    expect(q('models-point-at-server-btn')).not.toBeNull();
+
+    await click(q('ollama-start-btn'));
+    expect(calls.launchServer).toHaveBeenCalledWith('local', 'start');
+    await vi.waitFor(() => expect(q('models-runtime-status')?.dataset.state).toBe('running'));
+  });
+
+  it('keeps Install and the start hint when Desktop cannot start Ollama here', async () => {
+    bridge.status = DOWN;
+    bridge.servers = [{ ...THIS_COMPUTER, launch: launchView({ canStart: false }) }];
+    await mount(undefined, 'curated');
+    expect(q('ollama-start-btn')).toBeNull();
+    expect(q('ollama-start-hint')).not.toBeNull();
+    expect(q('models-install-ollama-btn')).not.toBeNull();
+    expect(calls.checkServers).toHaveBeenCalledWith('local');
+  });
+
+  it('shows neither Install nor Start while Desktop is still looking for Ollama', async () => {
+    bridge.status = DOWN;
+    bridge.servers = [{ ...THIS_COMPUTER, launch: launchView({ canStart: false, programPending: true }) }];
+    await mount(undefined, 'curated');
+    expect(q('ollama-start-btn')).toBeNull();
+    expect(q('models-install-ollama-btn')).toBeNull();
+    expect(q('ollama-start-hint')).toBeNull();
+    expect(q('models-no-runtime-text')?.textContent).not.toContain('install it');
+  });
+
+  it('shows no Install button or sentence until the model server list has loaded', async () => {
+    bridge.status = DOWN;
+    (window as unknown as { b4m: { modelServers: { list: () => Promise<unknown> } } }).b4m.modelServers.list = () =>
+      new Promise(() => {});
+    await mount(undefined, 'curated');
+    expect(q('models-no-runtime-text')).not.toBeNull();
+    expect(q('models-no-runtime-text')?.textContent).not.toContain('install it');
+    expect(q('models-install-ollama-btn')).toBeNull();
+    expect(q('ollama-start-hint')).toBeNull();
+  });
+
+  it('offers Install when the model server list cannot be read', async () => {
+    bridge.status = DOWN;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    (window as unknown as { b4m: { modelServers: { list: () => Promise<unknown> } } }).b4m.modelServers.list =
+      async () => {
+        throw new Error('ipc down');
+      };
+    await mount(undefined, 'curated');
+    expect(q('models-install-ollama-btn')).not.toBeNull();
+    expect(q('ollama-start-btn')).toBeNull();
+    expect(warn).toHaveBeenCalledWith('Listing model servers failed', expect.any(Error));
+    warn.mockRestore();
+  });
+
+  it('offers Install once main stops waiting on a look that never settled', async () => {
+    bridge.status = DOWN;
+    bridge.servers = [{ ...THIS_COMPUTER, launch: launchView({ canStart: false, programPending: true }) }];
+    await mount(undefined, 'curated');
+    expect(q('models-install-ollama-btn')).toBeNull();
+
+    bridge.servers = [{ ...THIS_COMPUTER, launch: launchView({ canStart: false }) }];
+    act(() => pushServers(bridge.servers));
+    expect(q('models-install-ollama-btn')).not.toBeNull();
+    expect(q('ollama-start-btn')).toBeNull();
+  });
+
+  it('rechecks whether Desktop can start Ollama on Check again, and offers Start once it can', async () => {
+    bridge.status = DOWN;
+    bridge.servers = [{ ...THIS_COMPUTER, launch: launchView({ canStart: false }) }];
+    await mount(undefined, 'curated');
+    expect(q('ollama-start-btn')).toBeNull();
+    calls.checkServers.mockClear();
+    calls.getStatus.mockClear();
+    calls.checkServers.mockImplementation(async () => {
+      bridge.servers = [{ ...THIS_COMPUTER, launch: launchView() }];
+      act(() => pushServers(bridge.servers));
+      return bridge.servers;
+    });
+
+    await click(q('models-runtime-retry-btn'));
+    expect(calls.checkServers).toHaveBeenCalledWith('local');
+    expect(calls.getStatus).toHaveBeenCalled();
+    expect(q('ollama-start-btn')).not.toBeNull();
+    expect(q('models-install-ollama-btn')).toBeNull();
   });
 
   it('hints at Ollama in WSL on Windows only', async () => {
@@ -1760,7 +1962,7 @@ describe('ModelsScreen explore', () => {
     await click(q('models-explore-result-row'));
     calls.pull.mockResolvedValue({
       ok: false,
-      error: { kind: 'runtime-unavailable', message: 'Ollama is not running. Start it, then retry.' },
+      error: { kind: 'runtime-unavailable', message: `${OLLAMA_NOT_RUNNING}. Start it, then retry.` },
       listed: false,
     });
     bridge.status = DOWN;
@@ -1768,7 +1970,7 @@ describe('ModelsScreen explore', () => {
     await click(q('models-build-pull-btn'));
     await click(q('models-pull-dialog-confirm-btn'));
 
-    expect(q('models-detail-pull-error')?.textContent).toContain('Ollama is not running');
+    expect(q('models-detail-pull-error')?.textContent).toContain(OLLAMA_NOT_RUNNING);
     expect(calls.getStatus.mock.calls.length).toBeGreaterThan(checks);
     expect(q('models-runtime-status')?.dataset.state).toBe('down');
     expect(q('models-build-pull-btn')?.hasAttribute('disabled')).toBe(true);
@@ -1791,12 +1993,12 @@ describe('ModelsScreen explore', () => {
           completedBytes: 0,
           totalBytes: null,
           expectedBytes: 1,
-          error: { kind: 'runtime-unavailable', message: 'Ollama is not running. Start it, then retry.' },
+          error: { kind: 'runtime-unavailable', message: `${OLLAMA_NOT_RUNNING}. Start it, then retry.` },
         },
       ])
     );
     await flush();
-    expect(q('models-pull-status')?.textContent).toContain('Ollama is not running');
+    expect(q('models-pull-status')?.textContent).toContain(OLLAMA_NOT_RUNNING);
     expect(q('models-runtime-status')?.dataset.state).toBe('down');
   });
 

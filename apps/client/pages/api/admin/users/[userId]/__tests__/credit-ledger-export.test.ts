@@ -28,6 +28,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
 }));
+vi.mock('@server/utils/ledgerWriteOffs', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/ledgerWriteOffs')>()),
+  loadLedgerWriteOffs: async () => ({ byTransactionId: new Map(), all: [] }),
+}));
 vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: { findLedgerPage: h.findLedgerPage, sumSignedCreditsNewerThan: h.sumNewer },
   userRepository: { findById: h.findUser },
@@ -245,7 +249,9 @@ describe('GET /api/admin/users/[userId]/credit-ledger-export', () => {
     await promise;
 
     const [header, api] = lines(res);
-    expect(header.endsWith('"Quest id","Cache read tokens","Cache write tokens","Session id","Tools"')).toBe(true);
-    expect(api.endsWith(',"r-1","",180000,12000,"desktop-session-1","read_file bash"')).toBe(true);
+    expect(
+      header.endsWith('"Quest id","Cache read tokens","Cache write tokens","Session id","Tools","Written off"')
+    ).toBe(true);
+    expect(api.endsWith(',"r-1","",180000,12000,"desktop-session-1","read_file bash",')).toBe(true);
   });
 });

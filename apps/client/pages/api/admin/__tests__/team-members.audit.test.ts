@@ -18,6 +18,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     const chain: Record<string, unknown> = Object.assign(
       (req: { method?: string }, res: unknown) => routes[req.method ?? 'GET']?.(req, res),
       {
+        use: () => chain,
         get: on('GET'),
         post: on('POST'),
         put: on('PUT'),
@@ -36,7 +37,7 @@ vi.mock('@bike4mind/database', () => ({
     findByPhone: h.findByPhone,
   },
 }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: h.audit,
   definedKeys: (data: Record<string, unknown>) => Object.keys(data).filter(key => data[key] !== undefined),
 }));

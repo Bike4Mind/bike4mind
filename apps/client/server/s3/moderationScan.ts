@@ -6,7 +6,7 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { generateUploadConstraintFor } from '@bike4mind/server-utils/files/generateUploadMarker';
 import { moderateUploadedFile, type ModerationVerdict } from '@bike4mind/server-utils/s3/moderateUploadedFile';
 import type { ClientSession, Types } from 'mongoose';
-import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 
 // Scan-ownership primitives for the hosted-upload doors: the S3 ObjectCreated handler
 // (objectCreated.ts) and the on-demand scan route (pages/api/files/[id]/moderate.ts). One

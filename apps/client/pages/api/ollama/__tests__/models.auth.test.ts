@@ -14,7 +14,7 @@ const { mockFindSettings, mockListModels, mockValidate } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
 }));
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: vi.fn().mockResolvedValue({ allowed: true, headers: {} }),
 }));

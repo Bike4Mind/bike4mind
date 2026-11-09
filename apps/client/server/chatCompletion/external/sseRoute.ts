@@ -24,6 +24,7 @@ import {
   SSE_KEEPALIVE,
   type CompletionSource,
   type CompletionSseErrorCode,
+  type IMessage,
   type SSEErrorEvent,
   type TurnUsage,
 } from '@bike4mind/common';
@@ -48,6 +49,7 @@ import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@s
 import { resolveContractAuth } from '@server/cli/resolveContractAuth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';
 import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
@@ -62,7 +64,7 @@ import {
   NO_COMPLETION_QUOTA,
   type CompletionQuotaGrant,
 } from '@server/utils/untrustedCompletionQuota';
-import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
 import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';
 
@@ -269,6 +271,10 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         }
       }
 
+      // Client-version gate (CONVENTIONS.md section 9), ahead of validation as on every transport.
+      const upgradeRequired = await checkClientVersion(req.headers, logger);
+      if (upgradeRequired) throw upgradeRequired;
+
       const parsed = CompletionRequestSchema.safeParse(req.body);
       if (!parsed.success) {
         const errorMessage = fromZodError(parsed.error).message;
@@ -363,7 +369,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         creditHolds: createCompletionCreditHolds(logger),
         userId,
         model: body.model,
-        messages: body.messages,
+        messages: body.messages as IMessage[],
         options: body.options,
         db: {
           adminSettings: adminSettingsRepository,

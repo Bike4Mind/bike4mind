@@ -56,14 +56,12 @@ vi.mock('@bike4mind/server-utils/memory/factCipher', () => ({
   encryptVector: () => ({ cipher: 'vc', iv: 'vi', tag: 'vt' }),
 }));
 
-vi.mock('@bike4mind/fab-pipeline', () => ({
-  EmbeddingFactory: class {
-    createEmbeddingService() {
-      return { generateEmbedding: (...a: unknown[]) => generateEmbedding(...(a as [])) };
-    }
-  },
-  getProviderFromModel: () => 'openai',
-  resolveEmbeddingConfig: () => ({ config: {}, missing: missingKey }),
+vi.mock('@bike4mind/services/llm/embeddingProviders', () => ({
+  buildEmbeddingRegistry: () => ({}),
+  bindEmbeddingModel: () => ({}),
+  embedOne: (_model: unknown, ...args: unknown[]) => generateEmbedding(...(args as [])),
+  embeddingBackendForModel: () => 'openai',
+  resolveEmbeddingCredentials: () => ({ config: {}, missing: missingKey }),
 }));
 
 vi.mock('@bike4mind/services', () => ({

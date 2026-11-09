@@ -1,4 +1,4 @@
-import { partnerSignupGrantForEmail } from '@server/entitlements/partnerRules';
+import { partnerSignupGrantForEmail } from '@bike4mind/server-utils/entitlements/partnerRules';
 
 /**
  * Whether a brand-new account may skip the invite gate because its email is on a partner domain.

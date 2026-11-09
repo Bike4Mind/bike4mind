@@ -243,7 +243,7 @@ def main(argv=None):
         print(f'FAIL {failure}: {MESSAGES[failure]}')
     if failures:
         return 1
-    print('preflight checks passed; live TLS/mail/auth/restore not proven')
+    print('preflight checks passed; live TLS/mail/auth not proven; restore with scripts/selfhost_backup.py (SELF_HOST.md#backup-and-restore)')
     return 0
 
 

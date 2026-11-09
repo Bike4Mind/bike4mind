@@ -10,6 +10,9 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import {
   formatMemory,
+  anIntelGpu,
+  LLAMA_SERVER_VRAM_HELP,
+  OLLAMA_SKIPS_INTEL_IGPU,
   pullKey,
   type CuratedBuildView,
   type CuratedEntryView,
@@ -40,23 +43,35 @@ const RATING_TEXT = { weak: 'weak', ok: 'good', strong: 'strong' } as const;
 const CHECK_FAILED = 'Could not check this model with the Models service. Try again.';
 
 function machineText(machine: MachineView): string {
+  if (machine.memoryKind !== 'unified') return separateMemoryText(machine);
+  const shared = sharedMemoryText(machine);
+  return machine.gpuVendor === 'intel' ? `${shared} ${OLLAMA_SKIPS_INTEL_IGPU}` : shared;
+}
+
+function sharedMemoryText(machine: MachineView): string {
   const memory = formatMemory(machine.totalMemoryBytes);
   const gpuName = machine.gpuName ? ` (${machine.gpuName})` : '';
-  // Only AMD unified memory reports gpuMemoryBytes, sized from what ROCm can allocate rather than the RAM the OS sees.
-  // The probe does not say whether that is a firmware reserve (Windows, BIOS) or Linux GTT shared with the system, so
-  // the wording must hold for both.
-  if (machine.memoryKind === 'unified' && machine.gpuMemoryBytes) {
+  // Only AMD unified memory (what ROCm can allocate) and Intel integrated graphics on Windows (the shared-memory limit)
+  // report gpuMemoryBytes. The probe does not say whether that is a firmware reserve (Windows, BIOS) or memory shared
+  // with the system, so the wording must hold for both.
+  if (machine.gpuMemoryBytes) {
     const usable = formatMemory(machine.gpuMemoryBytes);
     return machine.confidence === 'low'
       ? `This computer has ${memory} of RAM, and its GPU${gpuName} can use at least ${usable} of memory. The exact amount could not be confirmed.`
       : `This computer has ${memory} of RAM, and its GPU${gpuName} can use ${usable} of memory.`;
   }
-  if (machine.memoryKind === 'unified')
-    return machine.confidence === 'low'
-      ? `This computer has ${memory} of memory, shared with its GPU. How much of it the GPU can use could not be determined.`
-      : `This computer has ${memory} of memory, shared with its GPU.`;
+  return machine.confidence === 'low'
+    ? `This computer has ${memory} of memory, shared with its GPU${gpuName}. How much of it the GPU can use could not be determined.`
+    : `This computer has ${memory} of memory, shared with its GPU${gpuName}.`;
+}
+
+function separateMemoryText(machine: MachineView): string {
+  const memory = formatMemory(machine.totalMemoryBytes);
+  const gpuName = machine.gpuName ? ` (${machine.gpuName})` : '';
   if (machine.memoryKind === 'discrete' && machine.gpuMemoryBytes)
     return `This computer has ${memory} of RAM and ${formatMemory(machine.gpuMemoryBytes)} of GPU memory${gpuName}.`;
+  if (machine.vramNeedsLlamaServer)
+    return `This computer has ${memory} of RAM and ${anIntelGpu(machine.gpuName)} of unknown memory, so badges assume models run on the CPU. ${LLAMA_SERVER_VRAM_HELP}`;
   return `This computer has ${memory} of RAM and no GPU memory was detected, so badges assume models run on the CPU.`;
 }
 

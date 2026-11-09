@@ -12,6 +12,7 @@ import {
 import { creditTransactionRepository, userRepository, type LedgerPageFilter } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import type { Logger } from '@bike4mind/observability';
+import { NO_WRITE_OFFS, writtenOffNewerThan, type LedgerWriteOffs } from './ledgerWriteOffs';
 
 /** Where a page continues from: the last row of the previous page in {createdAt, _id} order. */
 export type LedgerCursor = { createdAt: Date; id: string };
@@ -101,12 +102,14 @@ type BuildRowsOptions = {
   /** Where a derived balance that disagrees with an adjustment's recorded one is reported. */
   userId?: string;
   logger?: Logger;
+  /** Shortfalls written off on capped turns (loadLedgerWriteOffs); their rows show what was charged. */
+  writeOffs?: LedgerWriteOffs;
 };
 
 /** Maps ledger documents to the wire rows (see adminLedgerRowSchema). */
 export async function buildLedgerRows(
   documents: LedgerDocument[],
-  { contiguous, balanceAfterFirst, userId, logger }: BuildRowsOptions
+  { contiguous, balanceAfterFirst, userId, logger, writeOffs = NO_WRITE_OFFS }: BuildRowsOptions
 ): Promise<AdminLedgerRow[]> {
   const lookups = await loadLookups(documents);
   let runningBalance = contiguous ? balanceAfterFirst : undefined;
@@ -116,7 +119,9 @@ export async function buildLedgerRows(
     const metadata = (record.metadata ?? {}) as Record<string, unknown>;
     const type = doc.type as CreditTransactionType;
     const kind = CREDIT_TRANSACTION_KIND[type];
-    const credits = signedCredits(type, doc.credits);
+    // A written-off shortfall never left the balance, so the row moves it by the charged part only.
+    const writtenOffCredits = writeOffs.byTransactionId.get(doc.id)?.writtenOffCredits;
+    const credits = signedCredits(type, doc.credits) + (writtenOffCredits ?? 0);
     const actorId = asString(metadata.actorId);
     const apiKeyId = asString(record.apiKeyId);
 
@@ -145,6 +150,7 @@ export async function buildLedgerRows(
       kind,
       createdAt: doc.createdAt.toISOString(),
       credits,
+      writtenOffCredits,
       balanceAfter,
       model: asString(record.model),
       source: asString(record.source),
@@ -171,18 +177,17 @@ export async function buildLedgerRows(
 /**
  * Balance right after the first row of a page. A page that starts at the newest row starts at the
  * current balance; any other (a later page, or any page under an end date) subtracts what every
- * newer row moved it by, in one aggregation.
+ * newer row moved it by, in one aggregation, less what those rows wrote off.
  */
 export async function balanceAfterFirstRow(
   userId: string,
   currentBalance: number,
   first: LedgerDocument,
-  startsAtNewest: boolean
+  startsAtNewest: boolean,
+  writeOffs: LedgerWriteOffs = NO_WRITE_OFFS
 ): Promise<number> {
   if (startsAtNewest) return currentBalance;
-  const newerNet = await creditTransactionRepository.sumSignedCreditsNewerThan(userId, CreditHolderType.User, {
-    createdAt: first.createdAt,
-    id: first.id,
-  });
-  return currentBalance - newerNet;
+  const position = { createdAt: first.createdAt, id: first.id };
+  const newerNet = await creditTransactionRepository.sumSignedCreditsNewerThan(userId, CreditHolderType.User, position);
+  return currentBalance - (newerNet + writtenOffNewerThan(writeOffs, position));
 }

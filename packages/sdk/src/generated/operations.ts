@@ -5,6 +5,18 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/data-lakes/{id}/files/{file_id}',
   },
+  addProjectFiles: {
+    method: 'POST',
+    path: '/api/v1/projects/{id}/files',
+  },
+  addProjectSessions: {
+    method: 'POST',
+    path: '/api/v1/projects/{id}/sessions',
+  },
+  addProjectSystemPrompts: {
+    method: 'POST',
+    path: '/api/v1/projects/{id}/system-prompts',
+  },
   bulkDeleteFiles: {
     method: 'POST',
     path: '/api/v1/files/bulk-delete',
@@ -33,6 +45,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/artifacts',
   },
+  createArtifactVersion: {
+    method: 'POST',
+    path: '/api/v1/artifacts/{id}/versions',
+  },
   createCompletion: {
     method: 'POST',
     path: '/api/ai/v1/completions',
@@ -56,6 +72,10 @@ export const operations = {
   createProject: {
     method: 'POST',
     path: '/api/v1/projects',
+  },
+  createProjectInvite: {
+    method: 'POST',
+    path: '/api/v1/projects/{id}/invites',
   },
   createSession: {
     method: 'POST',
@@ -100,6 +120,10 @@ export const operations = {
   deleteSession: {
     method: 'DELETE',
     path: '/api/sessions/{id}',
+  },
+  deleteSessionMessage: {
+    method: 'DELETE',
+    path: '/api/v1/sessions/{id}/messages/{messageId}',
   },
   editImage: {
     method: 'POST',
@@ -169,6 +193,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/skills/market/{id}/claude-plugin.zip',
   },
+  getClientConfig: {
+    method: 'GET',
+    path: '/api/v1/client-config',
+  },
   getCreditBalance: {
     method: 'GET',
     path: '/api/v1/credits',
@@ -209,6 +237,10 @@ export const operations = {
     method: 'GET',
     path: '/api/sessions/{id}',
   },
+  getSessionMessage: {
+    method: 'GET',
+    path: '/api/v1/sessions/{id}/messages/{messageId}',
+  },
   getSkillMarketListing: {
     method: 'GET',
     path: '/api/v1/skills/market/listings/{id}',
@@ -228,6 +260,10 @@ export const operations = {
   listAgents: {
     method: 'GET',
     path: '/api/v1/agents',
+  },
+  listArtifactTypes: {
+    method: 'GET',
+    path: '/api/v1/artifacts/types',
   },
   listArtifactVersions: {
     method: 'GET',
@@ -249,6 +285,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/decision-models',
   },
+  listEmbeddingModels: {
+    method: 'GET',
+    path: '/api/v1/embedding-models',
+  },
   listFiles: {
     method: 'GET',
     path: '/api/v1/files',
@@ -269,6 +309,18 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/skills/market/listings/mine',
   },
+  listProjectFiles: {
+    method: 'GET',
+    path: '/api/v1/projects/{id}/files',
+  },
+  listProjectInvites: {
+    method: 'GET',
+    path: '/api/v1/projects/{id}/invites',
+  },
+  listProjectSessions: {
+    method: 'GET',
+    path: '/api/v1/projects/{id}/sessions',
+  },
   listProjects: {
     method: 'GET',
     path: '/api/v1/projects',
@@ -276,6 +328,10 @@ export const operations = {
   listQuestFiles: {
     method: 'GET',
     path: '/api/v1/quests/{id}/files',
+  },
+  listSessionFiles: {
+    method: 'GET',
+    path: '/api/v1/sessions/{id}/files',
   },
   listSessionQuests: {
     method: 'GET',
@@ -325,6 +381,22 @@ export const operations = {
     method: 'DELETE',
     path: '/api/v1/data-lakes/{id}/files/{file_id}',
   },
+  removeProjectFile: {
+    method: 'DELETE',
+    path: '/api/v1/projects/{id}/files/{file_id}',
+  },
+  removeProjectMember: {
+    method: 'DELETE',
+    path: '/api/v1/projects/{id}/members/{user_id}',
+  },
+  removeProjectSession: {
+    method: 'DELETE',
+    path: '/api/v1/projects/{id}/sessions/{session_id}',
+  },
+  removeProjectSystemPrompt: {
+    method: 'DELETE',
+    path: '/api/v1/projects/{id}/system-prompts/{file_id}',
+  },
   rescanSkillMarketVersion: {
     method: 'POST',
     path: '/api/v1/skills/market/versions/{vid}/rescan',
@@ -333,6 +405,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/skills/market/versions/{vid}/review',
   },
+  searchArtifacts: {
+    method: 'GET',
+    path: '/api/v1/artifacts/search',
+  },
   searchDataLake: {
     method: 'POST',
     path: '/api/v1/data-lakes/{id}/search',
@@ -340,6 +416,10 @@ export const operations = {
   searchFiles: {
     method: 'GET',
     path: '/api/v1/files/search',
+  },
+  searchSessions: {
+    method: 'POST',
+    path: '/api/v1/sessions/semantic-search',
   },
   sendChatMessage: {
     method: 'POST',
@@ -377,9 +457,17 @@ export const operations = {
     method: 'PATCH',
     path: '/api/v1/projects/{id}',
   },
+  updateProjectSystemPrompt: {
+    method: 'PATCH',
+    path: '/api/v1/projects/{id}/system-prompts/{file_id}',
+  },
   updateSession: {
     method: 'PUT',
     path: '/api/sessions/{id}',
+  },
+  updateSessionMessage: {
+    method: 'PUT',
+    path: '/api/v1/sessions/{id}/messages/{messageId}',
   },
   withdrawSkillMarketListing: {
     method: 'DELETE',

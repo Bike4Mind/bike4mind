@@ -31,6 +31,7 @@ export type UserTimelineFilters = {
   /** Inclusive UTC calendar days, YYYY-MM-DD. */
   from?: string;
   to?: string;
+  apiKeyId?: string;
 };
 
 /** The day bounds as the endpoint's inclusive ISO instants. */
@@ -47,10 +48,21 @@ export const useUserTimeline = (
   const { pageSize = TIMELINE_PAGE_SIZE, enabled = true } = options;
   const types = [...filters.types].sort().join(',');
   return useInfiniteQuery({
-    queryKey: ['admin', 'users', userId, 'timeline', types, filters.from ?? '', filters.to ?? '', pageSize],
+    queryKey: [
+      'admin',
+      'users',
+      userId,
+      'timeline',
+      types,
+      filters.from ?? '',
+      filters.to ?? '',
+      pageSize,
+      filters.apiKeyId ?? '',
+    ],
     queryFn: async ({ pageParam }): Promise<UserTimelinePage> => {
       const params: Record<string, string> = { types, limit: String(pageSize), ...timelineRangeParams(filters) };
       if (pageParam) params.cursor = pageParam;
+      if (filters.apiKeyId) params.apiKeyId = filters.apiKeyId;
       const response = await api.get<{ entries: WireTimelineEntry[]; nextCursor: string | null }>(
         `/api/admin/users/${encodeURIComponent(userId)}/timeline`,
         { params }

@@ -461,27 +461,55 @@ describe('ImageGenerationService.selectInputImage reference images (#2744)', () 
     expect(result.referenceImages).toHaveLength(MAX_REFERENCE_IMAGES);
   });
 
-  it('uses all FLUX.2 workbench images and deduplicates an explicit primary reference', async () => {
-    const { service } = makeService({ a: cleanImage('a'), b: cleanImage('b') });
-    const result = await select(service, {
-      model: ImageModels.FLUX_2_PRO,
-      fabFileIds: ['a', 'b'],
-      referenceImageFabFileIds: ['a', 'b'],
-    });
-    expect(result.fileImage.id).toBe('a');
-    expect(result.referenceImages.map((file: FakeFile) => file.id)).toEqual(['b']);
+  it.each([ImageModels.FLUX_2_PRO, ImageModels.FLUX_3_IMAGE])(
+    'uses all %s workbench images and deduplicates an explicit primary reference',
+    async model => {
+      const { service } = makeService({ a: cleanImage('a'), b: cleanImage('b') });
+      const result = await select(service, {
+        model,
+        fabFileIds: ['a', 'b'],
+        referenceImageFabFileIds: ['a', 'b'],
+      });
+      expect(result.fileImage.id).toBe('a');
+      expect(result.referenceImages.map((file: FakeFile) => file.id)).toEqual(['b']);
+    }
+  );
+
+  it('counts the primary against the FLUX 3 input limit of ten', async () => {
+    const ids = Array.from({ length: 11 }, (_, index) => `ref-${index}`);
+    const { service } = makeService(Object.fromEntries(ids.map(id => [id, cleanImage(id)])));
+    await expect(
+      select(service, {
+        model: ImageModels.FLUX_3_IMAGE_KLEIN,
+        fabFileIds: [ids[0]],
+        referenceImageFabFileIds: ids.slice(1),
+      })
+    ).rejects.toThrow(/At most 10 input images/);
   });
 
-  it('preserves FLUX.2 attachment order when the database returns files in reverse order', async () => {
-    const files = { a: cleanImage('a'), b: cleanImage('b'), c: cleanImage('c') };
+  it.each([ImageModels.FLUX_2_PRO, ImageModels.FLUX_3_IMAGE])(
+    'preserves %s attachment order when the database returns files in reverse order',
+    async model => {
+      const files = { a: cleanImage('a'), b: cleanImage('b'), c: cleanImage('c') };
+      const { service, findAccessibleInIds } = makeService(files);
+      findAccessibleInIds.mockImplementation(async ids => ids.map(id => files[id as keyof typeof files]).reverse());
+      const result = await select(service, { model, fabFileIds: ['c', 'a', 'b'] });
+      expect(result.fileImage.id).toBe('c');
+      expect(result.referenceImages.map((file: FakeFile) => file.id)).toEqual(['a', 'b']);
+    }
+  );
+
+  it('keeps FLUX 3 references in caller order behind the primary when the database reverses them', async () => {
+    const files = { p: cleanImage('p'), a: cleanImage('a'), b: cleanImage('b'), c: cleanImage('c') };
     const { service, findAccessibleInIds } = makeService(files);
     findAccessibleInIds.mockImplementation(async ids => ids.map(id => files[id as keyof typeof files]).reverse());
     const result = await select(service, {
-      model: ImageModels.FLUX_2_PRO,
-      fabFileIds: ['c', 'a', 'b'],
+      model: ImageModels.FLUX_3_IMAGE,
+      fabFileIds: ['p'],
+      referenceImageFabFileIds: ['c', 'a', 'b'],
     });
-    expect(result.fileImage.id).toBe('c');
-    expect(result.referenceImages.map((file: FakeFile) => file.id)).toEqual(['a', 'b']);
+    expect(result.fileImage.id).toBe('p');
+    expect(result.referenceImages.map((file: FakeFile) => file.id)).toEqual(['c', 'a', 'b']);
   });
 
   it('counts the primary against the FLUX.2 Klein input limit', async () => {
@@ -575,6 +603,25 @@ describe('ImageGenerationService.invoke (image-parameter passthrough)', () => {
 
     const questInput = create.mock.calls[0][0];
     expect(questInput.promptMeta.model.parameters).not.toHaveProperty('seed');
+    expect(questInput.promptMeta.model.parameters).not.toHaveProperty('output_format');
+  });
+
+  it('omits output_format from promptMeta.parameters for flux-3-image, which picks its own format', async () => {
+    const startImageGenerationProcess = vi.fn(async () => undefined);
+    const { service, create } = makeInvokeService(startImageGenerationProcess);
+
+    await service.invoke({
+      body: {
+        sessionId: 'session1',
+        prompt: 'a cat',
+        model: ImageModels.FLUX_3_IMAGE,
+        fabFileIds: [],
+        output_format: 'png',
+      } as any,
+      userId: 'user1',
+    });
+
+    const questInput = create.mock.calls[0][0];
     expect(questInput.promptMeta.model.parameters).not.toHaveProperty('output_format');
   });
 
@@ -1413,18 +1460,35 @@ describe('ImageGenerationService.process (size normalization)', () => {
 
   const refs = [cleanFile('a'), cleanFile('b')];
 
-  it('forwards both attached FLUX.2 images to the BFL service', async () => {
+  it.each([ImageModels.FLUX_2_PRO, ImageModels.FLUX_3_IMAGE])(
+    'forwards both attached %s images to the BFL service',
+    async model => {
+      const { rendered } = await generateWith(
+        model,
+        ModelBackend.BFL,
+        undefined,
+        { fabFileIds: ['a', 'b'] },
+        { files: refs, supportsImageVariation: true }
+      );
+      expect(rendered).toMatchObject({
+        reference_images: [Buffer.from('fab/a').toString('base64'), Buffer.from('fab/b').toString('base64')],
+      });
+      expect(rendered).not.toHaveProperty('image_prompt');
+    }
+  );
+
+  it('sends FLUX 3 references to BFL in referenceImageFabFileIds order', async () => {
     const { rendered } = await generateWith(
-      ImageModels.FLUX_2_PRO,
+      ImageModels.FLUX_3_IMAGE,
       ModelBackend.BFL,
       undefined,
-      { fabFileIds: ['a', 'b'] },
-      { files: refs, supportsImageVariation: true }
+      { referenceImageFabFileIds: ['b', 'a'] },
+      { files: refs }
     );
-    expect(rendered).toMatchObject({
-      reference_images: [Buffer.from('fab/a').toString('base64'), Buffer.from('fab/b').toString('base64')],
-    });
-    expect(rendered).not.toHaveProperty('image_prompt');
+    expect(rendered?.reference_images).toEqual([
+      Buffer.from('fab/b').toString('base64'),
+      Buffer.from('fab/a').toString('base64'),
+    ]);
   });
 
   it('forwards explicit FLUX.2 references without a primary image', async () => {
@@ -1899,6 +1963,8 @@ describe('ImageGenerationService quest partial writes', () => {
         sessionId: 'session1',
         questId: 'quest1',
         contentType: 'image/png',
+        // The chat image's key, so a later "save to Files" of it finds this generation.
+        generatedOutputKey: 'generated/output.png',
         generation: {
           generator: 'image',
           provider: ModelBackend.Gemini,
@@ -1964,6 +2030,21 @@ describe('ImageGenerationService quest partial writes', () => {
 
       expect(save).toHaveBeenCalledTimes(2);
       expect(save.mock.calls.map(call => call[0].generation?.jobId).sort()).toEqual(['gen-1-0', 'gen-1-1']);
+    });
+
+    it('stamps each saved image with its own chat image key', async () => {
+      const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
+      const { service } = arrange(save);
+      const { upload } = (service as unknown as { storage: { upload: ReturnType<typeof vi.fn> } }).storage;
+      upload.mockImplementation(async (_buffer: unknown, filename: string) => `generated/${filename}`);
+      mockGeminiGenerate.mockReset();
+      mockGeminiGenerate.mockResolvedValue(twoImages);
+      await processGenerate(service, 'gen-1');
+
+      const uploaded = upload.mock.results.map(result => result.value);
+      const keys = save.mock.calls.map(call => call[0].generatedOutputKey);
+      expect(new Set(keys).size).toBe(2);
+      expect(await Promise.all(uploaded)).toEqual(expect.arrayContaining(keys));
     });
 
     it('saves nothing when moderation blocks the second image', async () => {

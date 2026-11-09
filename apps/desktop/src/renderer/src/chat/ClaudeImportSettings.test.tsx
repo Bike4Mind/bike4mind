@@ -30,6 +30,14 @@ const ready: ClaudeImportState = {
     projects: [],
   },
   chat: { watchFolder: null, running: false, lastImport: null },
+  web: {
+    settings: { enabled: false },
+    running: false,
+    lastSyncAt: null,
+    lastSyncMs: null,
+    counts: { found: 0, imported: 0, skipped: 0, failed: 0 },
+    forked: 0,
+  },
 };
 const getState = vi.fn<() => Promise<ClaudeImportState>>();
 const listeners = new Set<(state: ClaudeImportState) => void>();

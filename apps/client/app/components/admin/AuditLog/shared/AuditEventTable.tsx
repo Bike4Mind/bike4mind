@@ -5,6 +5,7 @@ import type { AuditEntry, AuditTarget } from '@bike4mind/common';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 import { DataTable, EmptyState, ErrorState, type AdminSelection, type DataColumn } from '../../shared';
 import { AuditActorLabel } from './AuditActorLabel';
+import { AuditKeyDetails, AuditSelfTargetedChip } from './AuditEntryHighlights';
 import { AuditSeverityChip } from './AuditSeverityChip';
 import { auditTargetHref } from './auditTargetHref';
 
@@ -99,18 +100,22 @@ export const AuditEventTable = <T extends AuditEntry = AuditEntry>({
       id: 'summary',
       label: 'Summary',
       render: entry => (
-        <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
-          <Typography level="body-sm">{entry.summary}</Typography>
-          {entry.source !== 'admin' && (
-            <Chip size="sm" variant="outlined" data-testid={`${testIdPrefix}-source-chip`}>
-              {entry.source}
-            </Chip>
-          )}
-          {entry.backfilled && (
-            <Chip size="sm" variant="outlined" data-testid={`${testIdPrefix}-backfilled-chip`}>
-              Backfilled
-            </Chip>
-          )}
+        <Stack spacing={0.5}>
+          <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
+            <Typography level="body-sm">{entry.summary}</Typography>
+            <AuditSelfTargetedChip entry={entry} testIdPrefix={testIdPrefix} />
+            {entry.source !== 'admin' && (
+              <Chip size="sm" variant="outlined" data-testid={`${testIdPrefix}-source-chip`}>
+                {entry.source}
+              </Chip>
+            )}
+            {entry.backfilled && (
+              <Chip size="sm" variant="outlined" data-testid={`${testIdPrefix}-backfilled-chip`}>
+                Backfilled
+              </Chip>
+            )}
+          </Stack>
+          <AuditKeyDetails entry={entry} testIdPrefix={testIdPrefix} />
         </Stack>
       ),
     },

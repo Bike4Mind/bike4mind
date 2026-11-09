@@ -77,6 +77,9 @@ export interface SessionPlacement {
 /** Newest context notice of each kind per conversation that was not open when it arrived; shown when it opens. */
 const backgroundNotices = new Map<string, ContextNotice[]>();
 
+// Refused prompts of a conversation that was not open when the refusal arrived; returned to its composer when it opens.
+const backgroundReturned = new Map<string, ChatQueuedMessage[]>();
+
 interface ContextNotice {
   message: string;
   kind?: ContextNoticeKind;
@@ -188,6 +191,7 @@ export function useSessions(): SessionsController {
   const remove = useCallback(async (sessionId: string, removeWorktree = false) => {
     await window.b4m.chat.deleteSession(sessionId, removeWorktree);
     backgroundNotices.delete(sessionId);
+    backgroundReturned.delete(sessionId);
     forgetSessionPrefs(sessionId);
     editSessions(current => current.filter(session => session.id !== sessionId));
   }, []);
@@ -650,7 +654,9 @@ export function useConversation(
     setNotices(backgroundNotices.get(sessionId ?? '') ?? []);
     if (sessionId) backgroundNotices.delete(sessionId);
     setProjectError(null);
-    setReturned(null);
+    const stashed = sessionId ? backgroundReturned.get(sessionId) : undefined;
+    if (sessionId) backgroundReturned.delete(sessionId);
+    setReturned(stashed ? { id: ++returnBatch.current, messages: stashed } : null);
     setQueued([]);
     setCommandProgress(null);
     setPreparing(null);
@@ -751,7 +757,16 @@ export function useConversation(
       // chips have to stop saying it is on its way.
       setSession(current =>
         current
-          ? { ...current, title: summary.title, project: summary.project, historyEnabled: summary.historyEnabled }
+          ? {
+              ...current,
+              title: summary.title,
+              project: summary.project,
+              historyEnabled: summary.historyEnabled,
+              model: summary.model,
+              orchestrationPolicy: summary.orchestrationPolicy,
+              workerSelection: summary.workerSelection,
+              workerTask: summary.workerTask,
+            }
           : current
       );
     });
@@ -1035,6 +1050,15 @@ export function useConversation(
           // Whatever the outcome: a refused turn has no 'start' coming to clear it.
           if (activeSessionId.current === sessionId) setPreparing(null);
         });
+      if (activeSessionId.current !== sessionId) {
+        if (!result.ok && prompt) {
+          backgroundReturned.set(sessionId, [
+            ...(backgroundReturned.get(sessionId) ?? []),
+            { id: 'refused', sessionId, text: prompt, queuedAt: new Date().toISOString() },
+          ]);
+        }
+        return result.ok;
+      }
       if (!result.ok) {
         discardOptimistic();
         setSendError(result.error);
@@ -1069,7 +1093,10 @@ export function useConversation(
 
       const summary = await window.b4m.chat.getSession(sessionId);
       if (summary) {
-        setSession(summary);
+        // A late read for the chat we left must not put the selected thread back behind its opening gate.
+        if (activeSessionId.current === sessionId) {
+          setSession(current => (current?.id === sessionId ? summary : current));
+        }
         onSummaryChanged(summarizeSession(summary));
       }
       return true;
@@ -1158,6 +1185,21 @@ export function useConversation(
               error: 'Paste the PR URL after /pr, e.g. /pr https://github.com/owner/repo/pull/123',
             };
         if (!bound.ok) setSendError(bound.error);
+        return;
+      }
+      if (name === 'loop') {
+        const result = await window.b4m.chat.loopCommand(sessionId, args);
+        if (activeSessionId.current !== sessionId) return;
+        if (!result.ok) setSendError(result.error);
+        else
+          setNotice(
+            result.notice ??
+              (result.state
+                ? args.trim() === 'list'
+                  ? `Loop ${result.state.phase}: ${result.state.prompt}`
+                  : null
+                : 'No active loop in this session.')
+          );
         return;
       }
       if (name === 'add-dir') {
@@ -1357,8 +1399,12 @@ export function useConversation(
       // The reply can land after a switch to another conversation, which must keep its own flag.
       setSession(current => {
         if (current?.id !== sessionId) return current;
-        const { orchestrate: _previous, ...rest } = current;
-        return updated.orchestrate ? { ...rest, orchestrate: true } : rest;
+        const { orchestrate: _previous, orchestrationPolicy: _policy, ...rest } = current;
+        return {
+          ...rest,
+          ...(updated.orchestrate ? { orchestrate: true } : {}),
+          ...(updated.orchestrationPolicy ? { orchestrationPolicy: updated.orchestrationPolicy } : {}),
+        };
       });
       onSummaryChanged(updated);
     },

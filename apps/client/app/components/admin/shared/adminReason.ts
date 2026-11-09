@@ -1,4 +1,5 @@
 import {
+  ABUSE_SUSPENSION_REASONS,
   ADMIN_ACTION_REASON_MAX_LENGTH,
   ADMIN_ACTION_REASON_MIN_LENGTH,
   isValidAdminActionReason,
@@ -6,31 +7,37 @@ import {
 
 /**
  * Preset reasons per audited action. A preset alone is a complete reason, so every label must
- * satisfy the shared `adminActionReason` rule unchanged; `adminAudit.test.ts` pins that against
+ * satisfy the shared `adminActionReason` rule unchanged; `adminReason.test.ts` pins that against
  * the server's `parseAdminActionReason`.
  */
 export const ADMIN_REASON_PRESETS = {
   subscriptionCancel: ['Customer request', 'Billing dispute', 'Duplicate subscription', 'Account closure'],
   subscriptionResume: ['Customer changed their mind', 'Canceled in error', 'Customer request'],
   creditAdjustment: ['Goodwill credit', 'Refund', 'Support request', 'Abuse / automated signups'],
-  suspension: ['Abuse / automated signups', 'Payment fraud', 'Terms violation', 'Customer request'],
+  // The abuse presets also grade the account's open shadow detections confirmed abuse.
+  suspension: [...ABUSE_SUSPENSION_REASONS, 'Customer request'],
   reinstatement: ['Suspended in error', 'Appeal accepted', 'Issue resolved'],
   restriction: ['Abuse / automated signups', 'Suspicious usage', 'Terms violation', 'Under investigation'],
   limitedTier: ['Abuse / automated signups', 'Suspicious usage', 'Under investigation'],
   limitedTierLift: ['Reviewed, not abusive', 'Appeal accepted', 'Applied in error'],
   emailVerification: ['Ownership confirmed by support', 'Bounced or invalid address', 'Internal testing'],
+  emailManualVerify: ['Ownership confirmed by support', 'Internal testing'],
+  feedbackDeletion: ['Spam or abuse', 'Duplicate report', 'Test submission'],
   profileEdit: ['Customer request', 'Correcting a typo', 'Account recovery, identity verified'],
   apiKeyTrust: ['Known integration', 'Partner access', 'Suspicious usage'],
   newAccountSpendCap: ['Verified customer', 'Known high-volume user', 'Suspicious usage'],
   internalAccount: ['Team member', 'Contractor or partner', 'Marked in error'],
   apiKeyRevokeAll: ['Compromised or leaked keys', 'Abuse / automated signups', 'Customer request'],
   apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
+  apiKeyAdminScope: ['Partner integration', 'Internal service', 'Requested by the account owner'],
   accountTags: ['Account review', 'Support request', 'Internal testing'],
   productAccess: ['Pilot or partner access', 'Plan change', 'Support request'],
   systemMessage: ['Account notice', 'Support follow-up', 'Policy warning'],
   roleChange: ['Joined the admin team', 'Left the admin team', 'Temporary on-call access'],
   subscriptionGrant: ['Pilot or partner access', 'Billing correction', 'Goodwill grant', 'Internal testing'],
   userDeletion: ['User requested deletion', 'Spam or bot account', 'Terms of service violation', 'Duplicate account'],
+  deletionVerification: ['Request sent from the email on file', 'Confirmed by reply from the email on file'],
+  deletionCancel: ['User asked to cancel, identity verified', 'Scheduled in error'],
   mfaReset: ['Lost authenticator, identity verified', 'New device, identity verified'],
   sessionRevoke: ['Compromised account', 'Lost or stolen device', 'Suspicious sign-in', 'User request'],
   impersonation: ['Reproduce a reported bug', 'Investigate a support ticket', 'Check account configuration'],
@@ -53,6 +60,12 @@ export const ADMIN_REASON_PRESETS = {
   bulkUserAction: ['Spam or bot account', 'Terms of service violation', 'Billing correction', 'Account cleanup'],
   bulkAbuseResponse: ['Spam or bot cohort', 'Credit farming', 'Disposable email domain', 'Coordinated signup abuse'],
   compChange: ['Pilot or trial ended', 'Granted in error', 'Customer request', 'Account cleanup'],
+  subscriptionSync: [
+    'Webhook missed or failed',
+    'Seats out of sync with billing',
+    'Billing correction',
+    'Mismatch review',
+  ],
   creditRateChange: ['Plan change', 'Goodwill adjustment', 'Billing correction', 'Customer request'],
   subscriptionRemove: ['Duplicate record', 'Comp no longer needed', 'Test or internal record', 'Billing correction'],
   seatChange: ['Customer request', 'Team size changed', 'Seats out of sync with billing', 'Billing correction'],
@@ -68,12 +81,21 @@ export const ADMIN_REASON_PRESETS = {
     'Duplicate of another dispute',
   ],
   stripeDisputeUndoContain: ['Customer verified as legitimate', 'Contained in error'],
+  signupRiskReopen: ['Evidence needs a manual look', 'Linked to known abuse', 'Payment disputed or refunded'],
   shadowDetectionVerdict: [
     'Reviewed account activity',
     'Matches a known abuse pattern',
     'Known customer or integration',
     'Not enough data to decide',
   ],
+  oauthClientRotate: ['Compromised or leaked secret', 'Routine rotation', 'Requested by the app owner'],
+  oauthClientDeactivate: [
+    'App retired',
+    'Compromised or leaked secret',
+    'Suspicious usage',
+    'Requested by the app owner',
+  ],
+  identityProviderDelete: ['Replaced by another provider', 'Domain no longer uses single sign-on', 'Created in error'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;

@@ -3,6 +3,7 @@ import { MAX_MODEL_ID_LENGTH } from './modelId';
 import {
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
+  UPGRADE_REQUIRED_ERROR_CODE,
   OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   UNKNOWN_MODEL_ERROR_CODE,
   type ApiErrorCode,
@@ -354,6 +355,17 @@ export const InsufficientCreditsErrorSchema = ApiErrorSchema.extend({
   // QUEST_ERROR_CODES is itself typed against apiErrorCodes.ts, so a rename there breaks this
   // rather than silently publishing a dead code.
   errorCode: z.enum(QUEST_ERROR_CODES).optional(),
+});
+
+/**
+ * 426 for a request whose declared client build is below the configured minimum
+ * (CONVENTIONS.md section 9). Thrown as `UpgradeRequiredError`, so errorHandler serves it
+ * and it derives from `ApiErrorSchema`.
+ */
+export const UpgradeRequiredErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal(UPGRADE_REQUIRED_ERROR_CODE),
+  client_name: z.string(),
+  minimum_version: z.string(),
 });
 
 /**

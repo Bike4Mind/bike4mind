@@ -1,5 +1,6 @@
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
+import Typography from '@mui/joy/Typography';
 
 export interface ExampleQuest {
   label: string;
@@ -41,6 +42,25 @@ export function ExampleQuestButtons({ onPick }: { onPick(prompt: string): void }
           {quest.label}
         </Button>
       ))}
+    </Box>
+  );
+}
+
+/**
+ * The quests above the composer of a session that has Orchestrate on but no agents and no messages yet.
+ * The header's agents switch only appears once there is an agent, so this is where a new orchestrating
+ * session finds its starters rather than on an empty stage.
+ */
+export function ExampleQuestStrip({ onPick }: { onPick(prompt: string): void }) {
+  return (
+    <Box
+      data-testid="orchestrate-example-quests"
+      sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.75, pb: 1 }}
+    >
+      <Typography level="body-xs" textColor="text.tertiary">
+        Try an example quest
+      </Typography>
+      <ExampleQuestButtons onPick={onPick} />
     </Box>
   );
 }

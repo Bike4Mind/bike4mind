@@ -233,6 +233,22 @@ describe('UsageEventRepository', () => {
       expect(sonnet!.day).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     });
 
+    it('splits substituted traffic into its own row under the executed model', async () => {
+      await record({ costUsd: 0.01, creditsCharged: 50 });
+      await record({ costUsd: 0.002, creditsCharged: 50, executedProvider: 'openai', executedModel: 'gpt-4o-mini' });
+
+      const rows = await usageEventRepository.marginByModelDay();
+
+      expect(rows).toHaveLength(2);
+      rows.forEach(r => expect(r).toMatchObject({ provider: 'bedrock', model: 'claude-sonnet-4-5' }));
+      const substituted = rows.find(r => r.executedModel === 'gpt-4o-mini');
+      expect(substituted).toMatchObject({ executedProvider: 'openai', requests: 1, creditsCharged: 50 });
+      expect(substituted!.cogsUsd).toBeCloseTo(0.002, 10);
+      const normal = rows.find(r => r.executedModel === 'claude-sonnet-4-5');
+      expect(normal).toMatchObject({ executedProvider: 'bedrock', requests: 1 });
+      expect(normal!.cogsUsd).toBeCloseTo(0.01, 10);
+    });
+
     it('excludes events older than the since date', async () => {
       await record();
       const rows = await usageEventRepository.marginByModelDay(new Date(Date.now() + 60_000));
@@ -278,6 +294,22 @@ describe('UsageEventRepository', () => {
         cachedInputTokens: 200,
       });
       expect(bedrock!.month).toMatch(/^\d{4}-\d{2}$/);
+    });
+
+    it('attributes substituted rows to the executed provider', async () => {
+      await record({ costUsd: 0.01 });
+      await record({ costUsd: 0.01 });
+      await record({ costUsd: 0.002, executedProvider: 'openai', executedModel: 'gpt-4o-mini' });
+
+      const rows = await usageEventRepository.monthlyCogsByProvider();
+
+      expect(rows).toHaveLength(2);
+      const bedrock = rows.find(r => r.provider === 'bedrock');
+      expect(bedrock!.requests).toBe(2);
+      expect(bedrock!.cogsUsd).toBeCloseTo(0.02, 10);
+      const openai = rows.find(r => r.provider === 'openai');
+      expect(openai!.requests).toBe(1);
+      expect(openai!.cogsUsd).toBeCloseTo(0.002, 10);
     });
 
     it('sums cacheWriteTokens', async () => {
@@ -923,6 +955,28 @@ describe('UsageEventRepository', () => {
       expect(summary.latency.p50).toBeGreaterThanOrEqual(200);
       expect(summary.latency.p50).toBeLessThanOrEqual(500);
       expect(summary.latency.p95).toBeGreaterThanOrEqual(summary.latency.p50);
+    });
+
+    it('counts failures and p95 latency per account', async () => {
+      const org = { ownerId: 'org-1', ownerType: CreditHolderType.Organization };
+      for (const latencyMs of [100, 200, 300]) {
+        await record({ ...org, latencyMs, status: 'ok' });
+      }
+      await record({ ...org, status: 'error', latencyMs: 400 });
+      await record({ ...org, status: 'timeout', latencyMs: 500 });
+      // Refusals and degenerates are their own rates, not failures.
+      await record({ ...org, status: 'refusal', latencyMs: 600 });
+      await record({ ...org, status: 'degenerate', latencyMs: 700 });
+      // No latencyMs anywhere: p95 reads 0 rather than null.
+      await record({ ownerId: 'user-9', ownerType: CreditHolderType.User, status: 'ok' });
+
+      const summary = await usageEventRepository.spendSummary();
+      const byOwner = Object.fromEntries(summary.byAccount.map(a => [a.ownerId, a]));
+
+      expect(byOwner['org-1']).toMatchObject({ requests: 7, failures: 2 });
+      expect(byOwner['org-1'].p95LatencyMs).toBeGreaterThanOrEqual(500);
+      expect(byOwner['org-1'].p95LatencyMs).toBeLessThanOrEqual(700);
+      expect(byOwner['user-9']).toMatchObject({ requests: 1, failures: 0, p95LatencyMs: 0 });
     });
 
     it('honors the date window and the user/model filters', async () => {

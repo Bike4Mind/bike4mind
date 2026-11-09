@@ -258,4 +258,41 @@ describe('PaymentAttemptModel', () => {
       distinctCards: 0,
     });
   });
+  it('finds settled payments of a risk level created at or before the cutoff, newest first, past newer other rows', async () => {
+    const cutoff = new Date('2026-11-01T00:00:00Z');
+    const at = (offsetMs: number) => new Date(cutoff.getTime() + offsetMs);
+    const row = (paymentIntentId: string, createdAt: Date, overrides: Record<string, unknown> = {}) => ({
+      paymentIntentId,
+      userId: 'u1',
+      kind: 'credits',
+      outcome: 'succeeded',
+      riskLevel: 'normal',
+      cardFingerprints: ['fp_1'],
+      createdAt,
+      ...overrides,
+    });
+    await PaymentAttemptModel.collection.insertMany([
+      row('pi_old', at(-2 * 60_000)),
+      row('pi_edge', at(0)),
+      row('pi_elevated', at(-60_000), { riskLevel: 'elevated' }),
+      row('pi_failed', at(-60_000), { outcome: 'failed' }),
+      row('pi_other_user', at(-60_000), { userId: 'u2' }),
+      row('pi_too_new', at(60_000)),
+      ...Array.from({ length: 60 }, (_, i) => row(`pi_started_${i}`, at(-30_000), { outcome: 'started' })),
+    ]);
+
+    const settled = await paymentAttemptRepository.findSettledByUser('u1', {
+      riskLevel: 'normal',
+      createdBefore: cutoff,
+      limit: 50,
+    });
+
+    expect(settled.map(attempt => attempt.paymentIntentId)).toEqual(['pi_edge', 'pi_old']);
+  });
+  it('finds the account that started a payment intent', async () => {
+    await paymentAttemptRepository.recordStart({ paymentIntentId: 'pi_1', ...start });
+
+    expect(await paymentAttemptRepository.findUserId('pi_1')).toBe('u1');
+    expect(await paymentAttemptRepository.findUserId('pi_unknown')).toBeNull();
+  });
 });

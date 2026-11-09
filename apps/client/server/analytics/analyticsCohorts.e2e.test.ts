@@ -25,11 +25,12 @@ const seedUser = (id: mongoose.Types.ObjectId, createdAt: string, extra: Record<
     _id: id,
     username: String(id),
     email: `${id}@customer.example.com`,
+    emailVerified: true,
     createdAt: new Date(createdAt),
     ...extra,
   });
 
-const seedEvent = (userId: mongoose.Types.ObjectId, at: string) =>
+const seedEvent = (userId: mongoose.Types.ObjectId, at: string, source: 'web' | 'api' = 'web') =>
   UsageEvent.collection.insertOne({
     requestId: String(oid()),
     userId: String(userId),
@@ -41,7 +42,7 @@ const seedEvent = (userId: mongoose.Types.ObjectId, at: string) =>
     costUsd: 0.01,
     creditsCharged: 2,
     status: 'ok',
-    source: 'web',
+    source,
     createdAt: new Date(at),
   });
 
@@ -198,6 +199,30 @@ describe('getAnalyticsCohorts', () => {
     const all = await getAnalyticsCohorts({ weeks: 3, signups: 'all' }, NOW);
     expect(all.cohorts.map(cohort => cohort.size)).toEqual([2, 1, 1]);
     expect(percents(all.cohorts[1].cells, 2)).toEqual([100, 100]);
+  });
+
+  it('keeps API-only real signups in cohort size but excludes API-only weeks from retention', async () => {
+    const apiOnly = oid();
+    await seedUser(apiOnly, '2026-05-26T08:00:00Z');
+    await seedEvent(apiOnly, '2026-05-26T10:00:00Z', 'api');
+    await seedEvent(apiOnly, '2026-06-02T10:00:00Z', 'api');
+    await seedEvent(users.a, '2026-06-09T10:00:00Z', 'api');
+
+    await rollupThroughAsOf();
+
+    expect(await AnalyticsUserDay.findOne({ userId: String(apiOnly), day: '2026-05-26' }).lean()).toMatchObject({
+      suspected: false,
+      active: false,
+    });
+    for (const signups of ['all', 'legit'] as const) {
+      const { cohorts } = await getAnalyticsCohorts({ weeks: 3, signups }, NOW);
+      expect(cohorts[0].size).toBe(3);
+      expect(cohorts[0].cells.slice(0, 3)).toEqual([
+        { active: 2, percent: (2 / 3) * 100 },
+        { active: 1, percent: (1 / 3) * 100 },
+        { active: 0, percent: 0 },
+      ]);
+    }
   });
 
   it('blanks the cohort and reports the day when a rollup day is missing', async () => {

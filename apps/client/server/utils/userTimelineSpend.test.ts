@@ -27,7 +27,7 @@ const row = (
   ...extra,
 });
 
-const noLookups = { notebookNames: new Map<string, string>(), apiKeyPrefixes: new Map<string, string>() };
+const noLookups = { apiKeyPrefixes: new Map<string, string>() };
 
 describe('rollUpSpend', () => {
   it('groups usage by hour, notebook and model, and gives each group the balance after its newest charge', () => {
@@ -107,13 +107,14 @@ const group = (overrides: Partial<SpendGroup> = {}): SpendGroup => ({
 });
 
 describe('spendGroupToEntry', () => {
-  it('names the count, model and notebook, and puts source, key, span and balance in the detail', () => {
+  it('names the count and model, and puts source, key, span and balance in the detail', () => {
     const entry = spendGroupToEntry(group(), {
-      notebookNames: new Map([['b'.repeat(24), 'Notebook X']]),
       apiKeyPrefixes: new Map([['c'.repeat(24), 'b4m_ab12']]),
     });
-    expect(entry.summary).toBe('Spent 2,400 credits: 14 chat messages on opus in "Notebook X"');
-    expect(entry.detail).toBe('CLI \u00b7 key b4m_ab12 \u00b7 over 30 min \u00b7 balance after 1,200');
+    expect(entry.summary).toBe('Spent 2,400 credits: 14 chat messages on opus');
+    expect(entry.detail).toBe(
+      `notebook ${'b'.repeat(24)} \u00b7 CLI \u00b7 key b4m_ab12 \u00b7 over 30 min \u00b7 balance after 1,200`
+    );
     expect(entry.alert).toBeUndefined();
     expect(entry.flags).toBeUndefined();
   });

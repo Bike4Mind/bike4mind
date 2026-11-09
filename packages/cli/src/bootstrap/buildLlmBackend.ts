@@ -7,7 +7,12 @@ import {
   type OpenAICompatibleBackendOptions,
 } from '@bike4mind/llm-adapters';
 import { detectRuntimes } from '@bike4mind/local-models';
-import { parseLocalModelId, serverRuntimeId, type FetchLike } from '@bike4mind/local-models/servers';
+import {
+  parseLocalModelId,
+  serverRuntimeId,
+  SSH_PROBE_TIMEOUT_MS,
+  type FetchLike,
+} from '@bike4mind/local-models/servers';
 import type { ILogger } from '@bike4mind/observability';
 import { extractErrorMessage } from '@bike4mind/utils';
 import type { CliConfig } from '../storage';
@@ -26,15 +31,25 @@ import {
   needsCredential,
   resolveServerTarget,
   serverFetch,
+  unusableStatus,
   type CliModelServer,
   type LoadedModelServers,
+  type SshFetchFor,
 } from '../models/modelServers.js';
 import { setWebSocketToolExecutor } from '../llm/ToolRouter';
 import { WebSocketConnectionManager } from '../ws/WebSocketConnectionManager';
 import { createSseBackend } from './sseTransport.js';
+import {
+  INSTALL_OLLAMA_HINT,
+  NoLocalModelsError,
+  SignedOutCloudBackend,
+  signedOutDefaultReplacedMessage,
+  savedServerDownMessage,
+  signedOutHeadlessCloudModelMessage,
+} from './signedOutLocal.js';
 
 /** The concrete backend types this builder can produce. */
-export type CliLlmBackend = ServerLlmBackend | WebSocketLlmBackend | MultiLlmBackend;
+export type CliLlmBackend = ServerLlmBackend | WebSocketLlmBackend | MultiLlmBackend | SignedOutCloudBackend;
 
 export interface BuildLlmBackendInput {
   config: CliConfig;
@@ -64,6 +79,12 @@ export interface BuildLlmBackendInput {
 }
 
 export const SAVED_OLLAMA_LISTING_TIMEOUT_MS = 5_000;
+
+/** How long a saved server that is not the default's gets at startup: an SSH one may need a login first. */
+export function savedServerListingMs(server: CliModelServer, listingTimeoutMs: number | undefined): number {
+  if (listingTimeoutMs !== undefined) return listingTimeoutMs;
+  return server.transport.type === 'ssh' ? SSH_PROBE_TIMEOUT_MS : SAVED_OLLAMA_LISTING_TIMEOUT_MS;
+}
 /** How long startup waits for an Ollama on the default loopback address when no host is configured. */
 export const OLLAMA_DETECT_TIMEOUT_MS = 1_000;
 /** How long startup waits to list the models of a detected Ollama; the user never configured it. */
@@ -127,6 +148,8 @@ export interface BuildLlmBackendDeps {
   ) => MultiLlmBackend;
   /** Desktop's saved model servers; defaults to reading Desktop's file. */
   loadModelServers?: () => Promise<LoadedModelServers>;
+  /** The SSH forward to a saved server on another machine; defaults to the system ssh. */
+  sshFetchFor?: SshFetchFor;
   /** The base URL of a healthy Ollama on the default loopback address, or null. Must stop when `signal` aborts. */
   detectOllama: (signal: AbortSignal) => Promise<string | null>;
 }
@@ -265,6 +288,56 @@ export function resolveHeadlessModel(
   return { modelInfo, warning: `Model "${defaultModel}" is not available; using "${modelInfo.id}".` };
 }
 
+/**
+ * Headless model choice while signed out, when `models` are all local: the default if listed, else the saved local
+ * default (with a warning to print). A default that is itself the local default must be listed; any other is taken
+ * for a cloud model and answered with how to pick a local one or sign in.
+ */
+export function resolveSignedOutHeadlessModel(
+  models: ModelInfo[],
+  config: Pick<CliConfig, 'defaultModel' | 'localDefaultModel'>,
+  ollama: Pick<LocalModelsAttachment, 'ollamaHost' | 'serverFailures'>
+): { modelInfo: ModelInfo; warning: string | null } {
+  const { defaultModel, localDefaultModel } = config;
+  requireLocalDefaultListed(models, defaultModel);
+  const listed = models.find(model => model.id === defaultModel);
+  if (listed) return { modelInfo: listed, warning: null };
+  if (localDefaultModel && defaultModel !== localDefaultModel) {
+    const saved = models.find(model => model.id === localDefaultModel);
+    if (saved) {
+      return {
+        modelInfo: saved,
+        warning: `Not signed in, so using the saved local model "${clean(saved.id)}" instead of "${clean(defaultModel)}".`,
+      };
+    }
+  }
+  const serverDown = savedLocalDefaultDownMessage(config, ollama.serverFailures);
+  if (serverDown) throw new Error(serverDown);
+  if (defaultModel === localDefaultModel) {
+    throw new Error(
+      `Model "${clean(defaultModel)}" is not available from Ollama${ollama.ollamaHost ? ` at ${clean(ollama.ollamaHost)}` : ''}. ` +
+        'Start Ollama, or pick another model with: b4m models use <name>'
+    );
+  }
+  throw new Error(signedOutHeadlessCloudModelMessage(defaultModel));
+}
+
+/**
+ * Signed out, a cloud default gives way to the saved local default, which may be on a saved model server still
+ * answering; this waits for those servers (each under its own deadline) only when that is the case.
+ */
+export async function withSignedOutLocalDefault(
+  attached: Pick<LocalModelsAttachment, 'llm' | 'models' | 'later'>,
+  config: Pick<CliConfig, 'defaultModel' | 'localDefaultModel'>
+): Promise<ModelInfo[]> {
+  const listed = (id: string | undefined) => id !== undefined && attached.models.some(model => model.id === id);
+  if (listed(config.defaultModel) || !config.localDefaultModel || listed(config.localDefaultModel)) {
+    return attached.models;
+  }
+  await attached.later;
+  return attached.llm.getModelInfo();
+}
+
 export interface LocalModelsAttachment {
   llm: CliLlmBackend;
   models: ModelInfo[];
@@ -276,11 +349,23 @@ export interface LocalModelsAttachment {
   ollamaListingFailed: boolean;
   /** `ollamaHost` was found by detection, not configured. */
   ollamaDetected: boolean;
-  /** Saved model servers whose models were listed before startup went on: the default model's, if any. */
+  /** Saved model servers listed before startup went on: the default model's, if any, or all that answered when `signedOut` waited for them. */
   servers: { name: string; modelCount: number }[];
+  /** Other saved model servers that could not be reached or listed, or lack a credential, by server id; complete once `later` settles. */
+  serverFailures: ReadonlyMap<string, { name: string; error: string }>;
   warnings: string[];
   /** Settles once every other saved model server has joined `llm` or been skipped. */
   later: Promise<void>;
+}
+
+/** Why the saved local default cannot be used when the saved model server holding it failed; else null. */
+export function savedLocalDefaultDownMessage(
+  config: Pick<CliConfig, 'localDefaultModel'>,
+  failures: LocalModelsAttachment['serverFailures']
+): string | null {
+  const onServer = config.localDefaultModel ? defaultOnServer(config.localDefaultModel) : null;
+  const failure = onServer ? failures.get(onServer.serverId) : undefined;
+  return onServer && failure ? savedServerDownMessage(onServer.model, failure.name, failure.error) : null;
 }
 
 export interface AttachLocalModelsOptions {
@@ -304,11 +389,16 @@ export interface AttachLocalModelsOptions {
   onNotice?: (text: string) => void;
   /** Called with the full model list each time a server joins after startup. */
   onModelsAdded?: (models: ModelInfo[]) => void;
+  /**
+   * No Bike4Mind server to fall back on: with nothing else listed, startup waits for the other saved model
+   * servers too, and finding no local model throws `NoLocalModelsError`.
+   */
+  signedOut?: boolean;
 }
 
 type LocalModelsDeps = Pick<
   BuildLlmBackendDeps,
-  'createOllamaBackend' | 'createOpenAICompatibleBackend' | 'createMultiBackend' | 'loadModelServers'
+  'createOllamaBackend' | 'createOpenAICompatibleBackend' | 'createMultiBackend' | 'loadModelServers' | 'sshFetchFor'
 >;
 
 /**
@@ -357,13 +447,14 @@ async function attachServer(
   const secret = config.modelServerCredentials?.[server.id]?.secret;
   if (needsCredential(server, secret))
     throw new Error(`${clean(server.name)} needs credentials. Run: ${loginHint(server)}`);
-  const base = serverFetch(server, secret);
+  const base = serverFetch(server, secret, deps.sshFetchFor);
   const startup = new AbortController();
-  let attaching = true;
+  // Set only on success: after the deadline, attach() still runs and its requests must stay aborted.
+  let attached = false;
   const fetch: FetchLike = (input, init = {}) =>
-    attaching
-      ? base(input, { ...init, signal: init.signal ? AbortSignal.any([init.signal, startup.signal]) : startup.signal })
-      : base(input, init);
+    attached
+      ? base(input, init)
+      : base(input, { ...init, signal: init.signal ? AbortSignal.any([init.signal, startup.signal]) : startup.signal });
   const attach = async (): Promise<LlmRoute> => {
     const target = await resolveServerTarget(server, secret, fetch, timeoutMs);
     const baseUrl = target.runtime.baseUrl;
@@ -390,11 +481,12 @@ async function attachServer(
     });
     return { backend, models: await backend.getModelInfo() };
   };
-  try {
-    return await withDeadline(attach(), timeoutMs, startup);
-  } finally {
-    attaching = false;
-  }
+  const route = await withDeadline(attach(), timeoutMs, startup).catch((error: unknown) => {
+    startup.abort(error);
+    throw error;
+  });
+  attached = true;
+  return route;
 }
 
 type Settled = { route: LlmRoute; error: null } | { route: null; error: string };
@@ -417,16 +509,20 @@ async function attachServers(
   deps: LocalModelsDeps
 ): Promise<{
   owner: (LlmRoute & { name: string }) | null;
-  others: { name: string; settled: Promise<Settled> }[];
+  others: { id: string; name: string; settled: Promise<Settled> }[];
+  /** Servers left out for want of a credential, with how to log in. */
+  skipped: { id: string; name: string; error: string }[];
   warnings: string[];
 }> {
   const wanted = defaultOnServer(config.defaultModel);
   const all = (opts.servers ?? 'all') === 'all';
-  if (!all && !wanted) return { owner: null, others: [], warnings: [] };
+  if (!all && !wanted) return { owner: null, others: [], skipped: [], warnings: [] };
   const loaded = await (deps.loadModelServers ?? loadModelServers)();
   const warnings: string[] = [];
   const owner = wanted ? loaded.servers.find(server => server.id === wanted.serverId) : undefined;
   if (wanted && !owner) {
+    const unusable = loaded.unusable?.find(server => server.id === wanted.serverId);
+    if (unusable) throw defaultUnusable(wanted.model, unusable.name, unusableStatus(unusable));
     throw new Error(
       `The default model ${clean(wanted.model)} is on a model server that is not saved in Desktop any more` +
         (loaded.problem ? ` (${loaded.problem})` : '') +
@@ -435,14 +531,22 @@ async function attachServers(
   }
   if (loaded.problem) warnings.push(`\u26a0\ufe0f  Desktop's model servers were not read: ${loaded.problem}`);
 
-  const othersMs = opts.listingTimeoutMs ?? SAVED_OLLAMA_LISTING_TIMEOUT_MS;
-  const others = (all ? loaded.servers : [])
-    .filter(server => server !== owner && !needsCredential(server, config.modelServerCredentials?.[server.id]?.secret))
+  const candidates = (all ? loaded.servers : []).filter(server => server !== owner);
+  const locked = (server: CliModelServer) =>
+    needsCredential(server, config.modelServerCredentials?.[server.id]?.secret);
+  const skipped = candidates.filter(locked).map(server => ({
+    id: server.id,
+    name: clean(server.name),
+    error: `${clean(server.name)} needs credentials. Run: ${loginHint(server)}`,
+  }));
+  const others = candidates
+    .filter(server => !locked(server))
     .map(server => ({
+      id: server.id,
       name: clean(server.name),
-      settled: settle(attachServer(server, config, opts, deps, othersMs)),
+      settled: settle(attachServer(server, config, opts, deps, savedServerListingMs(server, opts.listingTimeoutMs))),
     }));
-  if (!owner || !wanted) return { owner: null, others, warnings };
+  if (!owner || !wanted) return { owner: null, others, skipped, warnings };
 
   const name = clean(owner.name);
   const result = await settle(
@@ -452,7 +556,16 @@ async function attachServers(
   if (!result.route.models.some(model => model.id === config.defaultModel)) {
     throw defaultUnusable(wanted.model, owner.name, `${name} does not serve it. See: b4m models ls --server ${name}`);
   }
-  return { owner: { ...result.route, name }, others, warnings };
+  return { owner: { ...result.route, name }, others, skipped, warnings };
+}
+
+/** `host` is an Ollama that was configured or found running; `error` is why listing its models failed. */
+export function noLocalModelsReason(host: string | null, error: string | undefined): string {
+  if (host && error !== undefined) {
+    return `No local model found: Ollama at ${clean(host)} is not answering (${clean(error)}). Start it (open the Ollama app or run "ollama serve").`;
+  }
+  if (host) return `No local model found: Ollama at ${clean(host)} has no models. Pull one with: ollama pull qwen3.5`;
+  return `No local model found. ${INSTALL_OLLAMA_HINT}`;
 }
 
 /** The detected Ollama's base URL; null when detection is off, finds nothing, fails, or misses its deadline. */
@@ -511,9 +624,10 @@ export async function attachLocalModels(
     // An Ollama the user never configured is attached only when it has models to offer; it never warns.
     if (detected && (listing.error !== undefined || listing.models.length === 0)) {
       logger.debug(`Detected Ollama at ${detected} not attached: ${listing.error ?? 'no models pulled'}`);
-      return { host: null, backend: null, models: [] as ModelInfo[], detected: false };
+      const emptyHost = listing.error === undefined ? detected : null;
+      return { host: null, backend: null, models: [] as ModelInfo[], detected: false, emptyHost, error: undefined };
     }
-    return { host, backend, detected: detected !== null, ...listing };
+    return { host, backend, detected: detected !== null, emptyHost: null, ...listing };
   })();
   const [serverModels, ollama, servers] = await Promise.all([
     llm.getModelInfo(),
@@ -527,7 +641,31 @@ export async function attachLocalModels(
   const ollamaHost = dropDetected ? null : ollama.host;
   const ollamaBackend = dropDetected ? null : ollama.backend;
 
-  if (serverModels.length === 0 && ollamaModels.length === 0 && !servers.owner) {
+  // Signed out there is no server to chat with meanwhile, so the other saved servers (each under its own
+  // deadline) are waited for before deciding nothing local can chat.
+  let others = servers.others;
+  const joined: (LlmRoute & { name: string })[] = [];
+  const serverFailures = new Map(servers.skipped.map(({ id, name, error }) => [id, { name, error }]));
+  if (opts.signedOut && ollamaModels.length === 0 && !servers.owner && others.length > 0) {
+    for (const { id, name, settled } of others) {
+      const result = await settled;
+      if (result.route) joined.push({ ...result.route, name });
+      else {
+        serverFailures.set(id, { name, error: result.error });
+        logger.debug(`Model server ${name} skipped: ${result.error}`);
+      }
+    }
+    others = [];
+  }
+
+  if (opts.signedOut && ollamaModels.length === 0 && !servers.owner && !joined.some(r => r.models.length > 0)) {
+    throw new NoLocalModelsError(
+      savedLocalDefaultDownMessage(config, serverFailures) ??
+        noLocalModelsReason(ollamaHost ?? ollama.emptyHost, ollama.error)
+    );
+  }
+
+  if (serverModels.length === 0 && ollamaModels.length === 0 && !servers.owner && joined.length === 0) {
     if (!ollamaHost) throw new Error('No models available from server.');
     throw new Error(
       ollama.error !== undefined
@@ -543,9 +681,10 @@ export async function attachLocalModels(
   }
   warnings.push(...servers.warnings);
 
+  const listedServers = [...(servers.owner ? [servers.owner] : []), ...joined];
   const routes: LlmRoute[] = [
     ...(ollamaBackend ? [{ backend: ollamaBackend, models: ollamaModels }] : []),
-    ...(servers.owner ? [servers.owner] : []),
+    ...listedServers,
   ];
   const summary = {
     ollamaHost,
@@ -553,17 +692,19 @@ export async function attachLocalModels(
     ollamaModelIds: ollamaModels.map(m => m.id),
     ollamaListingFailed: ollama.error !== undefined,
     ollamaDetected: ollama.detected,
-    servers: servers.owner ? [{ name: servers.owner.name, modelCount: servers.owner.models.length }] : [],
+    servers: listedServers.map(server => ({ name: server.name, modelCount: server.models.length })),
+    serverFailures,
     warnings,
   };
-  if (routes.length === 0 && servers.others.length === 0) {
+  if (routes.length === 0 && others.length === 0) {
     return { llm, models: serverModels, ...summary, later: Promise.resolve() };
   }
   const multi = deps.createMultiBackend(llm, serverModels, routes, config.defaultModel);
   const later = Promise.all(
-    servers.others.map(({ name, settled }) =>
+    others.map(({ id, name, settled }) =>
       settled.then(async result => {
         if (!result.route) {
+          serverFailures.set(id, { name, error: result.error });
           logger.debug(`Model server ${name} skipped: ${result.error}`);
           return;
         }
@@ -596,20 +737,30 @@ export async function buildLlmBackend(
   deps: BuildLlmBackendDeps = defaultLlmBackendDeps
 ): Promise<BuildLlmBackendResult> {
   const { config, apiClient, startupLog, tokenGetter, getSessionId } = input;
+  const signedOut = apiClient.signedOut === true;
 
-  const sse = await createSseBackend(
-    { apiClient, model: config.defaultModel, getSessionId },
-    { createServerBackend: deps.createServerBackend, clearWebSocketToolExecutor: deps.clearWebSocketToolExecutor }
-  );
-  const wsManager = await connectFeatureEventSocket(config, sse.serverConfig.websocketUrl, deps, {
-    tokenGetter,
-    verifySession: () => apiClient.checkSessionValid(),
-  });
+  let serverLlm: CliLlmBackend;
+  let wsManager: WebSocketConnectionManager | null = null;
+  if (signedOut) {
+    deps.clearWebSocketToolExecutor();
+    serverLlm = new SignedOutCloudBackend(config.defaultModel);
+  } else {
+    const sse = await createSseBackend(
+      { apiClient, model: config.defaultModel, getSessionId },
+      { createServerBackend: deps.createServerBackend, clearWebSocketToolExecutor: deps.clearWebSocketToolExecutor }
+    );
+    serverLlm = sse.llm;
+    wsManager = await connectFeatureEventSocket(config, sse.serverConfig.websocketUrl, deps, {
+      tokenGetter,
+      verifySession: () => apiClient.checkSessionValid(),
+    });
+  }
 
   const attached = await attachLocalModels(
-    sse.llm,
+    serverLlm,
     config,
     {
+      signedOut,
       ollamaHost: input.ollamaHost,
       listingTimeoutMs: input.ollamaListingTimeoutMs,
       detectOllama: input.detectOllama ? deps.detectOllama : undefined,
@@ -621,7 +772,8 @@ export async function buildLlmBackend(
     },
     deps
   );
-  const { llm, models, later } = attached;
+  const { llm, later } = attached;
+  const models = signedOut ? await withSignedOutLocalDefault(attached, config) : attached.models;
   startupLog.push(...attached.warnings);
   if (attached.ollamaHost) {
     startupLog.push(`\u{1f999} Self-hosted Ollama: ${attached.ollamaModelCount} model(s) added to picker`);
@@ -633,7 +785,17 @@ export async function buildLlmBackend(
   logger.debug(`📋 Available models: ${models.map(m => m.id).join(', ')}`);
 
   requireLocalDefaultListed(models, config.defaultModel);
-  const modelInfo = resolveModelInfo(models, config.defaultModel);
+  const savedLocalDefault =
+    signedOut && !models.some(m => m.id === config.defaultModel)
+      ? models.find(m => m.id === config.localDefaultModel)
+      : undefined;
+  const modelInfo = savedLocalDefault ?? resolveModelInfo(models, config.defaultModel);
+
+  if (signedOut && modelInfo.id !== config.defaultModel) {
+    const serverDown = savedLocalDefault ? null : savedLocalDefaultDownMessage(config, attached.serverFailures);
+    if (serverDown) startupLog.push(serverDown);
+    startupLog.push(signedOutDefaultReplacedMessage(config.defaultModel, modelInfo.id));
+  }
 
   // Log model selection
   if (modelInfo.id !== config.defaultModel) {

@@ -5,11 +5,11 @@ import {
   type AdminSubscriptionPlan,
   type AdminSubscriptionsFilter,
   type AdminSubscriptionsSortField,
-} from '@client/app/utils/adminSubscriptionsFilter';
-import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@client/lib/userSubscriptions/constants';
-import { cancelCondition } from './subscriptionViewConditions';
+} from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
+import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
+import { cancelCondition } from '@bike4mind/server-utils/admin/subscriptionsList/subscriptionViewConditions';
 
-export { viewConditions } from './subscriptionViewConditions';
+export { viewConditions } from '@bike4mind/server-utils/admin/subscriptionsList/subscriptionViewConditions';
 
 /**
  * Pure filter, view and sort builders for the admin subscriptions list. Plain objects only, so they
@@ -80,11 +80,14 @@ export type MatchContext = {
   catalog: PlanCatalog;
   /** The search, already resolved to a condition on subscription fields. */
   searchCondition?: Condition;
+  /** The `mismatch` filter, already resolved to a condition on the ids of rows with an open finding. */
+  mismatchCondition?: Condition;
 };
 
 export function buildAdminSubscriptionsMatch(filter: AdminSubscriptionsFilter, context: MatchContext): Condition {
   const conditions: Condition[] = [];
   if (context.searchCondition) conditions.push(context.searchCondition);
+  if (filter.mismatch && context.mismatchCondition) conditions.push(context.mismatchCondition);
   if (filter.status?.length) conditions.push({ status: { $in: filter.status } });
   if (filter.plan?.length) conditions.push(planCondition(filter.plan, context.catalog));
   if (filter.interval) {

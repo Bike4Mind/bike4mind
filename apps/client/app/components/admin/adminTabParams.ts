@@ -5,6 +5,8 @@ import { ANALYTICS_TAB_PARAMS } from './Analytics/analyticsTabSearch';
 import { EVENTS_TAB_PARAMS } from './EventMetrics/eventsTabSearch';
 import { SHADOW_DETECTION_TAB_PARAMS } from './shadowDetectionSearch';
 import { STRIPE_DISPUTE_TAB_PARAMS } from './stripeDisputeSearch';
+import { MODEL_METRICS_TAB_PARAMS } from './ModelMetrics/modelMetricsSearch';
+import { SIGNUP_DOMAIN_HOLDS_TAB_PARAMS } from './signupDomainHoldsSearch';
 import {
   SECURITY_DASHBOARD_SEARCH_PARSERS,
   SECURITY_DASHBOARD_TAB_PARAMS,
@@ -56,12 +58,14 @@ export const ADMIN_SETTINGS_SEARCH_PARAM = 'q';
 // Slugs that are not in @bike4mind/common, shared with adminTabSlugs.ts.
 export const ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG = 'webhook-audit-logs';
 export const ADMIN_MODEL_LOGS_TAB_SLUG = 'model-logs';
+export const ADMIN_MODEL_METRICS_TAB_SLUG = 'model-metrics';
 export const ADMIN_INTEGRATION_DEMAND_TAB_SLUG = 'integration-demand';
 export const ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG = 'signup-risk-review';
 export const ADMIN_ANALYTICS_TAB_SLUG = 'analytics';
 export const ADMIN_EVENTS_TAB_SLUG = 'event-metrics';
 export const ADMIN_SECURITY_DASHBOARD_TAB_SLUG = 'security-dashboard';
 export const ADMIN_SHADOW_DETECTIONS_TAB_SLUG = 'shadow-detections';
+export const ADMIN_SIGNUP_DOMAIN_HOLDS_TAB_SLUG = 'signup-domain-holds';
 export const ADMIN_WAITLIST_TAB_SLUG = 'waitlist';
 export const ADMIN_STRIPE_DISPUTES_TAB_SLUG = 'disputes';
 export { ADMIN_ORGANIZATIONS_TAB_SLUG, ADMIN_SUBSCRIPTIONS_TAB_SLUG };
@@ -95,9 +99,11 @@ export const ADMIN_TAB_PARAMS = {
   [ADMIN_EVENTS_TAB_SLUG]: EVENTS_TAB_PARAMS,
   [ADMIN_SECURITY_DASHBOARD_TAB_SLUG]: SECURITY_DASHBOARD_TAB_PARAMS,
   [ADMIN_SHADOW_DETECTIONS_TAB_SLUG]: SHADOW_DETECTION_TAB_PARAMS,
+  [ADMIN_SIGNUP_DOMAIN_HOLDS_TAB_SLUG]: SIGNUP_DOMAIN_HOLDS_TAB_PARAMS,
   [ADMIN_MODERATION_INCIDENTS_TAB_SLUG]: [MODERATION_INCIDENT_ID_PARAM],
   [ADMIN_WAITLIST_TAB_SLUG]: INVITE_CENTER_TAB_PARAMS,
   [ADMIN_STRIPE_DISPUTES_TAB_SLUG]: STRIPE_DISPUTE_TAB_PARAMS,
+  [ADMIN_MODEL_METRICS_TAB_SLUG]: MODEL_METRICS_TAB_PARAMS,
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 type AdminTabParam = (typeof ADMIN_TAB_PARAMS)[keyof typeof ADMIN_TAB_PARAMS][number];

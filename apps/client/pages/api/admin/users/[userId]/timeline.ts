@@ -14,7 +14,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
 
   const { userId, ...query } = req.query;
   if (typeof userId !== 'string' || !OBJECT_ID_PATTERN.test(userId)) throw new BadRequestError('Invalid user id');
-  const { types, range, limit, cursor } = parseUserTimelineQuery(query);
+  const { types, range, limit, cursor, apiKeyId } = parseUserTimelineQuery(query);
 
   const user = await userRepository.findById(userId);
   if (!user) throw new NotFoundError('User not found');
@@ -32,7 +32,13 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
     },
   };
 
-  const { entries, nextCursor } = await listUserTimeline(subject, { types, range, limit, cursor });
+  const { entries, nextCursor } = await listUserTimeline(subject, {
+    types,
+    range,
+    limit,
+    cursor,
+    ...(apiKeyId ? { apiKeyId } : {}),
+  });
   const page: UserTimelinePage = { entries, nextCursor: nextCursor ? encodeAuditCursor(nextCursor) : null };
 
   Logger.info('[Admin] Queried user timeline', { types, count: entries.length });

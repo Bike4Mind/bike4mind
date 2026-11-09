@@ -45,6 +45,7 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { ContextHelpButton } from '@client/app/components/help';
 import { useQuestExport } from '@client/app/hooks/data/useQuestExport';
+import { LegacyQuestmasterBanner } from '@client/app/components/questmaster/LegacyQuestmasterRetirement';
 
 dayjs.extend(relativeTime);
 
@@ -466,6 +467,7 @@ function QuestsPage() {
 
   return (
     <Box data-testid="quests-page" sx={{ p: { xs: 1.5, sm: 2, md: 3 }, maxWidth: 1400, mx: 'auto' }}>
+      <LegacyQuestmasterBanner />
       {/* Header */}
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 3 }}>
         <Stack direction="row" alignItems="center" spacing={1}>

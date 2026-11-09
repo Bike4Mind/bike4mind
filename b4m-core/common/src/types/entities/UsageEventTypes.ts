@@ -94,6 +94,47 @@ export const UsageFundingBreakdown = z.object({
 export type IUsageFundingBreakdown = z.infer<typeof UsageFundingBreakdown>;
 
 /**
+ * The background job behind a system-sourced operational row (see recordSessionOperationalUsage).
+ * Names the job on an admin usage receipt; never derived from the content the job read or wrote.
+ */
+export const USAGE_EVENT_OPERATIONS = [
+  'notebook_naming',
+  'notebook_summary',
+  'notebook_tagging',
+  'context_summary',
+  'memento',
+] as const;
+
+export type UsageEventOperation = (typeof USAGE_EVENT_OPERATIONS)[number];
+
+/**
+ * How a request was run, for the admin usage receipt. Metadata only by contract: never prompt or
+ * reply text, file names or titles. Absent on rows written before it existed.
+ */
+export const UsageEventRequestMeta = z.object({
+  /** The provider's finish reason, e.g. end_turn, max_tokens, tool_use. */
+  stopReason: z.string().max(64).optional(),
+  /** The output ceiling the request was sent with, before any credit cap. */
+  maxOutputTokens: z.number().optional(),
+  /** The lowest per-round output budget the balance cap set; present only when the cap bound. */
+  creditCapOutputTokens: z.number().optional(),
+  /** True when the turn was stopped because the balance could not pay for more. */
+  stoppedForCredits: z.boolean().optional(),
+  /** The reasoning effort asked for: the user's explicit choice, or auto plus the classified complexity. */
+  reasoningEffort: z.string().max(32).optional(),
+  /** The extended-thinking budget sent, when thinking was on. */
+  thinkingBudgetTokens: z.number().optional(),
+  /** Tool calls by tool name. */
+  toolCalls: z.array(z.object({ name: z.string().max(128), count: z.number() })).optional(),
+  attachmentCount: z.number().optional(),
+  /** Total size of the attachments, in bytes. */
+  attachmentBytes: z.number().optional(),
+  operation: z.enum(USAGE_EVENT_OPERATIONS).optional(),
+});
+
+export type IUsageEventRequestMeta = z.infer<typeof UsageEventRequestMeta>;
+
+/**
  * One row per provider API call. Ties true COGS (costUsd, frozen
  * at write time) to what the user was debited (creditsCharged) so margin per
  * model/user is queryable. Dual-written at settlement time; never part of the
@@ -205,6 +246,8 @@ export const UsageEvent = z.object({
   turnUsageTruncated: z.boolean().optional(),
   /** The part of cacheWriteTokens written with the 1-hour TTL, priced at rates.cacheWrite1h. Absent when none. */
   cacheWrite1hTokens: z.number().optional(),
+  /** How the request ran, for the admin usage receipt (see UsageEventRequestMeta). */
+  requestMeta: UsageEventRequestMeta.optional(),
 
   createdAt: z.date(),
   updatedAt: z.date(),
@@ -228,6 +271,9 @@ export interface IModelDayMargin {
   day: string; // YYYY-MM-DD (UTC)
   provider: string;
   model: string;
+  // Equal to provider/model unless the request was served by a substitute model.
+  executedProvider?: string;
+  executedModel?: string;
   requests: number;
   cogsUsd: number;
   creditsCharged: number;
@@ -503,6 +549,10 @@ export interface ISpendSummaryFilters {
 export interface ISpendAccountBucket extends IUsageSpendBucket {
   ownerId: string;
   ownerType: CreditHolderType;
+  /** error + timeout events, the same fold as the window-level error rate. */
+  failures: number;
+  /** p95 latency in ms over this account's events; 0 when none carries latencyMs. */
+  p95LatencyMs: number;
 }
 
 /** COGS for one UTC day (Spend daily-cost line point). */
@@ -592,6 +642,22 @@ export interface SpendKpi {
   higherIsBetter: boolean;
 }
 
+/** A fixed limit an account crossed in the window (see SPEND_ACCOUNT_FLAG_THRESHOLDS). */
+export type SpendAccountFlag = 'dailyCost' | 'errorRate' | 'p95Latency';
+
+/**
+ * Fixed limits for flagging an account on the Spend tab. Cost is the window's
+ * average per day (estCost / window days, at least one day), not the peak day.
+ * The rate and latency flags need `minRequests` events so a handful of calls
+ * can't trip them. The tab prints these values, so a change here shows there.
+ */
+export const SPEND_ACCOUNT_FLAG_THRESHOLDS = {
+  dailyCostUsd: 50,
+  errorRate: 0.05,
+  p95LatencyMs: 120_000,
+  minRequests: 20,
+} as const;
+
 export interface SpendByAccountRow {
   accountId: string;
   accountName: string;
@@ -599,6 +665,11 @@ export interface SpendByAccountRow {
   requests: number;
   creditsUsed: number;
   costPerRequest: number;
+  /** (errors + timeouts) / requests, 0..1. */
+  errorRate: number;
+  p95LatencyMs: number;
+  /** Limits this account crossed; empty when none. */
+  flags: SpendAccountFlag[];
 }
 
 export interface CostByModelRow {

@@ -6,7 +6,7 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { moderateUploadedFile } from '@bike4mind/server-utils/s3/moderateUploadedFile';
 import type { ModerateImportedKnowledgeFilesArgs } from '@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles';
 import type { Types } from 'mongoose';
-import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 
 /**
  * The production claim/scan/persist wiring for imported-knowledge moderation, shared by the three

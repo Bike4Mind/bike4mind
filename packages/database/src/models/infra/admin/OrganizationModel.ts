@@ -165,6 +165,7 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     temperature: { type: Number, min: 0, max: 2 },
     maxTokens: { type: Number, min: 1, max: 200000 },
     maxCreditsPerMember: { type: Number, required: false },
+    redactPushContent: { type: Boolean, default: false },
   },
   {
     virtuals: true,
@@ -208,6 +209,7 @@ OrganizationSchema.plugin(softDeletePlugin);
 // data-lake request - Mongo index-unions an `$or` only when EVERY branch is index-supported, so
 // without both the org-admin resolution would plan a full `organizations` collscan.
 OrganizationSchema.index({ userId: 1 });
+OrganizationSchema.index({ name: 1 }, { collation: { locale: 'en', strength: 2 }, name: 'organization_name_ci' });
 OrganizationSchema.index({ stripeCustomerId: 1 }, { name: 'organization_stripeCustomerId' });
 // Backs findMembershipOrgIds' reverse lookup (users[] ACL by member) - previously every
 // membership question collscanned. The owner arm rides the existing { userId: 1 } index.
@@ -233,6 +235,15 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
 
   async findByStripeCustomerId(stripeCustomerId: string): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOne({ stripeCustomerId });
+  }
+
+  /** Seat counts keyed by Stripe customer id, in one query. Not on the interface: only the billing reconciliation needs it. */
+  async findSeatsByStripeCustomerIds(stripeCustomerIds: string[]): Promise<Map<string, number>> {
+    if (stripeCustomerIds.length === 0) return new Map();
+    const orgs = await this.organizationModel
+      .find({ stripeCustomerId: { $in: stripeCustomerIds } }, { stripeCustomerId: 1, seats: 1 })
+      .lean();
+    return new Map(orgs.map(org => [org.stripeCustomerId as string, org.seats as number]));
   }
 
   /**

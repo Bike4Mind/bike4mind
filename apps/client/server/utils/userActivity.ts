@@ -22,6 +22,7 @@ import {
   type UserCreditHistory,
 } from '@bike4mind/common';
 import { adminAuditService } from '@bike4mind/services';
+import { dailyNetWithWriteOffs, loadLedgerWriteOffs } from './ledgerWriteOffs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_ADJUSTMENT_MARKERS = 200;
@@ -310,10 +311,13 @@ export const getUserCreditHistory = async (
   const windowDays = USER_CREDIT_HISTORY_DAYS;
   const from = windowStart(now, windowDays);
 
-  const [dailyNet, adjustmentRows] = await Promise.all([
+  const [ledgerDailyNet, adjustmentRows, writeOffs] = await Promise.all([
     creditTransactionRepository.dailyNetCreditsForOwner(user.id, CreditHolderType.User, from, now),
     creditTransactionRepository.findAdminAdjustmentsForUser(user.id, from, now, MAX_ADJUSTMENT_MARKERS + 1),
+    loadLedgerWriteOffs(user.id),
   ]);
+  // Usage rows record the full cost of a capped turn; the written-off part never left the balance.
+  const dailyNet = dailyNetWithWriteOffs(ledgerDailyNet, writeOffs, from);
 
   const markerRows = adjustmentRows.slice(0, MAX_ADJUSTMENT_MARKERS);
   const directory = await buildActorDirectory(

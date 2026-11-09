@@ -11,6 +11,7 @@ import {
   composeAlarmMessage,
   describeFields,
   describeReason,
+  formatAlarmNumber,
   formatAlarmSlackMessage,
   formatDuration,
   lookupCatalog,
@@ -229,6 +230,19 @@ describe('formatAlarmSlackMessage on production', () => {
     expect(fields).toContain('*Breaching since*\n04:00 UTC (11 min)');
   });
 
+  it('rounds a USD measurement and ceiling to cents in both the sentence and the fields', () => {
+    const alarm = {
+      ...sample,
+      NewStateReason:
+        'Threshold Crossed: 1 datapoint [2.4855329999999998 (27/10/26 23:00:00)] was greater than or equal to the threshold (2.0).',
+      Trigger: { Period: 3600, EvaluationPeriods: 1 },
+    };
+    expect(describeReason(alarm, 'USD')).toBe('2.49 USD in the hour ending 00:00 UTC; the ceiling is 2.00.');
+    const fields = describeFields(alarm, 'USD');
+    expect(fields).toContain('*Measured*\n2.49 USD');
+    expect(fields).toContain('*Ceiling*\n2.00');
+  });
+
   it('rolls the bucket end over midnight', () => {
     const alarm = {
       ...sample,
@@ -381,13 +395,39 @@ describe('formatAlarmSlackMessage on other stages', () => {
   });
 });
 
+describe('formatAlarmNumber', () => {
+  it.each([
+    [2.4855329999999998, 'USD', '2.49'],
+    [5, 'USD', '5.00'],
+    [0, 'USD', '0.00'],
+    [0.01, 'USD', '0.01'],
+    [0.00123456, 'USD', '0.0012'],
+    [0.00000123456789, 'USD', '0.00000123457'],
+    [-0.000001, 'USD', '-0.000001'],
+    [1e-9, 'USD', '1e-9'],
+    [-2.4855329999999998, 'USD', '-2.49'],
+    [0.0099999, 'USD', '0.0100'],
+    [0.0100001, 'USD', '0.01'],
+    [7, 'errors', '7'],
+    [1234567, undefined, '1234567'],
+    [0.30000000000000004, 'runs', '0.3'],
+    [123.456789123, undefined, '123.457'],
+  ] as const)('formats %s %s as %s', (value, unit, expected) => {
+    expect(formatAlarmNumber(value, unit)).toBe(expected);
+  });
+});
+
 describe('ALARM_CATALOG', () => {
   it('asks for the account list on the young-account spend alarms only', () => {
     const withDetail = Object.entries(ALARM_CATALOG)
       .filter(([, entry]) => entry.detail !== undefined)
       .map(([key]) => key)
       .sort();
-    expect(withDetail).toEqual(['llm-spend-young-accounts', 'young-account-spend-rate']);
+    expect(withDetail).toEqual([
+      'llm-spend-young-accounts',
+      'young-account-spend-rate',
+      'young-account-spend-rate-warn',
+    ]);
     expect(ALARM_CATALOG['young-account-spend-rate'].action).toContain('listed above');
     expect(alarmCatalogEntry({ ...sample, AlarmName: 'bike4mind-dev-young-account-spend-rate' }, 'dev')?.detail).toBe(
       'young-account-spend'
@@ -453,6 +493,7 @@ describe('ALARM_CATALOG', () => {
       'llm-spend-rate',
       'llm-spend-young-accounts',
       'young-account-spend-rate',
+      'young-account-spend-rate-warn',
       'completion-credit-overdraft',
     ]) {
       expect(ALARM_CATALOG[key].category).toBe('abuse');
@@ -486,6 +527,7 @@ describe('ALARM_CATALOG', () => {
     expect(ALARM_CATALOG.SuccessfulSignups.level).toBe('page');
     expect(ALARM_CATALOG.NewAccountApiKeys.level).toBe('page');
     expect(ALARM_CATALOG['young-account-spend-rate'].level).toBe('page');
+    expect(ALARM_CATALOG['young-account-spend-rate-warn'].level).toBe('warn');
     expect(ALARM_CATALOG['llm-spend-hourly'].level).toBe('page');
     expect(ALARM_CATALOG['llm-spend-rate'].level).toBe('warn');
     expect(ALARM_CATALOG['provider-reported-spend-hourly'].level).toBe('page');
@@ -605,6 +647,7 @@ describe('lookupCatalog', () => {
     expect(lookupCatalog('llm-spend-rate-anthropic')).toBe(ALARM_CATALOG['llm-spend-rate']);
     expect(lookupCatalog('llm-spend-hourly-anthropic')).toBe(ALARM_CATALOG['llm-spend-hourly']);
     expect(lookupCatalog('young-account-spend-rate')).toBe(ALARM_CATALOG['young-account-spend-rate']);
+    expect(lookupCatalog('young-account-spend-rate-warn')).toBe(ALARM_CATALOG['young-account-spend-rate-warn']);
     expect(lookupCatalog('llm-spend-young-accounts')).toBe(ALARM_CATALOG['llm-spend-young-accounts']);
     expect(lookupCatalog('completion-credit-overdraft')).toBe(ALARM_CATALOG['completion-credit-overdraft']);
     expect(lookupCatalog('account-creation-metrics-missing')).toBe(ALARM_CATALOG['account-creation-metrics-missing']);
@@ -769,5 +812,72 @@ describe('fallback text', () => {
   it('escapes alarm-supplied text so a reason cannot smuggle a mention', () => {
     const message = formatAlarmSlackMessage({ ...sample, NewStateReason: '<!channel> & <odd>' }, 'production');
     expect(message?.text).toContain('&lt;!channel&gt; &amp; &lt;odd&gt;');
+  });
+});
+
+describe('new-account API key triage', () => {
+  const census: CloudWatchAlarmPayload = {
+    ...sample,
+    AlarmName: 'bike4mind-production-NewAccountApiKeys',
+    NewStateReason:
+      'Threshold Crossed: 2 datapoints [9.0 (02/01/26 00:05:00), 8.0 (01/01/26 23:05:00)] were greater than or equal to the threshold (8.0).',
+    StateChangeTime: '2026-01-02T01:06:00Z',
+  };
+
+  it('takes an operator to the live advisory, campaign evidence and broad key discovery', () => {
+    const message = formatAlarmSlackMessage(census, 'production', {
+      appUrl: 'https://app.example.com/',
+      mention: 'S012345',
+    });
+    expect(buttons(message)).toEqual([
+      expect.objectContaining({ label: 'Open in CloudWatch' }),
+      { label: 'AI-flagged accounts', url: 'https://app.example.com/admin?tab=users&aiVerdict=abuse' },
+      { label: 'Campaign evidence', url: 'https://app.example.com/admin?tab=shadow-detections' },
+      { label: 'Accounts with API keys', url: 'https://app.example.com/admin?tab=users&keys=yes' },
+    ]);
+    expect(JSON.stringify(message)).not.toContain('signedUp=hour');
+    expect(topBlocks(message)[0].text?.text).toContain('<!subteam^S012345>');
+    expect(contextOf(message)).toContain('level page  |  category abuse');
+  });
+
+  it('reports supplied evaluation timestamps across midnight without claiming continuous breach duration', () => {
+    const message = formatAlarmSlackMessage(census, 'production');
+    expect(fieldsOf(message)).toEqual([
+      '*Measured*\n9 API keys',
+      '*Threshold*\n8',
+      '*CloudWatch evaluation window*\n2026-01-02T00:05:00.000Z to 2026-01-02T01:05:00.000Z (end exclusive)',
+      '*Earliest breaching datapoint shown*\n2026-01-01T23:05:00.000Z',
+    ]);
+    expect(sectionText(message, 'What happened')).toContain('9 API keys in the latest breaching CloudWatch datapoint');
+    expect(sectionText(message, 'Scope and freshness')).toContain('not the census creation interval');
+    expect(JSON.stringify(message)).not.toContain('Breaching since');
+  });
+
+  it('distinguishes advisory scope, coordination, harmful activity and human ownership', () => {
+    const message = formatAlarmSlackMessage(census, 'production');
+    expect(sectionText(message, 'Why it matters')).toContain('not confirmed harmful use');
+    expect(sectionText(message, 'Scope and freshness')).toContain('not matched to this metric');
+    expect(sectionText(message, 'Scope and freshness')).toContain('last 24h');
+    expect(sectionText(message, 'Scope and freshness')).toContain('uncalibrated');
+    expect(sectionText(message, 'What to do')).toContain('available request outcomes, credits and ledger');
+    expect(sectionText(message, 'Ownership and escalation')).toContain('owner and next review time');
+    expect(sectionText(message, 'Ownership and escalation')).toContain('does not close the investigation');
+    expect(buttons(message).map(button => button.label)).toEqual(['Open in CloudWatch']);
+  });
+
+  it('keeps raw and missing metric reasons usable without inventing a census window', () => {
+    for (const reason of ['No datapoints were received', 'Unrecognized provider reason']) {
+      const message = formatAlarmSlackMessage({ ...census, NewStateReason: reason }, 'production');
+      expect(message).not.toBeNull();
+      expect(fieldsOf(message).join(' ')).not.toContain('CloudWatch evaluation window');
+      expect(sectionText(message, 'Scope and freshness')).toContain('live queue');
+    }
+  });
+
+  it('does not repeat investigation instructions or mentions on metric recovery', () => {
+    const message = formatAlarmSlackMessage({ ...census, NewStateValue: 'OK', OldStateValue: 'ALARM' }, 'production');
+    expect(message?.text).toContain('Resolved:');
+    expect(buttons(message)).toEqual([]);
+    expect(sectionText(message, 'Ownership and escalation')).toBeUndefined();
   });
 });

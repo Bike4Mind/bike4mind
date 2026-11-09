@@ -62,7 +62,10 @@ facts; use separate settings components for forms.
 `SectionCard`. `SaveBar` is sticky and accepts a dirty count, save/discard callbacks,
 pending state and validation/error text. It owns Cmd+S and Ctrl+S and removes its
 listener when unmounted. `UnsavedChangesGuard` protects router navigation and page
-unload; its caller defines which route changes leave the form.
+unload; its caller defines which route changes leave the form. An admin settings tab
+passes `leavesAdminSettingsPage` from `adminTabSwitches.ts` and calls
+`useRouteAdminTabSwitches(dirty)`, which sends sidebar tab switches through the
+router so the guard can block them.
 
 Admin Settings uses `SettingsDraftProvider` to retain drafts while filtering or
 switching sections. It saves through each editor's existing mutation, removes only
@@ -98,7 +101,7 @@ Irreversible commands add `typedConfirm`; `tone="danger"` styles only the commit
 Forms that keep their own submit button use `ReasonPicker` directly with an
 `AdminReasonDraft`, submitting `composeAdminReason(draft)` and gating on
 `isAdminReasonComplete(draft)`. Every preset must pass the shared
-`adminActionReason` rule unchanged; `server/utils/adminAudit.test.ts` pins this.
+`adminActionReason` rule unchanged; `packages/server-utils/src/utils/adminAudit.test.ts` pins this.
 
 After a write that can be reversed, call `useUndoToast()` (the provider is mounted
 in `AdminPage`). `onUndo` must perform the reverse write, which records its own

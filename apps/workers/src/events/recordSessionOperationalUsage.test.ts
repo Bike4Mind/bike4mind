@@ -12,7 +12,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: vi.fn() },
 }));
 const activePlanResolver = vi.hoisted(() => ({ hasActivePlan: vi.fn() }));
-vi.mock('@server/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
 
 import { getTextModelCost, getTurnsCost, type ModelInfo } from '@bike4mind/common';
 import { recordSessionOperationalUsage } from './recordSessionOperationalUsage';
@@ -32,6 +32,7 @@ const user = { id: 'u1' } as never;
 const run = (completionInfo: object) =>
   recordSessionOperationalUsage({
     user,
+    operation: 'notebook_tagging',
     sessionId: 's1',
     modelId: 'tiered-model',
     modelInfo,
@@ -90,6 +91,7 @@ describe('recordSessionOperationalUsage', () => {
     const runWith = (model: ModelInfo, completionInfo: object) =>
       recordSessionOperationalUsage({
         user,
+        operation: 'notebook_tagging',
         sessionId: 's1',
         modelId: 'tiered-model',
         modelInfo: model,

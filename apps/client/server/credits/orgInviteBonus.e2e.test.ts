@@ -19,7 +19,7 @@ import { isPayingOrganization } from '@server/entitlements/orgPaidStanding';
 import { retryOrgInviteBonus, payOrgInviteBonus, recordOrgSignupInvite } from './orgInviteBonus';
 
 // Without the signup protection wiring the budget is unmetered; signupGrantBudget covers the pools.
-vi.mock('@server/auth/signupProtection', () => ({ signupProtection: undefined }));
+vi.mock('@bike4mind/server-utils/auth/signupProtection', () => ({ signupProtection: undefined }));
 vi.mock('@server/entitlements/orgPaidStanding', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/entitlements/orgPaidStanding')>();
   return { ...actual, isPayingOrganization: vi.fn(actual.isPayingOrganization) };

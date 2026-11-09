@@ -9,7 +9,7 @@
  * and a malformed body 422, both before any billable generation is enqueued; a key
  * holding the scope, and JWT callers, pass through.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import { Logger } from '@bike4mind/observability';
@@ -55,13 +55,13 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Reset-Day': '0',
 };
 
-vi.mock('@server/utils/apiKeyTrust', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
   resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
     rateLimit: key.rateLimit,
     ownerUntrusted: false,
   }),
 }));
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it now; only
   // checkApiKeyRateLimit is stubbed.
   ...(await orig<Record<string, unknown>>()),
@@ -154,7 +154,14 @@ import handler from '../image-generations';
 import legacyHandler from '../../ai/generate-image';
 import { questRepository } from '@bike4mind/database';
 import { ImageGenerationService } from '@bike4mind/services/llm';
-import { ApiKeyScope, ApiKeyStatus, CreditHolderType, GenerateImageResponseSchema } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  ApiKeyStatus,
+  CreditHolderType,
+  GenerateImageResponseSchema,
+  MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+} from '@bike4mind/common';
+import { ForbiddenError } from '@bike4mind/utils';
 
 const VALID_KEY = 'sk-test-valid-key';
 const USER = { id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false };
@@ -273,6 +280,38 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     expect(warn.mock.calls.filter(([message]) => String(message).startsWith('[contract]'))).toEqual([]);
   });
 
+  describe('model admission refusal', () => {
+    const ROUTE_LOG = '[DEBUG API] Error in generate-image endpoint:';
+
+    it('answers a paid-plan refusal 403 with its message and logs it at warn, not error', async () => {
+      const message =
+        'Model "flux-pro-1.1-ultra" requires a paid plan. Upgrade your plan to use it, or choose one of the free-tier models.';
+      mockInvoke.mockRejectedValue(new ForbiddenError(message, { errorCode: MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE }));
+      // req.logger is a per-request child, so spy on the class rather than the singleton.
+      const warn = vi.spyOn(Logger.prototype, 'warn');
+      const error = vi.spyOn(Logger.prototype, 'error');
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({ body: { prompt: 'a red bicycle', model: 'flux-pro-1.1-ultra' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+      expect(res._getJSONData().error).toBe(message);
+      expect(error).not.toHaveBeenCalled();
+      expect(warn.mock.calls.some(([line]) => String(line).includes('model requires a paid plan'))).toBe(true);
+    });
+
+    it('keeps any other admission refusal at error', async () => {
+      mockInvoke.mockRejectedValue(new ForbiddenError('Model "x" has no price configured and cannot be used'));
+      const error = vi.spyOn(Logger.prototype, 'error');
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+      expect(error.mock.calls.some(([line]) => line === ROUTE_LOG)).toBe(true);
+    });
+
+    afterEach(() => vi.restoreAllMocks());
+  });
+
   describe('referenceImageFabFileIds', () => {
     const REFS = ['ref-1', 'ref-2'];
 
@@ -311,6 +350,53 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
       });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(400);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    const refIds = (count: number) => Array.from({ length: count }, (_, index) => `ref-${index}`);
+
+    it('forwards 10 FLUX 3 references in the caller order (200)', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const refs = refIds(10).reverse();
+      const { req, res } = fire({
+        body: { prompt: 'a red bicycle', model: 'flux-3-image', referenceImageFabFileIds: refs },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockInvoke).toHaveBeenCalledWith(
+        expect.objectContaining({ body: expect.objectContaining({ referenceImageFabFileIds: refs }) })
+      );
+    });
+
+    it('accepts a primary plus 9 FLUX 3 references, the cap boundary (200)', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({
+        body: {
+          prompt: 'a red bicycle',
+          model: 'flux-3-image',
+          fabFileIds: ['primary'],
+          referenceImageFabFileIds: refIds(9),
+        },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockInvoke).toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an 11th FLUX 3 reference', { referenceImageFabFileIds: refIds(11) }, /at most 10 images/],
+      [
+        'a primary plus 10 FLUX 3 references',
+        { fabFileIds: ['primary'], referenceImageFabFileIds: refIds(10) },
+        /fabFileIds plus referenceImageFabFileIds accept at most 10 images/,
+      ],
+    ])('rejects %s before enqueuing (400)', async (_label, extra, message) => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({ body: { prompt: 'a red bicycle', model: 'flux-3-image', ...extra } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(res._getJSONData().error).toMatch(message);
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
       expect(mockInvoke).not.toHaveBeenCalled();
     });
 

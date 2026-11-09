@@ -15,16 +15,16 @@
  *   (../autoContainment) is the one that may act on it.
  */
 
-import { randomUUID } from 'node:crypto';
 import {
   ABUSE_ASSESSMENT_JUDGMENTS,
   AbuseAssessmentConfigSchema,
   ABUSE_ASSESSMENT_MAX_ATTEMPTS,
+  ABUSE_ASSESSMENT_MAX_ACCOUNTS,
   ABUSE_ASSESSMENT_POLICY_VERSION,
+  ABUSE_ASSESSMENT_SKIP_REASONS,
   RISK_EVIDENCE_VERSION,
-  DecisionResponseMismatchError,
+  SELF_ASSESSED_SHADOW_DETECTORS,
   abuseAssessmentGroupEvidenceSchema,
-  getDecisionModelCapabilities,
   type AbuseAssessmentConfig,
   type AbuseAssessmentFailureCode,
   type AbuseAssessmentFeatureSummary,
@@ -37,7 +37,6 @@ import {
   type AbuseAssessmentSkipReason,
   type AbuseAssessmentTrigger,
   type DecisionAnswer,
-  type DecisionInput,
   type DecisionModelId,
   type DecisionQuestion,
   type ShadowDetectionItem,
@@ -46,23 +45,21 @@ import {
 import {
   abuseAssessmentRepository,
   adminSettingsRepository,
-  cacheRepository,
   shadowDetectionRepository,
   userRepository,
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { executeDecision } from '@server/decisions/executeDecision';
 import {
-  DecisionOverloadedError,
-  DecisionProviderError,
-  type ResolvedDecisionInput,
-} from '@bike4mind/utils/decisionProviders';
-import {
-  getDecisionProviderRegistry,
-  resolvePlatformDecisionProviderKey,
-} from '@bike4mind/server-utils/decisions/providers';
-import { DecisionRequestError } from '@server/decisions/decisionErrors';
-import { executeDecision, type DecisionAccounting } from '@server/decisions/executeDecision';
+  callablePlatformModel,
+  decisionFailureCode,
+  DecisionSkipped,
+  platformDecisionAccounting,
+  resolveJsonInput,
+  withPlatformCallSlot,
+  type PlatformDecisionLimits,
+} from '@server/decisions/platformDecision';
 import {
   accountRef,
   assessmentCacheKey,
@@ -71,13 +68,11 @@ import {
   rolloutBucket,
   type AssessedAccountSource,
 } from './featureSummary';
+import { collectRequestActivity } from './requestActivity';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-// Longer than the text deadline (10s) plus a retry, so a lease or claim never lapses mid-call.
-const IN_FLIGHT_MS = 60_000;
-const CALLS_KEY = 'abuseAssessment:calls';
-const SPEND_KEY = 'abuseAssessment:spendMicroUsd';
-const CONCURRENCY_KEY = 'abuseAssessment:concurrency';
+// Namespaces this feature's budget, call cap and concurrency in the shared platform policy.
+const KEY_PREFIX = 'abuseAssessment';
 const QUESTION_NAME = 'abuse_assessment';
 
 /**
@@ -103,6 +98,15 @@ export const ABUSE_ASSESSMENT_QUESTION: DecisionQuestion = {
     'fingerprint, a fast first API key, quick interaction) is not enough for abuse; require several',
     'independent signals. Missing or failed facts are unknown, not evidence either way. When in doubt,',
     'answer insufficient_evidence.',
+    'Campaign evidence identifies which summarized members share each relationship and how many scanned',
+    'accounts share it. Shared infrastructure, a fingerprint, or matching setup steps can also describe',
+    'legitimate users; coordination alone does not establish abuse. Ignored relationships are not positive',
+    'evidence. Your verdict applies to every account on the detection, transitive members included; answer abuse',
+    'only if it is justified for the whole set, not just for directly linked accounts. Truncated evidence is incomplete.',
+    'Request evidence covers only retained API-key logs, not all traffic. Some early authentication or',
+    'scope refusals and other API surfaces are absent. Zero recorded admin requests or refusals does not',
+    "prove none were attempted. A successful identity check reads the caller's own account and is not",
+    'an admin request or proof of abuse. Failed request evidence is unknown. Server errors can be platform faults.',
   ].join(' '),
   choices: [
     { value: 'abuse', description: 'Several independent signals point to coordinated abuse.' },
@@ -111,12 +115,10 @@ export const ABUSE_ASSESSMENT_QUESTION: DecisionQuestion = {
   ],
 };
 
-class AssessmentSkipped extends Error {
-  constructor(readonly reason: AbuseAssessmentSkipReason) {
-    super(reason);
-    this.name = 'AssessmentSkipped';
-  }
-}
+class AssessmentSkipped extends DecisionSkipped<AbuseAssessmentSkipReason> {}
+// Covers the shared platform skips (budget, cap, slot); a reason this feature does not list rethrows.
+const isAssessmentSkip = (error: unknown): error is DecisionSkipped<AbuseAssessmentSkipReason> =>
+  error instanceof DecisionSkipped && (ABUSE_ASSESSMENT_SKIP_REASONS as readonly string[]).includes(error.reason);
 
 export type AbuseAssessmentSettings = { enabled: boolean; config: AbuseAssessmentConfig };
 
@@ -131,65 +133,15 @@ export const loadAbuseAssessmentSettings = async (): Promise<AbuseAssessmentSett
   };
 };
 
-const toMicroUsd = (usd: number) => Math.ceil(usd * 1_000_000);
-
-/**
- * The internal policy: platform keys only, and a call cap and USD budget per fixed 24h window shared by
- * every assessment path. The budget is metered at each call's worst-case cost and not refunded, so it
- * can only under-spend. A zero budget refuses every call, free models included.
- */
-export const platformDecisionAccounting = (config: AbuseAssessmentConfig, logger: Logger): DecisionAccounting => ({
-  resolveProviderKey: provider => resolvePlatformDecisionProviderKey(provider, logger),
-  reserve: async ({ maxCostUsd }) => {
-    if (config.dailyBudgetUsd <= 0) throw new AssessmentSkipped('budget_exhausted');
-    const calls = await cacheRepository.tryIncrementWithinLimitFixedWindow(CALLS_KEY, config.maxCallsPerDay, DAY_MS);
-    if (!calls.success) throw new AssessmentSkipped('call_cap_reached');
-    const spend = await cacheRepository.tryAddWithinLimitFixedWindow(
-      SPEND_KEY,
-      toMicroUsd(maxCostUsd),
-      toMicroUsd(config.dailyBudgetUsd),
-      DAY_MS
-    );
-    if (!spend.success) throw new AssessmentSkipped('budget_exhausted');
-    return { refund: async () => {}, fail: async () => {}, settle: async () => 0 };
-  },
+const accountingLimits = (config: AbuseAssessmentConfig): PlatformDecisionLimits => ({
+  keyPrefix: KEY_PREFIX,
+  dailyBudgetUsd: config.dailyBudgetUsd,
+  maxCallsPerDay: config.maxCallsPerDay,
 });
 
 /** The configured model when this deployment serves it and holds a platform key for it. */
-const callableModel = async (
-  { enabled, config }: AbuseAssessmentSettings,
-  logger: Logger
-): Promise<DecisionModelId> => {
-  if (!enabled) throw new AssessmentSkipped('disabled');
-  if (!config.model) throw new AssessmentSkipped('no_model');
-  if (!getDecisionProviderRegistry().forModel(config.model)) throw new AssessmentSkipped('model_not_callable');
-  const key = await resolvePlatformDecisionProviderKey(getDecisionModelCapabilities(config.model).provider, logger);
-  if (!key) throw new AssessmentSkipped('model_not_callable');
-  return config.model;
-};
-
-// The summary is JSON only; an image part could only come from a bug, so refuse it outright.
-const resolveJsonInput = async (input: DecisionInput): Promise<ResolvedDecisionInput> => {
-  if (typeof input === 'string') return input;
-  return input.map(part => {
-    if (part.type === 'image')
-      throw new DecisionRequestError(422, 'unsupported_input', 'input', 'Images are not accepted');
-    return part;
-  });
-};
-
-const failureCode = (error: unknown): AbuseAssessmentFailureCode | null => {
-  if (error instanceof DecisionOverloadedError) return 'provider_overloaded';
-  if (error instanceof DecisionResponseMismatchError) return 'malformed_response';
-  if (error instanceof DecisionProviderError)
-    return error.kind === 'rejected_key' ? 'provider_rejected' : 'provider_error';
-  if (error instanceof DecisionRequestError) {
-    if (error.errorCode === 'provider_not_configured') return 'provider_not_configured';
-    if (error.errorCode === 'model_unavailable') return 'model_unavailable';
-    return 'invalid_request';
-  }
-  return null;
-};
+const callableModel = ({ enabled, config }: AbuseAssessmentSettings, logger: Logger): Promise<DecisionModelId> =>
+  callablePlatformModel({ enabled, model: config.model }, logger);
 
 const isJudgment = (value: string): value is AbuseAssessmentJudgment =>
   (ABUSE_ASSESSMENT_JUDGMENTS as readonly string[]).includes(value);
@@ -237,35 +189,19 @@ export async function askModel({
       model,
       body: { input: [{ type: 'json', json: summary }], questions: [ABUSE_ASSESSMENT_QUESTION] },
       logger,
-      accounting: platformDecisionAccounting(config, logger),
+      accounting: platformDecisionAccounting(accountingLimits(config), logger),
       resolveInput: resolveJsonInput,
     });
     return { ...readAnswer(response.answers[0]), modelVersion: response.model, costUsd };
   } catch (error) {
-    const failure = failureCode(error);
+    const failure = decisionFailureCode(error);
     if (!failure) throw error;
     return { result: 'unknown', failure, modelVersion: null, costUsd: 0 };
   }
 }
 
-/** Runs `work` while holding one of the platform-wide concurrency slots and an in-flight claim on the key. */
-async function withCallSlot<T>(cacheKey: string, maxConcurrency: number, work: () => Promise<T>): Promise<T> {
-  const claim = await cacheRepository.claimDedup(`abuseAssessment:inflight:${cacheKey}`, {}, IN_FLIGHT_MS);
-  if (!claim.claimed) throw new AssessmentSkipped('in_flight');
-  const holderId = randomUUID();
-  try {
-    if (!(await cacheRepository.tryAcquireLease(CONCURRENCY_KEY, holderId, maxConcurrency, IN_FLIGHT_MS))) {
-      throw new AssessmentSkipped('busy');
-    }
-    try {
-      return await work();
-    } finally {
-      await cacheRepository.releaseLease(CONCURRENCY_KEY, holderId);
-    }
-  } finally {
-    await cacheRepository.deleteByKey(`abuseAssessment:inflight:${cacheKey}`);
-  }
-}
+const withCallSlot = <T>(cacheKey: string, maxConcurrency: number, work: () => Promise<T>): Promise<T> =>
+  withPlatformCallSlot({ keyPrefix: KEY_PREFIX, cacheKey, maxConcurrency }, work);
 
 /**
  * The stored judgment for a key, or null when a call should be made. An unknown result is retried
@@ -295,7 +231,14 @@ export async function summarizeDetection(
   logger: Logger,
   deps: AbuseAssessmentDeps = {}
 ): Promise<AbuseAssessmentFeatureSummary> {
-  const accounts: AssessedAccountSource[] = await userRepository.findRiskEvidenceSummaries(detection.userIds);
+  const stored: AssessedAccountSource[] = await userRepository.findRiskEvidenceSummaries(detection.userIds);
+  const byId = new Map(stored.map(account => [account.id, account]));
+  const accounts: AssessedAccountSource[] = await Promise.all(
+    detection.userIds.slice(0, ABUSE_ASSESSMENT_MAX_ACCOUNTS).map(async id => ({
+      ...(byId.get(id) ?? { id, createdAt: null, summary: null }),
+      requests: await collectRequestActivity(id, detection.detectedAt, logger),
+    }))
+  );
   const refs = buildFeatureSummary({ detection, accounts, group: null }).accounts.map(account => account.ref);
   let group: AbuseAssessmentGroupEvidence | null = null;
   if (deps.groupEvidence) {
@@ -342,6 +285,7 @@ export async function assessShadowDetection({
     const model = await callableModel(resolved, logger);
     const detection = await shadowDetectionRepository.findById(detectionId);
     if (!detection) throw new AssessmentSkipped('detection_not_found');
+    if (SELF_ASSESSED_SHADOW_DETECTORS.includes(detection.detector)) throw new AssessmentSkipped('self_assessed');
 
     const summary = await summarizeDetection(detection, logger, deps);
     const hash = evidenceHash(summary);
@@ -387,7 +331,7 @@ export async function assessShadowDetection({
       }
     );
   } catch (error) {
-    if (error instanceof AssessmentSkipped) return { status: 'skipped', reason: error.reason };
+    if (isAssessmentSkip(error)) return { status: 'skipped', reason: error.reason };
     throw error;
   }
 }
@@ -437,7 +381,9 @@ export async function sweepAbuseAssessments({
   const { config } = settings;
   const since = new Date(now.getTime() - config.sweepLookbackHours * 60 * 60 * 1000);
   const candidates = (
-    await shadowDetectionRepository.listUnreviewedSince(since, config.maxAssessmentsPerSweep * 10)
+    await shadowDetectionRepository.listUnreviewedSince(since, config.maxAssessmentsPerSweep * 10, {
+      excludeDetectors: SELF_ASSESSED_SHADOW_DETECTORS,
+    })
   ).filter(detection => rolloutBucket(detection.id) < config.sweepRolloutPercent);
 
   const tally = { considered: 0, assessed: 0, cached: 0, errors: 0, skipped: {} as Record<string, number> };
@@ -508,7 +454,7 @@ export async function replayAbuseAssessments({
     try {
       await callableModel({ ...settings, config: { ...settings.config, model } }, logger);
     } catch (error) {
-      if (error instanceof AssessmentSkipped) return { status: 'stopped', reason: error.reason, rows };
+      if (isAssessmentSkip(error)) return { status: 'stopped', reason: error.reason, rows };
       throw error;
     }
     for (const example of examples) {
@@ -527,7 +473,7 @@ export async function replayAbuseAssessments({
           failure: output.result === 'unknown' ? output.failure : null,
         });
       } catch (error) {
-        if (error instanceof AssessmentSkipped) return { status: 'stopped', reason: error.reason, rows };
+        if (isAssessmentSkip(error)) return { status: 'stopped', reason: error.reason, rows };
         throw error;
       }
     }

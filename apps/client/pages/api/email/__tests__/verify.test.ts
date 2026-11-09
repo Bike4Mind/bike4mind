@@ -4,7 +4,9 @@ import { CreditHolderType, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { signupCreditsForEmail } from '@bike4mind/server-utils/lib/entitlements/registry';
 
 const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
-vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
 vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
 
 // Middleware is stripped so the handler body runs directly (same pattern as
@@ -28,7 +30,7 @@ const mockEmitVerifiedFunnel = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/analytics/funnel', () => ({
   emitEmailVerifiedFunnelEvents: (...a: any[]) => mockEmitVerifiedFunnel(...a),
 }));
-vi.mock('@server/utils/auditLog', () => ({
+vi.mock('@bike4mind/server-utils/utils/auditLog', () => ({
   logAuditEvent: vi.fn(),
   EmailAuditEvents: {
     EMAIL_VERIFICATION_FAILED: 'failed',
@@ -43,7 +45,7 @@ vi.mock('@server/entitlements/invalidate', () => ({ pushEntitlementInvalidation:
 // DB-backed partner rules (issue #293). Default to "no rule" so the existing cases
 // fall through to the env registry exactly as before; DB-precedence cases set a match.
 const mockPartnerGrant = vi.fn();
-vi.mock('@server/entitlements/partnerRules', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({
   partnerSignupGrantForEmail: (...a: any[]) => mockPartnerGrant(...a),
 }));
 

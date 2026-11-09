@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Button, Sheet, Stack, Typography } from '@mui/joy';
 import { adminSurface } from './adminStyles';
+import { isAdminOverlayOpen } from './adminKeyboard';
 
 export type SaveBarProps = {
   count: number;
@@ -19,6 +20,7 @@ export function SaveBar({ count, pending, blockedReason, error, onSave, onDiscar
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        if (isAdminOverlayOpen()) return;
         event.preventDefault();
         if (count > 0 && !pending && !blockedReason) saveRef.current();
       }

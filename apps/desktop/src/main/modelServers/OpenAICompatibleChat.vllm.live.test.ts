@@ -4,6 +4,7 @@ import type { CompletionRequest } from '../chat/completions';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
 import { ModelServerRegistry } from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';
+import { inertLaunchers } from './testLaunchers';
 
 // Opt-in check against a real vLLM serving `--served-model-name qwen-small qwen --lora-modules sql-lora=<adapter>
 // --max-model-len 4096`. DESKTOP_LIVE_VLLM_TOOLS=on when it also has --enable-auto-tool-choice --tool-call-parser.
@@ -43,6 +44,7 @@ describe.runIf(URL)('live vLLM through ModelServerRegistry', () => {
     const servers = new ModelServerRegistry({
       store: new ModelServerStore(cipher, memoryFile(), quiet),
       logger: quiet,
+      launchers: inertLaunchers(),
     });
     const views = await servers.add({
       address: URL as string,

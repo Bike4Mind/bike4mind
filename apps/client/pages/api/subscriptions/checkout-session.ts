@@ -4,7 +4,9 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { Request } from 'express';
 import Stripe from 'stripe';
-import { minorUnitsPerMajor } from '@server/integrations/stripe/currency';
+import { minorUnitsPerMajor } from '@bike4mind/server-utils/integrations/stripe/currency';
+import { planCreditsPerCycle } from '@bike4mind/server-utils/lib/userSubscriptions/planCreditsPerCycle';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 /**
  * GET /api/subscriptions/checkout-session?id=cs_...
@@ -18,9 +20,9 @@ import { minorUnitsPerMajor } from '@server/integrations/stripe/currency';
  * (it is written by the webhook, which races the redirect). Reading the session
  * is both authoritative and available the instant the customer lands.
  *
- * Only the analytics-relevant scalars are returned - never the Stripe object.
- * That keeps customer/payment-method/invoice detail out of a browser response
- * whose only job is to populate an ad-platform event.
+ * Only the analytics-relevant scalars, plus the plan's credit allotment for the
+ * customer's confirmation, are returned - never the Stripe object. That keeps
+ * customer/payment-method/invoice detail out of the browser.
  */
 
 const handler = baseApi()
@@ -57,7 +59,8 @@ const handler = baseApi()
     // Anything we cannot positively tie to this caller 404s - a session id is
     // guessable enough that confirming its existence is itself a leak.
     const subscription = session.subscription;
-    const ownerUserId = subscription && typeof subscription !== 'string' ? subscription.metadata?.userId : undefined;
+    const subscriptionMetadata = subscription && typeof subscription !== 'string' ? subscription.metadata : undefined;
+    const ownerUserId = subscriptionMetadata?.userId;
     if (!ownerUserId || ownerUserId !== req.user.id) {
       throw new NotFoundError('Checkout session not found');
     }
@@ -75,6 +78,17 @@ const handler = baseApi()
     const lineItem = session.line_items?.data?.[0];
     const price = lineItem?.price;
     const currency = session.currency ?? 'usd';
+    const priceId = typeof price === 'object' && price ? price.id : undefined;
+    const quantity = lineItem?.quantity ?? 1;
+    // Display-only, so best-effort: a failed settings read must not cost the conversion report.
+    const credits = await planCreditsPerCycle({
+      ownerType:
+        subscriptionMetadata?.ownerType === SubscriptionOwnerType.Organization
+          ? SubscriptionOwnerType.Organization
+          : SubscriptionOwnerType.User,
+      priceId,
+      quantity,
+    }).catch(() => null);
 
     return res.json({
       // The session id, not the subscription id: it is unique per checkout, so a
@@ -83,9 +97,10 @@ const handler = baseApi()
       transactionId: session.id,
       value: (session.amount_total ?? 0) / minorUnitsPerMajor(currency),
       currency: currency.toUpperCase(),
-      priceId: typeof price === 'object' && price ? price.id : undefined,
+      priceId,
       planName: lineItem?.description ?? undefined,
-      quantity: lineItem?.quantity ?? 1,
+      quantity,
+      credits: credits ?? undefined,
     });
   });
 

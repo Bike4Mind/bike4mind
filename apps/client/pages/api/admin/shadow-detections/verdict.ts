@@ -10,7 +10,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { respond } from '@server/utils/respond';
 
 const ONE_MINUTE_MS = 60_000;

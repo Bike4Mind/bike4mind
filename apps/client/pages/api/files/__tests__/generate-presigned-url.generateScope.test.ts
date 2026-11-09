@@ -16,7 +16,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
   },
 }));
 vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: h.getSignedUrl }));
-vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
+vi.mock('@bike4mind/server-utils/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: vi.fn() },

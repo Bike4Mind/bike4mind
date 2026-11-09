@@ -17,7 +17,7 @@ vi.mock('@server/middlewares/adminApi', () => ({
   }),
 }));
 vi.mock('@bike4mind/database', () => ({ Subscriber: { findOneAndUpdate: h.findOneAndUpdate } }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 await import('../delete');
 

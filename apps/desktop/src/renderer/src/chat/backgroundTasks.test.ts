@@ -95,6 +95,15 @@ describe('spawnedSessions', () => {
     expect(isSpawnedRunning(children[1])).toBe(false);
   });
 
+  it('leaves out a side chat, which the user drives rather than the parent', () => {
+    const sideChat = {
+      ...summary('side-chat', '2026-10-01T05:00:00Z'),
+      origin: { parentSessionId: 'parent', depth: 1, seedPrompt: 'passage', kind: 'side-chat' },
+    } as ChatSessionSummary;
+    const children = spawnedSessions([...sessions, sideChat], new Map(), 'parent');
+    expect(children.map(entry => entry.id)).toEqual(['newer-child', 'older-child']);
+  });
+
   it('counts a session at the approval gate as running, and lists nothing without a parent', () => {
     const [child] = spawnedSessions(sessions, new Map([['grandchild', 'needs-action']]), 'newer-child');
     expect(isSpawnedRunning(child)).toBe(true);

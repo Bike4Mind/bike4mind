@@ -26,7 +26,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: async () => [] }));
 vi.mock('@bike4mind/services/llm/imageModerationGate', () => ({ moderateImageOrThrow: vi.fn() }));
-vi.mock('@server/moderation/imageModerationIncidents', () => ({ imageModerationIncidents: {} }));
+vi.mock('@bike4mind/server-utils/moderation/imageModerationIncidents', () => ({ imageModerationIncidents: {} }));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: async () => ({

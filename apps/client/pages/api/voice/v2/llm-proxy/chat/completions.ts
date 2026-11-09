@@ -5,7 +5,7 @@
 // and ElevenLabs appends "/chat/completions" when making the actual request,
 // so the file lives at that suffix. This is the canonical (and only) location
 // of the handler.
-import { DATA_LAKE_TOOL_NAMES, questGenerationJobs } from '@bike4mind/common';
+import { DATA_LAKE_TOOL_NAMES, isTerminalCreditRefusal, questGenerationJobs } from '@bike4mind/common';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { adminSettingsRepository, questRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import {
@@ -231,6 +231,7 @@ async function runFullPipeline(
   await processService.process({
     body: {
       ...invokeBody,
+      ...(invokeService.autoNameDispatched ? { autoNameDispatched: true } : {}),
       questId: quest.id,
       userId: sessionCtx.userId,
       // From the verified token, never the request body. process() reads the tool context's auth
@@ -452,15 +453,18 @@ const handler = ipGatedApi.post(async (req, res) => {
     }
     // Flat strings next to `err`: the alert sink prints each field with `${value}`, which turned
     // the nested error object into `[object Object]`.
-    req.logger.error(
-      {
-        err,
-        errorName: err instanceof Error ? err.name : typeof err,
-        errorMessage: err instanceof Error ? err.message : String(err),
-        errorCause: describeErrorCause(err),
-      },
-      '[voice-v2/llm-proxy] full pipeline failed'
-    );
+    // A credit refusal is an expected outcome, not a pipeline fault; the spoken fallback below still runs.
+    const failureFields = {
+      err,
+      errorName: err instanceof Error ? err.name : typeof err,
+      errorMessage: err instanceof Error ? err.message : String(err),
+      errorCause: describeErrorCause(err),
+    };
+    if (isTerminalCreditRefusal(err)) {
+      req.logger.warn(failureFields, '[voice-v2/llm-proxy] full pipeline failed');
+    } else {
+      req.logger.error(failureFields, '[voice-v2/llm-proxy] full pipeline failed');
+    }
     try {
       if (res.writableEnded) return;
       // Only speak the fallback if nothing was streamed yet - otherwise the agent

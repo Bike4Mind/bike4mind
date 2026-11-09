@@ -1,6 +1,9 @@
 import {
   ABUSE_ASSESSMENT_MAX_ACCOUNTS,
+  ABUSE_ASSESSMENT_MAX_SIGNALS,
   RISK_EVIDENCE_VERSION,
+  abuseAssessmentFeatureSummarySchema,
+  type AccountCampaignGroup,
   type RiskEvidenceSummary,
   type ShadowDetectionItem,
 } from '@bike4mind/common';
@@ -87,7 +90,100 @@ const accounts = (summary: RiskEvidenceSummary | null = evidence()) => [
   { id: '65f0000000000000000000a2', createdAt: null, summary: null },
 ];
 
+const campaign = (): AccountCampaignGroup => {
+  const userIds = detection().userIds;
+  return {
+    policyVersion: 1,
+    window: { from: detectedAt, to: detectedAt },
+    firstObservedAt: detectedAt,
+    lastObservedAt: detectedAt,
+    members: userIds.map((userId, index) => ({
+      userId,
+      membership: index === 0 ? 'direct' : 'transitive',
+      linkCount: 1,
+      signedUpAt: detectedAt,
+    })),
+    links: [{ userIds: [userIds[0], userIds[1]], relationships: ['fingerprint'] }],
+    evidence: [
+      {
+        relationship: 'fingerprint',
+        axis: 'client',
+        value: 'private-fingerprint',
+        label: INJECTION,
+        population: 3,
+        userIds,
+      },
+    ],
+    ignored: [
+      {
+        relationship: 'mailDomain',
+        value: 'private.example',
+        population: 345,
+        reason: 'personalMailProvider',
+        memberCount: 2,
+      },
+    ],
+    unknown: { fingerprint: 0, network: 0 },
+    truncated: false,
+    totals: { direct: 1, transitive: 1, links: 1 },
+  };
+};
+
 describe('buildFeatureSummary', () => {
+  it('projects campaign relationships and rarity without raw identifiers or labels', () => {
+    const summary = buildFeatureSummary({
+      detection: detection({ detector: 'accountCampaign', group: campaign() }),
+      accounts: accounts(),
+      group: null,
+    });
+    expect(summary.detection.campaign).toEqual({
+      members: [
+        { ref: 'acct_1', membership: 'direct' },
+        { ref: 'acct_2', membership: 'transitive' },
+      ],
+      evidence: [{ relationship: 'fingerprint', axis: 'client', population: 3, memberRefs: ['acct_1', 'acct_2'] }],
+      ignored: [{ relationship: 'mailDomain', reason: 'personalMailProvider', population: 345, memberCount: 2 }],
+      truncated: false,
+    });
+    const wire = JSON.stringify(summary);
+    for (const secret of ['private-fingerprint', 'private.example', INJECTION, ...detection().userIds]) {
+      expect(wire).not.toContain(secret);
+    }
+  });
+
+  it('does not attach campaign context to another detector or require it on stored summaries', () => {
+    const summary = buildFeatureSummary({ detection: detection({ group: campaign() }), accounts: [], group: null });
+    expect(summary.detection.campaign).toBeUndefined();
+    expect(abuseAssessmentFeatureSummarySchema.safeParse(JSON.parse(JSON.stringify(summary))).success).toBe(true);
+  });
+
+  it('bounds campaign evidence and drops references to omitted accounts', () => {
+    const userIds = Array.from({ length: ABUSE_ASSESSMENT_MAX_ACCOUNTS + 1 }, (_, index) =>
+      (0x65f0000000000000000000a0n + BigInt(index)).toString(16)
+    );
+    const group = campaign();
+    group.members = userIds.map(userId => ({ userId, membership: 'direct', linkCount: 2, signedUpAt: detectedAt }));
+    group.evidence = [
+      { ...group.evidence[0], userIds: [userIds[0], userIds.at(-1)!] },
+      ...Array.from({ length: ABUSE_ASSESSMENT_MAX_SIGNALS + 1 }, () => ({ ...group.evidence[0], userIds })),
+    ];
+    group.ignored = Array.from({ length: ABUSE_ASSESSMENT_MAX_SIGNALS + 1 }, () => group.ignored[0]);
+    const summary = buildFeatureSummary({
+      detection: detection({ detector: 'accountCampaign', userIds, group }),
+      accounts: [],
+      group: null,
+    });
+    const context = summary.detection.campaign;
+    expect(context?.members).toHaveLength(ABUSE_ASSESSMENT_MAX_ACCOUNTS);
+    expect(context?.evidence).toHaveLength(ABUSE_ASSESSMENT_MAX_SIGNALS);
+    expect(context?.ignored).toHaveLength(ABUSE_ASSESSMENT_MAX_SIGNALS);
+    expect(context?.truncated).toBe(true);
+    for (const entry of context?.evidence ?? []) {
+      expect(entry.memberRefs).toHaveLength(ABUSE_ASSESSMENT_MAX_ACCOUNTS);
+      expect(entry.memberRefs).not.toContain('acct_11');
+    }
+  });
+
   it('sends counts and flags under pseudonymous refs, and no identity or free text', () => {
     const summary = buildFeatureSummary({ detection: detection(), accounts: accounts(), group: null });
     const wire = JSON.stringify(summary);
@@ -158,6 +254,35 @@ describe('buildFeatureSummary', () => {
 });
 
 describe('evidenceHash', () => {
+  it('invalidates a cached assessment when request outcomes change', () => {
+    const source = accounts();
+    const original = buildFeatureSummary({ detection: detection(), accounts: source, group: null });
+    const changed = buildFeatureSummary({
+      detection: detection(),
+      accounts: source.map(account => ({ ...account, requests: { status: 'failed' as const } })),
+      group: null,
+    });
+    expect(evidenceHash(changed)).not.toBe(evidenceHash(original));
+    expect(changed.accounts[0].requests).toEqual({ status: 'failed' });
+  });
+  it('reassesses when a campaign gains a different relationship or membership', () => {
+    const hashForGroup = (group: AccountCampaignGroup) =>
+      evidenceHash(
+        buildFeatureSummary({
+          detection: detection({ detector: 'accountCampaign', group }),
+          accounts: [],
+          group: null,
+        })
+      );
+    const original = campaign();
+    const changed = campaign();
+    changed.evidence[0] = { ...changed.evidence[0], relationship: 'networkPrefix', axis: 'affiliation' };
+    expect(hashForGroup(changed)).not.toBe(hashForGroup(original));
+    changed.evidence = original.evidence;
+    changed.members[1].membership = 'direct';
+    expect(hashForGroup(changed)).not.toBe(hashForGroup(original));
+  });
+
   const hashFor = (overrides: { logins?: number; creditsSpent?: number }) =>
     evidenceHash(buildFeatureSummary({ detection: detection(), accounts: accounts(evidence(overrides)), group: null }));
 

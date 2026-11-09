@@ -51,6 +51,11 @@ export function registerClaudeImport(ipcMain: Pick<IpcMain, 'handle'>, deps: Pic
     IPC_CHANNELS.claudeImportSetWatchFolder,
     withSender((clear: unknown) => service.setChatWatchFolder(clear === true))
   );
+  ipcMain.handle(IPC_CHANNELS.claudeImportSetWebSettings, (_event, patch: unknown) => service.setWebSettings(patch));
+  ipcMain.handle(IPC_CHANNELS.claudeImportSyncWeb, async () => {
+    await service.syncWeb();
+    return service.state();
+  });
   ipcMain.handle(IPC_CHANNELS.claudeImportRemove, (_event, kind: unknown) => service.removeImported(kind));
   return service;
 }

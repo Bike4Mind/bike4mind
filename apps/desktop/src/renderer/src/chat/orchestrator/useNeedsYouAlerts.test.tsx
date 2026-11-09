@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { StrictMode, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { AttentionNotice, AttentionOpenEvent } from '@shared/attention';
 import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
@@ -32,6 +32,7 @@ const notify = vi.fn(async (_notice: AttentionNotice) => undefined);
 const claim = vi.fn(async (sessionIds: string[]) => sessionIds);
 const setBadgeCount = vi.fn(async (_count: number) => undefined);
 const onOpen = vi.fn();
+const takePendingOpen = vi.fn(async (): Promise<AttentionOpenEvent | null> => null);
 let focused = false;
 
 const Probe = ({ statuses, loaded }: { statuses: ReadonlyMap<string, ChatSessionStatus>; loaded: boolean }) => {
@@ -66,6 +67,7 @@ beforeEach(() => {
       notify,
       claim,
       setBadgeCount,
+      takePendingOpen,
       onOpen: (listener: (event: AttentionOpenEvent) => void) => {
         openListener = listener;
         return () => {
@@ -195,6 +197,39 @@ describe('useNeedsYouAlerts', () => {
   it('hands a clicked notice to onOpen', async () => {
     await render({});
     act(() => openListener?.({ sessionId: 'child', rootId: 'root' }));
+    expect(onOpen).toHaveBeenCalledWith({ sessionId: 'child', rootId: 'root' });
+  });
+
+  it('opens the notice that reopened the window, once its session is listed', async () => {
+    takePendingOpen.mockResolvedValueOnce({ sessionId: 'child', rootId: 'root' });
+    sessions = [];
+    await render({}, false);
+    expect(onOpen).not.toHaveBeenCalled();
+
+    sessions = DEFAULT_SESSIONS;
+    await render({});
+    await render({});
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(onOpen).toHaveBeenCalledWith({ sessionId: 'child', rootId: 'root' });
+  });
+
+  it('opens nothing when no notice reopened the window', async () => {
+    await render({});
+    expect(takePendingOpen).toHaveBeenCalledTimes(1);
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('keeps the reopening notice when the take runs twice, as StrictMode does', async () => {
+    takePendingOpen.mockResolvedValueOnce({ sessionId: 'child', rootId: 'root' }).mockResolvedValueOnce(null);
+    await act(async () =>
+      root.render(
+        <StrictMode>
+          <Probe statuses={new Map()} loaded />
+        </StrictMode>
+      )
+    );
+    await act(async () => undefined);
+    expect(takePendingOpen).toHaveBeenCalledTimes(2);
     expect(onOpen).toHaveBeenCalledWith({ sessionId: 'child', rootId: 'root' });
   });
 });

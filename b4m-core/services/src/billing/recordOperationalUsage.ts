@@ -1,6 +1,8 @@
 import {
   CreditHolderType,
   IAdminSettingsRepository,
+  ICreditHolder,
+  ICreditHolderFlooredDebit,
   ICreditHolderMethods,
   ICreditTransactionRepository,
   IOrganizationDocument,
@@ -9,6 +11,7 @@ import {
   IUsageEventRepository,
   IUserDocument,
   UsageEventFeature,
+  UsageEventOperation,
   UsagePriceStamp,
   usdToCreditsStochastic,
   type CompletionSource,
@@ -63,6 +66,8 @@ export interface RecordOperationalUsageParams {
   apiKeyId?: string;
   /** Provider stop reason of the underlying completion, e.g. `CompletionInfo.stopReason`. */
   finishReason?: string;
+  /** The background job that made the call, shown on the admin usage receipt. */
+  operation?: UsageEventOperation;
   /**
    * Skip the credit-deduction path entirely, regardless of the billOperationalUsage/
    * enforceCredits admin settings. For spend already governed by its own dedicated
@@ -96,7 +101,9 @@ export interface RecordOperationalUsageParams {
 /** The repos the deduct path needs, all-or-nothing; a host passes them to let operational spend debit. */
 export type OperationalBillingAdapters = {
   creditTransactions: ICreditTransactionRepository;
-  users: ICreditHolderMethods;
+  /** Debits are floored at zero (decrementCreditsFloored); findById reads the balance for the ledger row. */
+  users: ICreditHolderMethods &
+    ICreditHolderFlooredDebit & { findById(id: string): Promise<ICreditHolder | null | undefined> };
   organizations: IOrganizationRepository;
   /** Enables the free-tier carve-out (see isOperationalBillingEnabled); absent, only the toggle bills. */
   activePlans?: ActivePlanResolver;
@@ -123,6 +130,10 @@ export interface RecordOperationalUsageAdapters {
  * wired) - or when the caller passes `forceCreditBilling`, which substitutes `enforceCredits`
  * alone for callers whose spend has its own credit economics (see that flag).
  *
+ * The debit never takes a balance below zero (debitFlooredAtZero): what the payer cannot cover is
+ * written off and recorded as the event's writtenOffCredits, so a balance at or below zero is never
+ * pushed further into debt by this spend.
+ *
  * Never throws: a billing or analytics failure here must not break the operational call it
  * is measuring. The billing (deduct) path reuses the `text_generation_usage` ledger machinery
  * for both features - the precise feature ('operations' | 'embedding') lives on the UsageEvent;
@@ -144,9 +155,9 @@ export interface RecordOperationalUsageAdapters {
  * session-event publishers run `server/utils/sessionOperationalCreditPreflight` (#1852) - the
  * ungated `SessionEvents` publishers are `POST /api/sessions/[id]/tag`,
  * `POST /api/sessions/[id]/summary`, the project-attach fan-out
- * (`pages/api/projects/[id]/sessions.ts`) and the admin spider; the rest already sit behind gated
- * primary actions. A NEW publisher of those events inherits no gate: add the pre-flight at its
- * entry point, not in this measurement helper.
+ * (`pages/api/projects/[id]/sessions.ts`) and the admin spider. Every session-event handler also
+ * re-checks the payer's balance before its model call (`apps/workers/src/events/
+ * sessionOperationalCreditGate`), because a chat turn settled at the cap leaves the payer at zero.
  */
 export async function recordOperationalUsage(
   params: RecordOperationalUsageParams,
@@ -157,6 +168,7 @@ export async function recordOperationalUsage(
   const outputTokens = params.outputTokens ?? 0;
 
   let creditsCharged = params.settledCredits ?? 0;
+  let writtenOffCredits = 0;
   try {
     // A db without billing repos can only ever record, so the flags cannot change the outcome -
     // read them only where the debit path is reachable, keeping the fresh read off record-only hosts.
@@ -176,12 +188,11 @@ export async function recordOperationalUsage(
       // Stochastic settlement legitimately rounds a sub-credit cost to 0 (paid in
       // expectation across calls); only touch the ledger when it lands above zero.
       if (credits > 0) {
-        await deductCreditsWithOrgSupport(
+        const settled = await debitFlooredAtZero(
           {
-            type: 'text_generation_usage',
+            credits,
             user,
             organization,
-            credits,
             sessionId: params.sessionId ?? '',
             questId: params.requestId,
             model: params.model,
@@ -190,15 +201,21 @@ export async function recordOperationalUsage(
             source: params.source ?? 'system',
             apiKeyId: params.apiKeyId,
           },
-          {
-            db: {
-              creditTransactions: db.creditTransactions,
-              users: db.users,
-              organizations: db.organizations,
-            },
-          }
+          { creditTransactions: db.creditTransactions, users: db.users, organizations: db.organizations },
+          logger
         );
         creditsCharged = credits;
+        writtenOffCredits = credits - settled;
+        if (writtenOffCredits > 0) {
+          logger.warn('[OPERATIONAL_SHORTFALL_CLAMP] Operational charge exceeds balance; flooring at zero', {
+            feature,
+            ownerId: organization ? organization.id : user.id,
+            ownerType: organization ? CreditHolderType.Organization : CreditHolderType.User,
+            charge: credits,
+            debited: settled,
+            writtenOff: writtenOffCredits,
+          });
+        }
       }
     }
   } catch (err) {
@@ -225,15 +242,73 @@ export async function recordOperationalUsage(
     settledBasis: 'local',
     costUsd: params.costUsd,
     creditsCharged,
+    ...(writtenOffCredits > 0 ? { writtenOffCredits } : {}),
     ...params.priceStamp,
     // Same refund key the chat/CLI completion paths record: see usageEventStatusForFinish.
     status: usageEventStatusForFinish(params.finishReason),
     latencyMs: params.latencyMs,
     // Same origin as this call's ledger write above (params.source ?? 'system').
     source: params.source ?? 'system',
+    requestMeta:
+      params.operation || params.finishReason
+        ? { operation: params.operation, stopReason: params.finishReason?.slice(0, 64) }
+        : undefined,
   };
 
   await db.usageEvents
     ?.record(event)
     .catch(err => logger.warn(`[recordOperationalUsage] usage event failed for ${feature}`, err));
+}
+
+type FlooredDebitParams = {
+  credits: number;
+  user: IUserDocument;
+  organization?: IOrganizationDocument | null;
+  sessionId: string;
+  questId: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  source: CompletionSource;
+  apiKeyId?: string;
+};
+
+/**
+ * Debit an operational charge without taking the payer's balance below zero. Operational calls are
+ * metered after the provider call with no hold, so this is the only place their charge can be bounded:
+ * a balance the chat turn's cap already brought to zero must not be pushed into debt by the background
+ * work that follows it (auto-naming, summaries, tags, mementos). The part the balance cannot cover is
+ * written off. Same floor as the voice and CLI settlements (decrementCreditsFloored). Resolves the
+ * credits actually debited; the ledger row records that amount, not the full charge.
+ */
+async function debitFlooredAtZero(
+  params: FlooredDebitParams,
+  db: OperationalBillingAdapters,
+  logger: Logger
+): Promise<number> {
+  const { organization, user } = params;
+  const holderId = organization ? organization.id : user.id;
+  const holderRepository = organization ? db.organizations : db.users;
+
+  const debited = await holderRepository.decrementCreditsFloored(holderId, params.credits);
+  if (debited <= 0) return 0;
+
+  // The balance has already moved, so a failure from here on must not report the charge as unbilled:
+  // resolve `debited` regardless and flag the missing ledger row for reconciliation.
+  try {
+    const holderAfterDebit = await holderRepository.findById(holderId);
+    if (!holderAfterDebit) throw new Error(`Credit holder ${holderId} disappeared after an operational debit`);
+
+    await deductCreditsWithOrgSupport(
+      { type: 'text_generation_usage', ...params, organization: organization ?? null, credits: debited },
+      { db },
+      { skipBalanceUpdate: true, currentCreditHolder: holderAfterDebit }
+    );
+  } catch (err) {
+    logger.error('[OPERATIONAL_LEDGER_WRITE_FAILED] Balance debited but the ledger row was not written', err, {
+      holderId,
+      debited,
+    });
+  }
+  return debited;
 }

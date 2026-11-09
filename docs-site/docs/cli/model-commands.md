@@ -8,17 +8,18 @@ sidebar_position: 13
 
 `b4m models` finds GGUF builds on Hugging Face, downloads them (or Ollama library models) into Ollama, makes one the model the CLI chats with, and removes them again. It needs a running [Ollama](https://ollama.com). To chat with an Ollama host's models without managing them, see [Self-hosted Ollama](./local-models.md).
 
-| Command | What it does |
-|---------|--------------|
-| `b4m models ls` | List the models installed on Ollama |
-| `b4m models search <terms>` | Search Hugging Face for GGUF repos |
-| `b4m models show <owner/repo>` | List a repo's builds with size, fit and the ref to pull |
-| `b4m models pull <ref>` | Download a model after showing its size, license and fit |
-| `b4m models use <name>` | Make an installed model, or a model on a saved server, the CLI's default |
-| `b4m models rm <name>` | Remove an installed model |
-| `b4m models servers` | List the model servers saved in Desktop, with status |
-| `b4m models servers login <name>` | Give the CLI its own credential for a server |
-| `b4m models servers logout <name>` | Remove the CLI's credential for a server |
+| Command                                   | What it does                                                             |
+| ----------------------------------------- | ------------------------------------------------------------------------ |
+| `b4m models ls`                           | List the models installed on Ollama                                      |
+| `b4m models search <terms>`               | Search Hugging Face for GGUF repos                                       |
+| `b4m models show <owner/repo>`            | List a repo's builds with size, fit and the ref to pull                  |
+| `b4m models pull <ref>`                   | Download a model after showing its size, license and fit                 |
+| `b4m models use <name>`                   | Make an installed model, or a model on a saved server, the CLI's default |
+| `b4m models rm <name>`                    | Remove an installed model                                                |
+| `b4m models servers`                      | List the model servers saved in Desktop, with status                     |
+| `b4m models servers discover <user@host>` | Find the model servers running on another machine, over SSH              |
+| `b4m models servers login <name>`         | Give the CLI its own credential for a server                             |
+| `b4m models servers logout <name>`        | Remove the CLI's credential for a server                                 |
 
 `ls`, `search`, `show` and `servers` print JSON with `--output-format json`. `ls`, `use`, `pull` and `rm` take `--server <name>` to act on a [Desktop model server](../features/desktop-model-servers.md) instead of the local Ollama.
 
@@ -161,6 +162,10 @@ vllm     vLLM    http://127.0.0.1:8001            Chat only  none               
 gpu-box  Ollama  https://gpu-box.example.com      Manage     needed: b4m models servers login gpu-box  needs credentials
 ```
 
+A server saved in Desktop with an SSH destination shows as `ssh user@gpu-box`, or as `ssh user@gpu-box port 8080` when it is not on Ollama's port 11434. The CLI reaches it through your computer's `ssh`, the same way Desktop does.
+
+A saved SSH server with a missing or unusable destination or port stays in the list with its reason. Remove it in Desktop and add it again. You can still run `b4m models servers logout <name>` to remove its CLI credential.
+
 The NOTE column warns when a server uses plain http on a private network ("Unencrypted") and when a public server answers anyone without credentials ("Open to anyone"). Add `--check-tools` to send each OpenAI-compatible server a one-token request that declares a tool; a server that refuses tool calls gets a note saying what to change on it.
 
 Desktop keeps its credentials in your operating system's encrypted storage, which the CLI cannot read. For a server that needs one, type it once for the CLI. The input is hidden, and the CLI saves it only after the server accepts it:
@@ -170,6 +175,28 @@ b4m models servers login gpu-box
 ```
 
 Pipe the credential instead with `--token-stdin`. The CLI keeps its copy in `~/.bike4mind/config.json`, which only you can read, next to its own sign-in tokens. It never prints a credential. `b4m models servers logout gpu-box` removes it, and also accepts the raw server id to clear a credential whose server was deleted in Desktop. The same address rules as in Desktop apply: credentials go over https, or over http only to this computer or a Tailscale address.
+
+### Find the servers on another machine
+
+`b4m models servers discover` signs in to a machine with your `ssh` and looks for model servers on its `127.0.0.1`: Ollama on `11434`, LM Studio on `1234`, llama-server and llama-swap on `8080`, and vLLM on `8000`. Add `--port` to look on one other port instead. It sends no API key, and it gives up after 30 seconds:
+
+```bash
+b4m models servers discover user@gpu-box.example.com
+```
+
+```text
+Looking for model servers on user@gpu-box.example.com (Ollama 11434, LM Studio 1234, llama-server 8080, vLLM 8000)
+PORT   KIND               VERSION  MODELS  NOTE
+11434  Ollama             0.12.0   3
+8080   llama-swap                  12
+8000   OpenAI-compatible                   asks for an API key
+
+To use one, add it in Desktop under Settings, Model servers: choose SSH and enter user@gpu-box.example.com. The CLI then lists it in: b4m models servers
+```
+
+The CLI does not save servers; add one in Desktop, as the output says. When nothing answers, the command says why and what to do, such as starting the server or enabling `AllowTcpForwarding` in the machine's `sshd_config`. It exits with 1 when it finds nothing. Add `--output-format json` for JSON.
+
+### Act on a server
 
 Add `--server <name>` to act on one of these servers:
 

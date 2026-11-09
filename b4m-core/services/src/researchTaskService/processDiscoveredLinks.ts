@@ -11,6 +11,7 @@ import {
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters, UnprocessableEntityError, FunctionQueueRunner } from '@bike4mind/utils';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
+import { isAiAccessRefusal } from '../userService/accountState';
 import { createSendStatusUpdate } from './utils';
 import axios from 'axios';
 import type mongoose from 'mongoose';
@@ -56,6 +57,10 @@ const CONCURRENCY_LIMIT = 3;
 const LINK_EXTRACTION_MAX_TOKENS = 16_384;
 
 // No whitespace consumers around the lazy body: the caller trims, and `\s*` there is quadratic on an unclosed fence.
+/** A refusal about the task owner (no credits, or no AI access), not the links; it fails every batch alike. */
+const isOwnerRefusal = (error: unknown): boolean =>
+  getQuestErrorCode(error) === 'insufficient_credits' || isAiAccessRefusal(error);
+
 export const FENCED_JSON_REGEX = /```(?:json)?([\s\S]*?)```/;
 
 export const processDiscoveredLinks = async (
@@ -294,9 +299,9 @@ export const processDiscoveredLinks = async (
 
               break;
             } catch (e) {
-              // A credit refusal is about the owner, not the links. Preserve them for a later run
+              // A credit or AI-access refusal is about the owner, not the links. Preserve them for a later run
               // and let the queue handler fail the task rather than retrying each unpaid batch.
-              if (getQuestErrorCode(e) === 'insufficient_credits') {
+              if (isOwnerRefusal(e)) {
                 creditRefusal = e;
                 throw e;
               }
@@ -341,7 +346,7 @@ export const processDiscoveredLinks = async (
     );
 
     for (const result of batchResults) {
-      if (result.status === 'rejected' && getQuestErrorCode(result.reason) === 'insufficient_credits') {
+      if (result.status === 'rejected' && isOwnerRefusal(result.reason)) {
         throw result.reason;
       }
     }
@@ -377,7 +382,7 @@ export const processDiscoveredLinks = async (
     await queueRunner.close();
     // Keep completed, paid batches when another batch is refused, so retrying the task does not
     // pay for those batches again. The queue handler owns the task's credit-refusal failure state.
-    if (getQuestErrorCode(e) === 'insufficient_credits') {
+    if (isOwnerRefusal(e)) {
       await db.researchTasks.update({ id: researchTask.id, discoveredLinks: researchTask.discoveredLinks });
       throw e;
     }

@@ -52,7 +52,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/utils/eventBus', () => ({ SessionEvents: { Summarize: { publish: vi.fn() } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ SessionEvents: { Summarize: { publish: vi.fn() } } }));
 vi.mock('@server/utils/sessionOperationalCreditPreflight', () => ({
   filterSessionIdsByOperationalCredits: vi.fn(),
 }));
@@ -101,7 +101,7 @@ describe('DELETE /api/projects/[id]/sessions - sessionIds validation', () => {
   });
 
   it('accepts an empty sessionIds array - a 200 no-op, mirroring files.zod-validation.test.ts', async () => {
-    mockRemoveSessions.mockResolvedValue({ id: PROJECT_ID, name: 'proj' });
+    mockRemoveSessions.mockResolvedValue({ project: { id: PROJECT_ID, name: 'proj' }, removedIds: [] });
     await run(deleteHandler, []);
     expect(mockRemoveSessions).toHaveBeenCalledOnce();
   });

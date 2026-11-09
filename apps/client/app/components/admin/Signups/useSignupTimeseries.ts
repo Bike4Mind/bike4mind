@@ -1,6 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import type { SignupTimeseries, SignupTimeseriesRange, SignupVerdicts } from '@client/app/utils/signupSignals';
+import type {
+  SignupTimeseries,
+  SignupTimeseriesRange,
+  SignupVerdicts,
+} from '@bike4mind/server-utils/app/utils/signupSignals';
 
 // Nested under ['users'] so every user mutation's prefix invalidation (create, delete, ...) refreshes the chart.
 export const signupTimeseriesQueryKey = (range: SignupTimeseriesRange) =>

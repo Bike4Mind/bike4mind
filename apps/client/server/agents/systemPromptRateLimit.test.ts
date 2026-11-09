@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, insufficientCreditsError, TooManyRequestsError } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import {
   SystemPromptRateLimitError,
@@ -54,6 +55,21 @@ describe('logSystemPromptGenerationFailure', () => {
     const logger = makeLogger();
     logSystemPromptGenerationFailure(logger, 'failed:', new SystemPromptRateLimitError('Rate limit exceeded.'));
     expect(logger.warn).toHaveBeenCalledWith('failed:', 'Rate limit exceeded.');
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'free-tier daily cap',
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+      }),
+    ],
+    ['insufficient credits', insufficientCreditsError('Not enough credits.')],
+  ])('logs a %s refusal at warn, not error', (_label, error) => {
+    const logger = makeLogger();
+    logSystemPromptGenerationFailure(logger, 'failed:', error);
+    expect(logger.warn).toHaveBeenCalledWith('failed:', error.message);
     expect(logger.error).not.toHaveBeenCalled();
   });
 

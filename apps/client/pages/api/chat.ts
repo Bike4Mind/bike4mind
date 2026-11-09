@@ -61,6 +61,7 @@ import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 import { requestTurnAuth } from '@server/auth/turnAuth';
 import { readVisitId } from '@server/analytics/visitSession';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { customMcpToolHost } from '@server/mcpConnections/customMcpToolHost';
 import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@server/utils/untrustedCompletionQuota';
 import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
 import { runWithDeadline, WAIT_TURN_BUDGET_MS, WAIT_TURN_WIND_DOWN_MS } from '@server/utils/waitTurnDeadline';
@@ -232,6 +233,9 @@ async function handleChat(
   // Shared options for ChatCompletionInvoke and ChatCompletionProcess
   const chatCompletionOptions = {
     ...getDefaultChatCompletionOptions(),
+    // Not on the shared defaults (surfaces without a confirm card must not offer custom tools);
+    // the queued path registers it in questProcessor, so the inline wait=true path must too.
+    customMcp: customMcpToolHost,
     queue: new SQSService(), // Create per-request to ensure fresh credentials
     tokenizer: getSharedTokenizer(req.logger),
     user: req.user,
@@ -315,6 +319,7 @@ async function handleChat(
           processService.process({
             body: {
               ...internalRequest,
+              ...(invokeService.autoNameDispatched ? { autoNameDispatched: true } : {}),
               questId: quest.id,
               userId: req.user.id,
               // Mirrors invoke() above: process() reads the tool context's auth from this body only.
@@ -556,9 +561,12 @@ async function resolveChatSessionId(
   }
 
   if (request.newConversation || isApiKeyAuth(req)) {
+    // The generated name is also the auto-name placeholder: the auto-naming worker skips a session
+    // renamed in the last 10s unless its name is a placeholder, and a fast async turn lands inside that window.
+    const name = newNotebookName(req);
     const session = await sessionService.createSession(
       req.user,
-      { name: newNotebookName(req) },
+      { name, autoNamePlaceholder: name },
       {
         db: {
           sessions: sessionRepository,

@@ -19,10 +19,14 @@ import { Quest } from '@bike4mind/database';
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => unknown> = [];
     const chain = Object.assign(
-      (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) await middleware(req, res, () => undefined);
+        return h[(req as { method?: string }).method ?? 'GET']?.(req, res);
+      },
       {
-        use: () => chain,
+        use: (middleware: (typeof middlewares)[number]) => (middlewares.push(middleware), chain),
         get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.GET = fns[fns.length - 1]), chain),
       }
     );
@@ -32,12 +36,6 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
-}));
-
-vi.mock('@bike4mind/server-utils/utils/errors', () => ({
-  ForbiddenError: class ForbiddenError extends Error {
-    name = 'ForbiddenError';
-  },
 }));
 
 import handler, { MODEL_LOGS_MAX_LIMIT } from '../model-logs';
@@ -339,7 +337,7 @@ describe('GET /api/admin/model-logs', () => {
     const aggregateSpy = vi.spyOn(Quest, 'aggregate');
     const countSpy = vi.spyOn(Quest, 'countDocuments');
     const { req, res } = run({}, false);
-    await expect(handler(req, res)).rejects.toMatchObject({ name: 'ForbiddenError' });
+    await expect(handler(req, res)).rejects.toThrow(/missing permission/i);
     expect(aggregateSpy).not.toHaveBeenCalled();
     expect(countSpy).not.toHaveBeenCalled();
     aggregateSpy.mockRestore();

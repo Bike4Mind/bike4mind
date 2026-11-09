@@ -14,6 +14,8 @@ import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
+import { SESSION_PANEL_SPACE_VAR } from './layout';
+import { SESSION_PANEL_SPACE } from './sessionPanelState';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -91,6 +93,7 @@ function quietBridge(overrides: Record<string, unknown>) {
 /** What the bridge reports for the open session; reset in beforeEach. */
 let transcript: ChatMessage[] = [];
 let processes: BackgroundProcessInfo[] = [];
+let loop: import('@shared/loop').LoopState | null = null;
 let updateProject: () => Promise<unknown> = async () => ({ ok: true });
 let sendMessage: () => Promise<SendMessageResult>;
 
@@ -106,6 +109,7 @@ beforeEach(() => {
   window.localStorage.clear();
   transcript = [];
   processes = [];
+  loop = null;
   updateProject = async () => ({ ok: true });
   sendMessage = async () => ({ ok: true, messageId: 'm1' });
   Element.prototype.scrollIntoView = () => undefined;
@@ -135,6 +139,7 @@ beforeEach(() => {
         getSession: async (id: string) =>
           ({ ...SESSIONS.find(entry => entry.id === id), messages: transcript }) as unknown as ChatSession,
         listBackgroundProcesses: async () => processes,
+        getLoop: async () => loop,
         inspectProject: async () => ({ currentBranch: 'main', branches: [] }),
         updateProject: () => updateProject(),
         sendMessage: () => sendMessage(),
@@ -210,8 +215,49 @@ function deferSend() {
 }
 
 describe('the session panel in the shell', () => {
-  it('docks over the thread of a Code session with a folder, holding the chips the composer used to', async () => {
+  it('keeps a Chat loop in Background tasks, never above the input, across panel toggles', async () => {
     paneWidth(1600);
+    loop = {
+      sessionId: 'chatting',
+      prompt: 'Check the build',
+      intervalMs: 30_000,
+      phase: 'scheduled',
+      nextRunAt: Date.now() + 30_000,
+    };
+    await open('chatting', 'chat');
+    expect(get('session-panel-section-background').contains(get('loop-status'))).toBe(true);
+    expect(find('session-panel-section-environment')).toBeNull();
+    const composer = get('chat-composer-input');
+    await act(async () => get('chat-toggle-session-panel-btn').click());
+    expect(find('loop-status')).toBeNull();
+    expect(get('loop-header-status').textContent).toContain('Loop scheduled');
+    expect(get('loop-header-stop-btn').tagName).toBe('BUTTON');
+    expect(get('chat-composer-input')).toBe(composer);
+    await act(async () => get('chat-toggle-session-panel-btn').click());
+    expect(get('session-panel-section-background').contains(get('loop-stop-btn'))).toBe(true);
+    expect(find('loop-header-status')).toBeNull();
+  });
+
+  it('keeps a loop visible and stoppable on narrow panes and with Background tasks folded', async () => {
+    paneWidth(900);
+    loop = { sessionId: 'chatting', prompt: 'Check', intervalMs: 30_000, phase: 'waiting', nextRunAt: null };
+    const stop = vi.fn();
+    window.b4m.chat.loopCommand = stop;
+    await open('chatting', 'chat');
+    expect(find('session-panel')).toBeNull();
+    expect(get('loop-header-status').textContent).toContain('Loop waiting');
+    await act(async () => get('loop-header-stop-btn').click());
+    expect(stop).toHaveBeenCalledWith('chatting', 'stop');
+    await act(async () => get('loop-header-open-btn').click());
+    expect(get('session-panel-section-background').contains(get('loop-stop-btn'))).toBe(true);
+    await act(async () => get('session-panel-background-toggle-btn').click());
+    expect(get('loop-header-stop-btn')).not.toBeNull();
+    await act(async () => get('loop-header-open-btn').click());
+    expect(get('loop-status')).not.toBeNull();
+  });
+
+  it('reserves a rail beside the thread of a Code session with a folder', async () => {
+    paneWidth(1100);
     transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
     await open('bound');
 
@@ -219,6 +265,10 @@ describe('the session panel in the shell', () => {
     expect(get('chat-toggle-session-panel-btn').getAttribute('aria-expanded')).toBe('true');
     expect(get('session-panel').contains(find('session-chips-panel'))).toBe(true);
     expect(find('session-chips-row')).toBeNull();
+    expect(getComputedStyle(get('chat-conversation-column')).getPropertyValue(SESSION_PANEL_SPACE_VAR)).toBe(
+      `${SESSION_PANEL_SPACE}px`
+    );
+    expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe(`${SESSION_PANEL_SPACE}px`);
   });
 
   it('hides from the header button and remembers it', async () => {
@@ -230,6 +280,16 @@ describe('the session panel in the shell', () => {
     expect(find('session-panel')).toBeNull();
     expect(get('chat-toggle-session-panel-btn').getAttribute('aria-expanded')).toBe('false');
     expect(window.localStorage.getItem('b4m.sessionPanel.open')).toBe('0');
+    expect(getComputedStyle(get('chat-conversation-column')).getPropertyValue(SESSION_PANEL_SPACE_VAR)).toBe('0px');
+    expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe('0px');
+
+    const thread = get('chat-thread');
+    const composer = get('chat-composer-input');
+    await act(async () => get('chat-toggle-session-panel-btn').click());
+    expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe(`${SESSION_PANEL_SPACE}px`);
+    expect(get('chat-thread')).toBe(thread);
+    expect(get('chat-composer-input')).toBe(composer);
+    await act(async () => get('chat-toggle-session-panel-btn').click());
 
     act(() => root?.unmount());
     host?.remove();
@@ -245,6 +305,8 @@ describe('the session panel in the shell', () => {
 
     await act(async () => get('chat-toggle-session-panel-btn').click());
     expect(get('session-panel').dataset.variant).toBe('popover');
+    expect(getComputedStyle(get('chat-conversation-column')).getPropertyValue(SESSION_PANEL_SPACE_VAR)).toBe('0px');
+    expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe('0px');
 
     await act(async () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
     expect(find('session-panel')).toBeNull();

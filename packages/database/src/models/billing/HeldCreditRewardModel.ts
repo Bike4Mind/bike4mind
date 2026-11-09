@@ -41,7 +41,7 @@ heldCreditRewardSchema.index({ status: 1, heldAt: 1, _id: 1 });
 // pauseForUser / resumeForUser filter on one user's rows by status.
 heldCreditRewardSchema.index({ userId: 1, status: 1 });
 
-export const HeldCreditRewardModel =
+export const HeldCreditRewardModel: mongoose.Model<HeldCreditRewardDoc> =
   (mongoose.models.HeldCreditReward as mongoose.Model<HeldCreditRewardDoc>) ??
   mongoose.model('HeldCreditReward', heldCreditRewardSchema);
 
@@ -117,6 +117,27 @@ export const heldCreditRewardRepository = {
     ]);
     const totals = { held: { count: 0, credits: 0 }, paused: { count: 0, credits: 0 } };
     for (const row of rows) totals[row._id] = { count: row.count, credits: row.credits };
+    return totals;
+  },
+  /** totalsForUser for many users in one query; every requested id gets an entry, zeros when it has no rows. */
+  async totalsForUsers(
+    userIds: string[]
+  ): Promise<Map<string, Record<'held' | 'paused', { count: number; credits: number }>>> {
+    const totals = new Map<string, Record<'held' | 'paused', { count: number; credits: number }>>();
+    for (const id of userIds) totals.set(id, { held: { count: 0, credits: 0 }, paused: { count: 0, credits: 0 } });
+    if (!userIds.length) return totals;
+    const rows = await HeldCreditRewardModel.aggregate<{
+      _id: { userId: string; status: 'held' | 'paused' };
+      count: number;
+      credits: number;
+    }>([
+      { $match: { userId: { $in: userIds }, status: { $in: ['held', 'paused'] } } },
+      { $group: { _id: { userId: '$userId', status: '$status' }, count: { $sum: 1 }, credits: { $sum: '$credits' } } },
+    ]);
+    for (const row of rows) {
+      const entry = totals.get(row._id.userId);
+      if (entry) entry[row._id.status] = { count: row.count, credits: row.credits };
+    }
     return totals;
   },
   async settle(transactionId: string, status: 'paid' | 'void', at: Date = new Date()) {

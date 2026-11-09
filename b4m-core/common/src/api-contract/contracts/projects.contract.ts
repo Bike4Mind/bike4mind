@@ -13,9 +13,9 @@ import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
 
 /**
  * The integrator-facing subset of the project API. Each route is a `/api/v1` twin of an SPA route
- * under `/api/projects/*` and reuses its service logic; the SPA routes are unchanged. The
- * sub-resources (files, sessions, members, invites, system prompts) are deliberately not published:
- * `session_ids`/`file_ids` on the project resource cover reading what a project groups.
+ * under `/api/projects/*` and reuses its service logic; the SPA routes are unchanged. The project's
+ * files and sessions are published by projectContent.contract.ts. Members, invites and system prompts
+ * are deliberately not published.
  */
 
 // projects:write is accepted for reads so a key that creates projects can read back what it wrote

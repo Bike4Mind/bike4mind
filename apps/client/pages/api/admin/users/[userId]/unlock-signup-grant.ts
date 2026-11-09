@@ -8,9 +8,9 @@ import { userService } from '@bike4mind/services';
 import { ForbiddenError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { signupProtection } from '@server/auth/signupProtection';
+import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import { readSignupGrantAdminAction } from '@server/credits/signupGrantAdminAction';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(csrfProtection())

@@ -5,7 +5,7 @@ import { ensureTavernAccess } from '@bike4mind/server-utils/utils/errors';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { agentRepository } from '@bike4mind/database';
 import { agentMemoryService, meterCompletionBackend } from '@bike4mind/services';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { HTTPError } from '@bike4mind/common';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 

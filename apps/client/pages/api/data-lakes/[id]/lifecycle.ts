@@ -33,7 +33,7 @@ import {
 import {
   disableGitHubConnectionForLake,
   enableGitHubConnectionForLake,
-} from '@server/integrations/github/dataLake/githubLakeConnection';
+} from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
 
 const LifecycleInput = z.object({
   action: z.enum(['archive', 'unarchive', 'restore', 'delete', 'cleanup', 'promote', 'demote']),

@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   startOllamaServe: vi.fn(async (_options: { env?: NodeJS.ProcessEnv }) => ({ pid: 1 })),
   runtimeEnv: vi.fn((_env: NodeJS.ProcessEnv | undefined) => undefined),
   startRouter: vi.fn(async () => ({ pid: 2 })),
+  warning: vi.fn(async (): Promise<string | null> => null),
 }));
 
 vi.mock('@bike4mind/local-models', async importOriginal => ({
@@ -15,6 +16,7 @@ vi.mock('@bike4mind/local-models', async importOriginal => ({
       mocks.runtimeEnv(options.env);
     }
     startRouter = mocks.startRouter;
+    warning = mocks.warning;
   },
 }));
 
@@ -51,6 +53,39 @@ describe('hostLaunchers.start', () => {
     );
     expect(mocks.startOllamaServe.mock.calls[0][0].env).toMatchObject({ PATH: '/usr/bin', [SPILL]: '1' });
     expect(mocks.runtimeEnv.mock.calls[0][0]).toMatchObject({ PATH: '/usr/bin', [SPILL]: '1' });
+  });
+
+  it("keeps llama-server's --fit-target 512 MiB above its default on an Intel GPU only", async () => {
+    const vendors = [
+      async () => 'intel' as const,
+      async () => 'nvidia' as const,
+      async () => null,
+      undefined,
+      () => Promise.reject(new Error('no probe')),
+    ];
+    for (const gpuVendor of vendors) {
+      const launchers = hostLaunchers({ env: { HOME: '/h' }, gpuVendor });
+      await launchers.start(
+        '/bin/llama-server',
+        { runtime: 'llama-server', port: 8090, settings: { modelsDir: '/m', flashAttention: 'on' } },
+        signal
+      );
+    }
+    expect(mocks.startRouter.mock.calls.map(call => (call as unknown[])[0])).toEqual([
+      { port: 8090, flashAttention: 'on', fitTargetMiB: 1536, signal },
+      { port: 8090, flashAttention: 'on', fitTargetMiB: undefined, signal },
+      { port: 8090, flashAttention: 'on', fitTargetMiB: undefined, signal },
+      { port: 8090, flashAttention: 'on', fitTargetMiB: undefined, signal },
+      { port: 8090, flashAttention: 'on', fitTargetMiB: undefined, signal },
+    ]);
+  });
+
+  it("carries the binary's warning, such as a GPU build that lists no GPU, on llama-server's handle", async () => {
+    const launchers = hostLaunchers({ env: { HOME: '/h' } });
+    const config = { runtime: 'llama-server' as const, port: 8090, settings: { modelsDir: '/m' } };
+    expect(await launchers.start('/bin/llama-server', config, signal)).toEqual({ pid: 2 });
+    mocks.warning.mockResolvedValueOnce('runs on the CPU');
+    expect(await launchers.start('/bin/llama-server', config, signal)).toEqual({ pid: 2, warning: 'runs on the CPU' });
   });
 
   it('adds no spill on a discrete GPU, or when the hardware probe fails', async () => {

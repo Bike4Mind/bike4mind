@@ -1,17 +1,17 @@
-import { emailDomain } from '@client/app/utils/signupAnomaly';
+import { emailDomain } from '@bike4mind/server-utils/app/utils/signupAnomaly';
 import {
   type DomainSignupSignal,
   type SignupSignal,
   isSuspectedSignup,
   SIGNUP_SIGNALS,
-} from '@client/app/utils/signupSignals';
-import { deliveryMailbox } from '@server/utils/deliveryMailbox';
-import { ipv6Slash64 } from '@server/utils/ipv6Slash64';
+} from '@bike4mind/server-utils/app/utils/signupSignals';
+import { deliveryMailbox } from '@bike4mind/server-utils/utils/deliveryMailbox';
+import { ipv6Slash64 } from '@bike4mind/server-utils/utils/ipv6Slash64';
 
 /**
  * Deterministic suspected-signup classifier. Every account gets the list of signals it triggered
  * (never a bare verdict) so an admin can see why it was flagged; `isSuspectedSignup` in
- * app/utils/signupSignals.ts turns that list into the suspected/likely-legit split.
+ * packages/server-utils/src/app/utils/signupSignals.ts turns that list into the suspected/likely-legit split.
  */
 
 const HOUR_MS = 60 * 60 * 1000;

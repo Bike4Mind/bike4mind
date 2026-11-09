@@ -8,7 +8,7 @@ const { getActiveSubscriptionsForUser, getRequestActiveSubscriptions, settingsMa
   settingsMap: vi.fn(),
 }));
 
-vi.mock('@server/entitlements/activeSubscriptions', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({
   getActiveSubscriptionsForUser,
   getRequestActiveSubscriptions,
 }));

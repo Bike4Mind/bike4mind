@@ -9,31 +9,34 @@
 
 import {
   Box,
-  Button,
-  Card,
-  CardContent,
-  Chip,
   FormControl,
   FormHelperText,
   FormLabel,
   Input,
   Option,
   Select,
-  Sheet,
   Stack,
   Switch,
   Typography,
 } from '@mui/joy';
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useGetSettingsValue, useUpdateSettings } from '@client/app/hooks/data/settings';
+import { useGetSettingsValue, useSettingsFromServer, useUpdateSettings } from '@client/app/hooks/data/settings';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { SecopsTriageConfigSchema, type SecopsTriageConfig } from '@bike4mind/common';
 import { toast } from 'sonner';
-import SaveIcon from '@mui/icons-material/Save';
-import ReplayIcon from '@mui/icons-material/Replay';
-import SecurityIcon from '@mui/icons-material/Security';
 import { api } from '@client/app/contexts/ApiContext';
+import { leavesAdminSettingsPage, useRouteAdminTabSwitches } from './shared/adminTabSwitches';
+import {
+  AdminPageHeader,
+  ErrorState,
+  LoadingState,
+  SaveBar,
+  SettingsSection,
+  StatusChip,
+  UnsavedChangesGuard,
+} from './shared';
+import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP } from './shared/adminStyles';
 
 interface SlackWorkspace {
   id: string;
@@ -44,23 +47,35 @@ interface SlackWorkspace {
 
 // Config Section
 
-function ConfigSection({ title, children }: { title: string; children: React.ReactNode }) {
+function ConfigSection({ title, testId, children }: { title: string; testId: string; children: React.ReactNode }) {
   return (
-    <Card variant="outlined" sx={{ mb: 2 }}>
-      <CardContent>
-        <Typography level="title-md" sx={{ mb: 2 }}>
-          {title}
-        </Typography>
-        {children}
-      </CardContent>
-    </Card>
+    <SettingsSection component="section" sx={{ mb: 0 }} data-testid={testId}>
+      <Typography level="title-md" component="h2" sx={{ mb: 2, color: 'admin.ink' }}>
+        {title}
+      </Typography>
+      {children}
+    </SettingsSection>
   );
+}
+
+// One count per form control: the two priority selects share the severityToPriority object.
+export function countChangedFields(draft: SecopsTriageConfig, saved: SecopsTriageConfig): number {
+  const byControl = ({ severityToPriority, ...rest }: SecopsTriageConfig): Record<string, unknown> => ({
+    ...rest,
+    criticalPriority: severityToPriority?.critical,
+    highPriority: severityToPriority?.high,
+  });
+  const before = byControl(saved);
+  const after = byControl(draft);
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  return [...keys].filter(key => JSON.stringify(before[key]) !== JSON.stringify(after[key])).length;
 }
 
 // Main Panel
 
 function SecopsTriageConfigPanel() {
   const rawConfig = useGetSettingsValue('secopsTriageConfig');
+  const { data: storedSettings, isLoading, isError, isFetching, refetch } = useSettingsFromServer();
   const updateSettings = useUpdateSettings();
 
   const [config, setConfig] = useState<SecopsTriageConfig | null>(null);
@@ -89,7 +104,8 @@ function SecopsTriageConfigPanel() {
     }
   }, [rawConfig]);
 
-  const isDirty = config && savedConfig ? JSON.stringify(config) !== JSON.stringify(savedConfig) : false;
+  const changeCount = config && savedConfig ? countChangedFields(config, savedConfig) : 0;
+  useRouteAdminTabSwitches(changeCount > 0);
 
   const handleSave = useCallback(async () => {
     if (!config) return;
@@ -110,17 +126,28 @@ function SecopsTriageConfigPanel() {
     if (savedConfig) setConfig(savedConfig);
   }, [savedConfig]);
 
+  if (isLoading) return <LoadingState label="Loading SecOps triage settings" testId="secops-triage-loading" />;
+  // Without the stored config the form would show defaults, and saving them would overwrite it.
+  if (isError && !storedSettings) {
+    return (
+      <ErrorState
+        message="SecOps triage settings could not be loaded."
+        onRetry={() => void refetch()}
+        retrying={isFetching}
+      />
+    );
+  }
   if (!config) return null;
 
   return (
     <Stack spacing={2}>
       {/* Master Controls */}
-      <ConfigSection title="Master Controls">
+      <ConfigSection title="Master controls" testId="secops-triage-section-master">
         <Stack spacing={2}>
           <Stack direction="row" alignItems="center" justifyContent="space-between">
             <Box>
               <Typography level="title-sm">Enabled</Typography>
-              <Typography level="body-xs" sx={{ color: 'neutral.500' }}>
+              <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
                 Master kill switch. When disabled, security scan findings are still ingested but no GitHub issues are
                 created.
               </Typography>
@@ -128,29 +155,23 @@ function SecopsTriageConfigPanel() {
             <Switch
               checked={config.enabled}
               onChange={e => setConfig({ ...config, enabled: e.target.checked })}
-              color={config.enabled ? 'success' : 'neutral'}
               data-testid="secops-triage-enabled-switch"
             />
           </Stack>
 
           <Stack direction="row" alignItems="center" justifyContent="space-between">
             <Box>
-              <Typography level="title-sm">
-                Dry Run{' '}
-                {config.dryRun && (
-                  <Chip size="sm" color="warning" variant="soft">
-                    Active
-                  </Chip>
-                )}
-              </Typography>
-              <Typography level="body-xs" sx={{ color: 'neutral.500' }}>
+              <Stack direction="row" alignItems="center" gap={1}>
+                <Typography level="title-sm">Dry run</Typography>
+                {config.dryRun && <StatusChip tone="warn" label="Active" data-testid="secops-triage-dry-run-chip" />}
+              </Stack>
+              <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
                 Logs all actions without creating real GitHub issues or posting to Slack. Enable first when testing.
               </Typography>
             </Box>
             <Switch
               checked={config.dryRun ?? false}
               onChange={e => setConfig({ ...config, dryRun: e.target.checked })}
-              color={config.dryRun ? 'warning' : 'neutral'}
               data-testid="secops-triage-dry-run-switch"
             />
           </Stack>
@@ -158,7 +179,7 @@ function SecopsTriageConfigPanel() {
       </ConfigSection>
 
       {/* GitHub Settings */}
-      <ConfigSection title="GitHub Settings">
+      <ConfigSection title="GitHub settings" testId="secops-triage-section-github">
         <Stack spacing={2}>
           <FormControl>
             <FormLabel>Repository</FormLabel>
@@ -242,7 +263,7 @@ function SecopsTriageConfigPanel() {
       </ConfigSection>
 
       {/* Slack Settings */}
-      <ConfigSection title="Slack Notifications">
+      <ConfigSection title="Slack notifications" testId="secops-triage-section-slack">
         <Stack spacing={2}>
           <FormControl>
             <FormLabel>Workspace</FormLabel>
@@ -257,6 +278,15 @@ function SecopsTriageConfigPanel() {
                   {ws.name || ws.slackTeamId}
                 </Option>
               ))}
+              {/* A stored id the list no longer offers stays selectable: Joy's Select resets a value it cannot
+                  find to null on mount, which would mark an untouched page as dirty. */}
+              {workspacesData &&
+                config.slackWorkspaceId &&
+                !workspacesData.workspaces.some(ws => ws.id === config.slackWorkspaceId) && (
+                  <Option value={config.slackWorkspaceId} data-testid="secops-triage-slack-workspace-unavailable">
+                    {`${config.slackWorkspaceId} (not available)`}
+                  </Option>
+                )}
             </Select>
             <FormHelperText>
               Slack app/workspace to use for posting. Must be invited to the channel below. Leave empty to use the first
@@ -280,19 +310,17 @@ function SecopsTriageConfigPanel() {
       </ConfigSection>
 
       {/* LLM Enrichment */}
-      <ConfigSection title="LLM Enrichment">
+      <ConfigSection title="LLM enrichment" testId="secops-triage-section-llm">
         <Stack spacing={2}>
           <Stack direction="row" alignItems="center" justifyContent="space-between">
             <Box>
-              <Typography level="title-sm">
-                LLM Enrichment{' '}
+              <Stack direction="row" alignItems="center" gap={1}>
+                <Typography level="title-sm">LLM enrichment</Typography>
                 {config.llmEnrichment && (
-                  <Chip size="sm" color="primary" variant="soft">
-                    Active
-                  </Chip>
+                  <StatusChip tone="good" label="Active" data-testid="secops-triage-llm-enrichment-chip" />
                 )}
-              </Typography>
-              <Typography level="body-xs" sx={{ color: 'neutral.500' }}>
+              </Stack>
+              <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
                 When enabled, the LLM will generate a combined &quot;Where It Was Found&quot; explanation and &quot;How
                 to Fix&quot; section for each new GitHub issue, plus an overall health assessment in the Slack summary.
               </Typography>
@@ -300,7 +328,6 @@ function SecopsTriageConfigPanel() {
             <Switch
               checked={config.llmEnrichment ?? false}
               onChange={e => setConfig({ ...config, llmEnrichment: e.target.checked })}
-              color={config.llmEnrichment ? 'primary' : 'neutral'}
               data-testid="secops-triage-llm-enrichment-switch"
             />
           </Stack>
@@ -319,6 +346,11 @@ function SecopsTriageConfigPanel() {
                     {model.name}
                   </Option>
                 ))}
+                {models && config.modelId && !textModels.some(model => model.id === config.modelId) && (
+                  <Option value={config.modelId} data-testid="secops-triage-model-unavailable">
+                    {`${config.modelId} (not available)`}
+                  </Option>
+                )}
               </Select>
               <FormHelperText>
                 LLM model used for finding enrichment and health assessment. A fast model like Claude Haiku is
@@ -329,36 +361,17 @@ function SecopsTriageConfigPanel() {
         </Stack>
       </ConfigSection>
 
-      {/* Save / Reset */}
-      <Stack direction="row" spacing={1} justifyContent="flex-end">
-        <Button
-          variant="plain"
-          color="neutral"
-          startDecorator={<ReplayIcon />}
-          onClick={handleReset}
-          disabled={!isDirty}
-          data-testid="secops-triage-reset-btn"
-        >
-          Reset
-        </Button>
-        <Button
-          variant="solid"
-          color="primary"
-          startDecorator={<SaveIcon />}
-          onClick={handleSave}
-          disabled={!isDirty}
-          loading={updateSettings.isPending}
-          data-testid="secops-triage-save-btn"
-        >
-          Save
-        </Button>
-      </Stack>
-
-      {isDirty && (
-        <Typography level="body-xs" sx={{ color: 'warning.500', textAlign: 'right' }}>
-          You have unsaved changes.
-        </Typography>
-      )}
+      <SaveBar
+        count={changeCount}
+        pending={updateSettings.isPending}
+        onSave={() => void handleSave()}
+        onDiscard={handleReset}
+      />
+      <UnsavedChangesGuard
+        dirty={changeCount > 0}
+        pending={updateSettings.isPending}
+        isLeaving={leavesAdminSettingsPage}
+      />
     </Stack>
   );
 }
@@ -367,18 +380,12 @@ function SecopsTriageConfigPanel() {
 
 export default function SecopsTriageTab() {
   return (
-    <Sheet sx={{ p: 3, maxWidth: 800 }}>
-      <Stack direction="row" alignItems="center" spacing={1.5} sx={{ mb: 3 }}>
-        <SecurityIcon sx={{ color: 'primary.500' }} />
-        <Box>
-          <Typography level="title-lg">SecOps Triage</Typography>
-          <Typography level="body-sm" sx={{ color: 'neutral.500' }}>
-            Auto-creates GitHub issues for critical/high security scan findings (OWASP ZAP, Gitleaks secrets, package
-            CVEs, Semgrep SAST) via the b4m-prod GitHub App.
-          </Typography>
-        </Box>
-      </Stack>
+    <Stack sx={{ gap: ADMIN_REGION_GAP, maxWidth: ADMIN_DETAIL_MAX_WIDTH }} data-testid="admin-secops-triage-tab">
+      <AdminPageHeader
+        title="SecOps triage"
+        description="Creates GitHub issues for critical and high security scan findings (OWASP ZAP, Gitleaks, package CVEs, Semgrep)."
+      />
       <SecopsTriageConfigPanel />
-    </Sheet>
+    </Stack>
   );
 }

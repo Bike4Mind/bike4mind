@@ -21,7 +21,7 @@ import {
   systemAuditActor,
   type AdminAuditWriter,
   type recordAdminActionFromRequest,
-} from '@server/utils/adminAudit';
+} from '@bike4mind/server-utils/utils/adminAudit';
 import {
   addBlockedEmailDomains,
   readBlockedEmailDomains,

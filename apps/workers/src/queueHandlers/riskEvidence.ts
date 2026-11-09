@@ -2,7 +2,7 @@
  * riskEvidenceQueue worker: rebuilds an account's behavioral evidence summary off the request path.
  *
  * Two message shapes arrive:
- * - `{ kind: 'refresh', ... }` from requestRiskEvidenceRefresh (apps/client/server/auth/riskEvidence.ts),
+ * - `{ kind: 'refresh', ... }` from requestRiskEvidenceRefresh (packages/server-utils/src/auth/riskEvidence.ts),
  *   already debounced: it runs userService.refreshRiskEvidence.
  * - `{ kind: 'completion', userId }`, which the completion.completed rule's input transformer sends
  *   (infra/eventBus.ts), so the event's prompt never reaches the queue. Completions are frequent, so
@@ -21,7 +21,7 @@ import type { Logger } from '@bike4mind/observability';
 import { userService } from '@bike4mind/services';
 import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
-import { requestRiskEvidenceRefresh, riskEvidenceDb } from '@server/auth/riskEvidence';
+import { requestRiskEvidenceRefresh, riskEvidenceDb } from '@bike4mind/server-utils/auth/riskEvidence';
 import { checkStrongLink, liveStrongLinkDeps } from '@server/security/autoContainment/strongLink';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { Resource } from 'sst';

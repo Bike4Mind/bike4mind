@@ -48,6 +48,8 @@ const {
   mockReleaseReservedCredits,
   mockSendStatusUpdate,
   waitTurnLimits,
+  processCtorOptions,
+  fakeCustomMcpHost,
 } = vi.hoisted(() => ({
   mockCheckFreeTierDailySpendCap: vi.fn().mockResolvedValue(undefined),
   mockValidate: vi.fn(),
@@ -82,7 +84,12 @@ const {
   mockSendStatusUpdate: vi.fn(),
   // The real 45s/7s by default; the over-budget tests shrink them so the deadline fires at once.
   waitTurnLimits: { budgetMs: 45_000, windDownMs: 7_000 },
+  // Options handed to the inline ChatCompletionProcess constructor.
+  processCtorOptions: { value: undefined as Record<string, unknown> | undefined },
+  fakeCustomMcpHost: { listConnections: () => [] },
 }));
+
+vi.mock('@server/mcpConnections/customMcpToolHost', () => ({ customMcpToolHost: fakeCustomMcpHost }));
 
 vi.mock('@server/utils/waitTurnDeadline', async orig => ({
   ...(await orig<Record<string, unknown>>()),
@@ -109,7 +116,7 @@ vi.mock('@server/billing/freeTierDailyCapGate', () => ({
   checkFreeTierDailySpendCap: (...args: unknown[]) => mockCheckFreeTierDailySpendCap(...args),
 }));
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it now; only
   // checkApiKeyRateLimit is stubbed.
   ...(await orig<Record<string, unknown>>()),
@@ -188,7 +195,8 @@ vi.mock('@bike4mind/services/llm', async orig => {
   }
   // The wait=true path constructs this directly; the async-path tests never reach it.
   class MockChatCompletionProcess {
-    constructor(options: unknown) {
+    constructor(options: Record<string, unknown>) {
+      processCtorOptions.value = options;
       mockProcessOptions(options);
     }
     pipelinePhases = undefined;
@@ -1251,6 +1259,20 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       expect(name).toMatch(/^API chat - /);
     });
 
+    // Without the placeholder, the auto-naming worker reads the fresh generated name as a recent
+    // user rename and skips naming whenever the turn finishes inside its 10s guard (async turns).
+    it.each([
+      ['API key', VALID_KEY, { message: 'hi' }],
+      ['new conversation', null, { message: 'hi', newConversation: true }],
+    ] as const)('marks the generated name as the auto-name placeholder (%s)', async (_label, apiKey, body) => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      withOpenNotebook();
+      const { req, res } = fire({ apiKey, body });
+      await handler(req, res);
+      const params = mockCreateSession.mock.calls[0][1] as { name: string; autoNamePlaceholder?: string };
+      expect(params.autoNamePlaceholder).toBe(params.name);
+    });
+
     // A rejected organization must not have already minted a notebook: resolveActiveOrg runs
     // BEFORE session resolution, so a 403/404 leaves no empty "API chat - ..." behind in the list.
     it('does not create a notebook when the requested org is rejected (403)', async () => {
@@ -1409,6 +1431,12 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     expect(mockProcess).toHaveBeenCalledWith(
       expect.objectContaining({ body: expect.objectContaining({ includeSystemPrompt: true }) })
     );
+  });
+
+  it('registers the custom connector host on the inline process options, matching the queued path', async () => {
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    expect(processCtorOptions.value?.customMcp).toBe(fakeCustomMcpHost);
   });
 
   it('hands process() an apiKey origin and the key id, matching what the async path stores', async () => {

@@ -79,6 +79,19 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   };
 });
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
+// readNetworkMeta's own capture is covered in server/auth; here only its shape on the stored row matters.
+const networkMeta = vi.hoisted(() => ({
+  ip: '81.2.69.160',
+  userAgent: 'Mozilla/5.0',
+  asn: 64500,
+  asnOrg: 'Example Hosting',
+  country: 'GB',
+  isDatacenter: true,
+  ja4: null,
+  wafAnonIp: true,
+  wafBotSignal: false,
+}));
+vi.mock('@server/auth/networkMeta', () => ({ readNetworkMeta: () => networkMeta }));
 
 import handler from '@pages/api/subscribers/create';
 
@@ -109,6 +122,26 @@ const submit = async (body: Record<string, unknown>, ip = '81.2.69.160') => {
 };
 
 const person = { firstName: 'Ada', lastName: 'Lovelace', email: 'ada@example.com' };
+
+const storedNetwork = (challengeVerified: true | null = null) => ({
+  ipPrefix: '81.2.69.0',
+  userAgent: 'Mozilla/5.0',
+  asn: 64500,
+  asnOrg: 'Example Hosting',
+  country: 'GB',
+  isDatacenter: true,
+  ja4: null,
+  wafAnonIp: true,
+  wafBotSignal: false,
+  challengeVerified,
+  capturedAt: expect.any(Date),
+});
+const storedRow = (source = 'subscribe_page', challengeVerified: true | null = null) => ({
+  ...person,
+  source,
+  signupNetwork: storedNetwork(challengeVerified),
+  suspicious: null,
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -152,7 +185,7 @@ describe('/api/subscribers/create - bot challenge', () => {
 
     expect(res._getStatusCode()).toBe(201);
     expect(verify).toHaveBeenCalledWith(expect.objectContaining({ token: 'solved', expectedAction: 'subscribe' }));
-    expect(mocks.create).toHaveBeenCalledWith({ ...person, source: 'subscribe_page' });
+    expect(mocks.create).toHaveBeenCalledWith(storedRow('subscribe_page', true));
   });
 
   it('is a no-op while the policy is inactive, so a signup without a token still lands', async () => {
@@ -228,7 +261,7 @@ describe('/api/subscribers/create - stored row', () => {
     await submit({ firstName: '  Ada ', lastName: ' Lovelace  ', email: '  Ada@Example.COM ' });
 
     expect(mocks.findOne).toHaveBeenCalledWith({ email: 'ada@example.com', deletedAt: null });
-    expect(mocks.create).toHaveBeenCalledWith({ ...person, source: 'subscribe_page' });
+    expect(mocks.create).toHaveBeenCalledWith(storedRow());
   });
 
   it('answers the same ack when the insert hits the unique email index', async () => {
@@ -282,31 +315,32 @@ describe('/api/subscribers/create - signup source', () => {
     const res = await submit(person);
 
     expect(res._getStatusCode()).toBe(201);
-    expect(mocks.create).toHaveBeenCalledWith({ ...person, source: 'subscribe_page' });
+    expect(mocks.create).toHaveBeenCalledWith(storedRow());
     expect(mocks.postMessageToSlack.mock.calls[0][0]).not.toContain('registration was closed');
   });
 
   it('stores a closed-signup source and flags it in the admin alert', async () => {
     await submit({ ...person, source: 'oauth_signup_closed' });
 
-    expect(mocks.create).toHaveBeenCalledWith({ ...person, source: 'oauth_signup_closed' });
+    expect(mocks.create).toHaveBeenCalledWith(storedRow('oauth_signup_closed'));
     expect(mocks.postMessageToSlack.mock.calls[0][0]).toContain('registration was closed');
     expect(mocks.postMessageToSlack.mock.calls[0][0]).toContain('oauth_signup_closed');
   });
 
   it('escapes subscriber-supplied names and email in the admin alert', async () => {
-    await submit({ firstName: '<!channel>', lastName: 'A&B', email: 'x@example.com' });
+    // Real markup is flagged and never reaches Slack (see 'payload-looking names'); this is the
+    // escaping that still guards a name the flag lets through.
+    await submit({ firstName: 'Ada<3>', lastName: 'A&B', email: 'x@example.com' });
 
     const text = mocks.postMessageToSlack.mock.calls[0][0] as string;
-    expect(text).toContain('&lt;!channel&gt; A&amp;B');
-    expect(text).not.toContain('<!channel>');
+    expect(text).toContain('Ada&lt;3&gt; A&amp;B');
   });
 
   it('breaks bare broadcast words in names so they cannot page the channel', async () => {
-    await submit({ firstName: '@channel', lastName: 'hi @here', email: 'x@example.com' });
+    await submit({ firstName: 'Ada @channel', lastName: 'hi @here', email: 'x@example.com' });
 
     const text = mocks.postMessageToSlack.mock.calls[0][0] as string;
-    expect(text).toContain('@\u200Bchannel hi @\u200Bhere');
+    expect(text).toContain('Ada @\u200Bchannel hi @\u200Bhere');
     expect(text).not.toMatch(/@(channel|here)\b/);
   });
 
@@ -329,4 +363,41 @@ describe('/api/subscribers/create - signup source', () => {
     await expect(submit({ ...person, source: 'anything-goes' })).rejects.toBeInstanceOf(ZodError);
     expect(mocks.create).not.toHaveBeenCalled();
   });
+});
+
+describe('/api/subscribers/create - payload-looking names', () => {
+  it.each([
+    ['markup', { firstName: '<img src=x onerror=alert(1)>', lastName: 'Probe' }, ['markup']],
+    ['a closing tag', { firstName: 'Ada', lastName: 'x</b>' }, ['markup']],
+    ['a formula prefix', { firstName: '=HYPERLINK("http://x")', lastName: '+1' }, ['formula_prefix']],
+    ['an at-sign lead', { firstName: '@SUM(A1)', lastName: 'Lovelace' }, ['formula_prefix']],
+    ['a minus lead', { firstName: 'Ada', lastName: '-2+3' }, ['formula_prefix']],
+    ['a control character', { firstName: 'Ada\u0007', lastName: 'Lovelace' }, ['control_characters']],
+    [
+      'several at once',
+      { firstName: '=<b>x</b>', lastName: 'a\u0000b' },
+      ['markup', 'formula_prefix', 'control_characters'],
+    ],
+  ])('stores %s with its reasons, answers the uniform ack and skips Slack', async (_label, names, reasons) => {
+    const res = await submit({ ...person, ...names });
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(res._getJSONData()).toEqual({ message: 'Thanks -- you are on the list.' });
+    const stored = mocks.create.mock.calls[0][0] as { suspicious: { reasons: string[] } };
+    expect(stored).toMatchObject({ ...names, signupNetwork: storedNetwork() });
+    expect(stored.suspicious.reasons.sort()).toEqual([...reasons].sort());
+    expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
+    // A flagged row does not spend a slot of the hourly alert budget either.
+    expect(cache.counts.has('subscriber-limit:slack-alerts')).toBe(false);
+  });
+
+  it.each(["O'Brien", 'Jean-Luc', 'Anne-Marie', 'Zoe 2nd', 'x > y'])(
+    'does not flag the ordinary name %s',
+    async name => {
+      await submit({ ...person, firstName: name });
+
+      expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ firstName: name, suspicious: null }));
+      expect(mocks.postMessageToSlack).toHaveBeenCalledOnce();
+    }
+  );
 });

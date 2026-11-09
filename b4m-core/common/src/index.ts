@@ -180,6 +180,7 @@ export * from './utils/experimentalFeatures';
 export * from './utils/skillMentions';
 export * from './utils/skillArguments';
 export * from './utils/sessionTitle';
+export * from './utils/autoNameEligibility';
 export * from './utils/skillSafety';
 export * from './utils/isImageServeable';
 export * from './utils/isModerationEvidenceHold';

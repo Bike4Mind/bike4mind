@@ -1,6 +1,10 @@
+import type { ChildProcess } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import http, { type IncomingHttpHeaders } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import net, { type AddressInfo } from 'node:net';
+import { PassThrough } from 'node:stream';
 import { inspect } from 'node:util';
+import { createSshFetch, type SshDeps, type SshEndpoint } from '@bike4mind/local-models/servers';
 import type { IpcMain } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '@shared/ipc';
@@ -18,6 +22,7 @@ import { registerModelServersIpc } from './ipc';
 import { LocalModels } from './LocalModels';
 import { ModelServerRegistry } from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';
+import { inertLaunchers } from './testLaunchers';
 
 // The `/` and `"` reach the echoing server's JSON escaped, as `\/` and `\"`.
 const BEARER = 'sentinel-bearer/7f3a9c2e41d8';
@@ -205,8 +210,72 @@ afterEach(async () => {
   );
 });
 
+type FakeChild = ChildProcess & { stdin: PassThrough; stdout: PassThrough; stderr: PassThrough };
+
+function exitChild(child: FakeChild, code: number | null, signal: NodeJS.Signals | null = null): void {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  Object.assign(child, { exitCode: code, signalCode: signal });
+  child.stdout.end();
+  child.stderr.end();
+  setImmediate(() => {
+    child.emit('exit', code, signal);
+    child.emit('close', code, signal);
+  });
+}
+
+/**
+ * The system ssh as createSshFetch runs it: `-W 127.0.0.1:<farPort>` reaches the loopback server at `localPort`, and
+ * any other port fails as ssh's forward does. Every command line and environment ssh gets counts as outbound.
+ */
+function fakeSsh(out: Outbound, farPort: number, localPort: () => number): SshDeps['spawn'] {
+  return (_command, args, options) => {
+    out.add('ssh spawn', { args, env: (options as { env?: unknown } | undefined)?.env });
+    const child = new EventEmitter() as FakeChild;
+    Object.assign(child, {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      exitCode: null,
+      signalCode: null,
+    });
+    child.kill = (() => {
+      exitChild(child, null, 'SIGTERM');
+      return true;
+    }) as never;
+    if (args[0] === '-G') {
+      setImmediate(() => {
+        child.stdout.write('user me\n');
+        exitChild(child, 0);
+      });
+      return child;
+    }
+    if (args[args.indexOf('-W') + 1] !== `127.0.0.1:${farPort}`) {
+      setImmediate(() => {
+        child.stderr.write('channel 0: open failed: connect failed: Connection refused\nstdio forwarding failed\n');
+        exitChild(child, 255);
+      });
+      return child;
+    }
+    const socket = net.connect(localPort(), '127.0.0.1');
+    child.stdin.pipe(socket);
+    socket.on('data', chunk => child.stdout.write(chunk));
+    socket.on('end', () => exitChild(child, 0));
+    socket.on('error', () => {
+      child.stderr.write('channel 0: open failed: connect failed: Connection refused\n');
+      exitChild(child, 255);
+    });
+    child.on('close', () => socket.destroy());
+    return child;
+  };
+}
+
 /** main as chat/index.ts wires it, with every exit from main captured. */
-function desktopMain(cipher: SecretCipher, out = new Outbound(), saved: string | null = null) {
+function desktopMain(
+  cipher: SecretCipher,
+  out = new Outbound(),
+  saved: string | null = null,
+  sshFetchFor?: (endpoint: SshEndpoint) => ReturnType<typeof createSshFetch>
+) {
   for (const level of ['log', 'info', 'warn', 'error', 'debug', 'trace'] as const) {
     vi.spyOn(console, level).mockImplementation((...args: unknown[]) => out.add(`console.${level}`, args));
   }
@@ -227,7 +296,9 @@ function desktopMain(cipher: SecretCipher, out = new Outbound(), saved: string |
   const registry = new ModelServerRegistry({
     store,
     logger,
+    launchers: inertLaunchers(),
     changed: views => out.ipc(`push ${IPC_CHANNELS.modelServersChanged}`, views),
+    ...(sshFetchFor ? { sshFetchFor } : {}),
   });
   const local = new LocalModels(new OllamaLocal(), registry);
 
@@ -515,6 +586,98 @@ describe('a model server credential never leaves main except in its own request 
     expect(out.records.some(record => record.where === 'model-servers.json' && record.text.includes('"secret"'))).toBe(
       true
     );
+  });
+
+  it('OpenAI-compatible over SSH: the bearer token reaches only its own requests', { timeout: 60_000 }, async () => {
+    const target = await fakeServer('openai-compatible');
+    const out = new Outbound();
+    const localPort = () => Number(new URL(target.address).port);
+    const sshFetchFor = (endpoint: SshEndpoint) =>
+      createSshFetch(endpoint, { spawn: fakeSsh(out, 8080, localPort), platform: 'win32' });
+    const cipher = xorCipher(true);
+    const main = desktopMain(cipher, out, null, sshFetchFor);
+    const { invoke } = main;
+    await main.registry.start();
+    const ssh = { address: 'me@gpu', transport: 'ssh', port: 8080 };
+
+    const malformed = await invoke<ModelServerProbeResult>(IPC_CHANNELS.modelServersProbe, {
+      ...ssh,
+      credential: { type: 'bearer', token: `${BEARER} more` },
+    });
+    expect(malformed.ok).toBe(false);
+    const header = await invoke<ModelServerProbeResult>(IPC_CHANNELS.modelServersProbe, {
+      ...ssh,
+      credential: credential('header'),
+    });
+    expect(header.error).toMatch(/takes a bearer token or nothing/);
+    const anyPort = await invoke<ModelServerProbeResult>(IPC_CHANNELS.modelServersProbe, {
+      address: 'me@gpu',
+      transport: 'ssh',
+      credential: credential('bearer'),
+    });
+    expect(anyPort.error).toBe('Enter the port of the server this token is for, then test again.');
+    expect(target.seen).toHaveLength(0);
+
+    target.state.mode = 'reject';
+    const rejected = await invoke<ModelServerProbeResult>(IPC_CHANNELS.modelServersProbe, {
+      ...ssh,
+      credential: credential('bearer'),
+    });
+    expect(rejected).toMatchObject({ ok: false, needsCredentials: true });
+    expect(rejected.error).toBe('The server at 127.0.0.1:8080 on me@gpu refused this token.');
+
+    target.state.mode = 'ok';
+    const added = await invoke<ModelServerMutationResult>(IPC_CHANNELS.modelServersAdd, {
+      ...ssh,
+      credential: credential('bearer'),
+      name: 'gpu box',
+      kind: 'openai-compatible',
+      access: 'chat',
+    });
+    if (!added.ok) throw new Error(added.error);
+    const saved = added.servers.find(server => !server.local) as ModelServerView;
+    expect(saved).toMatchObject({
+      transport: 'ssh',
+      port: 8080,
+      auth: { type: 'bearer' },
+      health: { state: 'online' },
+    });
+    const model = `local:srv-${saved.id}:m1`;
+    await main.listModels();
+    expect((await main.chat(model)).events).toContainEqual({ type: 'content', text: 'hello' });
+
+    const chatErrors: Record<string, Error | null> = {};
+    for (const mode of ['echo-401', 'echo-500', 'echo-stream'] as const) {
+      target.state.mode = mode;
+      await invoke(IPC_CHANNELS.modelServersProbe, { ...ssh, credential: credential('bearer') });
+      await invoke(IPC_CHANNELS.modelServersCheck, saved.id);
+      chatErrors[mode] = (await main.chat(model)).error;
+      await main.listModels();
+    }
+    target.state.mode = 'ok';
+    const echoed = 'credential [redacted] is not valid here';
+    expect(chatErrors['echo-401']?.name).toBe('ServerCredentialsError');
+    expect(chatErrors['echo-500']?.message).toBe(`gpu box returned HTTP 500: ${echoed}`);
+    expect(chatErrors['echo-stream']?.message).toBe(`gpu box: ${echoed}`);
+
+    const restarted = desktopMain(cipher, out, main.file.contents(), sshFetchFor);
+    await restarted.registry.start();
+    expect((await restarted.chat(model)).events).toContainEqual({ type: 'content', text: 'hello' });
+    restarted.registry.stop();
+
+    await target.close();
+    const down = await invoke<ModelServerView[]>(IPC_CHANNELS.modelServersCheck, saved.id);
+    expect(down.find(server => server.id === saved.id)?.health.error).toMatch(/nothing answers at 127\.0\.0\.1:8080/);
+    expect((await main.chat(model)).error).not.toBeNull();
+    const removed = await invoke<ModelServerMutationResult>(IPC_CHANNELS.modelServersRemove, saved.id);
+    if (!removed.ok) throw new Error(removed.error);
+    main.registry.stop();
+
+    expect(out.records.some(record => record.where === 'ssh spawn')).toBe(true);
+    expect(out.leaks()).toEqual([]);
+    expect(requestLeaks(target.seen)).toEqual([]);
+    expect(target.seen.some(request => request.headers.authorization === `Bearer ${BEARER}`)).toBe(true);
+    expect(main.file.contents()).not.toMatch(/"secret"/);
   });
 
   it('OpenAI-compatible without a keyring: custom header, then a bearer token', { timeout: 60_000 }, async () => {

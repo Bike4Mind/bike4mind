@@ -83,7 +83,9 @@ vi.mock('@server/auth/signupNetworkLimits', () => ({
   assertSignupNetworkWithinLimits: vi.fn().mockResolvedValue(undefined),
   createSignupRiskCollector: vi.fn(() => vi.fn()),
 }));
-vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
 vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   grantPackageRepository: {},
@@ -145,7 +147,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
-vi.mock('@server/analytics/signupEvents', () => ({
+vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({
   emitSignupForSourceProducts: (...a: unknown[]) => mockEmitSignup(...a),
   stableEventId: (...parts: string[]) => parts.join(':'),
 }));

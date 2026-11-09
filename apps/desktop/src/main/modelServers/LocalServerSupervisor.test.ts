@@ -3,6 +3,7 @@ import type { SecretCipher } from '../chat/mcp/McpServerStore';
 import { adoptedHandle, hostProcessProbe, readOwnedRecords, sameStartTime, type ProcessProbe } from './adoptedServers';
 import { hostLaunchers, LocalServerSupervisor, type Launchers, type ServerHandle } from './LocalServerSupervisor';
 import { observedFlashAttention, observedKvCacheType, observedLaunchVars, observedPrefill } from './observedOllama';
+import { inertLaunchers } from './testLaunchers';
 
 type Exit = { code: number | null; signal: NodeJS.Signals | null; stopped: boolean };
 
@@ -40,8 +41,10 @@ describe('LocalServerSupervisor', () => {
   it('owns a server it started, with the settings it started with, until it stops it', async () => {
     const child = handle();
     const { instance, changed } = supervisor(async () => child);
+    expect(instance.runningCount()).toBe(0);
     expect(instance.owned('a')).toBeNull();
     await instance.start('a', OLLAMA);
+    expect(instance.runningCount()).toBe(1);
     expect(instance.owned('a')).toEqual({
       runtime: 'ollama',
       port: 11500,
@@ -53,9 +56,24 @@ describe('LocalServerSupervisor', () => {
     await expect(instance.start('a', OLLAMA)).rejects.toThrow('Ollama is already running.');
     await instance.stop('a');
     expect(child.stop).toHaveBeenCalledTimes(1);
+    expect(instance.runningCount()).toBe(0);
     expect(instance.owned('a')).toBeNull();
     expect(instance.problem('a')).toBeNull();
     expect(changed).toHaveBeenCalledWith('a');
+  });
+
+  it("shows and logs a started server's warning until it stops", async () => {
+    const warning = 'llama-server at /bin/x is a SYCL build but lists no GPU, so it runs on the CPU.';
+    const child = { ...handle(), warning };
+    const { instance, warn } = supervisor(async () => child);
+    await instance.start('r', { runtime: 'llama-server', port: 8090, settings: { modelsDir: '/m' } });
+    expect(instance.owned('r')).not.toBeNull();
+    expect(instance.warning('r')).toBe(warning);
+    expect(instance.problem('r')).toBeNull();
+    expect(warn).toHaveBeenCalledWith(`MODEL SERVERS: ${warning}`);
+    await instance.stop('r');
+    expect(instance.warning('r')).toBeNull();
+    expect(instance.problem('r')).toBeNull();
   });
 
   it('gives the router key only while the router runs', async () => {
@@ -73,6 +91,7 @@ describe('LocalServerSupervisor', () => {
     await instance.start('a', OLLAMA);
     child.running = false;
     expect(instance.owned('a')).toBeNull();
+    expect(instance.runningCount()).toBe(0);
   });
 
   it('keeps why a server stopped on its own, with its last log line, and says so', async () => {
@@ -120,11 +139,13 @@ describe('LocalServerSupervisor', () => {
     const starting = instance.start('a', OLLAMA);
     await vi.waitFor(() => expect(signal).toBeDefined());
     expect(instance.busy('a')).toBe('starting');
+    expect(instance.runningCount()).toBe(1);
     await instance.stop('a');
     await expect(starting).rejects.toThrow('Stopped before it was ready.');
     expect(instance.owned('a')).toBeNull();
     expect(instance.busy('a')).toBeNull();
     expect(instance.problem('a')).toBeNull();
+    expect(instance.runningCount()).toBe(0);
   });
 
   it('stops a server whose start finishes after a stop cancelled it, and keeps nothing', async () => {
@@ -159,6 +180,23 @@ describe('LocalServerSupervisor', () => {
     await instance.stopAll();
     expect(a.stop).toHaveBeenCalledTimes(1);
     expect(b.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts a server until its stop finishes', async () => {
+    const child = handle();
+    const stopping = Promise.withResolvers<void>();
+    const stop = child.stop.getMockImplementation();
+    child.stop.mockImplementation(async () => {
+      await stopping.promise;
+      await stop?.();
+    });
+    const { instance } = supervisor(async () => child);
+    await instance.start('a', OLLAMA);
+    const stopped = instance.stop('a');
+    expect(instance.runningCount()).toBe(1);
+    stopping.resolve();
+    await stopped;
+    expect(instance.runningCount()).toBe(0);
   });
 });
 
@@ -647,6 +685,7 @@ describe('hostProcessProbe', () => {
 
     const rebooted = { ...files, [BOOT]: 'bbbb-2222\n' };
     const afterReboot = new LocalServerSupervisor({
+      launchers: inertLaunchers(),
       logger: { warn: vi.fn() },
       changed: vi.fn(),
       records: { read: async () => JSON.stringify(record), write: async () => undefined },
@@ -657,6 +696,7 @@ describe('hostProcessProbe', () => {
 
     const steppedClock = async (path: string) => (path === '/proc/stat' ? 'btime 1800000000\n' : proc(files)(path));
     const sameBoot = new LocalServerSupervisor({
+      launchers: inertLaunchers(),
       logger: { warn: vi.fn() },
       changed: vi.fn(),
       records: { read: async () => JSON.stringify(record), write: async () => undefined },

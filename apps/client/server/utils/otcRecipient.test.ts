@@ -15,7 +15,7 @@ vi.mock('@bike4mind/database', () => ({
     createOrUpdate: async ({ key, result }: { key: string; result: unknown }) => mocks.cache.set(key, result),
   },
 }));
-vi.mock('@server/auth/signupProtection', () => ({ signupProtection: {} }));
+vi.mock('@bike4mind/server-utils/auth/signupProtection', () => ({ signupProtection: {} }));
 
 import { otcRecipientRefusal } from './otcRecipient';
 

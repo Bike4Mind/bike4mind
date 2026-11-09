@@ -203,6 +203,7 @@ export {
   createAgentExtensionRegistry,
   CONTRIBUTED_GUARD_PRIORITY_MIN,
   CONTRIBUTED_GUARD_PRIORITY_MAX,
+  LOW_CONFIDENCE_COMPLETION_MODES,
 } from './deepAgent/runtime';
 export type {
   DeepAgentStore,
@@ -227,6 +228,7 @@ export type {
   AgentExtensionRegistry,
   AgentExtensionSource,
   ResolvedOrchestrationProfile,
+  LowConfidenceCompletionMode,
   SurfaceProfileContext,
   SurfaceProfileEntry,
   ToolMapGuardContext,

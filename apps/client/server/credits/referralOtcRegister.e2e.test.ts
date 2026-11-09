@@ -20,7 +20,7 @@ import {
   SignupGrantBudgetDayModel,
 } from '@bike4mind/database';
 import { createRegInvite } from '@server/managers/regInviteManager';
-import { signupProtection } from '@server/auth/signupProtection';
+import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import { releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
 import {
   createMongoReplSet,
@@ -28,7 +28,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
-vi.mock('@server/auth/signupProtection', async () => {
+vi.mock('@bike4mind/server-utils/auth/signupProtection', async () => {
   const { signupGrantBudgetRepository } = await import('@bike4mind/database');
   const clock = new Date('2030-03-01T10:00:00Z');
   return {

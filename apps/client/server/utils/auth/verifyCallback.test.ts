@@ -5,7 +5,9 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 // Linking an account that promotes emailVerified runs applyEmailVerifiedGrants, which rescores.
 const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
-vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
 vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
 
 const mockFindOne = vi.fn();
@@ -98,7 +100,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
 
 // The real signupDomainGrant helper runs; only its rule lookup and side-effect leaves are stubbed.
 const mockPartnerGrant = vi.fn();
-vi.mock('@server/entitlements/partnerRules', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({
   partnerSignupGrantForEmail: (...args: unknown[]) => mockPartnerGrant(...args),
 }));
 vi.mock('@server/entitlements/invalidate', () => ({ pushEntitlementInvalidation: vi.fn() }));
@@ -452,6 +454,29 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
     const updateArg = mockUpdateOne.mock.calls[0][1];
     expect(updateArg.authProviders).toHaveLength(1);
     expect(updateArg.authProviders[0].accessToken).toBe('access-tok');
+  });
+
+  it('stores provider tokens encrypted when an at-rest key is configured', async () => {
+    const { configureSecretsAtRest, decryptAtRest, generateEncryptionKey } = await import('@bike4mind/utils/security');
+    configureSecretsAtRest(generateEncryptionKey());
+    try {
+      mockFindOne.mockResolvedValueOnce({
+        _id: 'u1',
+        email: 'user@example.com',
+        authProviders: [{ strategy: AuthStrategy.Google, id: 'google-sub-stable', accessToken: 'old' }],
+      });
+
+      await runStandard(AuthStrategy.Google, { id: 'google-sub-stable', emails: [{ value: 'user@example.com' }] });
+
+      const updateArg = mockUpdateOne.mock.calls[0][1];
+      const [stored] = updateArg.authProviders;
+      expect(stored.encrypted).toBe(true);
+      expect(stored.accessToken).not.toBe('access-tok');
+      expect(decryptAtRest(stored.accessToken)).toBe('access-tok');
+      expect(decryptAtRest(updateArg.oauthCredentials.accessToken)).toBe('access-tok');
+    } finally {
+      configureSecretsAtRest(undefined);
+    }
   });
 
   it('stage-1 hit resolves user even when handle/email changed (fixes duplicate-account on rename)', async () => {

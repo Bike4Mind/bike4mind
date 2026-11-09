@@ -351,7 +351,7 @@ describe('AnthropicBackend reasoningEffort', () => {
       });
 
       expect(request.thinking).toEqual({ type: 'adaptive' });
-      expect(request.output_config).toEqual({ effort: 'high' });
+      expect(request.output_config).toEqual({ effort: 'medium' });
     });
 
     // Opus 4.7/4.8 do not think when `thinking` is omitted, so naming an effort would turn
@@ -468,7 +468,7 @@ describe('AnthropicBedrockBackend reasoningEffort', () => {
     });
 
     expect(body.thinking).toEqual({ type: 'adaptive' });
-    expect(body.output_config).toEqual({ effort: 'high' });
+    expect(body.output_config).toEqual({ effort: 'medium' });
   });
 
   it('does not turn thinking on for a model that does not think unless asked', () => {

@@ -95,7 +95,7 @@ Toggle the **Filters** button to reveal filtering controls:
 | **Exclude test campaigns** | Hides campaigns that were run in test mode. |
 | **From Date** | Only show campaigns created on or after this date. |
 | **To Date** | Only show campaigns created on or before this date. |
-| **Clear Filters** | Resets all filter selections. |
+| **Clear filters** | Resets all filter selections. |
 
 ### Campaign Detail Editor
 

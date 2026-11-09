@@ -3,8 +3,8 @@ import {
   SIGNUP_TIMESERIES_RANGES,
   SIGNUP_TZ_OFFSET_MESSAGE,
   signupTzOffsetSchema,
-} from '@client/app/utils/signupSignals';
-import { baseApi } from '@server/middlewares/baseApi';
+} from '@bike4mind/server-utils/app/utils/signupSignals';
+import { adminApi } from '@server/middlewares/adminApi';
 import { getSignupTimeseries } from '@server/users/signupTimeseries';
 
 const querySchema = z.object({
@@ -12,8 +12,7 @@ const querySchema = z.object({
   tzOffset: signupTzOffsetSchema,
 });
 
-export default baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
-  if (!req.user?.isAdmin) return res.status(403).json({ message: 'Admin access required' });
+export default adminApi({ adminPermissions: { GET: 'support:read' }, auth: 'jwtOnly' }).get(async (req, res) => {
   const parsed = querySchema.safeParse(req.query);
   if (!parsed.success) {
     const message =

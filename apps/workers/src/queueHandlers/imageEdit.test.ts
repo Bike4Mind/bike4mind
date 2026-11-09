@@ -8,11 +8,16 @@ vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
 const h = vi.hoisted(() => ({
   process: vi.fn(),
   dispatchQuestCallback: vi.fn(),
+  publishImageQuestReadyPush: vi.fn(),
 }));
 
 vi.mock('@server/imageGenerations/imageEdit', () => ({
   getImageEdit: () => ({ process: h.process }),
 }));
+
+vi.mock('@bike4mind/database', () => ({ Connection: {}, questRepository: {} }));
+vi.mock('@server/utils/pushNotifications', () => ({ publishPushNotification: vi.fn(), sessionDeepLink: vi.fn() }));
+vi.mock('./generationPush', () => ({ publishImageQuestReadyPush: h.publishImageQuestReadyPush }));
 
 vi.mock('@bike4mind/server-utils/generationCallback/dispatchQuestCallback', () => ({
   dispatchQuestCallback: h.dispatchQuestCallback,
@@ -76,5 +81,18 @@ describe('imageEdit dispatch', () => {
 
     expect(h.dispatchQuestCallback).toHaveBeenCalledWith('quest-1', logger);
     expect(h.dispatchQuestCallback).toHaveBeenCalledTimes(1);
+    expect(h.publishImageQuestReadyPush).not.toHaveBeenCalled();
+  });
+
+  it('publishes the generation_ready push for the settled quest after the callback', async () => {
+    const calls: string[] = [];
+    h.process.mockResolvedValue(undefined);
+    h.dispatchQuestCallback.mockImplementation(async () => void calls.push('callback'));
+    h.publishImageQuestReadyPush.mockImplementation(async () => void calls.push('push'));
+
+    await run();
+
+    expect(calls).toEqual(['callback', 'push']);
+    expect(h.publishImageQuestReadyPush).toHaveBeenCalledWith(BODY, 'edit', expect.any(Object), logger);
   });
 });

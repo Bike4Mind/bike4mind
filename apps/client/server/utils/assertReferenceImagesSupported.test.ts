@@ -34,3 +34,53 @@ describe('assertReferenceImagesSupported (edit)', () => {
     expect(() => assertReferenceImagesSupported(model, ids(limit + 1), 'generate')).toThrow(`at most ${limit} images`);
   });
 });
+
+describe('assertReferenceImagesSupported (generate, FLUX 3)', () => {
+  it.each([ImageModels.FLUX_3_IMAGE, ImageModels.FLUX_3_IMAGE_KLEIN])('%s takes 10 references, not 11', model => {
+    expect(() => assertReferenceImagesSupported(model, ids(10), 'generate')).not.toThrow();
+    expect(() => assertReferenceImagesSupported(model, ids(11), 'generate')).toThrow('at most 10 images');
+  });
+
+  it('counts the primary toward the cap', () => {
+    const model = ImageModels.FLUX_3_IMAGE;
+    expect(() => assertReferenceImagesSupported(model, ids(9), 'generate', ['primary'])).not.toThrow();
+    expect(() => assertReferenceImagesSupported(model, ids(10), 'generate', ['primary'])).toThrow('at most 10 images');
+  });
+
+  it('counts a primary repeated in the references once', () => {
+    const refs = ['primary', ...ids(9)];
+    expect(() => assertReferenceImagesSupported(ImageModels.FLUX_3_IMAGE, refs, 'generate', ['primary'])).not.toThrow();
+  });
+
+  it('counts the primary for FLUX.2 too', () => {
+    expect(() => assertReferenceImagesSupported(ImageModels.FLUX_2_PRO, ids(8), 'generate', ['primary'])).toThrow(
+      'at most 8 images'
+    );
+  });
+
+  it('accepts a primary plus 7 FLUX.2 references, the cap boundary', () => {
+    expect(() => assertReferenceImagesSupported(ImageModels.FLUX_2_PRO, ids(7), 'generate', ['primary'])).not.toThrow();
+  });
+
+  it('counts the primary toward the Klein cap of 4', () => {
+    const klein = ImageModels.FLUX_2_KLEIN_4B;
+    expect(() => assertReferenceImagesSupported(klein, ids(3), 'generate', ['primary'])).not.toThrow();
+    expect(() => assertReferenceImagesSupported(klein, ids(4), 'generate', ['primary'])).toThrow('at most 4 images');
+  });
+
+  it('names the shared cap in the error when a primary is counted', () => {
+    expect(() => assertReferenceImagesSupported(ImageModels.FLUX_3_IMAGE, ids(10), 'generate', ['primary'])).toThrow(
+      'fabFileIds plus referenceImageFabFileIds accept at most 10 images'
+    );
+  });
+
+  it('does not count the primary for gpt-image, which has its own slot', () => {
+    expect(() =>
+      assertReferenceImagesSupported(ImageModels.GPT_IMAGE_1, ids(15), 'generate', ['primary'])
+    ).not.toThrow();
+  });
+
+  it('still rejects references on FLUX 3 edit', () => {
+    expect(() => assertReferenceImagesSupported(ImageModels.FLUX_3_IMAGE, ['ref'])).toThrow('not supported');
+  });
+});

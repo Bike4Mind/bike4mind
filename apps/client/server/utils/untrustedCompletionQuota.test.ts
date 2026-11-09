@@ -30,7 +30,7 @@ vi.mock('@bike4mind/database', () => ({
   usageEventRepository: { userTokensSince: mocks.userTokensSince },
   User: { findById: mocks.findUser },
 }));
-vi.mock('@server/utils/apiKeyTrust', () => ({ resolveApiKeyTrust: mocks.resolveTrust }));
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({ resolveApiKeyTrust: mocks.resolveTrust }));
 
 import type { Request } from 'express';
 import {

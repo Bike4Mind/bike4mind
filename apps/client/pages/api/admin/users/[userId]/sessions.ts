@@ -3,7 +3,7 @@ import { authSessionService } from '@bike4mind/services';
 import { ApiKeyScope, type AdminUserSession, type IAuthSessionDocument } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { BadRequestError, ensureAdmin, NotFoundError, UnprocessableEntityError } from '@server/utils/errors';
 

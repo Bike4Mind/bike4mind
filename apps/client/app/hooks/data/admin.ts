@@ -11,7 +11,7 @@ import type {
   IncidentSignals,
   IncidentState,
 } from '@client/app/components/admin/SecurityDashboard/incidentTypes';
-import type { SignupAnomalySnapshot } from '@client/app/utils/signupAnomaly';
+import type { SignupAnomalySnapshot } from '@bike4mind/server-utils/app/utils/signupAnomaly';
 
 export interface LiveOpsTriageEnv {
   stage: string;

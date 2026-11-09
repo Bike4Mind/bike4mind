@@ -314,10 +314,14 @@ export interface CliConfig {
  * ~/.bike4mind/config.json - the excluded keys are dropped at compile time
  * (and again at runtime in save()). defaultModel/preferences stay writable
  * (that is what /model and /config edit); callers pass user-changed values, not
- * the repo-merged rest. See ConfigStore.save.
+ * the repo-merged rest. See ConfigStore.save. The sign-in and backend fields
+ * (auth/authByEnv/apiConfig) change only through the sign-in and backend mutators.
  */
 export type GlobalConfigPatch = Omit<
   Partial<CliConfig>,
+  | 'auth'
+  | 'authByEnv'
+  | 'apiConfig'
   | 'mcpServers'
   | 'trustedTools'
   | 'additionalDirectories'

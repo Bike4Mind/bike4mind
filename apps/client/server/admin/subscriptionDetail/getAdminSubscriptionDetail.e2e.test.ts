@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { Organization, User, mongoose } from '@bike4mind/database';
+import { BillingMismatchModel, Organization, User, billingMismatchRepository, mongoose } from '@bike4mind/database';
 import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
@@ -23,7 +23,12 @@ beforeAll(async () => {
 
 afterEach(async () => {
   // Per-collection delete, NOT dropDatabase: dropping would also drop the unique subscriptionId index.
-  await Promise.all([Subscription.deleteMany({}), User.deleteMany({}), Organization.deleteMany({})]);
+  await Promise.all([
+    Subscription.deleteMany({}),
+    User.deleteMany({}),
+    Organization.deleteMany({}),
+    BillingMismatchModel.deleteMany({}),
+  ]);
 });
 
 afterAll(async () => {
@@ -76,6 +81,7 @@ describe('getAdminSubscriptionDetail', () => {
       ownerCredits: 42,
       seats: null,
       actingUserId: String(user._id),
+      mismatch: null,
     });
     expect(detail?.otherSubscriptions.map(row => row.id)).toEqual([String(older._id)]);
   });
@@ -119,5 +125,31 @@ describe('getAdminSubscriptionDetail', () => {
 
     expect(detail?.ownerCredits).toBeNull();
     expect(detail?.actingUserId).toBeNull();
+  });
+
+  it('carries the open reconciliation finding for the row, and drops it once resolved', async () => {
+    const user = await User.create({ name: 'jane', username: 'jane', email: 'jane@example.com' });
+    const row = await seedSubscription(String(user._id), {});
+    const rowId = String(row._id);
+    await billingMismatchRepository.upsertOpen(
+      {
+        stripeSubscriptionId: String(row.subscriptionId),
+        kind: 'drift',
+        subscriptionRowId: rowId,
+        ownerType: 'User',
+        ownerId: String(user._id),
+        fields: [{ field: 'quantity', mongo: '1', stripe: '3' }],
+        stripeStatus: 'active',
+      },
+      new Date(NOW)
+    );
+
+    expect((await getAdminSubscriptionDetail(rowId))?.mismatch).toMatchObject({
+      kind: 'drift',
+      fields: [{ field: 'quantity', mongo: '1', stripe: '3' }],
+    });
+
+    await billingMismatchRepository.resolveForSubscription(rowId, 'sync');
+    expect((await getAdminSubscriptionDetail(rowId))?.mismatch).toBeNull();
   });
 });

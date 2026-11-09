@@ -50,7 +50,7 @@ vi.mock('@bike4mind/services', () => ({
     ],
   },
 }));
-vi.mock('@server/utils/adminAudit', async () => {
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async () => {
   const { BadRequestError: BadRequest } = await import('@bike4mind/common');
   return {
     parseAdminActionReason: (reason: unknown) => {

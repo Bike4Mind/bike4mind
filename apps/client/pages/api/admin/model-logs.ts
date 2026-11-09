@@ -1,11 +1,10 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { ApiKeyScope } from '@bike4mind/common';
 import type { PipelineStage, Types } from 'mongoose';
 import { z } from 'zod';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { dateParam } from '@server/utils/dateParam';
 import { MODEL_LOGS_MAX_PAGE } from '@client/shared/modelLogs';
 
@@ -74,13 +73,8 @@ type ModelLogSummaryRow = {
   artifacts: { type: string; preview: string }[];
 };
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
   asyncHandler(async (req, res) => {
-    // Check if user is admin
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     try {
       const { startDate, endDate, model, search, page, limit } = querySchema.parse(req.query);
 

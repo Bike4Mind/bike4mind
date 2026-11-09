@@ -631,6 +631,29 @@ describe('pickForMachine runtimes', () => {
     }
   });
 
+  it('rates Ollama candidates on Intel integrated graphics as CPU and llama-server ones on the GPU', () => {
+    const hardware: HardwareProfile = {
+      ...machine('unified', 32),
+      platform: 'linux',
+      arch: 'x64',
+      gpuName: 'Intel(R) Arc(TM) Graphics',
+      gpuVendor: 'intel',
+    };
+    const candidates = (role: HubRole, runtimes: MachineRuntimes) => {
+      const p = pick('mac-32', role, { hardware, runtimes });
+      return [p.best, ...p.alternates].filter(c => c !== null);
+    };
+    const ollama = candidates('embeddings', { ollama: { version: '0.40.11' } });
+    expect(ollama.length).toBeGreaterThan(0);
+    for (const c of ollama) expect(c.fit).toMatchObject({ placement: 'cpu', memory: { marginBytes: 256 * 1024 ** 2 } });
+    const llama = candidates('code', { 'llama-server': { build: 11889 } });
+    expect(llama.length).toBeGreaterThan(0);
+    for (const c of llama) {
+      expect(c.fit.placement).not.toBe('cpu');
+      expect(c.fit.memory.marginBytes).toBe(1.5 * 1024 ** 3);
+    }
+  });
+
   it('keeps an f16 cache on Ollama when its flash attention is off', () => {
     const runtimes = { ollama: { version: '0.40.11', kvType: 'q8_0' as const, flashAttention: false } };
     expect(pick('mac-64', 'vision', { runtimes }).best!.fit.kv).toEqual({ k: 'f16', v: 'f16' });

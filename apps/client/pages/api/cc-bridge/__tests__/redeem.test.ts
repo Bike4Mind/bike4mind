@@ -53,7 +53,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   userRepository: { findById: refs.findUser },
 }));
-vi.mock('@server/utils/apiKeyTrust', () => ({ resolveApiKeyTrust: refs.resolveTrust }));
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({ resolveApiKeyTrust: refs.resolveTrust }));
 vi.mock('@bike4mind/database/auth', () => ({
   UserApiKey: { updateOne: refs.apiKeyUpdateOne },
   userApiKeyRepository: {},

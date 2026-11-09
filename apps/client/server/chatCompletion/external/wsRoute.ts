@@ -52,7 +52,7 @@ import {
   type CompletionQuotaGrant,
 } from '@server/utils/untrustedCompletionQuota';
 import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';
-import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
 
 /**

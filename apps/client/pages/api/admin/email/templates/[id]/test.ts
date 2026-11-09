@@ -1,10 +1,10 @@
 import { emailTemplateRepository } from '@bike4mind/database';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import mailer from '@server/utils/mailer';
+import mailer from '@bike4mind/server-utils/utils/mailer/index';
 import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { ApiKeyScope } from '@bike4mind/common';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const handler = adminApi({
   adminPermissions: { POST: 'settings:manage' },

@@ -1,3 +1,4 @@
+import { TaskDecisionPanel } from './TaskDecisionPanel';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
@@ -8,12 +9,12 @@ import type { ChatApprovalAnswer, ChatMessage, ChatQueuedMessage, ChatToolCall }
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ToolCallList } from '../ToolCallList';
 import { groupToolCalls } from '../toolRows';
-import { pendingCallsIn } from './needsYou';
+import { pendingCallsIn } from '@shared/needsYou';
 import { activityLabel } from './activity';
 import { AgentStateChip } from './AgentStateChip';
 import type { AgentActions } from './OrchestratorStage';
 import type { AgentView } from './roster';
-import type { AgentPersona } from './tavern/agentPersona';
+import type { AgentPersona } from '@shared/agentPersona';
 
 const RECENT_MESSAGES = 3;
 const MESSAGE_SNIPPET_MAX = 280;
@@ -40,7 +41,7 @@ function errorText(error: unknown): string {
  * The session's messages, refetched whenever `refreshKey` changes. getSession includes the reply in
  * flight, so a call parked at the approval gate is in here with its `approvalId`.
  */
-function useSessionMessages(
+export function useSessionMessages(
   agentId: string,
   refreshKey: string
 ): { messages: ChatMessage[]; loadError: string | null } {
@@ -70,7 +71,7 @@ function useSessionMessages(
  * when the first request parks and when the last settles; while it stays 'needs-you', a further
  * request shows up only as a new activity, which the roster already folds from the stream.
  */
-function refreshKeyOf(agent: AgentView): string {
+export function refreshKeyOf(agent: AgentView): string {
   const waitingOn = agent.state === 'needs-you' && agent.activity ? activityLabel(agent.activity) : '';
   return [agent.updatedAt, agent.state, waitingOn].join('\n');
 }
@@ -93,7 +94,7 @@ function messageLine(message: ChatMessage): string | null {
  * through the same `respondToApproval` call. An answered card goes at once rather than waiting for
  * the status push, so a second click can never answer it twice.
  */
-function PendingRequests({ calls }: { calls: ChatToolCall[] }) {
+export function PendingRequests({ calls }: { calls: ChatToolCall[] }) {
   const [answered, setAnswered] = useState<ReadonlySet<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const open = calls.filter(call => call.approvalId && !answered.has(call.approvalId));
@@ -269,6 +270,8 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
       aria-label={`Agent details: ${agent.title}`}
       tabIndex={-1}
       data-testid="orchestrator-peek-drawer"
+      // Holds the Tavern's chrome up while open (ambient.ts).
+      data-ambient-hold
       sx={{
         outline: 'none',
         width: 340,
@@ -313,6 +316,7 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
         </IconButton>
       </Box>
 
+      <TaskDecisionPanel agent={agent} />
       {pending.length > 0 && <PendingRequests calls={pending} />}
 
       <Typography

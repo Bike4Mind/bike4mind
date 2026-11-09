@@ -121,6 +121,7 @@ export const INTEGRATION_LOGO_KEYS = [
   'okta',
   'claude-code',
   'mcp-cli',
+  'mcp-custom',
   'b4m-oauth',
   'hubspot',
   'salesforce',

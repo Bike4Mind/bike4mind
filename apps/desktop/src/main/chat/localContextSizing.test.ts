@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { HardwareProfile } from '@bike4mind/local-models';
+import type { HardwareProbeOptions, HardwareProfile } from '@bike4mind/local-models';
 import { AUTO_LOCAL_CONTEXT } from '@shared/localContextSetting';
-import { HardwareProbe, localContextSizing } from './localContextSizing';
+import type { ModelServerView } from '@shared/modelServers';
+import { HardwareProbe, localContextSizing, localLlamaServer } from './localContextSizing';
 
 const qwenInfo = {
   'general.architecture': 'qwen2',
@@ -75,6 +76,166 @@ describe('HardwareProbe', () => {
     expect((await hardware.profile())?.totalMemoryBytes).toBe(128 * 1024 ** 3);
     expect(hardware.known()?.totalMemoryBytes).toBe(128 * 1024 ** 3);
     expect(await hardware.probed()).toBe(machine);
+  });
+
+  it('passes the llama-server to the probe and lists its devices afresh when it is set or forgotten', async () => {
+    const intel = { ...machine, memoryKind: 'discrete' as const, gpuVendor: 'intel' as const, gpuCount: 1 };
+    const probe = vi.fn(async (_options: HardwareProbeOptions) => intel);
+    const hardware = new HardwareProbe(probe);
+    await hardware.profile();
+    expect(probe).toHaveBeenLastCalledWith({});
+    const locate = async () => ({ path: '/opt/llama/llama-server' });
+    hardware.setLlamaServer(locate);
+    expect(hardware.known()).toBeUndefined();
+    await hardware.profile();
+    expect(probe).toHaveBeenLastCalledWith({ llamaServer: locate, llamaServerMaxAgeMs: 0 });
+    await hardware.profile();
+    expect(probe).toHaveBeenCalledTimes(2);
+    hardware.forget();
+    await hardware.profile();
+    expect(probe).toHaveBeenLastCalledWith({ llamaServer: locate, llamaServerMaxAgeMs: 0 });
+    hardware.forget();
+    hardware.forget();
+    await hardware.profile();
+    await hardware.profile();
+    expect(probe).toHaveBeenCalledTimes(4);
+  });
+
+  it('reuses the cached device listing when the probe is retried after a failure', async () => {
+    let now = 0;
+    const probe = vi
+      .fn<(options: HardwareProbeOptions) => Promise<HardwareProfile>>()
+      .mockRejectedValueOnce(new Error('probe failed'))
+      .mockResolvedValue(machine);
+    const hardware = new HardwareProbe(probe, () => now);
+    hardware.forget();
+    expect(await hardware.profile()).toBeNull();
+    expect(probe).toHaveBeenLastCalledWith({ llamaServerMaxAgeMs: 0 });
+    now = 60_000;
+    expect(await hardware.profile()).toEqual(machine);
+    expect(probe).toHaveBeenLastCalledWith({});
+  });
+
+  it('lists again on every save on a Linux Intel card, keeping the last result readable', async () => {
+    const intel = { ...machine, memoryKind: 'discrete' as const, gpuVendor: 'intel' as const, gpuCount: 1 };
+    const sized = { ...intel, gpuMemoryBytes: 32 * 1024 ** 3 };
+    let finish: (profile: HardwareProfile) => void = () => undefined;
+    const probe = vi
+      .fn<(options: HardwareProbeOptions) => Promise<HardwareProfile>>()
+      .mockResolvedValueOnce(intel)
+      .mockImplementationOnce(() => new Promise(resolve => (finish = resolve)))
+      .mockResolvedValue(intel);
+    const hardware = new HardwareProbe(probe);
+    await hardware.profile();
+    hardware.relistLlamaServer();
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+    expect(probe).toHaveBeenLastCalledWith({ llamaServerMaxAgeMs: 0 });
+    expect(hardware.known()).toBe(intel);
+    finish(sized);
+    expect(await hardware.profile()).toBe(sized);
+    expect(hardware.known()).toBe(sized);
+    // With its VRAM known, a save may still point at another binary.
+    hardware.relistLlamaServer();
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(3));
+    expect(probe).toHaveBeenLastCalledWith({ llamaServerMaxAgeMs: 0 });
+    expect(await hardware.profile()).toBe(intel);
+  });
+
+  it('keeps the last result when a probe on save fails', async () => {
+    const intel = { ...machine, memoryKind: 'discrete' as const, gpuVendor: 'intel' as const, gpuCount: 1 };
+    const probe = vi
+      .fn<(options: HardwareProbeOptions) => Promise<HardwareProfile>>()
+      .mockResolvedValueOnce(intel)
+      .mockRejectedValue(new Error('probe failed'));
+    const hardware = new HardwareProbe(probe);
+    await hardware.profile();
+    hardware.relistLlamaServer();
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+    expect(await hardware.profile()).toBe(intel);
+    expect(hardware.known()).toBe(intel);
+  });
+
+  it('does not probe again on a save without a Linux Intel card', async () => {
+    const machines: HardwareProfile[] = [
+      { ...machine, memoryKind: 'discrete', gpuVendor: 'nvidia', gpuMemoryBytes: 24 * 1024 ** 3, gpuCount: 1 },
+      { ...machine, memoryKind: 'unified', gpuVendor: 'amd', gpuCount: 1 },
+      { ...machine, platform: 'darwin', arch: 'arm64', memoryKind: 'unified', gpuVendor: 'apple', gpuCount: 1 },
+      machine,
+      { ...machine, platform: 'win32', memoryKind: 'discrete', gpuVendor: 'intel', gpuCount: 1 },
+    ];
+    for (const probed of machines) {
+      const probe = vi.fn(async (_options: HardwareProbeOptions) => probed);
+      const hardware = new HardwareProbe(probe);
+      await hardware.profile();
+      hardware.relistLlamaServer();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(probe).toHaveBeenCalledTimes(1);
+      expect(hardware.known()).toBe(probed);
+    }
+  });
+
+  it('keeps a probe that finishes after forget from overwriting the newer one', async () => {
+    let finishFirst: (profile: HardwareProfile) => void = () => undefined;
+    const newer = { ...machine, totalMemoryBytes: 1 };
+    const probe = vi
+      .fn<(options: HardwareProbeOptions) => Promise<HardwareProfile>>()
+      .mockImplementationOnce(() => new Promise(resolve => (finishFirst = resolve)))
+      .mockResolvedValue(newer);
+    const hardware = new HardwareProbe(probe);
+    const first = hardware.probed();
+    hardware.forget();
+    expect(await hardware.probed()).toBe(newer);
+    finishFirst(machine);
+    expect(await first).toBe(machine);
+    expect(hardware.known()).toBe(newer);
+  });
+
+  it('gives a caller of a superseded probe that fails the newer result, not null', async () => {
+    let failFirst: (error: Error) => void = () => undefined;
+    const newer = { ...machine, totalMemoryBytes: 1 };
+    const probe = vi
+      .fn<(options: HardwareProbeOptions) => Promise<HardwareProfile>>()
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => (failFirst = reject)))
+      .mockResolvedValue(newer);
+    const hardware = new HardwareProbe(probe);
+    const first = hardware.probed();
+    hardware.forget();
+    const second = hardware.probed();
+    failFirst(new Error('probe failed'));
+    expect(await first).toBe(newer);
+    expect(await second).toBe(newer);
+    expect(hardware.known()).toBe(newer);
+  });
+});
+
+describe('localLlamaServer', () => {
+  const view = (launch: Record<string, unknown> | null) => ({ launch }) as unknown as ModelServerView;
+  const llama = (owner: string, binaryPath?: string) =>
+    view({ runtime: 'llama-server', owner, settings: binaryPath ? { binaryPath } : {} });
+
+  it('takes the binary a local llama-server is configured with, else the one on PATH', async () => {
+    const onPath = vi.fn(async () => '/usr/local/bin/llama-server');
+    const configured = localLlamaServer({
+      views: async () => [
+        view(null),
+        llama('remote', '/remote/llama-server'),
+        llama('desktop', '/opt/sycl/llama-server'),
+      ],
+      onPath,
+    });
+    expect(await configured()).toEqual({ path: '/opt/sycl/llama-server' });
+    expect(onPath).not.toHaveBeenCalled();
+    const unset = localLlamaServer({ views: async () => [llama('desktop'), llama('remote', '/remote/x')], onPath });
+    expect(await unset()).toEqual({ path: '/usr/local/bin/llama-server' });
+    expect(await localLlamaServer({ views: async () => [], onPath: async () => null })()).toBeNull();
+  });
+
+  it('rejects when the saved servers cannot be read', async () => {
+    const failing = localLlamaServer({
+      views: () => Promise.reject(new Error('store unreadable')),
+      onPath: async () => null,
+    });
+    await expect(failing()).rejects.toThrow('store unreadable');
   });
 });
 

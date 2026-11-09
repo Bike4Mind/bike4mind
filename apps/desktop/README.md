@@ -47,6 +47,14 @@ pnpm --filter @bike4mind/desktop dev
 Starts the Vite dev server for the renderer, builds main and preload, and launches
 Electron against it with HMR.
 
+On macOS, closing the last window leaves Desktop running. Use Cmd+Q to quit the app,
+including its background processes. If agents, approvals, background commands, terminal sessions,
+model downloads, or Desktop-managed model servers are active, Desktop asks before quitting and
+shows their counts. **Keep Running** is the default; **Quit Anyway** interrupts that work and
+shuts down the app. With nothing active, it quits without a prompt. Shutdown cleanup runs before
+the app exits; one quit request is enough. If Desktop remains in Cmd+Tab after cleanup, report the
+Desktop version and whether it was an installed build or a development run.
+
 | Command               | What it does                                       |
 | --------------------- | -------------------------------------------------- |
 | `pnpm dev`            | Dev server + Electron, with HMR                    |
@@ -146,6 +154,13 @@ loaded, the picker shows an error; refresh to retry without losing the saved cho
 the switch off or changing models clears the current hint and discards late answers from the
 previous choice. Ollama completion requests time out after 30 seconds; hosted requests after
 five. Loading the model list can add time before generation starts.
+
+## Troubleshooting saved SSH model servers
+
+A saved SSH server with an invalid port or destination stays visible under Settings > Model
+servers as **Refused**, with a message naming the problem. Desktop does not connect to it.
+Remove that server and add it again with a destination such as `user@gpu.example.com` and
+its model server's port from 1 to 65535. A missing saved port uses Ollama's 11434.
 
 ## Starting local model servers
 
@@ -759,6 +774,67 @@ The library requires a signed-in account and network access. If the list or an o
 cannot load, its error offers **Try again**; sign in again if your session has expired.
 **Customize** maps onto the folder grants this app already had, which moved out of the account
 panel into the collapsible **More**.
+
+### Session panel
+
+In Code conversations, the session panel reserves space beside the conversation when the pane
+can fit the panel and a full reading column. The header, messages and composer recenter together
+when you toggle it. Smaller panes open the panel as a popover without shifting the conversation.
+The layout transition respects the system's reduced-motion preference.
+
+## Orchestration worker models and task evidence
+
+Settings -> General -> Orchestration worker models configures implementation, exploration,
+and review roles for the current account and connected environment. Each role can inherit its
+parent model or use an available tool-capable catalog model. The conversation model picker
+still selects the planner. Nothing changes until you save defaults and enable Orchestrate for
+a future run. Existing users and legacy free-text spawns keep parent-model inheritance.
+
+The premium-planner/economical-worker preset is a draft you apply and save: choose an available
+Opus model in the conversation picker, then apply current Sonnet workers for implementation and
+exploration with inherited review in settings. It resolves the latest available catalog release
+by family rather than pinning a model generation. If the catalog has no capable Sonnet model,
+choose role models manually. You can change every role before saving; no preset is applied silently.
+
+Enabling Orchestrate snapshots the policy for that run. The summary above the composer names
+the planner and worker roles. Direct and nested role requests use this snapshot; changing
+settings or turning Orchestrate off does not reconfigure already-started children. Turning it
+off removes delegation guidance, role controls, and automatic parent wakes from later ordinary
+turns. Normal Chat/Code sends, suggestions, approvals, and model selection need no task form,
+role policy, planner step, or extra model request.
+
+Structured spawns carry a version-1 task contract: outcome/rationale, role, relevant paths and
+context references, owned changes and coordination constraints, non-goals, acceptance criteria,
+verification, assumptions and escalation conditions. Explicit empty lists are valid where a
+section does not apply; a contract needs at least one acceptance criterion, bounded entries,
+and a maximum serialized size of 24 KB. Workers receive this brief instead of the parent
+transcript. Declared ownership coordinates work; filesystem permissions remain authoritative.
+
+Workers use `task_report` to submit completion evidence, a blocked result, or an escalation
+request supported by evidence. A stopped turn is not accepted completion. Agent details show
+the effective catalog model, selection source, task state, attempt history, failed checks and
+unmet criteria. The parent uses `task_assess`, or you use agent details, to accept reviewed
+passing evidence, clarify and continue the same task, deny an upgrade, or cancel. Acceptance
+requires passing evidence for every declared criterion and no failed check or unmet criterion.
+A further worker turn invalidates previous acceptance and requires fresh evidence.
+
+Task upgrades ask first and affect only that worker. Configure allowed upgrade roles/models
+before starting the run; an approved decision resumes the same conversation and preserves its
+changes and attempt history. A denied or repeated decision starts no new attempt. The worker's
+normal model picker also supports an explicit user choice while it is idle. A skill or model
+message cannot authorize a permission, model, or spending increase.
+
+Automatic upgrades are unavailable until shared root-budget admission is connected. This
+release does not enforce a root spending cap or reconcile total orchestration cost. Contract,
+selection, pending decision, evidence and attempt lineage survive restart; as before,
+Orchestrate itself requires re-enabling after relaunch.
+
+If a configured model disappears, becomes unavailable or lacks required capabilities, explicit
+role-routed work blocks before starting; no more expensive or hosted replacement is selected.
+Choose an available replacement in settings, save, then turn Orchestrate off and on for a new
+run snapshot; existing children keep their previous policy. Alternatively, use the idle worker's
+model picker for that task. Device-local tasks cannot switch to a hosted model. Settings read/save
+failures and blocked task evidence remain visible; retry the operation after repairing access.
 
 ## Authentication
 

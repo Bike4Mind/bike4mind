@@ -14,11 +14,12 @@ import type { CreditLedgerEntry } from '@bike4mind/services/creditService';
 import type { ILogger } from '@bike4mind/observability';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { assertApiKeyOrgMembership } from '@bike4mind/server-utils/billing/assertApiKeyOrgMembership';
-import { attributeToRequestApiKey } from '@server/billing/attributeToRequestApiKey';
+import { attributeToRequestApiKey } from '@bike4mind/server-utils/billing/attributeToRequestApiKey';
 
 import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { checkFreeTierDailySpendCap } from './freeTierDailyCapGate';
+import { observeCreditHold, recordSettlementAfterSweep } from './creditHoldTelemetry';
 
 export { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 export type { CreditLedgerEntry };
@@ -134,23 +135,25 @@ export async function reserveRequestCredits({
 
   // One transaction, so the balance never moves without a pending row the sweep can find, and a row
   // never exists for a balance that did not move.
-  const { hold, pending } = await withTransaction(async () => {
-    const hold = await creditService.holdCredits(
-      {
-        userId,
-        organizationId: billingOrganizationId ?? null,
-        requiredCredits,
-        featureLabel,
-        logger: req.logger,
-        // Re-checked against the roster holdCredits just fetched - no extra query.
-        assertBillable: (billingUser, billingOrg) =>
-          assertApiKeyOrgMembership({ billingOrg, billingUser, isApiKeyCaller: Boolean(req.apiKeyInfo) }),
-      },
-      holdAdapters
-    );
-    const expiresAt = new Date(Date.now() + holdTtlMs);
-    return { hold, pending: await pendingCreditHoldRepository.record(hold, featureLabel, expiresAt) };
-  });
+  const { hold, pending } = await observeCreditHold({ ownerId, ownerType, featureLabel, lifecycle: 'request' }, () =>
+    withTransaction(async () => {
+      const hold = await creditService.holdCredits(
+        {
+          userId,
+          organizationId: billingOrganizationId ?? null,
+          requiredCredits,
+          featureLabel,
+          logger: req.logger,
+          // Re-checked against the roster holdCredits just fetched - no extra query.
+          assertBillable: (billingUser, billingOrg) =>
+            assertApiKeyOrgMembership({ billingOrg, billingUser, isApiKeyCaller: Boolean(req.apiKeyInfo) }),
+        },
+        holdAdapters
+      );
+      const expiresAt = new Date(Date.now() + holdTtlMs);
+      return { hold, pending: await pendingCreditHoldRepository.record(hold, featureLabel, expiresAt) };
+    })
+  );
 
   return {
     ownerId: hold.ownerId,
@@ -225,21 +228,25 @@ async function settlePendingHold(
   for (let attempt = 1; ; attempt++) {
     try {
       // A process death or failed write leaves either the original refundable hold or the completed settlement.
-      return await withTransaction(async () => {
+      const result = await withTransaction(async () => {
         if (!(await pendingCreditHoldRepository.markSettled(pendingHoldId, charged))) {
           const settled = await pendingCreditHoldRepository.findSettlement(pendingHoldId);
-          if (settled !== null) return settled;
-          logHoldError('settle found its credit hold already swept - request not charged');
-          return 0;
+          return { charged: settled ?? 0, missing: settled === null };
         }
-        return creditService.settleCreditHold(
+        const settled = await creditService.settleCreditHold(
           hold,
           chargedCredits,
           entry,
           { featureLabel, logger, throwOnWriteFailure: true },
           holdAdapters
         );
+        return { charged: settled, missing: false };
       });
+      if (result.missing) {
+        logHoldError('settle found its credit hold already swept - request not charged');
+        recordSettlementAfterSweep({ ...hold, featureLabel, lifecycle: 'request' }, pendingHoldId);
+      }
+      return result.charged;
     } catch (err) {
       // A commit can succeed while its acknowledgement is lost. Never infer a refund from a
       // missing claim: the durable receipt tells us whether this settlement already committed.

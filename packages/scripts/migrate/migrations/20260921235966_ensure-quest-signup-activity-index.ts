@@ -17,6 +17,8 @@ import { type MigrationFile } from './index';
  * Idempotent: createIndexes is a no-op for indexes that already exist. The index name matches the
  * schema declaration, so this build and autoIndex cannot produce an IndexKeySpecsConflict. Id is
  * backdated below the fail-closed OAuth backfill, which must stay the highest id on disk.
+ *
+ * The quest index is retired: the schema no longer declares it and 20260921237490_drop-quest-signup-activity drops it.
  */
 const migration: MigrationFile = {
   id: 20260921235966,

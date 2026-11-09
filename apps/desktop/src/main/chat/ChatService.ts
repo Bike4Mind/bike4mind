@@ -1,4 +1,18 @@
+import {
+  acceptTask,
+  renderTaskBrief,
+  resolveWorkerModel,
+  validateWorkerModel,
+  spawnOptionsSchema,
+  taskActionSchema,
+  rolePolicySchema,
+  type RolePolicy,
+  type SpawnOptions,
+  type TaskAction,
+} from '@shared/orchestration';
 import { randomUUID } from 'node:crypto';
+import { LOOP_HELP, parseLoop, type LoopResult, type LoopState } from '@shared/loop';
+import { LoopScheduler, type LoopOutcome } from './LoopScheduler';
 import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { NotAuthenticatedError, SessionRevokedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
@@ -46,6 +60,8 @@ import type {
   SendMessageResult,
   SpawnSuggestionResult,
   StartSpawnSuggestionRequest,
+  StartSideChatRequest,
+  StartSideChatResult,
   UpdateProjectRequest,
   UpdateProjectResult,
   WorkspacePreparation,
@@ -57,6 +73,7 @@ import {
   defaultSpawnPlacement,
   findModelOption,
   isLocalBackend,
+  isAgentSession,
   isLocalModel,
   isResumableStop,
   isTurnBudgetStop,
@@ -150,6 +167,8 @@ import type { PdfPromptText } from './pdfText';
 import type { AttachmentStore } from './AttachmentStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
+import { sideChatOpening } from './sideChat';
+import { summarizeSession } from '@shared/agentOutcome';
 import { createPhaseTracker, RESPONDING, THINKING, WAITING } from './modelPhase';
 import { createRoundProbe, startRoundTimer, type RoundPhases } from './turnTiming';
 import { devLog } from '../devlog/DevLogSink';
@@ -185,7 +204,8 @@ import { findStaleResults, historyRounds, sentHistory, toolResultContent } from 
 import { stalePlanReminder, unfinishedPlanReminder } from './planReminder';
 import { buildExploreContext, shouldOfferExplore } from './explore';
 import { MediaApiClient } from './media/MediaApiClient';
-import type { MediaStore } from './media/MediaStore';
+import { type MediaStore, parseMediaUrl } from './media/MediaStore';
+import { fitToolImage, MAX_TOOL_IMAGE_INPUT_BYTES, sniffImageType } from './tools/toolImages';
 import type { VideoJobScheduler } from './media/VideoJobScheduler';
 import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
@@ -210,6 +230,7 @@ import { SkillsPromptCache } from './skills/prompt';
 import { skillSource, type SkillCatalog } from './skills/SkillCatalog';
 import type { McpManager, McpToolBinding } from './mcp/McpManager';
 import { desktopAppGuidance, mcpGuidance, mcpServerLines } from './mcp/prompt';
+import { GENERATED_IMAGE_TOOL } from './tools/mediaTools';
 import { describeFlags, modelSafeRequest, planMcpServerRequest } from './tools/mcpTools';
 import type { AccessStore } from './tools/AccessStore';
 import { forgetSessionWrites } from './tools/sessionScripts';
@@ -260,6 +281,8 @@ import {
   type ImageContext,
   type ScreenCapturer,
   type ScreenContext,
+  type ModelContext,
+  type ModelViewPort,
   type SimulatorContext,
   type SimulatorDriver,
   type ToolContext,
@@ -369,6 +392,13 @@ interface MidTurnArrival {
 const SESSION_PAUSED_MESSAGE = 'Your session expired before this reply finished. Sign in again, then press Continue.';
 
 type SendOptions = {
+  loop?: {
+    signal: AbortSignal;
+    valid(session: ChatSession): Promise<boolean>;
+    workspacePrepared(previous: ChatProject, session: ChatSession): void;
+    skill: string;
+    settled(outcome: TurnOutcome, reply: { content: string; stopReason?: string }): void;
+  };
   /** Only launchSpawned may consume the initial-turn reservation. */
   spawnSeed?: true;
   /** A taken queue entry must never fall back into the queue. */
@@ -391,12 +421,6 @@ type SendOptions = {
  * Counts autonomous runs only. A user typing into a spawned session is not rationed.
  */
 export const MAX_CONCURRENT_SPAWNED = 10;
-
-/**
- * How long a spawned agent's first turn waits for its new worktree's dependency install (ms).
- * It cannot wait out an install itself: ending its turn reads as the agent having finished.
- */
-export const SPAWN_INSTALL_WAIT_MS = 10 * 60_000;
 
 /**
  * How long a title request may take before it is dropped.
@@ -543,6 +567,11 @@ export interface ChatServiceDeps {
    * The iOS Simulator and the user's live view of it. Wired on macOS only, so on any other
    * platform (and in tests that do not exercise it) the simulator tools are not declared.
    */
+  /**
+   * Each conversation's 3D model pane (main/chat/model3d/ModelLiveViews.ts): a turn's model tools get
+   * only their own session's view. Absent in tests that do not exercise it.
+   */
+  model?: { for(sessionId: string): ModelViewPort; forget?(sessionId: string): void };
   simulator?: {
     driver: SimulatorDriver;
     view: { attach(udid: string): Promise<unknown>; detach(): void; attachedUdid(): string | undefined };
@@ -556,6 +585,8 @@ export interface ChatServiceDeps {
   protectedPaths?: readonly string[];
   /** Protected folders not yet resolved; the file tools refuse every write while any is. */
   unresolvedProtectedPaths?: readonly string[];
+  /** Folders no permission allow rule covers; a shell command reaching one asks in auto mode too. */
+  uncoverablePaths?: readonly string[];
   /**
    * Where the user's own CLAUDE.md lives. Overridden only by tests, which must not read - or
    * depend on the contents of - the real ~/.claude of whoever runs them.
@@ -598,6 +629,7 @@ export interface ChatServiceDeps {
   /** Identifies the cached completions endpoint; changing environments invalidates it. */
   getEnvironmentUrl(): string;
   emit(event: ChatStreamEvent): void;
+  loopChanged?(sessionId: string, state: LoopState | null): void;
   /**
    * A session's stored summary changed outside any reply, such as its title or worktree binding.
    *
@@ -653,6 +685,34 @@ interface RawRound {
 }
 
 /**
+ * The project a child conversation of a Code session works in: its own worktree when `worktree`
+ * names one, else the parent's checkout. Shared by spawns and side chats.
+ *
+ * Copied field by field rather than spread, so a field added to ChatProject later has to be
+ * considered here: this object IS the child's access to the filesystem.
+ */
+function childProject(project: ChatProject, worktree: { branch: string; base: string } | null): ChatProject {
+  return {
+    directory: project.directory,
+    name: project.name,
+    // With a worktree to cut this is its BASE, as a toggle session records one, and
+    // `workspaceBranch` is the branch the card showed: ensureWorkspace cuts that from this.
+    branch: worktree?.base ?? project.branch,
+    // Local placement carries the parent's flag across unchanged: a child sharing a parent
+    // that is itself in a worktree IS in a worktree, and the chip must not say otherwise.
+    workspace: worktree !== null || project.workspace,
+    // Its own worktree branch, or the parent's when it shares the parent's checkout.
+    // Without it a re-resolution would cut a second branch rather than find this one.
+    ...(worktree ? { workspaceBranch: worktree.branch } : {}),
+    ...(!worktree && project.workspaceBranch ? { workspaceBranch: project.workspaceBranch } : {}),
+    // The repository folder until the worktree exists, which is what awaitsWorktree reads
+    // as pending - and a pending session starts no turn, so nothing runs here meanwhile.
+    workingDirectory: worktree ? project.directory : project.workingDirectory,
+    contextDirectories: [...project.contextDirectories],
+  };
+}
+
+/**
  * Owns conversations, the reply stream, and the tool loop.
  *
  * Streaming runs HERE, in main, and not in the renderer: the request carries the access
@@ -662,6 +722,150 @@ interface RawRound {
 export type AutomaticTurnResult = { ok: true } | { ok: false; busy: boolean; error: string };
 
 export class ChatService {
+  private readonly loopRequests = new Map<string, AbortController>();
+  private readonly loops = new LoopScheduler(
+    id => this.hasTurnInFlight(id) || this.queuedMessages(id).length > 0,
+    (id, state) => this.deps.loopChanged?.(id, state)
+  );
+
+  getLoop(sessionId: string): LoopState | null {
+    return this.loops.get(sessionId);
+  }
+
+  clearLoops(): void {
+    for (const request of this.loopRequests.values()) request.abort();
+    this.loopRequests.clear();
+    this.loops.clear();
+  }
+
+  private stopLoop(sessionId: string): void {
+    this.loopRequests.get(sessionId)?.abort();
+    this.loopRequests.delete(sessionId);
+    this.loops.stop(sessionId);
+  }
+
+  async loopCommand(sessionId: string, args: string): Promise<LoopResult> {
+    if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
+    const action = parseLoop(args);
+    if ('error' in action) return { ok: false, error: action.error };
+    if (action.kind === 'stop') {
+      this.stopLoop(sessionId);
+      return {
+        ok: true,
+        state: null,
+        notice: 'Loop stopped. A turn already running is left alone; use Stop to interrupt it.',
+      };
+    }
+    if (action.kind === 'help' || action.kind === 'list') {
+      return { ok: true, state: this.getLoop(sessionId), notice: action.kind === 'help' ? LOOP_HELP : undefined };
+    }
+    this.loopRequests.get(sessionId)?.abort();
+    const request = new AbortController();
+    this.loopRequests.set(sessionId, request);
+    const scope = this.deps.store.scopeKey();
+    try {
+      const session = await this.deps.store.get(sessionId);
+      if (!session || session.archived) return { ok: false, error: 'Open an unarchived conversation first.' };
+      if (session.mode === 'code' && !session.project) return { ok: false, error: 'Choose a project folder first.' };
+      const context = (value: ChatSession) => {
+        const project = value.project;
+        return JSON.stringify([
+          value.mode,
+          value.model,
+          project && [
+            project.directory,
+            project.name,
+            project.branch,
+            project.workspace,
+            project.workspaceBranch,
+            project.workingDirectory,
+            project.contextDirectories,
+          ],
+          value.grantedDirectories,
+        ]);
+      };
+      const captured = { context: context(session), roots: JSON.stringify(await this.deps.access.list()) };
+      const invocation = parseSkillInvocation(action.prompt);
+      const command = invocation
+        ? await this.deps.skills?.get(session.project?.workingDirectory ?? null, invocation.name)
+        : undefined;
+      if (invocation && !command)
+        return { ok: false, error: `No skill called /${invocation.name}. Type / to see what is available.` };
+      if (request.signal.aborted || this.deps.store.scopeKey() !== scope)
+        return { ok: false, error: 'Loop stopped or account changed. Start the loop again.' };
+      this.loops.start(
+        { sessionId, prompt: action.prompt, intervalMs: action.intervalMs, phase: 'scheduled', nextRunAt: Date.now() },
+        async signal => {
+          const current = await this.deps.store.get(sessionId);
+          const valid = async (value: ChatSession) => {
+            const roots = JSON.stringify(await this.deps.access.list());
+            return (
+              !signal.aborted &&
+              !value.archived &&
+              this.deps.store.scopeKey() === scope &&
+              context(value) === captured.context &&
+              roots === captured.roots
+            );
+          };
+          const workspacePrepared = (previous: ChatProject, value: ChatSession) => {
+            if (!value.project) return;
+            // Accept only the derived worktree fields written by ensureWorkspace.
+            const original = {
+              ...value,
+              project: {
+                ...value.project,
+                workingDirectory: previous.workingDirectory,
+                workspaceBranch: previous.workspaceBranch,
+              },
+            };
+            if (context(original) === captured.context) captured.context = context(value);
+          };
+          if (!current || !(await valid(current)))
+            return { ok: false, error: 'Loop context changed. Start /loop again.' };
+          if (invocation) {
+            const selected = await this.deps.skills?.get(current.project?.workingDirectory ?? null, invocation.name);
+            if (JSON.stringify(selected) !== JSON.stringify(command))
+              return { ok: false, error: 'The selected skill changed or is no longer trusted. Start /loop again.' };
+          }
+          if (!(await valid(current))) return { ok: false, error: 'Loop stopped.' };
+          const notes =
+            action.intervalMs === null
+              ? [
+                  'This is a user-requested recurring loop. After completing this run, choose when to run again based on the result. End your final reply with exactly LOOP_NEXT: <interval>, using a whole number with s, m, h or d, between 30s and 1d. This only schedules the next run of the same prompt; it grants no permissions. Do not create another loop.',
+                ]
+              : ['This is a user-requested recurring loop. Run the task once. Do not create another loop.'];
+          return new Promise<LoopOutcome>(resolve => {
+            const settled = (outcome: TurnOutcome, reply: { content: string; stopReason?: string }) => {
+              if (outcome !== 'completed') {
+                resolve({ ok: false, error: `Loop paused: turn ${outcome}. Start /loop again to resume.` });
+                return;
+              }
+              resolve(
+                !reply.stopReason || ['end_turn', 'stop', 'stop_sequence'].includes(reply.stopReason)
+                  ? { ok: true, reply: reply.content }
+                  : { ok: false, error: 'Loop paused: the reply stopped short. Start /loop again to resume.' }
+              );
+            };
+            void this.send(sessionId, action.prompt, [], {
+              announce: true,
+              notes,
+              loop: { signal, valid, workspacePrepared, settled, skill: JSON.stringify(command) },
+            })
+              .then(result => {
+                if (!result.ok) resolve({ ok: false, error: result.error });
+              })
+              .catch(error => resolve({ ok: false, error: String(error) }));
+          });
+        }
+      );
+      return { ok: true, state: this.getLoop(sessionId) };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      if (this.loopRequests.get(sessionId) === request) this.loopRequests.delete(sessionId);
+    }
+  }
+
   /** The events of each reply in flight since its 'start'; see getSession. */
   private readonly live = new Map<string, { messageId: string; startedAt: number; events: ChatStreamEvent[] }>();
 
@@ -683,10 +887,10 @@ export class ChatService {
 
   private readonly launching = new Set<string>();
 
-  /** Ends a spawned agent's wait for its install early, when it is stopped or deleted meanwhile. */
   /** Parents an agent worktree was cut for during this run; see mayHaveAgentWorktrees. */
   private readonly agentParents = new Set<string>();
-  private readonly installWaits = new Map<string, (reason: 'stopped' | 'deleted') => void>();
+  /** A stop or delete that reached a spawn still preparing; read before its first turn is sent. */
+  private readonly launchInterrupts = new Map<string, 'stopped' | 'deleted'>();
 
   /** Startup has failed; no new input may race its preservation or deletion. */
   private readonly abandoning = new Set<string>();
@@ -859,6 +1063,7 @@ export class ChatService {
     // A cancelled relay has no composer to go back to, so it lands in the transcript instead:
     // the user declined to let it RUN, which is not the same as never having received it.
     if (cancelled?.relay) void this.strandRelay(sessionId, [cancelled]).catch(() => undefined);
+    this.loops.idle(sessionId);
   }
 
   /**
@@ -990,6 +1195,7 @@ export class ChatService {
   }
 
   private archiveCleanup(sessionId: string): void {
+    this.stopLoop(sessionId);
     this.wake?.forget(sessionId);
     // Stops polling only; opening the conversation again lists its cards, which resumes them.
     this.deps.videoJobs?.stopSession(sessionId);
@@ -1558,6 +1764,19 @@ export class ChatService {
    * app chooses by itself comes through here.
    */
   async setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null> {
+    const scope = this.deps.store.scopeKey();
+    const session = await this.deps.store.get(sessionId);
+    if (session?.workerSelection) {
+      if (this.hasTurnInFlight(sessionId))
+        throw new Error('Stop the worker attempt before explicitly changing its model.');
+      validateWorkerModel(model, (await this.listModels()).models, {
+        localOnly: this.deviceLocal() || isLocalModel(session.model),
+        ...session.workerSelection?.requirements,
+      });
+      const updated = await this.deps.store.setWorkerModel(sessionId, model, scope);
+      if (updated) this.deps.summaryChanged?.(updated);
+      return updated;
+    }
     const updated = await this.deps.store.setModel(sessionId, model);
     if (updated) {
       // The conversation already switched; failing to remember it must not undo that for the user.
@@ -1587,8 +1806,209 @@ export class ChatService {
   }
 
   /** Read at the start of each turn, so a change applies from the next one. */
-  setSessionOrchestrate(sessionId: string, orchestrate: boolean): Promise<ChatSessionSummary | null> {
+  async setSessionOrchestrate(sessionId: string, orchestrate: boolean): Promise<ChatSessionSummary | null> {
+    const scope = this.deps.store.scopeKey();
+    const session = await this.deps.store.get(sessionId);
+    if (!session || this.deps.store.scopeKey() !== scope) return null;
+    if (orchestrate && !session.orchestrationPolicy) {
+      const policy = await this.deps.store.getRolePolicy();
+      const saved = await this.deps.store.setOrchestrationPolicy(
+        sessionId,
+        {
+          rootSessionId: sessionId,
+          rootRunId: randomUUID(),
+          policy,
+        },
+        scope
+      );
+      if (!saved) return null;
+    }
+    if (!orchestrate && !session.origin) await this.deps.store.setOrchestrationPolicy(sessionId, undefined, scope);
+    if (this.deps.store.scopeKey() !== scope) return null;
     return this.deps.store.setOrchestrate(sessionId, orchestrate);
+  }
+
+  getRolePolicy(): Promise<RolePolicy> {
+    return this.deps.store.getRolePolicy();
+  }
+
+  async setRolePolicy(value: RolePolicy): Promise<RolePolicy> {
+    const policy = rolePolicySchema.parse(value);
+    if (policy.escalation.mode === 'automatic')
+      throw new Error(
+        'Automatic model upgrades require shared root budget admission, which is not connected. Use ask-before-upgrade.'
+      );
+    const scope = this.deps.store.scopeKey();
+    const { models } = await this.listModels();
+    for (const model of new Set([
+      ...Object.values(policy.roles),
+      ...policy.allowedOverrides,
+      ...policy.escalation.allowedModels,
+    ])) {
+      if (model !== 'inherit') validateWorkerModel(model, models, { localOnly: this.deviceLocal() });
+    }
+    if (this.deps.store.scopeKey() !== scope) throw new Error('Account changed. Reopen settings.');
+    return this.deps.store.setRolePolicy(policy);
+  }
+
+  private taskDecisions = new Set<string>();
+
+  async actOnTask(callerId: string | null, sessionId: string, value: TaskAction): Promise<ChatSessionSummary> {
+    const action = taskActionSchema.parse(value);
+    const scope = this.deps.store.scopeKey();
+    const key = `${scope}:${sessionId}`;
+    if (action.kind !== 'report' && this.taskDecisions.has(key))
+      throw new Error('A task decision is already in progress.');
+    if (action.kind !== 'report') this.taskDecisions.add(key);
+    try {
+      const child = await this.deps.store.get(sessionId);
+      if (!child?.workerTask || !child.orchestrationPolicy) throw new Error('No structured task exists.');
+      const task = child.workerTask;
+      const caller = callerId ? await this.deps.store.get(callerId) : null;
+      if (callerId && (!caller || (isLocalModel(child.model) && !isLocalModel(caller.model))))
+        throw new Error('This caller cannot access the task evidence.');
+      if (callerId && action.kind === 'report' && callerId !== child.id)
+        throw new Error('Workers report only their own results.');
+      if (
+        callerId &&
+        action.kind !== 'report' &&
+        (child.origin?.parentSessionId !== callerId ||
+          !caller ||
+          (!orchestratesAgents(caller) && !(caller.origin && caller.orchestrationPolicy)))
+      )
+        throw new Error('Only the active orchestrating parent may assess this task.');
+      if (callerId && action.kind === 'upgrade')
+        throw new Error('A model cannot approve a model upgrade. Use agent details.');
+      if (action.kind !== 'report' && action.kind !== 'cancel' && this.hasTurnInFlight(sessionId))
+        throw new Error('Wait for the current attempt to stop before deciding.');
+      let next = task;
+      let nextModel: string | undefined;
+      let seed: string | undefined;
+      if (action.kind === 'report') {
+        if (task.state.status === 'canceled' || (task.state.status === 'completed' && task.state.accepted))
+          throw new Error('This task is already settled.');
+        if (
+          action.report.status === 'escalation-requested' &&
+          task.resolvedDecisions.includes(action.report.decisionId)
+        )
+          return summarizeSession(child);
+        next = {
+          ...task,
+          state: action.report.status === 'completed' ? { ...action.report, accepted: false } : action.report,
+        };
+      } else if (action.kind === 'accept') {
+        next = acceptTask(task, action.assessment);
+      } else if (action.kind === 'cancel') {
+        this.stop(sessionId);
+        next = { ...task, state: { status: 'canceled', reason: action.reason } };
+      } else if (action.kind === 'deny' || action.kind === 'upgrade') {
+        if (task.resolvedDecisions.includes(action.decisionId)) return summarizeSession(child);
+        if (task.state.status !== 'escalation-requested' || task.state.decisionId !== action.decisionId)
+          throw new Error('This decision is no longer pending.');
+        if (action.kind === 'deny')
+          next = {
+            ...task,
+            resolvedDecisions: [...task.resolvedDecisions, action.decisionId],
+            state: { status: 'blocked', reason: action.reason, evidence: task.state.evidence },
+          };
+        else {
+          const policy = child.orchestrationPolicy.policy;
+          if (
+            !policy.escalation.allowedRoles.includes(task.contract.role) ||
+            !policy.escalation.allowedModels.includes(action.modelId)
+          )
+            throw new Error('Model upgrade is outside this run policy. Revise the task or cancel it.');
+          nextModel = action.modelId;
+          validateWorkerModel(nextModel, (await this.listModels()).models, {
+            localOnly: this.deviceLocal() || isLocalModel(child.model),
+            ...child.workerSelection?.requirements,
+          });
+          seed = `The user approved this targeted model change. Continue the same task using the existing changes and evidence.\n\n${renderTaskBrief(task.contract)}`;
+          next = {
+            ...task,
+            resolvedDecisions: [...task.resolvedDecisions, action.decisionId],
+            state: { status: 'queued' },
+            attempts: [
+              ...task.attempts,
+              { id: randomUUID(), model: nextModel, startedAt: new Date().toISOString(), trigger: 'user-upgrade' },
+            ],
+          };
+        }
+      } else if (action.kind === 'revise') {
+        if (task.state.status === 'canceled') throw new Error('Canceled tasks cannot restart.');
+        if (action.contract.role !== task.contract.role)
+          throw new Error('Keep the task role when revising. Reassign explicitly with a new task.');
+        seed = `${action.instruction}\n\n${renderTaskBrief(action.contract)}`;
+        next = {
+          ...task,
+          contract: action.contract,
+          state: { status: 'queued' },
+          attempts: [
+            ...task.attempts,
+            { id: randomUUID(), model: child.model, startedAt: new Date().toISOString(), trigger: 'revision' },
+          ],
+        };
+      }
+      const updated = await this.deps.store.updateWorkerTask(
+        sessionId,
+        current => {
+          if (action.kind === 'report') {
+            if (current.state.status === 'canceled' || (current.state.status === 'completed' && current.state.accepted))
+              throw new Error('This task is already settled.');
+            if (current.attempts.at(-1)?.id !== task.attempts.at(-1)?.id)
+              throw new Error('A newer task attempt has started.');
+            if (
+              action.report.status === 'escalation-requested' &&
+              current.resolvedDecisions.includes(action.report.decisionId)
+            )
+              return current;
+            return { ...current, state: next.state };
+          }
+          if (current.state.status === 'canceled' && action.kind !== 'cancel')
+            throw new Error('This task was canceled.');
+          if (action.kind === 'cancel') return { ...current, state: next.state };
+          if (current.attempts.at(-1)?.id !== task.attempts.at(-1)?.id)
+            throw new Error('A newer task attempt has started. Reload agent details.');
+          return next;
+        },
+        scope,
+        nextModel
+      );
+      if (!updated) throw new Error('Account or task changed. Reload agent details.');
+      if (action.kind === 'cancel') this.stop(sessionId);
+      if (seed) {
+        if (!child.origin) throw new Error('Task lineage is missing.');
+        await this.deps.store.updateWorkerTask(
+          sessionId,
+          current => (current.state.status === 'canceled' ? current : { ...current, state: { status: 'running' } }),
+          scope
+        );
+        if (this.deps.store.scopeKey() !== scope) throw new Error('Account changed before the task could start.');
+        this.spawnWatch.set(sessionId, { parentSessionId: child.origin.parentSessionId });
+        const sent = await this.send(sessionId, seed, [], { spawnSeed: true });
+        if (!sent.ok) {
+          this.spawnWatch.delete(sessionId);
+          await this.deps.store.updateWorkerTask(
+            sessionId,
+            current =>
+              current.state.status === 'canceled'
+                ? current
+                : {
+                    ...current,
+                    state: { status: 'blocked', reason: sent.error, evidence: ['No new model attempt started.'] },
+                  },
+            scope
+          );
+          throw new Error(sent.error);
+        }
+      }
+      const latest = await this.deps.store.get(sessionId);
+      const summary = latest ? summarizeSession(latest) : updated;
+      this.deps.summaryChanged?.(summary);
+      return summary;
+    } finally {
+      if (action.kind !== 'report') this.taskDecisions.delete(key);
+    }
   }
 
   /**
@@ -1931,8 +2351,8 @@ export class ChatService {
     const scopeKey = this.deps.store.scopeKey() ?? 'local';
     this.deps.approvals?.forgetSession(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
-    // Ahead of stop(), so a spawn waiting on its install reads this as the delete it is.
-    this.installWaits.get(sessionId)?.('deleted');
+    // Ahead of stop(), so a spawn still preparing reads this as the delete it is.
+    if (this.launching.has(sessionId)) this.launchInterrupts.set(sessionId, 'deleted');
     this.stop(sessionId);
     await this.deps.capabilities
       ?.revokeMatching(
@@ -1956,6 +2376,7 @@ export class ChatService {
     // Video polling stops first, so a download landing afterwards cannot recreate the folder.
     this.deps.videoJobs?.forgetSession(sessionId);
     await this.deps.media?.forgetSession(sessionId);
+    this.deps.model?.forget?.(sessionId);
     // Read before the delete: its parent's running turn drops this worktree from its roots (agentWorktrees).
     const parentId = (await this.deps.store.get(sessionId))?.origin?.parentSessionId;
     if (deleteStoredSession) await this.deps.store.delete(sessionId);
@@ -1997,11 +2418,15 @@ export class ChatService {
    * server it started. `bash_kill` and the panel's Stop button are how those end.
    */
   stop(sessionId: string): void {
-    this.installWaits.get(sessionId)?.('stopped');
+    this.stopLoop(sessionId);
+    if (this.launching.has(sessionId) && !this.launchInterrupts.has(sessionId)) {
+      this.launchInterrupts.set(sessionId, 'stopped');
+    }
     this.active.get(sessionId)?.abort();
   }
 
   dispose(): void {
+    this.clearLoops();
     // Dropped BEFORE the aborts, so a promotion still in flight does not start a turn on the
     // way out: each abort settles a reply, and settleQueue would otherwise send it.
     this.promoted.clear();
@@ -2044,6 +2469,7 @@ export class ChatService {
       // An exit that came due while this send was being accepted was skipped as busy; a send
       // that was then refused starts no turn that would deliver it.
       this.wakeIfIdle(sessionId);
+      this.loops.idle(sessionId);
     }
   }
 
@@ -2074,6 +2500,8 @@ export class ChatService {
     // turn after appending it would leave the prompt in the thread with no reply coming.
     const existing = await this.deps.store.get(sessionId);
     if (!existing) return { ok: false, error: 'That conversation no longer exists.' };
+    if (options.loop && !(await options.loop.valid(existing)))
+      return { ok: false, error: 'Loop context changed or stopped.' };
 
     // Refused in main, not merely disabled in the UI. A Code session with no project has no
     // working directory, and a turn is the only thing that can make its tools run - so the
@@ -2104,6 +2532,9 @@ export class ChatService {
     const skillCommand = invocation
       ? await this.deps.skills?.get(existing.project?.workingDirectory ?? null, invocation.name)
       : undefined;
+    if (options.loop && JSON.stringify(skillCommand) !== options.loop.skill) {
+      return { ok: false, error: 'The selected skill changed. Start /loop again.' };
+    }
     if (invocation && !skillCommand) {
       // Named rather than silently sent as prose: a skill the user believes ran, which in fact
       // reached the model as the literal text "/deploy", is the one outcome worth refusing over.
@@ -2135,6 +2566,7 @@ export class ChatService {
       return { ok: false, error: 'This conversation could not start. Wait for startup cleanup to finish.' };
     }
     if (this.isBusy(sessionId, options.spawnSeed === true)) {
+      if (options.loop) return { ok: false, error: 'Loop paused because another turn started. Start /loop again.' };
       if (!this.deps.queue || released) return { ok: false, error: 'This conversation is still replying.' };
       // A card the model is parked on would hold this message behind the turn forever; the new
       // message is the user moving on, so it closes the question rather than waiting on it.
@@ -2192,6 +2624,17 @@ export class ChatService {
     const api = this.deps.getApiClient();
     if (!api && !isLocalModel(claimed.model) && !this.deviceLocal())
       return { ok: false, error: 'Sign in to send a message.' };
+    if (claimed.workerSelection) {
+      try {
+        validateWorkerModel(claimed.model, (await this.listModels()).models, {
+          localOnly: this.deviceLocal() || isLocalModel(claimed.workerSelection.effectiveModel),
+          ...claimed.workerSelection.requirements,
+        });
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
+    if (claimed.workerTask?.state.status === 'canceled') return { ok: false, error: 'This task was canceled.' };
     const settled: SettledModel = this.deviceLocal()
       ? await this.settleDeviceLocal(claimed, await this.localModelsFor(claimed.model))
       : { session: claimed };
@@ -2217,9 +2660,11 @@ export class ChatService {
     // still ahead of the prompt being stored, for the reason createCodeSession resolved before
     // writing the session: a worktree that cannot be made must refuse the turn rather than
     // leave a prompt in the thread with no reply coming.
+    const previousProject = options.loop && awaitsWorktree(existing.project) ? existing.project : undefined;
     const workspaceFailure = await this.ensureWorkspace(existing, prompt, timer);
     timer?.lap('workspace');
     if (workspaceFailure) return { ok: false, error: workspaceFailure.error };
+    if (previousProject) options.loop?.workspacePrepared(previousProject, existing);
 
     // The skill's body becomes the turn, and `skill` records which one so the thread can show
     // "/review src/foo.ts" rather than the page of instructions that was actually sent.
@@ -2242,8 +2687,35 @@ export class ChatService {
     // Last before the prompt is stored, so the boundary lands above it and the summary covers
     // everything the prompt follows on from. Every refusal above has already had its say: a
     // turn that will not go out must not cost a summary.
+    if (reconciled.workerTask && !options.spawnSeed) {
+      if (reconciled.workerTask.state.status === 'canceled')
+        return { ok: false, error: 'This task was canceled. Start a new task explicitly.' };
+      const updated = await this.deps.store.updateWorkerTask(sessionId, task =>
+        task.state.status === 'canceled'
+          ? task
+          : {
+              ...task,
+              state: { status: 'running' },
+              attempts: [
+                ...task.attempts,
+                { id: randomUUID(), model: reconciled.model, startedAt: new Date().toISOString(), trigger: 'revision' },
+              ],
+            }
+      );
+      if (!updated || updated.workerTask?.state.status === 'canceled')
+        return { ok: false, error: 'The task no longer exists or was canceled.' };
+      this.deps.summaryChanged?.(updated);
+      if (reconciled.origin) this.spawnWatch.set(sessionId, { parentSessionId: reconciled.origin.parentSessionId });
+    }
     await this.autoCompact(reconciled);
     timer?.lap('autoCompact');
+    if (options.loop) {
+      const current = await this.deps.store.get(sessionId);
+      if (!current || !(await options.loop.valid(current)))
+        return { ok: false, error: 'Loop context changed or stopped.' };
+    }
+    if (options.loop && !(await options.loop.valid(reconciled)))
+      return { ok: false, error: 'Loop context changed or stopped.' };
 
     // A relay carries `role: 'user'` because that is the only role out-of-band text can reach a
     // stateless completions endpoint under - the same compromise the spawned-session report
@@ -2275,6 +2747,9 @@ export class ChatService {
     const session = await this.deps.store.appendMessage(sessionId, userMessage);
     timer?.lap('append');
     if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+    if (options.loop && !(await options.loop.valid(session)))
+      return { ok: false, error: 'Loop context changed or stopped.' };
+    if (session.workerTask?.state.status === 'canceled') return { ok: false, error: 'This task was canceled.' };
 
     // Now that the conversation's attachments are settled, anything on disk it does not
     // reference was added to the composer and then removed. See AttachmentStore.prune.
@@ -2287,7 +2762,7 @@ export class ChatService {
     if (released?.automatic?.kind === 'auto-fix') this.autoFixTurns.add(sessionId);
     else this.autoFixTurns.delete(sessionId);
     // A relay, an automatic turn and a spawn's seed prompt all start a turn nobody typed here.
-    if (!released?.relay && !released?.automatic && seedHops === undefined) {
+    if (!released?.relay && !released?.automatic && !options.loop && seedHops === undefined) {
       this.attendedTurns.add(sessionId);
       this.wake?.attended(sessionId);
       // The user typing here lifts a hold their stop put on agent wakes, restarts the wake cap,
@@ -2296,9 +2771,16 @@ export class ChatService {
     } else {
       this.attendedTurns.delete(sessionId);
       const parentSessionId = session.origin?.parentSessionId;
-      if (parentSessionId) this.spawnWatch.set(sessionId, { parentSessionId });
+      if (parentSessionId && isAgentSession(session)) this.spawnWatch.set(sessionId, { parentSessionId });
     }
-    const replyId = this.startReply(session, api, historyScope, undefined, released?.relay?.hops ?? seedHops ?? 0);
+    const replyId = this.startReply(
+      session,
+      api,
+      historyScope,
+      undefined,
+      released?.relay?.hops ?? seedHops ?? 0,
+      options.loop?.settled
+    );
     this.noteNotify(sessionId, released?.relay);
 
     // After the reply is in flight, and never awaited: a first answer that waited on a title
@@ -2346,6 +2828,31 @@ export class ChatService {
       return { ok: false, error: 'There is nothing to continue here.' };
     }
 
+    if (session.workerSelection) {
+      try {
+        validateWorkerModel(session.model, (await this.listModels()).models, {
+          localOnly: this.deviceLocal() || isLocalModel(session.model),
+          ...session.workerSelection?.requirements,
+        });
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
+    if (session.workerTask) {
+      if (session.workerTask.state.status === 'canceled') return { ok: false, error: 'This task was canceled.' };
+      const updated = await this.deps.store.updateWorkerTask(sessionId, task =>
+        task.state.status === 'canceled'
+          ? task
+          : {
+              ...task,
+              state: { status: 'running' },
+            }
+      );
+      if (!updated || updated.workerTask?.state.status === 'canceled')
+        return { ok: false, error: 'This task no longer exists or was canceled.' };
+      if (updated) this.deps.summaryChanged?.(updated);
+      if (session.origin) this.spawnWatch.set(sessionId, { parentSessionId: session.origin.parentSessionId });
+    }
     // Reached only from the Continue button, so whoever clicked it is there to answer a card.
     this.attendedTurns.add(sessionId);
     // A reply stored before it was stamped still says what it started on in its context snapshot.
@@ -2411,9 +2918,18 @@ export class ChatService {
       return { ok: false, error: 'This conversation is still replying. Wait for the turn to finish, then compact it.' };
     }
 
-    const session = await this.deps.store.get(sessionId);
-    if (!session) return { ok: false, error: 'That conversation no longer exists.' };
-    return this.compact(session, focus, false);
+    this.compacting.add(sessionId);
+    try {
+      const session = await this.deps.store.get(sessionId);
+      if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+      const result = await this.compact(session, focus, false);
+      if (!result.ok) this.loops.pauseWaiting(sessionId);
+      return result;
+    } finally {
+      this.compacting.delete(sessionId);
+      this.flushQueue(sessionId);
+      this.loops.idle(sessionId);
+    }
   }
 
   /**
@@ -2601,7 +3117,8 @@ export class ChatService {
      * relayed message's own depth when session_send started it. Left undefined by
      * `continueReply`, which is carrying an existing turn on and keeps the depth it had.
      */
-    hops?: number
+    hops?: number,
+    onSettled?: (outcome: TurnOutcome, reply: { content: string; stopReason?: string }) => void
   ): string {
     const sessionId = session.id;
     const replyId = resume?.id ?? randomUUID();
@@ -2610,7 +3127,10 @@ export class ChatService {
     this.deps.activity?.replyStarted(sessionId);
     if (hops !== undefined) this.turnRelay.set(sessionId, { hops, sends: 0 });
 
-    void this.runReply(session, replyId, api, controller, historyScope, resume)
+    let finalReply = { content: '' } as { content: string; stopReason?: string };
+    void this.runReply(session, replyId, api, controller, historyScope, resume, reply => {
+      finalReply = reply;
+    })
       // runReply already catches, so this only covers a throw from its own bookkeeping. A turn
       // whose end cannot be classified is treated as failed, which HOLDS the queue rather than
       // firing it - the safe direction when the outcome is unknown.
@@ -2640,6 +3160,8 @@ export class ChatService {
         // and keeps the report above the turn that answers it.
         await this.flushChildReports(sessionId).catch(() => undefined);
         this.settleQueue(sessionId, outcome);
+        onSettled?.(outcome, finalReply);
+        this.loops.idle(sessionId);
       });
 
     return replyId;
@@ -2658,6 +3180,7 @@ export class ChatService {
    * gone - in that case the request goes out as saved and the server decides.
    */
   private async reconcileModel(session: ChatSession): Promise<{ session: ChatSession; notice?: string }> {
+    if (session.workerSelection) return { session };
     const available = this.deps.models?.cached();
     if (!available || available.length === 0) return { session };
     if (findModelOption(available, session.model)) return { session };
@@ -2682,7 +3205,7 @@ export class ChatService {
    * proceeds and anything else is refused, so nothing goes anywhere hosted.
    */
   private async settleDeviceLocal(session: ChatSession, models: readonly ChatModelOption[]): Promise<SettledModel> {
-    if (findModelOption(models, session.model)) return { session };
+    if (session.workerSelection || findModelOption(models, session.model)) return { session };
     if (models.length === 0)
       return parseLocalModelId(session.model)
         ? { session }
@@ -2801,7 +3324,8 @@ export class ChatService {
     api: AuthenticatedApiClient | null,
     controller: AbortController,
     historyScope: string | null,
-    resume?: ResumedReply
+    resume?: ResumedReply,
+    completed?: (reply: { content: string; stopReason?: string }) => void
   ): Promise<TurnOutcome> {
     const sessionId = session.id;
     // A new id from each mid-turn message on: see takeArrivals and the round loop below.
@@ -2943,6 +3467,15 @@ export class ChatService {
             detach: () => simulatorDeps.view.detach(),
           }
         : undefined;
+      // Code sessions only: the model file and the GLB written beside it live in the project.
+      const modelDeps = this.deps.model;
+      const model: ModelContext | undefined =
+        modelDeps && workingDirectory
+          ? {
+              view: modelDeps.for(sessionId),
+              keepScreenshot: (bytes, caption) => this.keepScreenshot(sessionId, bytes, caption),
+            }
+          : undefined;
       const offerExplore = shouldOfferExplore(catalog?.models ?? [], session.model);
       const exploreFor = (granted: readonly string[]): ExploreContext | undefined =>
         api && !localTurn && granted.length > 0 && offerExplore
@@ -2990,6 +3523,7 @@ export class ChatService {
               browser: !!browser,
               screen: !!screen,
               simulator: !!simulator,
+              model: !!model,
               memory: !!memory,
               skills: !!skills,
               web: !!web,
@@ -2997,6 +3531,8 @@ export class ChatService {
               ask,
               suggestions: !session.origin && !orchestrating,
               delegates: orchestrating,
+              structuredTask: !!session.workerTask,
+              managedDelegation: !!session.origin && !!session.orchestrationPolicy,
               mcp: mcpTools.map(binding => binding.definition.schema),
               mcpServers: !!this.deps.mcp,
               pullRequest: session.mode === 'code' && attended && !!this.deps.pullRequests,
@@ -3056,6 +3592,7 @@ export class ChatService {
           ask,
           screen: !!screen,
           simulator: !!simulator,
+          model: !!model,
         }),
       });
       const schemaFor = (name: string): ToolSchema | undefined =>
@@ -3111,6 +3648,10 @@ export class ChatService {
         tools = requestTools();
       } else {
         wire = await toCompletionMessages(session, readAttachment);
+      }
+      if (!resume && images?.vision) {
+        // Replayed images exist only on this turn's wire, so next turn the cached prefix changes at this user message and the rest is re-written to the cache once (accepted).
+        prependToPrompt(wire, await this.previousReplyImages(session, images));
       }
       const systemMessage = () =>
         buildSystemMessage(
@@ -3468,6 +4009,7 @@ export class ChatService {
                 browser,
                 screen,
                 simulator,
+                model,
                 images,
                 memory,
                 skills,
@@ -3652,6 +4194,7 @@ export class ChatService {
       }
 
       await settleSegment();
+      completed?.({ content, stopReason });
       // A truncated reply ('max_tokens'), a budget stop and a context stop all count as
       // completed: the model said something and the user can read it. Only the user's own stop
       // is 'aborted'.
@@ -3827,6 +4370,7 @@ export class ChatService {
    * to the composer, where the user decides whether it still says what they meant.
    */
   private settleQueue(sessionId: string, outcome: TurnOutcome): void {
+    if (outcome !== 'completed') this.loops.pauseWaiting(sessionId);
     // A promotion outranks the outcome, and is checked before it rather than under 'aborted',
     // because the turn may equally have finished by itself in the moment between the click and
     // the interrupt. Either way the promoted message is the next turn, and the REST of the
@@ -4033,6 +4577,55 @@ export class ChatService {
     });
   }
 
+  /**
+   * Content blocks re-showing the images generate_image made in the reply just before this prompt.
+   * A tool's image turn is never replayed (see sentRounds), so without this the model cannot see
+   * the picture a "turn this into a 3D model" refers to. Only that one reply, to bound the cost.
+   */
+  private async previousReplyImages(session: ChatSession, images: ImageContext): Promise<unknown[]> {
+    const store = this.deps.media;
+    if (!store) return [];
+    const history = sentHistory(session.messages);
+    if (history.at(-1)?.role !== 'user') return [];
+    const reply: ChatMessage[] = [];
+    for (let index = history.length - 2; index >= 0 && history[index].role === 'assistant'; index--) {
+      reply.unshift(history[index]);
+    }
+    const generated = reply
+      .flatMap(message => message.toolCalls ?? [])
+      .filter(call => call.name === GENERATED_IMAGE_TOOL && call.status === 'done')
+      .flatMap(call => (call.media ?? []).filter(item => item.kind === 'image'));
+
+    const shown: { image: { mediaType: string; data: string } }[] = [];
+    for (const item of generated) {
+      const location = parseMediaUrl(item.url);
+      const stored = location ? await store.read(location.sessionId, location.name) : null;
+      const type = stored ? sniffImageType(stored.bytes) : null;
+      if (!stored || !type || stored.bytes.length > MAX_TOOL_IMAGE_INPUT_BYTES) {
+        this.deps.logger.warn(`CHAT: not re-showing generated image ${item.url}: missing or unreadable`);
+        continue;
+      }
+      const fitted = fitToolImage(images, stored.bytes, type);
+      if (!fitted.ok) {
+        this.deps.logger.warn(`CHAT: not re-showing generated image ${item.url}: ${fitted.reason}`);
+        continue;
+      }
+      shown.push({ image: { mediaType: fitted.mediaType, data: fitted.bytes.toString('base64') } });
+    }
+    const { kept } = withinImageBudget(shown);
+    if (kept.length === 0) return [];
+    return [
+      {
+        type: 'text',
+        text: `${kept.length === 1 ? 'Image' : 'Images'} ${GENERATED_IMAGE_TOOL} made in the previous reply, shown again because the user may be referring to ${kept.length === 1 ? 'it' : 'them'}.`,
+      },
+      ...kept.map(({ image }) => ({
+        type: 'image',
+        source: { type: 'base64', media_type: image.mediaType, data: image.data },
+      })),
+    ];
+  }
+
   /** Images a finished call asked to show the model, handed over once. */
   private takeImages(callId: string): { mediaType: string; data: string }[] {
     const images = this.pendingImages.get(callId) ?? [];
@@ -4063,6 +4656,7 @@ export class ChatService {
       browser: BrowserContext | undefined;
       screen: ScreenContext | undefined;
       simulator: SimulatorContext | undefined;
+      model: ModelContext | undefined;
       images: ImageContext | undefined;
       memory: MemoryStore | undefined;
       skills: SkillContext | undefined;
@@ -4098,6 +4692,7 @@ export class ChatService {
       browser,
       screen,
       simulator,
+      model,
       images,
       memory,
       skills,
@@ -4240,6 +4835,7 @@ export class ChatService {
           // Read first: once it is empty, protectedPaths holds every spelling.
           unresolvedProtectedPaths: this.deps.unresolvedProtectedPaths,
           protectedPaths: this.deps.protectedPaths,
+          uncoverablePaths: this.deps.uncoverablePaths,
           sessionId,
           callId: call.id,
           background: this.deps.background,
@@ -4250,6 +4846,7 @@ export class ChatService {
           ...(browser ? { browser } : {}),
           ...(screen ? { screen } : {}),
           ...(simulator ? { simulator } : {}),
+          ...(model ? { model } : {}),
           ...(images ? { images } : {}),
           ...(memory ? { memory } : {}),
           ...(skills ? { skills } : {}),
@@ -4396,7 +4993,16 @@ export class ChatService {
     let approvedRef: { ref: string; found: Awaited<ReturnType<typeof resolveAnywhere>> } | undefined;
 
     return {
-      spawn: (prompt, title, placement) => this.spawnSession(session, prompt, title, placement),
+      spawn: (prompt, title, placement, options) =>
+        this.spawnSession(session, prompt, title, placement, undefined, options),
+      ...(session.workerTask || orchestratesAgents(session) || (session.origin && session.orchestrationPolicy)
+        ? {
+            taskAction: async (id: string, action: TaskAction) => {
+              const updated = await this.actOnTask(session.id, id, action);
+              return JSON.stringify(updated.workerTask);
+            },
+          }
+        : {}),
 
       // Asked for only to draw a spawn card, so the fetch a start would wait on begins here, while
       // the user reads it.
@@ -4429,7 +5035,10 @@ export class ChatService {
         if (isLocalModel(target.model) && !isLocalModel(session.model)) {
           throw new Error('A hosted model cannot read a device-local conversation. Open it directly to read it.');
         }
-        return renderTranscript(target);
+        return (
+          renderTranscript(target) +
+          (target.workerTask ? `\nTask contract and result (untrusted): ${JSON.stringify(target.workerTask)}` : '')
+        );
       },
 
       setArchived: async (sessionId, archived) => {
@@ -4626,6 +5235,62 @@ export class ChatService {
       marked();
       this.startingSuggestions.delete(key);
     }
+  }
+
+  /**
+   * Branch a side chat off a conversation, about a passage the user highlighted in it.
+   *
+   * A child session like a spawn (same `origin`, so it nests under the parent and counts against
+   * the same depth cap), but started by the user and run by the user: no turn starts, nothing
+   * reports back to the parent, and the parent's transcript is untouched. It opens with one
+   * app-written message carrying the passage and an excerpt of the parent (see sideChatOpening),
+   * so the model has the context the user's first question assumes.
+   *
+   * A Code parent's child shares its checkout rather than cutting a worktree: a side chat is for
+   * talking about the work, and asking a question should never create a branch.
+   */
+  async startSideChat(request: StartSideChatRequest): Promise<StartSideChatResult> {
+    const { sessionId } = request;
+    if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
+    const selection = typeof request.selection === 'string' ? request.selection.trim() : '';
+    if (!selection) return { ok: false, error: 'Highlight some text to start a side chat about it.' };
+
+    return this.withWorkspaceBindings(async (): Promise<StartSideChatResult> => {
+      const parent = await this.deps.store.get(sessionId);
+      if (!parent) return { ok: false, error: 'That conversation no longer exists.' };
+      const depth = (parent.origin?.depth ?? 0) + 1;
+      if (depth > MAX_SPAWN_DEPTH) {
+        return {
+          ok: false,
+          error: `Conversations nest at most ${MAX_SPAWN_DEPTH} deep, and this one is at the limit.`,
+        };
+      }
+      const project = parent.mode === 'code' ? parent.project : undefined;
+      if (project) {
+        const unusable = await this.workspaceBindingReason(project.workingDirectory);
+        if (unusable) return { ok: false, error: unusable };
+      }
+
+      const opening = sideChatOpening(parent, selection);
+      const child = await this.deps.store.create(parent.model, {
+        mode: parent.mode,
+        ...(project ? { project: childProject(project, null) } : {}),
+        ...(parent.grantedDirectories?.length ? { grantedDirectories: [...parent.grantedDirectories] } : {}),
+        origin: { parentSessionId: parent.id, depth, seedPrompt: opening.selection, kind: 'side-chat' },
+        // The same ceiling a spawn gets; see spawnSessionWithWorkspaceLease.
+        approvalMode: parent.approvalMode === 'full' ? 'auto' : parent.approvalMode,
+      });
+      const stored = await this.deps.store.appendMessage(child.id, {
+        id: randomUUID(),
+        role: 'user',
+        content: opening.content,
+        display: opening.display,
+        system: true,
+        sideChatOf: { sessionId: parent.id, title: parent.title },
+        createdAt: new Date().toISOString(),
+      });
+      return { ok: true, session: stored ? summarizeSession(stored) : child };
+    });
   }
 
   /** Put a card whose session could not start back as it was, as the user edited it, to try again. */
@@ -5083,7 +5748,7 @@ export class ChatService {
       grew = false;
       for (const entry of sessions) {
         const parent = entry.origin?.parentSessionId;
-        if (!parent || !parents.has(parent) || parents.has(entry.id)) continue;
+        if (!parent || !isAgentSession(entry) || !parents.has(parent) || parents.has(entry.id)) continue;
         parents.add(entry.id);
         agents.push(entry);
         grew = true;
@@ -5094,6 +5759,16 @@ export class ChatService {
     }
 
     const reasons: string[] = [];
+    const unaccepted = agents.filter(
+      agent =>
+        agent.workerTask &&
+        agent.workerTask.state.status !== 'canceled' &&
+        !(agent.workerTask.state.status === 'completed' && agent.workerTask.state.accepted)
+    );
+    if (unaccepted.length)
+      reasons.push(
+        `Task evidence still needs resolution: ${unaccepted.map(agent => agent.title).join(', ')}. Review task reports and use task_assess before completing.`
+      );
     const working = agents.filter(
       agent =>
         this.hasTurnInFlight(agent.id) ||
@@ -5181,7 +5856,8 @@ export class ChatService {
     prompt: string,
     title: string | undefined,
     placement: SpawnPlacement,
-    onFailed?: (message: string) => Promise<void>
+    onFailed?: (message: string) => Promise<void>,
+    options?: SpawnOptions
   ): Promise<SpawnOutcome> {
     // The worktree branch name this spawn holds (see reserveBranchName). It passes to
     // launchSpawned with the session; until then, any way out of here gives it back.
@@ -5191,7 +5867,7 @@ export class ChatService {
     };
     try {
       return await this.withWorkspaceBindings(() =>
-        this.spawnSessionWithWorkspaceLease(parent, prompt, title, placement, lease, onFailed)
+        this.spawnSessionWithWorkspaceLease(parent, prompt, title, placement, lease, onFailed, options)
       );
     } finally {
       if (!lease.launched && lease.reservation) releaseBranchName(lease.reservation);
@@ -5204,7 +5880,8 @@ export class ChatService {
     title: string | undefined,
     placement: SpawnPlacement,
     lease: BranchLease,
-    onFailed?: (message: string) => Promise<void>
+    onFailed?: (message: string) => Promise<void>,
+    options?: SpawnOptions
   ): Promise<SpawnOutcome> {
     const project = parent.project;
     if (!project) {
@@ -5255,33 +5932,82 @@ export class ChatService {
       }
       timer.lap('branchCheck');
 
+      const validated = spawnOptionsSchema.parse(options ?? {});
+      const managed = (orchestratesAgents(parent) || !!parent.origin) && parent.orchestrationPolicy;
+      const scope = this.deps.store.scopeKey();
+      const explicitWorkerChoice = !!(
+        validated.role ||
+        validated.requestedModelId ||
+        validated.contract ||
+        validated.requirements
+      );
+      const selection =
+        managed && explicitWorkerChoice
+          ? { ...resolveWorkerModel(parent.model, managed.policy, validated), rootRunId: managed.rootRunId }
+          : undefined;
+      if (!managed && (validated.role || validated.requestedModelId || validated.contract || validated.requirements)) {
+        return {
+          ok: false,
+          reason: 'model-policy',
+          message:
+            'Turn on Orchestrate to use role routing or task contracts. Legacy free-text spawn is still available.',
+        };
+      }
+      if (selection) {
+        try {
+          const { models } = await this.listModels();
+          const contextWindow = models.find(model => model.id === selection.effectiveModel)?.contextWindow;
+          const briefTokens = Math.ceil((validated.contract ? renderTaskBrief(validated.contract) : seed).length / 3);
+          validateWorkerModel(selection.effectiveModel, models, {
+            localOnly: this.deviceLocal() || isLocalModel(parent.model),
+            ...validated.requirements,
+            contextTokens:
+              validated.requirements?.contextTokens !== undefined
+                ? Math.max(validated.requirements.contextTokens, briefTokens)
+                : contextWindow
+                  ? briefTokens
+                  : undefined,
+          });
+        } catch (error) {
+          return { ok: false, reason: 'model-policy', message: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      if (this.deps.store.scopeKey() !== scope)
+        return {
+          ok: false,
+          reason: 'model-policy',
+          message: 'Account changed before launch. Try again in the intended account.',
+        };
+      const brief = validated.contract ? renderTaskBrief(validated.contract) : seed;
       const named = title?.trim();
-      const child = await this.deps.store.create(parent.model, {
+      const child = await this.deps.store.create(selection?.effectiveModel ?? parent.model, {
+        ...(managed ? { orchestrationPolicy: managed } : {}),
+        ...(selection ? { workerSelection: selection } : {}),
+        ...(validated.contract
+          ? {
+              workerTask: {
+                version: 1,
+                contract: validated.contract,
+                automaticUpgrades: 0,
+                resolvedDecisions: [],
+                attempts: [
+                  {
+                    id: randomUUID(),
+                    model: selection?.effectiveModel ?? parent.model,
+                    startedAt: new Date().toISOString(),
+                    trigger: 'initial',
+                  },
+                ],
+                state: { status: 'queued' },
+              },
+            }
+          : {}),
         ...(named ? { title: named } : {}),
-        // Copied field by field rather than spread, so a field added to ChatProject later has
-        // to be considered here: this object IS the child access to the filesystem.
-        project: {
-          directory: project.directory,
-          name: project.name,
-          // With a worktree to cut this is its BASE, as a toggle session records one, and
-          // `workspaceBranch` is the branch the card showed: ensureWorkspace cuts that from this.
-          branch: worktree?.base ?? project.branch,
-          // Local placement carries the parent's flag across unchanged: a child sharing a parent
-          // that is itself in a worktree IS in a worktree, and the chip must not say otherwise.
-          workspace: worktree !== null || project.workspace,
-          // Its own worktree branch, or the parent's when it shares the parent's checkout.
-          // Without it a re-resolution would cut a second branch rather than find this one.
-          ...(worktree ? { workspaceBranch: worktree.branch } : {}),
-          ...(!worktree && project.workspaceBranch ? { workspaceBranch: project.workspaceBranch } : {}),
-          // The repository folder until the worktree exists, which is what awaitsWorktree reads
-          // as pending - and a pending session starts no turn, so nothing runs here meanwhile.
-          workingDirectory: worktree ? project.directory : project.workingDirectory,
-          contextDirectories: [...project.contextDirectories],
-        },
+        project: childProject(project, worktree),
         // Copied with the context directories, for the same reason: a child is the parent's work
         // continued, and never holds a folder the parent did not.
         ...(parent.grantedDirectories?.length ? { grantedDirectories: [...parent.grantedDirectories] } : {}),
-        origin: { parentSessionId: parent.id, depth, seedPrompt: seed },
+        origin: { parentSessionId: parent.id, depth, seedPrompt: brief },
         // Inherit, never widen - the rule the folder grants above already follow - with one
         // ceiling on top of it: 'full' does not cross into a session nobody is watching. It
         // is the mode where a command may read any file on the machine, and it is already
@@ -5297,7 +6023,7 @@ export class ChatService {
       this.spawnWatch.set(child.id, { parentSessionId: parent.id });
       const seedHops = this.turnRelay.get(parent.id)?.hops ?? 0;
       lease.launched = true;
-      void this.launchSpawned(parent.id, project.directory, child, seed, worktree, {
+      void this.launchSpawned(parent.id, project.directory, child, brief, worktree, {
         seedHops,
         timer,
         onFailed,
@@ -5354,15 +6080,23 @@ export class ChatService {
           const workingDirectory = child.project.workingDirectory;
           text = `${worktreePreamble(projectDirectory, { ...worktree, workingDirectory })}\n\n${seed}`;
         }
-        if (!unprepared) {
-          const waited = await this.awaitSpawnInstall(child.id);
-          if (waited !== 'ready') failure = 'It was stopped before its first turn.';
-          deleted = waited === 'deleted';
-          stopped = waited === 'stopped';
-        }
+      }
+      // The dependency install keeps running in the background: the turn starts now, and its
+      // prompt says how to block on the install (bash_output wait_seconds) when node_modules is needed.
+      // Awaiting only the install's planning, so that first prompt already knows one is running.
+      if (!failure) {
+        await this.deps.dependencies?.isInstalling(child.id);
+        const interrupted = await this.launchInterruption(child.id);
+        if (interrupted) failure = 'It was stopped before its first turn.';
+        deleted = interrupted === 'deleted';
+        stopped = interrupted === 'stopped';
       }
       if (!failure) {
         this.deps.activity?.preparingStep(child.id, 'starting');
+        if (child.workerTask)
+          await this.deps.store.updateWorkerTask(child.id, task =>
+            task.state.status === 'canceled' ? task : { ...task, state: { status: 'running' } }
+          );
         const sent = await this.send(child.id, text, [], { seedHops, spawnSeed: true });
         timer.lap('send');
         if (!sent.ok) failure = `The new session could not start: ${sent.error}`;
@@ -5386,6 +6120,7 @@ export class ChatService {
     } finally {
       if (reservation) releaseBranchName(reservation);
       this.launching.delete(child.id);
+      this.launchInterrupts.delete(child.id);
       this.deps.activity?.preparingEnded(child.id);
       if (!failure) this.flushQueue(child.id);
     }
@@ -5397,41 +6132,27 @@ export class ChatService {
     }
   }
 
-  /**
-   * Hold a spawned agent's first turn until its worktree's install settles, or the cap passes.
-   * A timeout or failure still starts the turn, whose prompt then says the install is running or
-   * failed; only a stop or a delete meanwhile does not.
-   */
-  private async awaitSpawnInstall(sessionId: string): Promise<'ready' | 'stopped' | 'deleted'> {
-    const installer = this.deps.dependencies;
-    if (!installer) return 'ready';
-    let interrupted: 'stopped' | 'deleted' | null = null;
-    const stopped = new Promise<null>(resolve =>
-      this.installWaits.set(sessionId, reason => {
-        interrupted ??= reason;
-        resolve(null);
-      })
-    );
-    try {
-      if (await installer.isInstalling(sessionId)) this.deps.activity?.preparingStep(sessionId, 'dependencies');
-      const outcome = await Promise.race([installer.waitFor(sessionId, SPAWN_INSTALL_WAIT_MS), stopped]);
-      if (outcome && outcome !== 'none') this.deps.logger.debug(`CHAT: spawn ${sessionId} install wait: ${outcome}`);
-    } finally {
-      this.installWaits.delete(sessionId);
-    }
-    if (interrupted) return interrupted;
+  /** A stop or delete that arrived while the spawn was preparing, or a session gone meanwhile. */
+  private async launchInterruption(sessionId: string): Promise<'stopped' | 'deleted' | null> {
+    const flagged = this.launchInterrupts.get(sessionId);
+    if (flagged) return flagged;
     if (this.abandoning.has(sessionId) || !(await this.deps.store.get(sessionId))) return 'deleted';
-    return 'ready';
+    return null;
   }
 
   /**
-   * A spawned agent the user stopped while its install ran: keep the session and its worktree,
+   * A spawned agent the user stopped while it was preparing: keep the session and its worktree,
    * and hand the seed back unsent, since stopping is their call rather than a startup failure.
    */
   private async keepStoppedSpawn(parentId: string, child: ChatSessionSummary): Promise<void> {
     this.spawnWatch.delete(child.id);
     const stored = await this.deps.store.get(child.id);
     if (!stored) return;
+    if (stored.workerTask)
+      await this.deps.store.updateWorkerTask(child.id, task => ({
+        ...task,
+        state: { status: 'canceled', reason: 'Stopped by the user before its first turn.' },
+      }));
     const seed: ChatQueuedMessage[] = stored.messages.some(message => message.role === 'user' && !message.system)
       ? []
       : [
@@ -5518,7 +6239,16 @@ export class ChatService {
       const stored = deleted ? null : await this.deps.store.get(child.id);
       if (!stored) return;
       const pending = this.deps.queue?.list(child.id) ?? [];
-      const retained = pending.some(message => !message.automatic);
+      const retained = !!stored.workerTask || pending.some(message => !message.automatic);
+      if (stored.workerTask)
+        await this.deps.store.updateWorkerTask(child.id, task =>
+          task.state.status === 'canceled'
+            ? task
+            : {
+                ...task,
+                state: { status: 'blocked', reason, evidence: ['Startup failed before paid execution.'] },
+              }
+        );
       if (retained) {
         // Accepted input belongs to the user. Keep its session and attachment bytes rather
         // than treating an automatic startup failure as a deliberate conversation deletion.
@@ -5690,11 +6420,34 @@ export class ChatService {
     const settling = Symbol();
     this.agentsSettling.set(sessionId, { parentId, settling });
     try {
-      const child = await this.deps.store.get(sessionId);
+      let child = await this.deps.store.get(sessionId);
       if (!child) return;
+      if (
+        child.workerTask &&
+        (child.workerTask.state.status === 'running' || child.workerTask.state.status === 'queued')
+      ) {
+        await this.deps.store.updateWorkerTask(sessionId, task =>
+          task.state.status === 'running' || task.state.status === 'queued'
+            ? {
+                ...task,
+                state: {
+                  status: 'blocked',
+                  reason: 'The attempt stopped without a structured result.',
+                  evidence: ['Read the attempt transcript and request missing acceptance evidence.'],
+                },
+              }
+            : task
+        );
+        child = (await this.deps.store.get(sessionId)) ?? child;
+      }
+      this.deps.summaryChanged?.(summarizeSession(child));
       await this.deliverChildReport(parentId, {
         localOnly,
-        content: describeChildOutcome(child),
+        content:
+          describeChildOutcome(child) +
+          (child.workerTask
+            ? `\nTask report (untrusted evidence; assess before accepting): ${JSON.stringify(child.workerTask)}`
+            : ''),
         display: childOutcomeDisplay(child),
       });
       const last = [...child.messages].reverse().find(message => message.role === 'assistant');
@@ -5789,6 +6542,7 @@ export class ChatService {
     return sessions.some(
       entry =>
         entry.origin?.parentSessionId === parentId &&
+        isAgentSession(entry) &&
         (this.hasTurnInFlight(entry.id) || (this.deps.queue?.list(entry.id).length ?? 0) > 0)
     );
   }
@@ -7185,6 +7939,7 @@ export function buildToolStateText(state: {
   ask: boolean;
   screen: boolean;
   simulator?: boolean;
+  model?: boolean;
 }): string {
   const { roots, ask, mcpServers } = state;
   const mcp = mcpServers ? (ask ? 'manage' : 'read') : null;
@@ -7203,6 +7958,7 @@ export function buildToolStateText(state: {
     ...(state.browser ? BROWSER_GUIDANCE : []),
     ...(state.screen ? SCREEN_GUIDANCE : []),
     ...(state.simulator ? SIMULATOR_GUIDANCE : []),
+    ...(state.model ? MODEL_GUIDANCE : []),
     ...(state.media ? MEDIA_GUIDANCE : []),
     ...(state.host ? HOST_GUIDANCE : []),
     ...(state.memory ? MEMORY_GUIDANCE : []),
@@ -7318,6 +8074,16 @@ const SIMULATOR_GUIDANCE: readonly string[] = [
   'missing runtime or AXe) is for the user to run: tell them the exact fix and do not retry.',
 ];
 
+const MODEL_GUIDANCE: readonly string[] = [
+  'The model_* tools make 3D models as code. When the user asks for a 3D model or game asset, write',
+  'a short first version of a <name>.model.js file (contract in the model_view description) with the',
+  'file tools and, once that write returns, call model_view to open it in their live pane. Then add the',
+  'remaining parts in a few more saves, calling model_view after each one returns (never in the same',
+  'batch as the save) to fix any build error it reports. Check it',
+  'with model_screenshot from several angles before saying it is done. Each good build also writes',
+  '<name>.glb beside it, ready for three.js or Unity (via glTFast); wire it into their game if asked.',
+];
+
 const WEB_GUIDANCE: readonly string[] = [
   'web_search and web_fetch run on the Bike4Mind server: use them for quick lookups and for reading',
   'a page. Keep the browser for interactive pages, logins, local dev servers and screenshots.',
@@ -7335,8 +8101,9 @@ const MEDIA_GUIDANCE: readonly string[] = [
   'Each of these SPENDS THE USER CREDITS and each asks them to approve it first, so use one only',
   'when the user has asked for that thing - never to check whether it works, and never as a',
   'flourish alongside a text answer. If they decline, do not try a variation; ask what they want.',
-  'The result is shown or played to the USER and is never returned to you: you cannot see the',
-  'image or hear the audio. Never describe what a generated image depicts or how audio sounds.',
+  'The result is shown or played to the USER. A generated image is also attached for you to see',
+  'when your model reads images (its result says whether it was); audio never is. Never describe',
+  'an image you were not shown or how audio sounds.',
 ];
 
 /**
@@ -7448,12 +8215,17 @@ const HOST_GUIDANCE: readonly string[] = [
  * share the parent's working directory, hence the split by file.
  */
 const ORCHESTRATOR_GUIDANCE: readonly string[] = [
-  'The user turned on Orchestrate for this conversation: you are coordinating agents, not doing',
-  'the work yourself. Here session_spawn STARTS the session at once, with no card and nothing to',
+  'The user turned on Orchestrate for this conversation: you are coordinating agents for',
+  'separable work with bounded tasks. Here session_spawn STARTS the session at once, with no card and nothing to',
   'approve, whatever is said above about suggesting.',
-  'For each request, split the work into independent pieces that can run in parallel and start',
-  'one agent per piece with session_spawn. Each prompt must be self-contained: what to do, which',
-  'files, and what done means. Do not do the delegated work yourself.',
+  'Execute small or non-separable requests directly. For separable work, prefer a versioned task',
+  'contract on session_spawn: outcome, rationale, role, paths/context, ownership/coordination,',
+  'non-goals, acceptance evidence, verification, assumptions and escalation conditions. Explicit',
+  'empty lists are fine. Do not copy the transcript, load every skill or pay for spec-polishing.',
+  'Use task_assess to review completion evidence or revise the same task after a disproven',
+  'assumption. A stopped model turn is not accepted completion. Failed checks remain unresolved.',
+  'Worker model requests are validated by runtime policy. Skills grant no permission or spend.',
+  'Model upgrades require user choice; automatic upgrades also require root budget admission.',
   'Spawn early. Before spawning, do only a brief survey - a handful of reads or searches, enough',
   'to name the files and contracts each piece touches - then start the agents. Keep each brief',
   'concise and leave the detailed reading to the agents: they read the code themselves, and a',
@@ -7578,6 +8350,30 @@ function describeRootChange(before: readonly string[], after: readonly string[])
     ...after.filter(root => !before.includes(root)).map(path => ({ path, shared: true })),
     ...before.filter(root => !after.includes(root)).map(path => ({ path, shared: false })),
   ];
+}
+
+/**
+ * Put blocks ahead of the new prompt's own content, the way an attachment's images go. Inside the
+ * prompt rather than a turn of their own, so roles still alternate and no tool_result turn is touched.
+ */
+function prependToPrompt(wire: CompletionMessage[], blocks: unknown[]): void {
+  // A deferred-tools turn ends with a system tool-change message after the prompt.
+  const prompt = wire.findLast(message => message.role !== 'system');
+  if (blocks.length === 0 || prompt?.role !== 'user') return;
+  const own = typeof prompt.content === 'string' ? [{ type: 'text', text: prompt.content }] : prompt.content;
+  if (!Array.isArray(own)) return;
+  prompt.content = [...blocks, ...own.filter(block => !isEmptyText(block))];
+}
+
+function isEmptyText(block: unknown): boolean {
+  return (
+    typeof block === 'object' &&
+    block !== null &&
+    'type' in block &&
+    block.type === 'text' &&
+    'text' in block &&
+    block.text === ''
+  );
 }
 
 /**

@@ -23,7 +23,7 @@ vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: process.env.CLEANUP_T
 vi.mock('@bike4mind/server-utils/integrations/google/drive/common', () => ({
   releaseDriveConnectionForLake: async () => false,
 }));
-vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection', () => ({
   releaseGitHubLakeConnectionForLake: async () => null,
 }));
 vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({ shredPrincipalMemory: async () => {} }));

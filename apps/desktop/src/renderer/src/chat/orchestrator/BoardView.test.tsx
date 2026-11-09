@@ -3,7 +3,7 @@ import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { activityLabel } from './activity';
 import { SIDEBAR_DEFAULT_WIDTH } from '../sidebarWidth';
-import { assignPersonas } from './tavern/agentPersona';
+import { assignPersonas } from '@shared/agentPersona';
 import { BoardView, COLUMN_GAP, COLUMN_MIN_WIDTH, EMPTY_COLUMN_WIDTH, packBoardRows } from './BoardView';
 import type { AgentView } from './roster';
 import { agentFixture, createThemedMount, el, query } from './testUtils';

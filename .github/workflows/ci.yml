@@ -87,7 +87,7 @@ jobs:
       - name: Calculate core packages content hash
         id: core-hash
         run: |
-          TREE_HASH_B4M=$(git ls-tree -r HEAD b4m-core packages/database packages/sdk | awk '{print $3}' | sort | md5sum | awk '{print $1}')
+          TREE_HASH_B4M=$(git ls-tree -r HEAD b4m-core packages/database packages/design-tokens packages/sdk | awk '{print $3}' | sort | md5sum | awk '{print $1}')
           CONFIG_HASH=$(git ls-tree HEAD package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json 2>/dev/null | awk '{print $3}' | sort | md5sum | awk '{print $1}')
           CONTENT_HASH=$(echo "${TREE_HASH_B4M}${CONFIG_HASH}" | md5sum | awk '{print $1}')
           echo "content_hash=$CONTENT_HASH" >> $GITHUB_OUTPUT
@@ -125,6 +125,7 @@ jobs:
           path: |
             b4m-core/*/dist
             packages/database/dist
+            packages/design-tokens/dist
             packages/sdk/dist
           # Intra-run handoff only: the jobs that consume this all `needs:
           # core-build`, so it is dead weight the moment the run ends. It was on
@@ -221,6 +222,9 @@ jobs:
         run: python3 -m unittest discover -s scripts -p 'test_selfhost_production_preflight.py' -v
         env:
           B4M_PREFLIGHT_COMPOSE_TESTS: '1'
+
+      - name: Test self-host backup and restore tool
+        run: python3 -m unittest discover -s scripts -p 'test_selfhost_backup.py' -v
 
       - name: Run self-host chunk pipeline verifier tests
         run: python3 -m unittest discover -s scripts -p 'test_verify_selfhost_chunk_pipeline.py' -v
@@ -1233,7 +1237,7 @@ jobs:
           echo "::error::No docs/sensitive-scan result after 16 minutes. Ask a maintainer to re-run the scan, then re-run this job once it reports success."
           exit 1
 
-  # ============================================================
+  # =====================================================
   # CI gate aggregation. The main branch ruleset (main-protection)
   # requires a single status check named exactly "CI Complete". Deploy moved out
   # of this repo to the internal deployer, so there is no deploy to gate; this
@@ -1259,7 +1263,7 @@ jobs:
   # NOTE: this job name IS the required-check context. Renaming it must happen
   # in lockstep with editing both rulesets, or a required check with no matching
   # job hangs every PR.
-  # ============================================================
+  # =====================================================
   ci-complete:
     name: CI Complete
     needs:

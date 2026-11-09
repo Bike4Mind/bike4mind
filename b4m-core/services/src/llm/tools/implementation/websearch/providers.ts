@@ -1,3 +1,4 @@
+import { ExpectedToolError } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import type { WebSearchPlace } from '@bike4mind/common';
 import {
@@ -489,7 +490,7 @@ function buildSerpApiFailureError(failures: SerpApiAttemptFailure[]): Error {
   const earlierResponses = failures.slice(0, -1).filter(f => !f.timedOut);
   if (earlierResponses.length === 0) {
     // Every attempt made it timed out - the original message is accurate as-is.
-    return new Error(
+    return new ExpectedToolError(
       `Web search timed out: SerpAPI did not respond within ${SERPAPI_ATTEMPT_TIMEOUT_MS / 1000}s (tried ${failures.length} times)`
     );
   }
@@ -917,13 +918,17 @@ export function createSearxngProvider(baseUrl: string): WebSearchProvider {
         }
         return results;
       } catch (error) {
-        logSearxngFailure(options, '❌ WebSearch Tool: SearXNG request failed:', {
-          request,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        const details = { request, error: error instanceof Error ? error.message : String(error) };
+        if (isAbortError(error)) {
+          Logger.globalInstance.warn('WebSearch Tool: SearXNG request timed out', details);
+        } else {
+          logSearxngFailure(options, '\u274c WebSearch Tool: SearXNG request failed:', details);
+        }
         if (!options?.throwOnError) return [];
         if (isAbortError(error)) {
-          throw new Error(`Web search timed out: SearXNG did not respond within ${SEARCH_TIMEOUT_MS / 1000}s`);
+          throw new ExpectedToolError(
+            `Web search timed out: SearXNG did not respond within ${SEARCH_TIMEOUT_MS / 1000}s`
+          );
         }
         throw error;
       } finally {

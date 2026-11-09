@@ -8,13 +8,13 @@ import {
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { ApiKeyScope } from '@bike4mind/common';
 
 /**
  * Admin action: force-logout a user by revoking all their sessions (tokenVersion bump).
- * Authz (admin-only) is enforced inside userService.adminRevokeUserSessions, matching
- * users/[id]/delete.ts. All-device by design; see revokeSessions.ts. That check re-reads the
+ * Authz (admin-only) is enforced inside userService.adminRevokeUserSessions. All-device by
+ * design; see revokeSessions.ts. That check re-reads the
  * role from the database, so an API key's admin scope is enforced here instead.
  */
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(

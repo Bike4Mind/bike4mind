@@ -16,15 +16,24 @@ export const SHADOW_DETECTORS = [
   'paymentRisk',
   /** A new account that signed up from the same IP as a blocked account, close in time. */
   'signupIpLinkedToBlocked',
+  'signupDomainHold',
 ] as const;
 export type ShadowDetector = (typeof SHADOW_DETECTORS)[number];
 
 /**
+ * Detectors whose detections already carry their own Decisions verdict
+ * (apps/client/server/security/signupDomainHoldAssessment), so the abuse assessment sweep and the
+ * Detections assessment panel leave them alone.
+ */
+export const SELF_ASSESSED_SHADOW_DETECTORS: readonly ShadowDetector[] = ['signupDomainHold'];
+
+/**
  * The action the detector's policy maps the detection to. contain/suspend/restrict match the admin
  * bulk user actions; blockIp is for actors with no signed-in account, where containing a user is not
- * possible.
+ * possible. confirmHold/none are the signup domain hold assessment's outcomes (confirm the hold, or
+ * leave it for an admin).
  */
-export const SHADOW_DETECTION_ACTIONS = ['contain', 'suspend', 'restrict', 'blockIp'] as const;
+export const SHADOW_DETECTION_ACTIONS = ['contain', 'suspend', 'restrict', 'blockIp', 'confirmHold', 'none'] as const;
 export type ShadowDetectionAction = (typeof SHADOW_DETECTION_ACTIONS)[number];
 
 export const SHADOW_DETECTION_VERDICTS = [
@@ -78,11 +87,20 @@ export const shadowDetectionPaymentSchema = z.object({
 });
 export type ShadowDetectionPayment = z.infer<typeof shadowDetectionPaymentSchema>;
 
+/**
+ * Where a verdict came from. `review` is a grade recorded on the Detections page; `suspension` and
+ * `reinstatement` are recorded for the admin who suspended or reinstated an account the detection
+ * names. Absent on entries written before the field existed, which were all reviews.
+ */
+export const SHADOW_DETECTION_VERDICT_SOURCES = ['review', 'suspension', 'reinstatement'] as const;
+export type ShadowDetectionVerdictSource = (typeof SHADOW_DETECTION_VERDICT_SOURCES)[number];
+
 export const shadowDetectionVerdictEntrySchema = z.object({
   verdict: z.enum(SHADOW_DETECTION_VERDICTS),
   reason: z.string(),
   reviewerId: z.string(),
   reviewedAt: z.date(),
+  source: z.enum(SHADOW_DETECTION_VERDICT_SOURCES).optional(),
 });
 export type ShadowDetectionVerdictEntry = z.infer<typeof shadowDetectionVerdictEntrySchema>;
 
@@ -111,11 +129,16 @@ export const shadowDetectionItemSchema = z.object({
 });
 export type ShadowDetectionItem = z.infer<typeof shadowDetectionItemSchema>;
 
-/** Verdict counts for one detector and policy version. Precision is derived on the client. */
+/**
+ * Verdict counts for one detector and policy version. Precision is derived on the client. Verdict
+ * counts cover only records that would have acted; `noAction` counts the `wouldAction: 'none'`
+ * records, which are listed and gradable but never counted in precision.
+ */
 export const shadowDetectionSummaryRowSchema = z.object({
   detector: z.enum(SHADOW_DETECTORS),
   policyVersion: z.number().int(),
   recorded: z.number(),
+  noAction: z.number(),
   confirmedAbuse: z.number(),
   legitimateHuman: z.number(),
   legitimateAutomation: z.number(),
@@ -146,9 +169,22 @@ export const shadowDetectionVerdictRequestSchema = z.object({
 export type ShadowDetectionVerdictRequest = z.infer<typeof shadowDetectionVerdictRequestSchema>;
 
 /**
+ * Suspension reasons that mean the admin judged the account abusive, so its open detections are graded
+ * confirmed abuse. The admin suspend dialog offers these as presets (adminReason.ts); a reason counts
+ * when it is the preset alone or "Preset: note".
+ */
+export const ABUSE_SUSPENSION_REASONS = ['Abuse / automated signups', 'Payment fraud', 'Terms violation'] as const;
+
+export function isAbuseSuspensionReason(reason: string): boolean {
+  return ABUSE_SUSPENSION_REASONS.some(preset => reason === preset || reason.startsWith(`${preset}: `));
+}
+
+/**
  * Precision of a would-act decision among graded detections. insufficient_evidence is excluded from
  * both sides: it says the reviewer could not tell, not that the detector was wrong. Null with no
- * conclusive verdicts, so the UI never shows a ratio over zero.
+ * conclusive verdicts, so the UI never shows a ratio over zero. `noAction` records never enter it:
+ * the row's verdict counts already exclude them (shadowDetectionRepository.summarize), and a verdict
+ * on a record that would not have acted says nothing about a would-act decision.
  */
 export function shadowDetectionPrecision(row: ShadowDetectionSummaryRow): number | null {
   const falsePositives = row.legitimateHuman + row.legitimateAutomation;

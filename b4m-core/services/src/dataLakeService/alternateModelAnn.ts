@@ -1,5 +1,12 @@
+import {
+  bindEmbeddingModel,
+  buildEmbeddingRegistry,
+  embedOne,
+  embeddingBackendForModel,
+  resolveEmbeddingCredentials,
+} from '@bike4mind/utils/embeddingProviders';
 import { isSupportedEmbeddingModel, type SupportedEmbeddingModel } from '@bike4mind/common';
-import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/utils';
+
 import type { Logger } from '@bike4mind/observability';
 import { partitionByVectorSearchReadiness, type VectorSearchReadinessFile } from './vectorSearchEligibility';
 import type { EmbeddingLabeledFile } from './embeddingMismatch';
@@ -27,7 +34,7 @@ import type { AnnVectorSearchResult } from './annVectorSearch';
 export const MAX_ALTERNATE_ANN_MODELS = 3;
 
 export type AlternateAnnSkipReason =
-  | 'unsupportedModel' // not in the embedding registry - never hand to EmbeddingFactory
+  | 'unsupportedModel' // not in the embedding registry - never hand to EmbeddingRuntime
   | 'noQueryableIndex' // registry-known, but no queryable ANN index right now
   | 'missingCredential' // caller's apiKeyTable cannot embed under this model
   | 'notAnnReady' // stamp absent or inside the mongot/indexing lag - no scan fallback by design
@@ -53,7 +60,7 @@ export interface AlternateAnnPlan<T> {
  * Gate order is deliberate: cheapest and most decisive first, so nothing reaches an external call
  * it cannot use.
  *  1. Zero alternates: no-op, no awaits - a single-model lake costs nothing extra.
- *  2. Registry membership: an unrecognized label would otherwise reach EmbeddingFactory and throw.
+ *  2. Registry membership: an unrecognized label would otherwise reach EmbeddingRuntime and throw.
  *  3. Vectorized-at-all: a never-vectorized file must not outrank a real one for a cap slot.
  *  4. ANN readiness (per file): not-yet-ready alternate-model files are excluded, NEVER scanned -
  *     this is the ticket's explicit scope boundary, not an oversight.
@@ -91,7 +98,7 @@ export async function planAlternateAnnModels<T extends EmbeddingLabeledFile & Ve
     if (scanOnly.length > 0) skipped.push({ model: bucket.model, files: scanOnly, reason: 'notAnnReady' });
     if (annReady.length === 0) continue;
 
-    if (resolveEmbeddingConfig(getProviderFromModel(bucket.model), apiKeyTable).missing) {
+    if (resolveEmbeddingCredentials(embeddingBackendForModel(bucket.model), apiKeyTable).missing) {
       skipped.push({ model: bucket.model, files: annReady, reason: 'missingCredential' });
       continue;
     }
@@ -147,9 +154,9 @@ export async function tryEmbedQueryForModel(args: {
     // planAlternateAnnModels' registry-membership gate already guarantees `model` is supported
     // before it is ever selected, so this cast reflects an already-checked invariant.
     const supportedModel = model as SupportedEmbeddingModel;
-    const { config, missing } = resolveEmbeddingConfig(getProviderFromModel(supportedModel), apiKeyTable);
+    const { config, missing } = resolveEmbeddingCredentials(embeddingBackendForModel(supportedModel), apiKeyTable);
     if (missing) return null;
-    const vector = await new EmbeddingFactory(config).createEmbeddingService(supportedModel).generateEmbedding(query);
+    const vector = await embedOne(bindEmbeddingModel(buildEmbeddingRegistry(config), supportedModel), query);
     return vector.length > 0 ? vector : null;
   } catch (error) {
     logger?.warn?.('[semanticSearch] alternate-model query embedding failed', {

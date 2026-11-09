@@ -1,37 +1,19 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from '@tanstack/react-router';
 import {
+  Alert,
+  Box,
   Button,
-  Card,
-  CardContent,
   Chip,
-  Grid,
-  Select,
+  Checkbox,
+  Input,
   Option,
-  Sheet,
+  Select,
   Stack,
   Switch,
-  Table,
-  Typography,
-  Alert,
-  Checkbox,
   Tooltip,
-  Box,
-  Input,
-  useTheme,
+  Typography,
 } from '@mui/joy';
-import type { Theme } from '@mui/joy/styles';
-import ImageIcon from '@mui/icons-material/Image';
-import ChatIcon from '@mui/icons-material/Chat';
-import SecurityIcon from '@mui/icons-material/Security';
-import SaveIcon from '@mui/icons-material/Save';
-import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
-import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
-import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
-import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight';
-import FirstPageIcon from '@mui/icons-material/FirstPage';
-import LastPageIcon from '@mui/icons-material/LastPage';
-import SearchIcon from '@mui/icons-material/Search';
 import { LLMModelConfig, ModelBackend, normalizeEntitlementKey, isOAuthSourceTag } from '@bike4mind/common';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import {
@@ -42,33 +24,39 @@ import { useGetUsers } from '@client/app/hooks/data/user';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { KNOWN_ENTITLEMENT_KEYS } from '@bike4mind/server-utils/lib/entitlements/registry';
+import {
+  AdminPageHeader,
+  AdminSearchInput,
+  BulkActionBar,
+  DataTable,
+  EmptyState,
+  ErrorState,
+  FilterChip,
+  LoadingState,
+  SaveBar,
+  StatStrip,
+  StatTile,
+  UnsavedChangesGuard,
+  type AdminSelection,
+  type DataColumn,
+} from './shared';
+import { ADMIN_REGION_GAP, adminFocusScope } from './shared/adminStyles';
+import { useAdminModal } from './useAdminModal';
+import { adminTabToSlug } from './adminTabSlugs';
+import { adminSearchForTab } from './adminTabParams';
 
 // Available user tags for permissions (used in table display)
 // 'admin' access is handled via user.isAdmin property, not tags
 const AVAILABLE_USER_TAGS = [
-  { value: 'developer', label: 'Developer', color: 'warning' as const },
-  { value: 'customer', label: 'Customer', color: 'danger' as const },
+  { value: 'developer', label: 'Developer' },
+  { value: 'customer', label: 'Customer' },
 ];
 
-// Color rotation for custom tags
-const ALTERNATIVE_COLORS = ['success', 'primary', 'danger', 'warning'] as const;
-
-// Utility function to get tag info for both predefined and custom tags
-const getTagInfo = (tagValue: string, index: number = 0) => {
-  const predefinedTag = AVAILABLE_USER_TAGS.find(tag => tag.value === tagValue);
-  if (predefinedTag) {
-    return predefinedTag;
-  }
-
-  // Alternate colors for custom tags based on index
-  const colorIndex = index % ALTERNATIVE_COLORS.length;
-
-  return {
+const getTagInfo = (tagValue: string) =>
+  AVAILABLE_USER_TAGS.find(tag => tag.value === tagValue) ?? {
     value: tagValue,
     label: tagValue.charAt(0).toUpperCase() + tagValue.slice(1),
-    color: ALTERNATIVE_COLORS[colorIndex],
   };
-};
 
 // ModelInfo has no `vendor` field, but discovery-sourced rows may carry one - read it
 // structurally so the search covers it without asserting it onto the shared type.
@@ -79,84 +67,94 @@ const getModelVendor = (model: LLMModelConfig): string => {
 
 const SEARCH_DEBOUNCE_MS = 250;
 
-const PINNED_LAYOUT = { height: '100%', overflow: 'hidden' } as const;
-
-// A pinned header taller than the viewport leaves the inner-scrolling table 0px tall, so pin only where
-// ~250-300px of rows fit below the tallest measured chrome (655px at md, 513px at lg); elsewhere the tab scrolls.
-export const llmDashboardRootSx = (theme: Theme) => ({
-  p: 2,
-  width: '100%',
-  display: 'flex',
-  flexDirection: 'column',
-  [`${theme.breakpoints.up('md')} and (min-height: 960px)`]: PINNED_LAYOUT,
-  [`${theme.breakpoints.up('lg')} and (min-height: 770px)`]: PINNED_LAYOUT,
-});
-
-// Joy's Table uses `table-layout: fixed`, so every column needs a pixel width for the
-// table to widen (and scroll) instead of letting the per-key "Allowed" cells overflow it.
-const ALLOWED_KEY_WIDTH_PX = 60;
-const ALLOWED_KEY_GAP_PX = 2;
-// The Allowed cells set their own 8px side padding (not Joy's theme default), plus a 12px inner indent.
-const ALLOWED_CELL_CHROME_PX = 28;
-// Room for the wrapped header label and the "none configured" placeholder.
-const ALLOWED_CELL_MIN_PX = 140;
-
-const allowedColumnWidth = (keyCount: number): number =>
-  Math.max(
-    ALLOWED_CELL_MIN_PX,
-    ALLOWED_CELL_CHROME_PX + keyCount * ALLOWED_KEY_WIDTH_PX + Math.max(keyCount - 1, 0) * ALLOWED_KEY_GAP_PX
-  );
-
 // `query` must already be lowercased and trimmed.
 const matchesSearch = (model: LLMModelConfig, query: string): boolean =>
   [model.id, model.name, model.backend, getModelVendor(model)].some(field => field.toLowerCase().includes(query));
 
+const TYPE_OPTIONS = [
+  { value: 'text', label: 'Text' },
+  { value: 'image', label: 'Image' },
+];
+const BACKEND_OPTIONS = Object.values(ModelBackend).map(backend => ({ value: backend, label: backend }));
+const STATUS_OPTIONS = [
+  { value: 'enabled', label: 'Enabled' },
+  { value: 'disabled', label: 'Disabled' },
+];
+
+// Must match the checkbox column DataTable adds in front of `columns` (shared/DataTable.tsx).
+const SELECTION_COLUMN_REM = 2.75;
+// Joy header cells never wrap (nowrap + ellipsis), so a tag or entitlement column is as wide as its
+// 12 px label: about half a rem a character, plus the 12 px cell padding on each side.
+const accessColumnRem = (label: string): number => Math.max(5, label.length * 0.5 + 1.5);
+
+const DATE_FORMAT = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+const formatDate = (date?: Date) => (date ? DATE_FORMAT.format(date) : '-');
+
+type ModelDates = Record<string, { createdAt?: Date; updatedAt?: Date }>;
+type Snapshot = { models: LLMModelConfig[]; dates: ModelDates };
+
+const sameMembers = (left: readonly string[] = [], right: readonly string[] = []) =>
+  left.length === right.length && [...left].sort().join('\n') === [...right].sort().join('\n');
+
+// Compares only the fields this page edits, so toggling a value back counts as no change.
+const isUnchanged = (current: LLMModelConfig, loaded: LLMModelConfig | undefined) =>
+  !!loaded &&
+  current.enabled === loaded.enabled &&
+  current.rank === loaded.rank &&
+  (current.fallbackModel || '') === (loaded.fallbackModel || '') &&
+  sameMembers(current.allowedUserTags, loaded.allowedUserTags) &&
+  sameMembers(current.allowedEntitlements, loaded.allowedEntitlements);
+
+// Same rule as the admin settings guard (SettingsDraftProvider): another page or another admin tab.
+const isLeavingTab = (current: { pathname: string; search: object }, next: { pathname: string; search: object }) =>
+  current.pathname !== next.pathname ||
+  ('tab' in current.search ? current.search.tab : undefined) !== ('tab' in next.search ? next.search.tab : undefined);
+
 const LLMDashboardTab: React.FC = () => {
-  const { data: modelInfos, isLoading: modelInfoLoading, error } = useModelInfo();
-  const { data: models, isLoading: configLoading } = useLLMModelConfigurationsWithDefaults(modelInfos);
+  const router = useRouter();
+  const { data: modelInfos, isPending: modelInfoPending, error, refetch: refetchModelInfo } = useModelInfo();
+  // Pass the query's own pending state: inferring it from missing data would report a failed
+  // model-info fetch as loading forever and hide the error.
+  const { data: models, isLoading: configLoading } = useLLMModelConfigurationsWithDefaults(
+    modelInfos,
+    modelInfoPending
+  );
   const { data: usersData, isLoading: usersLoading } = useGetUsers({
     page: 1,
     limit: 1000, // Get all users to extract their tags
   });
   const [localModels, setLocalModels] = useState<LLMModelConfig[]>([]);
+  const [saved, setSaved] = useState<Snapshot>({ models: [], dates: {} });
   const [initialized, setInitialized] = useState(false);
-  const [filterType, setFilterType] = useState<'all' | 'text' | 'image'>('all');
-  const [filterBackend, setFilterBackend] = useState<string>('all');
-  const [filterEnabled, setFilterEnabled] = useState<'all' | 'enabled' | 'disabled'>('all');
+  const [filterType, setFilterType] = useState<string>();
+  const [filterBackend, setFilterBackend] = useState<string>();
+  const [filterStatus, setFilterStatus] = useState<string>();
   // Debounced: discovery grows this catalog, so every keystroke would otherwise
   // re-filter and re-sort a list that keeps getting longer.
   const {
     value: searchQuery,
     debouncedValue: debouncedSearchQuery,
     setValue: setSearchQuery,
+    setValueImmediately: resetSearchQuery,
   } = useDebounceValue('', SEARCH_DEBOUNCE_MS);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [bulkNotice, setBulkNotice] = useState<string | null>(null);
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-  const [sortColumn, setSortColumn] = useState<
-    'name' | 'type' | 'backend' | 'status' | 'rank' | 'createdAt' | 'updatedAt' | null
-  >(null);
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
-  const [currentPage, setCurrentPage] = useState(1);
-  const [rowsPerPage, setRowsPerPage] = useState(10);
-  const [modelDates, setModelDates] = useState<Record<string, { createdAt?: Date; updatedAt?: Date }>>({});
-  const theme = useTheme();
+  const [modelDates, setModelDates] = useState<ModelDates>({});
+  const savingRef = useRef<Snapshot | null>(null);
 
   const saveLLMConfigurations = useSaveLLMModelConfigurations(() => {
-    setHasUnsavedChanges(false);
-    // Keep the local state to avoid flickering, don't reinitialize
+    // The sent copy becomes the baseline; edits made while the request was in flight stay unsaved.
+    if (savingRef.current) setSaved(savingRef.current);
   });
 
   // Initialize local models when configurations are loaded
   useEffect(() => {
     if (models && models.length > 0 && !initialized) {
-      setLocalModels(models);
       setInitialized(true);
-      setHasUnsavedChanges(false);
 
       // Initialize dates for models (using current date as placeholder)
       // In a real implementation, these would come from the backend
-      const initialDates: Record<string, { createdAt?: Date; updatedAt?: Date }> = {};
+      const initialDates: ModelDates = {};
       models.forEach((model, index) => {
         // Create staggered dates for demo purposes
         // In production, these would be actual timestamps from the database
@@ -167,105 +165,31 @@ const LLMDashboardTab: React.FC = () => {
           updatedAt: new Date(baseDate.getTime() + Math.random() * 7 * 24 * 60 * 60 * 1000),
         };
       });
+      setLocalModels(models);
       setModelDates(initialDates);
+      setSaved({ models, dates: initialDates });
     }
   }, [models, initialized]);
 
-  const isLoading = modelInfoLoading || configLoading || usersLoading;
-
-  const handleSort = (column: 'name' | 'type' | 'backend' | 'status' | 'rank' | 'createdAt' | 'updatedAt') => {
-    if (sortColumn === column) {
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortColumn(column);
-      setSortDirection('asc');
-    }
-  };
+  // Until the init effect above copies the models in, localModels is still empty: show loading, not
+  // an empty table and a 0/0/0/0 strip.
+  const isLoading = configLoading || usersLoading || (models.length > 0 && !initialized);
 
   const filteredModels = useMemo(() => {
     const search = debouncedSearchQuery.trim().toLowerCase();
-    const filtered = localModels.filter(model => {
-      if (filterType !== 'all' && model.type !== filterType) return false;
-      if (filterBackend !== 'all' && model.backend !== filterBackend) return false;
-      if (filterEnabled === 'enabled' && !model.enabled) return false;
-      if (filterEnabled === 'disabled' && model.enabled) return false;
+    return localModels.filter(model => {
+      if (filterType && model.type !== filterType) return false;
+      if (filterBackend && model.backend !== filterBackend) return false;
+      if (filterStatus === 'enabled' && !model.enabled) return false;
+      if (filterStatus === 'disabled' && model.enabled) return false;
       if (model.type === 'speech-to-text') return false;
       if (search && !matchesSearch(model, search)) return false;
       return true;
     });
+  }, [localModels, filterType, filterBackend, filterStatus, debouncedSearchQuery]);
 
-    if (sortColumn) {
-      filtered.sort((a, b) => {
-        let aValue: string | Date | number;
-        let bValue: string | Date | number;
-
-        switch (sortColumn) {
-          case 'name':
-            aValue = a.name;
-            bValue = b.name;
-            break;
-          case 'type':
-            aValue = a.type;
-            bValue = b.type;
-            break;
-          case 'backend':
-            aValue = a.backend;
-            bValue = b.backend;
-            break;
-          case 'status':
-            aValue = a.enabled ? 'enabled' : 'disabled';
-            bValue = b.enabled ? 'enabled' : 'disabled';
-            break;
-          case 'rank':
-            // Models with rank set should be sorted before models without rank
-            // Lower rank = higher priority
-            aValue = a.rank ?? Number.MAX_SAFE_INTEGER;
-            bValue = b.rank ?? Number.MAX_SAFE_INTEGER;
-            break;
-          case 'createdAt':
-            aValue = modelDates[a.id]?.createdAt || new Date(0);
-            bValue = modelDates[b.id]?.createdAt || new Date(0);
-            break;
-          case 'updatedAt':
-            aValue = modelDates[a.id]?.updatedAt || new Date(0);
-            bValue = modelDates[b.id]?.updatedAt || new Date(0);
-            break;
-          default:
-            return 0;
-        }
-
-        let comparison: number;
-        if (aValue instanceof Date && bValue instanceof Date) {
-          comparison = aValue.getTime() - bValue.getTime();
-        } else if (typeof aValue === 'number' && typeof bValue === 'number') {
-          comparison = aValue - bValue;
-        } else if (typeof aValue === 'string' && typeof bValue === 'string') {
-          comparison = aValue.localeCompare(bValue);
-        } else {
-          comparison = 0;
-        }
-
-        return sortDirection === 'asc' ? comparison : -comparison;
-      });
-    }
-
-    return filtered;
-  }, [
-    localModels,
-    filterType,
-    filterBackend,
-    filterEnabled,
-    debouncedSearchQuery,
-    sortColumn,
-    sortDirection,
-    modelDates,
-  ]);
-
-  // Pagination calculations
-  const totalPages = Math.ceil(filteredModels.length / rowsPerPage);
-  const startIndex = (currentPage - 1) * rowsPerPage;
-  const endIndex = startIndex + rowsPerPage;
-  const paginatedModels = filteredModels.slice(startIndex, endIndex);
+  const hasFilters = Boolean(filterType || filterBackend || filterStatus || debouncedSearchQuery.trim());
+  const filterKey = JSON.stringify([filterType, filterBackend, filterStatus, debouncedSearchQuery]);
 
   const selectedIdSet = useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
   // The selection survives filter changes (narrowing a search must not silently
@@ -274,87 +198,80 @@ const LLMDashboardTab: React.FC = () => {
     () => filteredModels.filter(model => selectedIdSet.has(model.id)).map(model => model.id),
     [filteredModels, selectedIdSet]
   );
-  const allFilteredSelected = filteredModels.length > 0 && selectedFilteredIds.length === filteredModels.length;
-  const someFilteredSelected = selectedFilteredIds.length > 0 && !allFilteredSelected;
   const hiddenSelectedCount = selectedModelIds.length - selectedFilteredIds.length;
 
-  // Reset to first page and drop the last bulk-action receipt when filters change
+  const changedCount = useMemo(() => {
+    const loadedById = new Map(saved.models.map(model => [model.id, model]));
+    return localModels.filter(model => !isUnchanged(model, loadedById.get(model.id))).length;
+  }, [localModels, saved]);
+
+  const dirty = changedCount > 0 || saveLLMConfigurations.isPending;
+  // Same guard as SettingsDraftProvider; keep the two in sync. A sidebar or palette switch sets the tab in
+  // the store first, which would unmount this tab before UnsavedChangesGuard could block it, so route the
+  // switch first and let the URL-to-store sync commit it once the guard allows it.
+  useLayoutEffect(() => {
+    if (!dirty) return;
+    const guard = (tab: Parameters<typeof adminTabToSlug>[0]) => {
+      const location = router.state.location;
+      const slug = adminTabToSlug(tab);
+      if (slug === undefined) return false;
+      if (location.pathname !== '/admin' || location.search.tab === slug) return true;
+      void router.navigate({
+        to: '/admin',
+        search: previous => adminSearchForTab(previous, slug),
+        replace: true,
+      });
+      return false;
+    };
+    useAdminModal.getState().setTabChangeGuard(guard);
+    return () => {
+      if (useAdminModal.getState().tabChangeGuard === guard) useAdminModal.getState().setTabChangeGuard(null);
+    };
+  }, [dirty, router]);
+
+  // Drop the last bulk-action receipt when filters change
   useEffect(() => {
-    setCurrentPage(1);
     setBulkNotice(null);
-  }, [filterType, filterBackend, filterEnabled, debouncedSearchQuery]);
+  }, [filterKey]);
 
-  const handlePageChange = (page: number) => {
-    setCurrentPage(Math.max(1, Math.min(page, totalPages)));
-  };
-
-  const handleRowsPerPageChange = (value: number) => {
-    setRowsPerPage(value);
-    setCurrentPage(1);
-  };
-
-  const handleToggleModel = (modelId: string) => {
-    setLocalModels(prev => prev.map(model => (model.id === modelId ? { ...model, enabled: !model.enabled } : model)));
-    setHasUnsavedChanges(true);
-    // Update the updatedAt timestamp
-    setModelDates(prev => ({
-      ...prev,
-      [modelId]: {
-        ...prev[modelId],
-        updatedAt: new Date(),
-      },
-    }));
-  };
-
-  const handleToggleSelected = (modelId: string, selected: boolean) => {
-    setSelectedModelIds(prev => (selected ? [...prev, modelId] : prev.filter(id => id !== modelId)));
-  };
-
-  // Select-all is scoped to the filter, so its unchecked state only releases the
-  // visible rows - a selection made under a different filter is left alone.
-  const handleToggleSelectAll = (selected: boolean) => {
-    const visibleIds = new Set<string>(filteredModels.map(model => model.id));
-    setSelectedModelIds(prev => {
-      if (!selected) return prev.filter(id => !visibleIds.has(id));
-      return [...new Set([...prev, ...visibleIds])];
+  const touchModels = (modelIds: Iterable<string>) => {
+    const now = new Date();
+    setModelDates(prev => {
+      const next = { ...prev };
+      for (const id of modelIds) next[id] = { ...next[id], updatedAt: now };
+      return next;
     });
   };
 
-  // Writes through the same local state and dirty flag as the per-row switch, so the
-  // existing Save Changes flow persists a bulk edit in one request.
+  const updateModel = (modelId: string, update: (model: LLMModelConfig) => LLMModelConfig) => {
+    setLocalModels(prev => prev.map(model => (model.id === modelId ? update(model) : model)));
+    touchModels([modelId]);
+  };
+
+  // "Select all matching" adds every row the filter shows, across pages, and keeps a selection made
+  // under a different filter.
+  const handleSelectAllMatching = () => {
+    setSelectedModelIds(prev => [...new Set([...prev, ...filteredModels.map(model => model.id)])]);
+  };
+
+  const handleSelectionChange = (selection: AdminSelection) => {
+    if (selection.mode === 'explicit') setSelectedModelIds([...selection.ids]);
+  };
+
+  // Writes through the same local state as the per-row switch, so the SaveBar persists a bulk
+  // edit in one request.
   const handleBulkSetEnabled = (enabled: boolean) => {
     if (selectedFilteredIds.length === 0) return;
     const targetIds = new Set(selectedFilteredIds);
     setLocalModels(prev => prev.map(model => (targetIds.has(model.id) ? { ...model, enabled } : model)));
-    setHasUnsavedChanges(true);
-    const now = new Date();
-    setModelDates(prev => {
-      const next = { ...prev };
-      targetIds.forEach(id => {
-        next[id] = { ...next[id], updatedAt: now };
-      });
-      return next;
-    });
+    touchModels(targetIds);
     // Under a status filter the changed rows leave the table on the spot, so say
     // how many moved before the operator concludes the click did nothing.
-    const leavesFilter = filterEnabled === (enabled ? 'disabled' : 'enabled');
+    const leavesFilter = filterStatus === (enabled ? 'disabled' : 'enabled');
     setBulkNotice(
       `${enabled ? 'Enabled' : 'Disabled'} ${targetIds.size} model${targetIds.size === 1 ? '' : 's'}.` +
         (leavesFilter ? ` ${targetIds.size} no longer match the current filter.` : '')
     );
-  };
-
-  const handleFallbackModelChange = (modelId: string, fallbackModel: string) => {
-    setLocalModels(prev => prev.map(model => (model.id === modelId ? { ...model, fallbackModel } : model)));
-    setHasUnsavedChanges(true);
-    // Update the updatedAt timestamp
-    setModelDates(prev => ({
-      ...prev,
-      [modelId]: {
-        ...prev[modelId],
-        updatedAt: new Date(),
-      },
-    }));
   };
 
   const handleRankChange = (modelId: string, rankValue: string) => {
@@ -364,62 +281,25 @@ const LLMDashboardTab: React.FC = () => {
     if (rank !== undefined && (isNaN(rank) || rank < 0 || rank > 100)) {
       return; // Invalid input, ignore
     }
-    setLocalModels(prev => prev.map(model => (model.id === modelId ? { ...model, rank } : model)));
-    setHasUnsavedChanges(true);
-    // Update the updatedAt timestamp
-    setModelDates(prev => ({
-      ...prev,
-      [modelId]: {
-        ...prev[modelId],
-        updatedAt: new Date(),
-      },
-    }));
+    updateModel(modelId, model => ({ ...model, rank }));
   };
 
-  const handleUserTagsChange = (modelId: string, newTags: string[]) => {
-    setLocalModels(prev => prev.map(model => (model.id === modelId ? { ...model, allowedUserTags: newTags } : model)));
-    setHasUnsavedChanges(true);
-    // Update the updatedAt timestamp
-    setModelDates(prev => ({
-      ...prev,
-      [modelId]: {
-        ...prev[modelId],
-        updatedAt: new Date(),
-      },
-    }));
-  };
-
-  const handleEntitlementsChange = (modelId: string, newEntitlements: string[]) => {
-    setLocalModels(prev =>
-      prev.map(model => (model.id === modelId ? { ...model, allowedEntitlements: newEntitlements } : model))
-    );
-    setHasUnsavedChanges(true);
-    setModelDates(prev => ({
-      ...prev,
-      [modelId]: {
-        ...prev[modelId],
-        updatedAt: new Date(),
-      },
-    }));
-  };
-
-  const handleSaveConfigurations = () => {
+  const handleSave = () => {
+    savingRef.current = { models: localModels, dates: modelDates };
     saveLLMConfigurations.mutate(localModels);
   };
 
-  const getBackendColor = (backend: ModelBackend) => {
-    switch (backend) {
-      case ModelBackend.OpenAI:
-        return 'success';
-      case ModelBackend.Anthropic:
-        return 'warning';
-      case ModelBackend.Gemini:
-        return 'primary';
-      case ModelBackend.BFL:
-        return 'danger';
-      default:
-        return 'neutral';
-    }
+  const handleDiscard = () => {
+    setLocalModels(saved.models);
+    setModelDates(saved.dates);
+    setBulkNotice(null);
+  };
+
+  const clearFilters = () => {
+    resetSearchQuery('');
+    setFilterType(undefined);
+    setFilterBackend(undefined);
+    setFilterStatus(undefined);
   };
 
   const getFallbackOptions = (currentModel: LLMModelConfig) => {
@@ -436,12 +316,12 @@ const LLMDashboardTab: React.FC = () => {
   const allUsedTags = useMemo(() => {
     const allTags = new Set<string>();
     // Add tags from model configurations
-    localModels.forEach((model, index) => {
+    localModels.forEach(model => {
       model.allowedUserTags.forEach(tag => allTags.add(tag.toLowerCase()));
     });
 
     // Add tags from user assignments
-    usersData?.users?.forEach((user, index) => {
+    usersData?.users?.forEach(user => {
       if (user.tags && user.tags.length > 0) {
         user.tags.forEach(tag => {
           if (!isOAuthSourceTag(tag)) allTags.add(tag.toLowerCase());
@@ -453,7 +333,7 @@ const LLMDashboardTab: React.FC = () => {
     const predefinedValues = AVAILABLE_USER_TAGS.map(tag => tag.value.toLowerCase());
     const customTags = Array.from(allTags).filter(tag => !predefinedValues.includes(tag));
 
-    return [...AVAILABLE_USER_TAGS, ...customTags.map((tag, index) => getTagInfo(tag, index))];
+    return [...AVAILABLE_USER_TAGS, ...customTags.map(getTagInfo)];
   }, [localModels, usersData]);
 
   // Entitlement-key columns: registry-known keys plus any already configured on
@@ -473,828 +353,328 @@ const LLMDashboardTab: React.FC = () => {
   const textModels = localModels.filter(m => m.type === 'text' && m.enabled);
   const imageModels = localModels.filter(m => m.type === 'image' && m.enabled);
 
+  const sized = (widthRem: number, column: Omit<DataColumn<LLMModelConfig>, 'width'>) => ({
+    ...column,
+    width: `${widthRem}rem`,
+    widthRem,
+  });
+
+  const columns = [
+    sized(14, { id: 'name', label: 'Model', render: model => model.name, sortValue: model => model.name }),
+    sized(6, {
+      id: 'type',
+      label: 'Type',
+      render: model => (model.type === 'text' ? 'Text' : 'Image'),
+      sortValue: model => model.type,
+    }),
+    sized(9, { id: 'backend', label: 'Backend', render: model => model.backend, sortValue: model => model.backend }),
+    sized(9, {
+      id: 'status',
+      label: 'Status',
+      render: model => (
+        <Stack direction="row" gap={1} alignItems="center">
+          <Switch
+            checked={model.enabled}
+            onChange={() => updateModel(model.id, current => ({ ...current, enabled: !current.enabled }))}
+            size="sm"
+            slotProps={{ input: { 'aria-label': `Enable ${model.name}` } }}
+            data-testid={`llm-dashboard-toggle-${model.id}`}
+          />
+          {model.enabled ? 'Enabled' : 'Disabled'}
+        </Stack>
+      ),
+      sortValue: model => (model.enabled ? 'enabled' : 'disabled'),
+    }),
+    sized(7, {
+      id: 'rank',
+      label: 'Rank',
+      render: model => (
+        <Tooltip title="Lower rank = higher priority in model selection. Leave empty to use automatic ranking.">
+          <Input
+            type="number"
+            placeholder="Auto"
+            value={model.rank ?? ''}
+            onChange={e => handleRankChange(model.id, e.target.value)}
+            size="sm"
+            slotProps={{ input: { min: 1, max: 100, step: 1, 'aria-label': `Rank for ${model.name}` } }}
+            sx={{ width: '100%' }}
+            data-testid={`llm-dashboard-rank-${model.id}`}
+          />
+        </Tooltip>
+      ),
+      // Models with a rank sort before models without one; lower rank = higher priority.
+      sortValue: model => model.rank ?? Number.MAX_SAFE_INTEGER,
+    }),
+    sized(13, {
+      id: 'fallback',
+      label: 'Fallback model',
+      render: model => (
+        <Select
+          placeholder="Select fallback model"
+          value={model.fallbackModel || null}
+          onChange={(_, value) => updateModel(model.id, current => ({ ...current, fallbackModel: value || '' }))}
+          size="sm"
+          sx={{ width: '100%' }}
+          data-testid={`llm-dashboard-fallback-${model.id}`}
+        >
+          <Option value="">None</Option>
+          {getFallbackOptions(model).map(fallbackModel => (
+            <Option key={fallbackModel.id} value={fallbackModel.id}>
+              {fallbackModel.name}
+              {fallbackModel.backend === ModelBackend.Bedrock && (
+                <Chip size="sm" variant="soft" color="neutral" sx={{ ml: 0.5 }}>
+                  Bedrock
+                </Chip>
+              )}
+            </Option>
+          ))}
+        </Select>
+      ),
+    }),
+    sized(7.5, {
+      id: 'createdAt',
+      label: 'Created',
+      render: model => formatDate(modelDates[model.id]?.createdAt),
+      sortValue: model => modelDates[model.id]?.createdAt?.getTime() ?? 0,
+    }),
+    sized(7.5, {
+      id: 'updatedAt',
+      label: 'Updated',
+      render: model => formatDate(modelDates[model.id]?.updatedAt),
+      sortValue: model => modelDates[model.id]?.updatedAt?.getTime() ?? 0,
+    }),
+    ...allUsedTags.map(tag => {
+      const label = `${tag.label} users`;
+      return sized(accessColumnRem(label), {
+        id: `tag-${tag.value}`,
+        label,
+        render: model => (
+          <Checkbox
+            checked={model.allowedUserTags.includes(tag.value)}
+            onChange={e => {
+              const checked = e.target.checked;
+              updateModel(model.id, current => ({
+                ...current,
+                allowedUserTags: checked
+                  ? [...current.allowedUserTags, tag.value]
+                  : current.allowedUserTags.filter(t => t !== tag.value),
+              }));
+            }}
+            size="sm"
+            aria-label={`${tag.label} users can access ${model.name}`}
+            data-testid={`llm-dashboard-tag-${model.id}-${tag.value}`}
+          />
+        ),
+      });
+    }),
+    ...allEntitlementKeys.map(key =>
+      sized(accessColumnRem(key), {
+        id: `entitlement-${key}`,
+        label: key,
+        render: model => (
+          // Compare/write on the normalized form so a stored mixed-case or
+          // whitespace-padded value matches its (canonical) column key -
+          // toggling never leaves a near-duplicate behind.
+          <Checkbox
+            checked={(model.allowedEntitlements ?? []).some(k => normalizeEntitlementKey(k) === key)}
+            onChange={e => {
+              const checked = e.target.checked;
+              updateModel(model.id, current => {
+                const withoutKey = (current.allowedEntitlements ?? []).filter(k => normalizeEntitlementKey(k) !== key);
+                return { ...current, allowedEntitlements: checked ? [...withoutKey, key] : withoutKey };
+              });
+            }}
+            size="sm"
+            aria-label={`Users entitled to "${key}" can access ${model.name}`}
+            data-testid={`llm-dashboard-entitlement-${model.id}-${key}`}
+          />
+        ),
+      })
+    ),
+  ];
+  const tableMinWidth = `${columns.reduce((sum, column) => sum + column.widthRem, SELECTION_COLUMN_REM)}rem`;
+
+  const header = (
+    <AdminPageHeader
+      title="Models"
+      description="Turn models on or off and choose which user tags and entitlements can use each one."
+      actions={<ContextHelpButton helpId="admin/llm-dashboard" tooltipText="Models help" />}
+    />
+  );
+  const rootSx = { gap: ADMIN_REGION_GAP, minWidth: 0 };
+
   if (isLoading) {
     return (
-      <Sheet sx={{ p: 2, width: '100%', overflow: 'auto' }}>
-        <Stack direction="row" justifyContent="center" alignItems="center" sx={{ height: '400px' }}>
-          <Typography level="h4">Loading models...</Typography>
-        </Stack>
-      </Sheet>
+      <Stack sx={rootSx} data-testid="llm-dashboard-root">
+        {header}
+        <LoadingState label="Loading models" testId="llm-dashboard-loading" />
+      </Stack>
     );
   }
 
-  if (error) {
+  // A failed background refetch keeps the loaded models (and any unsaved edits) on screen.
+  if (error && !modelInfos) {
     return (
-      <Sheet sx={{ p: 2, width: '100%', overflow: 'auto' }}>
-        <Alert variant="soft" color="danger" sx={{ mb: 3 }}>
-          <Typography level="body-sm">
-            <strong>Error loading models:</strong> {error.message}
-          </Typography>
-        </Alert>
-      </Sheet>
+      <Stack sx={rootSx} data-testid="llm-dashboard-root">
+        {header}
+        <ErrorState message={`Could not load models: ${error.message}`} onRetry={() => void refetchModelInfo()} />
+      </Stack>
     );
   }
 
   return (
-    <Sheet data-testid="llm-dashboard-root" sx={llmDashboardRootSx}>
-      <Box sx={{ flexShrink: 0 }}>
-        <Alert variant="soft" color="primary" sx={{ mb: 3 }} startDecorator={<SecurityIcon />}>
-          <Typography level="body-sm">
-            <strong>Model Access Control:</strong> When a model is disabled, all users lose access. User tag permissions
-            control which user groups can access enabled models.
-          </Typography>
-        </Alert>
+    <Stack sx={rootSx} data-testid="llm-dashboard-root">
+      {header}
 
-        {hasUnsavedChanges && (
-          <Alert variant="soft" color="warning" sx={{ mb: 3 }}>
-            <Typography level="body-sm">
-              <strong>Unsaved Changes:</strong> You have unsaved changes. Click &quot;Save Changes&quot; to persist your
-              configuration.
-            </Typography>
-          </Alert>
-        )}
+      <Alert color="neutral" data-testid="llm-dashboard-access-banner">
+        <span>
+          <strong>Model access control:</strong> When a model is disabled, all users lose access. The user tag and
+          entitlement columns control which users can access an enabled model.
+        </span>
+      </Alert>
 
-        {/* Statistics Cards */}
-        <Grid container spacing={2} sx={{ mb: 3 }}>
-          <Grid xs={12} sm={6} md={3}>
-            <Card variant="soft" color="success">
-              <CardContent>
-                <Typography level="body-sm">Enabled Models</Typography>
-                <Typography level="h2">{enabledModels.length}</Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid xs={12} sm={6} md={3}>
-            <Card variant="soft" color="neutral">
-              <CardContent>
-                <Typography level="body-sm">Disabled Models</Typography>
-                <Typography level="h2">{disabledModels.length}</Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid xs={12} sm={6} md={3}>
-            <Card variant="soft" color="primary">
-              <CardContent>
-                <Typography level="body-sm">Text Models</Typography>
-                <Typography level="h2">{textModels.length}</Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid xs={12} sm={6} md={3}>
-            <Card variant="soft" color="warning">
-              <CardContent>
-                <Typography level="body-sm">Image Models</Typography>
-                <Typography level="h2">{imageModels.length}</Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-        </Grid>
+      <StatStrip aria-label="Model counts">
+        <StatTile label="Enabled" value={enabledModels.length} />
+        <StatTile label="Disabled" value={disabledModels.length} />
+        <StatTile label="Text models" value={textModels.length} />
+        <StatTile label="Image models" value={imageModels.length} />
+      </StatStrip>
 
-        {/* Filters */}
-        <Stack
-          direction={{ xs: 'column', lg: 'row' }}
-          justifyContent="space-between"
-          alignItems={{ xs: 'stretch', lg: 'center' }}
-          spacing={2}
-          sx={{ mb: 3 }}
-        >
-          <Stack
-            direction={{ xs: 'column', sm: 'row' }}
-            spacing={2}
-            alignItems={{ xs: 'stretch', sm: 'center' }}
-            flexWrap="wrap"
-            useFlexGap
-          >
-            <Input
-              size="sm"
-              placeholder="Search models"
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              startDecorator={<SearchIcon fontSize="small" />}
-              slotProps={{ input: { 'data-testid': 'llm-dashboard-search-input' } }}
-              sx={{ minWidth: 200 }}
-            />
-
-            <Stack direction="row" spacing={1} alignItems="center">
-              <Typography level="title-sm" sx={{ alignSelf: 'center', whiteSpace: 'nowrap' }}>
-                Type:
-              </Typography>
-              <Select
-                size="sm"
-                value={filterType}
-                onChange={(_, value) => setFilterType(value as 'all' | 'text' | 'image')}
-                sx={{ minWidth: 120 }}
-              >
-                <Option value="all">All Types</Option>
-                <Option value="text">Text Models</Option>
-                <Option value="image">Image Models</Option>
-              </Select>
-            </Stack>
-
-            <Stack direction="row" spacing={1} alignItems="center">
-              <Typography level="title-sm" sx={{ alignSelf: 'center', whiteSpace: 'nowrap' }}>
-                Backend:
-              </Typography>
-              <Select
-                size="sm"
-                value={filterBackend}
-                onChange={(_, value) => setFilterBackend(value as string)}
-                sx={{ minWidth: 120 }}
-              >
-                <Option value="all">All Backends</Option>
-                {Object.values(ModelBackend).map(backend => (
-                  <Option key={backend} value={backend}>
-                    {backend}
-                  </Option>
-                ))}
-              </Select>
-            </Stack>
-
-            <Stack direction="row" spacing={1} alignItems="center">
-              <Typography level="title-sm" sx={{ alignSelf: 'center', whiteSpace: 'nowrap' }}>
-                Status:
-              </Typography>
-              <Select
-                size="sm"
-                value={filterEnabled}
-                onChange={(_, value) => setFilterEnabled(value as 'all' | 'enabled' | 'disabled')}
-                sx={{ minWidth: 120 }}
-                data-testid="llm-dashboard-status-filter"
-              >
-                <Option value="all">All Models</Option>
-                <Option value="enabled">Enabled Only</Option>
-                <Option value="disabled">Disabled Only</Option>
-              </Select>
-            </Stack>
-          </Stack>
-
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Button
-              startDecorator={<SaveIcon />}
-              variant="solid"
-              color={hasUnsavedChanges ? 'primary' : 'success'}
-              disabled={!hasUnsavedChanges || saveLLMConfigurations.isPending}
-              onClick={handleSaveConfigurations}
-              loading={saveLLMConfigurations.isPending}
-              sx={{ width: { xs: '100%', lg: 'auto' } }}
-            >
-              {hasUnsavedChanges ? 'Save Changes' : 'Saved'}
-            </Button>
-            <ContextHelpButton helpId="admin/llm-dashboard" tooltipText="LLM Dashboard Help" />
-          </Stack>
-        </Stack>
-
-        {selectedModelIds.length > 0 && (
-          <Sheet
-            variant="soft"
-            color="primary"
-            sx={{ mb: 3, p: 1, borderRadius: 'sm' }}
-            data-testid="llm-dashboard-bulk-bar"
-          >
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-              <Typography level="title-sm" sx={{ mr: 1 }} data-testid="llm-dashboard-bulk-count">
-                {hiddenSelectedCount > 0
-                  ? `${selectedFilteredIds.length} of ${selectedModelIds.length} selected models match this filter`
-                  : `${selectedModelIds.length} selected`}
-              </Typography>
-              <Button
-                size="sm"
-                variant="solid"
-                color="success"
-                disabled={selectedFilteredIds.length === 0}
-                onClick={() => handleBulkSetEnabled(true)}
-                data-testid="llm-dashboard-bulk-enable-btn"
-              >
-                Enable selected
-              </Button>
-              <Button
-                size="sm"
-                variant="solid"
-                color="neutral"
-                disabled={selectedFilteredIds.length === 0}
-                onClick={() => handleBulkSetEnabled(false)}
-                data-testid="llm-dashboard-bulk-disable-btn"
-              >
-                Disable selected
-              </Button>
-              <Button
-                size="sm"
-                variant="plain"
-                color="neutral"
-                onClick={() => setSelectedModelIds([])}
-                data-testid="llm-dashboard-bulk-clear-btn"
-              >
-                Clear selection
-              </Button>
-            </Stack>
-          </Sheet>
-        )}
-
-        {bulkNotice && (
-          <Alert variant="soft" color="neutral" sx={{ mb: 3 }} data-testid="llm-dashboard-bulk-notice">
-            <Typography level="body-sm">{bulkNotice}</Typography>
-          </Alert>
-        )}
-      </Box>
-
-      {/* Models Table */}
-      <Sheet sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-        <Table aria-label="LLM Models table" stickyHeader hoverRow>
-          <thead style={{ backgroundColor: theme.palette.background.level1 }}>
-            {/* Headers */}
-            <tr>
-              <th
-                style={{
-                  width: '40px',
-                  verticalAlign: 'top',
-                  position: 'sticky',
-                  top: 0,
-                  zIndex: 1001,
-                }}
-              >
-                <Tooltip title="Select every model matching the current filters">
-                  <Checkbox
-                    checked={allFilteredSelected}
-                    indeterminate={someFilteredSelected}
-                    onChange={e => handleToggleSelectAll(e.target.checked)}
-                    size="sm"
-                    aria-label="Select every model matching the current filters"
-                    data-testid="llm-dashboard-select-all"
-                  />
-                </Tooltip>
-              </th>
-              <th
-                style={{
-                  width: '180px',
-                  verticalAlign: 'top',
-                  cursor: 'pointer',
-                  position: 'sticky',
-                  top: 0,
-                  zIndex: 1001,
-                }}
-                onClick={() => handleSort('name')}
-              >
-                <Stack direction="row" spacing={0.5} alignItems="center">
-                  Model
-                  {sortColumn === 'name' ? (
-                    sortDirection === 'asc' ? (
-                      <ArrowUpwardIcon fontSize="small" />
-                    ) : (
-                      <ArrowDownwardIcon fontSize="small" />
-                    )
-                  ) : (
-                    <UnfoldMoreIcon fontSize="small" />
-                  )}
-                </Stack>
-              </th>
-              <th
-                style={{
-                  width: '100px',
-                  verticalAlign: 'top',
-                  cursor: 'pointer',
-                  position: 'sticky',
-                  top: 0,
-                  zIndex: 1001,
-                }}
-                onClick={() => handleSort('type')}
-              >
-                <Stack direction="row" spacing={0.5} alignItems="center">
-                  Type
-                  {sortColumn === 'type' ? (
-                    sortDirection === 'asc' ? (
-                      <ArrowUpwardIcon fontSize="small" />
-                    ) : (
-                      <ArrowDownwardIcon fontSize="small" />
-                    )
-                  ) : (
-                    <UnfoldMoreIcon fontSize="small" />
-                  )}
-                </Stack>
-              </th>
-              <th
-                style={{
-                  width: '110px',
-                  verticalAlign: 'top',
-                  cursor: 'pointer',
-                  position: 'sticky',
-                  top: 0,
-                  zIndex: 1001,
-                }}
-                onClick={() => handleSort('backend')}
-              >
-                <Stack direction="row" spacing={0.5} alignItems="center">
-                  Backend
-                  {sortColumn === 'backend' ? (
-                    sortDirection === 'asc' ? (
-                      <ArrowUpwardIcon fontSize="small" />
-                    ) : (
-                      <ArrowDownwardIcon fontSize="small" />
-                    )
-                  ) : (
-                    <UnfoldMoreIcon fontSize="small" />
-                  )}
-                </Stack>
-              </th>
-              <th
-                style={{
-                  width: '130px',
-                  verticalAlign: 'top',
-                  cursor: 'pointer',
-                  position: 'sticky',
-                  top: 0,
-                  zIndex: 1001,
-                }}
-                onClick={() => handleSort('status')}
-              >
-                <Stack direction="row" spacing={0.5} alignItems="center">
-                  Status
-                  {sortColumn === 'status' ? (
-                    sortDirection === 'asc' ? (
-                      <ArrowUpwardIcon fontSize="small" />
-                    ) : (
-                      <ArrowDownwardIcon fontSize="small" />
-                    )
-                  ) : (
-                    <UnfoldMoreIcon fontSize="small" />
-                  )}
-                </Stack>
-              </th>
-              <th
-                style={{
-                  width: '90px',
-                  verticalAlign: 'top',
-                  cursor: 'pointer',
-                  position: 'sticky',
-                  top: 0,
-                  zIndex: 1001,
-                }}
-                onClick={() => handleSort('rank')}
-              >
-                <Tooltip title="Lower rank = higher priority in model selection. Leave empty to use automatic ranking.">
-                  <Stack direction="row" spacing={0.5} alignItems="center">
-                    Rank
-                    {sortColumn === 'rank' ? (
-                      sortDirection === 'asc' ? (
-                        <ArrowUpwardIcon fontSize="small" />
-                      ) : (
-                        <ArrowDownwardIcon fontSize="small" />
-                      )
-                    ) : (
-                      <UnfoldMoreIcon fontSize="small" />
-                    )}
-                  </Stack>
-                </Tooltip>
-              </th>
-              <th
-                style={{
-                  width: '180px',
-                  verticalAlign: 'top',
-                  position: 'sticky',
-                  top: 0,
-                  zIndex: 1001,
-                }}
-              >
-                Fallback Model
-              </th>
-              <th
-                style={{
-                  width: '110px',
-                  verticalAlign: 'top',
-                  cursor: 'pointer',
-                  position: 'sticky',
-                  top: 0,
-                  zIndex: 1001,
-                }}
-                onClick={() => handleSort('createdAt')}
-              >
-                <Stack direction="row" spacing={0.5} alignItems="center">
-                  Created
-                  {sortColumn === 'createdAt' ? (
-                    sortDirection === 'asc' ? (
-                      <ArrowUpwardIcon fontSize="small" />
-                    ) : (
-                      <ArrowDownwardIcon fontSize="small" />
-                    )
-                  ) : (
-                    <UnfoldMoreIcon fontSize="small" />
-                  )}
-                </Stack>
-              </th>
-              <th
-                style={{
-                  width: '110px',
-                  verticalAlign: 'top',
-                  cursor: 'pointer',
-                  position: 'sticky',
-                  top: 0,
-                  zIndex: 1001,
-                }}
-                onClick={() => handleSort('updatedAt')}
-              >
-                <Stack direction="row" spacing={0.5} alignItems="center">
-                  Updated
-                  {sortColumn === 'updatedAt' ? (
-                    sortDirection === 'asc' ? (
-                      <ArrowUpwardIcon fontSize="small" />
-                    ) : (
-                      <ArrowDownwardIcon fontSize="small" />
-                    )
-                  ) : (
-                    <UnfoldMoreIcon fontSize="small" />
-                  )}
-                </Stack>
-              </th>
-              <th
-                style={{
-                  verticalAlign: 'top',
-                  width: allowedColumnWidth(allUsedTags.length),
-                  position: 'sticky',
-                  top: 0,
-                  zIndex: 1001,
-                  paddingLeft: '8px',
-                  paddingRight: '8px',
-                }}
-              >
-                <Box
-                  sx={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    paddingLeft: '12px',
-                  }}
-                >
-                  <Typography sx={{ textAlign: 'center', marginBottom: 1, width: 'fit-content' }}>
-                    Users Allowed
-                  </Typography>
-                  <Box
-                    sx={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      flexDirection: 'row',
-                      gap: `${ALLOWED_KEY_GAP_PX}px`,
-                      justifyContent: 'flex-start',
-                    }}
-                  >
-                    {allUsedTags.map(tag => (
-                      <Box
-                        key={tag.value}
-                        sx={{
-                          display: 'flex',
-                          flexDirection: 'column',
-                          alignItems: 'center',
-                          width: ALLOWED_KEY_WIDTH_PX,
-                          flexShrink: 0,
-                          textAlign: 'center',
-                        }}
-                      >
-                        <Typography
-                          level="title-sm"
-                          sx={{
-                            textAlign: 'center',
-                            padding: '1px 2px',
-                            fontSize: '9px',
-                            lineHeight: 1.1,
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            width: '100%',
-                          }}
-                        >
-                          {tag.label}
-                        </Typography>
-                      </Box>
-                    ))}
-                  </Box>
-                </Box>
-              </th>
-              <th
-                style={{
-                  verticalAlign: 'top',
-                  width: allowedColumnWidth(allEntitlementKeys.length),
-                  position: 'sticky',
-                  top: 0,
-                  zIndex: 1001,
-                  paddingLeft: '8px',
-                  paddingRight: '8px',
-                }}
-              >
-                <Box sx={{ display: 'flex', flexDirection: 'column', paddingLeft: '12px' }}>
-                  <Typography sx={{ textAlign: 'center', marginBottom: 1, width: 'fit-content' }}>
-                    Entitlements Allowed
-                  </Typography>
-                  <Box
-                    sx={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      flexDirection: 'row',
-                      gap: `${ALLOWED_KEY_GAP_PX}px`,
-                      justifyContent: 'flex-start',
-                    }}
-                  >
-                    {allEntitlementKeys.length === 0 ? (
-                      <Typography level="body-xs" sx={{ fontStyle: 'italic', opacity: 0.6, whiteSpace: 'nowrap' }}>
-                        none configured
-                      </Typography>
-                    ) : (
-                      allEntitlementKeys.map(key => (
-                        <Box
-                          key={key}
-                          sx={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            alignItems: 'center',
-                            width: ALLOWED_KEY_WIDTH_PX,
-                            flexShrink: 0,
-                            textAlign: 'center',
-                          }}
-                        >
-                          <Typography
-                            level="title-sm"
-                            sx={{
-                              textAlign: 'center',
-                              padding: '1px 2px',
-                              fontSize: '9px',
-                              lineHeight: 1.1,
-                              whiteSpace: 'nowrap',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              width: '100%',
-                            }}
-                          >
-                            {key}
-                          </Typography>
-                        </Box>
-                      ))
-                    )}
-                  </Box>
-                </Box>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {paginatedModels.map(model => (
-              <tr key={model.id}>
-                <td>
-                  <Checkbox
-                    checked={selectedIdSet.has(model.id)}
-                    onChange={e => handleToggleSelected(model.id, e.target.checked)}
-                    size="sm"
-                    aria-label={`Select ${model.name}`}
-                    data-testid={`llm-dashboard-select-${model.id}`}
-                  />
-                </td>
-                <td>
-                  <Typography level="body-sm" fontWeight="md">
-                    {model.name}
-                  </Typography>
-                </td>
-                <td>
-                  <Chip
-                    variant="soft"
-                    color={model.type === 'text' ? 'primary' : 'warning'}
-                    startDecorator={model.type === 'text' ? <ChatIcon /> : <ImageIcon />}
-                  >
-                    {model.type === 'text' ? 'Text' : 'Image'}
-                  </Chip>
-                </td>
-                <td>
-                  <Chip variant="soft" color={getBackendColor(model.backend)}>
-                    {model.backend}
-                  </Chip>
-                </td>
-                <td>
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <Switch
-                      checked={model.enabled}
-                      onChange={() => handleToggleModel(model.id)}
-                      color={model.enabled ? 'success' : 'neutral'}
-                      size="sm"
-                      data-testid={`llm-dashboard-toggle-${model.id}`}
-                    />
-                    <Typography level="body-xs" color={model.enabled ? 'success' : 'neutral'}>
-                      {model.enabled ? 'Enabled' : 'Disabled'}
-                    </Typography>
-                  </Stack>
-                </td>
-                <td>
-                  <Input
-                    type="number"
-                    placeholder="Auto"
-                    value={model.rank ?? ''}
-                    onChange={e => handleRankChange(model.id, e.target.value)}
-                    size="sm"
-                    slotProps={{
-                      input: {
-                        min: 1,
-                        max: 100,
-                        step: 1,
-                      },
-                    }}
-                    sx={{ width: '70px' }}
-                  />
-                </td>
-                <td>
-                  <Select
-                    placeholder="Select fallback model"
-                    value={model.fallbackModel || null}
-                    onChange={(_, value) => handleFallbackModelChange(model.id, value || '')}
-                    size="sm"
-                    sx={{ width: '90%' }}
-                  >
-                    <Option value="">None</Option>
-                    {getFallbackOptions(model).map(fallbackModel => (
-                      <Option key={fallbackModel.id} value={fallbackModel.id}>
-                        {fallbackModel.name}
-                        {fallbackModel.backend === ModelBackend.Bedrock && (
-                          <Chip size="sm" variant="soft" color="neutral" sx={{ ml: 0.5 }}>
-                            Bedrock
-                          </Chip>
-                        )}
-                      </Option>
-                    ))}
-                  </Select>
-                </td>
-                <td>
-                  <Typography level="body-xs">
-                    {modelDates[model.id]?.createdAt
-                      ? new Intl.DateTimeFormat('en-US', {
-                          month: 'short',
-                          day: 'numeric',
-                          year: 'numeric',
-                        }).format(modelDates[model.id].createdAt)
-                      : '-'}
-                  </Typography>
-                </td>
-                <td>
-                  <Typography level="body-xs">
-                    {modelDates[model.id]?.updatedAt
-                      ? new Intl.DateTimeFormat('en-US', {
-                          month: 'short',
-                          day: 'numeric',
-                          year: 'numeric',
-                        }).format(modelDates[model.id].updatedAt)
-                      : '-'}
-                  </Typography>
-                </td>
-                <td style={{ paddingLeft: '8px', paddingRight: '8px' }}>
-                  <Box
-                    sx={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      flexDirection: 'row',
-                      gap: `${ALLOWED_KEY_GAP_PX}px`,
-                      justifyContent: 'flex-start',
-                      paddingLeft: '12px',
-                    }}
-                  >
-                    {allUsedTags.map(tag => (
-                      <Box
-                        key={tag.value}
-                        sx={{ display: 'flex', justifyContent: 'center', width: ALLOWED_KEY_WIDTH_PX, flexShrink: 0 }}
-                      >
-                        <Tooltip title={`${tag.label} users can access this model`}>
-                          <Checkbox
-                            checked={model.allowedUserTags.includes(tag.value)}
-                            onChange={e => {
-                              const newTags = e.target.checked
-                                ? [...model.allowedUserTags, tag.value]
-                                : model.allowedUserTags.filter(t => t !== tag.value);
-
-                              handleUserTagsChange(model.id, newTags);
-                            }}
-                            color={tag.color}
-                            size="sm"
-                            sx={{
-                              '& .MuiCheckbox-checkbox': { fontSize: '14px' },
-                            }}
-                          />
-                        </Tooltip>
-                      </Box>
-                    ))}
-                  </Box>
-                </td>
-                <td style={{ paddingLeft: '8px', paddingRight: '8px' }}>
-                  <Box
-                    sx={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      flexDirection: 'row',
-                      gap: `${ALLOWED_KEY_GAP_PX}px`,
-                      justifyContent: 'flex-start',
-                      paddingLeft: '12px',
-                    }}
-                  >
-                    {allEntitlementKeys.map(key => {
-                      const current = model.allowedEntitlements ?? [];
-                      // Compare/write on the normalized form so a stored mixed-case or
-                      // whitespace-padded value matches its (canonical) column key -
-                      // toggling never leaves a near-duplicate behind.
-                      return (
-                        <Box
-                          key={key}
-                          sx={{ display: 'flex', justifyContent: 'center', width: ALLOWED_KEY_WIDTH_PX, flexShrink: 0 }}
-                        >
-                          <Tooltip title={`Users entitled to "${key}" can access this model`}>
-                            <Checkbox
-                              checked={current.some(k => normalizeEntitlementKey(k) === key)}
-                              onChange={e => {
-                                const withoutKey = current.filter(k => normalizeEntitlementKey(k) !== key);
-                                const newEntitlements = e.target.checked ? [...withoutKey, key] : withoutKey;
-
-                                handleEntitlementsChange(model.id, newEntitlements);
-                              }}
-                              color="success"
-                              size="sm"
-                              sx={{
-                                '& .MuiCheckbox-checkbox': { fontSize: '14px' },
-                              }}
-                            />
-                          </Tooltip>
-                        </Box>
-                      );
-                    })}
-                  </Box>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </Table>
-      </Sheet>
-
-      {/* Pagination Controls */}
       <Stack
         direction="row"
-        spacing={2}
-        alignItems="center"
-        justifyContent="space-between"
         flexWrap="wrap"
-        useFlexGap
-        sx={{ mt: 2, px: 1, flexShrink: 0 }}
+        alignItems="center"
+        gap={1}
+        sx={adminFocusScope}
+        data-testid="llm-dashboard-filters"
       >
-        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-          <Typography level="body-sm">Rows per page:</Typography>
-          <Select
-            value={rowsPerPage}
-            onChange={(_, value) => handleRowsPerPageChange(value as number)}
-            size="sm"
-            sx={{ minWidth: 70 }}
-          >
-            <Option value={5}>5</Option>
-            <Option value={10}>10</Option>
-            <Option value={25}>25</Option>
-            <Option value={50}>50</Option>
-          </Select>
-          <Typography level="body-sm" sx={{ ml: { sm: 2 } }}>
-            {startIndex + 1}-{Math.min(endIndex, filteredModels.length)} of {filteredModels.length} models
-          </Typography>
-        </Stack>
-
-        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-          <Button
-            size="sm"
-            variant="plain"
-            color="neutral"
-            onClick={() => handlePageChange(1)}
-            disabled={currentPage === 1}
-            startDecorator={<FirstPageIcon />}
-          >
-            First
-          </Button>
-          <Button
-            size="sm"
-            variant="plain"
-            color="neutral"
-            onClick={() => handlePageChange(currentPage - 1)}
-            disabled={currentPage === 1}
-            startDecorator={<ChevronLeftIcon />}
-          >
-            Previous
-          </Button>
-          <Typography level="body-sm" sx={{ px: 2 }}>
-            Page {currentPage} of {totalPages || 1}
-          </Typography>
-          <Button
-            size="sm"
-            variant="plain"
-            color="neutral"
-            onClick={() => handlePageChange(currentPage + 1)}
-            disabled={currentPage === totalPages || totalPages === 0}
-            endDecorator={<ChevronRightIcon />}
-          >
-            Next
-          </Button>
-          <Button
-            size="sm"
-            variant="plain"
-            color="neutral"
-            onClick={() => handlePageChange(totalPages)}
-            disabled={currentPage === totalPages || totalPages === 0}
-            endDecorator={<LastPageIcon />}
-          >
-            Last
-          </Button>
-        </Stack>
+        <AdminSearchInput
+          value={searchQuery}
+          onChange={setSearchQuery}
+          label="Search models"
+          data-testid="llm-dashboard-search-input"
+        />
+        <FilterChip id="type" label="Type" value={filterType} options={TYPE_OPTIONS} onChange={setFilterType} />
+        <FilterChip
+          id="backend"
+          label="Backend"
+          value={filterBackend}
+          options={BACKEND_OPTIONS}
+          onChange={setFilterBackend}
+        />
+        <FilterChip
+          id="status"
+          label="Status"
+          value={filterStatus}
+          options={STATUS_OPTIONS}
+          onChange={setFilterStatus}
+        />
       </Stack>
-    </Sheet>
+
+      {bulkNotice && (
+        <Alert color="neutral" data-testid="llm-dashboard-bulk-notice">
+          {bulkNotice}
+        </Alert>
+      )}
+
+      <DataTable
+        label="Models"
+        testId="llm-dashboard-table"
+        rows={filteredModels}
+        columns={columns}
+        getRowId={model => model.id}
+        rowTestId={model => `llm-dashboard-row-${model.id}`}
+        selection={{ mode: 'explicit', ids: selectedModelIds }}
+        onSelectionChange={handleSelectionChange}
+        pageResetKey={filterKey}
+        minWidth={tableMinWidth}
+        alwaysShowScrollbar
+        onRetry={() => void refetchModelInfo()}
+        empty={
+          hasFilters ? (
+            <EmptyState
+              title="No models match these filters"
+              action={
+                <Button variant="outlined" onClick={clearFilters} data-testid="llm-dashboard-clear-filters-btn">
+                  Clear filters
+                </Button>
+              }
+            />
+          ) : (
+            <EmptyState
+              title="No models available"
+              description="Models appear here once the model catalog lists them."
+              action={
+                <Button
+                  variant="outlined"
+                  onClick={() => void refetchModelInfo()}
+                  data-testid="llm-dashboard-refresh-btn"
+                >
+                  Refresh models
+                </Button>
+              }
+            />
+          )
+        }
+      />
+
+      {(selectedModelIds.length > 0 || changedCount > 0) && (
+        // One sticky dock, so the bulk bar and the save bar stack instead of overlapping. Left-aligned so
+        // the AI chat pill in the bottom-right corner does not cover their buttons (as UsersBulkBar does).
+        // The dock spans the content width, so it must not take clicks meant for the rows beside the bars.
+        <Stack
+          gap={1}
+          alignItems="flex-start"
+          sx={{ position: 'sticky', bottom: 8, zIndex: 3, pointerEvents: 'none' }}
+          data-testid="llm-dashboard-dock"
+        >
+          {selectedModelIds.length > 0 && (
+            <Box data-testid="llm-dashboard-bulk-bar" sx={{ maxWidth: '100%', pointerEvents: 'auto' }}>
+              <BulkActionBar
+                selection={{ mode: 'explicit', ids: selectedModelIds }}
+                totalMatching={filteredModels.length}
+                onSelectAllMatching={handleSelectAllMatching}
+                onClear={() => setSelectedModelIds([])}
+              >
+                {hiddenSelectedCount > 0 && (
+                  <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid="llm-dashboard-bulk-count">
+                    {`${selectedFilteredIds.length} of ${selectedModelIds.length} selected models match this filter`}
+                  </Typography>
+                )}
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  disabled={selectedFilteredIds.length === 0}
+                  onClick={() => handleBulkSetEnabled(true)}
+                  data-testid="llm-dashboard-bulk-enable-btn"
+                >
+                  Enable selected
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  disabled={selectedFilteredIds.length === 0}
+                  onClick={() => handleBulkSetEnabled(false)}
+                  data-testid="llm-dashboard-bulk-disable-btn"
+                >
+                  Disable selected
+                </Button>
+              </BulkActionBar>
+            </Box>
+          )}
+          <Box data-testid="llm-dashboard-save-bar-dock" sx={{ maxWidth: '100%', pointerEvents: 'auto' }}>
+            <SaveBar
+              count={changedCount}
+              pending={saveLLMConfigurations.isPending}
+              onSave={handleSave}
+              onDiscard={handleDiscard}
+            />
+          </Box>
+        </Stack>
+      )}
+
+      <UnsavedChangesGuard dirty={dirty} pending={saveLLMConfigurations.isPending} isLeaving={isLeavingTab} />
+    </Stack>
   );
 };
 

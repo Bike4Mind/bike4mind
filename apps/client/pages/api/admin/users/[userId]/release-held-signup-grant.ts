@@ -1,9 +1,9 @@
 import { userService } from '@bike4mind/services';
 import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { buildHeldGrantAdapters } from '@server/credits/heldSignupGrantAdapters';
+import { buildHeldGrantAdapters } from '@bike4mind/server-utils/credits/heldSignupGrantAdapters';
 import { readSignupGrantAdminAction } from '@server/credits/signupGrantAdminAction';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:adjust' } })
   .use(csrfProtection())

@@ -1,6 +1,6 @@
 import { entitlementsForPriceIds } from '@bike4mind/server-utils/lib/entitlements/registry';
 import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
-import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
+import { getEntitlingPlanByPriceId } from '@bike4mind/server-utils/lib/userSubscriptions/utils';
 
 /**
  * Paid standing: the one answer to "is this account paid" for every free-tier gate - the `plan:paid`

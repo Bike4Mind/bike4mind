@@ -7,7 +7,6 @@ import {
 } from './buckets';
 import {
   DEFAULT_LAMBDA_ENVIRONMENT,
-  PRODUCTION_STAGES,
   SINGLE_RECORD_BATCH,
   TEST_GENERATION_PROVIDER_ENVIRONMENT,
 } from './constants';
@@ -424,6 +423,7 @@ const imageEditQueueSubscription = imageEditQueue.subscribe(
       fabFileBucket,
       appFilesBucket,
       imageProcessor,
+      eventBus,
       generationCallbackQueue,
     ],
     environment: {
@@ -484,7 +484,8 @@ const researchEngineQueueSubscription = researchEngineQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
-// Release notes generation queue (keeps the retired What's New generator's resource names)
+// Release notes and What's New highlights queue. Messages carry a `kind` that whatsNewJob.dispatch routes on.
+// Keeps the retired What's New generator's resource names: the release workflow holds this queue's URL in an external secret.
 const whatsNewGenerationQueueDLQ = new sst.aws.Queue('whatsNewGenerationQueueDLQ', {
   transform: {
     queue: {
@@ -507,7 +508,7 @@ const whatsNewGenerationQueue = new sst.aws.Queue('whatsNewGenerationQueue', {
 });
 const whatsNewGenerationQueueSubscription = whatsNewGenerationQueue.subscribe(
   {
-    handler: 'apps/workers/src/queueHandlers/releaseNotes.dispatch',
+    handler: 'apps/workers/src/queueHandlers/whatsNewJob.dispatch',
     timeout: '5 minutes',
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi],
@@ -584,7 +585,7 @@ const agentProactiveMessageQueueSubscription = agentProactiveMessageQueue.subscr
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket],
+    link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1107,9 +1108,8 @@ const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
-// What's New Highlights Queue
-// Generates a highlights summary from What's New modals and posts to Slack.
-// Fed only by the admin generate-highlights route; there is no scheduled trigger.
+// Legacy What's New highlights queue, retained with its consumer until in-flight messages drain.
+// The admin generate-highlights route now sends to whatsNewGenerationQueue; there is no scheduled trigger.
 const whatsNewHighlightsQueueDLQ = new sst.aws.Queue('whatsNewHighlightsQueueDLQ', {
   transform: {
     queue: {
@@ -1509,56 +1509,11 @@ const overwatchAnalyticsQueue = new sst.aws.Queue('overwatchAnalyticsQueue', {
     retry: 3,
   },
   transform: {
-    // SSE-SQS (not SSE-KMS): alias/aws/sqs is an AWS-managed key whose key policy cannot
-    // be modified to allow cross-account access. SSE-SQS is transparent to cross-account
-    // producers — they need only sqs:SendMessage. DLQ retains KMS (intra-account only).
+    // SSE-SQS, not SSE-KMS: the AWS-managed alias/aws/sqs key policy cannot be edited, so keep this as is.
+    // The DLQ stays on KMS.
     queue: { sqsManagedSseEnabled: true },
   },
 });
-
-// Allow cross-account sqs:SendMessage from external producer accounts (e.g. VibesWire,
-// K2Kanji, StocksAndVibes). The account IDs are deployment-specific, so they come from
-// the OVERWATCH_ANALYTICS_CROSS_ACCOUNT_IDS env var (comma-separated 12-digit IDs) with
-// no brand fallback — when unset/all-invalid, no cross-account policy is created. Entries
-// are validated as exactly 12 digits so a typo can't mint a malformed principal ARN.
-const overwatchCrossAccountIds = (process.env.OVERWATCH_ANALYTICS_CROSS_ACCOUNT_IDS ?? '')
-  .split(',')
-  .map(id => id.trim())
-  .filter(id => /^\d{12}$/.test(id));
-// Loud guard: on a persistent stage, an empty list means this deploy will NOT create the
-// policy — and Pulumi will DESTROY any existing one, silently revoking cross-account
-// sqs:SendMessage (e.g. VibesWire). Warn at synth so a missing/renamed/mis-scoped var is
-// visible in the deploy log instead of quietly dropping access.
-if (overwatchCrossAccountIds.length === 0 && PRODUCTION_STAGES.includes($app.stage)) {
-  console.warn(
-    `⚠️  OVERWATCH_ANALYTICS_CROSS_ACCOUNT_IDS is empty on stage '${$app.stage}'. ` +
-      `overwatchAnalyticsQueuePolicy will not be created; any existing cross-account ` +
-      `sqs:SendMessage grant will be REMOVED on this deploy. Set the repo/org variable ` +
-      `if external producers should retain access.`
-  );
-}
-if (overwatchCrossAccountIds.length > 0) {
-  new aws.sqs.QueuePolicy('overwatchAnalyticsQueuePolicy', {
-    queueUrl: overwatchAnalyticsQueue.url,
-    policy: overwatchAnalyticsQueue.arn.apply(arn =>
-      JSON.stringify({
-        Version: '2012-10-17',
-        Statement: [
-          {
-            Sid: 'AllowCrossAccountSendMessage',
-            Effect: 'Allow',
-            Principal: {
-              AWS: overwatchCrossAccountIds.map(id => `arn:aws:iam::${id}:root`),
-            },
-            Action: 'sqs:SendMessage',
-            Resource: arn,
-            Condition: { Bool: { 'aws:SecureTransport': 'true' } },
-          },
-        ],
-      })
-    ),
-  });
-}
 
 const overwatchAnalyticsQueueSubscription = overwatchAnalyticsQueue.subscribe(
   {

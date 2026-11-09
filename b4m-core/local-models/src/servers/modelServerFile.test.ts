@@ -239,23 +239,72 @@ describe('readDesktopModelServers', () => {
     await put('@bike4mind/desktop', JSON.stringify(body));
     const result = await readDesktopModelServers(opts());
     expect(result.servers.map(s => s.name)).toEqual(['kept']);
-    expect(result.desktopOnly).toEqual([]);
+    expect(result.unusable?.map(s => s.id)).toEqual(['ssh1']);
   });
 
-  it('lists SSH servers apart, as ones only Desktop can reach', async () => {
+  it('lists SSH servers with the rest, an old one without a port as Ollama on 11434', async () => {
     const body = {
       servers: [
         stored({ id: 'ssh1', name: 'lab', auth: { type: 'none' }, transport: { type: 'ssh', destination: 'me@lab' } }),
+        stored({
+          id: 'ssh3',
+          name: 'swap',
+          kind: 'openai-compatible',
+          transport: { type: 'ssh', destination: 'me@lab', port: 8080 },
+        }),
         stored({ id: 'ssh2', transport: { type: 'ssh', destination: '-oProxyCommand=x' } }),
+        stored({ id: 'ssh4', transport: { type: 'ssh', destination: 'me@lab', port: '22 -oProxyCommand=x' } }),
+        stored({ id: 'ok1', name: 'kept' }),
+      ],
+    };
+    await put('@bike4mind/desktop', JSON.stringify(body));
+    const result = await readDesktopModelServers(opts());
+    expect(result.servers.map(s => [s.name, s.kind, s.transport])).toEqual([
+      ['lab', 'ollama', { type: 'ssh', destination: 'me@lab', port: 11434 }],
+      ['swap', 'openai-compatible', { type: 'ssh', destination: 'me@lab', port: 8080 }],
+      ['kept', 'ollama', { type: 'http', baseUrl: 'http://10.0.0.5:11434' }],
+    ]);
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+  });
+
+  it('lists an SSH server saved with a port or destination it cannot use, or none, with why, apart from the usable ones', async () => {
+    const ports: unknown[] = [0, 65_536, -1, 1.5, null, 'abc', '', '22 -oProxyCommand=x', { port: 22 }];
+    const body = {
+      servers: [
+        ...ports.map((port, index) =>
+          stored({ id: `p${index}`, name: `port-${index}`, transport: { type: 'ssh', destination: 'me@lab', port } })
+        ),
+        stored({ id: 'd1', name: 'dest', transport: { type: 'ssh', destination: '-oProxyCommand=x', port: 8080 } }),
+        stored({ id: 'ssh1', name: 'none', transport: { type: 'ssh', host: 'box' } }),
+        stored({ id: 'ssh2', name: 'number', transport: { type: 'ssh', destination: 42, port: 8080 } }),
         stored({ id: 'ok1', name: 'kept' }),
       ],
     };
     await put('@bike4mind/desktop', JSON.stringify(body));
     const result = await readDesktopModelServers(opts());
     expect(result.servers.map(s => s.name)).toEqual(['kept']);
-    expect(result.desktopOnly).toEqual([
-      { id: 'ssh1', name: 'lab', kind: 'ollama', access: 'manage', transport: { type: 'ssh', destination: 'me@lab' } },
+    const missing = { transport: { type: 'ssh', destination: null }, problem: 'It has no saved SSH destination.' };
+    expect(result.unusable).toEqual([
+      ...ports.map((_port, index) => ({
+        id: `p${index}`,
+        name: `port-${index}`,
+        kind: 'ollama',
+        access: 'manage',
+        auth: { type: 'bearer' },
+        addedAt: '2026-10-01T00:00:00.000Z',
+        transport: { type: 'ssh', destination: 'me@lab' },
+        problem: 'Its saved SSH port is not a number from 1 to 65535.',
+      })),
+      expect.objectContaining({
+        id: 'd1',
+        transport: { type: 'ssh', destination: null },
+        problem: 'Its saved SSH destination is not one ssh can be given safely.',
+      }),
+      expect.objectContaining({ id: 'ssh1', name: 'none', ...missing }),
+      expect.objectContaining({ id: 'ssh2', name: 'number', ...missing }),
     ]);
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+    expect(JSON.stringify(result)).not.toContain('ProxyCommand');
   });
 
   it('reads a newer version as it is and never writes the file', async () => {
@@ -275,7 +324,7 @@ describe('readDesktopModelServers', () => {
     );
     const result = await readDesktopModelServers(opts());
     expect(JSON.stringify(result)).not.toContain('pw-zz');
-    expect(result.servers[0].transport.baseUrl).toBe('http://10.0.0.5:11434');
+    expect(result.servers[0].transport).toEqual({ type: 'http', baseUrl: 'http://10.0.0.5:11434' });
   });
 });
 
@@ -289,10 +338,27 @@ describe('stored records', () => {
 
   it('hydrates an SSH destination only when it cannot pass as an ssh option', () => {
     const ssh = (destination: unknown) => hydrate(stored({ transport: { type: 'ssh', destination } }) as never);
-    expect(ssh('me@gpu')?.transport).toEqual({ type: 'ssh', destination: 'me@gpu' });
+    expect(ssh('me@gpu')?.transport).toEqual({ type: 'ssh', destination: 'me@gpu', port: 11434 });
     expect(ssh('-oProxyCommand=touch /tmp/x')).toBeNull();
     expect(ssh('gpu box')).toBeNull();
     expect(ssh(42)).toBeNull();
+  });
+
+  it('defaults an SSH record saved without a port to Ollama on 11434 and refuses a port that is not one', () => {
+    const ssh = (port: unknown) =>
+      hydrate(stored({ transport: { type: 'ssh', destination: 'me@gpu', port } }) as never)?.transport ?? null;
+    const old = { ...stored({ auth: { type: 'none' }, transport: { type: 'ssh', destination: 'me@gpu' } }) };
+    delete old.secret;
+    expect(hydrate(old as never)).toMatchObject({
+      kind: 'ollama',
+      auth: { type: 'none' },
+      transport: { type: 'ssh', destination: 'me@gpu', port: 11434 },
+    });
+    expect(ssh(8080)).toEqual({ type: 'ssh', destination: 'me@gpu', port: 8080 });
+    expect(ssh('1234')).toEqual({ type: 'ssh', destination: 'me@gpu', port: 1234 });
+    for (const bad of [0, 65_536, -1, 80.5, '8080 -oProxyCommand=x', '127.0.0.1:22', null, {}, 'abc']) {
+      expect(ssh(bad), String(bad)).toBeNull();
+    }
   });
 
   it('keeps only specs that check out', () => {

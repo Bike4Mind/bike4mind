@@ -117,7 +117,7 @@ export interface SessionPanelProps {
   /** Popover only: the element that opened it, whose own click must not count as outside. */
   anchor?: RefObject<HTMLElement | null>;
   environment: {
-    project: ChatProject;
+    project: ChatProject | undefined;
     grantedDirectories?: readonly string[];
     binding: ProjectBindingController;
     settledTurns: number;
@@ -140,7 +140,8 @@ export interface SessionPanelProps {
   background: BackgroundSectionProps;
 }
 
-function environmentSection({ environment }: SessionPanelProps): SectionSpec {
+function environmentSection({ environment }: SessionPanelProps): SectionSpec | null {
+  if (!environment.project) return null;
   return {
     id: 'environment',
     title: 'Environment',
@@ -217,11 +218,11 @@ function planSection({ plan }: SessionPanelProps): SectionSpec | null {
 }
 
 function backgroundSection({ background }: SessionPanelProps): SectionSpec | null {
-  if (background.processes.length === 0 && background.spawned.length === 0) return null;
+  if (background.processes.length === 0 && background.spawned.length === 0 && !background.loop) return null;
   return {
     id: 'background',
     title: 'Background tasks',
-    summary: <SummaryText>{backgroundSummary(background.processes, background.spawned)}</SummaryText>,
+    summary: <SummaryText>{backgroundSummary(background.processes, background.spawned, background.loop)}</SummaryText>,
     content: <BackgroundSection {...background} />,
   };
 }
@@ -258,6 +259,7 @@ function useDismiss(
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       if (event.target instanceof Element && event.target.closest('[role="menu"]')) return;
+      event.preventDefault();
       onDismiss();
     };
     document.addEventListener('pointerdown', onPointerDown, true);

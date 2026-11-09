@@ -8,7 +8,7 @@ import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 //
 // A CASL `req.ability.can('read', AdminSettings)` check is NOT sufficient here: every
 // authenticated user holds a *conditional* read rule for feature-flag settings
-// (see server/auth/ability.ts), and CASL evaluates a subject-*type* check (the model class,
+// (see packages/server-utils/src/auth/ability.ts), and CASL evaluates a subject-*type* check (the model class,
 // not a document instance) as true whenever any conditional rule exists - the condition is
 // never applied. That leaked every secret to any logged-in non-admin.
 //

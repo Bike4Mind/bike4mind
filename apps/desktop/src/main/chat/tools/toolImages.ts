@@ -57,13 +57,14 @@ export function showImage(context: ToolContext, bytes: Buffer, mediaType: ImageM
     };
   }
 
-  const fitted = fit(images, bytes, mediaType);
+  const fitted = fitToolImage(images, bytes, mediaType);
   if (!fitted.ok) return fitted;
   report.image(fitted.bytes, fitted.mediaType);
   return { ok: true, ...(fitted.pixels ? { pixels: fitted.pixels } : {}) };
 }
 
-function fit(
+/** Fit an image under the size a tool image may be sent at; shared with the replay of generated images. */
+export function fitToolImage(
   images: ImageContext,
   bytes: Buffer,
   mediaType: ImageMediaType

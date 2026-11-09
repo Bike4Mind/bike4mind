@@ -35,7 +35,7 @@ vi.mock('@bike4mind/database/auth', () => ({
   userApiKeyRepository: { findByUserId: h.findByUserId, revokeIfNotDisabled: h.revoke },
 }));
 vi.mock('@bike4mind/services', () => ({ authSessionService: { endRealtimeConnections: h.endConnections } }));
-vi.mock('@server/utils/adminAudit', async () => {
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async () => {
   const { BadRequestError: BadRequest } = await import('@bike4mind/common');
   return {
     parseAdminActionReason: (reason: unknown) => {

@@ -192,6 +192,8 @@ export function prDisplayState(state: PrState, isDraft = false, queued = false):
 export interface PrSummary {
   number: number;
   state: PrDisplayState;
+  /** `owner/repo`, so a search for `owner/repo#N` can tell this PR from another repo's. */
+  repo?: string;
 }
 
 /** main -> renderer push; `summary` null means the conversation no longer has a PR to show. */
@@ -201,7 +203,7 @@ export interface PrSummaryEvent {
 }
 
 export function samePrSummary(a: PrSummary | null | undefined, b: PrSummary | null | undefined): boolean {
-  return a?.number === b?.number && a?.state === b?.state;
+  return a?.number === b?.number && a?.state === b?.state && a?.repo === b?.repo;
 }
 
 /** Whether `gh` can be used at all. Anything but 'ok' replaces the bar's content with a fix-it line. */
@@ -315,9 +317,13 @@ export function findPullRequestUrls(text: string): PrRef[] {
  */
 const BINDING_COMMAND = /(^|[\s;&|(])(gh\s+pr\s+create|git\s+push)\b/;
 
+export function isBindingCommand(command: string): boolean {
+  return BINDING_COMMAND.test(command);
+}
+
 /** The PR a shell command's output announces, or null. The last URL wins: it is the one printed on completion. */
 export function pullRequestFromShell(command: string, output: string): PrRef | null {
-  if (!BINDING_COMMAND.test(command)) return null;
+  if (!isBindingCommand(command)) return null;
   const urls = findPullRequestUrls(output);
   return urls.length > 0 ? urls[urls.length - 1] : null;
 }

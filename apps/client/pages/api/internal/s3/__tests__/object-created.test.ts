@@ -53,7 +53,9 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/server-utils/s3/storageCharge', () => ({ chargeUploadedObject: chargeMock }));
 vi.mock('@bike4mind/server-utils/s3/uploadSizeGate', () => ({ admitLandedUpload: admitMock }));
-vi.mock('@server/s3/recordRejectedUploadBatch', () => ({ recordRejectedUploadBatch: recordRejectedBatchMock }));
+vi.mock('@bike4mind/server-utils/s3/recordRejectedUploadBatch', () => ({
+  recordRejectedUploadBatch: recordRejectedBatchMock,
+}));
 vi.mock('@server/s3/moderationScan', () => ({
   normalizeETag: (eTag?: string) => eTag?.replace(/^"|"$/g, '') || undefined,
   recordLandedObject: recordLandedMock,

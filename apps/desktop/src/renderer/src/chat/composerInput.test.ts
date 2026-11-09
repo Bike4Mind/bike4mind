@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { addDirPath, matchCommands, parseCommandInvocation } from './commands';
 import {
+  appendToDraft,
   attachShortcut,
   COMPOSER_BUTTON_LABELS,
   composerButtonAction,
@@ -189,7 +190,13 @@ describe('composerPlaceholder', () => {
 describe('the `/` menu', () => {
   it('opens on a slash typed into an empty composer', () => {
     expect(skillQuery('/')?.query).toBe('');
-    expect(matchCommands('', 'code').map(command => command.name)).toEqual(['clear', 'compact', 'pr', 'add-dir']);
+    expect(matchCommands('', 'code').map(command => command.name)).toEqual([
+      'clear',
+      'compact',
+      'pr',
+      'add-dir',
+      'loop',
+    ]);
   });
 
   // A path is a path, and a command only runs as the whole draft: one picked mid-sentence would
@@ -202,7 +209,7 @@ describe('the `/` menu', () => {
   });
 
   it('offers /pr only in a Code session, and treats it as text elsewhere', () => {
-    expect(matchCommands('', 'chat').map(command => command.name)).toEqual(['clear', 'compact', 'add-dir']);
+    expect(matchCommands('', 'chat').map(command => command.name)).toEqual(['clear', 'compact', 'add-dir', 'loop']);
     expect(composerSubmitAction('/pr https://github.com/example-org/widgets/pull/611', 'chat')).toEqual({
       kind: 'send',
     });
@@ -325,5 +332,13 @@ describe('/add-dir', () => {
   it('is not a path starting with /add-dir', () => {
     expect(parseCommandInvocation('/add-dirs', 'code')).toBeNull();
     expect(composerSubmitAction('/add-dir/x', 'code')).toEqual({ kind: 'send' });
+  });
+});
+
+describe('appendToDraft', () => {
+  it('adds the text after the draft with one space between', () => {
+    expect(appendToDraft('', 'the `lid` part ')).toBe('the `lid` part ');
+    expect(appendToDraft('make', 'the `lid` part ')).toBe('make the `lid` part ');
+    expect(appendToDraft('make ', 'the `lid` part ')).toBe('make the `lid` part ');
   });
 });

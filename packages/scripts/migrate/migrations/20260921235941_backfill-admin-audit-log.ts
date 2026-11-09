@@ -53,7 +53,7 @@ const asString = (value: unknown): string | undefined =>
 const asNumber = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 
-// Same shape as systemAuditActor() in apps/client/server/utils/adminAudit.ts (scripts cannot import apps/client).
+// Same shape as systemAuditActor() in packages/server-utils/src/utils/adminAudit.ts (scripts cannot import apps/client).
 const systemActorNamed = (name: string): AuditActor => ({ kind: 'system', scope: 'platform', name, wasAdmin: false });
 
 const UNKNOWN_ACTOR: AuditActor = {

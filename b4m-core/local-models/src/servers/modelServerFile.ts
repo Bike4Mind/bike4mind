@@ -1,13 +1,16 @@
 import { readFile, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { parseSshDestination } from './ssh';
+import { parseSshDestination, parseSshPort, SSH_DEFAULT_PORT } from './ssh';
 
 export type ModelServerKind = 'ollama' | 'openai-compatible';
 export type ModelServerAccess = 'chat' | 'manage';
 export type HttpTransport = { type: 'http'; baseUrl: string };
-/** Ollama on the far end's loopback, through the system ssh (see ssh.ts). */
-export type SshTransport = { type: 'ssh'; destination: string };
+/**
+ * A server on the far end's loopback `port`, through the system ssh (see ssh.ts). A record saved before records
+ * carried a port has none on disk and is Ollama's SSH_DEFAULT_PORT.
+ */
+export type SshTransport = { type: 'ssh'; destination: string; port: number };
 export type ModelServerTransport = HttpTransport | SshTransport;
 export type StoredAuth = { type: 'none' } | { type: 'bearer' } | { type: 'header'; name: string };
 
@@ -41,13 +44,8 @@ export interface ModelServerRecord {
   specs: ModelServerSpecs | null;
 }
 
-/** A Desktop server the CLI can reach: one with an address. */
-export type SharedServerRecord = ModelServerRecord & { transport: HttpTransport };
-
-/** A Desktop server over SSH, which the CLI lists but cannot reach. */
-export type DesktopOnlyServer = Pick<ModelServerRecord, 'id' | 'name' | 'kind' | 'access'> & {
-  transport: SshTransport;
-};
+/** A Desktop server as the CLI reads it: without a credential embedded in its address. */
+export type SharedServerRecord = ModelServerRecord;
 
 /**
  * On disk, `model-servers.json`. Fields this version does not know (per-server settings, a companion)
@@ -58,7 +56,7 @@ export interface StoredServer extends Record<string, unknown> {
   id: string;
   name: string;
   kind: ModelServerKind;
-  transport: { type: string; baseUrl?: string; destination?: string };
+  transport: { type: string; baseUrl?: string; destination?: string; port?: unknown };
   access: ModelServerAccess;
   auth: StoredAuth;
   secret?: string;
@@ -137,29 +135,64 @@ function storedTransport(transport: StoredServer['transport']): ModelServerTrans
   if (transport.type === 'http' && typeof transport.baseUrl === 'string') {
     return { type: 'http', baseUrl: transport.baseUrl };
   }
-  // A hand-edited destination that could pass as an ssh option is never used.
+  // A hand-edited destination that could pass as an ssh option, or a port that is not one, is never used.
   const destination =
     transport.type === 'ssh' && typeof transport.destination === 'string'
       ? parseSshDestination(transport.destination)
       : null;
-  return destination ? { type: 'ssh', destination } : null;
+  const port = transport.port === undefined ? SSH_DEFAULT_PORT : parseSshPort(transport.port);
+  return destination && port !== null ? { type: 'ssh', destination, port } : null;
 }
 
-/** Null for a record this version cannot use (an unknown transport); it stays on disk untouched. */
-export function hydrate(stored: StoredServer): ModelServerRecord | null {
-  const transport = storedTransport(stored.transport);
-  if (!transport) return null;
+/**
+ * A saved SSH server whose destination is missing or cannot be used, or whose port cannot (a hand edit), so it is
+ * never connected to. It is listed with its problem so the user can see it and remove it.
+ */
+export interface UnusableServerRecord extends Omit<ModelServerRecord, 'transport' | 'models' | 'specs'> {
+  transport: { type: 'ssh'; destination: string | null };
+  problem: string;
+}
+
+/** The unusable record for a stored SSH server that hydrate turns down; null for any other record. */
+export function unusableServer(stored: StoredServer): UnusableServerRecord | null {
+  const { transport } = stored;
+  if (transport.type !== 'ssh' || storedTransport(transport)) return null;
+  const saved = typeof transport.destination === 'string';
+  const destination = saved ? parseSshDestination(transport.destination as string) : null;
+  return {
+    ...recordFields(stored),
+    transport: { type: 'ssh', destination },
+    problem: destination
+      ? 'Its saved SSH port is not a number from 1 to 65535.'
+      : saved
+        ? 'Its saved SSH destination is not one ssh can be given safely.'
+        : 'It has no saved SSH destination.',
+  };
+}
+
+function recordFields(
+  stored: StoredServer
+): Pick<ModelServerRecord, 'id' | 'name' | 'kind' | 'access' | 'auth' | 'addedAt'> {
   return {
     id: stored.id,
     name: stored.name,
     kind: stored.kind,
-    transport,
     access: stored.access,
     auth: stored.auth.type === 'header' ? { type: 'header', name: stored.auth.name } : { type: stored.auth.type },
+    addedAt: typeof stored.addedAt === 'string' ? stored.addedAt : '',
+  };
+}
+
+/** Null for a record this version cannot use (an unknown transport, or see unusableServer); it stays on disk untouched. */
+export function hydrate(stored: StoredServer): ModelServerRecord | null {
+  const transport = storedTransport(stored.transport);
+  if (!transport) return null;
+  return {
+    ...recordFields(stored),
+    transport,
     models: Array.isArray(stored.models)
       ? stored.models.filter((name): name is string => typeof name === 'string')
       : [],
-    addedAt: typeof stored.addedAt === 'string' ? stored.addedAt : '',
     specs: readSpecs(stored.specs),
   };
 }
@@ -280,12 +313,12 @@ export async function desktopUserDataFile(name: string, opts: DesktopDirsOptions
 
 export interface DesktopModelServers {
   servers: SharedServerRecord[];
-  /** Servers only Desktop can reach (SSH), so a listing can name them instead of leaving them out. */
-  desktopOnly?: DesktopOnlyServer[];
   /** The file that was read; null when Desktop has none. */
   path: string | null;
   /** Why the file could not be used; never quotes its contents. */
   problem: string | null;
+  /** SSH servers saved with a destination or port that cannot be used; absent when there are none. */
+  unusable?: UnusableServerRecord[];
 }
 
 export interface ReadDesktopOptions extends DesktopDirsOptions {
@@ -337,17 +370,19 @@ export async function readDesktopModelServers(opts: ReadDesktopOptions = {}): Pr
     const all = (parsed as { servers?: unknown } | null)?.servers;
     if (!Array.isArray(all)) return { servers: [], path: file, problem: `${FILE_NAME} has no server list.` };
     const servers: SharedServerRecord[] = [];
-    const desktopOnly: DesktopOnlyServer[] = [];
+    const unusable: UnusableServerRecord[] = [];
     for (const value of all) {
-      const record = isStored(value) ? hydrate(value) : null;
+      if (!isStored(value)) continue;
+      const record = hydrate(value);
       if (record?.transport.type === 'http') {
         servers.push({ ...record, transport: { type: 'http', baseUrl: withoutUserinfo(record.transport.baseUrl) } });
-      } else if (record?.transport.type === 'ssh') {
-        const { id, name, kind, access } = record;
-        desktopOnly.push({ id, name, kind, access, transport: record.transport });
+      } else if (record) servers.push(record);
+      else {
+        const turnedDown = unusableServer(value);
+        if (turnedDown) unusable.push(turnedDown);
       }
     }
-    return { servers, desktopOnly, path: file, problem: null };
+    return { servers, path: file, problem: null, ...(unusable.length > 0 ? { unusable } : {}) };
   }
   return { servers: [], path: null, problem: null };
 }

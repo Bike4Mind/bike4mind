@@ -4,7 +4,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { AnalyticsDaily, AnalyticsUserDay, UsageEvent, User, UserApiKey } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { rollupDay } from './analyticsRollup';
-import { getAnalyticsOverview } from './analyticsOverview';
+import { getAnalyticsOverview, loadLiveDay } from './analyticsOverview';
 
 const liveFailure = vi.hoisted(() => ({ error: null as Error | null }));
 vi.mock('./analyticsRollup', async importOriginal => {
@@ -54,7 +54,7 @@ const seedEvent = (userId: mongoose.Types.ObjectId, at: string, extra: Record<st
 
 beforeAll(async () => {
   mongod = await createMongoServer();
-  await mongoose.connect(mongod.getUri());
+  await mongoose.connect(mongod.getUri(), { autoIndex: false });
   await AnalyticsUserDay.createIndexes();
   await AnalyticsDaily.createIndexes();
   await User.createIndexes();
@@ -94,24 +94,27 @@ describe('getAnalyticsOverview', () => {
     await seedEvent(users.a, `${TODAY}T09:00:00Z`);
     await seedEvent(users.admin, `${TODAY}T09:30:00Z`);
     await seedEvent(users.fresh, `${TODAY}T10:00:00Z`, { source: 'system' });
+    await seedEvent(users.b, `${TODAY}T09:45:00Z`, { source: 'api' });
 
     const overview = await getAnalyticsOverview(
       { range: '28d', compare: 'prev', signups: 'all', accounts: 'external' },
       NOW
     );
     const today = overview.activeUsers.days.at(-1);
-    expect(today).toMatchObject({ day: TODAY, partial: true, dau: 3, wau: 3, mau: 4 });
-    expect(overview.activeUsers.bySource.at(-1)?.counts).toEqual({ web: 1, cli: 1 });
+    expect(today).toMatchObject({ day: TODAY, partial: true, dau: 2, wau: 2, mau: 3, apiDau: 1 });
+    expect(overview.activeUsers.bySource.at(-1)?.counts).toEqual({ web: 1, cli: 1, api: 1 });
     expect(overview.activeUsers.days.find(day => day.day === '2026-06-10')).toMatchObject({ dau: 1, partial: false });
     expect(overview.missingDays).toHaveLength(25);
 
     await rollupDay(TODAY, { now: NOW });
     const nightly = await AnalyticsDaily.findOne({ day: TODAY }).lean();
-    expect({ dau: today?.dau, wau: today?.wau, mau: today?.mau }).toEqual({
+    expect({ dau: today?.dau, wau: today?.wau, mau: today?.mau, apiDau: today?.apiDau }).toEqual({
       dau: nightly?.dau,
       wau: nightly?.wau,
       mau: nightly?.mau,
+      apiDau: nightly?.api?.dau,
     });
+    expect(nightly?.api).toEqual({ dau: 1, wau: 1, mau: 1 });
     expect(today?.internal).toEqual({ dau: 1, wau: 1, mau: 1 });
     expect(today?.internal).toEqual({
       dau: nightly?.internal?.dau,
@@ -128,13 +131,37 @@ describe('getAnalyticsOverview', () => {
     expect({
       legit: liveSignups?.legit,
       suspected: liveSignups?.suspected,
-      unclassified: liveSignups?.unclassified,
     }).toEqual({
       legit: nightly?.signups.legit,
       suspected: nightly?.signups.suspected,
-      unclassified: nightly?.signups.unclassified,
     });
-    expect((liveSignups?.legit ?? 0) + (liveSignups?.suspected ?? 0) + (liveSignups?.unclassified ?? 0)).toBe(1);
+    expect((liveSignups?.legit ?? 0) + (liveSignups?.suspected ?? 0)).toBe(1);
+    expect(nightly?.signups.unclassified).toBe(0);
+  });
+
+  it('live WAU/MAU and the api series equal the nightly row with API-only users in past and unrolled days', async () => {
+    const [apiPast, apiYesterday] = [oid(), oid()];
+    await seedUser(apiPast);
+    await seedUser(apiYesterday);
+    await seedEvent(users.a, '2026-06-10T10:00:00Z');
+    await seedEvent(apiPast, '2026-06-11T10:00:00Z', { source: 'api' });
+    await rollupDay('2026-06-10', { now: NOW });
+    await rollupDay('2026-06-11', { now: NOW });
+    await seedEvent(apiYesterday, '2026-06-14T22:00:00Z', { source: 'api' });
+    await seedEvent(users.b, '2026-06-14T22:00:00Z');
+    await seedEvent(users.c, `${TODAY}T08:00:00Z`);
+    await seedEvent(apiPast, `${TODAY}T08:00:00Z`, { source: 'api' });
+
+    const live = await loadLiveDay(TODAY, NOW);
+    for (const day of ['2026-06-14', TODAY]) await rollupDay(day, { now: NOW });
+    const nightly = await AnalyticsDaily.findOne({ day: TODAY }).lean();
+    expect({ dau: live.dau, wau: live.wau, mau: live.mau, api: live.api }).toEqual({
+      dau: nightly?.dau,
+      wau: nightly?.wau,
+      mau: nightly?.mau,
+      api: nightly?.api,
+    });
+    expect(nightly).toMatchObject({ wau: 3, mau: 3, api: { dau: 1, wau: 2, mau: 2 } });
   });
 
   it("counts yesterday's users in today's WAU/MAU before the nightly rollup has written yesterday", async () => {
@@ -173,6 +200,7 @@ describe('getAnalyticsOverview', () => {
       dau: null,
       wau: null,
       mau: null,
+      apiDau: null,
       partial: true,
       external: null,
       internal: null,
@@ -198,11 +226,21 @@ describe('getAnalyticsOverview', () => {
         dau: 1,
         wau: 1,
         mau: 1,
+        apiDau: 0,
         partial: false,
         external: { dau: 1, wau: 1, mau: 1 },
         internal: { dau: 0, wau: 0, mau: 0 },
       },
-      { day: '2026-06-02', dau: null, wau: null, mau: null, partial: false, external: null, internal: null },
+      {
+        day: '2026-06-02',
+        dau: null,
+        wau: null,
+        mau: null,
+        apiDau: null,
+        partial: false,
+        external: null,
+        internal: null,
+      },
     ]);
     expect(overview.missingDays).toEqual(['2026-06-02']);
     expect(overview.lastUpdated).toBe(NOW.toISOString());

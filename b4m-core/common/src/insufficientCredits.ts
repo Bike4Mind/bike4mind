@@ -26,9 +26,10 @@ export function getQuestErrorCode(error: unknown): QuestErrorCode | undefined {
 }
 
 /**
- * A credit refusal raised before any provider call that a redelivery cannot clear: the owner must buy
- * credits, or the free-tier daily cap (`daily_free_limit_reached`) must reset at UTC midnight. Background
- * workers consume the message on these instead of rethrowing into retries, the DLQ and the error alert.
+ * An expected credit refusal raised before any provider call that a retry cannot clear: the owner must buy
+ * credits, or the free-tier daily cap (`daily_free_limit_reached`) must reset at UTC midnight. Surface it
+ * with its own status and do not log it as a fault: HTTP routes rethrow it, and background workers consume
+ * the message instead of retrying into the DLQ and the error alert.
  */
 export function isTerminalCreditRefusal(error: unknown): boolean {
   const code = (error as { additionalInfo?: { errorCode?: unknown } } | null)?.additionalInfo?.errorCode;

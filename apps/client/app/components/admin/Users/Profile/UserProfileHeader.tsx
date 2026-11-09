@@ -1,7 +1,14 @@
 import React from 'react';
-import { isThrottleExempt } from '@bike4mind/common';
-import { Avatar, Button, Dropdown, ListDivider, Menu, MenuButton, MenuItem } from '@mui/joy';
+import {
+  canAccessAdmin,
+  hasAdminPermission,
+  isFullAdmin,
+  isThrottleExempt,
+  missingAdminPermissionMessage,
+} from '@bike4mind/common';
+import { Avatar, Button, Dropdown, ListDivider, Menu, MenuButton, MenuItem, Stack, Typography } from '@mui/joy';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
+import { useUser } from '@client/app/contexts/UserContext';
 import { EntityHeader, StatusChip } from '../../shared';
 import type { ProfileAction } from './actions/profileActions';
 import {
@@ -13,9 +20,24 @@ import {
   type AdminUserProfile,
 } from './userProfileModel';
 
-type MenuEntry = { action: ProfileAction | 'compliance'; label: string; danger?: boolean } | 'divider';
+type MenuEntry =
+  | { action: ProfileAction | 'compliance'; label: string; danger?: boolean; disabled?: boolean; hint?: string }
+  | 'divider';
 
-const menuEntries = (user: AdminUserProfile): MenuEntry[] => [
+type AdminIdentity = Parameters<typeof hasAdminPermission>[0];
+
+/** Mirrors the server gate on the deletion routes: `users:delete`, and full admin for a target with admin access. */
+export const deletionBlockedReason = (actor: AdminIdentity, target: AdminUserProfile): string | null => {
+  if (!hasAdminPermission(actor, 'users:delete')) return missingAdminPermissionMessage('users:delete');
+  if (canAccessAdmin(target) && !isFullAdmin(actor))
+    return 'Only full administrators can act on accounts with admin access';
+  return null;
+};
+
+const gateDeletion = (entry: Exclude<MenuEntry, 'divider'>, blocked: string | null): MenuEntry =>
+  blocked ? { ...entry, disabled: true, hint: blocked } : entry;
+
+const menuEntries = (user: AdminUserProfile, deletionBlocked: string | null): MenuEntry[] => [
   { action: 'editProfile', label: 'Edit profile' },
   { action: 'loginAs', label: 'Log in as user' },
   { action: 'message', label: 'Send message' },
@@ -26,7 +48,19 @@ const menuEntries = (user: AdminUserProfile): MenuEntry[] => [
   { action: 'compliance', label: 'Compliance record' },
   { action: 'restrict', label: user.isModerated ? 'Lift restriction' : 'Restrict account' },
   { action: 'shadowTier', label: user.throttle?.tier === 'shadow' ? 'Remove limited tier' : 'Move to limited tier' },
-  { action: 'delete', label: 'Delete user', danger: true },
+  gateDeletion(
+    user.deletion
+      ? {
+          action: 'cancelDeletion',
+          label: user.deletion.purgeStartedAt
+            ? 'Cancel scheduled deletion (purge in progress)'
+            : 'Cancel scheduled deletion',
+          disabled: !!user.deletion.purgeStartedAt,
+        }
+      : { action: 'scheduleDeletion', label: 'Schedule deletion (user request)', danger: true },
+    deletionBlocked
+  ),
+  gateDeletion({ action: 'delete', label: 'Delete user', danger: true }, deletionBlocked),
 ];
 
 const SIGNUP_METHOD_LABELS: Readonly<Record<string, string>> = {
@@ -55,6 +89,7 @@ export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({ user, onAc
   const status = accountStatus(user);
   const org = organizationName(user);
   const level = user.level ? (LEVEL_LABELS[user.level] ?? user.level) : null;
+  const { currentUser } = useUser();
 
   return (
     <EntityHeader
@@ -125,17 +160,27 @@ export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({ user, onAc
               <MoreHorizIcon />
             </MenuButton>
             <Menu placement="bottom-end" sx={{ minWidth: 240 }} data-testid="user-profile-more-menu">
-              {menuEntries(user).map((entry, index) =>
+              {menuEntries(user, deletionBlockedReason(currentUser, user)).map((entry, index) =>
                 entry === 'divider' ? (
                   <ListDivider key={`divider-${index}`} />
                 ) : (
                   <MenuItem
                     key={entry.action}
                     color={entry.danger ? 'danger' : 'neutral'}
+                    disabled={entry.disabled}
                     onClick={() => (entry.action === 'compliance' ? onCompliance() : onAction(entry.action))}
                     data-testid={`user-profile-menu-${entry.action}-item`}
                   >
-                    {entry.label}
+                    {entry.hint ? (
+                      <Stack>
+                        {entry.label}
+                        <Typography level="body-xs" data-testid={`user-profile-menu-${entry.action}-hint`}>
+                          {entry.hint}
+                        </Typography>
+                      </Stack>
+                    ) : (
+                      entry.label
+                    )}
                   </MenuItem>
                 )
               )}

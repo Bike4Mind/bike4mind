@@ -30,7 +30,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
 import { isAxiosError } from 'axios';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
-import type { SystemHealthResponse, OAuthProviderStatus } from '@client/pages/api/admin/system-health';
+import type { SystemHealthResponse, OAuthProviderStatus } from '@server/admin/systemHealth/getSystemHealthStatus';
 import type { TestOAuthResult, OAuthProvider, OktaDiagnostics } from '@client/pages/api/admin/system-health/test-oauth';
 
 interface TestEmailResponse {

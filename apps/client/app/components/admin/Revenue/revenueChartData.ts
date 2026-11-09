@@ -1,5 +1,5 @@
-import type { RevenueRange, RevenueTrendPlan, RevenueTrendPoint } from '@client/app/utils/adminRevenue';
-import { MRR_CURRENCY } from '@client/app/utils/adminSubscriptionsFilter';
+import type { RevenueRange, RevenueTrendPlan, RevenueTrendPoint } from '@bike4mind/server-utils/app/utils/adminRevenue';
+import { MRR_CURRENCY } from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { formatMoney } from '../shared/formatMoney';
 import { formatShare, formatTrendDay, signedMoney } from './revenueFormat';
 

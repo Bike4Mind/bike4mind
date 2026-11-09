@@ -1,11 +1,7 @@
 import { adminSettingsRepository } from '@bike4mind/database';
 import { type IAdminSettings, resolveSignupGrantSettings, settingsMap } from '@bike4mind/common';
 
-const STARTER_CREDIT_SETTINGS: IAdminSettings['settingName'][] = [
-  'allowOpenRegistration',
-  'signupGrantCredits',
-  'signupGrantInitialCredits',
-];
+const STARTER_CREDIT_SETTINGS: IAdminSettings['settingName'][] = ['allowOpenRegistration', 'signupGrantInitialCredits'];
 
 /**
  * Credits an open sign-up starts with, for user-facing copy (the share-page sign-up gate).

@@ -12,13 +12,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiKeyScope } from '@bike4mind/common';
 import { fire, h, resetHarness, validateWithScopes } from '@server/generations/__test__/routeHarness';
 
-vi.mock('@server/utils/apiKeyTrust', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
   resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
     rateLimit: key.rateLimit,
     ownerUntrusted: false,
   }),
 }));
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig =>
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig =>
   (await import('@server/generations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
 );
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', async () =>
@@ -43,7 +43,7 @@ vi.mock('@bike4mind/database', async orig =>
 vi.mock('@server/generationJobs/wiring', async () =>
   (await import('@server/generations/__test__/routeHarness')).wiringMock()
 );
-vi.mock('@server/generations/signOutputUrl', async () =>
+vi.mock('@bike4mind/server-utils/generations/signOutputUrl', async () =>
   (await import('@server/generations/__test__/routeHarness')).signOutputUrlMock()
 );
 vi.mock('@bike4mind/server-utils/videoGenerations/listUsableVideoModels', async orig =>

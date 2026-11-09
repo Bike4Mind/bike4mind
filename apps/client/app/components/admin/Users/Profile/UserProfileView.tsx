@@ -5,6 +5,7 @@ import BlockIcon from '@mui/icons-material/Block';
 import { useComplianceModal } from '../ComplianceModal';
 import GrantSubscriptionModal from '../Details/GrantSubscriptionModal';
 import BulkAbuseResponseModal from '../BulkAbuseResponseModal';
+import { useUser } from '@client/app/contexts/UserContext';
 import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
 import { AdminCommandPalette, type AdminCommand } from '../../shared/AdminCommandPalette';
 import { Kbd } from '../../shared';
@@ -14,6 +15,7 @@ import { EditProfileDialog } from './actions/EditProfileDialog';
 import { ChangeRoleDialog, ManageTagsDialog, ProductAccessDialog } from './actions/accessDialogs';
 import {
   ApiKeyTrustDialog,
+  CancelDeletionDialog,
   NewAccountSpendCapDialog,
   InternalAccountDialog,
   DeleteUserDialog,
@@ -22,10 +24,11 @@ import {
   ResetMfaDialog,
   RestrictDialog,
   SendMessageDialog,
+  ScheduleDeletionDialog,
   ShadowTierDialog,
 } from './actions/accountDialogs';
 import type { ProfileAction, ProfileDialogProps } from './actions/profileActions';
-import { UserProfileHeader } from './UserProfileHeader';
+import { UserProfileHeader, deletionBlockedReason } from './UserProfileHeader';
 import { UserProfileStats } from './UserProfileStats';
 import { UserProfileTabs } from './UserProfileTabs';
 import { UserRiskBadges } from './UserRiskBadges';
@@ -36,7 +39,7 @@ import { ActivityTab } from './tabs/ActivityTab';
 import { AdminLogTab } from './tabs/AdminLogTab';
 import { SignInsTab } from './tabs/SignInsTab';
 import { USER_PROFILE_TAB_LABELS, type UserProfileTab } from './userProfileSearch';
-import { displayName, type AdminUserProfile } from './userProfileModel';
+import { DELETION_SOURCE_LABELS, displayName, formatDeletionDay, type AdminUserProfile } from './userProfileModel';
 
 type UserProfileViewProps = {
   user: AdminUserProfile;
@@ -86,6 +89,10 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
       return <LoginAsDialog {...props} />;
     case 'message':
       return <SendMessageDialog {...props} />;
+    case 'scheduleDeletion':
+      return <ScheduleDeletionDialog {...props} />;
+    case 'cancelDeletion':
+      return <CancelDeletionDialog {...props} />;
     case 'delete':
       return <DeleteUserDialog {...props} onDeleted={onDeleted} />;
   }
@@ -119,6 +126,60 @@ const Breadcrumb: React.FC<{ name: string; onBack: () => void }> = ({ name, onBa
     </Typography>
   </Stack>
 );
+
+const DeletionBanner: React.FC<{ user: AdminUserProfile; canCancel: boolean; onCancel: () => void }> = ({
+  user,
+  canCancel,
+  onCancel,
+}) => {
+  const { deletion } = user;
+  if (!deletion) return null;
+  const started = !!deletion.purgeStartedAt;
+  return (
+    <Stack
+      role="status"
+      direction="row"
+      alignItems="center"
+      gap={1.5}
+      flexWrap="wrap"
+      sx={{
+        px: 2,
+        py: 1.5,
+        borderRadius: 12,
+        border: '1px solid',
+        borderColor: 'admin.status.bad.foreground',
+        bgcolor: 'admin.status.bad.background',
+        color: 'admin.status.bad.foreground',
+      }}
+      data-testid="user-profile-deletion-banner"
+    >
+      <BlockIcon sx={{ fontSize: 16 }} />
+      <Typography level="body-sm" sx={{ flex: '1 1 300px', color: 'inherit' }}>
+        {started ? (
+          <strong>Deletion in progress.</strong>
+        ) : (
+          <>
+            <strong>Deletion scheduled for {formatDeletionDay(deletion.scheduledFor)}.</strong>
+          </>
+        )}{' '}
+        Source: {DELETION_SOURCE_LABELS[deletion.source] ?? deletion.source}. Requested{' '}
+        {formatDeletionDay(deletion.requestedAt)}.
+      </Typography>
+      {!started && canCancel && (
+        <Button
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          onClick={onCancel}
+          sx={{ bgcolor: 'admin.surface' }}
+          data-testid="user-profile-cancel-deletion-btn"
+        >
+          Cancel deletion
+        </Button>
+      )}
+    </Stack>
+  );
+};
 
 const StatusBanner: React.FC<{ user: AdminUserProfile; onReinstate: () => void; onLiftRestriction: () => void }> = ({
   user,
@@ -174,6 +235,7 @@ const StatusBanner: React.FC<{ user: AdminUserProfile; onReinstate: () => void; 
 
 /** The profile of one user: every write is a named action that opens its own dialog. */
 export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onTabChange, onBack }) => {
+  const { currentUser } = useUser();
   const [action, setAction] = useState<ProfileAction | null>(null);
   // Revoking keys has no profile dialog of its own; it reuses the audited bulk flow for this one user.
   const [revokeKeysOpen, setRevokeKeysOpen] = useState(false);
@@ -227,7 +289,16 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
   return (
     <Stack gap={2.5} data-testid="user-profile-view">
       <Breadcrumb name={displayName(user)} onBack={onBack} />
-      <AdminCommandPalette commands={profileCommands} onOpenHelp={openHelpPanel} />
+      <AdminCommandPalette
+        enableEntitySearch={!!currentUser?.isAdmin}
+        commands={profileCommands}
+        onOpenHelp={openHelpPanel}
+      />
+      <DeletionBanner
+        user={user}
+        canCancel={deletionBlockedReason(currentUser, user) === null}
+        onCancel={() => setAction('cancelDeletion')}
+      />
       <StatusBanner
         user={user}
         onReinstate={() => setAction('reinstate')}

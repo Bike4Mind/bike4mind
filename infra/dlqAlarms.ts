@@ -70,6 +70,7 @@ import {
   sessionEnrichmentDeadLetter,
   billingEventsDeadLetter,
   emailEventsDeadLetter,
+  pushEventsDeadLetter,
   notebookEventsDeadLetter,
   completionEventsDeadLetter,
 } from './eventBus';
@@ -88,6 +89,7 @@ import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
+import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
@@ -299,7 +301,7 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
   },
   {
     label: 'release-notes',
-    displayName: 'Release Notes',
+    displayName: 'Release Notes and Highlights',
     application: 'ReleaseNotes',
     sourceQueue: 'whatsNewGenerationQueue',
     queue: whatsNewGenerationQueueDLQ,
@@ -656,6 +658,15 @@ if (isMonitoredStage) {
     });
   }
 
+  if (subscriptionReconciliationDeadLetter) {
+    createDlqAlarms({
+      label: 'subscription-reconciliation',
+      displayName: 'Subscription Reconciliation',
+      application: 'Billing',
+      queue: subscriptionReconciliationDeadLetter.queue,
+    });
+  }
+
   if (accountDeletionSweepDeadLetter) {
     createDlqAlarms({
       label: 'account-deletion-sweep',
@@ -708,6 +719,12 @@ if (isMonitoredStage) {
     displayName: 'Email Events',
     application: 'Email',
     queue: emailEventsDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'push-events',
+    displayName: 'Push Events',
+    application: 'Notifications',
+    queue: pushEventsDeadLetter.queue,
   });
   createDlqAlarms({
     label: 'notebook-events',
