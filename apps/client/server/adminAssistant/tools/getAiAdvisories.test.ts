@@ -51,7 +51,7 @@ describe('getAiAdvisoriesTool', () => {
     loadAbuseAssessmentSettings.mockReset().mockResolvedValue({ enabled: true, config: { model: 'some-model' } });
   });
 
-  it('says advisories are off when the feature is disabled, without reading them', async () => {
+  it('reports disabled assessment alongside the existing advisories', async () => {
     loadAbuseAssessmentSettings.mockResolvedValue({ enabled: false, config: { model: 'some-model' } });
 
     const result = await runTool();
@@ -59,8 +59,11 @@ describe('getAiAdvisoriesTool', () => {
     expect(result.ok).toBe(true);
     expect(result.data).toMatchObject({ status: 'off', reason: 'disabled' });
     expect(result.data.message).toContain('abuseAssessmentEnabled');
-    expect(result.data).not.toHaveProperty('advisories');
-    expect(listAiAbuseAdvisories).not.toHaveBeenCalled();
+    expect(result.data.advisoryCount).toBe(2);
+    expect(result.data.advisories).toHaveLength(2);
+    expect(result.data.networks).toEqual([network(1)]);
+    expect(result.data.mailDomains).toEqual([domain(1)]);
+    expect(listAiAbuseAdvisories).toHaveBeenCalledOnce();
   });
 
   it('says advisories are off when no model is configured', async () => {
@@ -69,8 +72,11 @@ describe('getAiAdvisoriesTool', () => {
     const result = await runTool();
 
     expect(result.data).toMatchObject({ status: 'off', reason: 'no_model' });
-    expect(result.data).not.toHaveProperty('advisories');
-    expect(listAiAbuseAdvisories).not.toHaveBeenCalled();
+    expect(result.data.advisoryCount).toBe(2);
+    expect(result.data.advisories).toHaveLength(2);
+    expect(result.data.networks).toEqual([network(1)]);
+    expect(result.data.mailDomains).toEqual([domain(1)]);
+    expect(listAiAbuseAdvisories).toHaveBeenCalledOnce();
   });
 
   it('reports disabled, not no_model, when both are off', async () => {
@@ -97,6 +103,7 @@ describe('getAiAdvisoriesTool', () => {
     expect(result.data.advisories).toEqual([
       {
         userId: 'u1',
+        detectionId: 'd1',
         verdict: 'abuse',
         detector: 'signupBurst',
         abuseProbability: 0.9,
@@ -104,6 +111,7 @@ describe('getAiAdvisoriesTool', () => {
       },
       {
         userId: 'u2',
+        detectionId: 'd2',
         verdict: 'abuse',
         detector: 'signupBurst',
         abuseProbability: 0.9,
@@ -171,6 +179,27 @@ describe('getAiAdvisoriesTool', () => {
     expect(result).toMatchObject({ ok: false, error: 'forbidden' });
     expect(loadAbuseAssessmentSettings).not.toHaveBeenCalled();
     expect(listAiAbuseAdvisories).not.toHaveBeenCalled();
+  });
+
+  it('reports an empty off window without implying assessment is enabled', async () => {
+    loadAbuseAssessmentSettings.mockResolvedValue({ enabled: false, config: { model: null } });
+    listAiAbuseAdvisories.mockResolvedValue(summary({ advisories: [], networks: [], mailDomains: [] }));
+
+    expect((await runTool()).data).toMatchObject({ status: 'off', advisoryCount: 0, advisories: [] });
+  });
+
+  it('returns a failed envelope when settings cannot be read', async () => {
+    loadAbuseAssessmentSettings.mockRejectedValue(new Error('settings unavailable'));
+
+    expect(await runTool()).toMatchObject({ ok: false, error: 'failed' });
+    expect(listAiAbuseAdvisories).not.toHaveBeenCalled();
+  });
+
+  it('returns a failed envelope when existing advisories cannot be read while assessment is off', async () => {
+    loadAbuseAssessmentSettings.mockResolvedValue({ enabled: false, config: { model: null } });
+    listAiAbuseAdvisories.mockRejectedValue(new Error('db down'));
+
+    expect(await runTool()).toMatchObject({ ok: false, error: 'failed' });
   });
 
   it('returns a failed envelope when the summary rejects', async () => {

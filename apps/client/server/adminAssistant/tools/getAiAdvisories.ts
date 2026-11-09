@@ -14,26 +14,24 @@ const WHERE_TO_ENABLE =
 export const getAiAdvisoriesTool = defineAdminTool({
   name: 'admin_get_ai_advisories',
   description:
-    'Accounts the AI judged as abuse on unreviewed shadow detections in the last 24 hours, plus the signup IPs and mail domains they share. Same data as the Dashboard AI advisory strip and the Users list AI filter; already-suspended accounts are excluded. Read-only. Returns status "off" when the AI abuse assessment is disabled or has no model.',
+    'Accounts the AI judged as abuse on unreviewed shadow detections in the last 24 hours, plus the signup IPs and mail domains they share. Same data as the Dashboard AI advisory strip and the Users list AI filter; already-suspended accounts are excluded. Read-only. Returns assessment status "off" and setup guidance when disabled or missing a model, alongside any existing advisories.',
   input: z.object({}),
   run: async () => {
     const { enabled, config } = await loadAbuseAssessmentSettings();
-    if (!enabled || config.model == null) {
-      return {
-        ok: true,
-        data: {
-          status: 'off' as const,
-          reason: enabled ? ('no_model' as const) : ('disabled' as const),
-          message: WHERE_TO_ENABLE,
-        },
-      };
-    }
+    const assessmentStatus =
+      !enabled || config.model == null
+        ? {
+            status: 'off' as const,
+            reason: enabled ? ('no_model' as const) : ('disabled' as const),
+            message: `AI abuse assessment is off. Existing judgments from the advisory window are still included. ${WHERE_TO_ENABLE}`,
+          }
+        : { status: 'on' as const };
 
     const summary = await listAiAbuseAdvisories();
     return {
       ok: true,
       data: {
-        status: 'on' as const,
+        ...assessmentStatus,
         since: toIso(summary.since),
         windowHours: AI_ADVISORY_WINDOW_HOURS,
         advisoryCount: summary.advisories.length,
@@ -41,6 +39,7 @@ export const getAiAdvisoriesTool = defineAdminTool({
         countIsLowerBound: summary.truncated,
         advisories: summary.advisories.slice(0, MAX_ADVISORIES).map(a => ({
           userId: a.userId,
+          detectionId: a.detectionId,
           verdict: 'abuse' as const,
           detector: a.detector,
           abuseProbability: a.abuseProbability,
