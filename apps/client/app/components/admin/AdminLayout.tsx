@@ -1,4 +1,5 @@
 import { Suspense, useCallback, useState, type ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Outlet, useLocation, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useShallow } from 'zustand/react/shallow';
 import MenuIcon from '@mui/icons-material/Menu';
@@ -9,8 +10,7 @@ import { ProviderBundle } from '@client/app/contexts/ProviderBundle';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useLiveOpsTriageEnv } from '@client/app/hooks/data/admin';
-import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
-import { useUnreviewedAuditCount } from '@client/app/hooks/data/adminAuditLog';
+import { adminActionCountsQueryKey, useAdminActionCounts } from '@client/app/hooks/data/adminActionCounts';
 import { HelpPanel } from '../help';
 import EnvironmentBanner from './AdminEnvironmentBanner';
 import { SidebarNav } from './AdminSidebarNav';
@@ -66,9 +66,10 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
   const { currentUser } = useUser();
   const isAdmin = !!currentUser?.isAdmin;
   const { data: liveOpsEnv } = useLiveOpsTriageEnv(isAdmin);
-  const waitingSubscribers = useGetWaitingSubscribersCount({ enabled: isAdmin });
   const impersonating = useAccessToken(s => s.impersonating);
-  const unreviewedAudit = useUnreviewedAuditCount({ enabled: isFullAdmin(currentUser) && !impersonating });
+  // Every counted queue is a full-admin tab; the server still gates each count by its own permission.
+  const actionCounts = useAdminActionCounts({ enabled: isFullAdmin(currentUser) && !impersonating });
+  const queryClient = useQueryClient();
   const newSubscriptions = useNewSubscriptionsDot(isAdmin);
   const { collapsed, toggleCollapsed } = useAdminSidebarCollapsed();
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -89,6 +90,8 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
 
   const selectTab = (tab: AdminTab) => {
     setDrawerOpen(false);
+    // Work done on the page being left shows in its badge now rather than at the next poll.
+    void queryClient.invalidateQueries({ queryKey: adminActionCountsQueryKey });
     setActiveTab(tab);
     // On the console the tab URL sync mirrors the store into `?tab=`; anywhere else, go there.
     if (pathname === ADMIN_CONSOLE_PATH) return;
@@ -108,8 +111,7 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
     account,
     enableUserMigration,
     showLiveOpsTriageTab: liveOpsEnv?.showTab ?? false,
-    waitingSubscribersCount: waitingSubscribers.data?.count,
-    unreviewedAuditCount: unreviewedAudit.data,
+    actionCounts: actionCounts.data,
     // No dot on the tab the admin is looking at; a row started meanwhile lights it once they leave.
     newSubscriptions: newSubscriptions && activeTab !== AdminTab.Subscriptions,
     hiddenNotifications,

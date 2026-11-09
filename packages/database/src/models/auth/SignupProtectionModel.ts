@@ -180,6 +180,12 @@ export const signupDomainHoldListRepository = {
       .limit(limit)
       .lean();
   },
+  /** Holds still waiting for a decision (the `pending` view); `limit` stops counting there. */
+  async countPending(options: { limit?: number } = {}): Promise<number> {
+    return SignupDomainReviewModel.countDocuments(holdListQuery({ status: 'pending' }), {
+      limit: options.limit,
+    }).exec();
+  },
   /** Rows per status view under the same reason filter and visibility window. */
   async countByStatus(
     filter: Omit<SignupDomainHoldListFilter, 'status'>
