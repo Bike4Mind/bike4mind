@@ -184,7 +184,7 @@ const WIDGET_JS = String.raw`(function () {
   // closed / 15s open) and the list's cache staleness, or a comment would be dropped
   // while it is still legitimately waiting to show up.
   var PENDING_TTL_MS = 300000;
-  var state = { comments: [], canComment: false, open: false, pinMode: false, pendingAnchor: null, draft: '', justPosted: [] };
+  var state = { comments: [], mineIds: [], canComment: false, open: false, pinMode: false, pendingAnchor: null, draft: '', justPosted: [] };
 
   /**
    * Latched once a request has 401ed with a FRESH token AND the gate-proof cookie attached -
@@ -252,7 +252,7 @@ const WIDGET_JS = String.raw`(function () {
     // Copy rather than mutate: opts IS init when init is truthy, so writing headers/credentials
     // onto it would scribble on the caller's object and on the retry's own input.
     var opts = init ? Object.assign({}, init) : {};
-    opts.headers = headers(opts.method === 'POST');
+    opts.headers = headers(opts.method === 'POST' || opts.method === 'PATCH');
     opts.credentials = s >= 2 ? 'same-origin' : 'omit';
     return fetch(url, opts).then(function (r) {
       // A stage we had to climb to that WORKED is where every later request should start.
@@ -322,6 +322,8 @@ const WIDGET_JS = String.raw`(function () {
     '.b4m-c .when{font-size:11px;color:#9a9ab0;margin-left:6px;font-weight:400}',
     '.b4m-c .body{font-size:13px;line-height:1.45;margin-top:3px;white-space:pre-wrap;word-wrap:break-word}',
     '.b4m-c .pin{font-size:11px;color:#5566cc;cursor:pointer;margin-top:3px;display:inline-block}',
+    '.b4m-c .own-actions{display:flex;gap:10px;margin-top:5px}',
+    '.b4m-c .own-actions button{border:0;background:none;color:#3949d4;cursor:pointer;padding:0;font-size:12px}',
     '.b4m-empty{padding:24px 16px;text-align:center;color:#9a9ab0;font-size:13px}',
     '#b4m-compose{border-top:1px solid #ececf3;padding:10px 12px}',
     '#b4m-ta{width:100%;border:1px solid #d8d8e4;border-radius:8px;padding:8px;font-size:13px;resize:vertical;min-height:54px;font-family:inherit}',
@@ -395,6 +397,8 @@ const WIDGET_JS = String.raw`(function () {
     launch.appendChild(d);
   }
 
+  function isMine(c) { return state.mineIds.indexOf(c.id) !== -1; }
+
   // Opening the panel is the first moment the composer matters, so it is where the credential
   // is acquired on a public artifact. lastCanComment gates it to one fetch per page.
   function openPanel() {
@@ -436,6 +440,34 @@ const WIDGET_JS = String.raw`(function () {
         who.appendChild(el('span', 'when', timeAgo(c.createdAt)));
         row.appendChild(who);
         row.appendChild(el('div', 'body', c.body));
+        if (isMine(c)) {
+          var own = el('div', 'own-actions');
+          var edit = el('button', null, 'Edit');
+          edit.addEventListener('click', function () {
+            var body = prompt('Edit comment', c.body);
+            if (body === null || !body.trim()) return;
+            authedFetch(API + '/' + encodeURIComponent(c.id), { method: 'PATCH', body: JSON.stringify({ body: body.trim() }) })
+              .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+              .then(function (updated) { c.body = updated.body; render(); })
+              .catch(function () { alert('Could not edit comment'); });
+          });
+          var remove = el('button', null, 'Delete');
+          remove.addEventListener('click', function () {
+            if (!confirm('Delete this comment?')) return;
+            authedFetch(API + '/' + encodeURIComponent(c.id), { method: 'DELETE' })
+              .then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                state.comments = state.comments.filter(function (item) { return item.id !== c.id; });
+                state.justPosted = state.justPosted.filter(function (p) { return p.id !== c.id; });
+                state.mineIds = state.mineIds.filter(function (id) { return id !== c.id; });
+                render();
+              })
+              .catch(function () { alert('Could not delete comment'); });
+          });
+          own.appendChild(edit);
+          own.appendChild(remove);
+          row.appendChild(own);
+        }
         if (c.anchor && typeof c.anchor.x === 'number') {
           var pin = el('span', 'pin', '📍 pinned');
           pin.addEventListener('click', function () { toFrame({ b4m: 'scrollto', y: c.anchor.y }); });
@@ -579,6 +611,7 @@ const WIDGET_JS = String.raw`(function () {
         // exactly the signed-out viewer it is meant for.
         if (!t) {
           state.canComment = false;
+          state.mineIds = [];
           lastCanComment = false;
           render();
           return null;
@@ -589,8 +622,9 @@ const WIDGET_JS = String.raw`(function () {
       .then(function (data) {
         if (!data) return;
         if (data.commentPolicy) policy = data.commentPolicy;
+        state.mineIds = data.mineIds || [];
         var next = !!data.canComment;
-        if (next === state.canComment && lastCanComment !== null) return; // unchanged
+        if (next === state.canComment && lastCanComment !== null) { render(); return; }
         state.canComment = next;
         lastCanComment = next;
         render();
@@ -616,6 +650,7 @@ const WIDGET_JS = String.raw`(function () {
       })
       .then(function (created) {
         state.comments.push(created);
+        state.mineIds.push(created.id);
         state.justPosted.push({ id: created.id, at: Date.now() });
         render();
       });
