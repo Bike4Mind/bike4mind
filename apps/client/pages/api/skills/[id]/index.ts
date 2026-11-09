@@ -25,6 +25,7 @@ import {
   canManageSkillSharing,
   redactShareRosterForViewer,
 } from '@server/utils/skillAccess';
+import { withdrawSkillListings } from '@bike4mind/server-utils/skillMarket/market';
 import { attachMarketStatus } from '@server/skillMarket/marketStatus';
 import { scanGlobalSkillUpdate } from '@server/skillMarket/globalSkillUpdate';
 import { getOperationsClassifierLlm } from '@server/skillMarket/classifySkill';
@@ -117,6 +118,7 @@ const handler = baseApi()
     }
 
     await skillRepository.delete(id as string);
+    await withdrawSkillListings(skill.id);
     res.status(204).end();
   });
 
