@@ -89,6 +89,14 @@ describe('organizationService - transferOwnership', () => {
     org = freshOrg({ billingContact: ' Owner@Example.com ' });
     const result = await run(owner);
     expect(result.billingContactChanged).toBe(true);
+    expect(adapters.db.organizations.update.mock.calls[0][0].billingContact).toBe('admin@example.com');
+  });
+
+  it('writes the new owner email trimmed and lowercased', async () => {
+    usersById.admin1 = { ...admin, email: '  Admin@Example.COM ' } as IUserDocument;
+    const result = await run(owner);
+    expect(result.billingContact).toBe('admin@example.com');
+    expect(adapters.db.organizations.update.mock.calls[0][0].billingContact).toBe('admin@example.com');
   });
 
   it('leaves a deliberately set billing contact alone', async () => {
@@ -103,6 +111,8 @@ describe('organizationService - transferOwnership', () => {
     const result = await run({ ...stranger, isAdmin: true } as IUserDocument);
 
     expect(result.previousOwnerId).toBeNull();
+    expect(result.billingContactChanged).toBe(false);
+    expect(adapters.db.organizations.update.mock.calls[0][0].adminUserIds).toEqual([]);
     expect(adapters.db.organizations.ensureUserDetails).not.toHaveBeenCalled();
     expect(adapters.db.organizations.update.mock.calls[0][0].users).toEqual([
       { userId: 'user2', permissions: [Permission.read] },
