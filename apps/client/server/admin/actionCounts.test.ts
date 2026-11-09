@@ -3,7 +3,7 @@ import { ADMIN_ACTION_COUNT_CAP, ADMIN_ACTION_COUNT_KEYS } from '@client/app/com
 
 const m = vi.hoisted(() => ({
   countWaiting: vi.fn(),
-  listReviewQueue: vi.fn(),
+  countUnreviewed: vi.fn(),
   countPendingReview: vi.fn(),
   countHeld: vi.fn(),
   countPendingHolds: vi.fn(),
@@ -22,7 +22,7 @@ const m = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/database', () => ({
   subscriberRepository: { countWaiting: m.countWaiting },
-  adminAuditLogRepository: { listReviewQueue: m.listReviewQueue },
+  adminAuditLogRepository: { countUnreviewed: m.countUnreviewed },
   imageModerationIncidentRepository: { countPendingReview: m.countPendingReview },
   signupGrantReleaseRepository: { countHeld: m.countHeld },
   signupDomainHoldListRepository: { countPending: m.countPendingHolds },
@@ -69,7 +69,7 @@ beforeEach(() => {
   ]) {
     fn.mockResolvedValue(1);
   }
-  m.listReviewQueue.mockResolvedValue({ entries: [], nextCursor: null, total: 1 });
+  m.countUnreviewed.mockResolvedValue(1);
   m.getDlqRegistry.mockReturnValue([{ label: 'a' }, { label: 'b' }, { label: 'c' }]);
   m.getQueueAttributes.mockResolvedValue({ approximateMessageCount: 1, approximateNotVisibleCount: 5 });
 });
@@ -147,13 +147,13 @@ describe('computeAdminActionCounts failures and caps', () => {
     });
   });
 
-  it('caps the unreviewed audit total, which the review queue does not bound', async () => {
-    m.listReviewQueue.mockResolvedValue({ entries: [], nextCursor: null, total: 5000 });
+  it('uses the capped unreviewed audit count', async () => {
+    m.countUnreviewed.mockResolvedValue(ADMIN_ACTION_COUNT_CAP);
 
     const counts = await computeAdminActionCounts(fullAdmin, 'admin', NOW);
 
     expect(counts.unreviewedAudit).toBe(ADMIN_ACTION_COUNT_CAP);
-    expect(m.listReviewQueue).toHaveBeenCalledWith({ status: 'unreviewed', viewerUserId: 'admin' }, { limit: 1 });
+    expect(m.countUnreviewed).toHaveBeenCalledWith({ viewerUserId: 'admin' }, { limit: ADMIN_ACTION_COUNT_CAP });
   });
 });
 

@@ -89,14 +89,7 @@ export const ADMIN_ACTION_COUNTERS: Record<AdminActionCountKey, AdminActionCount
   },
   unreviewedAudit: {
     access: 'support:read',
-    count: async ({ viewerUserId, cap }) => {
-      // listReviewQueue's total is not limit-bounded (it counts every match), so the cap is applied here.
-      const { total } = await adminAuditLogRepository.listReviewQueue(
-        { status: 'unreviewed', viewerUserId },
-        { limit: 1 }
-      );
-      return Math.min(total, cap);
-    },
+    count: ({ viewerUserId, cap }) => adminAuditLogRepository.countUnreviewed({ viewerUserId }, { limit: cap }),
   },
   moderationReview: {
     access: 'fullAdmin',
