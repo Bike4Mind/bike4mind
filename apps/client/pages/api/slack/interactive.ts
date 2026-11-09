@@ -140,7 +140,7 @@ async function getRawBody(req: NextApiRequest): Promise<string> {
 type SlackInteractivePayload = z.infer<typeof SlackInteractivePayloadSchema>;
 type SlackInteractiveResult = Record<string, unknown>;
 type AttachmentDownloadResult = {
-  content?: string;
+  content?: string | { text?: string }[];
   error?: string;
   filename?: string;
 };
@@ -724,15 +724,15 @@ async function handleInteractiveAction(
         // Execute and send result via response_url for reliable update
         if (response_url) {
           const confirmResult = await handleConfirmAction(dbUser, parseConfirmationButtonValue(action.value), {
-            slackTeamId: payload.team?.id as string,
-            channelId: payload.channel?.id as string,
+            slackTeamId: payload.team?.id,
+            channelId: payload.channel?.id,
           });
           await sendSlackResponse(response_url, confirmResult);
           return {}; // Empty response since we sent via response_url
         }
         return await handleConfirmAction(dbUser, parseConfirmationButtonValue(action.value), {
-          slackTeamId: payload.team?.id as string,
-          channelId: payload.channel?.id as string,
+          slackTeamId: payload.team?.id,
+          channelId: payload.channel?.id,
         });
 
       case 'cancel_action':
@@ -1348,7 +1348,7 @@ const NOT_REQUESTER_RESPONSE = {
 async function handleConfirmAction(
   dbUser: SlackDbUser,
   { questId, pendingActionTs }: { questId: string; pendingActionTs?: number },
-  clickedDestination: { slackTeamId: string; channelId: string }
+  { slackTeamId, channelId }: { slackTeamId?: string; channelId?: string }
 ): Promise<SlackInteractiveResult> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-confirm' } });
 
@@ -1375,6 +1375,8 @@ async function handleConfirmAction(
     };
   }
 
+  // A click without both ids cannot match the pending action's destination, so it is refused downstream.
+  const clickedDestination = slackTeamId && channelId ? { slackTeamId, channelId } : undefined;
   const result = await executePendingAction(questId, dbUser, logger, pendingActionTs, clickedDestination);
 
   return {
@@ -1446,7 +1448,7 @@ async function handleAttachmentDownload(
   // Look up Quest to get attachment data
   const quest = await Quest.findById(questId);
   const attachmentEntry = quest?.attachmentList?.attachments?.find(candidate => candidate.id === attachmentId);
-  if (!quest || !quest?.attachmentList || !attachmentEntry) {
+  if (!quest || !quest.attachmentList || !attachmentEntry) {
     logger.error('[Slack Interactive] Quest or attachment not found', { questId, attachmentId });
     return {
       text: '❌ Attachment data expired. Please list attachments again.',
@@ -1524,7 +1526,7 @@ async function handleAttachmentDownload(
     }
 
     // Handle nested content structure from MCP
-    const nestedText = (fileData?.content as { text?: string }[] | undefined)?.[0]?.text;
+    const nestedText = Array.isArray(fileData?.content) ? fileData.content[0]?.text : undefined;
     if (nestedText) {
       try {
         fileData = JSON.parse(nestedText);
@@ -1533,7 +1535,7 @@ async function handleAttachmentDownload(
       }
     }
 
-    if (fileData?.error || !fileData?.content) {
+    if (fileData?.error || !fileData?.content || typeof fileData.content !== 'string') {
       logger.error('[Slack Interactive] Attachment download failed', {
         error: fileData?.error,
         hasContent: !!fileData?.content,
@@ -1602,7 +1604,7 @@ async function openAttachmentDeleteModal(
 
   const quest = await Quest.findById(questId);
   const att = quest?.attachmentList?.attachments?.find(candidate => candidate.id === attachmentId);
-  if (!quest || !quest?.attachmentList || !att) {
+  if (!quest || !quest.attachmentList || !att) {
     return { text: '❌ Attachment data expired. Please list attachments again.', response_type: 'ephemeral' };
   }
 
@@ -1733,7 +1735,7 @@ async function handleAttachmentDeleteFromModal(
       const [questId, deletedAttachmentId] = buttonValue.split(':');
       const quest = await Quest.findById(questId);
 
-      if (quest && quest?.attachmentList?.attachments) {
+      if (quest?.attachmentList?.attachments) {
         // Remove the deleted attachment by id. The $pull is atomic so it does not overwrite a
         // concurrent removal of the same list (the web delete button prunes it the same way).
         const remainingAttachments = quest.attachmentList.attachments.filter(att => att.id !== deletedAttachmentId);
