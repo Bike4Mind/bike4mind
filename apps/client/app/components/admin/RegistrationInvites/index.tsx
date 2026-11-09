@@ -297,7 +297,7 @@ const RegistrationInvitesTab: React.FC = () => {
     <Stack gap={ADMIN_REGION_GAP} sx={{ width: '100%' }}>
       {query.isLoading && <LoadingState label="Loading invites" />}
 
-      {!query.isLoading && query.isError && !query.data && (
+      {!query.isLoading && query.isError && !hasInvites && (
         <ErrorState
           message="Could not load registration invites."
           onRetry={() => void query.refetch()}

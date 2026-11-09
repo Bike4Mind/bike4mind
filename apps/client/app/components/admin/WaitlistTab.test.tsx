@@ -247,6 +247,49 @@ describe('WaitlistTab list states', () => {
     await waitFor(() => expect(mocks.fetchSubscribers).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1 })));
   });
 
+  it('goes back to page 1 when a search is typed on a later page', async () => {
+    mocks.fetchSubscribers.mockResolvedValue({ data: [SUBSCRIBER], meta: { total: 60 } });
+    render(<WaitlistTab />, { wrapper: Wrapper });
+
+    await screen.findByText('ada@example.com');
+    fireEvent.click(screen.getByRole('button', { name: /next page/i }));
+    await waitFor(() => expect(mocks.fetchSubscribers).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 })));
+    fireEvent.change(screen.getByTestId('waitlist-search-input'), { target: { value: 'grace' } });
+
+    await waitFor(() =>
+      expect(mocks.fetchSubscribers).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, search: 'grace' }))
+    );
+  });
+
+  it('stays on the page after removing a row when others remain', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mocks.deleteSubscriber.mockResolvedValue(undefined);
+    mocks.fetchSubscribers.mockImplementation(({ page }: { page: number }) =>
+      Promise.resolve(
+        page === 1
+          ? { data: [SUBSCRIBER], meta: { total: 27 } }
+          : {
+              data: [
+                { ...SUBSCRIBER, id: 'sub-26', email: 'last@example.com' },
+                { ...SUBSCRIBER, id: 'sub-27', email: 'final@example.com' },
+              ],
+              meta: { total: 27 },
+            }
+      )
+    );
+    render(<WaitlistTab />, { wrapper: Wrapper });
+
+    await screen.findByText('ada@example.com');
+    fireEvent.click(screen.getByRole('button', { name: /next page/i }));
+    await screen.findByText('last@example.com');
+    fireEvent.click(screen.getByTestId('waitlist-row-actions-sub-26'));
+    fireEvent.click(await screen.findByTestId('waitlist-remove-sub-26'));
+
+    await waitFor(() => expect(mocks.deleteSubscriber).toHaveBeenCalledWith('sub-26'));
+    await waitFor(() => expect(mocks.fetchSubscribers.mock.calls.length).toBeGreaterThan(2));
+    expect(mocks.fetchSubscribers).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }));
+  });
+
   it('shows an empty state when nobody is waiting', async () => {
     mocks.fetchSubscribers.mockResolvedValue({ data: [], meta: { total: 0 } });
     render(<WaitlistTab />, { wrapper: Wrapper });

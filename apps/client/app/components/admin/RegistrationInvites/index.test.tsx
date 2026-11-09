@@ -25,7 +25,11 @@ vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 vi.mock('../../common/UsernameText', () => ({ default: ({ id }: { id: string }) => <span>{id}</span> }));
 vi.mock('./components/CreateInviteModal', () => ({ CreateInviteModal: () => null }));
-vi.mock('./components/DeleteConfirmModal', () => ({ DeleteConfirmModal: () => null }));
+vi.mock('./components/DeleteConfirmModal', () => ({
+  DeleteConfirmModal: ({ onConfirm }: { onConfirm: () => void }) => (
+    <button data-testid="mock-delete-confirm" onClick={onConfirm} />
+  ),
+}));
 
 const theme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => <CssVarsProvider theme={theme}>{children}</CssVarsProvider>;
@@ -80,6 +84,23 @@ describe('RegistrationInvitesTab', () => {
     expect(mocks.refetch).toHaveBeenCalledTimes(1);
   });
 
+  it('shows the error state when a refetch fails on an empty list', () => {
+    setQuery({ data: [], isError: true });
+    render(<RegistrationInvitesTab />, { wrapper: Wrapper });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load registration invites.');
+    fireEvent.click(screen.getByRole('button', { name: /try again/i }));
+    expect(mocks.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the table when a refetch fails but invites are cached', () => {
+    setQuery({ data: [invite(1)], isError: true });
+    render(<RegistrationInvitesTab />, { wrapper: Wrapper });
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getAllByTestId('invite-code-value')).toHaveLength(1);
+  });
+
   it('switches between the available and used invites', () => {
     setQuery({ data: [invite(1), invite(2, RegInviteStatusType.used)] });
     render(<RegistrationInvitesTab />, { wrapper: Wrapper });
@@ -111,5 +132,8 @@ describe('RegistrationInvitesTab', () => {
 
     fireEvent.click(screen.getByTestId('invite-bulk-delete-btn'));
     expect(useRegistrationInvitesStore.getState().openDeleteWarning).toBe(true);
+    fireEvent.click(screen.getByTestId('mock-delete-confirm'));
+    const ids = mocks.deleteMutate.mock.calls[0][0] as string[];
+    expect([...ids].sort()).toEqual(all.map(i => i.id).sort());
   });
 });
