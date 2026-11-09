@@ -38,10 +38,10 @@ import { baseApi } from './baseApi';
 
 const timing = () => h.lines.filter(l => l.message === 'req-timing').map(l => l.meta);
 
-// any: node-mocks-http req/res are not structurally the Express types the handler is typed for.
-async function call(handler: (req: any, res: any) => unknown, req: Record<string, unknown> = {}) {
+// `never` casts: node-mocks-http req/res are not structurally the Express types the handler is typed for.
+async function call(handler: (req: never, res: never) => unknown, req: Record<string, unknown> = {}) {
   const { req: request, res } = createMocks({ method: 'GET', url: '/api/x', ...req }, { eventEmitter: EventEmitter });
-  await handler(request, res);
+  await handler(request as never, res as never);
   return res;
 }
 

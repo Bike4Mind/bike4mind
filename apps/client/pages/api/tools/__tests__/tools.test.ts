@@ -69,9 +69,8 @@ vi.mock('@server/middlewares/requestLogger', async orig => {
     createRequestLogger: (...a: Parameters<typeof actual.createRequestLogger>) => {
       const logger = actual.createRequestLogger(...a);
       const withMetadata = logger.withMetadata.bind(logger);
-      // any: the logger's chained type is not worth re-declaring for a recording shim.
       logger.withMetadata = ((metadata: Record<string, unknown>) => {
-        const chained: any = withMetadata(metadata);
+        const chained = withMetadata(metadata);
         const info = chained.info.bind(chained);
         chained.info = (message: string) => {
           logged.push({ message, metadata });
