@@ -4751,16 +4751,33 @@ export function words(node: Node): string[] {
   return out;
 }
 
+/** Expressions in a `[` test, whose leaves are the words the `[` builtin is given. */
+const TEST_EXPRESSIONS = new Set([
+  'binary_expression',
+  'unary_expression',
+  'parenthesized_expression',
+  'ternary_expression',
+  'postfix_expression',
+]);
+
 /**
- * The words of `node` bash brace-expands: a command's, a declaration's (`local x=...` too), an array's, a for
- * loop's list and a redirect target, but no plain assignment.
+ * The words of `node` bash brace-expands: a command's, a declaration's (`local x=...` too), an `unset`'s, a `[`
+ * test's, an array's, a for or select loop's list and a redirect target. Not a plain assignment, a here-string, a
+ * `case` word or pattern, or a `[[` test.
  */
 function braceExpandedWords(node: Node): Node[] {
   const named = node.namedChildren.filter((child): child is Node => child !== null && child.type !== 'comment');
+  const leaves = (expression: Node): Node[] =>
+    TEST_EXPRESSIONS.has(expression.type)
+      ? expression.namedChildren.flatMap(child => (child === null ? [] : leaves(child)))
+      : [expression];
   switch (node.type) {
     case 'command':
       return named.filter(child => child.type !== 'variable_assignment' && !child.type.endsWith('redirect'));
+    case 'test_command':
+      return node.firstChild?.type === '[' ? named.flatMap(leaves) : [];
     case 'declaration_command':
+    case 'unset_command':
     case 'array':
       return named;
     case 'for_statement':

@@ -158,6 +158,9 @@ describe('shell expansions reaching a protected location', () => {
     'a=("`echo "{a,b}"`")',
     'export x="`echo "{a,b}"`"',
     'cat < "`echo "{a,b}"`"',
+    '[ "`echo "{a,b}"`" ]',
+    '[ -n x -a "`echo "{a,b}"`" = y ]',
+    'unset "`echo "{a,b}"`"',
   ])('leaves %s unread, as bash brace-expands a word the scan reads as quoted', async command => {
     expect((await scanShell(command, project, [project]))?.unread).toBe(true);
   });
@@ -187,6 +190,21 @@ describe('shell expansions reaching a protected location', () => {
   ] as const)('expands %s in host bash as the scan expects', (word, expected) => {
     // Whichever bash is first in PATH; each of these expands the same in 3.2 and 5.
     const printed = execFileSync('bash', ['-c', `printf '%s\\n' ${word}`], { encoding: 'utf8' });
+    expect(printed.split('\n').slice(0, -1)).toEqual(expected);
+  });
+
+  // The inner printf prints on fd 3, once per word bash makes of the quoted backtick.
+  const counted = '"`printf \'%s\\n\' "{a,b}" >&3`"';
+
+  it.each([
+    [`[ -n ${counted} ]`, ['a', 'b']],
+    [`unset ${counted}`, ['a', 'b']],
+  ])('brace-expands the words of %s in host bash as the scan expects', (script, expected) => {
+    // Whichever bash is first in PATH; each of these expands the same in 3.2 and 5.
+    const printed = execFileSync('bash', ['-c', `exec 3>&1; ${script}; :`], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
     expect(printed.split('\n').slice(0, -1)).toEqual(expected);
   });
 });

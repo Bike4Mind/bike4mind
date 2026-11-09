@@ -637,6 +637,16 @@ describe('commands main ran unasked', () => {
     'a=("`rm -rf "{x,.claude}"`")',
     'export x="`rm -rf "{x,.claude}"`"',
     'cat < "`rm -rf "{x,.claude}"`"',
+    // `[` and `unset` are builtins, whose words bash brace-expands as it does any command's.
+    '[ "`rm -rf "{x,.claude}"`" ]',
+    'if [ "`rm -rf "{x,.claude}"`" ]; then :; fi',
+    'while [ "`rm -rf "{x,.claude}"`" ]; do :; done',
+    '! [ "`rm -rf "{x,.claude}"`" ]',
+    '{ [ "`rm -rf "{x,.claude}"`" ]; }',
+    '[ -n x -a "`rm -rf "{x,.claude}"`" = y ]',
+    '[ "$(rm -rf "{x,.claude}")" ]',
+    'unset "`rm -rf "{x,.claude}"`"',
+    '[ "`cat "{x,../.config/Bike4Mind/value}"`" ]',
   ])('asks in every mode for %s, reading its braces by bash quote rules', async command => {
     expect(await judge(command)).toMatchObject(asks);
   });
