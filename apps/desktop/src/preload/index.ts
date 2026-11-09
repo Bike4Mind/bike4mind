@@ -137,6 +137,8 @@ const api: DesktopApi = {
   account: {
     getCredits: () => ipcRenderer.invoke(IPC_CHANNELS.accountGetCredits),
     getProfile: () => ipcRenderer.invoke(IPC_CHANNELS.accountGetProfile),
+    getBilling: () => ipcRenderer.invoke(IPC_CHANNELS.accountGetBilling),
+    subscribePlan: priceId => ipcRenderer.invoke(IPC_CHANNELS.accountSubscribePlan, priceId),
   },
   usage: {
     getHistory: (window: UsageWindowId, force?: boolean) =>
