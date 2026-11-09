@@ -20,13 +20,22 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
 
     const { newOwnerId } = bodySchema.parse(req.body);
 
-    const result = await withTransaction(() =>
-      organizationService.transferOwnership(
+    // The audit write is strict, so it joins the transaction: a failed audit write rolls the transfer back.
+    const result = await withTransaction(async () => {
+      const transferred = await organizationService.transferOwnership(
         req.user!,
         { organizationId, newOwnerId },
         { db: { organizations: organizationRepository, users: userRepository } }
-      )
-    );
+      );
+      await recordAdminActionFromRequest(req, {
+        action: 'org.owner.transferred',
+        actorScope: 'organization',
+        target: { kind: 'organization', id: organizationId, displayName: transferred.organizationName },
+        summary: 'transferred organization ownership',
+        changes: [{ field: 'userId', before: transferred.previousOwnerId, after: transferred.newOwnerId }],
+      });
+      return transferred;
+    });
 
     // The Stripe customer belongs to the org, so only its contact email can be stale. Best-effort: the
     // transfer is already committed, and a failed mirror is a stale email on the customer, not a stuck org.
@@ -39,14 +48,6 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
         });
       }
     }
-
-    await recordAdminActionFromRequest(req, {
-      action: 'org.owner.transferred',
-      actorScope: 'organization',
-      target: { kind: 'organization', id: organizationId, displayName: result.organizationName },
-      summary: 'transferred organization ownership',
-      changes: [{ field: 'userId', before: result.previousOwnerId, after: result.newOwnerId }],
-    });
 
     return res.status(200).json({ organizationId, ownerId: result.newOwnerId });
   })
