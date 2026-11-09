@@ -56,6 +56,7 @@ describe('GET /api/admin/shadow-detections/ai-advisory', () => {
 
     await h.get!(req, res);
 
+    expect(h.listAiAbuseAdvisories).toHaveBeenCalledWith(undefined, { includeLinkedAccounts: true });
     expect(res._getStatusCode()).toBe(200);
     expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(JSON.parse(res._getData())).toEqual({ ...summary, since: SINCE.toISOString() });

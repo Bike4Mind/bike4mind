@@ -115,7 +115,7 @@ function mailDomainsOf(flagged: ShadowDetectionItem[], open: Set<string>): AiAdv
  */
 export async function listAiAbuseAdvisories(
   now = new Date(),
-  { includeLinkedAccounts = true }: { includeLinkedAccounts?: boolean } = {}
+  { includeLinkedAccounts = false }: { includeLinkedAccounts?: boolean } = {}
 ): Promise<AiAdvisorySummary> {
   const since = new Date(now.getTime() - AI_ADVISORY_WINDOW_HOURS * 60 * 60 * 1000);
   const fetched = await shadowDetectionRepository.listUnreviewedSince(since, SHADOW_DETECTION_LIST_LIMIT + 1);

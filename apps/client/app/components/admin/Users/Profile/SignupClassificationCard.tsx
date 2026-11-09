@@ -42,7 +42,6 @@ export function SignupClassificationCard({ userId }: { userId: string }) {
       await changeRange(range);
     }
     await chart.refetch();
-    if (!snapshot && chart.data?.until) await verdicts.refetch();
   };
   return (
     <SectionCard title="Signup classification" data-testid="signup-classification-card">

@@ -63,4 +63,29 @@ describe('bounded linked-account population retry', () => {
     expect(mocks.events.mock.calls[2][0].ip).toEqual({ $in: [rareIp] });
     expect(mocks.events).toHaveBeenCalledTimes(3);
   });
+
+  it('drops a single-user address that saturates the row cap and keeps linking through the other address', async () => {
+    const seed = { _id: id(1), signupMeta: {}, createdAt: new Date(0) };
+    const candidate = { _id: id(2), name: 'Example candidate', signupMeta: { ip: rareIp } };
+    mocks.users
+      .mockReturnValueOnce(query([seed]))
+      .mockReturnValueOnce(query([]))
+      .mockReturnValueOnce(query([candidate]))
+      .mockReturnValueOnce(query([candidate]));
+    mocks.events
+      .mockReturnValueOnce(
+        query([
+          { userId: id(1), ip: busyIp, type: 'login' },
+          { userId: id(1), ip: rareIp, type: 'login' },
+        ])
+      )
+      .mockReturnValueOnce(query(Array.from({ length: 2_001 }, () => ({ userId: id(1), ip: busyIp, type: 'login' }))))
+      .mockReturnValueOnce(query([]));
+
+    const result = await findLinkedAdvisoryAccounts([id(1)], now);
+    expect(result.truncated).toBe(true);
+    expect(result.accounts.map(account => account.userId)).toEqual([id(2)]);
+    expect(mocks.users.mock.calls[2][0]['signupMeta.ip']).toEqual({ $in: [rareIp] });
+    expect(mocks.events.mock.calls[2][0].ip).toEqual({ $in: [rareIp] });
+  });
 });

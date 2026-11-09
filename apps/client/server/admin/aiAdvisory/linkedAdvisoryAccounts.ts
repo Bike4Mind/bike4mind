@@ -118,10 +118,17 @@ export async function findLinkedAdvisoryAccounts(seedUserIds: readonly string[],
     const sharedIps = new Set(
       [...population].filter(([, users]) => users.size > MAX_SHARED_ACCOUNTS).map(([ip]) => ip)
     );
-    if (sharedIps.size === 0) return { accounts: [], truncated: true };
-    ips = ips.filter(ip => !sharedIps.has(ip));
+    const rowCounts = new Map<string, number>();
+    for (const row of [...signupUsers.flatMap(signupObservation), ...events]) {
+      if (row.ip) rowCounts.set(row.ip, (rowCounts.get(row.ip) ?? 0) + 1);
+    }
+    const saturatedIps = [...rowCounts].filter(([ip, rows]) => rows >= MAX_ROWS && !sharedIps.has(ip));
+    const droppedIps = new Set([...sharedIps, ...saturatedIps.map(([ip]) => ip)]);
+    if (droppedIps.size === 0) return { accounts: [], truncated: true };
+    truncated ||= saturatedIps.length > 0;
+    ips = ips.filter(ip => !droppedIps.has(ip));
     if (ips.length === 0) return { accounts: [], truncated: true };
-    seedObservations = seedObservations.filter(observation => !sharedIps.has(observation.ip));
+    seedObservations = seedObservations.filter(observation => !droppedIps.has(observation.ip));
     [signupUsers, events] = await loadPopulation(ips);
     if (signupUsers.length > MAX_ROWS || events.length > MAX_ROWS) return { accounts: [], truncated: true };
   }

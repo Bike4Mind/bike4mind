@@ -191,7 +191,7 @@ describe('listAiAbuseAdvisories', () => {
       links: [{ sourceUserId: userId(1), ip: '198.51.100.10', sourceKind: 'signup', candidateKind: 'login' }],
     };
     h.findLinked.mockResolvedValue({ accounts: [linked], truncated: true });
-    const result = await listAiAbuseAdvisories(NOW);
+    const result = await listAiAbuseAdvisories(NOW, { includeLinkedAccounts: true });
     expect(result.advisories.map(row => row.userId)).toEqual([userId(1)]);
     expect(result.linkedAccounts).toEqual([linked]);
     expect(result.linkedAccounts[0]).not.toHaveProperty('abuseProbability');
@@ -218,7 +218,7 @@ describe('listAiAbuseAdvisories', () => {
       }),
     ]);
     h.aggregate.mockResolvedValue([judgment(detectionId(1), 'abuse', 0.9)]);
-    const result = await listAiAbuseAdvisories(NOW);
+    const result = await listAiAbuseAdvisories(NOW, { includeLinkedAccounts: true });
     expect(result.advisories.map(row => [row.userId, row.abuseProbability])).toEqual(members.map(id => [id, 0.9]));
     expect(result.networks.map(entry => [entry.ip, entry.accountCount])).toEqual([['198.51.100.10', 3]]);
     expect(result.mailDomains).toEqual([{ domain: 'example.org', accountCount: 3 }]);
@@ -229,7 +229,7 @@ describe('listAiAbuseAdvisories', () => {
     h.listUnreviewedSince.mockResolvedValue([detection({ id: detectionId(1), userIds: [userId(1)] })]);
     h.aggregate.mockResolvedValue([judgment(detectionId(1), 'abuse', 0.9)]);
     h.findLinked.mockRejectedValue(new Error('query failed'));
-    const result = await listAiAbuseAdvisories(NOW);
+    const result = await listAiAbuseAdvisories(NOW, { includeLinkedAccounts: true });
     expect(result.advisories).toHaveLength(1);
     expect(result.linkedAccountsStatus).toBe('failed');
   });
