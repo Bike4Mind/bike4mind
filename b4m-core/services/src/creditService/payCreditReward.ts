@@ -53,7 +53,7 @@ export interface HeldCreditRewardRepository {
 export type RewardPartyFields = AccountStateFields & {
   isSynthetic?: boolean | null;
   deletedAt?: Date | null;
-  signupGrant?: Pick<SignupGrant, 'blocked'> | null;
+  signupGrant?: Pick<SignupGrant, 'blocked' | 'unlockForfeited'> | null;
 };
 
 /**
@@ -68,13 +68,13 @@ export const isRewardPartyBlocked = (party: RewardPartyFields) =>
   party.moderation?.status === 'suspend_pending';
 
 /**
- * isRewardPartyBlocked plus an admin's grant block, for the account a reward pays. Hold time
+ * isRewardPartyBlocked plus an admin's grant block or a forfeited signup unlock, for the account a reward pays. Hold time
  * (packages/server-utils/src/referrals/firstAnswerReward.ts, the gears catalog) and release time both use it, so a
  * reward never pays on release what it would have refused up front. It never applies to the invited friend of a
  * referral reward, so blocking a friend cannot hold the inviter's reward in the queue.
  */
 export const isRewardRecipientBlocked = (party: RewardPartyFields) =>
-  isRewardPartyBlocked(party) || isSignupGrantBlocked(party);
+  isRewardPartyBlocked(party) || isSignupGrantBlocked(party) || !!party.signupGrant?.unlockForfeited;
 
 /** Metadata key naming the invited friend on a referral reward; that friend is re-checked before paying. */
 export const REFERRED_USER_ID_METADATA_KEY = 'referredUserId';
@@ -97,7 +97,7 @@ export type PayCreditRewardOutcome =
 
 /**
  * 'transient' covers states an account can leave (dispute pending, suspension or suspend_pending, both
- * appealable, or an admin grant block on the recipient, which unblock lifts): the release keeps such a reward
+ * appealable, or an admin grant block or forfeited unlock on the recipient, which an admin can lift): the release keeps such a reward
  * queued rather than voiding it, which would forfeit it for good.
  */
 type PartyBlock = 'terminal' | 'transient' | null;
@@ -134,7 +134,7 @@ async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAd
   const credit = async () => {
     // Read inside the payout transaction: a block that commits after the caller's check conflicts with this
     // write, and the retry then sees the flag. Without an owned transaction this narrows the window only.
-    if (isSignupGrantBlocked((await adapters.users.findById(reward.userId)) ?? {})) return null;
+    if (isRewardRecipientBlocked((await adapters.users.findById(reward.userId)) ?? {})) return null;
     return addCreditsWithLedgerRow(
       {
         ownerId: reward.userId,
@@ -217,7 +217,8 @@ export async function payCreditReward(
   }
   await adapters.heldRewards.hold(reward);
   // A block can commit between the check above and this insert, after its pause already ran; the flag is
-  // read again once the row exists, so either that pause or this one takes it out of the queue.
+  // read again once the row exists, so either that pause or this one takes it out of the queue. Only a grant
+  // block pauses, since only unblock resumes paused rows; a forfeit landing here stays held and release defers it.
   if (isSignupGrantBlocked((await adapters.users.findById(reward.userId)) ?? {})) {
     await adapters.heldRewards.pauseOne(reward.transactionId);
     return { outcome: 'blocked' };

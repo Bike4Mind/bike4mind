@@ -299,6 +299,30 @@ describe('payCreditReward', () => {
     expect(await balance(later.id)).toBe(0);
   });
 
+  it('refuses a forfeited unlock up front, and defers rather than voids a queued reward that forfeits', async () => {
+    const forfeit = { 'signupGrant.unlockForfeited': { cause: 'refund', at: new Date() } };
+    const forfeited = await makeUser();
+    await User.updateOne({ _id: forfeited.id }, { $set: forfeit });
+    expect((await creditService.payCreditReward(reward(forfeited.id, 'projects'), adapters)).outcome).toBe('blocked');
+    expect(await HeldCreditRewardModel.countDocuments({})).toBe(0);
+
+    config.signupGrantTricklePoolDaily = '0';
+    const later = await makeUser();
+    await creditService.payCreditReward(reward(later.id, 'projects'), adapters);
+    await User.updateOne({ _id: later.id }, { $set: forfeit });
+    config.signupGrantTricklePoolDaily = '1000';
+    expect(await creditService.releaseHeldCreditRewards(adapters, { limit: 10 })).toMatchObject({
+      paid: 0,
+      voided: 0,
+      deferred: 1,
+    });
+    expect(await balance(later.id)).toBe(0);
+
+    await User.updateOne({ _id: later.id }, { $unset: { 'signupGrant.unlockForfeited': 1 } });
+    expect(await creditService.releaseHeldCreditRewards(adapters, { limit: 10 })).toMatchObject({ paid: 1 });
+    expect(await balance(later.id)).toBe(100);
+  });
+
   it('answers duplicate for a reward already in the ledger', async () => {
     const user = await makeUser();
     await creditService.payCreditReward(reward(user.id, 'projects'), adapters);

@@ -50,7 +50,9 @@ export async function rewardInviterForFirstAnswer(friendId: string): Promise<voi
 
     const inviterId = String(friend.referredByUserId);
     const inviter = await User.findById(inviterId)
-      .select('isSynthetic deletedAt isBanned disputePending moderation.status signupGrant.blocked')
+      .select(
+        'isSynthetic deletedAt isBanned disputePending moderation.status signupGrant.blocked signupGrant.unlockForfeited'
+      )
       .lean<RewardParty>();
     if (!inviter || isBlockedInviter(inviter)) return;
 

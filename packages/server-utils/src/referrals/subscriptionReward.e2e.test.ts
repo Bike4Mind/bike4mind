@@ -168,6 +168,20 @@ describe('releaseDueSubscriptionRewards against a real replica set', () => {
       expect(await reward()).toMatchObject({ status: 'released' });
     });
 
+    it('keeps the reward pending while the inviter has forfeited the signup unlock', async () => {
+      const { inviter } = await seedPair();
+      await User.updateOne(
+        { _id: inviter.id },
+        { $set: { 'signupGrant.unlockForfeited': { cause: 'refund', at: NOW } } }
+      );
+
+      const run = await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid });
+
+      expect(run).toMatchObject({ candidates: 1, released: 0, cancelled: 0, failed: 0 });
+      expect(await reward()).toMatchObject({ status: 'pending' });
+      expect((await User.findById(inviter.id))?.currentCredits).toBe(0);
+    });
+
     it('still pays the inviter when only the payer is grant-blocked', async () => {
       const { inviter, payer } = await seedPair();
       await block(payer.id);

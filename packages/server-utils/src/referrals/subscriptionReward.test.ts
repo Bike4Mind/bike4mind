@@ -44,6 +44,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', async () => ({
   creditService: {
     isRewardPartyBlocked: (await import('@bike4mind/services/creditService')).isRewardPartyBlocked,
+    isRewardRecipientBlocked: (await import('@bike4mind/services/creditService')).isRewardRecipientBlocked,
     addCreditsWithLedgerRow: mockAddCredits,
     subtractCredits: mockSubtractCredits,
     clawbackCreditLotsByStripeRef: mockClawbackLots,

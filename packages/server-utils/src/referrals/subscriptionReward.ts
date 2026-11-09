@@ -1,4 +1,4 @@
-import { CreditHolderType, isSignupGrantBlocked, settingsMap } from '@bike4mind/common';
+import { CreditHolderType, settingsMap } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   creditLotRepository,
@@ -31,7 +31,7 @@ const MAX_REVERSAL_ATTEMPTS = 3;
 
 const PARTY_FIELDS = 'isSynthetic deletedAt isBanned disputePending moderation.status';
 // An admin's grant block applies to the account the reward pays, never to the invited friend who paid.
-const INVITER_FIELDS = `${PARTY_FIELDS} signupGrant.blocked`;
+const INVITER_FIELDS = `${PARTY_FIELDS} signupGrant.blocked signupGrant.unlockForfeited`;
 
 // In Stripe v22 the payment intent lives on invoice.payments (expand it when retrieving the invoice).
 const invoicePaymentIntentId = (invoice: Stripe.Invoice): string | undefined => {
@@ -224,8 +224,8 @@ export async function releaseDueSubscriptionRewards({
         if (await referralSubscriptionRewardRepository.cancelPending(candidate.id, blocked, now)) result.cancelled++;
         continue;
       }
-      // Unblock lifts an admin grant block, so the reward stays pending instead of closing for good.
-      if (inviter && isSignupGrantBlocked(inviter)) continue;
+      // An admin can lift a grant block or a forfeited unlock, so the reward stays pending instead of closing for good.
+      if (inviter && creditService.isRewardRecipientBlocked(inviter)) continue;
 
       // A Stripe failure throws into the catch below, so the reward is retried next run rather than paid.
       const outcome = candidate.paymentIntentId ? await paymentOutcome(candidate.paymentIntentId) : 'paid';
