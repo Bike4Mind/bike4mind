@@ -5177,6 +5177,7 @@ export interface components {
       chunkRebuildRequestedAt?: unknown;
       chunkStallReason?: unknown;
       noExtractableTextAt?: unknown;
+      extractionRefusalReason?: unknown;
       chunkPolicyConflict?: unknown;
       isVectorizing?: unknown;
       vectorized?: unknown;
