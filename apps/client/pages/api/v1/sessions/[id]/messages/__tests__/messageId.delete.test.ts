@@ -36,9 +36,14 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: <T>(fn: T) => fn,
 }));
 
+const mockFindSession = vi.fn();
+const mockFindMessage = vi.fn();
 vi.mock('@bike4mind/database', () => ({
-  sessionRepository: { update: vi.fn().mockResolvedValue(undefined) },
-  questRepository: {},
+  sessionRepository: {
+    findByIdAndUserId: (...a: unknown[]) => mockFindSession(...a),
+    update: vi.fn().mockResolvedValue(undefined),
+  },
+  questRepository: { findBySessionIdAndId: (...a: unknown[]) => mockFindMessage(...a) },
   withTransaction: <T>(fn: () => Promise<T>) => fn(),
 }));
 
@@ -63,36 +68,60 @@ function fireDelete() {
   return { req: req as any, res: res as any, logger };
 }
 
+const replySource = { kind: 'replyMessage', sessionId: 'sess-1', messageIds: ['quest-1'] };
+
 describe('DELETE /api/v1/sessions/[id]/messages/[messageId]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFindSession.mockResolvedValue({ id: 'sess-1' });
+    mockFindMessage.mockResolvedValue({ id: 'quest-1', sessionId: 'sess-1' });
     mockDeleteSessionMessage.mockResolvedValue({ id: 'quest-1', sessionId: 'sess-1' });
     mockUnpublish.mockResolvedValue({ artifacts: [], annotations: 0, reports: 0, viewAudits: 0 });
   });
 
-  it("takes down the caller's replies published from the deleted message", async () => {
+  it("takes down the caller's replies before the delete and sweeps again after it commits", async () => {
     const { req, res, logger } = fireDelete();
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ msg: 'Message deleted' });
+    expect(mockFindSession).toHaveBeenCalledWith('SESS-1', 'owner-1');
+    expect(mockFindMessage).toHaveBeenCalledWith('sess-1', 'quest-1');
     expect(mockDeleteSessionMessage).toHaveBeenCalledWith(
       'owner-1',
       { sessionId: 'SESS-1', messageId: 'quest-1' },
       expect.anything()
     );
-    expect(mockUnpublish).toHaveBeenCalledTimes(1);
-    expect(mockUnpublish).toHaveBeenCalledWith(
-      'owner-1',
-      { kind: 'replyMessage', sessionId: 'sess-1', messageIds: ['quest-1'] },
-      { logger }
-    );
-    expect(mockDeleteSessionMessage.mock.invocationCallOrder[0]).toBeLessThan(
-      mockUnpublish.mock.invocationCallOrder[0]
-    );
+    expect(mockUnpublish).toHaveBeenCalledTimes(2);
+    expect(mockUnpublish).toHaveBeenNthCalledWith(1, 'owner-1', replySource, { logger });
+    expect(mockUnpublish).toHaveBeenNthCalledWith(2, 'owner-1', replySource, { logger });
+    const [before, after] = mockUnpublish.mock.invocationCallOrder;
+    const deleteOrder = mockDeleteSessionMessage.mock.invocationCallOrder[0];
+    expect(before).toBeLessThan(deleteOrder);
+    expect(deleteOrder).toBeLessThan(after);
   });
 
-  it('leaves published replies alone when the delete fails', async () => {
+  it('fails without deleting when the take-down fails, so a retry can finish the job', async () => {
+    const failure = new Error('db down');
+    mockUnpublish.mockRejectedValueOnce(failure);
+    const { req, res } = fireDelete();
+
+    await expect(handler(req, res)).rejects.toBe(failure);
+    expect(mockDeleteSessionMessage).not.toHaveBeenCalled();
+  });
+
+  it('takes nothing down when the caller does not own the session', async () => {
+    mockFindSession.mockResolvedValue(null);
+    mockDeleteSessionMessage.mockRejectedValue(Object.assign(new Error('Session not found'), { statusCode: 404 }));
+    const { req, res } = fireDelete();
+
+    await expect(handler(req, res)).rejects.toMatchObject({ statusCode: 404 });
+    expect(mockFindMessage).not.toHaveBeenCalled();
+    expect(mockUnpublish).not.toHaveBeenCalled();
+  });
+
+  it('takes nothing down when the message is missing or already deleted', async () => {
+    mockFindMessage.mockResolvedValue(null);
     mockDeleteSessionMessage.mockRejectedValue(Object.assign(new Error('Message not found'), { statusCode: 404 }));
     const { req, res } = fireDelete();
 
@@ -100,9 +129,10 @@ describe('DELETE /api/v1/sessions/[id]/messages/[messageId]', () => {
     expect(mockUnpublish).not.toHaveBeenCalled();
   });
 
-  it('logs a failed take-down and still reports the committed delete', async () => {
+  it('logs a failed post-commit sweep and still reports the committed delete', async () => {
     const failure = new Error('db down');
-    mockUnpublish.mockRejectedValue(failure);
+    mockUnpublish.mockResolvedValueOnce({ artifacts: [], annotations: 0, reports: 0, viewAudits: 0 });
+    mockUnpublish.mockRejectedValueOnce(failure);
     const { req, res, logger } = fireDelete();
 
     await handler(req, res);

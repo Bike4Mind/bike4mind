@@ -117,9 +117,24 @@ const putHandler = nextRouteForContract(updateSessionMessageContract).put(async 
 
 const deleteHandler = nextRouteForContract(deleteSessionMessageContract).delete(async (req, res) => {
   const { id: sessionId, messageId } = req.validatedParams;
+  const userId = req.user.id;
+
+  // Take published replies down before the delete, so a failed take-down fails the request while a
+  // retry can still find the message (a re-DELETE of a deleted message 404s). Same order as the
+  // delete-all-notebooks route in pages/api/sessions/index.ts.
+  const ownedSession = await sessionRepository.findByIdAndUserId(sessionId, userId);
+  const target = ownedSession ? await questRepository.findBySessionIdAndId(ownedSession.id, messageId) : null;
+  if (ownedSession && target) {
+    await unpublishUserArtifactsBySource(
+      userId,
+      { kind: 'replyMessage', sessionId: ownedSession.id, messageIds: [target.id] },
+      { logger: req.logger }
+    );
+  }
+
   const deleted = await withTransaction(async () => {
     const deletedMessage = await sessionService.deleteSessionMessage(
-      req.user.id,
+      userId,
       { sessionId, messageId },
       { db: { sessions: sessionRepository, chatHistories: questRepository } }
     );
@@ -127,10 +142,11 @@ const deleteHandler = nextRouteForContract(deleteSessionMessageContract).delete(
     return deletedMessage;
   });
 
-  // The delete is already committed, so a failed take-down is logged rather than failing the request.
+  // A reply publish that read the message before the delete committed can land its page after the
+  // take-down above, so sweep once more; publish/reply.ts re-checks the message after its own write.
   try {
     await unpublishUserArtifactsBySource(
-      req.user.id,
+      userId,
       { kind: 'replyMessage', sessionId: deleted.sessionId, messageIds: [deleted.id] },
       { logger: req.logger }
     );

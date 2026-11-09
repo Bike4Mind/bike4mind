@@ -4,6 +4,7 @@ import { Quest, Session } from '@bike4mind/database';
 import { PublishReplyRequestSchema, type PublishResult, type CitableSource, visibleReplyText } from '@bike4mind/common';
 import { resolveVisibility, checkScopePermission, type PublishUser } from '@server/services/publish';
 import { settlePublication } from '@server/services/publish/settlePublication';
+import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
 import { parseArtifactsWithFallback } from '@bike4mind/server-utils/app/utils/artifactParser';
 import {
   REPLY_TITLE_MAX,
@@ -76,6 +77,7 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
   const quest = await Quest.findOne({ _id: body.messageId, sessionId: body.sessionId })
     .select('reply replies structuredReplies promptMeta.citables')
     .lean<{
+      _id: unknown;
       reply?: string | null;
       replies?: string[] | null;
       structuredReplies?: Array<{ content?: unknown }> | null;
@@ -88,7 +90,9 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
   // Ownership lives on the Session, not the Quest: ChatHistoryItemSchema has no
   // top-level userId, so read the owner from the parent session (userId is
   // required there). Reading it off the Quest silently 403s every non-admin.
-  const session = await Session.findById(body.sessionId).select('userId').lean<{ userId: string } | null>();
+  const session = await Session.findById(body.sessionId)
+    .select('userId')
+    .lean<{ _id: unknown; userId: string } | null>();
   if (!session) {
     return res.status(404).json({ error: 'Reply not found' });
   }
@@ -124,12 +128,16 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
     return res.status(400).json({ error: viz.error, code: viz.code });
   }
 
+  // Store the ids as the database spells them: the lookups above cast case-insensitively, while the
+  // take-down on message/notebook delete (purgeOwnerPublishedArtifactsBySource) matches exact strings.
+  const source = { kind: 'reply' as const, sessionId: String(session._id), messageId: String(quest._id) };
+
   // One publication per owner+reply, rewritten in place on re-publish - see settlePublication.
   const settled = await settlePublication({
     ownerId: userId,
     isAdmin: req.user.isAdmin,
     ownerCreatedAt: req.user.createdAt,
-    source: { kind: 'reply', sessionId: body.sessionId, messageId: body.messageId },
+    source,
     tier,
     scopeId,
     visibility: viz.visibility,
@@ -142,6 +150,19 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
     return res.status(settled.status).json(settled.body);
   }
   const { saved, slug, publishedAt } = settled;
+
+  // A message delete that committed while this publish was in flight ran its take-down before this
+  // page existed, so re-check the message after the write and take the page back down if it is gone.
+  // Pairs with the post-commit sweep in pages/api/v1/sessions/[id]/messages/[messageId].ts.
+  const stillLive = await Quest.findOne({ _id: quest._id, sessionId: source.sessionId }).select('_id').lean();
+  if (!stillLive) {
+    await unpublishUserArtifactsBySource(
+      userId,
+      { kind: 'replyMessage', sessionId: source.sessionId, messageIds: [source.messageId] },
+      { logger: req.logger }
+    );
+    return res.status(404).json({ error: 'Reply not found' });
+  }
 
   req.logger.info(`[PUBLISH] reply session=${body.sessionId} msg=${body.messageId} → /p/r/${saved.publicId}`);
 

@@ -61,7 +61,7 @@ vi.mock('@bike4mind/database', () => ({
   newAccountSpendCapAdapters: {},
   organizationRepository: {},
   questRepository: {},
-  sessionRepository: { update: mockSessionUpdate },
+  sessionRepository: { update: mockSessionUpdate, findByIdAndUserId: async () => null },
   usageEventRepository: {},
   userRepository: {},
   withTransaction: async (fn: () => Promise<unknown>) => fn(),
