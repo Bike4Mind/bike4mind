@@ -20,6 +20,8 @@ export class HardwareProbe {
   private retryAt = 0;
   private override: (probed: HardwareProfile) => HardwareProfile = probed => probed;
   private llamaServer: HardwareProbeOptions['llamaServer'];
+  /** The llama-server path the current result's probe found; undefined when it looked for none. */
+  private listedPath: string | null | undefined;
   private relist = false;
 
   constructor(
@@ -47,16 +49,25 @@ export class HardwareProbe {
   }
 
   /**
-   * After a model server is saved: probes again with the llama-server's devices listed afresh on a Linux Intel card,
-   * whose VRAM only a listing gives, as the saved binary may differ. The last result stays readable until replaced.
+   * After a model server is saved, on a Linux Intel card, whose VRAM only a llama-server listing gives: probes again
+   * with the devices listed afresh when the saved server is a llama-server on this computer (`llamaServerSaved`), or
+   * when the llama-server Desktop would list is no longer the one listed. The last result stays readable until replaced.
    */
-  relistLlamaServer(): void {
-    void this.probed().then(profile => {
+  relistLlamaServer(llamaServerSaved: boolean): void {
+    void this.probed().then(async profile => {
       if (profile?.platform !== 'linux' || profile.memoryKind !== 'discrete' || profile.gpuVendor !== 'intel') return;
+      if (!llamaServerSaved && !(await this.locatesAnother())) return;
       this.pending = undefined;
       this.relist = true;
       void this.probed();
     });
+  }
+
+  private async locatesAnother(): Promise<boolean> {
+    if (!this.llamaServer) return false;
+    // A lookup that fails cannot tell, so it lists again.
+    const found = await this.llamaServer().catch(() => undefined);
+    return found === undefined || (found?.path ?? null) !== this.listedPath;
   }
 
   /** The probe with any override applied; null after a failed probe, which is tried again a minute later. */
@@ -69,15 +80,28 @@ export class HardwareProbe {
   probed(): Promise<HardwareProfile | null> {
     if (this.result === null && this.now() >= this.retryAt) this.pending = undefined;
     if (this.pending) return this.pending;
+    const locate = this.llamaServer;
+    let located: string | null | undefined;
     const options: HardwareProbeOptions = {
-      ...(this.llamaServer ? { llamaServer: this.llamaServer } : {}),
+      ...(locate
+        ? {
+            llamaServer: async () => {
+              const found = await locate();
+              located = found?.path ?? null;
+              return found;
+            },
+          }
+        : {}),
       ...(this.relist ? { llamaServerMaxAgeMs: 0 } : {}),
     };
     this.relist = false;
     const previous = this.result;
     const pending: Promise<HardwareProfile | null> = this.probe(options).then(
       profile => {
-        if (this.pending === pending) this.result = profile;
+        if (this.pending === pending) {
+          this.result = profile;
+          this.listedPath = located;
+        }
         return profile;
       },
       () => {
@@ -100,6 +124,25 @@ export class HardwareProbe {
 
 export const localHardware = new HardwareProbe();
 
+/** A saved llama-server that Desktop would launch on this computer, the kind localLlamaServer picks from. */
+function launchesLocalLlamaServer(view: ModelServerView): boolean {
+  return view.launch?.runtime === 'llama-server' && view.launch.owner !== 'remote';
+}
+
+/** The ModelServerRegistry.onServerSaved listener that has `hardware` list the llama-server's devices afresh. */
+export function relistAfterSave(
+  hardware: HardwareProbe,
+  views: () => Promise<ModelServerView[]>,
+  logger: { warn(message: string): void }
+): (id: string) => void {
+  return id => {
+    void views().then(
+      saved => hardware.relistLlamaServer(saved.some(view => view.id === id && launchesLocalLlamaServer(view))),
+      error => logger.warn(`MODEL SERVERS: could not read the saved servers after a save: ${String(error)}`)
+    );
+  };
+}
+
 /** The llama-server Desktop would launch on this computer: a configured binary, else the first on the user's PATH. */
 export function localLlamaServer(deps: {
   views(): Promise<ModelServerView[]>;
@@ -107,8 +150,9 @@ export function localLlamaServer(deps: {
 }): () => Promise<LlamaServerLocation | null> {
   return async () => {
     const launch = (await deps.views())
+      .filter(launchesLocalLlamaServer)
       .map(view => view.launch)
-      .find(view => view?.runtime === 'llama-server' && view.owner !== 'remote' && view.settings.binaryPath);
+      .find(view => view?.settings.binaryPath);
     const path = launch?.settings.binaryPath ?? (await deps.onPath());
     return path ? { path } : null;
   };

@@ -69,7 +69,7 @@ import { registerGenerationIpc } from './generationIpc';
 import { modelSettingsChanged, registerModelSettingsIpc } from './modelSettingsIpc';
 import { ModelSettingsStore } from './ModelSettingsStore';
 import { registerLocalContextIpc } from './localContextIpc';
-import { localContextSizing, localHardware, localLlamaServer } from './localContextSizing';
+import { localContextSizing, localHardware, localLlamaServer, relistAfterSave } from './localContextSizing';
 import { findOnPath, resolveUserPath } from './tools/userPath';
 import { SidebarSectionStore } from './SidebarSectionStore';
 import { registerImageMenuIpc } from './imageMenuIpc';
@@ -561,7 +561,7 @@ export function registerChat(
       onPath: async () => findOnPath('llama-server', await resolveUserPath()),
     })
   );
-  modelServers.onServerSaved(() => localHardware.relistLlamaServer());
+  modelServers.onServerSaved(relistAfterSave(localHardware, () => modelServers.views(), logger));
   void localHardware.profile();
   const local = new LocalModels(
     new OllamaLocal((url, init) => net.fetch(url, init), localSizing, undefined, loadSettings),
