@@ -1,6 +1,9 @@
 import {
+  ADMIN_DATA_EXPORT_DENIED_ACTION,
+  ADMIN_DATA_EXPORT_FAILED_ACTION,
   ADMIN_DATA_EXPORT_REQUESTED_ACTION,
   NotFoundError,
+  type AdminAuditAction,
   assertCanActOnAdminTarget,
   type AdminDataExportStatus,
   type AdminDataExportSummary,
@@ -12,6 +15,7 @@ import {
   isMissingObjectError,
 } from '@bike4mind/server-utils/utils/accountDataExport';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { denySelfAdminAction, isSelfOrImpersonator } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
  * Admin data subject exports have no job table: the strict `user.data_export.requested` audit entry
@@ -33,6 +37,23 @@ export async function findDataExportTarget(actor: AdminActor, userId: unknown) {
     user,
     auditTarget: { kind: 'user' as const, id: user.id, displayName: user.email ?? user.username ?? user.id },
   };
+}
+
+type DataExportTarget = Awaited<ReturnType<typeof findDataExportTarget>>;
+
+/**
+ * No admin exports their own account (or the one they are impersonating) through the admin tool:
+ * records a `user.data_export.denied` entry and throws a 403, as the sibling admin user routes do.
+ * Their own data goes through the self-serve export.
+ */
+export async function denySelfDataExport(
+  req: Parameters<typeof denySelfAdminAction>[0],
+  { user, auditTarget }: DataExportTarget,
+  attempted: Extract<AdminAuditAction, `user.data_export.${string}`>
+): Promise<void> {
+  // Fails closed: a request with no actor is denied too (adminApi always sets one).
+  if (req.user && !isSelfOrImpersonator(req.user, user.id)) return;
+  await denySelfAdminAction(req, { action: ADMIN_DATA_EXPORT_DENIED_ACTION, attempted, target: auditTarget });
 }
 
 type ExportStorage = Pick<ReturnType<typeof getFilesStorage>, 'getMetadata'>;
@@ -67,32 +88,45 @@ export async function listAdminDataExports(
   storage: ExportStorage = getFilesStorage(),
   now = Date.now()
 ): Promise<AdminDataExportSummary[]> {
-  const { entries } = await adminAuditLogRepository.list(
-    {
-      action: ADMIN_DATA_EXPORT_REQUESTED_ACTION,
-      targetKind: 'user',
-      targetId: userId,
-      from: new Date(now - ACCOUNT_DATA_EXPORT_TTL_MS - ADMIN_DATA_EXPORT_GIVE_UP_MS).toISOString(),
-    },
-    { limit: LISTED_EXPORTS }
-  );
+  const recent = (action: AdminAuditAction) =>
+    adminAuditLogRepository.list(
+      {
+        action,
+        targetKind: 'user',
+        targetId: userId,
+        from: new Date(now - ACCOUNT_DATA_EXPORT_TTL_MS - ADMIN_DATA_EXPORT_GIVE_UP_MS).toISOString(),
+      },
+      { limit: LISTED_EXPORTS }
+    );
+  const [requested, failed] = await Promise.all([
+    recent(ADMIN_DATA_EXPORT_REQUESTED_ACTION),
+    recent(ADMIN_DATA_EXPORT_FAILED_ACTION),
+  ]);
+  const neverQueued = new Set(failed.entries.flatMap(entry => exportJobIdOf(entry) ?? []));
   return Promise.all(
-    entries.flatMap(entry => {
-      const exportJobId = entry.details?.exportJobId;
-      if (typeof exportJobId !== 'string') return [];
+    requested.entries.flatMap(entry => {
+      const exportJobId = exportJobIdOf(entry);
+      if (!exportJobId) return [];
       return [
         (async (): Promise<AdminDataExportSummary> => ({
           exportJobId,
           requestedAt: entry.occurredAt.toISOString(),
           requestedBy: entry.actor.name,
           reason: entry.reason ?? null,
-          status: adminDataExportStatus(
-            await readAdminDataExportBuiltAt(storage, userId, exportJobId),
-            entry.occurredAt,
-            now
-          ),
+          status: neverQueued.has(exportJobId)
+            ? { state: 'failed' }
+            : adminDataExportStatus(
+                await readAdminDataExportBuiltAt(storage, userId, exportJobId),
+                entry.occurredAt,
+                now
+              ),
         }))(),
       ];
     })
   );
 }
+
+const exportJobIdOf = (entry: { details?: Record<string, unknown> | null }): string | undefined => {
+  const exportJobId = entry.details?.exportJobId;
+  return typeof exportJobId === 'string' ? exportJobId : undefined;
+};

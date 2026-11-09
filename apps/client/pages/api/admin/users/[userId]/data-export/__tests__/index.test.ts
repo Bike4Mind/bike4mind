@@ -11,7 +11,11 @@ const h = vi.hoisted(() => ({
   record: vi.fn(),
   requireStepUp: vi.fn(),
   findTarget: vi.fn(),
+  denySelf: vi.fn(),
   list: vi.fn(),
+  quota: vi.fn(),
+  release: vi.fn(),
+  logError: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/adminApi', () => ({
@@ -38,7 +42,11 @@ vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => 'cs
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: h.requireStepUp }));
 vi.mock('@server/dataSubject/adminDataExports', () => ({
   findDataExportTarget: h.findTarget,
+  denySelfDataExport: h.denySelf,
   listAdminDataExports: h.list,
+}));
+vi.mock('@bike4mind/database', () => ({
+  cacheRepository: { tryIncrementWithinLimitFixedWindow: h.quota, decrementCounter: h.release },
 }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: h.record,
@@ -61,7 +69,7 @@ const TARGET = { kind: 'user', id: USER_ID, displayName: 'ada@example.com' };
 
 function mocks(method: 'GET' | 'POST', body?: unknown) {
   const { req, res } = createMocks({ method, query: { userId: USER_ID }, body });
-  Object.assign(req, { user: { id: ADMIN_ID, isAdmin: true } });
+  Object.assign(req, { user: { id: ADMIN_ID, isAdmin: true }, logger: { error: h.logError } });
   return { req, res };
 }
 
@@ -72,6 +80,10 @@ beforeEach(() => {
   h.record.mockReset().mockImplementation(async () => void h.calls.push('audit'));
   h.send.mockReset().mockImplementation(async () => void h.calls.push('enqueue'));
   h.list.mockReset().mockResolvedValue([]);
+  h.denySelf.mockReset().mockResolvedValue(undefined);
+  h.quota.mockReset().mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 15 * 60_000) });
+  h.release.mockReset().mockResolvedValue(undefined);
+  h.logError.mockReset();
 });
 
 describe('admin data subject export requests', () => {
@@ -130,6 +142,64 @@ describe('admin data subject export requests', () => {
     await expect(h.post!(req, res)).rejects.toThrow('step_up_required');
     expect(h.record).not.toHaveBeenCalled();
     expect(h.send).not.toHaveBeenCalled();
+  });
+
+  it("queues nothing for the admin's own account", async () => {
+    h.denySelf.mockRejectedValue(new Error('Admins cannot perform this action on their own account.'));
+    const { req, res } = mocks('POST', { reason: 'Art. 15 request' });
+
+    await expect(h.post!(req, res)).rejects.toThrow('own account');
+    expect(h.denySelf).toHaveBeenCalledWith(
+      req,
+      { user: { id: USER_ID }, auditTarget: TARGET },
+      'user.data_export.requested'
+    );
+    expect(h.quota).not.toHaveBeenCalled();
+    expect(h.record).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
+  it('allows one export of a user per 15 minutes and hands back the one in flight', async () => {
+    h.quota.mockResolvedValue({ success: false, expiresAt: new Date(Date.now() + 90_000) });
+    h.list.mockResolvedValue([
+      { exportJobId: 'ready-job', status: { state: 'ready' } },
+      { exportJobId: 'in-flight', status: { state: 'building' } },
+    ]);
+    const { req, res } = mocks('POST', { reason: 'Art. 15 request' });
+
+    await h.post!(req, res);
+
+    expect(h.quota).toHaveBeenCalledWith(`rate-limit:${USER_ID}:admin-data-export`, 1, 15 * 60 * 1000);
+    expect(res._getStatusCode()).toBe(429);
+    expect(res._getJSONData()).toMatchObject({ exportJobId: 'in-flight' });
+    expect(Number(res.getHeader('Retry-After'))).toBeGreaterThan(0);
+    expect(h.record).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
+  it('records a request it cannot queue as failed and gives the slot back', async () => {
+    h.send.mockRejectedValue(new Error('SQS down'));
+    const { req, res } = mocks('POST', { reason: 'Art. 15 request' });
+
+    await h.post!(req, res);
+
+    expect(res._getStatusCode()).toBe(500);
+    const { exportJobId } = res._getJSONData();
+    expect(h.release).toHaveBeenCalledWith(`rate-limit:${USER_ID}:admin-data-export`);
+    expect(h.record).toHaveBeenLastCalledWith(req, {
+      action: 'user.data_export.failed',
+      target: TARGET,
+      summary: 'could not queue a data subject export',
+      details: { exportJobId },
+    });
+  });
+
+  it('gives the slot back when the request cannot be audited', async () => {
+    h.record.mockRejectedValue(new Error('audit write failed'));
+    const { req, res } = mocks('POST', { reason: 'Art. 15 request' });
+
+    await expect(h.post!(req, res)).rejects.toThrow('audit write failed');
+    expect(h.release).toHaveBeenCalledWith(`rate-limit:${USER_ID}:admin-data-export`);
   });
 
   it('lists the recent exports uncached', async () => {

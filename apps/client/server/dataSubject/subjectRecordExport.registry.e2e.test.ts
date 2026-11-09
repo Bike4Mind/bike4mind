@@ -41,4 +41,26 @@ describe('SubjectRecordExport over the real registry', () => {
     expect(exporter.models.length).toBeGreaterThan(50);
     expect(failures).toEqual([]);
   });
+
+  it("withholds the other people and the abuse scoring on the subject's own User record", async () => {
+    const userId = new mongoose.Types.ObjectId();
+    const other = new mongoose.Types.ObjectId();
+    await mongoose.model('User').collection.insertOne({
+      _id: userId,
+      email: 'own-record@example.com',
+      password: 'hash',
+      referredByUserId: other,
+      throttle: { changedBy: other },
+      signupLanding: { notebookOwnerId: other },
+      signupGrantAssessment: { band: 'review' },
+    });
+    const exporter = new SubjectRecordExport({ userId: userId.toString(), email: 'own-record@example.com' });
+
+    const records = [];
+    for await (const record of exporter.records('User')) records.push(JSON.parse(JSON.stringify(record)));
+
+    expect(records).toEqual([
+      { _id: userId.toString(), email: 'own-record@example.com', throttle: {}, signupLanding: {} },
+    ]);
+  });
 });

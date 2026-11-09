@@ -31,7 +31,8 @@ export const useRequestAdminDataExport = (userId: string) => {
   return useMutation({
     mutationFn: async (reason: string) =>
       (await api.post<{ exportJobId: string }>(exportsPath(userId), { reason })).data,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: adminDataExportsQueryKey(userId) }),
+    // Settled, not success: a refused or unqueued request still changes the list (in flight, failed).
+    onSettled: () => queryClient.invalidateQueries({ queryKey: adminDataExportsQueryKey(userId) }),
     onError: error => toastFailure(error, 'Could not request the export.'),
   });
 };

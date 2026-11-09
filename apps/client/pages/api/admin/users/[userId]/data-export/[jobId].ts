@@ -3,7 +3,11 @@ import { ADMIN_DATA_EXPORT_DOWNLOADED_ACTION, ApiKeyScope } from '@bike4mind/com
 import { ACCOUNT_DATA_EXPORT_TTL_MS, adminDataExportKey } from '@bike4mind/server-utils/utils/accountDataExport';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { requireStepUp } from '@server/auth/stepUp';
-import { findDataExportTarget, readAdminDataExportBuiltAt } from '@server/dataSubject/adminDataExports';
+import {
+  denySelfDataExport,
+  findDataExportTarget,
+  readAdminDataExportBuiltAt,
+} from '@server/dataSubject/adminDataExports';
 import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
@@ -22,7 +26,9 @@ const handler = adminApi({
   await requireStepUp(req);
   const jobId = z.uuid().safeParse(req.query.jobId);
   if (!jobId.success) return res.status(400).json({ error: 'Invalid export id' });
-  const { user, auditTarget } = await findDataExportTarget(req.user, req.query.userId);
+  const target = await findDataExportTarget(req.user, req.query.userId);
+  await denySelfDataExport(req, target, ADMIN_DATA_EXPORT_DOWNLOADED_ACTION);
+  const { user, auditTarget } = target;
 
   const storage = getFilesStorage();
   const builtAt = await readAdminDataExportBuiltAt(storage, user.id, jobId.data);

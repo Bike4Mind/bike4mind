@@ -80,7 +80,7 @@ export class SubjectRecordExport {
     if (!holder) throw new Error(`"${model}" is not in the data holder registry`);
     const source =
       holder.kind === 'subject'
-        ? this.subjectRecords(model)
+        ? this.subjectRecords(model, holder.references)
         : holder.kind === 'holder'
           ? this.holderRecords(model, holder.references)
           : holder.kind === 'viaParent'
@@ -95,10 +95,13 @@ export class SubjectRecordExport {
     this.completed.add(model);
   }
 
-  private async *subjectRecords(model: string): AsyncGenerator<ExportedRecord> {
+  private async *subjectRecords(model: string, references: readonly UserReference[]): AsyncGenerator<ExportedRecord> {
     // The subject's own references sit on OTHER people's User documents (who invited whom), which
-    // are not this person's to take, so only their own document is exported.
-    for await (const document of this.query(model, { _id: this.subject.userId })) yield document;
+    // are not this person's to take, so only their own document is exported, less the people it
+    // names (their referrer, the admin who throttled them).
+    for await (const document of this.query(model, { _id: this.subject.userId })) {
+      yield this.withholdOthers(document, references);
+    }
   }
 
   private async *holderRecords(model: string, references: readonly UserReference[]): AsyncGenerator<ExportedRecord> {

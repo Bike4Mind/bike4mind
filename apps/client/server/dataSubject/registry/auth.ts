@@ -321,6 +321,8 @@ export const authHolders = {
       'pendingEmailToken',
       // A hash of the user id that only resolves provider safety notices; the export already has the id.
       'providerEndUserId',
+      // The stored abuse-scoring result, withheld for the same reason as `PendingOtcToken.codes.riskSignals`.
+      'signupGrantAssessment',
     ],
   },
   UserActivityCounter: {

@@ -87,6 +87,9 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // the action when they cannot be recorded (the request before it is queued, the download before it is signed).
   'user.data_export.requested': { category: 'account', severity: 'critical', write: 'strict' },
   'user.data_export.downloaded': { category: 'account', severity: 'critical', write: 'strict' },
+  // The request was recorded but could not be queued; the export list shows it as failed.
+  'user.data_export.failed': { category: 'account', severity: 'notice', write: 'bestEffort' },
+  'user.data_export.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
   'user.deletion.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
   // notice, not critical like user.deleted: the sweep carrying out a user's own scheduled deletion.
   'user.deletion.completed': { category: 'account', severity: 'notice', write: 'strict' },
