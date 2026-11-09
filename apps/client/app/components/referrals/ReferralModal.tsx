@@ -229,7 +229,7 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
             Enter the email of the person you want to refer to {t('app_name')}
           </Typography>
 
-          {referralSummary?.enabled && (
+          {referralSummary?.enabled && referralSummary.rewards && (
             <Box data-testid="referral-modal-rewards" sx={{ mb: 2, textAlign: 'center' }}>
               {[
                 {

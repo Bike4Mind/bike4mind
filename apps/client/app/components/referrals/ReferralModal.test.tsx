@@ -178,6 +178,18 @@ it('hides the inviter summary while the program is off', () => {
   queryClient.clear();
 });
 
+it('skips the reward lines when a cached summary predates the rewards field', () => {
+  useGetReferralSummary.mockReturnValue({
+    data: { enabled: true, invited: 0, active: 0, subscribed: 0, creditsEarned: 0, recentRewards: [] },
+  });
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+
+  expect(screen.getByTestId('referral-summary')).toBeInTheDocument();
+  expect(screen.queryByTestId('referral-modal-rewards')).toBeNull();
+  queryClient.clear();
+});
+
 it('only asks for the summary while the modal is open', () => {
   renderModal();
   expect(useGetReferralSummary).toHaveBeenCalledWith({ enabled: false });

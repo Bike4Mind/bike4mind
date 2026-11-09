@@ -233,6 +233,7 @@ export const registerUser = async (
         if (subscriber && subscriber.inviteCode === normalizedInviteCode) {
           // Use subscriber-specific allocations if available
           subscriberCredits = isReferralInvite ? 0 : subscriber.startingCredits || 0;
+          // Storage sits outside the signup grant, so a referral invite keeps the subscriber's storage override.
           subscriberStorage = subscriber.startingStorage || DEFAULT_STORAGE_LIMIT_MB;
           subscriberStorageFound = true;
           logger.info(
