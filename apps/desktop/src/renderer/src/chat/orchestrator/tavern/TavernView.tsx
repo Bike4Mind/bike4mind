@@ -1,15 +1,18 @@
 import Box from '@mui/joy/Box';
 import { useTheme } from '@mui/joy/styles';
 import { keyframes } from '@mui/system';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { SESSION_SETUP_LABEL } from '@shared/chat';
 import { activityLabel, toolKind, type ToolKind } from '../activity';
 import { prefersReducedMotion } from '../motion';
+import { describeAgentStates } from '../OrchestrateToggle';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
 import { AGENT_STATE_LABEL, spawnerName, type AgentState, type AgentView, type ParentView } from '../roster';
 import type { AgentPersona } from '@shared/agentPersona';
 import { INNKEEPER_GREETING, OrderSlip, ReplyBubble } from './InnkeeperDesk';
+import { useAgentAnnouncements } from './announcements';
 import { innkeeperAct, innkeeperBubble } from './innkeeper';
+import { OverflowStack, STATE_LAMP, type StackedAgent } from './OverflowStack';
 import {
   DOOR_POINT,
   INNKEEPER_POINT,
@@ -22,9 +25,11 @@ import {
   type NameLabel,
   type Placement,
   type SlotPoint,
+  type TavernZone,
 } from './scene';
 import { TavernLight, type TavernMood } from './TavernLight';
 import { INNKEEPER_ART, TAVERN_BACKDROP, characterSprite, type CharacterId, type InnkeeperPose } from './tavernArt';
+import { useScenePause } from './useScenePause';
 
 const BUBBLE_MAX = 28;
 const NAME_MAX = 26;
@@ -36,15 +41,24 @@ const SPRITE_HEIGHT = `${SPRITE_HEIGHT_PERCENT}%`;
 const NO_MOTION = '@media (prefers-reduced-motion: reduce)';
 // Pointing at, focusing or selecting an agent brings it forward and shows its label uncapped.
 const LIFTED = '&:hover, &:focus-visible, &[aria-pressed="true"]';
-// Above every seated sprite (zIndex is its y, at most 100) and the door overflow chip.
+// Above every seated sprite (zIndex is its y, at most 100) and the overflow stacks (101).
 const LIFTED_Z = 102;
 
 type CssVars = CSSProperties & Record<`--${string}`, string | number>;
 const HIDDEN_LABEL: NameLabel = { lane: 0, maxWidth: 0, shown: false };
 const NO_PARENT: ParentView = {};
+const VISUALLY_HIDDEN = {
+  position: 'absolute',
+  width: '1px',
+  height: '1px',
+  overflow: 'hidden',
+  clip: 'rect(0 0 0 0)',
+  whiteSpace: 'nowrap',
+} as const;
 // Not a session id shape, so it never collides with an agent in the label layout.
 const INNKEEPER_KEY = ' innkeeper';
 const INNKEEPER_NAME = 'Innkeeper';
+const STACK_KEY = ' stack-';
 /** Shortest visit (ms): the walk over plus a moment beside the agent, however quick the read was. */
 const VISIT_HOLD_MS = 2400;
 /** How far beside a visited agent the Innkeeper stands, toward the middle (percent of scene width). */
@@ -241,16 +255,6 @@ function ContactShadow({ hidden = false }: { hidden?: boolean }) {
     />
   );
 }
-
-/** The lamp on each nameplate: the agent's state at a glance, without the bubble. */
-const STATE_LAMP: Record<AgentState, string> = {
-  'needs-you': '#f5c542',
-  working: '#ff9d3c',
-  done: '#7ed07a',
-  failed: '#e5534b',
-  stopped: '#a89a88',
-  idle: '#a89a88',
-};
 
 // Wood: a lit top edge and a dark bottom one, notched corners in the pixel-art way (no radius).
 const PLAQUE_WOOD = 'linear-gradient(#6b4523, #4a2e14)';
@@ -600,33 +604,35 @@ export function TavernView({
     mounted.current = true;
   }, []);
 
-  const queue = agents.filter(agent => placements.get(agent.id)?.zone === 'door');
-  const selectedQueued = queue.findIndex(agent => agent.id === selectedId);
-  const firstQueued = (candidates: readonly AgentView[]) =>
-    candidates.reduce<AgentView | undefined>(
-      (first, agent) =>
-        !first || (placements.get(agent.id)?.slot ?? 0) < (placements.get(first.id)?.slot ?? 0) ? agent : first,
-      undefined
-    );
-  // The door shows one agent: the selected one so the selection stays visible, else one that needs the
-  // user so the bar overflowing never hides a call for help, else the longest-queued.
-  const atDoor =
-    selectedQueued >= 0
-      ? queue[selectedQueued]
-      : (firstQueued(queue.filter(agent => agent.state === 'needs-you')) ?? firstQueued(queue));
-  const waiting = queue.length - 1;
-  const hiddenNeedsYou = queue.filter(agent => agent !== atDoor && agent.state === 'needs-you').length;
-  const urgent = hiddenNeedsYou > 0;
-  const urgentNote = urgent ? `, ${hiddenNeedsYou} ${hiddenNeedsYou === 1 ? 'needs' : 'need'} you` : '';
   const visible = agents.flatMap(agent => {
     const placement = placements.get(agent.id);
-    return placement && (placement.zone !== 'door' || agent === atDoor) ? [{ agent, placement }] : [];
+    return placement?.kind === 'seat' ? [{ agent, placement }] : [];
   });
+  const shortName = useCallback((agent: AgentView) => personas.get(agent.id)?.label ?? agent.title, [personas]);
+  const stacks = new Map<TavernZone, { point: SlotPoint; stacked: StackedAgent[] }>();
+  for (const agent of agents) {
+    const placement = placements.get(agent.id);
+    if (placement?.kind !== 'overflow') continue;
+    const stack = stacks.get(placement.zone) ?? { point: placement.point, stacked: [] };
+    const persona = personas.get(agent.id);
+    stack.stacked[placement.index] = {
+      agent,
+      character: characters.get(agent.id) ?? 1,
+      name: persona ? `${persona.label}: ${agent.title}` : agent.title,
+    };
+    stacks.set(placement.zone, stack);
+  }
+  const paused = useScenePause();
+  const announcement = useAgentAnnouncements(agents, shortName);
+  const summaryId = useId();
+  const summary = describeAgentStates(agents.map(agent => agent.state));
   // Laid out for where everyone stands once seated; labels may brush in passing while walking.
   const labels = nameLabelLayout(
     new Map([
       ...visible.map(({ agent, placement }) => [agent.id, placement.point] as const),
       [INNKEEPER_KEY, INNKEEPER_POINT] as const,
+      // Stacks take no label, but name plates still keep clear of them.
+      ...[...stacks].map(([zone, stack]) => [`${STACK_KEY}${zone}`, stack.point] as const),
     ])
   );
   const [slip, setSlip] = useState<{ key: number; seed: string } | null>(null);
@@ -658,6 +664,7 @@ export function TavernView({
     <Box
       data-testid="orchestrator-tavern-frame"
       data-settled={settled || undefined}
+      data-paused={paused}
       sx={{
         position: 'relative',
         flex: 1,
@@ -671,8 +678,18 @@ export function TavernView({
         containerType: 'size',
         overflow: 'hidden',
         [NO_MOTION]: { transition: 'none' },
+        // Nobody is looking: hold every looping animation (embers, flicker, bob, drift) where it is.
+        '&[data-paused] *, &[data-paused] *::before, &[data-paused] *::after': {
+          animationPlayState: 'paused !important',
+        },
       }}
     >
+      <Box id={summaryId} data-testid="orchestrator-tavern-summary" sx={VISUALLY_HIDDEN}>
+        {summary}
+      </Box>
+      <Box data-testid="orchestrator-tavern-announcer" aria-live="polite" aria-atomic sx={VISUALLY_HIDDEN}>
+        {announcement}
+      </Box>
       {/* Quiet, the room spills past its frame: a soft, dim copy of it fills the bars around the picture. */}
       <Box
         aria-hidden
@@ -692,6 +709,9 @@ export function TavernView({
       />
       <Box
         data-testid="orchestrator-tavern"
+        role="group"
+        aria-label="Tavern"
+        aria-describedby={summaryId}
         sx={{
           position: 'relative',
           width: 'min(100cqw, 100cqh * 16 / 9)',
@@ -772,37 +792,16 @@ export function TavernView({
             onDismiss={() => setDismissedReply(reply.id)}
           />
         )}
-        {waiting > 0 && (
-          <Box
-            component="button"
-            type="button"
-            data-testid="orchestrator-tavern-door-overflow"
-            aria-label={`${waiting} more waiting at the door${urgentNote}; select next`}
-            onClick={() => {
-              const next = selectedQueued >= 0 ? queue[(selectedQueued + 1) % queue.length] : atDoor;
-              if (next) onSelect(next.id);
-            }}
-            style={{ left: `${DOOR_POINT.x}%`, top: `${DOOR_POINT.y}%` }}
-            sx={{
-              position: 'absolute',
-              zIndex: 101,
-              transform: 'translate(-50%, 20%)',
-              px: '0.5em',
-              py: 0,
-              border: 0,
-              borderRadius: '999px',
-              cursor: 'pointer',
-              bgcolor: urgent ? '#f5c542' : 'rgba(20, 12, 6, 0.78)',
-              color: urgent ? '#2a1d10' : '#fbe9c8',
-              fontWeight: 700,
-              fontSize: 'clamp(10px, 2.2cqh, 14px)',
-              lineHeight: 1.5,
-              '&:focus-visible': { outline: '2px solid #fbe9c8', outlineOffset: 2 },
-            }}
-          >
-            {`${urgent ? '!' : ''}+${waiting}`}
-          </Box>
-        )}
+        {[...stacks].map(([zone, stack]) => (
+          <OverflowStack
+            key={zone}
+            zone={zone}
+            point={stack.point}
+            stacked={stack.stacked}
+            selectedId={selectedId}
+            onSelect={onSelect}
+          />
+        ))}
         {sceneOverlay}
       </Box>
     </Box>
