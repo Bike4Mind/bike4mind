@@ -80,7 +80,7 @@ describe('grantPuzzleReward', () => {
   ] as const)('pays tier %i (hard: %s) %i credits under a stable per-rung key', async (tier, hard, amount) => {
     const result = await grantPuzzleReward({ ...INPUT, tier, hard });
 
-    expect(result).toEqual({ ok: true, granted: true, credits: amount, balance: 1000, firstSolveCredits: 500 });
+    expect(result).toEqual({ ok: true, granted: true, credits: amount, balance: 1000, firstSolveCredits: 1000 });
     expect(rungWrite()).toEqual({
       ownerId: USER_ID,
       ownerType: 'User',
@@ -173,11 +173,11 @@ describe('grantPuzzleReward', () => {
         ownerId: USER_ID,
         ownerType: 'User',
         type: 'generic_add',
-        credits: 500,
+        credits: 1000,
         reason: BEDROCKNEWS_FIRST_SOLVE_REASON,
         transactionId: FIRST_SOLVE_KEY,
       });
-      expect(result).toMatchObject({ granted: true, credits: 40, firstSolveCredits: 500 });
+      expect(result).toMatchObject({ granted: true, credits: 40, firstSolveCredits: 1000 });
     });
 
     // Bonus first: a rung write that fails after it leaves the rung unpaid, so the retry pays the rung.
@@ -282,10 +282,10 @@ describe('grantPuzzleReward', () => {
       expect(match.createdAt.$gte.getTime()).toBeLessThanOrEqual(Date.now() - DAY_MS);
     });
 
-    // The check reserves room for the 500 first-solve bonus on top of the 40 rung while it is unpaid.
+    // The check reserves room for the 1000 first-solve bonus on top of the 40 rung while it is unpaid.
     it.each([
-      [199_460, true],
-      [199_461, false],
+      [198_960, true],
+      [198_961, false],
     ])('with %i paid in the window a 40 grant is allowed: %s', async (last24h, allowed) => {
       givenSpend({ last24h });
 

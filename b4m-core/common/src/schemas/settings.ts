@@ -4199,7 +4199,7 @@ export const settingsMap = {
   BedrockNewsFirstSolveCredits: makeNumberSetting({
     key: 'BedrockNewsFirstSolveCredits',
     name: 'BedrockNews Headword: First Solve Bonus',
-    defaultValue: 500,
+    defaultValue: 1000,
     int: true,
     min: 0,
     max: 100_000_000,

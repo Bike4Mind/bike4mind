@@ -1500,7 +1500,7 @@ describe('BedrockNews Headword reward settings', () => {
     ['BedrockNewsPuzzleCredits6', 60],
     ['BedrockNewsPuzzleCredits7', 100],
     ['BedrockNewsPuzzleHardMultiplier', 1.5],
-    ['BedrockNewsFirstSolveCredits', 500],
+    ['BedrockNewsFirstSolveCredits', 1000],
     ['BedrockNewsPuzzleDailyCap', 300],
     ['BedrockNewsRewardsDailyBudget', 200000],
   ] as const)('%s defaults to %s', (key, expected) => {
