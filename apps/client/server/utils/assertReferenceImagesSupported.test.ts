@@ -58,6 +58,22 @@ describe('assertReferenceImagesSupported (generate, FLUX 3)', () => {
     );
   });
 
+  it('accepts a primary plus 7 FLUX.2 references, the cap boundary', () => {
+    expect(() => assertReferenceImagesSupported(ImageModels.FLUX_2_PRO, ids(7), 'generate', ['primary'])).not.toThrow();
+  });
+
+  it('counts the primary toward the Klein cap of 4', () => {
+    const klein = ImageModels.FLUX_2_KLEIN_4B;
+    expect(() => assertReferenceImagesSupported(klein, ids(3), 'generate', ['primary'])).not.toThrow();
+    expect(() => assertReferenceImagesSupported(klein, ids(4), 'generate', ['primary'])).toThrow('at most 4 images');
+  });
+
+  it('names the shared cap in the error when a primary is counted', () => {
+    expect(() => assertReferenceImagesSupported(ImageModels.FLUX_3_IMAGE, ids(10), 'generate', ['primary'])).toThrow(
+      'fabFileIds plus referenceImageFabFileIds accept at most 10 images'
+    );
+  });
+
   it('does not count the primary for gpt-image, which has its own slot', () => {
     expect(() =>
       assertReferenceImagesSupported(ImageModels.GPT_IMAGE_1, ids(15), 'generate', ['primary'])

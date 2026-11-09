@@ -58,12 +58,13 @@ export const generateImageContract = defineEndpoint({
     '`referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input ' +
     'image taken from `fabFileIds`. GPT-image accepts 15 references; FLUX.2 accepts 8 total input images ' +
     '(4 for Klein) and FLUX 3 accepts 10. For FLUX.2 and FLUX 3 the distinct ids across `fabFileIds` and ' +
-    '`referenceImageFabFileIds` are counted together, and a request over the limit is rejected with a 400. ' +
-    'A primary picked from session history (none attached) is counted only when the render runs. ' +
+    '`referenceImageFabFileIds` are counted together when `referenceImageFabFileIds` is set, and a request over the limit is rejected with a 400. ' +
+    'A request over the limit with only `fabFileIds`, or with a primary picked from session history, is ' +
+    'checked when the render runs and fails on the polled quest. ' +
     'Unsupported models are also rejected with a 400. FLUX 3 receives its inputs as `ref_image_1` to ' +
     '`ref_image_N`, in this order: the first `fabFileIds` image (so `ref_image_1` when one is attached), ' +
-    'the remaining `fabFileIds` images, then `referenceImageFabFileIds` as listed. A repeated id keeps only ' +
-    'its first position, which shifts the later tags. Refer to them in the prompt, e.g. ' +
+    'the remaining `fabFileIds` images, then `referenceImageFabFileIds` as listed. A repeated id, or an image ' +
+    'with identical content, keeps only its first position, which shifts the later tags. Refer to them in the prompt, e.g. ' +
     '"the jacket from ref_image_2". Which `size` values a model accepts, and whether it honours ' +
     '`background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block ' +
     'of `GET /api/v1/models`. Credits are checked when the render runs, so ' +

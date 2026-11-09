@@ -368,15 +368,34 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
       );
     });
 
+    it('accepts a primary plus 9 FLUX 3 references, the cap boundary (200)', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({
+        body: {
+          prompt: 'a red bicycle',
+          model: 'flux-3-image',
+          fabFileIds: ['primary'],
+          referenceImageFabFileIds: refIds(9),
+        },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockInvoke).toHaveBeenCalled();
+    });
+
     it.each([
-      ['an 11th FLUX 3 reference', { referenceImageFabFileIds: refIds(11) }],
-      ['a primary plus 10 FLUX 3 references', { fabFileIds: ['primary'], referenceImageFabFileIds: refIds(10) }],
-    ])('rejects %s before enqueuing (400)', async (_label, extra) => {
+      ['an 11th FLUX 3 reference', { referenceImageFabFileIds: refIds(11) }, /at most 10 images/],
+      [
+        'a primary plus 10 FLUX 3 references',
+        { fabFileIds: ['primary'], referenceImageFabFileIds: refIds(10) },
+        /fabFileIds plus referenceImageFabFileIds accept at most 10 images/,
+      ],
+    ])('rejects %s before enqueuing (400)', async (_label, extra, message) => {
       validateWithScopes([ApiKeyScope.AI_GENERATE]);
       const { req, res } = fire({ body: { prompt: 'a red bicycle', model: 'flux-3-image', ...extra } });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(400);
-      expect(res._getJSONData().error).toMatch(/at most 10 images/);
+      expect(res._getJSONData().error).toMatch(message);
       expect(mockGetOrCreateSession).not.toHaveBeenCalled();
       expect(mockInvoke).not.toHaveBeenCalled();
     });
