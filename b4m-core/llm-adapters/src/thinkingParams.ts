@@ -37,11 +37,21 @@ export type AnthropicEffort = (typeof ANTHROPIC_EFFORT_LEVELS)[number];
 
 /**
  * The effort a Claude turn runs at when the caller states none: 'high' normally, 'medium'
- * for QuestMaster. These are the values the two Anthropic backends hardcoded before effort
- * was wired, kept as the default so an unstated turn is priced exactly as it was.
+ * for QuestMaster and for the models in MEDIUM_DEFAULT_EFFORT_MODELS.
  */
 export const DEFAULT_ANTHROPIC_EFFORT: AnthropicEffort = 'high';
 export const DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT: AnthropicEffort = 'medium';
+
+/**
+ * Models whose unstated effort is 'medium' rather than DEFAULT_ANTHROPIC_EFFORT. Exact ids,
+ * direct and Bedrock, so a new model keeps 'high' until it is added here.
+ */
+export const MEDIUM_DEFAULT_EFFORT_MODELS: ReadonlySet<string> = new Set([
+  ChatModels.CLAUDE_5_5_OPUS,
+  ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+  ChatModels.CLAUDE_5_5_HAIKU,
+  ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
+]);
 
 /**
  * B4M's six-level `ReasoningEffort` onto Anthropic's five.
@@ -54,7 +64,7 @@ export const DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT: AnthropicEffort = 'medium';
  *
  * 'none' and 'minimal' are OpenAI levels with no Anthropic counterpart, and they never
  * reach the wire. They resolve to 'low' rather than to omission because omitting the
- * parameter leaves the caller on DEFAULT_ANTHROPIC_EFFORT ('high'), so dropping a
+ * parameter leaves the caller on the model's default ('high' or 'medium'), so dropping a
  * least-effort request would bill MORE reasoning than was asked for, not less. 'low' is
  * the least Anthropic can express.
  *
@@ -96,10 +106,10 @@ export function supportsAnthropicEffort(model: string, modelInfo: ModelInfo | un
 /**
  * The effort for one Claude turn. Precedence: the Anthropic-native option, then the
  * cross-provider `reasoningEffort` mapped into Anthropic's vocabulary, then the default
- * for the turn type. A caller stating nothing lands on the default, which is what the
- * backends sent before this was wired.
+ * for the turn type and model.
  */
 export function resolveAnthropicEffort(input: {
+  model?: string;
   questMaster?: boolean;
   anthropicEffort?: AnthropicEffort;
   reasoningEffort?: ReasoningEffort;
@@ -107,7 +117,11 @@ export function resolveAnthropicEffort(input: {
   return (
     input.anthropicEffort ??
     toAnthropicEffort(input.reasoningEffort) ??
-    (input.questMaster === true ? DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT : DEFAULT_ANTHROPIC_EFFORT)
+    (input.questMaster === true
+      ? DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT
+      : input.model !== undefined && MEDIUM_DEFAULT_EFFORT_MODELS.has(input.model)
+        ? 'medium'
+        : DEFAULT_ANTHROPIC_EFFORT)
   );
 }
 

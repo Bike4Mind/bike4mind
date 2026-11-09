@@ -744,6 +744,45 @@ describe('resolveAnthropicEffort', () => {
       expect(resolveAnthropicEffort({ questMaster: true, reasoningEffort: 'xhigh' })).toBe('xhigh');
     });
   });
+
+  describe('the unstated default is per model', () => {
+    const MEDIUM = [
+      ChatModels.CLAUDE_5_5_OPUS,
+      ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+      ChatModels.CLAUDE_5_5_HAIKU,
+      ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
+    ];
+    const HIGH = [
+      ChatModels.CLAUDE_5_OPUS,
+      ChatModels.CLAUDE_5_OPUS_BEDROCK,
+      ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
+      ChatModels.CLAUDE_4_7_OPUS,
+      ChatModels.CLAUDE_4_7_OPUS_BEDROCK,
+    ];
+
+    it.each(MEDIUM)('is medium for %s', model => {
+      expect(resolveAnthropicEffort({ model })).toBe('medium');
+    });
+
+    it.each(HIGH)('is high for %s', model => {
+      expect(resolveAnthropicEffort({ model })).toBe('high');
+    });
+
+    it('is high for an unknown id, including a dated variant of a medium model', () => {
+      expect(resolveAnthropicEffort({ model: 'claude-opus-5-5-20270101' })).toBe('high');
+    });
+
+    it.each(MEDIUM)('lets a stated effort override the default on %s', model => {
+      expect(resolveAnthropicEffort({ model, anthropicEffort: 'high' })).toBe('high');
+      expect(resolveAnthropicEffort({ model, anthropicEffort: 'xhigh' })).toBe('xhigh');
+      expect(resolveAnthropicEffort({ model, reasoningEffort: 'low' })).toBe('low');
+      expect(resolveAnthropicEffort({ model, reasoningEffort: 'high' })).toBe('high');
+    });
+
+    it('keeps QuestMaster at medium on a high-default model', () => {
+      expect(resolveAnthropicEffort({ model: ChatModels.CLAUDE_5_OPUS, questMaster: true })).toBe('medium');
+    });
+  });
 });
 
 describe('planReasoningEffort', () => {
