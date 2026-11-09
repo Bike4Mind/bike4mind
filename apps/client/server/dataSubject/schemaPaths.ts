@@ -2,13 +2,16 @@ import type { Schema, SchemaType } from 'mongoose';
 
 type SchemaTypeWithSubschema = SchemaType & {
   schema?: Schema;
-  options: { ref?: unknown };
+  options: { ref?: unknown; select?: unknown };
   /** The element type of a primitive array (`[{ type: String, ref: 'User' }]`). */
   caster?: { options?: { ref?: unknown } };
 };
 
-/** `instance` is the Mongoose type name (`String`, `Boolean`, `Array`, `Mixed`, ...). */
-export type SchemaLeaf = { path: string; refsUser: boolean; instance: string };
+/**
+ * `instance` is the Mongoose type name (`String`, `Boolean`, `Array`, `Mixed`, ...). `hiddenByDefault`
+ * is `select: false`: the schema author kept it out of ordinary reads, usually because it is a secret.
+ */
+export type SchemaLeaf = { path: string; refsUser: boolean; instance: string; hiddenByDefault: boolean };
 
 /**
  * Every leaf path of a schema, descending into subdocuments and arrays of subdocuments, and whether
@@ -26,7 +29,12 @@ export function listSchemaLeaves(schema: Schema, prefix = ''): SchemaLeaf[] {
       return;
     }
     const ref = schemaType.options.ref ?? schemaType.caster?.options?.ref;
-    leaves.push({ path: fullPath, refsUser: ref === 'User', instance: schemaType.instance });
+    leaves.push({
+      path: fullPath,
+      refsUser: ref === 'User',
+      instance: schemaType.instance,
+      hiddenByDefault: schemaType.options.select === false,
+    });
   });
   return leaves;
 }

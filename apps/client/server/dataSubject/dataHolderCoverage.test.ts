@@ -19,7 +19,8 @@ const registeredModels = mongoose.modelNames().sort();
 const classifiedModels = Object.keys(DATA_HOLDER_REGISTRY).sort();
 
 function referencePaths(reference: UserReference): string[] {
-  return [reference.path, ...Object.keys(reference.where ?? {}), ...alsoRedactOf(reference)];
+  const scopePaths = reference.scope === 'personal' ? ['organizationId'] : [];
+  return [reference.path, ...Object.keys(reference.where ?? {}), ...scopePaths, ...alsoRedactOf(reference)];
 }
 
 function alsoRedactOf(reference: UserReference): readonly string[] {
@@ -181,6 +182,21 @@ describe('data holder registry', () => {
     }
   );
 
+  it.each(classifiedModels.filter(name => registeredModels.includes(name) && isExported(DATA_HOLDER_REGISTRY[name])))(
+    '%s: every select: false path is classified',
+    modelName => {
+      // An export reads with every field selected, so a field hidden from ordinary reads must be a
+      // deliberate choice: a secret, a reference, or a path known to be harmless.
+      const holder = DATA_HOLDER_REGISTRY[modelName];
+      const secrets = 'secretPaths' in holder ? (holder.secretPaths ?? []) : [];
+      const acknowledged = new Set([...acknowledgedPathsOf(holder), ...secrets]);
+      const unlisted = listSchemaLeaves(mongoose.model(modelName).schema)
+        .filter(leaf => leaf.hiddenByDefault && !acknowledged.has(leaf.path))
+        .map(leaf => leaf.path);
+      expect(unlisted, 'Add each path to secretPaths, or to unrelatedPaths if it is safe to export').toEqual([]);
+    }
+  );
+
   it('User: every field that references another user is a subject reference', () => {
     // The person's own fields are covered by deleting the User document; a field naming another
     // user is the person recorded on someone else's account, which outlives this erasure.
@@ -213,7 +229,6 @@ describe('data holder registry', () => {
   )('%s: where %s = %s is a value the schema allows', (modelName, key, value) => {
     const enumValues = (mongoose.model(modelName).schema.path(key) as { enumValues?: unknown[] } | undefined)
       ?.enumValues;
-    if (value === null) return;
     if (!enumValues?.length) {
       expect(WHERE_WITHOUT_ENUM, `${modelName}.${key} has no enum to check ${value} against`).toContain(
         `${modelName}.${key}`
@@ -221,6 +236,21 @@ describe('data holder registry', () => {
       return;
     }
     expect(enumValues).toContain(value);
+  });
+
+  it.each(
+    classifiedModels.flatMap(name =>
+      referencesOf(DATA_HOLDER_REGISTRY[name])
+        .filter(reference => reference.scope === 'personal')
+        .map(reference => [name, reference.path, reference.action] as const)
+    )
+  )('%s: personal-scoped %s %s has an unscoped anonymize for organization rows', (modelName, referencePath) => {
+    // Without the fallback, the person's id would survive on every row their organization owns.
+    const fallback = referencesOf(DATA_HOLDER_REGISTRY[modelName]).find(
+      reference =>
+        reference.path === referencePath && reference.action === 'anonymize' && !reference.scope && !reference.where
+    );
+    expect(fallback).toBeDefined();
   });
 
   it.each(

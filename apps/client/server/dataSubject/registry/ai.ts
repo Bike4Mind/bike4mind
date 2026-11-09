@@ -40,7 +40,7 @@ export const aiHolders = {
     kind: 'holder',
     references: [
       // A personal lake goes; an organization's lake stays with its creator cleared.
-      { path: 'createdByUserId', matchBy: 'userId', action: 'deleteDocument', where: { organizationId: null } },
+      { path: 'createdByUserId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
       { path: 'createdByUserId', matchBy: 'userId', action: 'anonymize' },
       { path: 'lastUpdatedByUserId', matchBy: 'userId', action: 'anonymize' },
     ],
@@ -148,6 +148,7 @@ export const aiHolders = {
       // On an org-owned job the requester is attribution on someone else's document.
       { path: 'requestedBy', matchBy: 'userId', action: 'anonymize' },
     ],
+    secretPaths: ['rawProviderError'],
   },
   LakeAccessEvent: {
     kind: 'holder',
@@ -318,10 +319,12 @@ export const aiHolders = {
   // may have imported it: their copies are independent Skill documents.
   SkillListing: {
     kind: 'holder',
-    references: [{ path: 'authorUserId', matchBy: 'userId', action: 'deleteDocument' }],
+    references: [
+      // A personal listing goes (`purgePersonalSkills`); an organization's stays with its author cleared.
+      { path: 'authorUserId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'authorUserId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['authorName'] },
+    ],
     secretPaths: ['shareToken'],
-    // The author's own display name, deleted with the listing.
-    unrelatedPaths: ['authorName'],
   },
   SkillListingImport: {
     kind: 'holder',

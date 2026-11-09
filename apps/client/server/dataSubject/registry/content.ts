@@ -25,19 +25,23 @@ export const contentHolders = {
   Artifact: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      // As with FabFile: a personal artifact goes, an organization's stays with its creator cleared.
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
       { path: 'permissions.canRead', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'permissions.canWrite', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'permissions.canDelete', matchBy: 'userId', action: 'pullFromArray' },
     ],
   },
-  ArtifactContent: { kind: 'viaParent', parent: 'Artifact', foreignKey: 'artifactId' },
+  // Artifacts are keyed by their own string `id`, not `_id` (see `purgeArtifacts`).
+  ArtifactContent: { kind: 'viaParent', parent: 'Artifact', foreignKey: 'artifactId', parentKey: 'id' },
   // Versions follow the artifact so no content outlives it; a collaborator's version of someone
   // else's artifact survives with its author anonymized.
   ArtifactVersion: {
     kind: 'viaParent',
     parent: 'Artifact',
     foreignKey: 'artifactId',
+    parentKey: 'id',
     attribution: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
   },
   BriefcasePrompt: {
@@ -54,7 +58,7 @@ export const contentHolders = {
     references: [
       // A personal upload goes; a file uploaded into an organization's lake is the org's and stays,
       // with the uploader cleared (the anonymize below; precedence is in types.ts).
-      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', where: { organizationId: null } },
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
       { path: 'userId', matchBy: 'userId', action: 'anonymize' },
       { path: 'users.userId', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'supersededInLakes.decidedByUserId', matchBy: 'userId', action: 'anonymize' },
@@ -97,6 +101,7 @@ export const contentHolders = {
   ImportHistoryJob: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    secretPaths: ['errorStack'],
   },
   Memento: {
     kind: 'holder',

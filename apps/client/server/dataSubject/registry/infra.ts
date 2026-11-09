@@ -11,6 +11,17 @@ export const infraHolders = {
     foreignKey: 'detectionId',
     attribution: [{ path: 'requestedBy', matchBy: 'userId', action: 'anonymize' }],
   },
+  // An admin's request for a second admin's sign-off on a privileged action, kept with the audit trail.
+  // `summary` and `paramsJson` (which may name the target account) are free text and not scanned.
+  AdminApproval: {
+    kind: 'holder',
+    references: [
+      { path: 'requestedBy.id', matchBy: 'userId', action: 'retain', reason: AUDIT_LOG_REASON },
+      { path: 'requestedBy.selfIds', matchBy: 'userId', action: 'retain', reason: AUDIT_LOG_REASON },
+      { path: 'requestedBy.email', matchBy: 'email', action: 'retain', reason: AUDIT_LOG_REASON },
+      { path: 'decidedBy.id', matchBy: 'userId', action: 'retain', reason: AUDIT_LOG_REASON },
+    ],
+  },
   AdminAuditAlertState: {
     kind: 'holder',
     references: [{ path: 'openBursts.actorUserId', matchBy: 'userId', action: 'pullFromArray' }],
@@ -37,6 +48,11 @@ export const infraHolders = {
   AdminAuditReview: {
     kind: 'holder',
     references: [{ path: 'reviewer.userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['reviewer.name'] }],
+  },
+  // Expires on its own (TTL index) once the admin's gated action has written its audit rows.
+  AdminGateReservation: {
+    kind: 'holder',
+    references: [{ path: 'actorUserId', matchBy: 'userId', action: 'deleteDocument' }],
   },
   AdminSavedView: {
     kind: 'holder',
@@ -275,7 +291,7 @@ export const infraHolders = {
       { path: 'adminUserIds', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'userDetails.id', matchBy: 'userId', action: 'pullFromArray' },
     ],
-    unrelatedPaths: ['userDetails.email', 'maxCreditsPerMember'],
+    unrelatedPaths: ['userDetails.email', 'maxCreditsPerMember', 'signupGrantUnlockCount', 'signupInviteBonusCount'],
   },
   OverwatchProduct: { kind: 'noUserData', note: 'Tracked product catalogue entry.' },
   // The event `userId` is an HMAC of the Bike4Mind user id under a server-side salt (`pseudonymizeUserId`), not the id.

@@ -89,6 +89,12 @@ export const authHolders = {
   DisposableDomain: { kind: 'noUserData', note: 'Catalogue of throwaway email domains.' },
   DisposableDomainSource: { kind: 'noUserData', note: 'Sync status of the disposable-domain feeds.' },
   DomainIntelligence: { kind: 'noUserData', note: 'Cached DNS/MX lookups keyed by email domain, not by person.' },
+  ErasureRecord: {
+    kind: 'pseudonymous',
+    note: 'The erasure ledger: a keyed hash of an erased account id, kept so a restore from backup can re-apply the erasure.',
+    // Who started the erasure ('admin', 'self', 'backfill'), not an id.
+    unrelatedPaths: ['initiatedBy'],
+  },
   IdentityProvider: {
     kind: 'holder',
     references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
@@ -130,7 +136,8 @@ export const authHolders = {
   PendingOtcToken: {
     kind: 'holder',
     references: [{ path: 'email', matchBy: 'email', action: 'deleteDocument' }],
-    secretPaths: ['nonce', 'codes.nonce', 'codes.otcHash', 'debugCode'],
+    // `codes.riskSignals` is abuse scoring; exporting it would show an attacker which signals tripped.
+    secretPaths: ['nonce', 'codes.nonce', 'codes.otcHash', 'codes.riskSignals', 'debugCode'],
   },
   PushToken: {
     kind: 'holder',
@@ -149,7 +156,8 @@ export const authHolders = {
     ],
     // Authors of cited works and attachments, not platform users.
     unrelatedPaths: ['promptMeta.citables.author', 'attachmentList.attachments.author'],
-    secretPaths: ['callback.url'],
+    // `signupActivity` is a retired field: never exported, though its `userId` is still anonymized.
+    secretPaths: ['callback.url', 'signupActivity'],
   },
   RegistrationInvite: {
     kind: 'holder',
@@ -237,6 +245,11 @@ export const authHolders = {
       { path: 'adminId', matchBy: 'userId', action: 'anonymize' },
     ],
     secretPaths: ['sid'],
+    unmatchedPaths: {
+      reason: "The admin's free-text reason for the access; it may name the person but is not matched to them.",
+      escalationReason:
+        "The admin's free-text reason for escalating; it may name the person but is not matched to them.",
+    },
   },
   TrustedDevice: {
     kind: 'holder',
@@ -248,6 +261,8 @@ export const authHolders = {
     references: [
       { path: 'referredByUserId', matchBy: 'userId', action: 'anonymize' },
       { path: 'throttle.changedBy', matchBy: 'userId', action: 'anonymize' },
+      // The notebook owner whose shared page this account signed up from.
+      { path: 'signupLanding.notebookOwnerId', matchBy: 'userId', action: 'anonymize' },
     ],
     // Declared `ref: 'User'`, but `recordReferrals` stores the ids of the invites this user created.
     unrelatedPaths: ['regInvites'],

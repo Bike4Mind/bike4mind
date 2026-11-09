@@ -92,7 +92,7 @@ describe('listSchemaLeaves', () => {
 });
 
 describe('looksLikeSecret', () => {
-  const leaf = (path: string, instance = 'String') => ({ path, refsUser: false, instance });
+  const leaf = (path: string, instance = 'String') => ({ path, refsUser: false, instance, hiddenByDefault: false });
 
   it.each([
     'refreshTokenHash',

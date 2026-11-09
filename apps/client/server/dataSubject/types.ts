@@ -42,7 +42,9 @@ export type ErasureAction =
   /**
    * The document belongs to someone else (an org, another user, the platform) but records this
    * person in it: erasure clears the reference and any listed sibling fields that repeat their
-   * identity (a cached display name, email, IP), and keeps the document.
+   * identity (a cached display name, email, IP), and keeps the document. Many targets are
+   * `required` (`FabFile.userId`, `Artifact.userId`), so the executor overwrites them with a fixed
+   * placeholder rather than unsetting them, or the document would fail validation on its next save.
    */
   | { action: 'anonymize'; alsoRedact?: readonly string[] }
   /**
@@ -64,12 +66,16 @@ export type UserReference = ErasureAction & {
    * lowercase on write and keeps no previous addresses, so a later change of address is not matched.
    */
   matchBy: 'userId' | 'email';
+  /** Extra equality filter, e.g. `{ ownerType: 'User' }` when `ownerId` may also hold an organization id. */
+  where?: Readonly<Record<string, string>>;
   /**
-   * Extra equality filter, e.g. `{ ownerType: 'User' }` when `ownerId` may also hold an
-   * organization id. `null` matches a field that is absent or null, which is how an uploader's
-   * personal file (`{ organizationId: null }`) is told apart from one their organization owns.
+   * `personal` limits the reference to the person's own content, not their organization's. It is not
+   * a literal filter: personal rows store `organizationId` as null, absent or `''`, or name one of
+   * the person's personal-workspace organizations, so the executor must reuse the account purge's
+   * predicate (`personalFilter` in `server/users/purgeAccountContent.ts`; for `FabFile` also
+   * `isOrganizationFile` in `server/users/purgeAccountFiles.ts`, which keeps legacy org uploads).
    */
-  where?: Readonly<Record<string, string | null>>;
+  scope?: 'personal';
 };
 
 export type AttributionReference = UserReference & { action: 'anonymize' };
@@ -86,7 +92,7 @@ export type DataHolder =
   | {
       kind: 'holder';
       references: readonly [UserReference, ...UserReference[]];
-      /** Never exported: credentials, token hashes, encrypted secrets, signed URLs. */
+      /** Never exported: credentials, token hashes, encrypted secrets, signed URLs, server-only diagnostics. */
       secretPaths?: readonly string[];
       /** Exported functions the erasure executor must call before walking this holder's references. */
       beforeErasure?: readonly string[];
