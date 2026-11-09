@@ -1,5 +1,11 @@
 # @bike4mind/resource
 
+## 3.2.0
+
+### Minor Changes
+
+- [#6403](https://github.com/Bike4Mind/bike4mind/pull/6403) [`2e5e01d`](https://github.com/Bike4Mind/bike4mind/commit/2e5e01db57d70a42054cc03463c00c63b222de05) Thanks [@onoya](https://github.com/onoya)! - APNs push delivery pipeline
+
 ## 3.1.1
 
 ### Patch Changes

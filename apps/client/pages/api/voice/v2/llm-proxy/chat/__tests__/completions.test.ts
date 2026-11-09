@@ -134,6 +134,7 @@ vi.mock('@bike4mind/voice', () => ({
   writeStaticCompletion: (...args: unknown[]) => mockWriteStaticCompletion(...args),
 }));
 
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError } from '@bike4mind/common';
 import handler from '../completions';
 import { VOICE_SESSION_TOKEN_TTL_SECONDS } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 
@@ -599,5 +600,23 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - pipeline failure loggi
       }),
       '[voice-v2/llm-proxy] full pipeline failed'
     );
+  });
+
+  it('logs a free-tier daily cap refusal at warn, not error', async () => {
+    mockInvoke.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+    const req = makeReq();
+
+    await handler(req as never, makeRes() as never);
+
+    expect(req.logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ errorName: 'TooManyRequestsError' }),
+      '[voice-v2/llm-proxy] full pipeline failed'
+    );
+    expect(req.logger.error).not.toHaveBeenCalled();
   });
 });

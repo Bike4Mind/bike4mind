@@ -35,6 +35,7 @@ import { readPanelFlag, spawnedSessions, writePanelFlag } from './backgroundTask
 import { BrowserPane } from './BrowserPane';
 import { SimulatorPane } from './SimulatorPane';
 import { ModelPane } from './ModelPane';
+import { useModelBackgroundBuilds } from './model3d/useModelBackgroundBuilds';
 import { useModelEngine } from './model3d/useModelEngine';
 import { useSimulatorView } from './useSimulatorView';
 import { readBrowserPaneOpen, writeBrowserPaneOpen } from './agentBrowser';
@@ -363,8 +364,11 @@ export function ChatShell({
   const simulatorView = useSimulatorView();
   const [simulatorOpen, setSimulatorOpen] = useState(false);
   const darkMode = useTheme().palette.mode === 'dark';
-  // Mounted here rather than in the pane so builds, GLB writes and screenshots keep working while it is closed.
-  const modelEngine = useModelEngine(darkMode);
+  // Mounted here rather than in the pane so builds, GLB writes and screenshots keep working while it
+  // is closed. Each conversation has its own model: the pane follows this one, and the background
+  // builds keep every other conversation's model tools working.
+  const modelEngine = useModelEngine(darkMode, activeId);
+  useModelBackgroundBuilds(activeId, darkMode);
   const [modelOpen, setModelOpen] = useState(false);
   // Per conversation rather than one flag: see terminalPanelState.ts.
   const [terminalSessions, setTerminalSessions] = useState(readTerminalOpenSessions);
@@ -441,11 +445,16 @@ export function ChatShell({
       return !current;
     });
   }, []);
-  // The agent opening a model (model_view) is the user asking to see it, so a new path opens the pane.
+  // The agent opening a model (model_view) is the user asking to see it, so a new path opens the pane;
+  // a conversation opens with its pane showing its own model, or closed when it has none.
   const modelPath = modelEngine.state.path;
+  const modelPaneFor = useRef(activeId);
   useEffect(() => {
-    if (modelPath) setModelOpen(true);
-  }, [modelPath]);
+    if (modelPaneFor.current !== activeId) {
+      modelPaneFor.current = activeId;
+      setModelOpen(modelPath !== null);
+    } else if (modelPath) setModelOpen(true);
+  }, [activeId, modelPath]);
   const toggleModel = useCallback(() => setModelOpen(current => !current), []);
   const toggleBrowser = useCallback(() => {
     setBrowserOpen(current => {

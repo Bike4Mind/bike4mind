@@ -1,5 +1,11 @@
 # @bike4mind/infra
 
+## 6.1.1
+
+### Patch Changes
+
+- [#6627](https://github.com/Bike4Mind/bike4mind/pull/6627) [`9830975`](https://github.com/Bike4Mind/bike4mind/commit/9830975903ef41719f4f02e0dfb3711fe9075e7f) Thanks [@aflordelis](https://github.com/aflordelis)! - move the remaining lower shared layer into the package
+
 ## 6.1.0
 
 ### Minor Changes

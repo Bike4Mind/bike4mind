@@ -1,5 +1,21 @@
 # @bike4mind/cli
 
+## 4.4.0
+
+### Minor Changes
+
+- [#6814](https://github.com/Bike4Mind/bike4mind/pull/6814) [`d42d87d`](https://github.com/Bike4Mind/bike4mind/commit/d42d87df084411984595a2ca56d8c55252b99ee8) Thanks [@maconard](https://github.com/maconard)! - find and save model servers of any kind over ssh
+
+- [#6815](https://github.com/Bike4Mind/bike4mind/pull/6815) [`763126b`](https://github.com/Bike4Mind/bike4mind/commit/763126b28325007c1c0fd8088896b65c5f7ef999) Thanks [@maconard](https://github.com/maconard)! - detect intel gpus and size them for sycl and vulkan
+
+### Patch Changes
+
+- [#6792](https://github.com/Bike4Mind/bike4mind/pull/6792) [`09ee8d1`](https://github.com/Bike4Mind/bike4mind/commit/09ee8d1cb0541e12ef93ac03b54b153c54b92407) Thanks [@maconard](https://github.com/maconard)! - keep the saved config and session in sync, and fix mcp enable/disable
+
+- [#6793](https://github.com/Bike4Mind/bike4mind/pull/6793) [`c676608`](https://github.com/Bike4Mind/bike4mind/commit/c6766084fc6d7851e7094d741d16724da9c27b2d) Thanks [@maconard](https://github.com/maconard)! - clearer mcp enable/disable messages
+
+- [#6803](https://github.com/Bike4Mind/bike4mind/pull/6803) [`2c7fdfe`](https://github.com/Bike4Mind/bike4mind/commit/2c7fdfe2fbe5dc68ce729ee20f5b3c25204be497) Thanks [@onoya](https://github.com/onoya)! - enrich assessment campaign context
+
 ## 4.3.0
 
 ### Minor Changes
