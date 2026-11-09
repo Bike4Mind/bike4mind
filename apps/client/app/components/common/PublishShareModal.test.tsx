@@ -1479,13 +1479,11 @@ describe('PublishShareModal - access options match the Live Artifacts badge', ()
       );
 
     const openPrivateLinkSection = async () => {
-      (api.get as unknown as ReturnType<typeof vi.fn>)
-        .mockReset()
-        .mockImplementation((url: string) =>
-          Promise.resolve({
-            data: url.endsWith('/share-token') ? { shareToken: null, shareLinks: [] } : { artifact: {} },
-          })
-        );
+      (api.get as unknown as ReturnType<typeof vi.fn>).mockReset().mockImplementation((url: string) =>
+        Promise.resolve({
+          data: url.endsWith('/share-token') ? { shareToken: null, shareLinks: [] } : { artifact: {} },
+        })
+      );
       (api.post as unknown as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue({
         data: { id: 'l1', shareToken: 'TOK', shareUrl: '/a/TOK', shareLinks: [] },
       });
@@ -1499,6 +1497,12 @@ describe('PublishShareModal - access options match the Live Artifacts badge', ()
       await waitFor(() => expect(mintCalls()).toHaveLength(1));
       expect(mintCalls()[0][1]).not.toHaveProperty('expiresAt');
       expect((await screen.findByTestId('publish-share-token-expires')).textContent).toBe('This link does not expire.');
+      expect(screen.getByTestId('publish-share-token-expiry-label').textContent).toBe('Expiry for a regenerated link');
+    });
+
+    it('labels the select as the new link expiry before a link exists', async () => {
+      await openPrivateLinkSection();
+      expect(screen.getByTestId('publish-share-token-expiry-label').textContent).toBe('Link expiry');
     });
 
     it('sends an expiry one day out when 1 day is chosen, and shows it', async () => {

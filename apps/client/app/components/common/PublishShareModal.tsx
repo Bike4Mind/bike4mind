@@ -1202,12 +1202,15 @@ export function PublishShareModal({
                       ? `This page is public, so the link above already opens for anyone${storedGate ? ` ${GATED_LINK_WHO[storedGate]}` : ''}. Revoke this one if you no longer need it.`
                       : `The link above only opens for ${visibility === 'organization' ? 'your team' : 'you'}. This one opens for anyone you send it to${storedGate ? ` ${GATED_LINK_WHO[storedGate]}` : ', without signing in'}.`}
                 </Typography>
+                <Typography level="body-xs" sx={{ mb: 0.5 }} data-testid="publish-share-token-expiry-label">
+                  {shareToken ? 'Expiry for a regenerated link' : 'Link expiry'}
+                </Typography>
                 <Select
                   size="sm"
                   value={shareExpiry}
                   onChange={(_, value) => value && setShareExpiry(value)}
                   sx={{ mb: 1, maxWidth: 220 }}
-                  aria-label="Private link expiry"
+                  aria-label={shareToken ? 'Expiry for a regenerated link' : 'Link expiry'}
                   data-testid="publish-share-token-expiry"
                 >
                   {(Object.keys(SHARE_EXPIRY_LABELS) as ShareExpiryChoice[]).map(choice => (
