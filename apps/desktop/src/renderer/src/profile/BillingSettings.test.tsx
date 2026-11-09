@@ -205,6 +205,43 @@ describe('personal Billing settings', () => {
     expect(getBilling).toHaveBeenCalledTimes(2);
   });
 
+  it('does not restore pending when billing confirms before the browser-open reply', async () => {
+    let opened!: (value: { ok: true }) => void;
+    subscribePlan.mockReturnValue(
+      new Promise(resolve => {
+        opened = resolve;
+      })
+    );
+    await render();
+    await click('billing-subscribe-btn');
+    getBilling.mockResolvedValue({
+      ...billing,
+      subscriptions: [
+        {
+          priceId: 'price_personal',
+          subscriptionId: 'sub_new',
+          status: 'active',
+          periodEndsAt: null,
+          canceledAt: null,
+        },
+      ],
+    });
+    await click('billing-refresh-btn');
+    await act(async () => opened({ ok: true }));
+    expect(element('billing-checkout-pending')).toBeNull();
+    expect(element('billing-plan-current')).not.toBeNull();
+  });
+
+  it('discards the previous account billing and pending state when identity changes', async () => {
+    await render();
+    await click('billing-subscribe-btn');
+    getBilling.mockReturnValue(new Promise(() => {}));
+    await render({ ...auth, user: { id: 'user-2' } });
+    expect(element('billing-checkout-pending')).toBeNull();
+    expect(element('billing-current-plan')).toBeNull();
+    expect(element('billing-loading')).not.toBeNull();
+  });
+
   it('keeps pending after a refresh with no confirmed subscription, with an explicit cancel path', async () => {
     await render();
     await click('billing-subscribe-btn');

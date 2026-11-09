@@ -33,7 +33,7 @@ export function BillingSettings({ auth }: { auth: AuthState | null }) {
       </Stack>
     );
   }
-  return <SignedInBilling />;
+  return <SignedInBilling key={`${auth.environment.url}:${auth.user?.id}`} />;
 }
 
 function SignedInBilling() {
@@ -85,7 +85,7 @@ function SignedInBilling() {
     setCheckoutError(null);
     try {
       const result = await window.b4m.account.subscribePlan(priceId);
-      if (!mounted.current) return;
+      if (!mounted.current || !checkoutLock.current) return;
       if (result.ok) setCheckout('pending');
       else {
         checkoutLock.current = false;
@@ -93,7 +93,7 @@ function SignedInBilling() {
         setCheckoutError(result.error);
       }
     } catch {
-      if (!mounted.current) return;
+      if (!mounted.current || !checkoutLock.current) return;
       checkoutLock.current = false;
       setCheckout('idle');
       setCheckoutError('Could not open checkout. Please try again.');
