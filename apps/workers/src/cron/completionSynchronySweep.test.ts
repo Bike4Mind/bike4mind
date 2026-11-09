@@ -62,7 +62,7 @@ describe('synchronized completion sweep', () => {
       failed: 0,
       recorded: { created: 1 },
     });
-    expect(mocks.record.mock.calls[0][0].completionSynchrony.creditExposure).toBeUndefined();
+    expect(mocks.record.mock.calls[0][0].completionSynchrony).not.toHaveProperty('creditExposure');
     expect(onRecordError).toHaveBeenCalledTimes(1);
   });
 

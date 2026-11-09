@@ -70,7 +70,7 @@ export async function sweepCompletionSynchrony({
       completionSynchrony: {
         ...metrics,
         scannedAt: now,
-        creditExposure,
+        ...(creditExposure ? { creditExposure } : {}),
         source: 'api_key_request_starts',
         windowHours: 24,
         eventsScanned: scan.rowsScanned,

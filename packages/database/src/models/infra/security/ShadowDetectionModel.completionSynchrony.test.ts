@@ -13,7 +13,7 @@ import {
   type RecordShadowDetectionInput,
 } from './ShadowDetectionModel';
 const ids = [1, 2, 3].map(n => n.toString(16).padStart(24, '0'));
-const now = new Date();
+const now = new Date('2026-03-10T12:00:00.000Z');
 const evidence = {
   scannedAt: now,
   source: 'api_key_request_starts' as const,
@@ -115,6 +115,29 @@ describe('synchronized API observation storage', () => {
         creditExposure: { creditsCharged: 12 },
       },
     });
+  });
+
+  it('keeps listing records when stored synchrony evidence is unreadable', async () => {
+    await shadowDetectionRepository.recordCompletionSynchrony(observation());
+    await ShadowDetectionModel.collection.updateMany({}, { $set: { 'completionSynchrony.creditExposure': null } });
+    const { data } = await shadowDetectionRepository.list({ limit: 10 });
+    expect(data).toHaveLength(1);
+    expect(data[0].completionSynchrony).toBeUndefined();
+  });
+
+  it('does not replace stored evidence with a later scan that saw fewer bursts', async () => {
+    await shadowDetectionRepository.recordCompletionSynchrony({
+      ...observation(),
+      completionSynchrony: { ...evidence, bursts: 8 },
+    });
+    expect(
+      await shadowDetectionRepository.recordCompletionSynchrony({
+        ...observation(),
+        completionSynchrony: { ...evidence, scannedAt: new Date(now.getTime() + 60_000), bursts: 3 },
+      })
+    ).toBe('unchanged');
+    const { data } = await shadowDetectionRepository.list({ limit: 10 });
+    expect(data[0].completionSynchrony).toMatchObject({ bursts: 8 });
   });
 
   it('keeps reviewed evidence immutable and removes the whole record on participant purge', async () => {

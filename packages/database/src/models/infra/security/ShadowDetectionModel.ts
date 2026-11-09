@@ -232,6 +232,7 @@ const VERDICT_COUNT_FIELDS = {
 
 const toItem = (doc: LeanShadowDetection): ShadowDetectionItem => {
   const parsed = completionSequenceEvidenceSchema.safeParse(doc.completionSequence);
+  const synchrony = completionSynchronyEvidenceSchema.safeParse(doc.completionSynchrony);
   return {
     id: doc._id.toString(),
     detector: doc.detector,
@@ -256,9 +257,7 @@ const toItem = (doc: LeanShadowDetection): ShadowDetectionItem => {
     })),
     windowMinutes: doc.windowMinutes ?? null,
     group: doc.group ?? null,
-    ...(doc.completionSynchrony
-      ? { completionSynchrony: completionSynchronyEvidenceSchema.parse(doc.completionSynchrony) }
-      : {}),
+    ...(synchrony.success ? { completionSynchrony: synchrony.data } : {}),
     ...(parsed.success ? { completionSequence: parsed.data } : {}),
     // Records written before payment evidence existed carry no field at all.
     payment: doc.payment
@@ -341,7 +340,10 @@ class ShadowDetectionRepository {
     if (created.upsertedCount > 0) return (await reconcileMembers()) ? 'created' : 'unchanged';
     const freshness =
       'scannedAt' in sequence
-        ? { 'completionSynchrony.scannedAt': { $lt: sequence.scannedAt } }
+        ? {
+            'completionSynchrony.scannedAt': { $lt: sequence.scannedAt },
+            'completionSynchrony.bursts': { $lte: sequence.bursts },
+          }
         : {
             'completionSequence.lastObservedAt': { $lt: sequence.lastObservedAt },
             'completionSequence.rounds': { $lte: sequence.rounds },
