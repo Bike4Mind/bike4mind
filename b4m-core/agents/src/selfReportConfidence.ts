@@ -30,8 +30,8 @@ export const SELF_REPORT_CONFIDENCE_REMINDER =
 const OPEN = '<confidence';
 const CLOSE = '</confidence>';
 const CLOSING_TAG = /<\/confidence\s*>/gi;
-// Models given this prompt open a turn with an empty reasoning block before the tag. It carries
-// nothing, and left in it surfaces as a literal "<think></think>" thought.
+// Models often open a turn with an empty reasoning block, before the confidence tag when one is asked
+// for. It carries nothing, and left in it surfaces as a literal "<think></think>" thought.
 const EMPTY_THINK = '<think></think>';
 const EMPTY_THINK_BLOCKS = /<think>\s*<\/think>/gi;
 // A confidence tag the model never closed (or a stray closing tag). Only the tag itself goes; the text
@@ -56,6 +56,12 @@ export class SelfReportStreamFilter {
   private dropClosing = false;
   private carry = '';
 
+  /**
+   * `thinkOnly` drops leading empty reasoning blocks and nothing else, for runs that do not ask the model
+   * for a confidence tag: any `<confidence>` text there is the model's own and must reach the answer.
+   */
+  constructor(private readonly options: { thinkOnly?: boolean } = {}) {}
+
   /** The part of `delta` that is safe to show now. */
   push(delta: string): string {
     if (this.settled) return this.dropClosing ? this.withoutClosingTag(delta) : delta;
@@ -64,8 +70,9 @@ export class SelfReportStreamFilter {
     const lower = rest.toLowerCase();
     // Whitespace inside the empty block is tolerated, as `EMPTY_THINK_BLOCKS` does for the stored text.
     const compact = lower.replace(/^<think>\s+/, '<think>');
-    if (lower === '' || OPEN.startsWith(lower) || EMPTY_THINK.startsWith(compact)) return '';
-    if (!lower.startsWith(OPEN)) return this.release();
+    const thinkOnly = this.options.thinkOnly;
+    if (lower === '' || (!thinkOnly && OPEN.startsWith(lower)) || EMPTY_THINK.startsWith(compact)) return '';
+    if (thinkOnly || !lower.startsWith(OPEN)) return this.release();
     const end = lower.indexOf(CLOSE);
     if (end === -1) return this.held.length > MAX_HELD_LENGTH ? this.release(true) : '';
     this.settled = true;
@@ -82,7 +89,9 @@ export class SelfReportStreamFilter {
   }
 
   private release(dropClosing = false): string {
-    const held = this.held.replace(EMPTY_THINK_BLOCKS, '').replace(DANGLING_TAG, '');
+    const held = this.options.thinkOnly
+      ? stripEmptyThink(this.held)
+      : this.held.replace(EMPTY_THINK_BLOCKS, '').replace(DANGLING_TAG, '');
     this.settled = true;
     this.dropClosing = dropClosing;
     this.held = '';
@@ -101,6 +110,16 @@ export class SelfReportStreamFilter {
     this.carry = '';
     return text;
   }
+}
+
+const LEADING_EMPTY_THINK = /^(?:\s*<think>\s*<\/think>)+/i;
+
+/**
+ * Remove empty reasoning blocks from the start of turn text. Safe on any run: it never touches a
+ * confidence tag, and a literal `<think></think>` later in an answer is the model's own text.
+ */
+export function stripEmptyThink(text: string): string {
+  return text.replace(LEADING_EMPTY_THINK, '');
 }
 
 /**
