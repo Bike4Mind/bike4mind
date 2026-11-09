@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ImageInputRejectedError, ImageModerationBlockedError } from '../imageGeneration/imageGenerationErrors';
 import {
   classifyImageProviderError,
@@ -15,13 +15,13 @@ const httpError = (status: number) => Object.assign(new Error(`http ${status}`),
 
 describe('raceAbort', () => {
   it('resolves with the work result', async () => {
-    await expect(raceAbort(Promise.resolve('done'), new AbortController().signal)).resolves.toBe('done');
+    await expect(raceAbort(() => Promise.resolve('done'), new AbortController().signal)).resolves.toBe('done');
   });
 
   it('rejects with the signal reason when aborted mid-flight', async () => {
     const controller = new AbortController();
     const reason = new Error('lease expired');
-    const raced = raceAbort(new Promise<string>(() => undefined), controller.signal);
+    const raced = raceAbort(() => new Promise<string>(() => undefined), controller.signal);
     controller.abort(reason);
     await expect(raced).rejects.toBe(reason);
   });
@@ -29,12 +29,14 @@ describe('raceAbort', () => {
   it('throws immediately when the signal is already aborted', () => {
     const controller = new AbortController();
     controller.abort(new Error('already'));
-    expect(() => raceAbort(Promise.resolve('x'), controller.signal)).toThrow('already');
+    const start = vi.fn(() => Promise.resolve('x'));
+    expect(() => raceAbort(start, controller.signal)).toThrow('already');
+    expect(start).not.toHaveBeenCalled();
   });
 
   it('propagates a rejection of the work', async () => {
     const failure = new Error('boom');
-    await expect(raceAbort(Promise.reject(failure), new AbortController().signal)).rejects.toBe(failure);
+    await expect(raceAbort(() => Promise.reject(failure), new AbortController().signal)).rejects.toBe(failure);
   });
 });
 

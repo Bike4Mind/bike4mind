@@ -7,16 +7,17 @@ const MAX_CAUSE_DEPTH = 5;
 const DATA_URL_PATTERN = /^data:([^;,]+);base64,(.+)$/s;
 
 /**
- * Settles with `work`, or rejects as soon as `signal` aborts. The image services take no AbortSignal, so this is
+ * Settles with the promise `start` returns, or rejects as soon as `signal` aborts. The image services take no AbortSignal, so this is
  * how an adapter honours the step's lease. The abandoned call may still finish and bill, which is why an abort
  * must surface as a throw (an unknown outcome) and never as a classified failure.
  */
-export const raceAbort = <T>(work: Promise<T>, signal: AbortSignal): Promise<T> => {
+export const raceAbort = <T>(start: () => Promise<T>, signal: AbortSignal): Promise<T> => {
+  // `start` runs only after the check, so an already-aborted signal never reaches the provider.
   signal.throwIfAborted();
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(signal.reason);
     signal.addEventListener('abort', onAbort, { once: true });
-    work.then(
+    start().then(
       value => {
         signal.removeEventListener('abort', onAbort);
         resolve(value);

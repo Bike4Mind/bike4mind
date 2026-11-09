@@ -39,7 +39,7 @@ export class OpenAIImageProvider implements ImageProvider {
     const service = new OpenAIImageService(ctx.apiKey, ctx.logger, this.options.imageProcessorLambdaName?.());
     let dataUrl: string;
     try {
-      dataUrl = await raceAbort(this.render(service, request, inputs), ctx.signal);
+      dataUrl = await raceAbort(() => this.render(service, request, inputs), ctx.signal);
     } catch (error) {
       if (ctx.signal.aborted) throw error;
       const classified = classifyImageProviderError(error);
