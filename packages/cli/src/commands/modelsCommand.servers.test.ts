@@ -564,21 +564,46 @@ describe('b4m models servers login and logout', () => {
     return locked;
   }
 
-  it.each(['http', 'ssh'] as const)(
-    'on Ctrl-C while checking the credential on an %s server, cancels at once and saves nothing',
-    async transport => {
-      const stalled = await startFakeServer({ 'GET /api/version': () => undefined, 'GET /api/tags': () => undefined });
+  it.each([
+    { transport: 'http', phase: 'probe' },
+    { transport: 'http', phase: 'listing' },
+    { transport: 'ssh', phase: 'probe' },
+    { transport: 'ssh', phase: 'listing' },
+  ] as const)(
+    'on Ctrl-C during $phase on an $transport server, ends the request and saves nothing',
+    async ({ transport, phase }) => {
+      let requests = 0;
+      let pending = false;
+      let closed = false;
+      const models = { data: [{ id: 'qwen', owned_by: 'other' }] };
+      const stalled = await startFakeServer({
+        'GET /v1/models': (request, response) => {
+          requests += 1;
+          if (phase === 'listing' && requests === 1) return json(models)(request, response);
+          pending = true;
+          response.once('close', () => {
+            closed = true;
+          });
+        },
+      });
       open.push(stalled);
-      const sshFetchFor: SshFetchFor = () => (_input, init) =>
-        new Promise((_resolve, reject) => {
-          const signal = init?.signal;
-          signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+      const signals: AbortSignal[] = [];
+      const sshFetchFor: SshFetchFor = () => async (_input, init) => {
+        requests += 1;
+        if (phase === 'listing' && requests === 1) return Response.json(models);
+        const signal = init?.signal;
+        if (!signal) throw new Error('The request must be abortable.');
+        signals.push(signal);
+        pending = true;
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
         });
+      };
       await writeServers([
         record({
           id: 'ccc',
           name: 'locked',
-          kind: transport === 'ssh' ? 'openai-compatible' : 'ollama',
+          kind: 'openai-compatible',
           auth: { type: 'bearer' },
           transport:
             transport === 'ssh'
@@ -592,11 +617,17 @@ describe('b4m models servers login and logout', () => {
         { action: 'login', name: 'locked', 'token-stdin': true },
         deps({ stdin: TOKEN, ssh: { sshFetchFor }, signal: ctrlC.signal })
       );
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await vi.waitFor(() => expect(pending).toBe(true));
       const started = performance.now();
       ctrlC.abort(new DOMException('Cancelled', 'AbortError'));
       expect(await running).toBe(130);
       expect(performance.now() - started).toBeLessThan(1_000);
+      if (transport === 'ssh') {
+        expect(signals).toHaveLength(1);
+        expect(signals[0].aborted).toBe(true);
+      } else {
+        await vi.waitFor(() => expect(closed).toBe(true), { timeout: 1_000 });
+      }
       expect(output()).toBe('Cancelled.');
       expect(secrets).toEqual({});
     }
