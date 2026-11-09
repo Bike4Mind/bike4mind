@@ -64,13 +64,13 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
       throw new BadRequestError('Invalid input data');
     }
 
-    // A new admin account is an admin-role grant: session-only, and a browser session must have
-    // recently re-verified. A non-admin account takes over no existing account, so it is ungated.
     assertCanSeedAccount(req, {
       isAdmin: validatedData.isAdmin,
       credits: validatedData.initialCredits,
       tags: validatedData.tags,
     });
+    // A new admin account is an admin-role grant: session-only, and a browser session must have
+    // recently re-verified. A non-admin account takes over no existing account, so it is ungated.
     if (validatedData.isAdmin) {
       if (req.apiKeyInfo) {
         throw new ForbiddenError('Credential and admin-role changes require a signed-in session.');
