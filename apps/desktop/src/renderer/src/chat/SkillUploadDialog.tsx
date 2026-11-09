@@ -114,7 +114,11 @@ export function versionOutcome(
             : 'Passed the automated safety scan and is live now.',
       };
     case 'approved':
-      return { color: 'success', title: 'Approved by a reviewer', body: 'This version is live.' };
+      return {
+        color: 'success',
+        title: version.selfApproved ? 'Self-approved by an org admin' : 'Approved by a reviewer',
+        body: 'This version is live.',
+      };
     case 'pending':
       return {
         color: 'warning',

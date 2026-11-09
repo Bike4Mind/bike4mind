@@ -60,6 +60,7 @@ import {
   VisibilityChip,
   formatCount,
 } from './parts';
+import { SELF_APPROVED_LABEL } from './ScanResult';
 
 const REPORT_REASONS: Array<{ value: SkillListingReportReason; label: string }> = [
   { value: 'malicious', label: 'Malicious or unsafe behaviour' },
@@ -478,7 +479,7 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
                 </Chip>
               ) : live ? (
                 <Chip size="sm" variant="soft" color="success" startDecorator={<VerifiedUserIcon />}>
-                  Reviewed by a person
+                  {version?.selfApproved ? SELF_APPROVED_LABEL : 'Reviewed by a person'}
                 </Chip>
               ) : null}
               {viewer.canReview || viewer.isAuthor ? <TierChip tier={listing.riskTier} /> : null}

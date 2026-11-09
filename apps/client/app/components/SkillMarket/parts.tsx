@@ -228,7 +228,7 @@ export const HonestSummaryPanel: FC<{ summary?: ISkillHonestSummary; tools?: str
 
 /** Line diff of two skill bodies (added lines green, removed red). */
 export const BodyDiff: FC<{ before: string; after: string; testId?: string }> = ({ before, after, testId }) => {
-  const parts = useMemo(() => diffLines(before, after), [before, after]);
+  const parts = useMemo(() => diffLines(before, after, { ignoreNewlineAtEof: true }), [before, after]);
   const unchanged = parts.every(p => !p.added && !p.removed);
   return (
     <Box

@@ -181,3 +181,25 @@ describe('ListingDetail "Use in Claude Code"', () => {
     });
   });
 });
+
+describe('ListingDetail review chip', () => {
+  const reviewed = (selfApproved?: boolean) => {
+    const base = makeData();
+    return makeData({
+      listing: { ...base.listing, autoChecked: false },
+      version: { ...base.version!, ...(selfApproved === undefined ? {} : { selfApproved }) },
+    });
+  };
+
+  it('says a person reviewed a version approved by someone else', () => {
+    renderListing(reviewed(false));
+    expect(screen.getByText('Reviewed by a person')).toBeInTheDocument();
+    expect(screen.queryByText('Self-approved by an org admin')).not.toBeInTheDocument();
+  });
+
+  it('says self-approved when the author approved their own version', () => {
+    renderListing(reviewed(true));
+    expect(screen.getByText('Self-approved by an org admin')).toBeInTheDocument();
+    expect(screen.queryByText('Reviewed by a person')).not.toBeInTheDocument();
+  });
+});

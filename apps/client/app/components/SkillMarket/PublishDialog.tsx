@@ -47,6 +47,12 @@ import {
 } from '@client/app/hooks/data/skillMarket';
 import ScanResult from './ScanResult';
 
+/** An open Select listbox keeps focus on its button and bubbles Escape to the Modal, which must not treat it as a close. */
+const isEscapeFromOpenListbox = (event: unknown): boolean => {
+  const target = (event as { target?: unknown } | null)?.target;
+  return target instanceof Element && !!target.closest('[aria-expanded="true"], [role="listbox"]');
+};
+
 const MY_LISTINGS = 'My listings';
 
 const MyListingsLink: FC = () => (
@@ -184,7 +190,13 @@ const PublishDialog: FC<PublishDialogProps> = ({ onClose, skill, ownSkills = [] 
   };
 
   return (
-    <Modal open onClose={onClose}>
+    <Modal
+      open
+      onClose={(event, reason) => {
+        if (reason === 'escapeKeyDown' && isEscapeFromOpenListbox(event)) return;
+        onClose();
+      }}
+    >
       <ModalDialog
         sx={{ width: 620, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' }}
         data-testid="market-publish-dialog"
@@ -206,6 +218,7 @@ const PublishDialog: FC<PublishDialogProps> = ({ onClose, skill, ownSkills = [] 
               <ScanResult
                 version={result.version}
                 visibility={result.listing.visibility}
+                authorUserId={result.listing.authorUserId}
                 onRescan={retryScan}
                 rescanning={rescan.isPending}
               />

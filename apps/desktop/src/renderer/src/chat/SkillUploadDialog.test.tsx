@@ -378,3 +378,13 @@ describe('legacy auto-approved review-tier outcomes', () => {
     });
   });
 });
+
+describe('approved outcome', () => {
+  it('names a self-approval and keeps the reviewer wording otherwise', () => {
+    const approved = { ...published.version, reviewStatus: 'approved' };
+    expect(versionOutcome({ ...approved, selfApproved: true }, 'organization').title).toBe(
+      'Self-approved by an org admin'
+    );
+    expect(versionOutcome(approved, 'organization').title).toBe('Approved by a reviewer');
+  });
+});

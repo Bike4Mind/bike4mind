@@ -111,7 +111,7 @@ const SkillDetailPage: FC = () => {
           All skills
         </Button>
 
-        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={2}>
+        <Stack gap={2}>
           <Box>
             <Typography level="h2" component="code" data-testid="skill-detail-name">
               /{skill.name}
@@ -129,7 +129,13 @@ const SkillDetailPage: FC = () => {
               <MarketStatusBadge status={skill.marketStatus} />
             </Stack>
           </Box>
-          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap justifyContent="flex-end">
+          <Stack
+            direction="row"
+            gap={1}
+            flexWrap="wrap"
+            data-testid="skill-detail-actions"
+            sx={{ '& > .MuiButton-root': { whiteSpace: 'nowrap', flexShrink: 0 } }}
+          >
             <Button
               variant="outlined"
               startDecorator={<TerminalIcon />}

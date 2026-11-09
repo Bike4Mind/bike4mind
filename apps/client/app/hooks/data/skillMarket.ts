@@ -25,6 +25,8 @@ export type MarketVersionView = {
   snapshot: ISkillSnapshot;
   honestSummary?: ISkillHonestSummary;
   riskTier?: SkillRiskTier;
+  /** The listing's author approved it themselves; no second reviewer. */
+  selfApproved?: boolean;
   createdAt: string;
 };
 

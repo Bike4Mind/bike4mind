@@ -47,7 +47,7 @@ const STATUS: Record<SkillListingStatus, { label: string; color: 'success' | 'wa
 
 const VersionRow: FC<{ version: ISkillListingVersion; listing: MyListing }> = ({ version, listing }) => {
   const rescan = useRescanVersion();
-  const outcome = versionOutcome(version, listing.visibility);
+  const outcome = versionOutcome(version, listing.visibility, listing.authorUserId);
   return (
     <Accordion>
       <AccordionSummary>
@@ -72,6 +72,7 @@ const VersionRow: FC<{ version: ISkillListingVersion; listing: MyListing }> = ({
         <ScanResult
           version={version}
           visibility={listing.visibility}
+          authorUserId={listing.authorUserId}
           rescanning={rescan.isPending}
           onRescan={() => void rescan.mutateAsync(version.id).catch(e => toast.error(getErrorMessage(e)))}
         />
@@ -98,7 +99,7 @@ const ListingRow: FC<{ listing: MyListing }> = ({ listing }) => {
   const resubmit = async () => {
     try {
       const { version } = await submit.mutateAsync({ listingId: listing.id });
-      const outcome = versionOutcome(version, listing.visibility);
+      const outcome = versionOutcome(version, listing.visibility, listing.authorUserId);
       if (outcome.color === 'danger') toast.error(outcome.title);
       else toast.success(`v${version.version}: ${outcome.title}`);
     } catch (e) {
