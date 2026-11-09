@@ -4,6 +4,7 @@ import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscript
 import { creditTransactionRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { creditService, organizationService } from '@bike4mind/services';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import {
   handleOrganizationSubscriptionInvoice,
   handleUserSubscriptionInvoice,
@@ -536,6 +537,46 @@ describe('handleOrganizationSubscriptionInvoice - purchaser no longer exists', (
 
   it('still grants credits for an existing org when the subscription metadata names a deleted user', async () => {
     await handleOrganizationSubscriptionInvoice(buildInvoice(), buildSubscription(), metadata, logger);
+
+    expect(creditService.addCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'org_team', credits: 4 * 50000 }),
+      expect.anything()
+    );
+  });
+
+  it('notifies the current owner when it differs from the checkout purchaser', async () => {
+    vi.mocked(organizationRepository.findById).mockResolvedValue({
+      id: 'org_team',
+      name: 'Team',
+      userId: 'u_current_owner',
+      users: [],
+      seats: 4,
+    } as unknown as Awaited<ReturnType<typeof organizationRepository.findById>>);
+
+    await handleOrganizationSubscriptionInvoice(buildInvoice(), buildSubscription(), metadata, logger);
+
+    for (const queryKey of [['subscriptions'], ['organizations']]) {
+      expect(sendToClient).toHaveBeenCalledWith('u_current_owner', 'ws://test', {
+        action: 'invalidate_query',
+        queryKey,
+      });
+    }
+  });
+
+  it('grants renewal credits when the purchaser no longer exists', async () => {
+    vi.mocked(organizationRepository.findByStripeCustomerId).mockResolvedValue({
+      id: 'org_team',
+      name: 'Team',
+      users: [],
+      seats: 4,
+    } as unknown as Awaited<ReturnType<typeof organizationRepository.findByStripeCustomerId>>);
+
+    await handleOrganizationSubscriptionInvoice(
+      { ...buildInvoice(), billing_reason: 'subscription_cycle' } as Stripe.Invoice,
+      buildSubscription(),
+      metadata,
+      logger
+    );
 
     expect(creditService.addCredits).toHaveBeenCalledWith(
       expect.objectContaining({ ownerId: 'org_team', credits: 4 * 50000 }),

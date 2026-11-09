@@ -490,6 +490,19 @@ export const handleOrganizationSubscriptionInvoice = async (
     })
   );
 
+  if (org?.userId && String(org.userId) !== String(metadata.userId)) {
+    promises.push(
+      sendToClient(org.userId, Resource.websocket.managementEndpoint, {
+        action: 'invalidate_query',
+        queryKey: ['subscriptions'],
+      }),
+      sendToClient(org.userId, Resource.websocket.managementEndpoint, {
+        action: 'invalidate_query',
+        queryKey: ['organizations'],
+      })
+    );
+  }
+
   await Promise.all(promises);
 };
 
