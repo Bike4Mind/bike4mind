@@ -55,7 +55,6 @@ export default {
   'OrganizationsTab.tsx': [[2, 'fdb3e735aeb282e9']],
   'PartnerSignupRulesTab.tsx': [[2, '4d25dd633956e08a']],
   'PrReport/PrReportDialog.tsx': [[2, '42e1900e98b7aac9']],
-  'PrReport/PrReportTab.tsx': [[2, '1cfd9ffb38523c51']],
   'PublishedArtifactsTab.tsx': [[2, 'e9f0cb3a32140028']],
   'RapidReplyMetrics.tsx': [[2, '6df573295acd8bbb']],
   'RapidReplyTab.tsx': [[2, 'fa3a87800a5a93ab']],

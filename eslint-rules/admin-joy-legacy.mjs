@@ -54,7 +54,6 @@ const componentsByFile = {
   'OrganizationsTab.tsx': ['Card', 'Modal', 'Table'],
   'PartnerSignupRulesTab.tsx': ['Modal', 'Table'],
   'PrReport/PrReportDialog.tsx': ['Modal'],
-  'PrReport/PrReportTab.tsx': ['Card'],
   'PublishedArtifactsTab.tsx': ['Table'],
   'RapidReplyMetrics.tsx': ['Card', 'Table'],
   'RapidReplyTab.tsx': ['Card', 'Modal', 'Table'],

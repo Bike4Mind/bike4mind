@@ -1,7 +1,10 @@
 import { useState } from 'react';
-import { Box, Button, Card, Divider, Stack, Tooltip, Typography } from '@mui/joy';
+import { Box, Button, Stack, Tooltip } from '@mui/joy';
 
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
+import { SettingsDraftProvider } from '../SettingsDraftProvider';
+import { AdminPageHeader } from '../shared';
+import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP } from '../shared/adminStyles';
 import { PrReportDialog } from './PrReportDialog';
 import { PrReportSettings } from './PrReportSettings';
 
@@ -20,51 +23,30 @@ export function PrReportTab() {
   const repoConfigured = typeof repo === 'string' && repo.trim().length > 0;
 
   return (
-    <Box sx={{ maxWidth: 760, mx: 'auto' }}>
-      <Stack spacing={0.75} sx={{ mb: 3 }}>
-        <Typography level="h3">PR Status Digest</Typography>
-        <Typography level="body-sm" textColor="text.secondary">
-          Buckets the configured repository&apos;s open pull requests by workflow state and renders a Slack digest that
-          tags whoever owes the next move. Generating is read-only - you review and edit the draft, then send it
-          explicitly. Nothing posts on its own.
-        </Typography>
-      </Stack>
+    <Stack sx={{ gap: ADMIN_REGION_GAP, maxWidth: ADMIN_DETAIL_MAX_WIDTH }} data-testid="admin-pr-report-tab">
+      <AdminPageHeader
+        title="PR digest"
+        description="Drafts a Slack digest of open pull requests that tags whoever owes the next move. Nothing posts until you review and send it."
+        actions={
+          <Tooltip title={repoConfigured ? '' : 'Save a repository below first.'} disableHoverListener={repoConfigured}>
+            <Box component="span">
+              <Button onClick={() => setOpen(true)} disabled={!repoConfigured} data-testid="admin-pr-report-open-btn">
+                Generate digest
+              </Button>
+            </Box>
+          </Tooltip>
+        }
+      />
 
-      <Card variant="outlined" sx={{ p: 3, gap: 2.5, mb: 3 }}>
-        <Box>
-          <Typography level="title-md">Configuration</Typography>
-          <Typography level="body-xs" textColor="text.tertiary">
-            Saved to admin settings and shared across the deployment. Each field saves on its own.
-          </Typography>
-        </Box>
-        <Divider />
+      {/* Each field stages its edit for the provider's one SaveBar and leave-page guard. */}
+      <SettingsDraftProvider>
         <PrReportSettings />
-      </Card>
-
-      <Divider sx={{ mb: 3 }} />
-
-      <Stack
-        direction={{ xs: 'column', sm: 'row' }}
-        spacing={2}
-        alignItems={{ xs: 'stretch', sm: 'center' }}
-        justifyContent="space-between"
-      >
-        <Typography level="body-sm" textColor="text.secondary">
-          Fetches the current open PRs and drafts a digest. You review and edit it before anything is sent.
-        </Typography>
-        <Tooltip title={repoConfigured ? '' : 'Set the repository above first.'} disableHoverListener={repoConfigured}>
-          <Box sx={{ alignSelf: { xs: 'flex-end', sm: 'auto' } }}>
-            <Button onClick={() => setOpen(true)} disabled={!repoConfigured} data-testid="admin-pr-report-open-btn">
-              Generate digest
-            </Button>
-          </Box>
-        </Tooltip>
-      </Stack>
+      </SettingsDraftProvider>
 
       {/* Mounted only while open so each run starts from a fresh draft and a fresh
           idempotency key, rather than reusing the previous attempt's send state. */}
       {open && <PrReportDialog open={open} onClose={() => setOpen(false)} />}
-    </Box>
+    </Stack>
   );
 }
 
