@@ -27,19 +27,13 @@ export const adminSurface = {
  *
  * The bottom padding is what keeps the fixed AI chat pill (FloatingChatPill: 20 px from the
  * bottom-right corner, 40 px tall) off the last row and the table pager. Must stay at least
- * ADMIN_FRAME_MIN_PB on every breakpoint (adminStyles.test.ts pins it).
+ * 7 (56 px) on every breakpoint; adminStyles.test.ts pins it.
  */
 export const adminPageFrame = {
   px: { xs: 2, md: 4 },
   pt: { xs: 2, md: 3 },
   pb: 8,
 };
-
-/**
- * Smallest frame bottom padding (Joy units of 8 px) that clears the AI chat pill: the pill's top edge
- * is 60 px up (20 px gap + 40 px pill), and the DataTable footer keeps 8 px under its pager buttons.
- */
-export const ADMIN_FRAME_MIN_PB = 7;
 
 /**
  * Rows-per-page sizes the DataTable footer offers. Feedback/constants.ts derives the page sizes its URL

@@ -246,7 +246,7 @@ describe('EmailVerificationTab', () => {
 
     await waitFor(() =>
       expect(m.post).toHaveBeenCalledWith(`/api/admin/users/${UNVERIFIED_ID}/verify-email`, {
-        reason: ADMIN_REASON_PRESETS.emailVerify[0],
+        reason: ADMIN_REASON_PRESETS.emailManualVerify[0],
       })
     );
   });
