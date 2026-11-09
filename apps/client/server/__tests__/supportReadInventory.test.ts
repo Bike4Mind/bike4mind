@@ -28,13 +28,16 @@ const routeFiles = (dir: string): string[] =>
     return entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts') ? [full] : [];
   });
 
-/** The methods a route's `adminApi` declaration puts on support:read, alone or in an any-of list. */
-const supportReadMethods = (source: string): string[] => {
-  const declaration = /adminPermissions:\s*\{([^}]*)\}/.exec(source)?.[1] ?? '';
-  return [...declaration.matchAll(/(\w+):\s*(\[[^\]]*\]|'[^']*'|\w+)/g)]
-    .filter(([, , value]) => value.includes("'support:read'") || value === 'SETTINGS_PAGE_READ')
-    .map(([, method]) => method);
-};
+/** The methods a route's `adminApi` declarations put on support:read, alone or in an any-of list. */
+const supportReadMethods = (source: string): string[] =>
+  [...source.matchAll(/adminPermissions:\s*\{([^}]*)\}/g)].flatMap(([, declaration]) =>
+    [...declaration.matchAll(/(\w+):\s*(\[[^\]]*\]|'[^']*'|\w+)/g)].flatMap(([, method, value]) => {
+      if (/^\w+$/.test(value) && value !== 'SETTINGS_PAGE_READ') {
+        throw new Error(`Unrecognised permission constant ${value}: teach this test whether it includes support:read`);
+      }
+      return value.includes("'support:read'") || value === 'SETTINGS_PAGE_READ' ? [method] : [];
+    })
+  );
 
 const inventory = routeFiles(API_DIR)
   .map(file => ({ route: path.relative(API_DIR, file), methods: supportReadMethods(readFileSync(file, 'utf8')) }))
@@ -56,7 +59,7 @@ describe('support:read inventory', () => {
     for (const route of SUPPORT_READ_WRITES.keys()) {
       const entry = inventory.find(item => item.route === route);
       expect(
-        entry?.methods.some(m => m !== 'GET'),
+        entry?.methods.some(m => m !== 'GET' && m !== 'HEAD'),
         route
       ).toBe(true);
     }

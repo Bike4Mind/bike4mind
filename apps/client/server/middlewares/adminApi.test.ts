@@ -81,6 +81,20 @@ describe('adminApi', () => {
     ).toThrow('Missing permission: credits:adjust');
   });
 
+  it('reports the denied requirement in the error details', () => {
+    const details = (requirement: Parameters<typeof requireAdminPermission>[1]) => {
+      try {
+        requireAdminPermission({ user: { adminPermissions: [] } }, requirement);
+      } catch (err) {
+        return (err as { additionalInfo?: unknown }).additionalInfo;
+      }
+    };
+    expect(details(['support:read', 'settings:manage'])).toEqual({
+      required_any_of: ['support:read', 'settings:manage'],
+    });
+    expect(details('settings:manage')).toEqual({ required_permission: 'settings:manage' });
+  });
+
   it('refuses a request with no user', () => {
     expect(() => requireAdminPermission({}, 'support:read')).toThrow('Missing permission: support:read');
   });
