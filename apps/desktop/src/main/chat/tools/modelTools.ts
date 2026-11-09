@@ -84,6 +84,13 @@ const MODEL_FILE_CONTRACT = [
   'angle the image shows and compare: fix the largest difference in proportion first, colours last.',
   'CSG builds hard-surface shapes well; an organic subject (a creature, a person, a plant) comes out stylised, so say',
   'that before you start rather than after.',
+  'Unless the user wants a faceted low-poly look, round off organic parts (a body, a head, limbs, a tail): build them from',
+  'spheres of 16-24 segments, hulled or unioned, then call shape.smoothOut(60, 0.5).refine(3) on the finished part and',
+  'set `smooth: true`. smoothOut bends each facet onto a curved patch and refine subdivides it (each step multiplies the',
+  'triangles by n squared), turning a faceted blob into a rounded one. Apply it per organic part, after its CSG, and',
+  'leave hard parts (horns, claws, spines, wings, a base) faceted so they stay crisp. Keep refine at 2-3: a whole',
+  'creature smoothed this way builds in well under a second. Seams where hulled pieces meet can show as streaks, so',
+  'prefer one hull per limb over many short hulls unioned together.',
 ].join('\n');
 
 function requireModel(context: ToolContext): ModelContext {
