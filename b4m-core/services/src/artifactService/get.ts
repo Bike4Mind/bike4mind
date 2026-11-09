@@ -42,7 +42,7 @@ export interface GetArtifactResult {
   access: ArtifactReadAccess;
   artifact: IArtifactDocument | ArtifactViewerView;
   content?: IArtifactContentDocument | null;
-  versions?: (IArtifactVersionDocument | ArtifactViewerVersion)[];
+  versions?: (IArtifactVersionDocument | ArtifactViewerVersion<IArtifactVersionDocument>)[];
 }
 
 /**

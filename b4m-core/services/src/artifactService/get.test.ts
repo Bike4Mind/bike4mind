@@ -72,6 +72,25 @@ describe('get by caller', () => {
     expect(r.versions).toEqual([versionDoc]);
   });
 
+  it('gives a read sharee on a private artifact the full document', async () => {
+    const r = await call('sharee', { ...stored, visibility: 'private' });
+    expect(r.access).toBe('shared');
+    expect(r.artifact).toEqual({ ...stored, visibility: 'private' });
+    expect(r.versions).toEqual([versionDoc]);
+  });
+
+  const writeOnly = { ...stored, permissions: { canRead: [], canWrite: ['writer'], canDelete: [], isPublic: false } };
+
+  it('gives a write-only grantee on a public artifact the full document', async () => {
+    const r = await call('writer', writeOnly);
+    expect(r.access).toBe('shared');
+    expect(r.artifact).toEqual(writeOnly);
+  });
+
+  it('refuses a write-only grantee on a private artifact', async () => {
+    await expect(call('writer', { ...writeOnly, visibility: 'private' })).rejects.toThrow('Access denied');
+  });
+
   it.each([
     ['visibility public', stored],
     ['isPublic', { ...stored, visibility: 'private', permissions: { ...stored.permissions, isPublic: true } }],

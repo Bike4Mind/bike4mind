@@ -3,19 +3,24 @@
  * GET /api/artifacts/[id] and GET /api/artifacts/[id]/versions by caller. The real artifactService
  * runs (only the repositories are fake) so the viewer projection is exercised, not mocked.
  */
+import type { NextApiRequest, NextApiResponse } from 'next';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
+type Handler = (req: NextApiRequest, res: NextApiResponse) => Promise<unknown>;
+
 const mockRefs = vi.hoisted(() => ({
-  handlers: {} as Record<string, (req: any, res: any) => Promise<unknown>>,
+  handlers: {} as Record<string, (req: NextApiRequest, res: NextApiResponse) => Promise<unknown>>,
   doc: null as unknown,
   current: undefined as string | undefined,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
+  // any: next-connect chain stub, only get/put/post/delete are exercised
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {};
   for (const m of ['get', 'put', 'post', 'delete']) {
-    chain[m] = (fn: any) => {
+    chain[m] = (fn: (req: NextApiRequest, res: NextApiResponse) => Promise<unknown>) => {
       mockRefs.handlers[`${m}:${mockRefs.current ?? ''}`] = fn;
       return chain;
     };
@@ -53,6 +58,7 @@ const stored = {
   userId: 'owner',
   organizationId: 'org',
   sessionId: 'sess',
+  projectId: 'proj',
   permissions: { canRead: ['sharee'], canWrite: [], canDelete: [], isPublic: false },
 };
 
@@ -64,9 +70,9 @@ async function load() {
   return { byId: mockRefs.handlers['get:byId'], versions: mockRefs.handlers['get:versions'] };
 }
 
-async function run(handler: (req: any, res: any) => Promise<unknown>, userId: string) {
+async function run(handler: Handler, userId: string) {
   const { req, res } = createMocks({ method: 'GET', query: { id: 'a1', includeContent: 'true' } });
-  (req as any).user = { id: userId };
+  Object.assign(req, { user: { id: userId } });
   await handler(req, res);
   return res._getJSONData();
 }
@@ -91,7 +97,7 @@ describe('artifact readers', () => {
     expect(body.artifact).toMatchObject({ id: 'a1', title: 'T', type: 'html', version: 1, metadata: {} });
     expect(body.artifact.updatedAt).toBeDefined();
     expect(body.content.content).toBe('body');
-    for (const k of ['userId', 'permissions', 'organizationId', 'sessionId'])
+    for (const k of ['_id', 'userId', 'permissions', 'organizationId', 'sessionId', 'projectId'])
       expect(body.artifact).not.toHaveProperty(k);
     expect((await run(versions, 'stranger')).data[0]).not.toHaveProperty('createdBy');
   });

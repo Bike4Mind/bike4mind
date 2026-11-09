@@ -24,6 +24,7 @@ describe('toArtifactViewerView', () => {
       permissions: { canRead: ['x'], canWrite: [], canDelete: [], isPublic: true },
       sourceQuestId: 'q',
       somethingAddedLater: 'secret',
+      metadata: { dependencies: { react: '18' }, questId: 'q', desktopSessionId: 'd' },
     } as unknown as IArtifactDocument;
 
     const view = toArtifactViewerView(doc) as Record<string, unknown>;
@@ -34,6 +35,7 @@ describe('toArtifactViewerView', () => {
         'contentSize',
         'createdAt',
         'id',
+        'metadata',
         'status',
         'tags',
         'title',
@@ -43,6 +45,14 @@ describe('toArtifactViewerView', () => {
         'visibility',
       ].sort()
     );
+  });
+
+  it('keeps metadata keys the viewer needs and drops quest and desktop session ids', () => {
+    const view = toArtifactViewerView({
+      id: 'a1',
+      metadata: { dependencies: { react: '18' }, questId: 'q', desktopSessionId: 'd' },
+    } as unknown as IArtifactDocument);
+    expect(view.metadata).toEqual({ dependencies: { react: '18' } });
   });
 
   it('drops the author from a version', () => {
@@ -56,5 +66,10 @@ describe('toArtifactViewerView', () => {
     } as unknown as IArtifactVersionDocument;
     expect(toArtifactViewerVersion(v)).not.toHaveProperty('createdBy');
     expect(toArtifactViewerVersion(v)).toMatchObject({ _id: 'v', version: 1 });
+  });
+
+  it('drops a version field that is not on the allowlist', () => {
+    const v = { _id: 'v', version: 1, createdBy: 'u', contentId: 'c', addedLater: 'x' };
+    expect(Object.keys(toArtifactViewerVersion(v)).sort()).toEqual(['_id', 'version']);
   });
 });
