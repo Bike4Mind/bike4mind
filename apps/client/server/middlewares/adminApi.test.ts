@@ -53,6 +53,14 @@ describe('adminApi', () => {
 
   it('rejects routes with no permission declarations', () => {
     expect(() => adminApi({ adminPermissions: {} })).toThrow('must declare');
+    expect(() => adminApi({ adminPermissions: { GET: [] } })).toThrow('must not be empty');
+  });
+
+  it('admits any one permission of a listed requirement', () => {
+    adminApi({ adminPermissions: { GET: ['support:read', 'settings:manage'] } });
+    expect(runGuard('GET', ['settings:manage'])).toHaveBeenCalledOnce();
+    expect(runGuard('GET', ['support:read'])).toHaveBeenCalledOnce();
+    expect(() => runGuard('GET', ['users:moderate'])).toThrow('Missing permission: support:read or settings:manage');
   });
 
   it('keeps API key scopes independent of the owner permissions', () => {
@@ -71,6 +79,20 @@ describe('adminApi', () => {
         'credits:adjust'
       )
     ).toThrow('Missing permission: credits:adjust');
+  });
+
+  it('reports the denied requirement in the error details', () => {
+    const details = (requirement: Parameters<typeof requireAdminPermission>[1]) => {
+      try {
+        requireAdminPermission({ user: { adminPermissions: [] } }, requirement);
+      } catch (err) {
+        return (err as { additionalInfo?: unknown }).additionalInfo;
+      }
+    };
+    expect(details(['support:read', 'settings:manage'])).toEqual({
+      required_any_of: ['support:read', 'settings:manage'],
+    });
+    expect(details('settings:manage')).toEqual({ required_permission: 'settings:manage' });
   });
 
   it('refuses a request with no user', () => {

@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useState, type ReactNode } from 'react';
+import { Suspense, useCallback, useState, type ReactNode } from 'react';
 import { Outlet, useLocation, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useShallow } from 'zustand/react/shallow';
 import MenuIcon from '@mui/icons-material/Menu';
@@ -15,10 +15,11 @@ import { HelpPanel } from '../help';
 import EnvironmentBanner from './AdminEnvironmentBanner';
 import { SidebarNav } from './AdminSidebarNav';
 import { AdminTab } from './adminSidebarConfig';
-import { canEnterAdminConsole, canOpenAdminTab } from './adminTabPermissions';
+import { canEnterAdminConsole, canOpenAdminTab, DELEGATED_ADMIN_TAB_PERMISSIONS } from './adminTabPermissions';
 import { environmentChipLabel, resolveCurrentEnvironment } from './environmentBanner';
 import { adminTabToSlug } from './adminTabSlugs';
 import { AdminCommandPalette } from './shared/AdminCommandPalette';
+import { MissingPermissionState } from './shared/MissingPermission';
 import { adminFocus, adminScrollGutter } from './shared/adminStyles';
 import { useNewSubscriptionsDot } from './Subscriptions/subscriptionsLastSeen';
 import { useAdminModal } from './useAdminModal';
@@ -77,18 +78,14 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
 
   // A detail page belongs to its tab, so a delegate who cannot open that tab cannot open the page.
   const canOpenTab = useCallback((tab: AdminTab) => canOpenAdminTab(currentUser, tab), [currentUser]);
-  const isDetailPageDenied = (path: string) => {
+  const deniedTabOf = (path: string) => {
     const tab = detailPageTabFor(path);
-    return tab !== undefined && !canOpenTab(tab);
+    return tab !== undefined && !canOpenTab(tab) ? tab : undefined;
   };
-  // The outlet draws the matched route, which trails the location while the redirect commits, so
-  // check both: one render of a denied page would already fire its requests.
+  // The outlet draws the matched route, which trails the location during a navigation, so check
+  // both: one render of a denied page would already fire its requests.
   const renderedPathname = useRouterState({ select: state => state.matches.at(-1)?.pathname ?? '' });
-  const locationDenied = isDetailPageDenied(pathname);
-  const detailPageDenied = locationDenied || isDetailPageDenied(renderedPathname);
-  useEffect(() => {
-    if (locationDenied) navigate({ to: ADMIN_CONSOLE_PATH, replace: true });
-  }, [locationDenied, navigate]);
+  const deniedDetailTab = deniedTabOf(pathname) ?? deniedTabOf(renderedPathname);
 
   const selectTab = (tab: AdminTab) => {
     setDrawerOpen(false);
@@ -171,7 +168,11 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
               </Typography>
             </Box>
             <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', ...adminScrollGutter }}>
-              {detailPageDenied ? null : children}
+              {deniedDetailTab === undefined ? (
+                children
+              ) : (
+                <MissingPermissionState requirement={DELEGATED_ADMIN_TAB_PERMISSIONS[deniedDetailTab]} />
+              )}
             </Box>
           </Box>
         </Box>
