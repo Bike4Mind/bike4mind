@@ -343,6 +343,7 @@ export function PublishShareModal({
   // The opt-in no-sign-in (`/a/<token>`) share link, minted lazily only when the owner asks.
   const [shareToken, setShareToken] = useState<string | null>(null);
   const [shareExpiresAt, setShareExpiresAt] = useState<string | null>(null);
+  // Expiry for the next link minted or regenerated; the current link's own expiry is shareExpiresAt.
   const [shareExpiry, setShareExpiry] = useState<ShareExpiryChoice>('none');
   const [shareBusy, setShareBusy] = useState(false);
   // Access gate on top of Public (issue #383). `gateTouched` distinguishes "left at
