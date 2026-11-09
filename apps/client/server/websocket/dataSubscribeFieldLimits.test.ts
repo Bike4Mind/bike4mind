@@ -181,6 +181,10 @@ describe('resolveFieldLimits', () => {
       'userDetails.maxCredits',
     ]);
     expect(findWithheldFilterPaths({ 'userDetails.email': 'a@b.test' }, limits)).toEqual([]);
+    expect(findWithheldFilterPaths({ 'userDetails.0.usedCredits': { $gt: 0 } }, limits)).toEqual([
+      'userDetails.0.usedCredits',
+    ]);
+    expect(findWithheldFilterPaths({ 'userDetails.0.email': 'a@b.test' }, limits)).toEqual([]);
   });
 
   it('still excludes stripeCustomerId for a platform admin, who keeps billingContact', () => {

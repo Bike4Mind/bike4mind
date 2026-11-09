@@ -322,6 +322,7 @@ describe('dataSubscribeRequest WS handler - organization field scoping', () => {
     expect(fields['userDetails.lastCreditUsedAt']).toBe(withheld ? false : undefined);
     expect(fields['userDetails.periodStart']).toBe(withheld ? false : undefined);
     expect(fields.billingContact).toBe(isAdmin ? undefined : false);
+    expect(mockUpsertSubscriber).toHaveBeenCalledWith(expect.objectContaining({ fields }), expect.anything());
   });
 
   it.each([

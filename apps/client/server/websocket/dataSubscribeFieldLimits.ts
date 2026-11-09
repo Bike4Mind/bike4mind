@@ -128,8 +128,15 @@ export function findWithheldFilterPaths(filter: unknown, fieldLimits: Record<str
     .map(([path]) => path);
   if (!withheld.length) return [];
 
-  const touches = (path: string) =>
-    withheld.some(field => field === path || field.startsWith(`${path}.`) || path.startsWith(`${field}.`));
+  const normalize = (path: string) =>
+    path
+      .split('.')
+      .filter(segment => !/^\d+$/.test(segment))
+      .join('.');
+  const touches = (key: string) => {
+    const path = normalize(key);
+    return withheld.some(field => field === path || field.startsWith(`${path}.`) || path.startsWith(`${field}.`));
+  };
   const found: string[] = [];
   const walk = (node: unknown) => {
     if (Array.isArray(node)) {
