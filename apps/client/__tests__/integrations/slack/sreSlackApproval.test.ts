@@ -11,18 +11,28 @@ import {
   postSreFixLoopMessage,
   postSreScopeBlockedMessage,
 } from '@bike4mind/server-utils/integrations/slack/sreSlackApproval';
+import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 
 const mockGetSettingsValue = vi.fn();
 const mockFindFullById = vi.fn();
 const mockFindByIdWithToken = vi.fn();
 const mockAtomicTransition = vi.fn();
 const mockPostMessage = vi.fn().mockResolvedValue({ ok: true });
+const mockWebClientToken = vi.fn();
+const encryptionKey = vi.hoisted(() => 'a'.repeat(64));
+
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { SECRET_ENCRYPTION_KEY: encryptionKey },
+}));
 
 vi.mock('@slack/web-api', () => ({
   // Use a class so `new WebClient(token)` works - arrow functions are not constructors.
   // Class field initializers run at `new` time (not class-definition time), so
   // mockPostMessage is accessible even though vi.mock factories are hoisted.
   WebClient: class MockWebClient {
+    constructor(token: string) {
+      mockWebClientToken(token);
+    }
     chat = { postMessage: mockPostMessage };
   },
 }));
@@ -99,6 +109,22 @@ describe('postSreAnalysisFailureMessage', () => {
         {} // no workspaceId/channelId
       )
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('Slack workspace token', () => {
+  it('constructs the client with the decrypted stored bot token', async () => {
+    const token = 'xoxb-test-token';
+    mockFindByIdWithToken.mockResolvedValue({ slackBotToken: encryptSecret(token, encryptionKey) });
+    mockWebClientToken.mockClear();
+
+    await postSreAnalysisFailureMessage('tracking-1', 'fingerprint', 'Error', 'Failure', 'source', {
+      workspaceId: 'ws-1',
+      channelId: 'C123',
+    });
+
+    expect(mockWebClientToken).toHaveBeenCalledWith(token);
+    expect(mockPostMessage).toHaveBeenCalled();
   });
 });
 
