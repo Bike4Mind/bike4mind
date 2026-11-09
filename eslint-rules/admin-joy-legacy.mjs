@@ -39,7 +39,6 @@ const componentsByFile = {
   'FilesTab/EditTagModal.tsx': ['Modal'],
   'FilesTab/index.tsx': ['Table'],
   'GitHubConnectionTab.tsx': ['Card', 'Modal'],
-  'HelpAnalyticsTab/index.tsx': ['Card', 'Modal', 'Table'],
   'IdentityProvidersTab.tsx': ['Card', 'Modal', 'Table'],
   'IntegrationDemandTab.tsx': ['Table'],
   'IntegrationHealth/components/IntegrationDetailPanel.tsx': ['Card', 'Table'],
