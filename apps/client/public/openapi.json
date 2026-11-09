@@ -734,6 +734,39 @@
             "deprecated": true,
             "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
           },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "account_suspended"
+            ]
+          },
+          "suspension": {
+            "type": "object",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "multiple_accounts",
+                  "automated_misuse",
+                  "payment_fraud",
+                  "prohibited_content",
+                  "terms_violation"
+                ],
+                "description": "Which Terms of Service rule the account was suspended under. New categories may be added."
+              },
+              "terms_url": {
+                "type": "string",
+                "description": "The policy page for this category. Absent on self-hosted deployments."
+              },
+              "appeal_url": {
+                "type": "string",
+                "description": "Where to appeal the suspension. Absent on self-hosted deployments."
+              }
+            },
+            "required": [
+              "reason_category"
+            ]
+          },
           "required_scopes": {
             "type": "array",
             "items": {
@@ -1064,6 +1097,40 @@
             "deprecated": true,
             "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
           },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "account_suspended",
+              "billing_organization_mismatch"
+            ]
+          },
+          "suspension": {
+            "type": "object",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "multiple_accounts",
+                  "automated_misuse",
+                  "payment_fraud",
+                  "prohibited_content",
+                  "terms_violation"
+                ],
+                "description": "Which Terms of Service rule the account was suspended under. New categories may be added."
+              },
+              "terms_url": {
+                "type": "string",
+                "description": "The policy page for this category. Absent on self-hosted deployments."
+              },
+              "appeal_url": {
+                "type": "string",
+                "description": "Where to appeal the suspension. Absent on self-hosted deployments."
+              }
+            },
+            "required": [
+              "reason_category"
+            ]
+          },
           "required_scopes": {
             "type": "array",
             "items": {
@@ -1077,12 +1144,6 @@
               "type": "string"
             },
             "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
-          },
-          "errorCode": {
-            "type": "string",
-            "enum": [
-              "billing_organization_mismatch"
-            ]
           }
         },
         "required": [
@@ -3139,6 +3200,40 @@
             "deprecated": true,
             "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
           },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "account_suspended",
+              "billing_organization_mismatch"
+            ]
+          },
+          "suspension": {
+            "type": "object",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "multiple_accounts",
+                  "automated_misuse",
+                  "payment_fraud",
+                  "prohibited_content",
+                  "terms_violation"
+                ],
+                "description": "Which Terms of Service rule the account was suspended under. New categories may be added."
+              },
+              "terms_url": {
+                "type": "string",
+                "description": "The policy page for this category. Absent on self-hosted deployments."
+              },
+              "appeal_url": {
+                "type": "string",
+                "description": "Where to appeal the suspension. Absent on self-hosted deployments."
+              }
+            },
+            "required": [
+              "reason_category"
+            ]
+          },
           "required_scopes": {
             "type": "array",
             "items": {
@@ -3152,12 +3247,6 @@
               "type": "string"
             },
             "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
-          },
-          "errorCode": {
-            "type": "string",
-            "enum": [
-              "billing_organization_mismatch"
-            ]
           },
           "provider": {
             "type": "string",
@@ -3714,6 +3803,40 @@
             "deprecated": true,
             "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
           },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "account_suspended",
+              "billing_organization_mismatch"
+            ]
+          },
+          "suspension": {
+            "type": "object",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "multiple_accounts",
+                  "automated_misuse",
+                  "payment_fraud",
+                  "prohibited_content",
+                  "terms_violation"
+                ],
+                "description": "Which Terms of Service rule the account was suspended under. New categories may be added."
+              },
+              "terms_url": {
+                "type": "string",
+                "description": "The policy page for this category. Absent on self-hosted deployments."
+              },
+              "appeal_url": {
+                "type": "string",
+                "description": "Where to appeal the suspension. Absent on self-hosted deployments."
+              }
+            },
+            "required": [
+              "reason_category"
+            ]
+          },
           "required_scopes": {
             "type": "array",
             "items": {
@@ -3727,12 +3850,6 @@
               "type": "string"
             },
             "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
-          },
-          "errorCode": {
-            "type": "string",
-            "enum": [
-              "billing_organization_mismatch"
-            ]
           }
         },
         "required": [
@@ -5303,6 +5420,40 @@
             "deprecated": true,
             "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
           },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "account_suspended",
+              "billing_organization_mismatch"
+            ]
+          },
+          "suspension": {
+            "type": "object",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "multiple_accounts",
+                  "automated_misuse",
+                  "payment_fraud",
+                  "prohibited_content",
+                  "terms_violation"
+                ],
+                "description": "Which Terms of Service rule the account was suspended under. New categories may be added."
+              },
+              "terms_url": {
+                "type": "string",
+                "description": "The policy page for this category. Absent on self-hosted deployments."
+              },
+              "appeal_url": {
+                "type": "string",
+                "description": "Where to appeal the suspension. Absent on self-hosted deployments."
+              }
+            },
+            "required": [
+              "reason_category"
+            ]
+          },
           "required_scopes": {
             "type": "array",
             "items": {
@@ -5316,12 +5467,6 @@
               "type": "string"
             },
             "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
-          },
-          "errorCode": {
-            "type": "string",
-            "enum": [
-              "billing_organization_mismatch"
-            ]
           }
         },
         "required": [
@@ -5707,6 +5852,40 @@
             "deprecated": true,
             "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
           },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "account_suspended",
+              "billing_organization_mismatch"
+            ]
+          },
+          "suspension": {
+            "type": "object",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "multiple_accounts",
+                  "automated_misuse",
+                  "payment_fraud",
+                  "prohibited_content",
+                  "terms_violation"
+                ],
+                "description": "Which Terms of Service rule the account was suspended under. New categories may be added."
+              },
+              "terms_url": {
+                "type": "string",
+                "description": "The policy page for this category. Absent on self-hosted deployments."
+              },
+              "appeal_url": {
+                "type": "string",
+                "description": "Where to appeal the suspension. Absent on self-hosted deployments."
+              }
+            },
+            "required": [
+              "reason_category"
+            ]
+          },
           "required_scopes": {
             "type": "array",
             "items": {
@@ -5720,12 +5899,6 @@
               "type": "string"
             },
             "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
-          },
-          "errorCode": {
-            "type": "string",
-            "enum": [
-              "billing_organization_mismatch"
-            ]
           }
         },
         "required": [
@@ -10223,6 +10396,40 @@
             "deprecated": true,
             "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
           },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "account_suspended",
+              "billing_organization_mismatch"
+            ]
+          },
+          "suspension": {
+            "type": "object",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "multiple_accounts",
+                  "automated_misuse",
+                  "payment_fraud",
+                  "prohibited_content",
+                  "terms_violation"
+                ],
+                "description": "Which Terms of Service rule the account was suspended under. New categories may be added."
+              },
+              "terms_url": {
+                "type": "string",
+                "description": "The policy page for this category. Absent on self-hosted deployments."
+              },
+              "appeal_url": {
+                "type": "string",
+                "description": "Where to appeal the suspension. Absent on self-hosted deployments."
+              }
+            },
+            "required": [
+              "reason_category"
+            ]
+          },
           "required_scopes": {
             "type": "array",
             "items": {
@@ -10236,12 +10443,6 @@
               "type": "string"
             },
             "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
-          },
-          "errorCode": {
-            "type": "string",
-            "enum": [
-              "billing_organization_mismatch"
-            ]
           }
         },
         "required": [
@@ -11602,6 +11803,40 @@
             "deprecated": true,
             "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
           },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "account_suspended",
+              "billing_organization_mismatch"
+            ]
+          },
+          "suspension": {
+            "type": "object",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "multiple_accounts",
+                  "automated_misuse",
+                  "payment_fraud",
+                  "prohibited_content",
+                  "terms_violation"
+                ],
+                "description": "Which Terms of Service rule the account was suspended under. New categories may be added."
+              },
+              "terms_url": {
+                "type": "string",
+                "description": "The policy page for this category. Absent on self-hosted deployments."
+              },
+              "appeal_url": {
+                "type": "string",
+                "description": "Where to appeal the suspension. Absent on self-hosted deployments."
+              }
+            },
+            "required": [
+              "reason_category"
+            ]
+          },
           "required_scopes": {
             "type": "array",
             "items": {
@@ -11615,12 +11850,6 @@
               "type": "string"
             },
             "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
-          },
-          "errorCode": {
-            "type": "string",
-            "enum": [
-              "billing_organization_mismatch"
-            ]
           }
         },
         "required": [
@@ -18975,7 +19204,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -20044,7 +20273,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -20426,7 +20655,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -20816,7 +21045,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -21195,7 +21424,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -22256,7 +22485,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -23544,7 +23773,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -24881,7 +25110,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -25143,7 +25372,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -25370,6 +25599,24 @@
               }
             }
           },
+          "403": {
+            "description": "The account is suspended (`errorCode: account_suspended`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "405": {
             "description": "The path does not serve this HTTP method.",
             "headers": {
@@ -25507,6 +25754,24 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account is suspended (`errorCode: account_suspended`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -25707,7 +25972,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -26000,7 +26265,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -27223,7 +27488,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -30874,7 +31139,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -33143,7 +33408,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -45507,7 +45772,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
             "content": {
               "application/json": {
                 "schema": {

@@ -16,8 +16,10 @@ const {
   mockDeny,
   mockSetThrottleTier,
   mockGradeDetections,
+  mockEmailSuspensionNotice,
   txnState,
 } = vi.hoisted(() => ({
+  mockEmailSuspensionNotice: vi.fn(),
   mockGradeDetections: vi.fn(),
   mockSetThrottleTier: vi.fn(),
   mockRecord: vi.fn(),
@@ -139,7 +141,7 @@ vi.mock('@bike4mind/database', () => ({
           const keep = fields.split(' ');
           // The session-end snapshot is the only read that asks for every block field; note
           // whether it happened inside the change callback (the transaction) or before it.
-          if (fields === 'isAdmin email isBanned isModerated disputePending moderation') {
+          if (fields === 'isAdmin email isBanned suspensionReasonCategory isModerated disputePending moderation') {
             txnState.snapshotReadInsideChange = txnState.changeRunning;
           }
           projected =
@@ -174,6 +176,8 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
 
 // The gate's own behaviour is covered in server/auth/stepUp.test.ts; here only where it applies.
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mockRequireStepUp }));
+// The setting gate and the mail are covered in server/users/suspensionNoticeEmail.test.ts; here only the call.
+vi.mock('@server/users/suspensionNoticeEmail', () => ({ emailSuspensionNoticeIfEnabled: mockEmailSuspensionNotice }));
 vi.mock('@server/billing/linkedAccounts', () => ({ propagateAccountRisk: mockPropagateAccountRisk }));
 // Grading rules are covered in server/admin/shadowDetectionStatusVerdicts.test.ts; here only the call.
 vi.mock('@server/admin/shadowDetectionStatusVerdicts', () => ({
@@ -791,6 +795,21 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
     await promise;
 
     expect(txnState.snapshotReadInsideChange).toBe(true);
+  });
+
+  it('offers the suspension notice email only when an account becomes suspended', async () => {
+    adminEdit(BEFORE, { ...BEFORE, isBanned: true, suspensionReasonCategory: 'multiple_accounts' });
+    await run({
+      user: ADMIN,
+      userId: 'target',
+      body: { isBanned: true, suspensionReasonCategory: 'multiple_accounts', statusChangeReason: 'Abuse' },
+    }).promise;
+    expect(mockEmailSuspensionNotice).toHaveBeenCalledWith('target', 'multiple_accounts', expect.anything());
+
+    mockEmailSuspensionNotice.mockClear();
+    adminEdit(BEFORE, { ...BEFORE, email: 'new@example.com' });
+    await run({ user: ADMIN, userId: 'target', body: { email: 'new@example.com' } }).promise;
+    expect(mockEmailSuspensionNotice).not.toHaveBeenCalled();
   });
 
   it('acts on accounts linked to one an admin bans, and not on other edits', async () => {
