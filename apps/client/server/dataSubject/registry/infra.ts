@@ -99,6 +99,15 @@ export const infraHolders = {
     kind: 'noUserData',
     note: 'Short-lived dedupe, lease and rate-limit entries keyed by an opaque string; rows expire on their TTL.',
   },
+  // An admin's working list of accounts suspected of acting together; the evidence lives on the linked detection
+  // (`sourceDetectionId`), so an erased member is pulled and the owner anonymized.
+  CampaignWatch: {
+    kind: 'holder',
+    references: [
+      { path: 'userIds', matchBy: 'userId', action: 'pullFromArray' },
+      { path: 'ownerId', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
   // Activity counters behind platform metrics: the row stays for the aggregates, the person's identity goes.
   CounterLog: {
     kind: 'holder',
