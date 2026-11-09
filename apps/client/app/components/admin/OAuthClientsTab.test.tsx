@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -56,6 +56,12 @@ const client = {
 };
 const SECRET = 'shown-once-secret';
 
+// Edit and rotate live in each row's "..." menu, which renders its items only while open.
+const openRowAction = async (action: 'edit' | 'rotate', clientId = client.clientId) => {
+  fireEvent.click(await screen.findByTestId(`oauth-client-actions-${clientId}`));
+  fireEvent.click(await screen.findByTestId(`oauth-client-${action}-${clientId}`));
+};
+
 beforeEach(() => {
   // Not resetAllMocks: that also wipes global setup mocks (matchMedia) the theme provider needs.
   for (const fn of [...Object.values(api), copy, toast.success, toast.error]) vi.mocked(fn).mockReset();
@@ -100,6 +106,17 @@ describe('OAuthClientsTab', () => {
     await waitFor(() => expect(screen.queryByTestId('oauth-client-secret-modal')).not.toBeInTheDocument());
     const values = Array.from(document.querySelectorAll('input, textarea')).map(el => (el as HTMLInputElement).value);
     expect(values).not.toContain(SECRET);
+  });
+
+  it('closes the secret modal from its close button', async () => {
+    api.createOAuthClient.mockResolvedValue({ client, clientSecret: SECRET });
+    renderTab();
+    fireEvent.click(await screen.findByTestId('oauth-client-add-btn'));
+    fireEvent.click(screen.getByTestId('oauth-client-create-submit-btn'));
+    await screen.findByTestId('oauth-client-secret-modal');
+
+    fireEvent.click(screen.getByTestId('oauth-client-secret-modal-close-btn'));
+    await waitFor(() => expect(screen.queryByTestId('oauth-client-secret-modal')).not.toBeInTheDocument());
   });
 
   it('keeps the secret modal open on Escape and backdrop click; only Done closes it', async () => {
@@ -197,7 +214,7 @@ describe('OAuthClientsTab', () => {
   it('rotates only after confirmation and shows the new secret', async () => {
     api.rotateOAuthClientSecret.mockResolvedValue({ client, clientSecret: SECRET });
     renderTab();
-    fireEvent.click(await screen.findByTestId('oauth-client-rotate-b4m_my_app_0011aabb'));
+    await openRowAction('rotate');
     expect(api.rotateOAuthClientSecret).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId('oauth-client-rotate-confirm-btn'));
 
@@ -218,7 +235,7 @@ describe('OAuthClientsTab', () => {
   it('edits redirect URIs', async () => {
     api.updateOAuthClient.mockResolvedValue(client);
     renderTab();
-    fireEvent.click(await screen.findByTestId('oauth-client-edit-b4m_my_app_0011aabb'));
+    await openRowAction('edit');
     fireEvent.change(screen.getByTestId('oauth-client-edit-uris-input'), {
       target: { value: 'https://app.example.test/new\n' },
     });
@@ -243,7 +260,7 @@ describe('OAuthClientsTab', () => {
   it('keeps the edit modal open and shows the error when saving redirect URIs fails', async () => {
     api.updateOAuthClient.mockRejectedValue(new Error('Redirect URI must not contain whitespace'));
     renderTab();
-    fireEvent.click(await screen.findByTestId('oauth-client-edit-b4m_my_app_0011aabb'));
+    await openRowAction('edit');
     fireEvent.change(screen.getByTestId('oauth-client-edit-uris-input'), {
       target: { value: 'https://x.example.test/cb' },
     });
@@ -260,7 +277,7 @@ describe('OAuthClientsTab', () => {
     });
     api.updateOAuthClient.mockRejectedValueOnce(conflict);
     renderTab();
-    fireEvent.click(await screen.findByTestId('oauth-client-edit-b4m_my_app_0011aabb'));
+    await openRowAction('edit');
     fireEvent.change(screen.getByTestId('oauth-client-edit-uris-input'), {
       target: { value: 'https://x.example.test/cb' },
     });
@@ -280,7 +297,7 @@ describe('OAuthClientsTab', () => {
   it('toasts the error and shows no secret modal when rotation fails', async () => {
     api.rotateOAuthClientSecret.mockRejectedValue(new Error('rotate failed'));
     renderTab();
-    fireEvent.click(await screen.findByTestId('oauth-client-rotate-b4m_my_app_0011aabb'));
+    await openRowAction('rotate');
     fireEvent.click(screen.getByTestId('oauth-client-rotate-confirm-btn'));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('rotate failed'));
     expect(screen.queryByTestId('oauth-client-secret-modal')).not.toBeInTheDocument();
@@ -325,8 +342,103 @@ describe('OAuthClientsTab', () => {
   it('hides rotate for a public (PKCE) client', async () => {
     api.fetchOAuthClients.mockResolvedValue([{ ...client, tokenEndpointAuthMethod: 'none' }]);
     renderTab();
-    await screen.findByTestId('oauth-client-row-b4m_my_app_0011aabb');
+    fireEvent.click(await screen.findByTestId('oauth-client-actions-b4m_my_app_0011aabb'));
+    expect(await screen.findByTestId('oauth-client-edit-b4m_my_app_0011aabb')).toBeInTheDocument();
     expect(screen.queryByTestId('oauth-client-rotate-b4m_my_app_0011aabb')).not.toBeInTheDocument();
+  });
+});
+
+describe('OAuthClientsTab page frame', () => {
+  const second = { ...client, id: 'c2', clientId: 'b4m_other_app_22ccdd', name: 'Other App' };
+
+  it('opens with the page header: sentence-case h1 with the count, description and the register action', async () => {
+    renderTab();
+    await screen.findByTestId('oauth-client-row-b4m_my_app_0011aabb');
+    const header = screen.getByTestId('admin-page-header');
+
+    expect(screen.getByTestId('oauth-clients-tab').firstElementChild).toBe(header);
+    expect(within(header).getByRole('heading', { level: 1 })).toHaveTextContent(/^OAuth clients \(1\)$/);
+    expect(header).toHaveTextContent('Apps registered to use "Sign in with Bike4Mind".');
+    expect(within(header).getByTestId('oauth-client-add-btn')).toHaveTextContent('Register client');
+  });
+
+  it('lists clients in one DataTable that scrolls sideways below its min width, with single-line names', async () => {
+    renderTab();
+    await screen.findByTestId('oauth-client-row-b4m_my_app_0011aabb');
+
+    expect(screen.getByTestId('oauth-clients-table')).toHaveStyle({ minWidth: '68rem' });
+    expect(screen.getByTestId('oauth-clients-tab').querySelectorAll('.MuiCard-root')).toHaveLength(0);
+    const name = screen.getByTestId('oauth-client-name-b4m_my_app_0011aabb');
+    expect(name).toHaveAttribute('title', 'My App');
+    expect(getComputedStyle(name).whiteSpace).toBe('nowrap');
+    expect(getComputedStyle(name).textOverflow).toBe('ellipsis');
+  });
+
+  it('opens the rotate confirmation for the row whose menu was used', async () => {
+    api.fetchOAuthClients.mockResolvedValue([client, second]);
+    api.rotateOAuthClientSecret.mockResolvedValue({ client: second, clientSecret: SECRET });
+    renderTab();
+    await openRowAction('rotate', second.clientId);
+
+    const dialog = screen.getByTestId('oauth-client-rotate-modal');
+    expect(dialog).toHaveAttribute('role', 'alertdialog');
+    expect(within(dialog).getByRole('heading', { level: 2 })).toHaveTextContent('Rotate client secret');
+    expect(dialog).toHaveTextContent('Generate a new secret for Other App?');
+    fireEvent.click(screen.getByTestId('oauth-client-rotate-confirm-btn'));
+    await waitFor(() => expect(api.rotateOAuthClientSecret).toHaveBeenCalledWith('c2'));
+  });
+
+  it('opens the edit dialog for the row whose menu was used', async () => {
+    api.fetchOAuthClients.mockResolvedValue([client, second]);
+    renderTab();
+    await openRowAction('edit', second.clientId);
+
+    const dialog = screen.getByTestId('oauth-client-edit-modal');
+    expect(within(dialog).getByRole('heading', { level: 2 })).toHaveTextContent('Edit OAuth client');
+    expect(dialog).toHaveTextContent('Other App');
+  });
+
+  it('names the object on the register and edit commit buttons', async () => {
+    renderTab();
+    fireEvent.click(await screen.findByTestId('oauth-client-add-btn'));
+    expect(screen.getByTestId('oauth-client-create-submit-btn')).toHaveTextContent(/^Register client$/);
+    fireEvent.click(screen.getByTestId('oauth-client-create-modal-close-btn'));
+    await waitFor(() => expect(screen.queryByTestId('oauth-client-create-modal')).not.toBeInTheDocument());
+
+    await openRowAction('edit');
+    expect(screen.getByTestId('oauth-client-edit-save-btn')).toHaveTextContent(/^Save changes$/);
+  });
+
+  it('shows an empty state in place of the table whose action opens the register dialog', async () => {
+    api.fetchOAuthClients.mockResolvedValue([]);
+    renderTab();
+
+    const empty = await screen.findByTestId('oauth-clients-empty');
+    expect(within(empty).getByTestId('admin-empty-state')).toHaveTextContent('No OAuth clients registered yet');
+    expect(screen.queryByTestId('oauth-clients-table')).not.toBeInTheDocument();
+    fireEvent.click(within(empty).getByTestId('oauth-clients-empty-add-btn'));
+    expect(await screen.findByTestId('oauth-client-create-modal')).toBeInTheDocument();
+  });
+
+  it('keeps the header and shows skeleton rows while clients load', () => {
+    api.fetchOAuthClients.mockReturnValue(new Promise(() => {}));
+    renderTab();
+
+    expect(screen.getByTestId('admin-page-header')).toBeInTheDocument();
+    expect(screen.getAllByTestId('admin-table-skeleton-row').length).toBeGreaterThan(0);
+  });
+
+  it('retries the list from the load error state', async () => {
+    api.fetchOAuthClients.mockRejectedValueOnce(new Error('Forbidden'));
+    renderTab();
+
+    const loadError = await screen.findByTestId('oauth-clients-load-error');
+    expect(within(loadError).getByTestId('admin-error-state')).toHaveTextContent(
+      'Could not load OAuth clients: Forbidden'
+    );
+    fireEvent.click(within(loadError).getByTestId('admin-error-retry-btn'));
+    expect(await screen.findByTestId('oauth-client-row-b4m_my_app_0011aabb')).toBeInTheDocument();
+    expect(api.fetchOAuthClients).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -405,7 +517,7 @@ describe('edit modal scopes and federated trust', () => {
   };
   const openEdit = async () => {
     renderTab();
-    fireEvent.click(await screen.findByTestId('oauth-client-edit-b4m_my_app_0011aabb'));
+    await openRowAction('edit');
   };
   const scopeBox = (scope: string) => screen.getByTestId(`oauth-client-edit-scope-${scope}`) as HTMLInputElement;
 

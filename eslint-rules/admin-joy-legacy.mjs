@@ -52,7 +52,6 @@ const componentsByFile = {
   'ModelMetrics/components/MetricsInfoModal.tsx': ['Modal'],
   'ModelMetrics/components/RawDataTab.tsx': ['Table', 'Card'],
   'ModelMetrics/components/SpendTab.tsx': ['Table'],
-  'OAuthClientsTab.tsx': ['Modal', 'Table'],
   'OrganizationGroupMembersCard.tsx': ['Card'],
   'OrganizationGroupTypesCard.tsx': ['Card'],
   'OrganizationProfile.tsx': ['Card'],

@@ -53,7 +53,6 @@ export default {
   'ModelMetrics/components/MetricsInfoModal.tsx': [[2, 'c6c6ac7ed5b077e5']],
   'ModelMetrics/components/RawDataTab.tsx': [[2, '75a9a9612e03580f']],
   'ModelMetrics/components/SpendTab.tsx': [[2, 'c909d4ea5a207560']],
-  'OAuthClientsTab.tsx': [[2, '45b473e9ba6319a9']],
   'OrganizationGroupMembersCard.tsx': [[2, '8ca139fc1617a856']],
   'OrganizationGroupTypesCard.tsx': [[2, 'a2ae12a4f8a0ea28']],
   'OrganizationProfile.tsx': [[2, '86700e7e9f5ffef4']],
