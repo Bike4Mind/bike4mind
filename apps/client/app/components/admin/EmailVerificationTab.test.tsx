@@ -1,6 +1,6 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -66,7 +66,7 @@ const renderTab = () => {
   );
 };
 
-// Every layout, old or new, renders the username once the list has loaded.
+// The username renders once the list has loaded, in the table or any earlier layout of the tab.
 const listLoaded = () => screen.findAllByText('verified-user');
 
 const openRowMenu = async (id: string) => {
@@ -141,7 +141,7 @@ describe('EmailVerificationTab', () => {
     renderTab();
     await listLoaded();
 
-    // hidden: true also counts controls a responsive breakpoint hides from jsdom.
+    // hidden: true also counts controls CSS hides, so no Unverify button can sit out of view in a row.
     expect(screen.queryAllByRole('button', { name: /unverify/i, hidden: true })).toHaveLength(0);
     // Joy's stable color utility class, the only DOM trace of color="danger".
     expect(document.body.querySelector('[class*="colorDanger"]')).toBeNull();
@@ -242,6 +242,49 @@ describe('EmailVerificationTab', () => {
     fireEvent.click(resendChange);
 
     await waitFor(() => expect(m.post).toHaveBeenCalledWith(`/api/admin/users/${CHANGING_ID}/resend-email-change`));
+  });
+
+  it.each([
+    ['resend', UNVERIFIED_ID, 'Sending verification email', 'Verification email resent to unverified@example.com'],
+    ['resend-email-change', CHANGING_ID, 'Sending email change link', 'Email change link resent to next@example.com'],
+  ])('ignores a second %s on a row while its first one is still sending', async (command, id, pendingLabel, toast) => {
+    let finishSend: (value: unknown) => void = () => undefined;
+    m.post.mockImplementation(() => new Promise(resolve => (finishSend = resolve)));
+    renderTab();
+
+    await openRowMenu(id);
+    fireEvent.click(await screen.findByTestId(`email-verification-row-${command}-${id}`));
+    await waitFor(() => expect(m.post).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByTestId(`email-verification-row-${command}-${id}`)).toBeNull());
+
+    await openRowMenu(id);
+    const again = await screen.findByTestId(`email-verification-row-${command}-${id}`);
+    expect(again).toHaveAttribute('aria-disabled', 'true');
+    expect(again).toHaveTextContent(pendingLabel);
+    fireEvent.click(again);
+    expect(m.post).toHaveBeenCalledTimes(1);
+
+    await act(async () => finishSend({ data: { success: true } }));
+    await waitFor(() => expect(m.toastSuccess).toHaveBeenCalledWith(toast));
+  });
+
+  it('searches through the filter bar and returns to the first page', async () => {
+    renderTab();
+    await listLoaded();
+    fireEvent.click(screen.getByTestId('admin-table-next-btn'));
+    await waitFor(() =>
+      expect(m.get).toHaveBeenLastCalledWith('/api/admin/users/email-verification', {
+        params: expect.objectContaining({ page: 2 }),
+      })
+    );
+
+    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'carol' } });
+
+    await waitFor(() =>
+      expect(m.get).toHaveBeenLastCalledWith('/api/admin/users/email-verification', {
+        params: expect.objectContaining({ search: 'carol', page: 1 }),
+      })
+    );
   });
 
   it('reports the server error from a failed resend', async () => {

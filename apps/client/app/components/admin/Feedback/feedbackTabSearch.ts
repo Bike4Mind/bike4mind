@@ -29,9 +29,10 @@ const FEEDBACK_VIEW_PARAMS = [
 
 export const FEEDBACK_TAB_PARAMS = [...FEEDBACK_VIEW_PARAMS, FEEDBACK_ID_PARAM] as const;
 
-// `feedbackStatus` is the checked statuses joined with commas (`New,Closed`). No box checked is a real
-// state distinct from the default (it matches nothing; useFeedbackOperations skips the list query),
-// so it gets its own token.
+// `feedbackStatus` is the checked statuses joined with commas (`New,Closed`). No status checked is a
+// real state distinct from the default (it matches nothing; useFeedbackOperations skips the list
+// query), so it gets its own token. Only a URL can carry it: the status filter chip checks every
+// status again when its last one is unpicked.
 const STATUS_SEPARATOR = ',';
 const NO_STATUS_TOKEN = 'none';
 

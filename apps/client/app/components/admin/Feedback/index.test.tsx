@@ -269,6 +269,23 @@ describe('FeedbackTab', () => {
       expect(defaultPaginationReturn.handleItemsPerPageChange).toHaveBeenCalledWith(50);
     });
 
+    it('flips the date order from the Created header and goes back to page 1', async () => {
+      renderFeedbackTab();
+
+      await userEvent.click(screen.getByTestId('admin-table-sort-createdAt-btn'));
+
+      expect(defaultFiltersReturn.toggleSortDirection).toHaveBeenCalledTimes(1);
+      expect(defaultPaginationReturn.handlePageChange).toHaveBeenCalledWith(1);
+    });
+
+    it('sends the search box text to the filter hook', () => {
+      renderFeedbackTab();
+
+      fireEvent.change(screen.getByTestId('feedback-search-input'), { target: { value: 'export broke' } });
+
+      expect(defaultFiltersReturn.setSearchTerm).toHaveBeenCalledWith('export broke');
+    });
+
     it('scrolls the table sideways inside its own container instead of crushing columns', () => {
       renderFeedbackTab();
 

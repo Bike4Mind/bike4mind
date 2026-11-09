@@ -62,7 +62,8 @@ export type DataTableProps<Row> = {
   /** Show the scrollbar thumb all the time instead of only on hover. */
   alwaysShowScrollbar?: boolean;
 };
-const PAGE_SIZES = [25, 50, 100] as const;
+// A server-paged list that validates its page size (Feedback/constants.ts) offers exactly these.
+export const PAGE_SIZES = [25, 50, 100] as const;
 const CELL_CONTROLS = 'button, input, a, [role="checkbox"], [role="menu"], [role="menuitem"]';
 
 function nextDirection(current: DataTableSort | undefined, columnId: string): DataTableSort {

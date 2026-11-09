@@ -1,15 +1,19 @@
 import { FEEDBACK_LIST_MAX_LIMIT, FEEDBACK_SUBJECTS, FeedbackStatus, FeedbackSubject } from '@bike4mind/common';
 
 /**
- * Page sizes offered for the feedback list. Must match DataTable's page-size select (25, 50, 100),
- * which is the list's only pager; the top size is FEEDBACK_LIST_MAX_LIMIT because GET /api/feedback
- * rejects a larger limit outright, so the two cannot drift into a size that 4xxs.
+ * Page sizes offered for the feedback list. Must equal DataTable's PAGE_SIZES, the list's only pager
+ * (constants.test.ts pins it); not imported from there because feedbackTabSearch.ts reads this file
+ * and the router imports that eagerly, so it stays React-free. The top size is
+ * FEEDBACK_LIST_MAX_LIMIT because GET /api/feedback rejects a larger limit outright.
  */
 export const FEEDBACK_PAGE_SIZE_OPTIONS = [25, 50, FEEDBACK_LIST_MAX_LIMIT];
 
 export const FEEDBACK_DEFAULT_PAGE_SIZE = FEEDBACK_PAGE_SIZE_OPTIONS[0];
 
-/** Triage order: the status filter and each row's status select list them in it, and `feedbackStatus` is written in it. */
+/**
+ * Triage order: the status filter and each row's status select list statuses in it, and
+ * `feedbackStatus` is written in it.
+ */
 export const FEEDBACK_STATUS_ORDER = [FeedbackStatus.New, FeedbackStatus.InProgress, FeedbackStatus.Closed] as const;
 
 /** Sentence-case labels; the stored values are bare tokens (`InProgress`). */

@@ -8,11 +8,12 @@ import {
   FEEDBACK_SUBJECT_LABELS,
   toSubjectFilter,
 } from './constants';
+import { PAGE_SIZES } from '../shared/DataTable';
 
-// DataTable's footer select offers exactly these sizes, and the list's URL parser accepts only them.
+// The list's URL parser accepts only these sizes, so they must be the ones the footer select offers.
 describe('FEEDBACK_PAGE_SIZE_OPTIONS', () => {
   it('matches the table pager and stays within the server cap', () => {
-    expect(FEEDBACK_PAGE_SIZE_OPTIONS).toEqual([25, 50, 100]);
+    expect(FEEDBACK_PAGE_SIZE_OPTIONS).toEqual([...PAGE_SIZES]);
     expect(Math.max(...FEEDBACK_PAGE_SIZE_OPTIONS)).toBeLessThanOrEqual(FEEDBACK_LIST_MAX_LIMIT);
     expect(FEEDBACK_DEFAULT_PAGE_SIZE).toBe(25);
   });

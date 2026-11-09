@@ -235,9 +235,22 @@ const COLUMNS: DataColumn<User>[] = [
 
 type RowCommand = 'resend' | 'resend-email-change' | 'verify' | 'unverify';
 
-const RowMenu = ({ user, onCommand }: { user: User; onCommand: (command: RowCommand, user: User) => void }) => {
-  const item = (command: RowCommand, label: string) => (
-    <MenuItem onClick={() => onCommand(command, user)} data-testid={`email-verification-row-${command}-${user._id}`}>
+const RowMenu = ({
+  user,
+  resending,
+  onCommand,
+}: {
+  user: User;
+  /** A resend for this row is in flight: its resend items are disabled and say so. */
+  resending: boolean;
+  onCommand: (command: RowCommand, user: User) => void;
+}) => {
+  const item = (command: RowCommand, label: string, disabled = false) => (
+    <MenuItem
+      disabled={disabled}
+      onClick={() => onCommand(command, user)}
+      data-testid={`email-verification-row-${command}-${user._id}`}
+    >
       {label}
     </MenuItem>
   );
@@ -259,9 +272,12 @@ const RowMenu = ({ user, onCommand }: { user: User; onCommand: (command: RowComm
       </MenuButton>
       <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
         {/* While an address change is pending, its link is the only action offered. */}
-        {user.pendingEmail && item('resend-email-change', 'Resend email change link')}
+        {user.pendingEmail &&
+          item('resend-email-change', resending ? 'Sending email change link' : 'Resend email change link', resending)}
         {!user.pendingEmail && user.emailVerified && item('unverify', 'Unverify email')}
-        {!user.pendingEmail && !user.emailVerified && item('resend', 'Resend verification email')}
+        {!user.pendingEmail &&
+          !user.emailVerified &&
+          item('resend', resending ? 'Sending verification email' : 'Resend verification email', resending)}
         {!user.pendingEmail && !user.emailVerified && item('verify', 'Verify email')}
       </Menu>
     </Dropdown>
@@ -275,6 +291,9 @@ const EmailVerificationTab = () => {
   const [statusFilter, setStatusFilter] = useState<VerificationStatusFilter>('all');
   // Verify and unverify change the account, so they go through a dialog that asks for an audited reason.
   const [dialog, setDialog] = useState<{ type: 'verify' | 'unverify'; user: User } | null>(null);
+  // Rows with a resend in flight, tracked here because a mutation only reports its latest call: a
+  // send on one row must not re-enable another row's resend while that one is still pending.
+  const [resendingIds, setResendingIds] = useState<ReadonlySet<string>>(() => new Set());
 
   const queryClient = useQueryClient();
   const users = useGetEmailVerificationUsers({
@@ -316,6 +335,7 @@ const EmailVerificationTab = () => {
       setDialog({ type: command, user });
       return;
     }
+    setResendingIds(ids => new Set(ids).add(user._id));
     try {
       if (command === 'resend') {
         await resendVerification.mutateAsync(user._id);
@@ -326,6 +346,12 @@ const EmailVerificationTab = () => {
       }
     } catch (error) {
       reportFailure(error);
+    } finally {
+      setResendingIds(ids => {
+        const next = new Set(ids);
+        next.delete(user._id);
+        return next;
+      });
     }
   };
 
@@ -426,8 +452,13 @@ const EmailVerificationTab = () => {
               setCurrentPage(1);
             },
           }}
-          pageResetKey={`${statusFilter}:${debouncedSearch}`}
-          rowActions={user => <RowMenu user={user} onCommand={(command, row) => void runCommand(command, row)} />}
+          rowActions={user => (
+            <RowMenu
+              user={user}
+              resending={resendingIds.has(user._id)}
+              onCommand={(command, row) => void runCommand(command, row)}
+            />
+          )}
           minWidth="62rem"
           maxHeight="none"
         />

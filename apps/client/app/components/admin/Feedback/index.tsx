@@ -453,7 +453,7 @@ const FeedbackTab: React.FC = () => {
             )
           }
           sort={{ columnId: 'createdAt', direction: filters.sortAscending ? 'asc' : 'desc' }}
-          onSortChange={toggleSortDirection}
+          onSortChange={() => toggleSortDirection()}
           pagination={{
             page: currentPage,
             pageSize: itemsPerPage,
@@ -461,7 +461,6 @@ const FeedbackTab: React.FC = () => {
             onPageChange: handlePageChange,
             onPageSizeChange: handleItemsPerPageChange,
           }}
-          pageResetKey={JSON.stringify(filterParams)}
           rowActions={row => <FeedbackRowMenu row={row} onDelete={handleDeleteFeedbackClick} />}
           minWidth="56rem"
           maxHeight="none"
@@ -482,7 +481,7 @@ const FeedbackTab: React.FC = () => {
           )
         }
         reasonPresets={ADMIN_REASON_PRESETS.feedbackDeletion}
-        // DELETE /api/feedback/:id takes no reason, so the one picked here is neither sent nor stored.
+        // DELETE /api/feedback/:id/delete takes no reason, so the one picked here is neither sent nor stored.
         reasonAudited={false}
         confirmLabel="Delete feedback"
         tone="danger"
