@@ -24,8 +24,6 @@ export default {
   'DependenciesTab.tsx': [[2, '9e9d8dad48570e0a']],
   'DiscoveryRunDetailModal.tsx': [[2, '2dbf3bba4b9d6a8c']],
   'DlqReplayTab.tsx': [[2, 'c49941a37e1cc343']],
-  'DocumentationTab/components/DocSection.tsx': [[2, '3a7dde35da9fc670']],
-  'DocumentationTab/index.tsx': [[2, '21a4c9a0e4056fb7']],
   'EmailVerificationTab.tsx': [[2, 'def9b5c49c1ced23']],
   'EmbedKeysTab.tsx': [[10, '5606976cb6f3ed67']],
   'EventMetrics/components/CurationBreakdownTab.tsx': [[2, 'e2ae0a0feb2b939a']],

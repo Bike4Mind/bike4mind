@@ -23,8 +23,6 @@ const componentsByFile = {
   'DependenciesTab.tsx': ['Table'],
   'DiscoveryRunDetailModal.tsx': ['Modal', 'Table'],
   'DlqReplayTab.tsx': ['Card', 'Modal', 'Table'],
-  'DocumentationTab/components/DocSection.tsx': ['Card'],
-  'DocumentationTab/index.tsx': ['Card'],
   'EmailVerificationTab.tsx': ['Card', 'Modal'],
   'EmbedKeysTab.tsx': ['Modal', 'Table'],
   'EventMetrics/components/CurationBreakdownTab.tsx': ['Card'],
