@@ -270,6 +270,14 @@ describe('StripeDisputesTab', () => {
     expect(screen.getByTestId('admin-missing-permission-action')).toBeInTheDocument();
   });
 
+  it('disables Resolve and Undo for a reader without users:moderate', () => {
+    m.currentUser = { isAdmin: false, adminPermissions: ['support:read', 'credits:adjust'] };
+    m.useStripeDisputes.mockReturnValue(queryResult(list()));
+    renderTab();
+    expect(screen.getByTestId(`stripe-dispute-resolve-btn-${ORG_ID}`)).toBeDisabled();
+    expect(screen.getByTestId(`stripe-dispute-undo-btn-${USER_DISPUTE_ID}`)).toBeDisabled();
+  });
+
   it('shows the truncated notice and leaves the partial count out of the header', () => {
     m.useStripeDisputes.mockReturnValue(queryResult(list({ truncated: true })));
     renderTab();

@@ -91,6 +91,20 @@ describe('AuditFilterBar account filters', () => {
     expect(screen.getByTestId('mock-user-selector-Target user')).toBeInTheDocument();
   });
 
+  it('clears the delegate actor input when the filters are cleared', () => {
+    user.current = { isAdmin: false, adminPermissions: ['support:read'] };
+    const onChange = vi.fn();
+    const onClear = vi.fn();
+    const { rerender } = render(
+      <AuditFilterBar filters={{ actorUserId: 'abc' }} onChange={onChange} onClear={onClear} />,
+      { wrapper: TestWrapper }
+    );
+    expect(screen.getByTestId('audit-filter-actor-id')).toHaveValue('abc');
+
+    rerender(<AuditFilterBar filters={{}} onChange={onChange} onClear={onClear} />);
+    expect(screen.getByTestId('audit-filter-actor-id')).toHaveValue('');
+  });
+
   it('gives a delegate id inputs, since the lookups list only full admins results', () => {
     user.current = { isAdmin: false, adminPermissions: ['support:read'] };
     const onChange = vi.fn();

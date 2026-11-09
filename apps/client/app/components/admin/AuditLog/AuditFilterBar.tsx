@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Autocomplete, Button, FormControl, FormLabel, Input, Option, Select, Stack } from '@mui/joy';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import {
@@ -123,6 +123,7 @@ type IdInputProps = {
 
 const IdInput: React.FC<IdInputProps> = ({ label, testId, value, onChange }) => {
   const [draft, setDraft] = useState(value ?? '');
+  useEffect(() => setDraft(value ?? ''), [value]);
   const commit = () => {
     const trimmed = draft.trim();
     if (trimmed !== (value ?? '')) onChange(trimmed || undefined);
