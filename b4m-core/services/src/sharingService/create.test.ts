@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { InviteType, IUserDocument, Permission } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { createInvite } from './create';
 
 /**
@@ -211,7 +211,7 @@ describe('sharingService - createInvite (project arm authority)', () => {
     // demonstrate it - see projectInviteAuth.e2e.test.ts.
     findShareAccessById.mockResolvedValue(null);
 
-    await expect(create(asUser('outsider-1'))).rejects.toThrow(BadRequestError);
+    await expect(create(asUser('outsider-1'))).rejects.toThrow(NotFoundError);
     expect(db.invites.create).not.toHaveBeenCalled();
   });
 });
