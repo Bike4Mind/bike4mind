@@ -11,7 +11,9 @@ const m = vi.hoisted(() => ({
   undo: vi.fn(),
   search: {} as Record<string, unknown>,
   navigate: vi.fn(),
+  currentUser: { isAdmin: true } as { isAdmin: boolean; adminPermissions?: string[] },
 }));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: m.currentUser }) }));
 vi.mock('@client/app/hooks/data/stripeDisputes', () => ({
   useStripeDisputes: m.useStripeDisputes,
   useResolveStripeDispute: () => ({ mutateAsync: m.resolve, isPending: false, error: null }),
@@ -104,6 +106,7 @@ describe('StripeDisputesTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     m.search = {};
+    m.currentUser = { isAdmin: true };
     m.useStripeDisputes.mockReturnValue(queryResult(list()));
   });
 
@@ -257,6 +260,14 @@ describe('StripeDisputesTab', () => {
     fireEvent.click(within(dialog).getByTestId('stripe-dispute-undo-dialog-reason-input-preset-0'));
     fireEvent.click(within(dialog).getByTestId('stripe-dispute-undo-dialog-confirm-btn'));
     expect((await screen.findByTestId('stripe-dispute-undo-conflict')).textContent).toContain('later bulk action');
+  });
+
+  it('disables the actions a support reader lacks the permission for', () => {
+    m.currentUser = { isAdmin: false, adminPermissions: ['support:read', 'users:moderate'] };
+    m.useStripeDisputes.mockReturnValue(queryResult(list({ data: [containedUserDispute()] })));
+    renderTab();
+    expect(screen.getByTestId(`stripe-dispute-undo-btn-${USER_DISPUTE_ID}`)).toBeDisabled();
+    expect(screen.getByTestId('admin-missing-permission-action')).toBeInTheDocument();
   });
 
   it('shows the truncated notice and leaves the partial count out of the header', () => {

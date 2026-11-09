@@ -293,15 +293,21 @@ const Approvals: React.FC = () => {
             </Button>
           </span>
         </Tooltip>
-        <Button
-          size="sm"
-          variant="plain"
-          color="neutral"
-          onClick={() => setRejecting(row)}
-          data-testid={isRequester ? 'admin-withdraw-btn' : 'admin-reject-btn'}
-        >
-          {isRequester ? 'Withdraw' : 'Reject'}
-        </Button>
+        {/* The server lets the requester withdraw, and otherwise rejects on the same check as approve. */}
+        <Tooltip title={hint} disableHoverListener={isRequester || row.canDecide}>
+          <span>
+            <Button
+              size="sm"
+              variant="plain"
+              color="neutral"
+              disabled={!isRequester && !row.canDecide}
+              onClick={() => setRejecting(row)}
+              data-testid={isRequester ? 'admin-withdraw-btn' : 'admin-reject-btn'}
+            >
+              {isRequester ? 'Withdraw' : 'Reject'}
+            </Button>
+          </span>
+        </Tooltip>
       </Stack>
     );
   };

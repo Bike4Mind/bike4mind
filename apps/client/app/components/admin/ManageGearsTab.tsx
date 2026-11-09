@@ -18,6 +18,7 @@ import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
+import { AdminPermissionAction } from './shared/MissingPermission';
 
 /**
  * Manage Gears - the ops override surface for the Gears progression system
@@ -301,22 +302,36 @@ const ManageGearsTab = () => {
                         </Stack>
                       ) : (
                         <Stack direction="row" gap={0.5}>
-                          <Button size="sm" variant="outlined" disabled={busy} onClick={() => startEdit(g)}>
-                            Edit
-                          </Button>
-                          {overridden && (
-                            <Tooltip title="Reset to code defaults">
-                              <IconButton
+                          <AdminPermissionAction requirement="settings:manage">
+                            {disabled => (
+                              <Button
                                 size="sm"
-                                variant="plain"
-                                color="danger"
-                                disabled={busy}
-                                onClick={() => void reset(g)}
-                                data-testid={`manage-gear-reset-${g.key}`}
+                                variant="outlined"
+                                disabled={disabled || busy}
+                                onClick={() => startEdit(g)}
+                                data-testid={`manage-gear-edit-${g.key}`}
                               >
-                                <RestartAltIcon />
-                              </IconButton>
-                            </Tooltip>
+                                Edit
+                              </Button>
+                            )}
+                          </AdminPermissionAction>
+                          {overridden && (
+                            <AdminPermissionAction requirement="settings:manage">
+                              {disabled => (
+                                <Tooltip title="Reset to code defaults">
+                                  <IconButton
+                                    size="sm"
+                                    variant="plain"
+                                    color="danger"
+                                    disabled={disabled || busy}
+                                    onClick={() => void reset(g)}
+                                    data-testid={`manage-gear-reset-${g.key}`}
+                                  >
+                                    <RestartAltIcon />
+                                  </IconButton>
+                                </Tooltip>
+                              )}
+                            </AdminPermissionAction>
                           )}
                         </Stack>
                       )}

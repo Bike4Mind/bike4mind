@@ -7,7 +7,7 @@ tags: [admin, permissions, security]
 
 # Delegated Admin Permissions
 
-A delegated admin holds one or more named permissions instead of full admin access. API routes check the permission declared for each HTTP method. Console access is separate: a delegated admin can enter only when a tab supports one of their permissions. Currently, `settings:manage` opens the Modals tab; other tabs require full admin access.
+A delegated admin holds one or more named permissions instead of full admin access. API routes check the permission declared for each HTTP method. Console access is separate: a delegated admin can enter only when a tab supports one of their permissions, and sees only those tabs. See [Console tabs](#console-tabs) for the current list.
 
 Full administrators (the legacy `isAdmin` flag) have every permission implicitly. Account-action safeguards still apply, including the role-change rules below.
 
@@ -17,7 +17,7 @@ The table gives examples of current route coverage. A permission does not automa
 
 | Permission | Current coverage |
 |------------|------------------|
-| `support:read` | Read admin reporting routes and internal notes |
+| `support:read` | Read admin reporting, audit, approval, security, and settings pages, and internal notes (see [Support reads](#support-reads)) |
 | `credits:adjust` | Review, release, block, and unblock signup credit grants |
 | `users:moderate` | Write, edit, and delete internal notes; manage organization membership and moderation reviews |
 | `users:impersonate` | Defined permission; Login as User requires full admin access |
@@ -29,6 +29,32 @@ The table gives examples of current route coverage. A permission does not automa
 Permissions are enforced per route. `users:delete`, `models:curate`, `support:read`, `credits:adjust`, `users:moderate`, and `settings:manage` are enforced by `adminApi` middleware on their routes. `users:impersonate` and `keys:revoke` are defined in the permission list but not declared on an `adminApi` route; those flows require the legacy full-admin flag.
 
 Legacy user profile edits, balance adjustments, and bulk account actions require full admin access. Holding a named permission alone does not grant access to those flows.
+
+## Support reads
+
+`support:read` is read-only. Routes declare it on `GET` only, with two reviewed exceptions whose handlers make their own check: deciding an approval also needs the permission the approval names, and signing off an audit entry needs full admin access.
+
+It covers the read side of:
+
+- Reporting: analytics, revenue, spend, usage, model metrics and logs, event metrics, help analytics, and retrieval rate.
+- Oversight: the audit log, approvals, webhook and integration audit logs, published-page reports, Stripe disputes, and shadow detections.
+- Operations: stuck agent executions, the dead-letter queue list and history, integration health and demand, and QA runs.
+- Security: the security dashboard, including firewall traffic and blocked requests.
+- Configuration: system prompts, tool definitions, gears, email templates and campaigns, OAuth clients, partner signup rules, voice agents, and the GitHub connection.
+
+Firewall reads run metered cloud queries, and some GitHub reads call the GitHub API. They stay on `support:read` and are rate-limited per user.
+
+A page whose edits need `settings:manage` also opens to `settings:manage` alone for reading, so a settings manager does not need `support:read` to see what they edit. This applies to tool definitions, gears, and stuck agent executions. `settings:manage` does not imply `support:read` anywhere else.
+
+## Console tabs
+
+| Tab | Opens with |
+|-----|------------|
+| Modals | `settings:manage` |
+| Retrieval, Webhook logs, Help analytics, API key scopes, Integration demand, Audit log, Approvals, Stripe disputes, Shadow detections | `support:read` |
+| Tools, Gears, Stuck executions | `support:read` or `settings:manage` |
+
+Other tabs require full admin access. Inside an open tab, an action the delegate cannot perform is disabled and names the permission it needs, such as "Missing permission: users:moderate". A detail page under a tab the delegate cannot open, such as a user profile, shows the same message in place of the page.
 
 ## Granting permissions
 
@@ -79,7 +105,7 @@ A `HEAD` request uses the `GET` permission unless the route declares a separate 
 
 ## Troubleshooting
 
-If the admin entry or a tab is missing, check whether that tab supports your permissions; holding a permission does not by itself grant console access. An API response of `Missing permission: ...` names the permission required for that method. API keys also need the `admin` scope, and routes configured as session-only require a signed-in browser session.
+If the admin entry or a tab is missing, check [Console tabs](#console-tabs); holding a permission does not by itself grant console access. An API response of `Missing permission: ...` names the permission required for that method. API keys also need the `admin` scope, and routes configured as session-only require a signed-in browser session.
 
 ## Existing references
 
