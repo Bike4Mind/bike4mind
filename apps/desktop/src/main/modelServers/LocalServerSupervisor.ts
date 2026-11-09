@@ -314,6 +314,7 @@ export class LocalServerSupervisor {
       startedAt: new Date().toISOString(),
       settings,
       ...(handle.apiKey ? { apiKey: handle.apiKey } : {}),
+      ...(handle.warning ? { warning: handle.warning } : {}),
     });
     await this.persist();
     return true;
