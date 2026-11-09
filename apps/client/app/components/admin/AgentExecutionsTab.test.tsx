@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -219,6 +219,19 @@ describe('AgentExecutionsTab', () => {
     expect((await screen.findAllByTestId('admin-table-skeleton-row')).length).toBeGreaterThan(0);
   });
 
+  it('keeps skeleton rows, not the empty state, while the first request waits for the network', () => {
+    onlineManager.setOnline(false);
+    try {
+      renderTab();
+
+      expect(screen.getAllByTestId('admin-table-skeleton-row').length).toBeGreaterThan(0);
+      expect(screen.queryByTestId('stuck-agent-executions-empty')).toBeNull();
+      expect(mocks.get).not.toHaveBeenCalled();
+    } finally {
+      onlineManager.setOnline(true);
+    }
+  });
+
   it('shows an ErrorState with Try again when the first load fails', async () => {
     mocks.get.mockRejectedValueOnce(new Error('timeout'));
     renderTab();
@@ -238,5 +251,30 @@ describe('AgentExecutionsTab', () => {
 
     expect(await screen.findByTestId('stuck-agent-executions-updating')).toBeInTheDocument();
     expect(screen.getByTestId('stuck-execution-row-exec-1')).toBeInTheDocument();
+  });
+
+  it('counts and releases only selected rows that are still listed after a poll', async () => {
+    renderTab();
+    await screen.findByTestId('stuck-execution-row-exec-1');
+
+    selectRow('exec-1');
+    selectRow('exec-3');
+    mocks.get.mockResolvedValue({ data: { items: [ITEMS[0], ITEMS[1]], olderThanMinutes: 20 } });
+    fireEvent.click(screen.getByTestId('stuck-agent-executions-refresh-btn'));
+    await waitFor(() => expect(screen.queryByTestId('stuck-execution-row-exec-3')).toBeNull());
+
+    expect(screen.getByTestId('admin-bulk-action-bar')).toHaveTextContent('1 selected');
+    fireEvent.click(screen.getByTestId('stuck-agent-executions-cleanup-btn'));
+    const dialog = await screen.findByTestId('stuck-agent-executions-release-dialog');
+    expect(within(dialog).getByTestId('stuck-agent-executions-release-summary')).toHaveTextContent(
+      '1 selected: 1 running'
+    );
+    fireEvent.change(within(dialog).getByTestId('stuck-agent-executions-release-dialog-reason-input'), {
+      target: { value: 'Abandoned by a user who left' },
+    });
+    fireEvent.click(within(dialog).getByTestId('stuck-agent-executions-release-dialog-confirm-btn'));
+
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(1));
+    expect(mocks.post.mock.calls[0][1]).toEqual({ executionIds: ['exec-1'] });
   });
 });

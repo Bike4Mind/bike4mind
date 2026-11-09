@@ -46,7 +46,7 @@ const formatConfidenceTooltip = (t: NonNullable<StuckExecutionItem['confidenceTe
 
 const USER_ID_DEBOUNCE_MS = 300;
 
-/** The server caps a page at this many rows; reaching it means more may match. */
+/** Rows this page requests (the route allows up to 500); reaching it means more may match. */
 const ROW_LIMIT = 200;
 const NO_SELECTION: AdminSelection = { mode: 'explicit', ids: [] };
 
@@ -83,11 +83,18 @@ const AgentExecutionsTab: React.FC = () => {
     setSelection(NO_SELECTION);
   }
 
-  const { data, isLoading, isError, error, refetch, isFetching } = useStuckAgentExecutions(queryParams);
+  const { data, isPending, isError, error, refetch, isFetching } = useStuckAgentExecutions(queryParams);
   const cleanup = useCleanupAgentExecutions();
 
   const items: StuckExecutionItem[] = data?.items ?? [];
-  const selectedIds = selection.mode === 'allMatching' ? items.map(it => it.id) : selection.ids;
+  // Only rows still listed: the 30 s poll drops an execution that updated again, and releasing it
+  // would end a run that is alive.
+  const selectedIds =
+    selection.mode === 'allMatching'
+      ? items.map(it => it.id)
+      : items.filter(it => selection.ids.includes(it.id)).map(it => it.id);
+  const liveSelection: AdminSelection =
+    selection.mode === 'allMatching' ? selection : { mode: 'explicit', ids: selectedIds };
   const errorMessage = `Failed to load stuck executions${error instanceof Error ? `: ${error.message}` : ''}`;
 
   const handleCleanup = async () => {
@@ -271,7 +278,7 @@ const AgentExecutionsTab: React.FC = () => {
       </Stack>
 
       <Stack gap={1}>
-        <UpdatingBar active={isFetching && !isLoading} testId="stuck-agent-executions-updating" />
+        <UpdatingBar active={isFetching && !isPending} testId="stuck-agent-executions-updating" />
         <DataTable
           label="Stuck executions"
           testId="stuck-agent-executions-table"
@@ -279,10 +286,10 @@ const AgentExecutionsTab: React.FC = () => {
           columns={columns}
           getRowId={item => item.id}
           rowTestId={item => `stuck-execution-row-${item.id}`}
-          selection={selection}
+          selection={liveSelection}
           onSelectionChange={setSelection}
           pageResetKey={filterKey}
-          loading={isLoading}
+          loading={isPending}
           error={isError && !data ? errorMessage : undefined}
           onRetry={() => void refetch()}
           // Fixed columns total 54.75rem with the checkbox; the query takes the rest and truncates.
@@ -305,7 +312,7 @@ const AgentExecutionsTab: React.FC = () => {
       </Stack>
 
       <BulkActionBar
-        selection={selection}
+        selection={liveSelection}
         totalMatching={items.length}
         onSelectAllMatching={() => setSelection({ mode: 'allMatching' })}
         onClear={() => setSelection(NO_SELECTION)}
