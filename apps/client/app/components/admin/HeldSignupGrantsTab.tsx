@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Box, Button, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
+import { Alert, Button, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { PENDING_GRANTS_QUERY_KEY } from '@client/app/hooks/data/adminSignupGrant';
