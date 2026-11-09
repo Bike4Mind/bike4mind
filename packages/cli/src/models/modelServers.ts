@@ -27,6 +27,7 @@ import {
   type OpenAICompatibleProduct,
   type SharedServerRecord,
   type SshEndpoint,
+  type UnusableServerRecord,
 } from '@bike4mind/local-models/servers';
 import { clean, type RuntimeTarget } from './localModels.js';
 import { shellWord } from '../utils/shellWord.js';
@@ -40,6 +41,8 @@ export interface LoadedModelServers {
   servers: CliModelServer[];
   /** Why Desktop's list could not be read, when it could not. */
   problem: string | null;
+  /** Saved SSH servers whose destination or port cannot be used: listed with why, never connected to. */
+  unusable?: UnusableServerRecord[];
 }
 
 /** The CLI's saved credential for a server id, if any. */
@@ -48,8 +51,12 @@ export type SecretFor = (serverId: string) => string | undefined;
 export async function loadModelServers(
   read: () => Promise<DesktopModelServers> = readDesktopModelServers
 ): Promise<LoadedModelServers> {
-  const { servers, problem } = await read();
-  return { servers: servers.map(server => ({ ...server, source: 'desktop' as const })), problem };
+  const { servers, problem, unusable } = await read();
+  return {
+    servers: servers.map(server => ({ ...server, source: 'desktop' as const })),
+    problem,
+    ...(unusable?.length ? { unusable } : {}),
+  };
 }
 
 export function findModelServer(servers: CliModelServer[], name: string): CliModelServer | undefined {
@@ -57,7 +64,22 @@ export function findModelServer(servers: CliModelServer[], name: string): CliMod
   return servers.find(server => server.name === name) ?? servers.find(server => server.name.toLowerCase() === wanted);
 }
 
+export function unusableStatus(server: UnusableServerRecord): string {
+  return `${server.problem} Remove it in Desktop and add it again.`;
+}
+
+export function unusableReason(server: UnusableServerRecord): string {
+  return `${clean(server.name)} cannot be used: ${unusableStatus(server)}`;
+}
+
+export function findUnusableServer(loaded: LoadedModelServers, name: string): UnusableServerRecord | undefined {
+  const wanted = name.trim().toLowerCase();
+  return loaded.unusable?.find(server => server.name.toLowerCase() === wanted);
+}
+
 export function noSuchServer(loaded: LoadedModelServers, name: string): Error {
+  const unusable = findUnusableServer(loaded, name);
+  if (unusable) return new Error(unusableReason(unusable));
   const known = loaded.servers.map(server => clean(server.name)).join(', ');
   const detail = loaded.problem ?? (known ? `Saved servers: ${known}.` : 'No model servers are saved in Desktop.');
   return new Error(`No model server named ${clean(name)}. ${detail} See: b4m models servers`);

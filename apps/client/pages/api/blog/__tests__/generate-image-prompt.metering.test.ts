@@ -6,7 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { insufficientCreditsError } from '@bike4mind/common';
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError, insufficientCreditsError } from '@bike4mind/common';
 
 const quotaAdmission = vi.hoisted(() => vi.fn().mockResolvedValue({ release: async () => {} }));
 vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quotaAdmission }));
@@ -89,12 +89,14 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
 
 const { default: handler } = await import('@pages/api/blog/generate-image-prompt');
 
+const testLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() };
+
 async function call() {
   const { req, res } = createMocks({
     method: 'POST',
     body: { content: 'A post about bikes.', title: 'Bikes', summary: '' },
   });
-  Object.assign(req, { user: { id: 'u1' }, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() } });
+  Object.assign(req, { user: { id: 'u1' }, logger: testLogger });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
   await (handler as any)(req, res);
   return res;
@@ -117,6 +119,21 @@ describe('POST /api/blog/generate-image-prompt metering', () => {
 
     await expect(call()).rejects.toMatchObject({ statusCode: 422 });
     expect(m.complete).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the free-tier daily cap as its 429 without logging an error', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    m.hold.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+
+    await expect(call()).rejects.toMatchObject({ statusCode: 429 });
+    expect(testLogger.error).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 
   it('charges a funded caller the priced usage once', async () => {

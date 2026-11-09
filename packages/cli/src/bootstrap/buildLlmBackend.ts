@@ -31,6 +31,7 @@ import {
   needsCredential,
   resolveServerTarget,
   serverFetch,
+  unusableStatus,
   type CliModelServer,
   type LoadedModelServers,
   type SshFetchFor,
@@ -480,7 +481,10 @@ async function attachServer(
     });
     return { backend, models: await backend.getModelInfo() };
   };
-  const route = await withDeadline(attach(), timeoutMs, startup);
+  const route = await withDeadline(attach(), timeoutMs, startup).catch((error: unknown) => {
+    startup.abort(error);
+    throw error;
+  });
   attached = true;
   return route;
 }
@@ -517,6 +521,8 @@ async function attachServers(
   const warnings: string[] = [];
   const owner = wanted ? loaded.servers.find(server => server.id === wanted.serverId) : undefined;
   if (wanted && !owner) {
+    const unusable = loaded.unusable?.find(server => server.id === wanted.serverId);
+    if (unusable) throw defaultUnusable(wanted.model, unusable.name, unusableStatus(unusable));
     throw new Error(
       `The default model ${clean(wanted.model)} is on a model server that is not saved in Desktop any more` +
         (loaded.problem ? ` (${loaded.problem})` : '') +

@@ -242,9 +242,10 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
     setRecordProgress(0);
     setNote({ kind: 'info', text: `Recording a turntable (${TURNTABLE_SECONDS} s)...` });
     try {
+      const session = engine.sessionId;
       const bytes = await handle.recordTurntable(joints, setRecordProgress);
       setRecordProgress(null);
-      setNote(savedNote(await window.b4m.model.saveExport({ format: 'webm', bytes })));
+      setNote(savedNote(await engine.saveRecording(session, bytes)));
     } catch (caught) {
       setNote({ kind: 'error', text: errorText(caught) });
     } finally {

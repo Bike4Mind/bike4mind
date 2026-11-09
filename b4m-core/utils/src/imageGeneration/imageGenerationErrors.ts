@@ -1,4 +1,4 @@
-import { getQuestErrorCode } from '@bike4mind/common';
+import { isTerminalCreditRefusal } from '@bike4mind/common';
 import type { ImageModerationBlockedError as OwnModerationBlockedError } from '../imageModeration';
 
 export type ExpectedImageFailureKind = 'moderation_blocked' | 'provider_unavailable' | 'input_rejected';
@@ -97,9 +97,11 @@ export function logImageGenerationFailure(
     });
     return;
   }
-  // Out of credits is not an incident either: the user sees the message and the Add Credits CTA.
-  if (getQuestErrorCode(error) === 'insufficient_credits') {
-    logger.warn(message, { ...context, errorCode: 'insufficient_credits', detail: (error as Error).message });
+  // A credit refusal (out of credits, or the free-tier daily cap) is not an incident either: the user
+  // sees the message and the Add Credits / try-tomorrow CTA.
+  if (isTerminalCreditRefusal(error)) {
+    const errorCode = (error as { additionalInfo?: { errorCode?: unknown } }).additionalInfo?.errorCode;
+    logger.warn(message, { ...context, errorCode, detail: (error as Error).message });
     return;
   }
   if (context) {

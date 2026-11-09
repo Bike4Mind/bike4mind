@@ -46,6 +46,7 @@ import {
   UnprocessableEntityError,
   insufficientCreditsError,
   isSupportedEmbeddingModel,
+  isTerminalCreditRefusal,
   SupportedEmbeddingModel,
   type ModelInfo,
 } from '@bike4mind/common';
@@ -457,7 +458,11 @@ const handler = baseApi().post(
                 }
               }
             } catch (embeddingError) {
-              if (embeddingError instanceof ForbiddenError || embeddingError instanceof UnprocessableEntityError) {
+              if (
+                embeddingError instanceof ForbiddenError ||
+                embeddingError instanceof UnprocessableEntityError ||
+                isTerminalCreditRefusal(embeddingError)
+              ) {
                 throw embeddingError;
               }
               // Skip messages that fail embedding generation
@@ -618,7 +623,13 @@ const handler = baseApi().post(
           },
         });
       } catch (error) {
-        if (error instanceof ForbiddenError || error instanceof UnprocessableEntityError) throw error;
+        if (
+          error instanceof ForbiddenError ||
+          error instanceof UnprocessableEntityError ||
+          isTerminalCreditRefusal(error)
+        ) {
+          throw error;
+        }
         req.logger?.error?.('Semantic search failed:', error);
         return res.status(500).json({
           error: 'Semantic search failed. Please try again.',

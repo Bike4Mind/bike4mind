@@ -72,7 +72,7 @@ export const CheckoutCatalogPanel = ({ teamPlan }: { teamPlan: TeamPlanSettings 
   <Sheet variant="outlined" sx={{ ...adminSurface, p: 2 }} data-testid="admin-growth-pricing-section-catalog">
     <Stack spacing={2}>
       <Stack spacing={0.5}>
-        <Typography level="title-md" sx={{ color: 'admin.ink' }}>
+        <Typography level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
           What checkout sells
         </Typography>
         <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
