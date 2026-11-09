@@ -41,6 +41,7 @@ import { useSimulatorView } from './useSimulatorView';
 import { readBrowserPaneOpen, writeBrowserPaneOpen } from './agentBrowser';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
+import { LoopBar } from './LoopBar';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
 import type { ModelsInUse } from '../models/InstalledTab';
 import type { ComposerFill } from './composerInput';
@@ -1993,6 +1994,7 @@ export function ChatShell({
               </Box>
             )}
 
+            <LoopBar sessionId={activeId} />
             <Composer
               sessionId={activeId}
               disabled={!activeId || creatingCode}

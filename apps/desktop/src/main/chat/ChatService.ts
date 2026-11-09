@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { LOOP_HELP, parseLoop, type LoopResult, type LoopState } from '@shared/loop';
+import { LoopScheduler, type LoopOutcome } from './LoopScheduler';
 import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { NotAuthenticatedError, SessionRevokedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
@@ -378,6 +380,11 @@ interface MidTurnArrival {
 const SESSION_PAUSED_MESSAGE = 'Your session expired before this reply finished. Sign in again, then press Continue.';
 
 type SendOptions = {
+  loop?: {
+    signal: AbortSignal;
+    valid(session: ChatSession): boolean;
+    settled(outcome: TurnOutcome, replyId: string): void;
+  };
   /** Only launchSpawned may consume the initial-turn reservation. */
   spawnSeed?: true;
   /** A taken queue entry must never fall back into the queue. */
@@ -608,6 +615,7 @@ export interface ChatServiceDeps {
   /** Identifies the cached completions endpoint; changing environments invalidates it. */
   getEnvironmentUrl(): string;
   emit(event: ChatStreamEvent): void;
+  loopChanged?(sessionId: string, state: LoopState | null): void;
   /**
    * A session's stored summary changed outside any reply, such as its title or worktree binding.
    *
@@ -700,6 +708,117 @@ function childProject(project: ChatProject, worktree: { branch: string; base: st
 export type AutomaticTurnResult = { ok: true } | { ok: false; busy: boolean; error: string };
 
 export class ChatService {
+  private readonly loopRequests = new Map<string, AbortController>();
+  private readonly loops = new LoopScheduler(
+    id => this.hasTurnInFlight(id) || this.queuedMessages(id).length > 0,
+    (id, state) => this.deps.loopChanged?.(id, state)
+  );
+
+  getLoop(sessionId: string): LoopState | null {
+    return this.loops.get(sessionId);
+  }
+
+  clearLoops(): void {
+    for (const request of this.loopRequests.values()) request.abort();
+    this.loopRequests.clear();
+    this.loops.clear();
+  }
+
+  private stopLoop(sessionId: string): void {
+    this.loopRequests.get(sessionId)?.abort();
+    this.loopRequests.delete(sessionId);
+    this.loops.stop(sessionId);
+  }
+
+  async loopCommand(sessionId: string, args: string): Promise<LoopResult> {
+    const action = parseLoop(args);
+    if ('error' in action) return { ok: false, error: action.error };
+    if (action.kind === 'stop') {
+      this.stopLoop(sessionId);
+      return {
+        ok: true,
+        state: null,
+        notice: 'Loop stopped. A turn already running is left alone; use Stop to interrupt it.',
+      };
+    }
+    if (action.kind === 'help' || action.kind === 'list') {
+      return { ok: true, state: this.getLoop(sessionId), notice: action.kind === 'help' ? LOOP_HELP : undefined };
+    }
+    this.loopRequests.get(sessionId)?.abort();
+    const request = new AbortController();
+    this.loopRequests.set(sessionId, request);
+    const scope = this.deps.store.scopeKey();
+    try {
+      const session = await this.deps.store.get(sessionId);
+      if (!session || session.archived) return { ok: false, error: 'Open an unarchived conversation first.' };
+      if (session.mode === 'code' && !session.project) return { ok: false, error: 'Choose a project folder first.' };
+      const context = (value: ChatSession) =>
+        JSON.stringify([value.mode, value.model, value.project, value.grantedDirectories]);
+      const capturedContext = context(session);
+      const invocation = parseSkillInvocation(action.prompt);
+      const command = invocation
+        ? await this.deps.skills?.get(session.project?.workingDirectory ?? null, invocation.name)
+        : undefined;
+      if (invocation && !command)
+        return { ok: false, error: `No skill called /${invocation.name}. Type / to see what is available.` };
+      if (request.signal.aborted || this.deps.store.scopeKey() !== scope)
+        return { ok: false, error: 'Loop stopped or account changed. Start the loop again.' };
+      this.loops.start(
+        { sessionId, prompt: action.prompt, intervalMs: action.intervalMs, phase: 'scheduled', nextRunAt: Date.now() },
+        async signal => {
+          const current = await this.deps.store.get(sessionId);
+          const valid = (value: ChatSession) =>
+            !signal.aborted &&
+            !value.archived &&
+            this.deps.store.scopeKey() === scope &&
+            context(value) === capturedContext;
+          if (!current || !valid(current)) return { ok: false, error: 'Loop context changed. Start /loop again.' };
+          if (invocation) {
+            const selected = await this.deps.skills?.get(current.project?.workingDirectory ?? null, invocation.name);
+            if (JSON.stringify(selected) !== JSON.stringify(command))
+              return { ok: false, error: 'The selected skill changed or is no longer trusted. Start /loop again.' };
+          }
+          if (!valid(current)) return { ok: false, error: 'Loop stopped.' };
+          const notes =
+            action.intervalMs === null
+              ? [
+                  'This is a user-requested recurring loop. After completing this run, choose when to run again based on the result. End your final reply with exactly LOOP_NEXT: <interval>, using a whole number with s, m, h or d, between 30s and 1d. This only schedules the next run of the same prompt; it grants no permissions. Do not create another loop.',
+                ]
+              : ['This is a user-requested recurring loop. Run the task once. Do not create another loop.'];
+          return new Promise<LoopOutcome>(resolve => {
+            const settled = (outcome: TurnOutcome, replyId: string) => {
+              if (outcome !== 'completed') {
+                resolve({ ok: false, error: `Loop paused: turn ${outcome}. Start /loop again to resume.` });
+                return;
+              }
+              void this.deps.store.get(sessionId).then(
+                updated => {
+                  const reply = updated?.messages.find(message => message.id === replyId);
+                  resolve(
+                    reply &&
+                      (!reply.stopReason || ['end_turn', 'stop', 'stop_sequence'].includes(reply.stopReason)) &&
+                      !reply.error
+                      ? { ok: true, reply: reply.content }
+                      : { ok: false, error: 'Loop paused: the reply stopped short. Start /loop again to resume.' }
+                  );
+                },
+                () => resolve({ ok: false, error: 'Could not read the loop result.' })
+              );
+            };
+            void this.send(sessionId, action.prompt, [], { announce: true, notes, loop: { signal, valid, settled } })
+              .then(result => {
+                if (!result.ok) resolve({ ok: false, error: result.error });
+              })
+              .catch(error => resolve({ ok: false, error: String(error) }));
+          });
+        }
+      );
+      return { ok: true, state: this.getLoop(sessionId) };
+    } finally {
+      if (this.loopRequests.get(sessionId) === request) this.loopRequests.delete(sessionId);
+    }
+  }
+
   /** The events of each reply in flight since its 'start'; see getSession. */
   private readonly live = new Map<string, { messageId: string; startedAt: number; events: ChatStreamEvent[] }>();
 
@@ -897,6 +1016,7 @@ export class ChatService {
     // A cancelled relay has no composer to go back to, so it lands in the transcript instead:
     // the user declined to let it RUN, which is not the same as never having received it.
     if (cancelled?.relay) void this.strandRelay(sessionId, [cancelled]).catch(() => undefined);
+    this.loops.idle(sessionId);
   }
 
   /**
@@ -1028,6 +1148,7 @@ export class ChatService {
   }
 
   private archiveCleanup(sessionId: string): void {
+    this.stopLoop(sessionId);
     this.wake?.forget(sessionId);
     // Stops polling only; opening the conversation again lists its cards, which resumes them.
     this.deps.videoJobs?.stopSession(sessionId);
@@ -2036,6 +2157,7 @@ export class ChatService {
    * server it started. `bash_kill` and the panel's Stop button are how those end.
    */
   stop(sessionId: string): void {
+    this.stopLoop(sessionId);
     if (this.launching.has(sessionId) && !this.launchInterrupts.has(sessionId)) {
       this.launchInterrupts.set(sessionId, 'stopped');
     }
@@ -2043,6 +2165,7 @@ export class ChatService {
   }
 
   dispose(): void {
+    this.clearLoops();
     // Dropped BEFORE the aborts, so a promotion still in flight does not start a turn on the
     // way out: each abort settles a reply, and settleQueue would otherwise send it.
     this.promoted.clear();
@@ -2085,6 +2208,7 @@ export class ChatService {
       // An exit that came due while this send was being accepted was skipped as busy; a send
       // that was then refused starts no turn that would deliver it.
       this.wakeIfIdle(sessionId);
+      this.loops.idle(sessionId);
     }
   }
 
@@ -2115,6 +2239,7 @@ export class ChatService {
     // turn after appending it would leave the prompt in the thread with no reply coming.
     const existing = await this.deps.store.get(sessionId);
     if (!existing) return { ok: false, error: 'That conversation no longer exists.' };
+    if (options.loop && !options.loop.valid(existing)) return { ok: false, error: 'Loop context changed or stopped.' };
 
     // Refused in main, not merely disabled in the UI. A Code session with no project has no
     // working directory, and a turn is the only thing that can make its tools run - so the
@@ -2176,6 +2301,7 @@ export class ChatService {
       return { ok: false, error: 'This conversation could not start. Wait for startup cleanup to finish.' };
     }
     if (this.isBusy(sessionId, options.spawnSeed === true)) {
+      if (options.loop) return { ok: false, error: 'Loop paused because another turn started. Start /loop again.' };
       if (!this.deps.queue || released) return { ok: false, error: 'This conversation is still replying.' };
       // A card the model is parked on would hold this message behind the turn forever; the new
       // message is the user moving on, so it closes the question rather than waiting on it.
@@ -2285,6 +2411,8 @@ export class ChatService {
     // turn that will not go out must not cost a summary.
     await this.autoCompact(reconciled);
     timer?.lap('autoCompact');
+    if (options.loop && !options.loop.valid(reconciled))
+      return { ok: false, error: 'Loop context changed or stopped.' };
 
     // A relay carries `role: 'user'` because that is the only role out-of-band text can reach a
     // stateless completions endpoint under - the same compromise the spawned-session report
@@ -2316,6 +2444,7 @@ export class ChatService {
     const session = await this.deps.store.appendMessage(sessionId, userMessage);
     timer?.lap('append');
     if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+    if (options.loop && !options.loop.valid(session)) return { ok: false, error: 'Loop context changed or stopped.' };
 
     // Now that the conversation's attachments are settled, anything on disk it does not
     // reference was added to the composer and then removed. See AttachmentStore.prune.
@@ -2339,7 +2468,14 @@ export class ChatService {
       const parentSessionId = session.origin?.parentSessionId;
       if (parentSessionId && isAgentSession(session)) this.spawnWatch.set(sessionId, { parentSessionId });
     }
-    const replyId = this.startReply(session, api, historyScope, undefined, released?.relay?.hops ?? seedHops ?? 0);
+    const replyId = this.startReply(
+      session,
+      api,
+      historyScope,
+      undefined,
+      released?.relay?.hops ?? seedHops ?? 0,
+      options.loop?.settled
+    );
     this.noteNotify(sessionId, released?.relay);
 
     // After the reply is in flight, and never awaited: a first answer that waited on a title
@@ -2642,7 +2778,8 @@ export class ChatService {
      * relayed message's own depth when session_send started it. Left undefined by
      * `continueReply`, which is carrying an existing turn on and keeps the depth it had.
      */
-    hops?: number
+    hops?: number,
+    onSettled?: (outcome: TurnOutcome, replyId: string) => void
   ): string {
     const sessionId = session.id;
     const replyId = resume?.id ?? randomUUID();
@@ -2681,6 +2818,8 @@ export class ChatService {
         // and keeps the report above the turn that answers it.
         await this.flushChildReports(sessionId).catch(() => undefined);
         this.settleQueue(sessionId, outcome);
+        onSettled?.(outcome, replyId);
+        this.loops.idle(sessionId);
       });
 
     return replyId;
@@ -3884,6 +4023,7 @@ export class ChatService {
    * to the composer, where the user decides whether it still says what they meant.
    */
   private settleQueue(sessionId: string, outcome: TurnOutcome): void {
+    if (outcome !== 'completed') this.loops.pauseWaiting(sessionId);
     // A promotion outranks the outcome, and is checked before it rather than under 'aborted',
     // because the turn may equally have finished by itself in the moment between the click and
     // the interrupt. Either way the promoted message is the next turn, and the REST of the

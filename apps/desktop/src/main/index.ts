@@ -175,6 +175,7 @@ void app.whenReady().then(async () => {
   let needsYouScope = chatScopeKeyOf(auth.getState());
   onAuthStateChanged(state => {
     const next = chatScopeKeyOf(state);
+    if (next !== needsYouScope || state.busy === 'signing-out' || state.reauthRequired) chat.clearLoops();
     if (next === needsYouScope) return;
     needsYouScope = next;
     needsYou.scopeChanged();
