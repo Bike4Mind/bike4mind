@@ -48,6 +48,8 @@ vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', async importOrigina
   buildEmailLogoImg: () => '',
 }));
 
+vi.mock('@client/lib/entitlements/managedUserTags', () => ({ isManagedTag: (tag: string) => tag === 'managed' }));
+
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...args: unknown[]) => h.recordAdminAction(...args),
 }));
@@ -302,6 +304,41 @@ describe('POST /api/admin/bulk-create-users', () => {
     expect(usernames).toContain('jo');
     expect(usernames.find(u => u !== 'jo')).toMatch(/^user-[0-9a-f]{8}$/);
     expect(h.createUser.mock.calls.every(([params]) => params.allowReservedUsername === undefined)).toBe(true);
+  });
+
+  describe('seed check for a delegated admin', () => {
+    const res = () => ({ status: vi.fn().mockReturnThis(), json: vi.fn() });
+    const delegateReq = (users: unknown[], extra: Record<string, unknown> = {}) => ({
+      ...makeReq(users, extra),
+      user: { id: 'delegate-1', isAdmin: false, adminPermissions: ['settings:manage'] },
+    });
+
+    it('refuses a grant package with credits and creates no rows', async () => {
+      h.requirePackage.mockResolvedValue({ id: 'pkg-1', credits: 250, storageMb: 400, active: true });
+      await expect(
+        h.handler!(delegateReq([{ email: 'a@b.test' }], { grantPackageId: 'pkg-1' }), res())
+      ).rejects.toThrow('Missing permission: credits:adjust');
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+
+    it('refuses a row with starting credits and creates no rows', async () => {
+      await expect(
+        h.handler!(delegateReq([{ email: 'a@b.test' }, { email: 'c@b.test', startingCredits: 10 }]), res())
+      ).rejects.toThrow('Missing permission: credits:adjust');
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+
+    it('refuses a managed tag on a single row and creates no rows', async () => {
+      await expect(
+        h.handler!(delegateReq([{ email: 'a@b.test' }, { email: 'c@b.test', tags: ['managed'] }]), res())
+      ).rejects.toThrow('Only full administrators can assign managed tags');
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+
+    it('creates rows with no credits and no managed tags', async () => {
+      await h.handler!(delegateReq([{ email: 'a@b.test', tags: ['beta'] }]), res());
+      expect(h.createUser).toHaveBeenCalledOnce();
+    });
   });
 
   describe('grant package', () => {
