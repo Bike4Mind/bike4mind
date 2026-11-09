@@ -8,6 +8,12 @@ import {
 } from '@bike4mind/common';
 import { secureParameters, NotFoundError, UnauthorizedError } from '@bike4mind/utils';
 import { z } from 'zod';
+import {
+  toArtifactViewerView,
+  toArtifactViewerVersion,
+  type ArtifactViewerView,
+  type ArtifactViewerVersion,
+} from './toArtifactViewerView';
 
 const getArtifactSchema = z.object({
   id: z.string(),
@@ -27,9 +33,26 @@ interface GetArtifactAdapters {
 }
 
 /**
+ * How the caller may read: `owner` and `shared` (an explicit grant) get the full document; `public`
+ * (no grant, only the artifact's public flag) gets the viewer shape.
+ */
+export type ArtifactReadAccess = 'owner' | 'shared' | 'public';
+
+export interface GetArtifactResult {
+  access: ArtifactReadAccess;
+  artifact: IArtifactDocument | ArtifactViewerView;
+  content?: IArtifactContentDocument | null;
+  versions?: (IArtifactVersionDocument | ArtifactViewerVersion)[];
+}
+
+/**
  * Retrieves an artifact with optional content and version information
  */
-export const get = async (userId: string, parameters: GetArtifactParameters, adapters: GetArtifactAdapters) => {
+export const get = async (
+  userId: string,
+  parameters: GetArtifactParameters,
+  adapters: GetArtifactAdapters
+): Promise<GetArtifactResult> => {
   const { db } = adapters;
   const { id, includeContent, includeVersions, version } = secureParameters(parameters, getArtifactSchema);
 
@@ -44,16 +67,15 @@ export const get = async (userId: string, parameters: GetArtifactParameters, ada
     throw new NotFoundError('Artifact not found');
   }
 
-  // Check access permissions
-  if (!canUserAccessArtifact(userId, artifact, 'read')) {
+  const access = readAccess(userId, artifact);
+  if (!access) {
     throw new UnauthorizedError('Access denied');
   }
 
-  const result: {
-    artifact: IArtifactDocument;
-    content?: IArtifactContentDocument | null;
-    versions?: IArtifactVersionDocument[];
-  } = { artifact };
+  const result: GetArtifactResult = {
+    access,
+    artifact: access === 'public' ? toArtifactViewerView(artifact) : artifact,
+  };
 
   // Include content if requested
   if (includeContent) {
@@ -70,7 +92,7 @@ export const get = async (userId: string, parameters: GetArtifactParameters, ada
   // Include version history if requested
   if (includeVersions) {
     const versions = await db.artifactVersions.findByArtifactId(artifact.id);
-    result.versions = versions;
+    result.versions = access === 'public' ? versions.map(toArtifactViewerVersion) : versions;
   }
 
   return result;
@@ -90,6 +112,21 @@ export function canUserReadArtifact(
   }
 ): boolean {
   return canUserAccessArtifact(userId, artifact, 'read');
+}
+
+/** Why `userId` may read the artifact, or null. A write-only grant on a private artifact is not a read. */
+function readAccess(
+  userId: string,
+  artifact: {
+    userId: string;
+    visibility?: string;
+    permissions?: { canRead?: string[]; canWrite?: string[]; isPublic?: boolean };
+  }
+): ArtifactReadAccess | null {
+  if (artifact.userId === userId) return 'owner';
+  const granted = artifact.permissions?.canRead?.includes(userId) || artifact.permissions?.canWrite?.includes(userId);
+  if (artifact.visibility === 'public' || artifact.permissions?.isPublic) return granted ? 'shared' : 'public';
+  return artifact.permissions?.canRead?.includes(userId) ? 'shared' : null;
 }
 
 /**

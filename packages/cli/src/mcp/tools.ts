@@ -881,7 +881,8 @@ export async function publishArtifact(
   const artifactType = ArtifactTypeSchema.safeParse(artifact.type);
   if (!artifactType.success)
     throw new Error(`artifact ${artifact.id} has an unsupported type (${String(artifact.type)})`);
-  if (typeof artifact.userId !== 'string') throw new Error(`artifact ${artifact.id} has no owner to publish under`);
+  if (typeof artifact.userId !== 'string')
+    throw new Error(`artifact ${artifact.id} can only be published by its owner`);
 
   const storedTitle = typeof artifact.title === 'string' ? artifact.title : '';
   const title = (args.title ?? storedTitle).trim().slice(0, PUBLISH_TITLE_MAX) || PUBLISH_FALLBACK_TITLE;
