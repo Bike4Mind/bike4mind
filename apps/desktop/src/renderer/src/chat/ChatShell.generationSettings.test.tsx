@@ -194,3 +194,49 @@ describe('Params across a chat switch', () => {
     expect(setSessionGeneration).toHaveBeenLastCalledWith('second', { topK: 30 });
   });
 });
+
+describe('Composer chat settings across a chat switch', () => {
+  const OPUS: ChatModelOption = {
+    id: 'claude-opus-5-5',
+    name: 'Claude Opus 5.5',
+    supportsReasoningEffort: true,
+    supportsOneHourCache: true,
+    controls: {
+      effort: { levels: ['low', 'high'], scope: 'request' },
+      temperature: { min: 0, max: 1, step: 0.05, default: 1, scope: 'request' },
+    },
+  };
+  const CONTROLS = [
+    'approval-mode-btn',
+    'model-picker-btn',
+    'effort-picker-btn',
+    'generation-settings-btn',
+    'prompt-cache-ttl-picker-btn',
+  ];
+  const disabled = (testId: string) => (el(testId) as HTMLButtonElement).disabled;
+
+  it("stay disabled while they still show the previous chat's settings", async () => {
+    let answerSecond: () => void = () => {};
+    const chat = window.b4m.chat as unknown as Record<string, unknown>;
+    chat.listModels = async () => ({ models: [MODEL, OPUS] });
+    chat.getSession = (id: string) => {
+      const read = { ...SESSIONS.find(entry => entry.id === id), messages: [] };
+      if (id === 'first') return Promise.resolve({ ...read, model: OPUS.id } as unknown as ChatSession);
+      return new Promise<ChatSession>(
+        resolve => (answerSecond = () => resolve({ ...read, model: MODEL.id } as unknown as ChatSession))
+      );
+    };
+    await renderShell();
+    await act(async () => el('composer-tune-btn').click());
+    for (const testId of CONTROLS) expect(disabled(testId), testId).toBe(false);
+
+    await act(async () => document.querySelectorAll<HTMLElement>('[data-testid="chat-session-item"]')[1].click());
+    expect(find('chat-thread-opening')).not.toBeNull();
+    for (const testId of CONTROLS) expect(disabled(testId), testId).toBe(true);
+
+    await act(async () => answerSecond());
+    expect(el('chat-session-title').textContent).toBe('Second');
+    for (const testId of ['approval-mode-btn', 'model-picker-btn', 'generation-settings-btn'])
+      expect(disabled(testId), testId).toBe(false);
+  });
+});
