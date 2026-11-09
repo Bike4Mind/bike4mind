@@ -215,12 +215,29 @@ function parseStoredEntry(
   return { settings, unsupported };
 }
 
+/** Thrown for a file saved as UTF-16; `problem` completes "The model settings file <path> ...". */
+export class ModelSettingsEncodingError extends SyntaxError {
+  readonly problem = 'is saved as UTF-16, which cannot be read. Save it as UTF-8';
+  constructor() {
+    super('The model settings file is saved as UTF-16, which cannot be read. Save it as UTF-8.');
+    this.name = 'ModelSettingsEncodingError';
+  }
+}
+
 /**
- * The file's text as JSON, throwing as JSON.parse does. A leading byte order mark is skipped: Notepad and
- * PowerShell 5 can save a hand edit as UTF-8 with one, which JSON.parse refuses.
+ * The file's text, read as UTF-8, as JSON; throws as JSON.parse does. A leading UTF-8 byte order mark is
+ * skipped: Notepad and PowerShell 5 can save a hand edit with one, which JSON.parse refuses. A UTF-16 mark
+ * (PowerShell 5 `>`) decodes as UTF-8 to two U+FFFD, or U+FFFE when the text was decoded as UTF-16, and
+ * throws ModelSettingsEncodingError.
  */
 export function parseModelSettingsJson(text: string): unknown {
+  if (text.startsWith('��') || text.charCodeAt(0) === 0xfffe) throw new ModelSettingsEncodingError();
   return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+}
+
+/** The problem to report for a settings file whose text parseModelSettingsJson rejected. */
+export function modelSettingsJsonProblem(error: unknown): string {
+  return error instanceof ModelSettingsEncodingError ? error.problem : 'is not valid JSON';
 }
 
 /**

@@ -5,6 +5,7 @@ import {
   emptyStoredModelSettings,
   parseModelSettingsFile,
   parseModelSettingsJson,
+  modelSettingsJsonProblem,
   changedJsonPath,
   quotedForMessage,
   storedModelEntry,
@@ -87,8 +88,8 @@ export class ModelSettingsStore {
           let raw: unknown;
           try {
             raw = parseModelSettingsJson(text);
-          } catch {
-            throw new ModelSettingsFileError(this.filePath, 'is not valid JSON');
+          } catch (error) {
+            throw new ModelSettingsFileError(this.filePath, modelSettingsJsonProblem(error));
           }
           const parsed = parseModelSettingsFile(raw);
           if (!parsed) throw new ModelSettingsFileError(this.filePath, 'does not hold model settings');

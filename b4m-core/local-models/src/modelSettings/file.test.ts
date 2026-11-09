@@ -4,6 +4,8 @@ import {
   parseModelSettingsFile,
   parseModelSettingsInput,
   parseModelSettingsJson,
+  modelSettingsJsonProblem,
+  ModelSettingsEncodingError,
   changedJsonPath,
   quotedForMessage,
   storedModelEntry,
@@ -32,6 +34,39 @@ describe('parseModelSettingsJson', () => {
     expect(() => parseModelSettingsJson(BOM)).toThrow(SyntaxError);
     expect(() => parseModelSettingsJson(`${BOM}${BOM}${text}`)).toThrow(SyntaxError);
     expect(() => parseModelSettingsJson(` ${BOM}${text}`)).toThrow(SyntaxError);
+  });
+
+  const utf16le = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
+  const utf16be = Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(text, 'utf16le').swap16()]);
+
+  it.each([
+    ['UTF-16 LE bytes read as UTF-8', utf16le.toString('utf8')],
+    ['UTF-16 BE bytes read as UTF-8', utf16be.toString('utf8')],
+    ['a lone UTF-16 LE mark read as UTF-8', Buffer.from([0xff, 0xfe]).toString('utf8')],
+    ['UTF-16 BE bytes read as UTF-16 LE', utf16be.toString('utf16le')],
+  ])('names the encoding and says to save as UTF-8 for %s', (_name, decoded) => {
+    expect(() => parseModelSettingsJson(decoded)).toThrow(ModelSettingsEncodingError);
+    try {
+      parseModelSettingsJson(decoded);
+    } catch (error) {
+      expect(modelSettingsJsonProblem(error)).toBe('is saved as UTF-16, which cannot be read. Save it as UTF-8');
+      expect((error as Error).message).toContain('UTF-16');
+      expect((error as Error).message).toContain('UTF-8');
+    }
+  });
+
+  it('reports ordinary bad JSON as not valid JSON, including a single replacement character', () => {
+    for (const bad of ['{"models": ', '�{}', `{"a": "��"`]) {
+      let thrown: unknown;
+      try {
+        parseModelSettingsJson(bad);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(SyntaxError);
+      expect(thrown).not.toBeInstanceOf(ModelSettingsEncodingError);
+      expect(modelSettingsJsonProblem(thrown)).toBe('is not valid JSON');
+    }
   });
 });
 

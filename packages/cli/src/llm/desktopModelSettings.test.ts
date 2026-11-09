@@ -148,6 +148,17 @@ describe('readDesktopModelSettings', () => {
     await expect(readDesktopModelSettings(at(file), 'local:ollama:other')).rejects.toThrow(problem);
   });
 
+  it.each([
+    ['FF FE', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('{"models": {}}', 'utf16le')])],
+    ['FE FF', Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from('{"models": {}}', 'utf16le').swap16()])],
+  ])('names the encoding of a file saved as UTF-16 with a %s mark', async (_mark, bytes) => {
+    await writeFile(file, bytes);
+    const failure = readDesktopModelSettings(at(file), QWEN);
+    await expect(failure).rejects.toThrow(`${file} is saved as UTF-16, which cannot be read. Save it as UTF-8.`);
+    await expect(failure).rejects.not.toThrow('is not valid JSON');
+    await expect(readDesktopModelSettings(at(file), 'local:ollama:other')).rejects.toThrow('UTF-16');
+  });
+
   it('rejects a path it cannot read rather than reading no settings', async () => {
     await mkdir(file);
     await expect(readDesktopModelSettings(at(file), QWEN)).rejects.toThrow(`${file} could not be read (EISDIR)`);

@@ -29,6 +29,8 @@ export {
   parseModelSettingsFile,
   parseModelSettingsInput,
   parseModelSettingsJson,
+  modelSettingsJsonProblem,
+  ModelSettingsEncodingError,
   quotedForMessage,
   storedModelEntry,
   type KeepAliveSeconds,
