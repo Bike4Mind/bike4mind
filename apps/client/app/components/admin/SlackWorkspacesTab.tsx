@@ -830,19 +830,19 @@ const SlackWorkspacesTab: React.FC = () => {
     {
       id: 'team',
       label: 'Team ID',
-      width: '8rem',
+      width: '7.5rem',
       render: workspace => (workspace.slackTeamId ? <Mono>{workspace.slackTeamId}</Mono> : <NoValue />),
     },
     {
       id: 'app',
       label: 'App ID',
-      width: '9rem',
+      width: '7.5rem',
       render: workspace => (workspace.slackAppId ? <Mono>{workspace.slackAppId}</Mono> : <NoValue />),
     },
     {
       id: 'bot',
       label: 'Bot name',
-      width: '9rem',
+      width: '8rem',
       render: workspace => workspace.slackBotName || <NoValue />,
     },
     {
@@ -906,46 +906,40 @@ const SlackWorkspacesTab: React.FC = () => {
     },
   ];
 
-  // Deactivate is destructive, so it sits in the row's menu rather than as a red icon in every row.
+  // One menu per row: DataTable's action column holds a single button, and Deactivate is destructive,
+  // so it belongs in a menu rather than as a red icon in every row.
   const rowActions = (workspace: SlackWorkspace) => {
     const teamIdOrId = workspace.slackTeamId || workspace.id;
     return (
-      <>
-        {workspace.installedAt && (
-          <Tooltip title="Export channel history">
-            <IconButton
-              size="sm"
-              variant="plain"
-              aria-label={`Export channel history from ${workspace.name}`}
-              onClick={() => handleExportClick(workspace)}
+      <Dropdown>
+        <MenuButton
+          slots={{ root: IconButton }}
+          slotProps={{ root: { size: 'sm', variant: 'plain' } }}
+          aria-label={`More actions for ${workspace.name}`}
+          data-testid={`slack-workspace-menu-btn-${teamIdOrId}`}
+        >
+          <MoreHoriz />
+        </MenuButton>
+        <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+          {workspace.installedAt && (
+            <MenuItem
               disabled={!workspace.isActive}
+              onClick={() => handleExportClick(workspace)}
               data-testid={`slack-workspace-export-btn-${teamIdOrId}`}
             >
-              <Download />
-            </IconButton>
-          </Tooltip>
-        )}
-        <Dropdown>
-          <MenuButton
-            slots={{ root: IconButton }}
-            slotProps={{ root: { size: 'sm', variant: 'plain' } }}
-            aria-label={`More actions for ${workspace.name}`}
-            data-testid={`slack-workspace-menu-btn-${teamIdOrId}`}
-          >
-            <MoreHoriz />
-          </MenuButton>
-          <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
-            <MenuItem
-              color="danger"
-              disabled={!workspace.isActive}
-              onClick={() => handleDeactivateClick(workspace)}
-              data-testid={`slack-workspace-deactivate-btn-${teamIdOrId}`}
-            >
-              Deactivate workspace
+              Export channel history
             </MenuItem>
-          </Menu>
-        </Dropdown>
-      </>
+          )}
+          <MenuItem
+            color="danger"
+            disabled={!workspace.isActive}
+            onClick={() => handleDeactivateClick(workspace)}
+            data-testid={`slack-workspace-deactivate-btn-${teamIdOrId}`}
+          >
+            Deactivate workspace
+          </MenuItem>
+        </Menu>
+      </Dropdown>
     );
   };
 
@@ -1014,7 +1008,8 @@ const SlackWorkspacesTab: React.FC = () => {
             rowActions={rowActions}
             rowTestId={workspace => `slack-workspace-row-${workspace.id}`}
             testId="slack-workspaces-table"
-            minWidth="62rem"
+            // The fixed columns take 58.5rem, which leaves the workspace name 9.5rem.
+            minWidth="68rem"
           />
         </Stack>
       )}

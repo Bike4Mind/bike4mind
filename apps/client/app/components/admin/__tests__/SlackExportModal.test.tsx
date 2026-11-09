@@ -130,7 +130,8 @@ describe('SlackWorkspacesTab Export Modal', () => {
       });
 
       // Click export button
-      const exportBtn = screen.getByTestId('slack-workspace-export-btn-T123456');
+      await user.click(screen.getByTestId('slack-workspace-menu-btn-T123456'));
+      const exportBtn = await screen.findByTestId('slack-workspace-export-btn-T123456');
       await user.click(exportBtn);
 
       // Check preset buttons are visible
@@ -152,7 +153,8 @@ describe('SlackWorkspacesTab Export Modal', () => {
       });
 
       // Open export modal
-      const exportBtn = screen.getByTestId('slack-workspace-export-btn-T123456');
+      await user.click(screen.getByTestId('slack-workspace-menu-btn-T123456'));
+      const exportBtn = await screen.findByTestId('slack-workspace-export-btn-T123456');
       await user.click(exportBtn);
 
       // Click "Last 7 days" preset
@@ -180,7 +182,8 @@ describe('SlackWorkspacesTab Export Modal', () => {
         expect(screen.getByText('Test Workspace')).toBeInTheDocument();
       });
 
-      const exportBtn = screen.getByTestId('slack-workspace-export-btn-T123456');
+      await user.click(screen.getByTestId('slack-workspace-menu-btn-T123456'));
+      const exportBtn = await screen.findByTestId('slack-workspace-export-btn-T123456');
       await user.click(exportBtn);
 
       await user.click(screen.getByTestId('slack-export-preset-last30'));
@@ -200,7 +203,8 @@ describe('SlackWorkspacesTab Export Modal', () => {
         expect(screen.getByText('Test Workspace')).toBeInTheDocument();
       });
 
-      const exportBtn = screen.getByTestId('slack-workspace-export-btn-T123456');
+      await user.click(screen.getByTestId('slack-workspace-menu-btn-T123456'));
+      const exportBtn = await screen.findByTestId('slack-workspace-export-btn-T123456');
       await user.click(exportBtn);
 
       await user.click(screen.getByTestId('slack-export-preset-thisMonth'));
@@ -221,7 +225,8 @@ describe('SlackWorkspacesTab Export Modal', () => {
         expect(screen.getByText('Test Workspace')).toBeInTheDocument();
       });
 
-      const exportBtn = screen.getByTestId('slack-workspace-export-btn-T123456');
+      await user.click(screen.getByTestId('slack-workspace-menu-btn-T123456'));
+      const exportBtn = await screen.findByTestId('slack-workspace-export-btn-T123456');
       await user.click(exportBtn);
 
       await user.click(screen.getByTestId('slack-export-preset-lastMonth'));
@@ -245,7 +250,8 @@ describe('SlackWorkspacesTab Export Modal', () => {
         expect(screen.getByText('Test Workspace')).toBeInTheDocument();
       });
 
-      const exportBtn = screen.getByTestId('slack-workspace-export-btn-T123456');
+      await user.click(screen.getByTestId('slack-workspace-menu-btn-T123456'));
+      const exportBtn = await screen.findByTestId('slack-workspace-export-btn-T123456');
       await user.click(exportBtn);
 
       // First set a date range
@@ -269,7 +275,8 @@ describe('SlackWorkspacesTab Export Modal', () => {
         expect(screen.getByText('Test Workspace')).toBeInTheDocument();
       });
 
-      const exportBtn = screen.getByTestId('slack-workspace-export-btn-T123456');
+      await user.click(screen.getByTestId('slack-workspace-menu-btn-T123456'));
+      const exportBtn = await screen.findByTestId('slack-workspace-export-btn-T123456');
       await user.click(exportBtn);
 
       // Select a preset
@@ -317,7 +324,8 @@ describe('SlackWorkspacesTab Export Modal', () => {
         expect(screen.getByText('Test Workspace')).toBeInTheDocument();
       });
 
-      const exportBtn = screen.getByTestId('slack-workspace-export-btn-T123456');
+      await user.click(screen.getByTestId('slack-workspace-menu-btn-T123456'));
+      const exportBtn = await screen.findByTestId('slack-workspace-export-btn-T123456');
       await user.click(exportBtn);
 
       // Enter channel ID
@@ -358,7 +366,8 @@ describe('SlackWorkspacesTab Export Modal', () => {
         expect(screen.getByText('Test Workspace')).toBeInTheDocument();
       });
 
-      const exportBtn = screen.getByTestId('slack-workspace-export-btn-T123456');
+      await user.click(screen.getByTestId('slack-workspace-menu-btn-T123456'));
+      const exportBtn = await screen.findByTestId('slack-workspace-export-btn-T123456');
       await user.click(exportBtn);
 
       const channelInput = screen.getByTestId('slack-export-channel-id-input');
@@ -403,7 +412,8 @@ describe('SlackWorkspacesTab Export Modal', () => {
         expect(screen.getByText('Test Workspace')).toBeInTheDocument();
       });
 
-      const exportBtn = screen.getByTestId('slack-workspace-export-btn-T123456');
+      await user.click(screen.getByTestId('slack-workspace-menu-btn-T123456'));
+      const exportBtn = await screen.findByTestId('slack-workspace-export-btn-T123456');
       await user.click(exportBtn);
 
       const channelInput = screen.getByTestId('slack-export-channel-id-input');
@@ -425,7 +435,8 @@ describe('SlackWorkspacesTab Export Modal', () => {
         expect(screen.getByText('Test Workspace')).toBeInTheDocument();
       });
 
-      const exportBtn = screen.getByTestId('slack-workspace-export-btn-T123456');
+      await user.click(screen.getByTestId('slack-workspace-menu-btn-T123456'));
+      const exportBtn = await screen.findByTestId('slack-workspace-export-btn-T123456');
       await user.click(exportBtn);
 
       const confirmBtn = screen.getByTestId('slack-export-confirm-btn');
@@ -440,7 +451,8 @@ describe('SlackWorkspacesTab Export Modal', () => {
         expect(screen.getByText('Test Workspace')).toBeInTheDocument();
       });
 
-      const exportBtn = screen.getByTestId('slack-workspace-export-btn-T123456');
+      await user.click(screen.getByTestId('slack-workspace-menu-btn-T123456'));
+      const exportBtn = await screen.findByTestId('slack-workspace-export-btn-T123456');
       await user.click(exportBtn);
 
       const channelInput = screen.getByTestId('slack-export-channel-id-input');
@@ -462,7 +474,8 @@ describe('SlackWorkspacesTab Export Modal', () => {
       });
 
       // Open modal
-      const exportBtn = screen.getByTestId('slack-workspace-export-btn-T123456');
+      await user.click(screen.getByTestId('slack-workspace-menu-btn-T123456'));
+      const exportBtn = await screen.findByTestId('slack-workspace-export-btn-T123456');
       await user.click(exportBtn);
 
       // Fill in fields
@@ -502,7 +515,8 @@ describe('SlackWorkspacesTab Export Modal', () => {
         expect(screen.getByText('Test Workspace')).toBeInTheDocument();
       });
 
-      const exportBtn = screen.getByTestId('slack-workspace-export-btn-T123456');
+      await user.click(screen.getByTestId('slack-workspace-menu-btn-T123456'));
+      const exportBtn = await screen.findByTestId('slack-workspace-export-btn-T123456');
       await user.click(exportBtn);
 
       const channelInput = screen.getByTestId('slack-export-channel-id-input');

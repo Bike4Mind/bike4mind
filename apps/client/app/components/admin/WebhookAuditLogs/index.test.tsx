@@ -93,6 +93,13 @@ const STATS = {
 const precedes = (first: Element, second: Element) =>
   Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
 
+/** Total rem width of the header cells that set a fixed width; the rest is the table's auto column. */
+const fixedColumnsRem = (table: HTMLElement) =>
+  Array.from(table.querySelectorAll<HTMLElement>('thead th')).reduce(
+    (sum, cell) => (cell.style.width.endsWith('rem') ? sum + parseFloat(cell.style.width) : sum),
+    0
+  );
+
 beforeEach(() => {
   mocks.useWebhookAuditLog.mockReset();
   mocks.useWebhookAuditLog.mockReturnValue({ data: undefined, isLoading: true, error: null });
@@ -274,6 +281,13 @@ describe('WebhookAuditLogsTab delivery list', () => {
 
     fireEvent.click(within(screen.getByTestId('webhook-logs-row-d-failed')).getByText('acme/widgets'));
     expect(fakeAdminRouter.search).toMatchObject({ webhookDeliveryId: 'd-failed' });
+  });
+
+  it('leaves the repository column room below the table min width instead of crushing it', () => {
+    mocks.useWebhookAuditLogs.mockReturnValue(logsResult({ data: { pages: [{ logs: LOGS }] } }));
+    renderTab();
+    const table = screen.getByTestId('webhook-logs-table');
+    expect(parseFloat(getComputedStyle(table).minWidth) - fixedColumnsRem(table)).toBeGreaterThanOrEqual(12);
   });
 
   it('loads the next page from below the table', () => {

@@ -520,7 +520,8 @@ const WebhookAuditLogsTab: React.FC = () => {
           testId="webhook-logs-table"
           // The server pages by cursor with no total, so the list grows through Load more below.
           pagination={false}
-          minWidth="52rem"
+          // The fixed columns take 52.5rem, which leaves the repository 15.5rem.
+          minWidth="68rem"
         />
         {hasNextPage && (
           <Stack direction="row" justifyContent="center" sx={{ pt: 1 }}>

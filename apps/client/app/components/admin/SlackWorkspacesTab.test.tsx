@@ -75,6 +75,19 @@ const routeGets = (workspaces: unknown[] = WORKSPACES, job?: Record<string, unkn
 
 const loaded = async () => screen.findByTestId('slack-workspaces-table');
 
+/** Total rem width of the header cells that set a fixed width; the rest is the table's auto column. */
+const fixedColumnsRem = (table: HTMLElement) =>
+  Array.from(table.querySelectorAll<HTMLElement>('thead th')).reduce(
+    (sum, cell) => (cell.style.width.endsWith('rem') ? sum + parseFloat(cell.style.width) : sum),
+    0
+  );
+
+/** Opens a row's More actions menu and picks Export channel history. */
+const openExport = async (teamId: string) => {
+  fireEvent.click(screen.getByTestId(`slack-workspace-menu-btn-${teamId}`));
+  fireEvent.click(await screen.findByTestId(`slack-workspace-export-btn-${teamId}`));
+};
+
 /** Picks the first preset reason, which completes an ActionDialog's required reason. */
 const pickReason = (dialogTestId: string) =>
   fireEvent.click(screen.getByTestId(`${dialogTestId}-reason-input-preset-0`));
@@ -148,7 +161,7 @@ describe('SlackWorkspacesTab page anatomy and states', () => {
     renderTab();
     const table = await loaded();
     expect(screen.getByTestId('slack-workspaces-table-frame')).toContainElement(table);
-    expect(table).toHaveStyle({ minWidth: '62rem' });
+    expect(parseFloat(getComputedStyle(table).minWidth) - fixedColumnsRem(table)).toBeGreaterThanOrEqual(9);
 
     const tone = (testId: string) => screen.getByTestId(testId).getAttribute('data-tone');
     expect(tone('slack-workspace-status-ws-ok')).toBe('good');
@@ -196,11 +209,32 @@ describe('SlackWorkspacesTab dialogs', () => {
     await waitFor(() => expect(screen.queryByTestId('slack-workspace-deactivate-dialog')).toBeNull());
   });
 
-  it('cannot deactivate a workspace that is already inactive', async () => {
+  it('gives each row one More actions menu that holds Export and Deactivate', async () => {
+    renderTab();
+    await loaded();
+    const actions = screen.getByTestId('slack-workspace-row-ws-ok').querySelector<HTMLElement>('[data-row-actions]');
+    expect(within(actions as HTMLElement).getAllByRole('button')).toHaveLength(1);
+    expect(screen.queryByTestId('slack-workspace-export-btn-T1')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('slack-workspace-menu-btn-T1'));
+    expect(await screen.findByTestId('slack-workspace-export-btn-T1')).toHaveTextContent('Export channel history');
+    expect(screen.getByTestId('slack-workspace-deactivate-btn-T1')).toHaveTextContent('Deactivate workspace');
+  });
+
+  it('offers no export for a workspace without an install', async () => {
+    renderTab();
+    await loaded();
+    fireEvent.click(screen.getByTestId('slack-workspace-menu-btn-ws-new'));
+    await screen.findByTestId('slack-workspace-deactivate-btn-ws-new');
+    expect(screen.queryByTestId('slack-workspace-export-btn-ws-new')).toBeNull();
+  });
+
+  it('cannot export from or deactivate a workspace that is already inactive', async () => {
     renderTab();
     await loaded();
     fireEvent.click(screen.getByTestId('slack-workspace-menu-btn-T3'));
     expect(await screen.findByTestId('slack-workspace-deactivate-btn-T3')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByTestId('slack-workspace-export-btn-T3')).toHaveAttribute('aria-disabled', 'true');
   });
 
   it('opens the export form in an AdminDialog and posts the same export payload', async () => {
@@ -210,7 +244,7 @@ describe('SlackWorkspacesTab dialogs', () => {
     renderTab();
     await loaded();
 
-    fireEvent.click(screen.getByTestId('slack-workspace-export-btn-T1'));
+    await openExport('T1');
     const dialog = await screen.findByTestId('slack-export-dialog');
     expect(within(dialog).getByRole('heading', { level: 2 })).toHaveTextContent('Export channel history');
     fireEvent.change(screen.getByTestId('slack-export-channel-id-input'), { target: { value: 'C0123' } });
@@ -233,7 +267,7 @@ describe('SlackWorkspacesTab dialogs', () => {
     const { unmount } = renderTab();
     await loaded();
 
-    fireEvent.click(screen.getByTestId('slack-workspace-export-btn-T1'));
+    await openExport('T1');
     await screen.findByTestId('slack-export-dialog');
     fireEvent.click(within(screen.getByTestId('slack-export-async-toggle')).getByRole('switch'));
     fireEvent.change(screen.getByTestId('slack-export-channel-id-input'), { target: { value: 'C0123' } });

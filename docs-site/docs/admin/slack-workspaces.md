@@ -11,7 +11,7 @@ The Slack Workspaces tab provides administrators with a centralized interface fo
 
 ## Workspace Table
 
-The main view displays a table of all connected workspaces. The page title shows the number of connected workspaces in brackets. On a narrow screen the table keeps its columns and scrolls sideways inside its own frame.
+The main view displays a table of all connected workspaces. The page title shows the number of connected workspaces in parentheses. On a narrow screen the table keeps its columns and scrolls sideways inside its own frame.
 
 | Column | Description |
 |--------|-------------|
@@ -23,7 +23,7 @@ The main view displays a table of all connected workspaces. The page title shows
 | **Status** | An "Active" (green) or "Inactive" (grey) status chip |
 | **Manifest** | Current manifest status with actionable indicators |
 
-Hover over or focus a row to show its actions: the export (download) button on an installed workspace and a **More actions** menu that holds **Deactivate workspace**.
+Hover over or focus a row to show its **More actions** (...) menu. It holds **Export channel history** on an installed workspace and **Deactivate workspace**; both are greyed out on an inactive workspace.
 
 When no workspaces are connected, an empty state explains that workspaces appear after users install the bot via OAuth at `/integrations/slack/install`, with a **Create Slack app** button. While the list loads you see a loading indicator, and if it fails to load you see an error with a **Try again** button. **Refresh** reloads the list and keeps the current rows on screen while it does.
 
@@ -61,7 +61,7 @@ When the manifest status shows "Reconnect needed" (missing token), clicking the 
 
 ## Channel Message Export
 
-Click the export (download) icon on any active, installed workspace to open the export dialog. The export feature supports both synchronous (immediate download) and asynchronous (background processing) modes.
+Open the **More actions** menu on any active, installed workspace and choose **Export channel history** to open the export dialog. The export feature supports both synchronous (immediate download) and asynchronous (background processing) modes.
 
 ### Export Configuration
 
