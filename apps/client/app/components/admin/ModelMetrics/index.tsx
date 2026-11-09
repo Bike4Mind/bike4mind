@@ -142,7 +142,9 @@ const ModelMetricsTab: React.FC = () => {
     <Stack gap={ADMIN_REGION_GAP}>
       <AdminPageHeader
         title="Model metrics"
-        count={isLoading || metrics.length >= SERVER_ROW_CAP ? undefined : metrics.length}
+        count={
+          isLoading || (isError && !metrics.length) || metrics.length >= SERVER_ROW_CAP ? undefined : metrics.length
+        }
         description="Per-call performance, token use and cost across models."
         actions={
           <>

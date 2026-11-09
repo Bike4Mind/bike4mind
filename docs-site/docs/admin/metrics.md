@@ -19,7 +19,7 @@ The filter bar at the top of Model Metrics applies each filter as you pick it. T
 
 | Filter | Description |
 |--------|-------------|
-| **Period** | One of Today, Last 24 hours, Last 7 days or Last 30 days. Every query returns at most the 500 most recent matching calls. |
+| **Period** | One of Today, Last 24 hours, Last 7 days or Last 30 days. Overview, Raw data and the CSV export show at most the 500 most recent matching calls; Analytics runs its own query with a higher cap. |
 | **Model** | Filter by AI model |
 | **User** | Filter by specific user |
 | **Status** | Done, Error or Pending |

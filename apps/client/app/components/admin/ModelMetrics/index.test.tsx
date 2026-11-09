@@ -169,6 +169,13 @@ describe('ModelMetricsTab - page frame', () => {
     expect(metricsState.refetch).toHaveBeenCalledTimes(1);
   });
 
+  it('leaves the header count out when the first fetch failed', () => {
+    metricsState.data = [];
+    metricsState.isError = true;
+    render(<ModelMetricsTab />, { wrapper: TestWrapper });
+    expect(screen.queryByText('0')).not.toBeInTheDocument();
+  });
+
   it('does not render the empty state in the Spend panel, and Refresh there busts spend', () => {
     metricsState.data = [];
     render(<ModelMetricsTab />, { wrapper: TestWrapper });
