@@ -5,7 +5,12 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { BadRequestError, ensureAdmin, NotFoundError, UnprocessableEntityError } from '@server/utils/errors';
+import {
+  BadRequestError,
+  ensureAdmin,
+  NotFoundError,
+  UnprocessableEntityError,
+} from '@bike4mind/server-utils/utils/errors';
 
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
 

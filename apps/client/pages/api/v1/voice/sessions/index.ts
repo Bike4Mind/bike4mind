@@ -47,8 +47,8 @@ import { requestTurnAuth } from '@server/auth/turnAuth';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
-import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
-import { recordVoiceRefusal } from '@server/billing/userLimitEvents';
+import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
+import { recordVoiceRefusal } from '@bike4mind/server-utils/billing/userLimitEvents';
 
 const DEFAULT_MODEL = ChatModels.CLAUDE_4_6_SONNET as ChatModelName;
 // Mirror v1's concurrency guard so a user (or a leaked session endpoint) can't
@@ -156,7 +156,9 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
         // See resolveRetrievalLakeScopeForUser - request-free so the lake arm of the lake-tag
         // derivation runs here too, not only on the two session routes that have a `req`.
         resolveLakeAccess: async () =>
-          (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(req.user!),
+          (
+            await import('@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope')
+          ).resolveRetrievalLakeScopeForUser(req.user!),
       },
       { origin: resolveSessionOrigin(req) }
     );

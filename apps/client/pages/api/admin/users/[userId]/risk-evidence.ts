@@ -7,7 +7,7 @@ import {
   type AdminRiskEvidenceView,
 } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ensureAdmin, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ensureAdmin, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
 

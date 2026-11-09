@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
-import type { AiAbuseAdvisory, AiAdvisorySummary } from '@client/app/utils/aiAdvisory';
+import type { AiAbuseAdvisory, AiAdvisorySummary } from '@bike4mind/server-utils/app/utils/aiAdvisory';
 
 const ENDPOINT = '/api/admin/shadow-detections/ai-advisory';
 export const AI_ADVISORY_QUERY_KEY = ['admin-ai-advisory'];

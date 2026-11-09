@@ -1,6 +1,6 @@
 import * as z from 'zod';
 import { passthroughShape } from '@bike4mind/common';
-import { ADMIN_USER_LIST_FIELDS } from '@client/app/utils/adminUserProjection';
+import { ADMIN_USER_LIST_FIELDS } from '@bike4mind/server-utils/app/utils/adminUserProjection';
 
 const ADMIN_USER_ROW_KEYS = Object.fromEntries([...ADMIN_USER_LIST_FIELDS, 'id'].map(field => [field, true])) as Record<
   (typeof ADMIN_USER_LIST_FIELDS)[number] | 'id',

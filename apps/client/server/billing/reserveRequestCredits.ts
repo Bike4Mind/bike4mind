@@ -7,8 +7,8 @@ import {
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
-import { recordInsufficientCredits } from '@server/billing/userLimitEvents';
+import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
+import { recordInsufficientCredits } from '@bike4mind/server-utils/billing/userLimitEvents';
 import { creditService } from '@bike4mind/services';
 import type { CreditLedgerEntry } from '@bike4mind/services/creditService';
 import type { ILogger } from '@bike4mind/observability';
@@ -18,7 +18,7 @@ import { attributeToRequestApiKey } from '@bike4mind/server-utils/billing/attrib
 
 import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
-import { checkFreeTierDailySpendCap } from './freeTierDailyCapGate';
+import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
 import { observeCreditHold, recordSettlementAfterSweep } from './creditHoldTelemetry';
 
 export { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';

@@ -50,7 +50,7 @@ import {
   scopedSettingsRepository,
   cacheRepository,
 } from '@bike4mind/database';
-import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
+import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
 import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import {
@@ -84,7 +84,7 @@ import { Logger } from '@bike4mind/observability';
 import { Permission } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
-import { getUserEntitlements } from '@server/entitlements';
+import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { executionTurnAuth } from '@server/auth/turnAuth';
@@ -266,7 +266,7 @@ import {
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
-import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
+import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';
 import { publishRunPendingAction } from './agentExecutor.pendingAction';
 import {
   createAgentPushDeps,
@@ -275,11 +275,11 @@ import {
   endAgentLiveActivity,
   type AgentPushSender,
 } from './agentExecutor.push';
-import { publishPushNotification, sessionDeepLink } from '@server/utils/pushNotifications';
+import { publishPushNotification, sessionDeepLink } from '@bike4mind/server-utils/utils/pushNotifications';
 import { createAgentToolEchoMarker, persistedExecutionSteps } from '@bike4mind/server-utils/utils/markAgentToolEchoes';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
 import { extractFinalAnswer } from '@bike4mind/server-utils/utils/extractFinalAnswer';
-import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
+import { resolveAndPublishMementoCompletion } from '@bike4mind/server-utils/utils/publishMementoCompletion';
 import { resolveAndBuildMementosPreamble } from '@workers/utils/getFirstIterationMementosPreamble';
 import { resolveExecutionMementoGates } from '@bike4mind/server-utils/utils/resolveExecutionMementoGates';
 import { getFirstIterationSkillsPreamble } from '@workers/utils/getFirstIterationSkillsPreamble';

@@ -67,8 +67,8 @@ import {
   evidenceHash,
   rolloutBucket,
   type AssessedAccountSource,
-} from './featureSummary';
-import { collectRequestActivity } from './requestActivity';
+} from '@bike4mind/server-utils/security/abuseAssessment/featureSummary';
+import { collectRequestActivity } from '@bike4mind/server-utils/security/abuseAssessment/requestActivity';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Namespaces this feature's budget, call cap and concurrency in the shared platform policy.

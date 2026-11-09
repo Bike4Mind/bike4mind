@@ -3,7 +3,7 @@ import { ApiKeyScope, type UserTimelinePage } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
 import { encodeAuditCursor, parseUserTimelineQuery } from '@server/utils/adminAuditQuery';
-import { BadRequestError, ensureAdmin, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ensureAdmin, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { listUserTimeline } from '@server/utils/userTimeline';
 
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;

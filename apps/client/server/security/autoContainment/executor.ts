@@ -13,7 +13,7 @@ import {
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import type { AdminUsersBulkResult } from '@client/app/utils/adminUsersBulk';
+import type { AdminUsersBulkResult } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import { usersBulkExecuteDepsFor, usersBulkResolveDeps } from '@server/admin/usersBulk/adapters';
 import { executeAdminUsersBulk } from '@server/admin/usersBulk/execute';
 import { cohortHashOf, resolveAdminUsersBulk } from '@server/admin/usersBulk/resolve';

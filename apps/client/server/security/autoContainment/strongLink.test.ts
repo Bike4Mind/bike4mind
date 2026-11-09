@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { UserSignupLinkFacts } from '@bike4mind/database';
 
 vi.mock('@bike4mind/database', () => ({ cacheRepository: {}, shadowDetectionRepository: {}, userRepository: {} }));
-vi.mock('@server/billing/linkedAccounts', () => ({ findLinkedAccounts: vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/linkedAccounts', () => ({ findLinkedAccounts: vi.fn() }));
 vi.mock('@server/security/abuseAssessment/abuseAssessment', () => ({ assessShadowDetection: vi.fn() }));
 vi.mock('@server/security/abuseAssessment/linkedAccountEvidence', () => ({ linkedAccountGroupEvidence: vi.fn() }));
 vi.mock('./executor', () => ({
@@ -11,7 +11,7 @@ vi.mock('./executor', () => ({
   loadAutoContainmentConfig: vi.fn(),
 }));
 
-import type { LinkedAccount } from '@server/billing/linkedAccounts';
+import type { LinkedAccount } from '@bike4mind/server-utils/billing/linkedAccounts';
 import { buildStrongLinkDetection, checkStrongLink, strongLinks, type StrongLinkDeps } from './strongLink';
 
 const HOUR_MS = 60 * 60 * 1000;

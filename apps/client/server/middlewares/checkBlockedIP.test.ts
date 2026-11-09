@@ -17,7 +17,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: () => h.clientIp }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: h.emitMetric }));
-vi.mock('@server/billing/fraudBlockAlert', () => ({ alertFraudBlock: h.alertFraudBlock }));
+vi.mock('@bike4mind/server-utils/billing/fraudBlockAlert', () => ({ alertFraudBlock: h.alertFraudBlock }));
 
 import {
   checkBlockedIP,

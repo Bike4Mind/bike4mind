@@ -12,7 +12,7 @@ import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
-import { priceAffectsEntitlements } from '@server/entitlements/paidStanding';
+import { priceAffectsEntitlements } from '@bike4mind/server-utils/entitlements/paidStanding';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';

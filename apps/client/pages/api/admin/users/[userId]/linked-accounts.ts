@@ -1,8 +1,8 @@
 import { userRepository } from '@bike4mind/database';
 import { ApiKeyScope, type UserLinkedAccount } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ensureAdmin, NotFoundError } from '@server/utils/errors';
-import { findLinkedAccounts } from '@server/billing/linkedAccounts';
+import { BadRequestError, ensureAdmin, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { findLinkedAccounts } from '@bike4mind/server-utils/billing/linkedAccounts';
 
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
 

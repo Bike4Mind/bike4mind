@@ -31,8 +31,10 @@ const h = vi.hoisted(() => ({
   sendCancelledEmail: vi.fn(),
   audit: vi.fn(),
 }));
-vi.mock('@server/billing/cancelAccountSubscriptions', () => ({ cancelAccountSubscriptions: h.cancelSubscriptions }));
-vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', () => ({
+  cancelAccountSubscriptions: h.cancelSubscriptions,
+}));
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
   purgeUserPublishedArtifacts: h.purgeArtifacts,
 }));
 vi.mock('@bike4mind/server-utils/skillMarket/market', () => ({ withdrawAuthorListings: h.withdrawListings }));

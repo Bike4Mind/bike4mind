@@ -55,7 +55,7 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Reset-Day': '0',
 };
 
-vi.mock('@server/billing/freeTierDailyCapGate', () => ({
+vi.mock('@bike4mind/server-utils/billing/freeTierDailyCapGate', () => ({
   checkFreeTierDailySpendCap: (...args: unknown[]) => mockCheckFreeTierDailySpendCap(...args),
 }));
 
@@ -71,7 +71,7 @@ vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockApiKeyRateLimit(...a),
 }));
-vi.mock('@server/utils/userRateTier', () => ({
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({
   resolveUserRateLimitPerMin: (...a: unknown[]) => mockResolveUserRateLimitPerMin(...a),
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));

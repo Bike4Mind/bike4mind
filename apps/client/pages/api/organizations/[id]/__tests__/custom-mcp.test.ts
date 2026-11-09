@@ -32,7 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 const verifyOrgAccess = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
 const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 

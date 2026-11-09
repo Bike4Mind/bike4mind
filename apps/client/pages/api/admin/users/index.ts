@@ -2,8 +2,8 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { ADMIN_USERS_LIST_MAX, AdminUsersQuerySchema } from '@client/app/utils/adminUsersFilter';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { ADMIN_USERS_LIST_MAX, AdminUsersQuerySchema } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import { adminUsersDomainGroups, listAdminUsers } from '@server/admin/usersList/listAdminUsers';
 import qs from 'qs';
 

@@ -7,7 +7,7 @@ import { DATA_LAKE_PROPOSAL_STATUSES, lakeProposalListResponseSchema } from '@bi
 import { ForbiddenError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { respond } from '@server/utils/respond';
 
 const ListQuery = z.object({

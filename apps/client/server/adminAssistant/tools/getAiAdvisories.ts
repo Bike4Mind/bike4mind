@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { listAiAbuseAdvisories } from '@server/admin/aiAdvisory/aiAbuseAdvisories';
+import { listAiAbuseAdvisories } from '@bike4mind/server-utils/admin/aiAdvisory/aiAbuseAdvisories';
 import { loadAbuseAssessmentSettings } from '@server/security/abuseAssessment/abuseAssessment';
-import { AI_ADVISORY_WINDOW_HOURS } from '@client/app/utils/aiAdvisory';
+import { AI_ADVISORY_WINDOW_HOURS } from '@bike4mind/server-utils/app/utils/aiAdvisory';
 import { defineAdminTool } from '../defineAdminTool';
 import { toIso } from '../formatters';
 

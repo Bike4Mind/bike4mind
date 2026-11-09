@@ -10,7 +10,7 @@ import { adminSettingsRepository } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import type { Request } from 'express';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 /** Admin-set reads per minute per key. Infinity (JWT callers, 0/unset setting) skips rateLimit; 0 would block. */
 async function creditReadsPerMinute(req: Request): Promise<number> {

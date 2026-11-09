@@ -6,7 +6,7 @@ import { withTransaction, dataLakeResearchConfigRepository, dataLakeRepository }
 import { researchConfigEnvelopeResponseSchema } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchManage';
 import { ResearchLeversInput, ResearchScheduleInput } from '@server/dataLakes/researchConfigInput';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';

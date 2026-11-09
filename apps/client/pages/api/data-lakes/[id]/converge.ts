@@ -16,7 +16,7 @@ import { CONVERGENCE_ORIGIN, isSupportedEmbeddingModel } from '@bike4mind/common
 import { BadRequestError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { isConvergenceHalted } from '@bike4mind/server-utils/dataLakes/convergenceKillSwitch';
