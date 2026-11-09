@@ -9,7 +9,6 @@ const componentsByFile = {
   'AdminSystemHealthTab.tsx': ['Card'],
   'AdminWhatsNewModalsTab.tsx': ['Card', 'Modal', 'Table'],
   'AgentExecutionsTab.tsx': ['Table'],
-  'AgentOpsTab.tsx': ['Card', 'Modal', 'Table'],
   'ContextInspectorTab.tsx': ['Card', 'Table', 'Modal'],
   'CreateSlackAppModal.tsx': ['Modal'],
   'CreditAnalysis/components/CreditAdjustmentModal.tsx': ['Modal'],

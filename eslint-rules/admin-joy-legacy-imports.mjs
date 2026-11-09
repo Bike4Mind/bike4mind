@@ -10,7 +10,6 @@ export default {
   'AdminSystemHealthTab.tsx': [[1, 'c76590d0c3aaf0ac']],
   'AdminWhatsNewModalsTab.tsx': [[1, '27481ac346d5dfed']],
   'AgentExecutionsTab.tsx': [[2, 'd79be72c8bce0206']],
-  'AgentOpsTab.tsx': [[2, '6bf18f13b9471baa']],
   'ContextInspectorTab.tsx': [[3, '4efdcaa4a7756dc6']],
   'CreateSlackAppModal.tsx': [[2, '77f0833039f8ec69']],
   'CreditAnalysis/components/CreditAdjustmentModal.tsx': [[2, '203e42cbb719af8a']],

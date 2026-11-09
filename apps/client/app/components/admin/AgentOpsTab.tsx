@@ -1,35 +1,48 @@
 import React, { useState, useEffect } from 'react';
 import {
+  Alert,
   Box,
   Button,
-  Card,
-  CardContent,
+  Checkbox,
+  Dropdown,
   FormControl,
+  FormHelperText,
   FormLabel,
+  IconButton,
   Input,
-  LinearProgress,
+  Menu,
+  MenuButton,
+  MenuItem,
   Select,
   Option,
   Stack,
   Typography,
   Textarea,
-  Chip,
-  Modal,
-  ModalDialog,
-  ModalClose,
-  Table,
-  Badge,
-  Alert,
 } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import SettingsIcon from '@mui/icons-material/Settings';
-import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
+import type { ModelInfo } from '@bike4mind/common';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { agentOpsModelLabels, agentOpsModelOptions } from '@client/app/utils/agentOpsModels';
+import { SettingsDraftProvider, useSettingsDraft } from './SettingsDraftProvider';
+import {
+  AdminDialog,
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  SettingsSection,
+  StatStrip,
+  StatTile,
+  StatusChip,
+  UpdatingBar,
+  type DataColumn,
+} from './shared';
+import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
 
 interface MetaPromptVersion {
   versionNumber: number;
@@ -81,11 +94,87 @@ Given the agent metadata below, create a detailed system prompt that:
 
 Provide only the final system prompt text (do not include additional explanations or meta-commentary). The prompt should be ready to use directly as a system message for the AI agent.`;
 
+/** The fields PUT /api/admin/agent-ops-settings takes, in the order it has always been sent. */
+type SettingsForm = Pick<AgentOpsSettings, 'generationLlmModel' | 'rateLimitSeconds' | 'isEnabled'>;
+
+const SectionTitle = ({ children }: { children: React.ReactNode }) => (
+  <Typography level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
+    {children}
+  </Typography>
+);
+
+/** Staged in the page's SettingsDraftProvider, so the SaveBar and leave-page guard cover it. */
+function GenerationSettings({
+  baseline,
+  modelOptions,
+  modelLabels,
+  onSave,
+}: {
+  baseline: SettingsForm;
+  modelOptions: ModelInfo[];
+  modelLabels: Map<string, string>;
+  onSave(form: SettingsForm): Promise<void>;
+}) {
+  const { value: form, setValue } = useSettingsDraft<SettingsForm>('agent-ops-settings', baseline, {
+    name: 'Generation settings',
+    save: onSave,
+  });
+  const set = (patch: Partial<SettingsForm>) => setValue(previous => ({ ...previous, ...patch }));
+
+  return (
+    <SettingsSection component="section" sx={{ mb: 0 }} data-testid="agent-ops-settings-section">
+      <Stack gap={2}>
+        <SectionTitle>Generation settings</SectionTitle>
+        <FormControl>
+          <FormLabel>Model</FormLabel>
+          <Select
+            value={form.generationLlmModel}
+            onChange={(_, value) => value && set({ generationLlmModel: value })}
+            data-testid="agent-ops-model-select"
+          >
+            {/* A pin the catalog no longer lists (retired upstream) still needs an Option, or
+                the Select renders blank and the admin cannot see what is currently saved. */}
+            {form.generationLlmModel && !modelOptions.some(m => m.id === form.generationLlmModel) && (
+              <Option value={form.generationLlmModel} disabled>
+                {form.generationLlmModel} (no longer available)
+              </Option>
+            )}
+            {modelOptions.map(model => (
+              <Option key={model.id} value={model.id} disabled={model.disabled}>
+                {modelLabels.get(model.id) ?? model.name}
+                {model.disabled ? ' (unavailable)' : ''}
+              </Option>
+            ))}
+          </Select>
+          <FormHelperText>The model that writes each agent&apos;s system prompt.</FormHelperText>
+        </FormControl>
+        <FormControl>
+          <FormLabel>Rate limit (seconds)</FormLabel>
+          <Input
+            type="number"
+            value={form.rateLimitSeconds}
+            onChange={e => set({ rateLimitSeconds: parseInt(e.target.value) || 60 })}
+            slotProps={{ input: { min: 0, max: 3600, 'data-testid': 'agent-ops-rate-limit-input' } }}
+          />
+          <FormHelperText>Minimum seconds between system prompt generations per agent.</FormHelperText>
+        </FormControl>
+        <Checkbox
+          label="Enable system prompt generation"
+          checked={form.isEnabled}
+          onChange={e => set({ isEnabled: e.target.checked })}
+          slotProps={{ input: { 'data-testid': 'agent-ops-enabled-checkbox' } }}
+        />
+      </Stack>
+    </SettingsSection>
+  );
+}
+
 const AgentOpsTab: React.FC = () => {
   const [settings, setSettings] = useState<AgentOpsSettings | null>(null);
   const [versions, setVersions] = useState<MetaPromptVersion[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const { data: catalogModels } = useModelInfo();
   const modelOptions = React.useMemo(() => agentOpsModelOptions(catalogModels ?? []), [catalogModels]);
@@ -93,35 +182,21 @@ const AgentOpsTab: React.FC = () => {
   const modelLabels = React.useMemo(() => agentOpsModelLabels(modelOptions), [modelOptions]);
   const modelLabel = (modelId?: string) => (modelId ? modelLabels.get(modelId) : undefined) ?? modelId ?? 'Unknown';
 
-  // Modal states
   const [isCreateVersionModalOpen, setIsCreateVersionModalOpen] = useState(false);
-  const [isEditSettingsModalOpen, setIsEditSettingsModalOpen] = useState(false);
   const [newVersionData, setNewVersionData] = useState({ metaPrompt: '', description: '' });
-
-  // Settings form state
-  const [settingsForm, setSettingsForm] = useState({
-    generationLlmModel: 'claude-opus-4-20250514',
-    rateLimitSeconds: 60,
-    isEnabled: true,
-  });
 
   const loadData = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const settingsResponse = await api.get('/api/admin/agent-ops-settings');
-      const settingsData = settingsResponse.data;
-      setSettings(settingsData);
-      setSettingsForm({
-        generationLlmModel: settingsData.generationLlmModel,
-        rateLimitSeconds: settingsData.rateLimitSeconds,
-        isEnabled: settingsData.isEnabled,
-      });
+      setSettings(settingsResponse.data);
 
       const versionsResponse = await api.get('/api/admin/agent-ops-settings/versions');
       setVersions(versionsResponse.data);
     } catch (error) {
       console.error('Error loading AgentOps data:', error);
-      toast.error('Failed to load AgentOps settings');
+      setLoadError('Agent settings could not be loaded.');
     } finally {
       setLoading(false);
     }
@@ -131,19 +206,11 @@ const AgentOpsTab: React.FC = () => {
     loadData();
   }, []);
 
-  const handleSaveSettings = async () => {
-    setSaving(true);
-    try {
-      await api.put('/api/admin/agent-ops-settings', settingsForm);
-      toast.success('Settings saved successfully');
-      setIsEditSettingsModalOpen(false);
-      await loadData();
-    } catch (error) {
-      console.error('Error saving settings:', error);
-      toast.error('Failed to save settings');
-    } finally {
-      setSaving(false);
-    }
+  // Errors reach the SaveBar, which keeps the draft for a retry.
+  const handleSaveSettings = async (form: SettingsForm) => {
+    await api.put('/api/admin/agent-ops-settings', form);
+    toast.success('Settings saved successfully');
+    await loadData();
   };
 
   const handleCreateVersion = async () => {
@@ -213,318 +280,264 @@ const AgentOpsTab: React.FC = () => {
     return new Date(dateString).toLocaleString();
   };
 
-  if (loading) {
-    return (
-      <Box>
-        <LinearProgress />
-        <Typography level="body-sm" sx={{ mt: 1 }}>
-          Loading AgentOps settings...
+  const openCreateVersion = () => setIsCreateVersionModalOpen(true);
+
+  const columns: DataColumn<MetaPromptVersion>[] = [
+    {
+      id: 'version',
+      label: 'Version',
+      width: '6rem',
+      render: version => (
+        <Typography level="title-sm" noWrap data-testid={`agent-ops-version-number-${version.versionNumber}`}>
+          v{version.versionNumber}
         </Typography>
-      </Box>
+      ),
+    },
+    {
+      id: 'description',
+      label: 'Description',
+      render: version =>
+        version.description || <Typography sx={{ color: 'admin.inkMuted' }}>No description</Typography>,
+    },
+    {
+      id: 'status',
+      label: 'Status',
+      width: '7rem',
+      render: version => (
+        <StatusChip
+          tone={version.isActive ? 'good' : 'neutral'}
+          label={version.isActive ? 'Active' : 'Inactive'}
+          data-testid={`agent-ops-version-status-${version.versionNumber}`}
+        />
+      ),
+    },
+    {
+      id: 'created',
+      label: 'Created',
+      width: '13rem',
+      render: version => (
+        <Typography level="body-xs" noWrap sx={{ color: 'admin.inkMuted' }}>
+          {formatDate(version.createdAt)}
+        </Typography>
+      ),
+    },
+  ];
+
+  const versionMenu = (version: MetaPromptVersion) =>
+    version.isActive ? null : (
+      <Dropdown>
+        <MenuButton
+          slots={{ root: IconButton }}
+          slotProps={{
+            root: {
+              size: 'sm',
+              variant: 'plain',
+              disabled: saving,
+              'aria-label': `Actions for version ${version.versionNumber}`,
+              sx: { ...adminFocus, color: 'admin.inkMuted' },
+            },
+          }}
+          data-testid={`agent-ops-version-actions-${version.versionNumber}`}
+        >
+          <MoreHorizIcon sx={{ fontSize: 18 }} />
+        </MenuButton>
+        <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+          <MenuItem
+            onClick={() => void handleActivateVersion(version.versionNumber)}
+            data-testid={`agent-ops-activate-${version.versionNumber}`}
+          >
+            Activate version
+          </MenuItem>
+        </Menu>
+      </Dropdown>
     );
-  }
 
-  return (
-    <Box>
-      <Stack spacing={3}>
-        {/* Header */}
-        <Box>
-          <Stack direction="row" alignItems="center" spacing={1}>
-            <Typography level="h2" startDecorator={<AutoAwesomeIcon />}>
-              Agent Operations Dashboard
-            </Typography>
-            <ContextHelpButton helpId="admin/agent-operations" tooltipText="Agent Operations Help" />
-          </Stack>
-          <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-            Manage system prompt generation settings and meta-prompt templates for AI agents
-          </Typography>
-        </Box>
+  const body = () => {
+    if (!settings) {
+      return loading ? (
+        <LoadingState label="Loading agent settings" testId="agent-ops-loading" />
+      ) : (
+        <ErrorState message={loadError ?? 'Agent settings could not be loaded.'} onRetry={() => void loadData()} />
+      );
+    }
+    return (
+      <>
+        {loadError && (
+          <Alert color="warning" variant="soft" data-testid="agent-ops-refresh-error">
+            Could not load the latest agent settings. Showing the last loaded values.
+          </Alert>
+        )}
 
-        {/* Status Overview */}
-        <Card variant="outlined">
-          <CardContent>
-            <Typography level="title-md" sx={{ mb: 2 }}>
-              System Status
-            </Typography>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={3} sx={{ flexWrap: 'wrap', gap: { xs: 0, sm: 3 } }}>
-              <Box sx={{ minWidth: { xs: '100%', sm: 'auto' } }}>
-                <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                  Service Status
-                </Typography>
-                <Chip color={settings?.isEnabled ? 'success' : 'danger'} size="sm">
-                  {settings?.isEnabled ? 'Enabled' : 'Disabled'}
-                </Chip>
-              </Box>
-              <Box sx={{ minWidth: { xs: '100%', sm: 'auto' } }}>
-                <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                  Active Meta-prompt
-                </Typography>
-                <Typography level="body-sm" fontWeight="bold">
-                  Version {settings?.currentVersionNumber || 'None'}
-                </Typography>
-              </Box>
-              <Box sx={{ minWidth: { xs: '100%', sm: 'auto' } }}>
-                <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                  Total Generations
-                </Typography>
-                <Typography level="body-sm" fontWeight="bold">
-                  {settings?.totalGenerationsCount || 0}
-                </Typography>
-              </Box>
-              <Box sx={{ minWidth: { xs: '100%', sm: 'auto' } }}>
-                <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                  Rate Limit
-                </Typography>
-                <Typography level="body-sm" fontWeight="bold">
-                  {settings?.rateLimitSeconds || 60}s
-                </Typography>
-              </Box>
-              <Box sx={{ minWidth: { xs: '100%', sm: 'auto' } }}>
-                <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                  LLM Model
-                </Typography>
-                <Typography level="body-sm" fontWeight="bold">
-                  {modelLabel(settings?.generationLlmModel)}
-                </Typography>
-              </Box>
-            </Stack>
-          </CardContent>
-        </Card>
-
-        {/* Quick Actions */}
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-          <Button
-            variant="solid"
-            color="primary"
-            startDecorator={<AddIcon />}
-            onClick={() => setIsCreateVersionModalOpen(true)}
-            sx={{ width: { xs: '100%', sm: 'auto' } }}
-          >
-            Create Meta-prompt Version
-          </Button>
-          <Button
-            variant="outlined"
-            startDecorator={<SettingsIcon />}
-            onClick={() => setIsEditSettingsModalOpen(true)}
-            sx={{ width: { xs: '100%', sm: 'auto' } }}
-          >
-            Edit Settings
-          </Button>
-          <Button
-            variant="outlined"
-            color="warning"
-            startDecorator={<AutoAwesomeIcon />}
-            onClick={handleRepairDatabase}
-            loading={saving}
-            disabled={saving}
-            sx={{ width: { xs: '100%', sm: 'auto' } }}
-          >
-            Repair Database
-          </Button>
+        <Stack gap={1}>
+          <UpdatingBar active={loading} testId="agent-ops-updating" />
+          <StatStrip aria-label="Generation status">
+            <StatTile
+              label="Service"
+              value={
+                <StatusChip
+                  tone={settings.isEnabled ? 'good' : 'bad'}
+                  label={settings.isEnabled ? 'Enabled' : 'Disabled'}
+                  data-testid="agent-ops-service-status"
+                />
+              }
+            />
+            <StatTile
+              label="Active meta-prompt"
+              value={settings.currentVersionNumber ? `Version ${settings.currentVersionNumber}` : 'None'}
+            />
+            <StatTile label="Total generations" value={settings.totalGenerationsCount || 0} />
+            <StatTile label="Rate limit" value={`${settings.rateLimitSeconds || 60}s`} />
+            <StatTile label="Model" value={modelLabel(settings.generationLlmModel)} />
+          </StatStrip>
         </Stack>
 
-        {/* Meta-prompt Versions */}
-        <Card variant="outlined">
-          <CardContent>
-            <Typography level="title-md" sx={{ mb: 2 }}>
-              Meta-prompt Versions
-            </Typography>
-            {versions.length === 0 ? (
-              <Alert color="warning">
-                <Typography level="body-sm">
-                  No meta-prompt versions found. Create one to enable system prompt generation.
-                </Typography>
-              </Alert>
-            ) : (
-              <Table stickyHeader>
-                <thead>
-                  <tr>
-                    <th>Version</th>
-                    <th>Description</th>
-                    <th>Status</th>
-                    <th>Created</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {versions.map(version => (
-                    <tr key={version.versionNumber}>
-                      <td>
-                        <Typography level="body-sm" fontWeight="bold">
-                          v{version.versionNumber}
-                        </Typography>
-                      </td>
-                      <td>
-                        <Typography level="body-sm">{version.description || 'No description'}</Typography>
-                      </td>
-                      <td>
-                        {version.isActive ? (
-                          <Badge color="success" size="sm">
-                            <CheckCircleIcon sx={{ fontSize: 'inherit' }} />
-                            Active
-                          </Badge>
-                        ) : (
-                          <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                            Inactive
-                          </Typography>
-                        )}
-                      </td>
-                      <td>
-                        <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                          {formatDate(version.createdAt)}
-                        </Typography>
-                      </td>
-                      <td>
-                        <Stack direction="row" spacing={1}>
-                          {!version.isActive && (
-                            <Button
-                              size="sm"
-                              variant="soft"
-                              color="primary"
-                              onClick={() => handleActivateVersion(version.versionNumber)}
-                              disabled={saving}
-                            >
-                              Activate
-                            </Button>
-                          )}
-                        </Stack>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
-      </Stack>
-
-      {/* Create Version Modal */}
-      <Modal open={isCreateVersionModalOpen} onClose={() => setIsCreateVersionModalOpen(false)}>
-        <ModalDialog sx={{ maxWidth: '800px', width: '90%', maxHeight: '80vh', overflow: 'auto' }}>
-          <ModalClose />
-          <Typography level="h4" sx={{ mb: 2 }}>
-            Create New Meta-prompt Version
-          </Typography>
-
-          <Stack spacing={2}>
-            <FormControl>
-              <FormLabel>Description</FormLabel>
-              <Input
-                value={newVersionData.description}
-                onChange={e => setNewVersionData(prev => ({ ...prev, description: e.target.value }))}
-                placeholder="Brief description of this version..."
-              />
-            </FormControl>
-
-            <FormControl>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <FormLabel>Meta-prompt Content</FormLabel>
-                <Button
-                  size="sm"
-                  variant="soft"
-                  onClick={handleUseDefaultMetaPrompt}
-                  startDecorator={<AutoAwesomeIcon />}
-                >
-                  Use Default Template
-                </Button>
-              </Box>
-              <Textarea
-                minRows={15}
-                maxRows={25}
-                value={newVersionData.metaPrompt}
-                onChange={e => setNewVersionData(prev => ({ ...prev, metaPrompt: e.target.value }))}
-                placeholder="Enter the meta-prompt content..."
-                sx={{ fontFamily: 'monospace', fontSize: '0.875rem' }}
-              />
-            </FormControl>
-
-            <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
-              <Button variant="outlined" onClick={() => setIsCreateVersionModalOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                variant="solid"
-                color="primary"
-                loading={saving}
-                onClick={handleCreateVersion}
-                disabled={!newVersionData.metaPrompt.trim()}
-              >
-                Create Version
-              </Button>
-            </Box>
-          </Stack>
-        </ModalDialog>
-      </Modal>
-
-      {/* Edit Settings Modal */}
-      <Modal open={isEditSettingsModalOpen} onClose={() => setIsEditSettingsModalOpen(false)}>
-        <ModalDialog sx={{ maxWidth: '500px', width: '90%' }}>
-          <ModalClose />
-          <Typography level="h4" sx={{ mb: 2 }}>
-            Agent Operations Settings
-          </Typography>
-
-          <Stack spacing={2}>
-            <FormControl>
-              <FormLabel>LLM Model for Generation</FormLabel>
-              <Select
-                value={settingsForm.generationLlmModel}
-                onChange={(_, value) => value && setSettingsForm(prev => ({ ...prev, generationLlmModel: value }))}
-              >
-                {/* A pin the catalog no longer lists (retired upstream) still needs an Option, or
-                    the Select renders blank and the admin cannot see what is currently saved. */}
-                {settingsForm.generationLlmModel &&
-                  !modelOptions.some(m => m.id === settingsForm.generationLlmModel) && (
-                    <Option value={settingsForm.generationLlmModel} disabled>
-                      {settingsForm.generationLlmModel} (no longer available)
-                    </Option>
-                  )}
-                {modelOptions.map(model => (
-                  <Option key={model.id} value={model.id} disabled={model.disabled}>
-                    {modelLabels.get(model.id) ?? model.name}
-                    {model.disabled ? ' (unavailable)' : ''}
-                  </Option>
-                ))}
-              </Select>
-            </FormControl>
-
-            <FormControl>
-              <FormLabel>Rate Limit (seconds)</FormLabel>
-              <Input
-                type="number"
-                value={settingsForm.rateLimitSeconds}
-                onChange={e => setSettingsForm(prev => ({ ...prev, rateLimitSeconds: parseInt(e.target.value) || 60 }))}
-                slotProps={{ input: { min: 0, max: 3600 } }}
-              />
-              <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                Minimum seconds between system prompt generations per agent
-              </Typography>
-            </FormControl>
-
-            <FormControl>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                <input
-                  type="checkbox"
-                  id="isEnabled"
-                  checked={settingsForm.isEnabled}
-                  onChange={e => setSettingsForm(prev => ({ ...prev, isEnabled: e.target.checked }))}
+        <Stack component="section" gap={1}>
+          <SectionTitle>Meta-prompt versions</SectionTitle>
+          <DataTable
+            label="Meta-prompt versions"
+            testId="agent-ops-versions-table"
+            rows={versions}
+            columns={columns}
+            getRowId={version => String(version.versionNumber)}
+            rowTestId={version => `agent-ops-version-row-${version.versionNumber}`}
+            rowActions={versionMenu}
+            error={loadError && versions.length === 0 ? 'Meta-prompt versions could not be loaded.' : undefined}
+            onRetry={() => void loadData()}
+            // Fixed columns total 29.5rem with the actions column; the description takes the rest.
+            minWidth="44rem"
+            maxHeight="none"
+            pagination={false}
+            empty={
+              <Box data-testid="agent-ops-versions-empty">
+                <EmptyState
+                  title="No meta-prompt versions"
+                  description="Create one to turn on system prompt generation."
+                  action={
+                    <Button
+                      variant="outlined"
+                      startDecorator={<AddIcon />}
+                      onClick={openCreateVersion}
+                      data-testid="agent-ops-empty-create-btn"
+                    >
+                      Create version
+                    </Button>
+                  }
                 />
-                <FormLabel htmlFor="isEnabled">Enable system prompt generation</FormLabel>
               </Box>
-            </FormControl>
+            }
+          />
+        </Stack>
 
-            <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
-              <Button variant="outlined" onClick={() => setIsEditSettingsModalOpen(false)}>
-                Cancel
+        <SettingsDraftProvider>
+          <GenerationSettings
+            baseline={{
+              generationLlmModel: settings.generationLlmModel,
+              rateLimitSeconds: settings.rateLimitSeconds,
+              isEnabled: settings.isEnabled,
+            }}
+            modelOptions={modelOptions}
+            modelLabels={modelLabels}
+            onSave={handleSaveSettings}
+          />
+        </SettingsDraftProvider>
+      </>
+    );
+  };
+
+  return (
+    <Stack sx={{ gap: ADMIN_REGION_GAP, minWidth: 0 }} data-testid="agent-ops-tab">
+      <AdminPageHeader
+        title="Agents"
+        description="How agents get their system prompts: the generation model, its rate limit and the meta-prompt versions."
+        actions={
+          <>
+            <ContextHelpButton helpId="admin/agent-operations" tooltipText="Agents help" />
+            <Button
+              size="sm"
+              variant="outlined"
+              onClick={handleRepairDatabase}
+              loading={saving}
+              disabled={saving}
+              data-testid="agent-ops-repair-btn"
+            >
+              Repair database
+            </Button>
+            <Button
+              size="sm"
+              startDecorator={<AddIcon />}
+              onClick={openCreateVersion}
+              data-testid="agent-ops-create-version-btn"
+            >
+              Create version
+            </Button>
+          </>
+        }
+      />
+
+      {body()}
+
+      <AdminDialog
+        open={isCreateVersionModalOpen}
+        onClose={() => setIsCreateVersionModalOpen(false)}
+        title="Create meta-prompt version"
+        width={800}
+        data-testid="agent-ops-create-version-dialog"
+      >
+        <Stack gap={2}>
+          <FormControl>
+            <FormLabel>Description</FormLabel>
+            <Input
+              value={newVersionData.description}
+              onChange={e => setNewVersionData(prev => ({ ...prev, description: e.target.value }))}
+              placeholder="Brief description of this version..."
+              slotProps={{ input: { 'data-testid': 'agent-ops-version-description-input' } }}
+            />
+          </FormControl>
+
+          <FormControl required>
+            <Stack direction="row" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={1}>
+              <FormLabel>Meta-prompt content</FormLabel>
+              <Button
+                size="sm"
+                variant="plain"
+                onClick={handleUseDefaultMetaPrompt}
+                data-testid="agent-ops-use-default-btn"
+              >
+                Use default template
               </Button>
-              <Button variant="solid" color="primary" loading={saving} onClick={handleSaveSettings}>
-                Save Settings
-              </Button>
-            </Box>
+            </Stack>
+            <Textarea
+              minRows={15}
+              maxRows={25}
+              value={newVersionData.metaPrompt}
+              onChange={e => setNewVersionData(prev => ({ ...prev, metaPrompt: e.target.value }))}
+              placeholder="Enter the meta-prompt content..."
+              sx={{ fontFamily: 'monospace' }}
+              slotProps={{ textarea: { 'data-testid': 'agent-ops-version-content-input' } }}
+            />
+          </FormControl>
+
+          <Stack direction="row" gap={1} justifyContent="flex-end">
+            <Button
+              variant="plain"
+              color="neutral"
+              onClick={() => setIsCreateVersionModalOpen(false)}
+              data-testid="agent-ops-create-version-cancel-btn"
+            >
+              Cancel
+            </Button>
+            <Button
+              loading={saving}
+              onClick={handleCreateVersion}
+              disabled={!newVersionData.metaPrompt.trim()}
+              data-testid="agent-ops-create-version-confirm-btn"
+            >
+              Create version
+            </Button>
           </Stack>
-        </ModalDialog>
-      </Modal>
-    </Box>
+        </Stack>
+      </AdminDialog>
+    </Stack>
   );
 };
 
