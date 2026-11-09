@@ -195,8 +195,9 @@ describe('active session heartbeat', () => {
 
   it('alerts the unset drip cap once a day from the heartbeat and the activity payout', async () => {
     const notify = vi.spyOn(signupProtection.grantBudget!, 'notify').mockResolvedValue();
-    delete config.signupGrantDripCap;
+    // Enrolled under a stored cap, so the grant is mid-drip when the setting goes missing.
     const user = await createSignupStageUser();
+    delete config.signupGrantDripCap;
     expect(await ping(user.id, 0)).toMatchObject({ creditsGranted: 0, spent: true });
     expect(await ping(user.id, 600)).toMatchObject({ creditsGranted: 0, spent: true });
     expect((await payActivityDripForDay(user.id, at(700))).creditsGranted).toBe(0);
@@ -207,8 +208,8 @@ describe('active session heartbeat', () => {
 
   it('does not alert the drip cap from the heartbeat with a stored cap of 0', async () => {
     const notify = vi.spyOn(signupProtection.grantBudget!, 'notify').mockResolvedValue();
-    config.signupGrantDripCap = '0';
     const user = await createSignupStageUser();
+    config.signupGrantDripCap = '0';
     expect(await ping(user.id, 0)).toMatchObject({ spent: true });
     expect((await payActivityDripForDay(user.id, at(60))).creditsGranted).toBe(0);
     expect(notify).not.toHaveBeenCalled();
