@@ -112,6 +112,40 @@ describe('OpenAICompatibleRuntime', () => {
     expect(models.map(model => Object.hasOwn(model, 'loadState'))).toEqual([true, false, false, false]);
   });
 
+  it('keeps the model row whatever shape status takes, and reads only a string status.value', async () => {
+    server = await startFakeServer({
+      'GET /v1/models': json({
+        data: [
+          { id: 'string', status: 'ready' },
+          { id: 'number', status: 3 },
+          { id: 'null', status: null },
+          { id: 'array', status: ['loaded'] },
+          { id: 'novalue', status: { args: [] } },
+          { id: 'nonstring', status: { value: 7 } },
+          { id: 'unknown', status: { value: 'warming' } },
+          { id: 'loaded', status: { value: 'loaded' } },
+          { id: 'loading', status: { value: 'loading' } },
+          { id: 'unloaded', status: { value: 'unloaded' } },
+          { id: 'sleeping', status: { value: 'sleeping' } },
+        ],
+      }),
+    });
+    const models = await new OpenAICompatibleRuntime({ baseUrl: server.baseUrl }).list();
+    expect(models.map(model => [model.name, model.loadState])).toEqual([
+      ['string', undefined],
+      ['number', undefined],
+      ['null', undefined],
+      ['array', undefined],
+      ['novalue', undefined],
+      ['nonstring', undefined],
+      ['unknown', 'warming'],
+      ['loaded', 'loaded'],
+      ['loading', 'loading'],
+      ['unloaded', 'unloaded'],
+      ['sleeping', 'sleeping'],
+    ]);
+  });
+
   it('lists /v1/models ids, taking llama-server meta.size when present', async () => {
     server = await startFakeServer({ 'GET /v1/models': json(llamaServerModels) });
     const models = await new OpenAICompatibleRuntime({ baseUrl: server.baseUrl }).list();

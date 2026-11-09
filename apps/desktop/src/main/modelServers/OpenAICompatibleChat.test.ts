@@ -8,6 +8,7 @@ import {
   isEffortTemplate,
   OpenAICompatibleChat,
   PROPS_CONCURRENCY,
+  NO_PROPS_EXPIRY_MS,
   TEMPLATE_RETRY_MS,
   toOpenAIMessages,
 } from './OpenAICompatibleChat';
@@ -1083,6 +1084,30 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     await client.listModels();
     await settle();
     expect(server.propsUrls).toHaveLength(PROPS_CONCURRENCY);
+  });
+
+  it('probes /props again once the 404 expires, and not before', async () => {
+    const clock = fakeClock();
+    let status = 404;
+    const changed = vi.fn();
+    const server = llamaServer({
+      props: () => (status === 404 ? new Response('', { status }) : Response.json({ chat_template: HARMONY })),
+    });
+    const client = chat(server.fetch, 'llama-server', changed);
+    await client.listModels();
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await settle();
+    clock.set(NO_PROPS_EXPIRY_MS - 1);
+    await collect(client, ask('house-model'));
+    await client.listModels();
+    await settle();
+    expect(server.propsUrls).toHaveLength(1);
+
+    status = 200;
+    clock.set(NO_PROPS_EXPIRY_MS);
+    await client.listModels();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    expect(server.propsUrls).toHaveLength(2);
   });
 
   it('asks again after a restart for a server that had no /props, and keeps asking once it has one', async () => {

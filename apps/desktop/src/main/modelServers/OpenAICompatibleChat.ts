@@ -236,6 +236,9 @@ export const PROPS_CONCURRENCY = 2;
 /** How long to wait before asking again for a template the server could not name. */
 export const TEMPLATE_RETRY_MS = 5 * 60_000;
 
+/** How long a 404 or 405 from `/props` switches probing off; a proxy blip must not disable detection for good. */
+export const NO_PROPS_EXPIRY_MS = 30 * 60_000;
+
 /** A router lists each model's load state; only a loaded or sleeping one answers `/props` with autoload off. */
 const isProbeable = (state: string | undefined) => state === undefined || state === 'loaded' || state === 'sleeping';
 
@@ -333,8 +336,8 @@ export class OpenAICompatibleChat implements LocalChat {
   private readonly seenIdentities = new Map<string, string>();
   /** Each listed name's router load state in the last listing. */
   private readonly loadStates = new Map<string, string | undefined>();
-  /** The server answered 404 or 405 for `/props`, so nothing asks again until a listing follows a failed one. */
-  private noProps = false;
+  /** When (performance.now()) the server answered 404 or 405 for `/props`; nothing asks again until NO_PROPS_EXPIRY_MS passes or a listing follows a failed one. */
+  private noPropsAt: number | null = null;
   /** A listing failed since the last success, so the server may have restarted with another template. */
   private listingFailed = false;
   /** Bumped when every learned template is dropped, so an ask still out is discarded. */
@@ -633,13 +636,20 @@ export class OpenAICompatibleChat implements LocalChat {
     return this.templates.get(name)?.effort === true;
   }
 
+  private propsOff(): boolean {
+    if (this.noPropsAt === null) return false;
+    if (performance.now() - this.noPropsAt < NO_PROPS_EXPIRY_MS) return true;
+    this.noPropsAt = null;
+    return false;
+  }
+
   /** The server may have restarted, perhaps with another template file, so nothing learned from it holds. */
   private forgetTemplates(): void {
     this.templates.clear();
     this.unansweredTemplates.clear();
     this.askingTemplates.clear();
     this.recheckTemplates.clear();
-    this.noProps = false;
+    this.noPropsAt = null;
     this.listingFailed = false;
     this.templateEpoch++;
   }
@@ -692,7 +702,7 @@ export class OpenAICompatibleChat implements LocalChat {
    * not-loaded answer. One that takes effort levels changes the listing.
    */
   private async learnTemplates(names: readonly string[], afterReply = false): Promise<void> {
-    if (this.server.product !== 'llama-server' || this.noProps) return;
+    if (this.server.product !== 'llama-server' || this.propsOff()) return;
     const now = performance.now();
     const asking = [...new Set(names)].filter(name => {
       if (this.askingTemplates.has(name) || this.namedEffort.has(name) || takesReasoningEffort({ name })) return false;
@@ -754,14 +764,15 @@ export class OpenAICompatibleChat implements LocalChat {
    * answers 400 for a model it has not loaded; a server with no `/props` answers 404 or 405.
    */
   private async servedTemplate(name: string, epoch: number): Promise<PropsAnswer> {
-    if (this.noProps || epoch !== this.templateEpoch || this.server.isCurrent?.() === false) return { kind: 'skipped' };
+    if (this.propsOff() || epoch !== this.templateEpoch || this.server.isCurrent?.() === false)
+      return { kind: 'skipped' };
     try {
       const response = await this.server.fetch(
         `${this.server.baseUrl}/props?model=${encodeURIComponent(name)}&autoload=false`,
         { signal: AbortSignal.timeout(PROPS_TIMEOUT_MS) }
       );
       if (response.status === 404 || response.status === 405) {
-        if (epoch === this.templateEpoch) this.noProps = true;
+        if (epoch === this.templateEpoch) this.noPropsAt = performance.now();
         await response.body?.cancel();
         return { kind: 'no-props' };
       }
