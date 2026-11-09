@@ -134,6 +134,7 @@ import { fitFromArch, fitFromSize, machineView, type FitWhere } from './fit';
 import { loadedStateOf, loadedStateTarget } from './loadedState';
 import { installedProjectorBytes, pinnedProjectorSizes } from './projectorBytes';
 import { catalogSampling } from './catalogSampling';
+import type { OllamaBuild } from './ollamaWslPatch';
 import { clearsCap, isLinuxStoreDir, partialLoad, releaseCapsWslGpu, wslGpuCapWarning } from './wslGpuCap';
 import type { CatalogSampling } from '@shared/generation';
 
@@ -241,8 +242,8 @@ export interface ModelHubServiceDeps {
   wslHost?: boolean;
   /** Whether this computer's NVIDIA GPU uses the CPU's memory; null when nvidia-smi cannot say. */
   integratedGpu?: () => Promise<boolean | null>;
-  /** Whether the Ollama at `url` on this computer carries the WSL shared GPU memory change; null when unreadable. */
-  ollamaWslPatch?: (url: string) => Promise<boolean | null>;
+  /** The Ollama at `url` on this computer and whether it carries the WSL shared GPU memory change; null if unknown. */
+  ollamaWslPatch?: (url: string) => Promise<OllamaBuild | null>;
   /** The main log. */
   warn: (message: string) => void;
   /** Minimum gap between progress pushes (ms). */
@@ -252,6 +253,7 @@ export interface ModelHubServiceDeps {
 }
 
 const DEFAULT_PROGRESS_INTERVAL_MS = 250;
+const serverKey = (version: string | null, build: OllamaBuild | null) => `${version ?? ''}\0${build?.server ?? ''}`;
 // Ollama 0.40 holds /api/show on a just-pulled model for about 15 s on a busy host, then answers in milliseconds.
 const CHECK_TIMEOUT_MS = 30_000;
 const DEFAULT_CHECK_BACKOFF_MS = [1_000, 3_000];
@@ -808,7 +810,9 @@ export class ModelHubService {
   /** nvidia-smi's answer for the session, null included; undefined until it settles. */
   #integrated: boolean | null | undefined = undefined;
   #integratedAsked = false;
-  #patchUnknownLogged = false;
+  /** The server `#gpuCap` was seen on; the limit is not shown once another one answers. */
+  #gpuCapServer: string | null = null;
+  #buildUnreadLogged = false;
   #lastPush = 0;
   #pushTimer: ReturnType<typeof setTimeout> | null = null;
   #awake = false;
@@ -858,6 +862,7 @@ export class ModelHubService {
   }
 
   async #checkGpuCap(target: Target, loaded: readonly LoadedModel[]): Promise<void> {
+    if (this.#gpuCap && (await this.#serverKey(target)) !== this.#gpuCapServer) this.#gpuCap = null;
     const { hardware } = await this.#localSizing();
     const budgets = memoryBudgets(hardware);
     const found = budgets.cpuOnly ? null : partialLoad(loaded, budgets.gpu - fitMarginBytes(hardware));
@@ -902,7 +907,9 @@ export class ModelHubService {
     if (integrated === undefined) return false;
     const confirmed = integrated === true && (await this.#ollamaInLinux(target));
     if (confirmed) {
+      const server = await this.#serverKey(target);
       this.#gpuCap = this.#capCandidate;
+      this.#gpuCapServer = server;
       this.#ratingsChanged(target.id);
     }
     this.#capCandidate = null;
@@ -921,14 +928,20 @@ export class ModelHubService {
    * nvidia-smi answers, which is not awaited.
    */
   async #wslFitWarning(target: Target): Promise<string | null> {
-    if (!target.local || !this.#deps.wslHost || this.#integratedGpu(target) !== true) return null;
+    if (!target.local || !this.#deps.wslHost) return null;
+    // Without the probe only a load seen held back flags, so nvidia-smi and the folder lookup wait for one.
+    if (!this.#deps.ollamaWslPatch && !this.#gpuCap) return null;
+    if (this.#integratedGpu(target) !== true) return null;
     try {
       const health = await target.runtime.health();
-      const release = health.ok && releaseCapsWslGpu(health.version) ? health.version : null;
+      const version = health.ok ? health.version : null;
+      const release = releaseCapsWslGpu(version) ? version : null;
       if (!release && !this.#gpuCap) return null;
       if (!(await this.#ollamaInLinux(target))) return null;
-      if (release && (await this.#lacksWslPatch(target))) return wslGpuCapWarning(release);
-      return this.#gpuCap ? wslGpuCapWarning(null) : null;
+      const build = await this.#build(target);
+      if (release && build?.patched === false) return wslGpuCapWarning(release);
+      const capped = this.#gpuCap !== null && this.#gpuCapServer === serverKey(version, build);
+      return capped ? wslGpuCapWarning(null) : null;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       this.#deps.warn(
@@ -938,16 +951,30 @@ export class ModelHubService {
     }
   }
 
-  /** True only when the running Ollama binary was read in full and lacks the WSL shared GPU memory change. */
-  async #lacksWslPatch(target: Target): Promise<boolean> {
-    const patched = this.#deps.ollamaWslPatch ? await this.#deps.ollamaWslPatch(target.runtime.baseUrl) : null;
-    if (patched === null && this.#deps.ollamaWslPatch && !this.#patchUnknownLogged) {
-      this.#patchUnknownLogged = true;
+  /** The running Ollama as the probe reads it; null without a probe or when it fails. One unread build is logged. */
+  async #build(target: Target): Promise<OllamaBuild | null> {
+    const probe = this.#deps.ollamaWslPatch;
+    if (!probe) return null;
+    let build: OllamaBuild | null = null;
+    let reason = '';
+    try {
+      build = await probe(target.runtime.baseUrl);
+    } catch (error) {
+      reason = `: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    if ((build?.patched ?? null) === null && !this.#buildUnreadLogged) {
+      this.#buildUnreadLogged = true;
       this.#deps.warn(
-        "MODELS: could not read whether this computer's Ollama carries the WSL GPU memory fix, so badges are not flagged before a load"
+        `MODELS: could not read whether this computer's Ollama carries the WSL GPU memory fix, so badges are not flagged before a load${reason}`
       );
     }
-    return patched === false;
+    return build;
+  }
+
+  /** Which Ollama answers for this computer: its version and, where the probe reads it, its process and binary. */
+  async #serverKey(target: Target): Promise<string> {
+    const [health, build] = await Promise.all([target.runtime.health().catch(() => null), this.#build(target)]);
+    return serverKey(health?.ok ? health.version : null, build);
   }
 
   #ratingsChanged(serverId: string): void {

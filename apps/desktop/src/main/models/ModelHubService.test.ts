@@ -49,6 +49,7 @@ import {
   type ModelHubServiceDeps,
   type ModelRuntimePort,
 } from './ModelHubService';
+import type { OllamaBuild } from './ollamaWslPatch';
 
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
 const SHA = 'a'.repeat(64);
@@ -1302,27 +1303,34 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
       healthy?: boolean;
       /** null: Ollama reports no folder, as with no model installed. */
       storeDir?: string | null;
-      /** Desktop on Windows sees no Linux path; inside WSL it does. */
-      desktopInWsl?: boolean;
+      /** Desktop on Windows: no Linux path exists for it and, as in production, it has no probe. */
+      windowsDesktop?: boolean;
       hardware?: HardwareProfile;
       defaultStoreDir?: () => string | null;
       /** What reading the running Ollama binary found: false lacks the fix, null could not be read. */
       patched?: boolean | null;
+      /** The whole probe answer; null when the server process could not be told. */
+      build?: OllamaBuild | null;
       deps?: Partial<Pick<ModelHubServiceDeps, 'onRatingsChanged' | 'flashAttention' | 'ollamaWslPatch'>>;
     } = {}
   ) {
+    const windows = options.windowsDesktop === true;
     const integratedGpu = vi.fn(async () => (options.integrated === undefined ? true : options.integrated));
-    const ollamaWslPatch = vi.fn(async (_url: string) => (options.patched === undefined ? false : options.patched));
+    const ollamaWslPatch = vi.fn(async (_url: string): Promise<OllamaBuild | null> =>
+      options.build !== undefined
+        ? options.build
+        : { server: 'pid-1', patched: options.patched === undefined ? false : options.patched }
+    );
     const made = harness({
-      hardware: options.hardware ?? N1X,
+      hardware: options.hardware ?? (windows ? N1X : { ...N1X, platform: 'linux' }),
       version: options.version === undefined ? '0.40.15' : options.version,
       healthy: options.healthy,
       deps: {
         wslHost: options.wslHost ?? true,
         integratedGpu,
-        ollamaWslPatch,
-        pathExists: async path => (options.desktopInWsl ? path.startsWith('/') : !path.startsWith('/')),
-        defaultStoreDir: options.defaultStoreDir ?? (() => (options.desktopInWsl ? LINUX_STORE : WINDOWS_STORE)),
+        ollamaWslPatch: windows ? undefined : ollamaWslPatch,
+        pathExists: async path => (windows ? !path.startsWith('/') : path.startsWith('/')),
+        defaultStoreDir: options.defaultStoreDir ?? (() => (windows ? WINDOWS_STORE : LINUX_STORE)),
         ...options.deps,
       },
     });
@@ -1368,12 +1376,21 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     expect(result.ok && result.gpuMemoryCap).toBeFalsy();
   });
 
-  it.each([
-    ['on unified memory reported with no dedicated figure', { hardware: GB10 }],
-    ['while Desktop itself runs inside WSL', { desktopInWsl: true }],
-  ])('flags badges %s', async (_case, options) => {
-    const { service } = flagHarness(options);
+  it('flags badges on unified memory reported with no dedicated figure', async () => {
+    const { service } = flagHarness({ hardware: GB10 });
     expect((await settledFits(service)).get('small:q4')?.warning).toMatch(RELEASE_FLAG);
+  });
+
+  it('never flags before a load when Desktop runs on Windows, and leaves nvidia-smi until one', async () => {
+    const { service, integratedGpu, runtime } = flagHarness({ windowsDesktop: true, version: '0.40.13' });
+    for (const fit of (await settledFits(service)).values()) expect(fit).not.toHaveProperty('warning');
+    expect(integratedGpu).not.toHaveBeenCalled();
+    runtime.loaded.mockResolvedValue([
+      { name: 'mid:q8_0', sizeBytes: 40 * GIB, vramBytes: 20 * GIB, contextLength: 131072, expiresAt: null },
+    ]);
+    await vi.waitFor(async () =>
+      expect((await installedFits(service)).get('small:q4')?.warning).toMatch(/^It looks like Ollama in WSL limits/)
+    );
   });
 
   it.each([
@@ -1384,7 +1401,7 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     ['Ollama reports no model folder, so where it runs is unknown', { storeDir: null }],
     ['the release is newer than the ones known to limit the GPU', { version: '0.40.16' }],
     ['Ollama is a source build, which may carry the fix', { version: '0.0.0' }],
-    ['Ollama is a git describe build, which may carry the fix', { version: '0.40.13-11-ge7ff614' }],
+    ['Ollama is a git describe build, which may carry the fix', { version: '0.40.13-11-g3f9c2d1' }],
     ['Ollama reports no version', { version: null }],
     ['Ollama does not answer its version', { healthy: false }],
     ['the machine has no GPU memory to rate against', { hardware: CPU_16 }],
@@ -1402,7 +1419,7 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
   it.each([
     ['carries the WSL GPU memory fix', { patched: true }],
     ['cannot be read, or its read timed out', { patched: null }],
-    ['cannot be read from where Desktop runs, as on Windows', { deps: { ollamaWslPatch: undefined } }],
+    ['cannot be told from the other processes', { build: null }],
     [
       'check fails',
       {
@@ -1440,8 +1457,58 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
   it('follows the running binary from one read to the next', async () => {
     const { service, ollamaWslPatch } = flagHarness({ version: '0.40.13' });
     expect((await settledFits(service)).get('small:q4')?.warning).toMatch(/^Ollama 0\.40\.13 in WSL limits/);
-    ollamaWslPatch.mockResolvedValue(true);
+    ollamaWslPatch.mockResolvedValue({ server: 'pid-2', patched: true });
     expect((await installedFits(service)).get('small:q4')).not.toHaveProperty('warning');
+  });
+
+  const HELD_BACK = [
+    { name: 'mid:q8_0', sizeBytes: 40 * GIB, vramBytes: 20 * GIB, contextLength: 131072, expiresAt: null },
+  ];
+  const capOf = async (service: ModelHubService) => {
+    const result = await service.installed();
+    return result.ok ? (result.gpuMemoryCap ?? null) : null;
+  };
+
+  it('drops a limit seen on one server once a build with the fix answers, with nothing loaded', async () => {
+    const { service, runtime, ollamaWslPatch } = flagHarness({ version: '0.40.13' });
+    runtime.loaded.mockResolvedValue(HELD_BACK);
+    await settledFits(service);
+    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    ollamaWslPatch.mockResolvedValue({ server: 'pid-2', patched: true });
+    runtime.loaded.mockResolvedValue([]);
+    expect(await capOf(service)).toBeNull();
+    for (const fit of (await installedFits(service)).values()) expect(fit).not.toHaveProperty('warning');
+  });
+
+  it('drops a limit seen with Desktop on Windows once Ollama reports another version', async () => {
+    const { service, runtime } = flagHarness({ windowsDesktop: true, version: '0.40.13' });
+    runtime.loaded.mockResolvedValue(HELD_BACK);
+    await settledFits(service);
+    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    runtime.health.mockResolvedValue({ ok: true, version: '0.40.14', error: null });
+    runtime.loaded.mockResolvedValue([]);
+    expect(await capOf(service)).toBeNull();
+    for (const fit of (await installedFits(service)).values()) expect(fit).not.toHaveProperty('warning');
+  });
+
+  it('keeps a limit seen after a load when the probe fails, logging the failure once', async () => {
+    const { service, runtime, warn } = flagHarness({
+      version: '0.0.0',
+      deps: {
+        ollamaWslPatch: async () => {
+          throw new Error('permission denied');
+        },
+      },
+    });
+    runtime.loaded.mockResolvedValue(HELD_BACK);
+    await settledFits(service);
+    await vi.waitFor(async () =>
+      expect((await installedFits(service)).get('small:q4')?.warning).toMatch(/^It looks like Ollama in WSL limits/)
+    );
+    await installedFits(service);
+    const logged = warn.mock.calls.filter(([message]) => message.includes('carries the WSL GPU memory fix'));
+    expect(logged).toHaveLength(1);
+    expect(logged[0][0]).toMatch(/: permission denied$/);
   });
 
   it('names no release for a build with the fix once a load was seen held to the VM', async () => {
@@ -1549,7 +1616,7 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
 
   it('does not flag a saved model server, Ollama or llama-server, whose GPU is not this computer', async () => {
     const integratedGpu = vi.fn(async () => true);
-    const ollamaWslPatch = vi.fn(async (_url: string) => false);
+    const ollamaWslPatch = vi.fn(async (_url: string) => ({ server: 'pid-1', patched: false }));
     const { service, runtimes, local } = servers({
       hardware: N1X,
       version: '0.40.15',

@@ -57,7 +57,7 @@ export function isWslHost(
 // availableMemoryForGPU): added in v0.30.0-rc0, checked through v0.40.15. Newer ones may carry the upstream fix.
 const FIRST_CAPPED_RELEASE = [0, 30, 0];
 const LAST_CAPPED_RELEASE = [0, 40, 15];
-// A build reports its tag, 0.0.0 or a `git describe` version such as 0.40.13-11-ge7ff614. A patched build can report a
+// A build reports its tag, 0.0.0 or a `git describe` version such as 0.40.13-11-g3f9c2d1. A patched build can report a
 // plain release number, so a version in range is flagged only once the running binary is read (ollamaWslPatch.ts).
 const RELEASE_VERSION = /^v?(\d+)\.(\d+)\.(\d+)(?:-rc\d+)?$/;
 
