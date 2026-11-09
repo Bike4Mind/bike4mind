@@ -176,7 +176,7 @@ export default function PartnerSignupRulesTab() {
         <span data-testid={`partner-rule-subscription-${rule.domain}`}>
           {rule.subscription
             ? `${planLabelForPriceId(rule.subscription.priceId)}, ${rule.subscription.durationMonths} mo`
-            : '-'}
+            : dash}
         </span>
       ),
     },

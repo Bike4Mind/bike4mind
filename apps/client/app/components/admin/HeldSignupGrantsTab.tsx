@@ -49,7 +49,13 @@ export default function HeldSignupGrantsTab() {
   });
   const release = useMutation({
     mutationFn: async (userIds: string[]) => (await api.post<ReleaseResult>(`${ENDPOINT}/release`, { userIds })).data,
-    onSuccess: () => setSelection({ mode: 'explicit', ids: [] }),
+    // Rows ticked while the release was in flight stay selected.
+    onSuccess: (_result, userIds) =>
+      setSelection(current =>
+        current.mode === 'explicit'
+          ? { mode: 'explicit', ids: current.ids.filter(id => !userIds.includes(id)) }
+          : current
+      ),
     onSettled: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
