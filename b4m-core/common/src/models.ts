@@ -338,8 +338,8 @@ export enum ChatModels {
   DEEPSEEK_FLASH = 'deepseek-flash',
   DEEPSEEK_V4_PRO = 'deepseek-v4-pro',
 }
-// The dated snapshot is excluded until it has a catalog row: the adapter tables hold no entry for
-// it, so getAvailableModels returns no ModelInfo (pricing, limits) for it unless a catalog row adds one.
+// Dated snapshots are excluded until they have a catalog row: the adapter tables hold no entry for
+// them, so getAvailableModels returns no ModelInfo (pricing, limits) for them unless a catalog row adds one.
 export const supportedChatModels = z.enum(ChatModels).exclude(['GPT5_4_MINI_2026_03_17', 'GPT5_2025_08_07']);
 export type ChatModelName = z.infer<typeof supportedChatModels>;
 export const CHAT_MODELS: string[] = [...supportedChatModels.options];
@@ -649,8 +649,8 @@ export type SpeechToTextModelName = z.infer<typeof supportedSpeechToTextModels>;
 /**
  * All supported models
  */
-// Deliberately not excluding the dated snapshot (unlike supportedChatModels): this is used as the
-// ModelName type only, and excluding it narrows ModelName so ChatModels values stop assigning to it.
+// Deliberately not excluding the dated snapshots (unlike supportedChatModels): this is used as the
+// ModelName type only, and excluding them narrows ModelName so ChatModels values stop assigning to it.
 export const supportedModels = z.enum({
   ...ChatModels,
   ...ImageModels,
