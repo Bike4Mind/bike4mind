@@ -4885,9 +4885,10 @@ export async function scanShell(
       throughProcess(text, wslLocation(cwd)?.linuxPath ?? cwd);
 
     /**
-     * The paths a glob operand expands to through a link, which are checked again as written; null when the
-     * expansion is too large to read, or may be empty under nullglob, where a program given no operand may act on
-     * `.` (find). Empty where the scan does not expand (Windows, a WSL folder) unless nullglob may be on.
+     * The paths a glob operand expands to through a link, which are checked again as written. Null when the expansion
+     * is too large to read, or matches nothing while nullglob, globstar or nocaseglob may be on: bash may then drop the
+     * operand (find given none acts on `.`) or match names the walk does not. Empty where the scan does not expand
+     * (Windows, a WSL folder) unless one of those options may be on.
      */
     const linkMatches = async (word: OperandWord, operand: ReadOperand, cwd: string): Promise<string[] | null> => {
       if (operand.start === null || operand.unread) return [];
@@ -4980,7 +4981,8 @@ export async function scanShell(
         const matched: string[] = [];
         for (const glob of listing.globs ?? []) {
           const names = await globNames(state.cwd, glob, stopped);
-          // A name with a leading `:` reaches git as magic, which can turn every other pathspec into an exclude.
+          // git reads a name with a leading `:` as magic for that name alone (`:/x` from the top, `:!x` an exclude); a
+          // bare `:`, or excludes with no other pathspec, match every path.
           if (names === null || names.some(name => name.startsWith(':'))) return false;
           // git reads a name holding `[`, `]`, `?`, `*` or `\` as a pattern too, so its own git gets it as written.
           matched.push(...names.filter(name => /[[\]?*\\]/.test(name)));
