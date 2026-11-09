@@ -1,8 +1,9 @@
 // First, before any module that could read userData or touch safeStorage; see appIdentity.ts.
 import './bootstrapIdentity';
 import { join } from 'node:path';
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { IPC_CHANNELS, type AppInfo } from '@shared/ipc';
+import { describeBusy, isBusy, type UpdateBusyReport } from '@shared/update';
 import appIcon from '../../build/icon.png?asset';
 import macAppIcon from '../../build/icon-mac.png?asset';
 import { registerAccount } from './account';
@@ -46,6 +47,7 @@ function buildAppInfo(): AppInfo {
 
 /** Set once chat is registered; closes the agent's hidden browsers. */
 let closeAgentBrowsers = (): void => undefined;
+let canCloseLastWindow = (): boolean => true;
 
 function createWindow(): void {
   const window = new BrowserWindow({
@@ -64,6 +66,13 @@ function createWindow(): void {
 
   // Showing only once the renderer has painted avoids a flash of empty chrome.
   window.once('ready-to-show', () => window.show());
+  window.on('close', event => {
+    if (process.platform === 'darwin' || canCloseLastWindow()) return;
+    if (appWindows().some(other => other !== window)) return;
+    // Keep the last window available if the user cancels the quit confirmation.
+    event.preventDefault();
+    app.quit();
+  });
   // Hidden agent browsers would otherwise keep the app alive and `window-all-closed` from
   // firing. The developer log window is excluded from `appWindows` for the same reason, so it
   // is closed here too rather than being left as the one window holding the app open.
@@ -175,6 +184,7 @@ void app.whenReady().then(async () => {
   let needsYouScope = chatScopeKeyOf(auth.getState());
   onAuthStateChanged(state => {
     const next = chatScopeKeyOf(state);
+    if (next !== needsYouScope || state.busy === 'signing-out' || state.reauthRequired) chat.clearLoops();
     if (next === needsYouScope) return;
     needsYouScope = next;
     needsYou.scopeChanged();
@@ -190,46 +200,85 @@ void app.whenReady().then(async () => {
     return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;
   });
 
-  // Set by whichever path starts the teardown, so the `before-quit` veto below runs at most
-  // once. Declared here because the updater's install path does that teardown itself and must
-  // not then be vetoed: quitAndInstall has already handed the app to the installer, and a
-  // second graceful pass would only delay a quit whose children are already gone.
-  let quitting = false;
+  let quitState: 'idle' | 'confirming' | 'cleaning-up' | 'ready' = 'idle';
+  let signalQuit = false;
+  canCloseLastWindow = () => quitState === 'ready';
+
+  const busyReport = (): UpdateBusyReport => {
+    const statuses = chat.sessionStatuses();
+    return {
+      replying: statuses.filter(status => status.status === 'processing').length,
+      awaitingApproval: statuses.filter(status => status.status === 'needs-action').length,
+      background: background.runningCount(),
+      terminals: terminals.runningCount(),
+      modelDownloads: models.runningCount(),
+      modelServers: modelServers.runningLocalServerCount(),
+    };
+  };
+
+  const prepareQuit = async () => {
+    quitState = 'cleaning-up';
+    const results = await Promise.allSettled([
+      background.shutdown(),
+      mcp.shutdown(),
+      terminals.shutdown(),
+      browser.cookies.clearOnQuit(),
+      spareWorktrees.dispose(),
+      stopLocalServers(),
+    ]);
+    for (const result of results) {
+      if (result.status === 'rejected') console.warn('QUIT: cleanup failed', result.reason);
+    }
+    quitState = 'ready';
+  };
 
   // Everything a quit would throw away, counted fresh each time it is asked for. The updater
   // puts this to the user rather than acting on it: a streaming reply and a dev server are both
   // things only they can say are expendable.
   const updates = registerUpdates({
-    busy: () => {
-      const statuses = chat.sessionStatuses();
-      return {
-        replying: statuses.filter(status => status.status === 'processing').length,
-        awaitingApproval: statuses.filter(status => status.status === 'needs-action').length,
-        background: background.runningCount(),
-      };
-    },
-    prepareQuit: async () => {
-      quitting = true;
-      await Promise.all([
-        background.shutdown(),
-        mcp.shutdown(),
-        terminals.shutdown(),
-        browser.cookies.clearOnQuit(),
-        spareWorktrees.dispose(),
-        stopLocalServers(),
-      ]).catch(() => undefined);
-    },
+    busy: busyReport,
+    prepareQuit,
   });
+
+  const requestQuit = async () => {
+    quitState = 'confirming';
+    try {
+      const busy = busyReport();
+      if (!signalQuit && isBusy(busy)) {
+        const { response } = await dialog.showMessageBox({
+          type: 'warning',
+          title: 'Quit Bike4Mind?',
+          message: 'Background work is still active. Quit anyway?',
+          detail: `${describeBusy(busy)}\n\nQuitting will interrupt active agents and downloads, close terminals, and stop background processes and model servers started by Desktop.`,
+          buttons: ['Keep Running', 'Quit Anyway'],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+        });
+        // A signal or updater may have started cleanup while the dialog was open.
+        if (quitState !== 'confirming') return;
+        if (response !== 1) {
+          quitState = 'idle';
+          return;
+        }
+      }
+      await prepareQuit();
+      // Let Electron finish cancelling the native quit before starting another one on macOS.
+      setImmediate(() => app.quit());
+    } catch (error) {
+      if (quitState === 'confirming') quitState = 'idle';
+      console.warn('QUIT: could not prepare to quit', error);
+    }
+  };
 
   /**
    * Kill every background process and MCP server child before the app goes, in two passes.
    *
    * `before-quit` is the only hook that can wait, so the graceful pass lives here: the quit is
-   * vetoed once, the process groups are SIGTERMed and given a moment to shut down cleanly (a
-   * dev server releasing its port), and only then does the quit resume. `quitting` stops that
-   * veto from looping forever - and stops it firing at all after an update install, which has
-   * already done this pass - and Electron's own force-quit paths still land on `will-quit`
-   * below, which SIGKILLs whatever survived.
+   * vetoed until the user confirms any active work and cleanup finishes. The process groups
+   * are SIGTERMed and given a moment to shut down cleanly (a dev server releasing its port),
+   * and only then does the quit resume. The ready state lets a resumed quit or a prepared
+   * update install proceed without another veto. `will-quit` below SIGKILLs whatever survived.
    *
    * Neither of these runs if main is SIGKILLed or crashes. For a background command that case
    * is covered inside the child instead - see tools/backgroundScript.ts - because it is the
@@ -239,21 +288,10 @@ void app.whenReady().then(async () => {
    * it speaks. An MCP child therefore survives a crash of main, and nothing else.
    */
   app.on('before-quit', event => {
-    if (quitting) return;
-    quitting = true;
+    if (quitState === 'ready') return;
     event.preventDefault();
-    // The imported cookies go too. They have no expiry and so were never written to disk, but
-    // this is the pass that can await, and the guarantee is worth holding in two places.
-    void Promise.all([
-      background.shutdown(),
-      mcp.shutdown(),
-      terminals.shutdown(),
-      browser.cookies.clearOnQuit(),
-      spareWorktrees.dispose(),
-      stopLocalServers(),
-    ])
-      .catch(() => undefined)
-      .finally(() => app.quit());
+    if (quitState === 'cleaning-up' || (quitState === 'confirming' && !signalQuit)) return;
+    void requestQuit();
   });
 
   app.once('will-quit', () => {
@@ -279,6 +317,7 @@ void app.whenReady().then(async () => {
   // process groups, so a terminal interrupt does not reach them on its own (see `spawnsDetached`).
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
     process.on(signal, () => {
+      signalQuit = true;
       background.shutdownSync();
       mcp.shutdownSync();
       terminals.shutdownSync();

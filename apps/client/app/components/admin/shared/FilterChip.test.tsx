@@ -29,8 +29,13 @@ describe('FilterChip', () => {
     expect(screen.queryByTestId('admin-filter-clear-status-btn')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('admin-filter-status'));
-    fireEvent.click(screen.getByTestId('admin-filter-status-suspended'));
+    const suspended = screen.getByTestId('admin-filter-status-suspended');
+    expect(suspended).toHaveAttribute('role', 'menuitemradio');
+    expect(suspended).toHaveAttribute('aria-checked', 'false');
+    fireEvent.click(suspended);
     expect(screen.getByTestId('admin-filter-status')).toHaveTextContent('Status: Suspended');
+    fireEvent.click(screen.getByTestId('admin-filter-status'));
+    expect(screen.getByTestId('admin-filter-status-suspended')).toHaveAttribute('aria-checked', 'true');
 
     fireEvent.click(screen.getByTestId('admin-filter-clear-status-btn'));
     expect(screen.getByTestId('admin-filter-status')).toHaveTextContent(/^Status$/);
@@ -101,5 +106,12 @@ describe('FilterChip with several values', () => {
     expect(screen.getByTestId('admin-filter-org')).toHaveTextContent('Organization: Acme +1');
     fireEvent.click(screen.getByTestId('admin-filter-clear-org-btn'));
     expect(screen.getByTestId('admin-filter-org')).toHaveTextContent(/^Organization$/);
+  });
+
+  it('offers checkbox items on a multiple chip', () => {
+    render(<OrgFilter />);
+    fireEvent.click(screen.getByTestId('admin-filter-org'));
+    expect(screen.getByTestId('admin-filter-org-Acme')).toHaveAttribute('role', 'menuitemcheckbox');
+    expect(screen.getByTestId('admin-filter-org-Acme')).toHaveAttribute('aria-checked', 'false');
   });
 });

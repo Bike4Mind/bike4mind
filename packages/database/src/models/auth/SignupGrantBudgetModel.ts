@@ -26,7 +26,7 @@ const budgetDaySchema = new Schema<SignupGrantBudgetDay>(
 // _id is `<pool>:<YYYY-MM-DD>`. Days are kept 90 days for reporting.
 budgetDaySchema.index({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 });
 
-export const SignupGrantBudgetDayModel =
+export const SignupGrantBudgetDayModel: mongoose.Model<SignupGrantBudgetDay> =
   (mongoose.models.SignupGrantBudgetDay as mongoose.Model<SignupGrantBudgetDay>) ??
   mongoose.model('SignupGrantBudgetDay', budgetDaySchema);
 

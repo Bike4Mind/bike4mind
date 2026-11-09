@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatToolCall } from '@shared/chat';
 import { GhError } from './gh';
+import type { PrChatHooks } from './PrMonitor';
 import { REF, TrackedMonitor, collector, fakeGithub, quietLogger, snapshot, tempStore } from './prTestSupport';
 
 const SESSION = 'session-1';
@@ -9,7 +10,9 @@ function shellCall(command: string, preview: string, status: ChatToolCall['statu
   return { id: 'c1', name: 'bash_execute', input: { command }, status, preview };
 }
 
-function setup(project: { workingDirectory: string; branch: string | null } | null = null, code = true) {
+type Project = { workingDirectory: string; branch: string | null } | null;
+
+function setup(project: Project | PrChatHooks['project'] = null, code = true) {
   const store = tempStore();
   const fake = fakeGithub();
   const out = collector();
@@ -18,7 +21,7 @@ function setup(project: { workingDirectory: string; branch: string | null } | nu
     github: fake.github,
     chat: {
       isCode: async () => code,
-      project: async () => project,
+      project: typeof project === 'function' ? project : async () => project,
       archive: async () => undefined,
       isBusy: () => false,
       startAutoFix: async () => ({ ok: false as const, busy: true, error: 'busy' }),
@@ -187,6 +190,90 @@ describe('PrMonitor binding', () => {
     await onFeature.monitor.watch(1, SESSION);
     await onFeature.monitor.idle();
     expect(onFeature.fake.calls).toEqual(['branch:feat/widget-ladder']);
+  });
+
+  describe('a binding command whose output lost the PR URL', () => {
+    const command =
+      "git push -u origin feat/widget-ladder && gh pr create --base main --head feat/widget-ladder --body-file - <<'EOF'";
+    const cut = [
+      `$ ${command}`,
+      '(in /work)',
+      '',
+      'pre-push hook: checking',
+      '[... 163226 bytes omitted from the middle ...]',
+      'pre-push hook: done',
+      '',
+      '[exit 0]',
+    ].join('\n');
+
+    it('looks up the branch at once and binds its PR', async () => {
+      const asked: unknown[] = [];
+      const { store, fake, monitor } = setup(async (_id, options) => {
+        asked.push(options);
+        return { workingDirectory: '/work', branch: 'feat/widget-ladder' };
+      });
+      fake.answerBranch(REF.url);
+
+      monitor.observeToolEnd(SESSION, shellCall(command, cut));
+      await monitor.idle();
+
+      expect(await store.get(SESSION)).toMatchObject({ number: 611, source: 'branch' });
+      expect(fake.calls).toEqual(['branch:feat/widget-ladder', 'snapshot']);
+      expect(asked).toEqual([{ live: true }]);
+      monitor.dispose();
+    });
+
+    it('asks again past the lookup made when the conversation was opened', async () => {
+      const { store, fake, monitor } = setup({ workingDirectory: '/work', branch: 'feat/widget-ladder' });
+      await monitor.watch(1, SESSION);
+      await monitor.idle();
+      fake.answerBranch(REF.url);
+
+      monitor.observeToolEnd(SESSION, shellCall(command, cut));
+      await monitor.idle();
+
+      expect(await store.get(SESSION)).toMatchObject({ number: 611, source: 'branch' });
+      expect(fake.calls.filter(call => call.startsWith('branch:'))).toHaveLength(2);
+      monitor.dispose();
+    });
+
+    it('makes no gh call for a failed or ordinary command, an unowned branch, or a bound open PR', async () => {
+      const onFeature = setup({ workingDirectory: '/work', branch: 'feat/widget-ladder' });
+      onFeature.monitor.observeToolEnd(SESSION, shellCall(command, cut.replace('[exit 0]', '[exit 1]')));
+      onFeature.monitor.observeToolEnd(SESSION, shellCall('ls -la', '$ ls -la\n\n[exit 0]'));
+      await onFeature.monitor.idle();
+      expect(onFeature.fake.calls).toEqual([]);
+
+      await onFeature.store.set(SESSION, { ...REF, source: 'shell', boundAt: '', lastState: 'OPEN' });
+      onFeature.monitor.observeToolEnd(SESSION, shellCall('git push', '$ git push\n\n[exit 0]'));
+      await onFeature.monitor.idle();
+      expect(onFeature.fake.calls).toEqual([]);
+      onFeature.monitor.dispose();
+
+      const onMain = setup({ workingDirectory: '/work', branch: 'main' });
+      onMain.monitor.observeToolEnd(SESSION, shellCall(command, cut));
+      await onMain.monitor.idle();
+      expect(onMain.fake.calls).toEqual([]);
+    });
+
+    it('binds a follow-up PR over a merged one, but keeps a dismissed open one hidden', async () => {
+      const followUp = { ...REF, number: 612, url: 'https://github.com/example-org/widgets/pull/612' };
+      const merged = setup({ workingDirectory: '/work', branch: 'feat/widget-ladder' });
+      await merged.store.set(SESSION, { ...REF, source: 'shell', boundAt: '', lastState: 'MERGED' });
+      merged.fake.answerBranch(followUp.url);
+      merged.monitor.observeToolEnd(SESSION, shellCall(command, cut));
+      await merged.monitor.idle();
+      expect(await merged.store.get(SESSION)).toMatchObject({ number: 612, source: 'branch' });
+      merged.monitor.dispose();
+
+      const dismissed = setup({ workingDirectory: '/work', branch: 'feat/widget-ladder' });
+      await dismissed.store.set(SESSION, { ...REF, source: 'shell', boundAt: '', dismissed: true, lastState: 'OPEN' });
+      dismissed.fake.answerBranch(REF.url);
+      dismissed.monitor.observeToolEnd(SESSION, shellCall(command, cut));
+      await dismissed.monitor.idle();
+      expect(await dismissed.store.get(SESSION)).toMatchObject({ number: 611, dismissed: true });
+      expect(dismissed.fake.calls).toEqual([]);
+    });
   });
 
   it('shows a missing gh as app-wide state rather than an error per PR', async () => {

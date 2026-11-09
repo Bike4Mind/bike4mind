@@ -3,7 +3,7 @@ import type { FetchLike } from '@bike4mind/local-models';
 import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
 import { ServerCredentialsError, ServerUnreachableError } from './errors';
 import type { ChatModelOption } from '@shared/chat';
-import type { ModelServerProbeInput, ModelServerProbeResult } from '@shared/modelServers';
+import type { ModelServerProbeInput, ModelServerProbeResult, ModelServerUpdateInput } from '@shared/modelServers';
 import {
   foundServers,
   LISTED_FRESH_MS,
@@ -2168,6 +2168,32 @@ describe('ModelServerRegistry SSH servers', () => {
     expect(saved.servers[0].transport).toEqual({ type: 'ssh', destination: 'me@gpu' });
   });
 
+  it('keeps this computer editable when a broken SSH record uses its reserved id', async () => {
+    const file = memoryFile();
+    await file.write(
+      JSON.stringify({
+        version: 1,
+        servers: [
+          {
+            id: 'local',
+            name: 'broken',
+            kind: 'ollama',
+            transport: { type: 'ssh' },
+            access: 'chat',
+            auth: { type: 'none' },
+            models: [],
+            addedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      })
+    );
+    const { registry: servers, store } = sshSetup(file);
+    const specs = { ramGiB: 64, gpuMemoryGiB: null, bandwidthGBps: null, unified: false };
+    expect((await servers.update('local', { specs }))[0].specs).toEqual(specs);
+    await expect(servers.update('local', { launch: { flashAttention: 'on' } })).resolves.toBeDefined();
+    expect(await store.localLaunch()).toMatchObject({ flashAttention: 'on' });
+  });
+
   it('shows an SSH server saved with a port or destination it cannot use as refused, and lets it be removed', async () => {
     const file = memoryFile();
     const saved = (id: string, name: string, transport: Record<string, unknown>) => ({
@@ -2194,7 +2220,8 @@ describe('ModelServerRegistry SSH servers', () => {
     );
     const { registry: servers, sshCalls, sent } = sshSetup(file);
     const views = await servers.views();
-    expect(views.map(view => view.name)).toEqual(['This computer', 'typo', 'text', 'hostile']);
+    expect(views.map(view => view.name)).toEqual(['This computer', 'typo', 'text', 'hostile', 'other']);
+    expect(views.map(view => view.unusable)).toEqual([undefined, true, true, true, true]);
     const port = 'Its saved SSH port is not a number from 1 to 65535. Remove this server and add it again.';
     expect(views[1]).toMatchObject({
       id: 'a1',
@@ -2206,6 +2233,7 @@ describe('ModelServerRegistry SSH servers', () => {
       models: [],
       launch: null,
       health: { state: 'refused', error: port },
+      unusable: true,
     });
     expect(views[1].port).toBeUndefined();
     expect(views[2].health.error).toBe(port);
@@ -2216,6 +2244,10 @@ describe('ModelServerRegistry SSH servers', () => {
         error: 'Its saved SSH destination is not one ssh can be given safely. Remove this server and add it again.',
       },
     });
+    expect(views[4]).toMatchObject({
+      address: 'unusable address',
+      health: { state: 'refused', error: 'It has no saved SSH destination. Remove this server and add it again.' },
+    });
     expect(JSON.stringify(views)).not.toContain('ProxyCommand');
     expect(JSON.stringify(views)).not.toContain(TOKEN);
     await servers.check();
@@ -2224,12 +2256,21 @@ describe('ModelServerRegistry SSH servers', () => {
     const hub = servers.hubServer('a1');
     expect(await hub?.runtime.health()).toEqual({ ok: false, version: null, error: port });
     await expect(hub?.runtime.list()).rejects.toThrow(port);
-    await expect(servers.update('a1', { name: 'fixed' })).rejects.toThrow(port);
+    const patches: ModelServerUpdateInput[] = [
+      { name: 'fixed' },
+      { kind: 'ollama' },
+      { access: 'manage' },
+      { credential: { type: 'none' } },
+      { specs: null },
+      { launch: { flashAttention: 'on' } },
+      { launch: { kvCacheType: 'q8_0' }, kind: 'ollama' },
+    ];
+    for (const patch of patches) await expect(servers.update('a1', patch)).rejects.toThrow(port);
     expect(sshCalls).toEqual([]);
     expect(sent).toEqual([]);
 
     const left = await servers.remove('a1');
-    expect(left.map(view => view.name)).toEqual(['This computer', 'text', 'hostile']);
+    expect(left.map(view => view.name)).toEqual(['This computer', 'text', 'hostile', 'other']);
     const stored = JSON.parse((await file.read()) as string) as { servers: { id: string }[] };
     expect(stored.servers.map(server => server.id)).toEqual(['a2', 'a3', 'a4']);
   });

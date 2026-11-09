@@ -16,7 +16,10 @@ vi.mock('@tanstack/react-router', () => ({
     select({ pathname: router.pathname }),
 }));
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string, fallback?: string) => fallback ?? key }),
+  useTranslation: () => ({
+    t: (key: string, fallback?: string, options?: Record<string, unknown>) =>
+      (fallback ?? key).replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(options?.[name] ?? '')),
+  }),
 }));
 vi.mock('@client/app/components/inbox/Badge', () => ({
   default: ({ children }: { children: React.ReactNode }) => children,
@@ -70,8 +73,20 @@ vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
 }));
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsTablet: () => false }));
 vi.mock('@client/app/hooks/data/entitlements', () => ({ useEntitlements: () => ({ data: undefined }) }));
+type MockAccount = { id: string; name: string; personal: boolean; credits: number };
+const accountsState = vi.hoisted(() => ({
+  accounts: [] as MockAccount[],
+  selectedAccount: null as MockAccount | null,
+  refetchOrganizations: vi.fn(),
+}));
 vi.mock('@client/app/components/Credits/AccountSelector', () => ({
-  useAccounts: () => ({ accounts: [], selectedAccount: null, setSelectedAccount: vi.fn(), showAccountType: false }),
+  useAccounts: () => ({
+    accounts: accountsState.accounts,
+    selectedAccount: accountsState.selectedAccount,
+    setSelectedAccount: vi.fn(),
+    showAccountType: accountsState.accounts.length > 1,
+    refetchOrganizations: accountsState.refetchOrganizations,
+  }),
 }));
 vi.mock('..', () => ({
   useNotebookLayout: (select: (s: unknown) => unknown) => select({ setOpenSideNav: vi.fn() }),
@@ -747,5 +762,54 @@ describe('ProfileMenu - Hearth', () => {
   it('hides Hearth when its flag is off', () => {
     openMoreFlyout();
     expect(screen.queryByTestId('profile-more-hearth')).not.toBeInTheDocument();
+  });
+});
+
+describe('ProfileMenu - active account', () => {
+  const personal = { id: 'u1', name: 'Jane (Personal)', personal: true, credits: 10 };
+  const team = { id: 'org1', name: 'Acme & Co', personal: false, credits: 500 };
+
+  afterEach(() => {
+    accountsState.accounts = [];
+    accountsState.selectedAccount = null;
+    accountsState.refetchOrganizations.mockClear();
+  });
+
+  const renderMenu = () =>
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+
+  it('names the active team on the card', () => {
+    accountsState.accounts = [personal, team];
+    accountsState.selectedAccount = team;
+    renderMenu();
+
+    const active = screen.getByTestId('profile-menu-active-account');
+    expect(active).toHaveTextContent('Acme & Co');
+    expect(active).toHaveTextContent('(Team)');
+  });
+
+  it('labels the personal account as Personal', () => {
+    accountsState.accounts = [personal, team];
+    accountsState.selectedAccount = personal;
+    renderMenu();
+
+    expect(screen.getByTestId('profile-menu-active-account')).toHaveTextContent('Personal');
+    expect(screen.getByTestId('profile-menu-card')).not.toHaveTextContent('(Team)');
+  });
+
+  it('refetches account balances each time the menu opens', () => {
+    renderMenu();
+    expect(accountsState.refetchOrganizations).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('profile-menu-card'));
+    expect(accountsState.refetchOrganizations).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId('profile-menu-card'));
+    fireEvent.click(screen.getByTestId('profile-menu-card'));
+    expect(accountsState.refetchOrganizations).toHaveBeenCalledTimes(2);
   });
 });

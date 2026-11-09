@@ -160,6 +160,25 @@ describe('ModelPane', () => {
     expect(byTestId('model-pane-export-btn')?.hasAttribute('disabled')).toBe(false);
   });
 
+  it('announces each build state in a polite live region that stays mounted', () => {
+    render(engine({ ...BUILT, status: 'building' }));
+    const announcer = byTestId('model-pane-announcer');
+    expect(announcer?.getAttribute('aria-live')).toBe('polite');
+    expect(announcer?.textContent).toBe('Building the model.');
+    render(engine(BUILT));
+    expect(byTestId('model-pane-announcer')).toBe(announcer);
+    expect(announcer?.textContent).toBe('Model built.');
+    render(engine({ ...BUILT, status: 'error', error: { message: 'width is not defined', line: 7 } }));
+    expect(announcer?.textContent).toBe('Model build failed at line 7: width is not defined');
+  });
+
+  it('reads a timeout, which has no line number, as a plain failure with its reason', () => {
+    const message = 'Build stopped after 5 s without finishing.';
+    render(engine({ ...BUILT, status: 'error', error: { message } }));
+    expect(byTestId('model-pane-announcer')?.textContent).toBe(`Model build failed: ${message}`);
+    expect(byTestId('model-pane-error')?.textContent).toBe(message);
+  });
+
   it('keeps the last good model dimmed under the error', () => {
     render(engine({ ...BUILT, status: 'error', error: { message: 'width is not defined', line: 7 } }));
     expect(byTestId('model-pane-error')?.textContent).toBe('Line 7: width is not defined');

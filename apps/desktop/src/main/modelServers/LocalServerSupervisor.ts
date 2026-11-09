@@ -187,6 +187,10 @@ export class LocalServerSupervisor {
     return { runtime: slot.request.runtime, port: slot.request.port, pid: handle.pid, settings: slot.request.settings };
   }
 
+  runningCount(): number {
+    return [...this.slots.values()].filter(slot => slot.busy !== null || slot.handle?.running).length;
+  }
+
   busy(id: string): 'starting' | 'stopping' | null {
     return this.slots.get(id)?.busy ?? null;
   }

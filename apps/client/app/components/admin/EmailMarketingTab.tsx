@@ -1,33 +1,34 @@
-import { Box, Stack, Tab, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
+import { Stack } from '@mui/joy';
 import { useState } from 'react';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { AdminPageHeader, ViewTabs, type ViewTab } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import EmailTemplatesPanel from './email/EmailTemplatesPanel';
 import EmailJobsPanel from './email/EmailJobsPanel';
 
+const VIEWS: readonly ViewTab[] = [
+  { id: 'templates', label: 'Templates' },
+  { id: 'campaigns', label: 'Campaigns' },
+];
+
 export default function EmailMarketingTab() {
-  const [activeTab, setActiveTab] = useState(0);
+  const [activeView, setActiveView] = useState('templates');
 
   return (
-    <Box>
-      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-        <Typography level="h3">Email Marketing</Typography>
-        <ContextHelpButton helpId="admin/email-marketing" tooltipText="Email Marketing Help" />
-      </Stack>
-
-      <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as number)} sx={{ borderRadius: 'lg' }}>
-        <TabList>
-          <Tab>Templates</Tab>
-          <Tab>Campaigns</Tab>
-        </TabList>
-
-        <TabPanel value={0} sx={{ p: 0 }}>
-          <EmailTemplatesPanel />
-        </TabPanel>
-
-        <TabPanel value={1} sx={{ p: 0 }}>
-          <EmailJobsPanel />
-        </TabPanel>
-      </Tabs>
-    </Box>
+    <Stack sx={{ gap: ADMIN_REGION_GAP, minWidth: 0 }} data-testid="admin-email-marketing-tab">
+      <AdminPageHeader
+        title="Email marketing"
+        description="Reusable email templates and the campaigns that send them to users and the waitlist."
+        actions={<ContextHelpButton helpId="admin/email-marketing" tooltipText="Email marketing help" />}
+      />
+      <ViewTabs
+        views={VIEWS}
+        activeId={activeView}
+        onSelect={setActiveView}
+        aria-label="Email marketing views"
+        data-testid="email-marketing-views"
+      />
+      {activeView === 'templates' ? <EmailTemplatesPanel /> : <EmailJobsPanel />}
+    </Stack>
   );
 }

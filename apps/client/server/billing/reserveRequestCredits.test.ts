@@ -1,5 +1,5 @@
 import { CreditHolderType } from '@bike4mind/common';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   deductCredits,
@@ -79,9 +79,12 @@ const userReq = (apiKeyInfo?: unknown) =>
   >[0]['req'];
 const ledger: CreditLedgerEntry = { type: 'sound_effects_usage', sessionId: 's1', model: 'm', source: 'api' };
 
+afterEach(() => vi.restoreAllMocks());
+
 describe('reserveRequestCredits', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.spyOn(console, 'info').mockImplementation(() => {});
     withTransaction.mockImplementation(async callback => {
       const snapshot = new Map(pendingHolds);
       try {
@@ -462,6 +465,10 @@ describe('reserveRequestCredits', () => {
 
     expect(userIncrement).not.toHaveBeenCalled();
     expect(deductCredits).not.toHaveBeenCalled();
+    const events = vi.mocked(console.info).mock.calls.map(([event]) => JSON.parse(event));
+    expect(events.filter(event => event.SettlementsAfterSweep === 1)).toEqual([
+      expect.objectContaining({ ownerId: 'u1', lifecycle: 'request', holdId: 'hold-1' }),
+    ]);
     expect(logger.error).toHaveBeenCalledWith(
       expect.stringContaining('embeddings settle found its credit hold already swept'),
       expect.objectContaining({ holdId: 'hold-1', reservedCredits: 3 })
@@ -472,6 +479,38 @@ describe('reserveRequestCredits', () => {
         holdId: 'hold-1',
       }
     );
+  });
+
+  it('emits one hold latency sample even when the transaction callback is retried', async () => {
+    withTransaction.mockImplementationOnce(async callback => {
+      await callback();
+      return callback();
+    });
+    await reserveRequestCredits({
+      req: userReq(),
+      requiredCredits: 3,
+      enforceCredits: true,
+      featureLabel: 'embeddings',
+    });
+    const events = vi.mocked(console.info).mock.calls.map(([event]) => JSON.parse(event));
+    expect(events.filter(event => typeof event.HoldLatency === 'number')).toHaveLength(1);
+  });
+
+  it('counts a missing request hold once even when the settlement transaction is retried', async () => {
+    const reservation = await reserveRequestCredits({
+      req: userReq(),
+      requiredCredits: 3,
+      enforceCredits: true,
+      featureLabel: 'embeddings',
+    });
+    pendingHolds.clear();
+    withTransaction.mockImplementationOnce(async callback => {
+      await callback();
+      return callback();
+    });
+    expect(await reservation.settle(1, ledger)).toBe(0);
+    const events = vi.mocked(console.info).mock.calls.map(([event]) => JSON.parse(event));
+    expect(events.filter(event => event.SettlementsAfterSweep === 1)).toHaveLength(1);
   });
 
   it('refunds only once when refund is called twice', async () => {

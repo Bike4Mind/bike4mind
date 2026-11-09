@@ -25,10 +25,23 @@ const {
   mockReadGrants: vi.fn(),
 }));
 
+const route = vi.hoisted(() => ({
+  options: null as null | Record<string, unknown>,
+  guard: null as null | ((req: unknown, res: unknown, next: () => void) => void),
+}));
+// adminApi stays real: the permission guard it installs is part of what is under test.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    delete: (fn: (req: unknown, res: unknown) => unknown) => fn,
-  }),
+  baseApi: (options: Record<string, unknown>) => {
+    route.options = options;
+    const chain = {
+      use: (guard: (req: unknown, res: unknown, next: () => void) => void) => {
+        route.guard = guard;
+        return chain;
+      },
+      delete: (fn: (req: unknown, res: unknown) => unknown) => fn,
+    };
+    return chain;
+  },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
@@ -84,7 +97,9 @@ import { executeApprovedAdminDelete } from '@server/admin/deleteUserAsAdmin';
 
 type DeleteAdapters = { db: { users: { delete: (id: string) => Promise<unknown> } } };
 
-async function run(options: { user?: { id: string; isAdmin: boolean }; body?: unknown; id?: string } = {}) {
+type Actor = { id: string; isAdmin: boolean; adminPermissions?: string[] };
+
+async function run(options: { user?: Actor; body?: unknown; id?: string } = {}) {
   const { req, res } = createMocks({
     method: 'DELETE',
     query: { id: options.id ?? 'u1' },
@@ -92,7 +107,10 @@ async function run(options: { user?: { id: string; isAdmin: boolean }; body?: un
   });
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   Object.assign(req, { user: options.user ?? { id: 'admin1', isAdmin: true }, logger });
-  const call = (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
+  const call = (async () => {
+    route.guard!(req, res, () => {});
+    return (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
+  })();
   return { res, call, logger };
 }
 
@@ -273,12 +291,69 @@ describe('DELETE /api/users/[id]/delete', () => {
   });
 
   describe('audit trail', () => {
-    it('rejects a non-admin with 401 before any write', async () => {
+    it('is gated on users:delete for the DELETE method', () => {
+      expect(route.options).toMatchObject({ allowedMethods: ['DELETE'] });
+    });
+
+    it('rejects a non-admin with 403 before any write', async () => {
       const { call } = await run({ user: { id: 'user1', isAdmin: false } });
 
-      await expect(call).rejects.toThrow('not authorized');
+      await expect(call).rejects.toMatchObject({ statusCode: 403 });
       expect(mockAdminDeleteUser).not.toHaveBeenCalled();
       expect(mockRecord).not.toHaveBeenCalled();
+    });
+
+    it('rejects a delegate without users:delete, naming the missing permission', async () => {
+      const { call } = await run({ user: { id: 'd1', isAdmin: false, adminPermissions: ['support:read'] } });
+
+      await expect(call).rejects.toMatchObject({ statusCode: 403, message: 'Missing permission: users:delete' });
+      expect(mockFindById).not.toHaveBeenCalled();
+      expect(mockAdminDeleteUser).not.toHaveBeenCalled();
+    });
+
+    it('lets a delegate with users:delete delete a non-admin account', async () => {
+      mockPolicy.mockResolvedValue({ enabled: false, expiryHours: 24 });
+      mockFindById.mockResolvedValue({ id: 'u1', name: 'Target', isAdmin: false });
+      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+        await db.users.delete('u1');
+        return { id: 'u1' };
+      });
+
+      const { res, call } = await run({ user: { id: 'd1', isAdmin: false, adminPermissions: ['users:delete'] } });
+      await call;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockAdminDeleteUser).toHaveBeenCalledWith('d1', { id: 'u1' }, expect.anything());
+    });
+
+    it('stops a delegate whose target gained admin access after the check, even with approvals off', async () => {
+      mockPolicy.mockResolvedValue({ enabled: false, expiryHours: 24 });
+      mockFindById.mockResolvedValueOnce({ id: 'u1', isAdmin: false }).mockResolvedValue({ id: 'u1', isAdmin: true });
+      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+        await db.users.delete('u1');
+        return { id: 'u1' };
+      });
+
+      const { call } = await run({ user: { id: 'd1', isAdmin: false, adminPermissions: ['users:delete'] } });
+
+      await expect(call).rejects.toMatchObject({ statusCode: 409 });
+      expect(mockCancelSubscriptions).not.toHaveBeenCalled();
+      expect(mockRepoDelete).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['approvals off', false],
+      ['approvals on', true],
+    ])('refuses a delegate deleting an account with admin access (%s)', async (_label, enabled) => {
+      mockPolicy.mockResolvedValue({ enabled, expiryHours: 24 });
+      mockFindById.mockResolvedValue({ id: 'u1', name: 'Boss', isAdmin: false, adminPermissions: ['support:read'] });
+
+      const { call } = await run({ user: { id: 'd1', isAdmin: false, adminPermissions: ['users:delete'] } });
+
+      await expect(call).rejects.toMatchObject({ statusCode: 403 });
+      expect(mockRequestApproval).not.toHaveBeenCalled();
+      expect(mockAdminDeleteUser).not.toHaveBeenCalled();
+      expect(mockCancelSubscriptions).not.toHaveBeenCalled();
     });
 
     it('denies deleting your own account with a 403 and a user.deletion.denied entry', async () => {

@@ -5,6 +5,7 @@ import { invalidateSettingsCache } from '@bike4mind/utils';
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { requireAdminPermission } from '@server/middlewares/adminApi';
 import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
 import { ForbiddenError, NotFoundError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
@@ -42,7 +43,7 @@ const getHandler = asyncHandler(async (req, res) => {
 
 // Update LLM Model Configurations
 const putHandler = asyncHandler<unknown, unknown, { configurations: LLMModelConfig[] }>(async (req, res) => {
-  if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
+  requireAdminPermission(req, 'settings:manage');
 
   if (!req.ability) throw new NotFoundError('Ability not found');
 

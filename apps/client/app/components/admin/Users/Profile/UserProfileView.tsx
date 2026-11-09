@@ -28,7 +28,7 @@ import {
   ShadowTierDialog,
 } from './actions/accountDialogs';
 import type { ProfileAction, ProfileDialogProps } from './actions/profileActions';
-import { UserProfileHeader } from './UserProfileHeader';
+import { UserProfileHeader, deletionBlockedReason } from './UserProfileHeader';
 import { UserProfileStats } from './UserProfileStats';
 import { UserProfileTabs } from './UserProfileTabs';
 import { UserRiskBadges } from './UserRiskBadges';
@@ -127,7 +127,11 @@ const Breadcrumb: React.FC<{ name: string; onBack: () => void }> = ({ name, onBa
   </Stack>
 );
 
-const DeletionBanner: React.FC<{ user: AdminUserProfile; onCancel: () => void }> = ({ user, onCancel }) => {
+const DeletionBanner: React.FC<{ user: AdminUserProfile; canCancel: boolean; onCancel: () => void }> = ({
+  user,
+  canCancel,
+  onCancel,
+}) => {
   const { deletion } = user;
   if (!deletion) return null;
   const started = !!deletion.purgeStartedAt;
@@ -161,7 +165,7 @@ const DeletionBanner: React.FC<{ user: AdminUserProfile; onCancel: () => void }>
         Source: {DELETION_SOURCE_LABELS[deletion.source] ?? deletion.source}. Requested{' '}
         {formatDeletionDay(deletion.requestedAt)}.
       </Typography>
-      {!started && (
+      {!started && canCancel && (
         <Button
           size="sm"
           variant="outlined"
@@ -290,7 +294,11 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
         commands={profileCommands}
         onOpenHelp={openHelpPanel}
       />
-      <DeletionBanner user={user} onCancel={() => setAction('cancelDeletion')} />
+      <DeletionBanner
+        user={user}
+        canCancel={deletionBlockedReason(currentUser, user) === null}
+        onCancel={() => setAction('cancelDeletion')}
+      />
       <StatusBanner
         user={user}
         onReinstate={() => setAction('reinstate')}

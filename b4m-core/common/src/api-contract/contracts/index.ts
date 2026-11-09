@@ -11,6 +11,7 @@ import { synthesizeSpeechContract } from './tts.contract';
 import { generateMusicContract } from './music.contract';
 import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
+import { getClientConfigContract } from './clientConfig.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
 import { getCreditBalanceContract } from './credits.contract';
 import { listModelsContract } from './models.contract';
@@ -96,6 +97,14 @@ import {
   removeProjectSessionContract,
 } from './projectContent.contract';
 import {
+  removeProjectMemberContract,
+  listProjectInvitesContract,
+  createProjectInviteContract,
+  addProjectSystemPromptsContract,
+  updateProjectSystemPromptContract,
+  removeProjectSystemPromptContract,
+} from './projectSharing.contract';
+import {
   listAgentsContract,
   getAgentContract,
   createAgentContract,
@@ -143,6 +152,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   generateMusicContract,
   generateSoundEffectContract,
   getMeContract,
+  getClientConfigContract,
   registerPushTokenContract,
   unregisterPushTokenContract,
   getCreditBalanceContract,
@@ -218,6 +228,12 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listProjectSessionsContract,
   addProjectSessionsContract,
   removeProjectSessionContract,
+  removeProjectMemberContract,
+  listProjectInvitesContract,
+  createProjectInviteContract,
+  addProjectSystemPromptsContract,
+  updateProjectSystemPromptContract,
+  removeProjectSystemPromptContract,
   listAgentsContract,
   getAgentContract,
   createAgentContract,

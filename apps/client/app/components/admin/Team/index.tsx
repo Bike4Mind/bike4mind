@@ -1,10 +1,8 @@
 import {
-  Box,
   Card,
   Grid,
   Typography,
   Stack,
-  CircularProgress,
   Alert,
   FormControl,
   FormLabel,
@@ -34,9 +32,11 @@ import {
 } from '@client/app/hooks/data/admin';
 import { IInternalTeamMemberDocument } from '@bike4mind/common';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { AdminPageHeader, EmptyState, ErrorState, LoadingState } from '../shared';
+import { ADMIN_REGION_GAP } from '../shared/adminStyles';
 
 const Team: React.FC = () => {
-  const { data: teamMembers = [], isLoading, error } = useGetTeamMembers();
+  const { data: teamMembers, isLoading, error, refetch } = useGetTeamMembers();
   const deleteMember = useDeleteTeamMember();
   const [isCreateModalOpen, setCreateModalOpen] = useState(false);
   const [editingMember, setEditingMember] = useState<IInternalTeamMemberDocument | null>(null);
@@ -44,9 +44,10 @@ const Team: React.FC = () => {
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const sortedMembers = useMemo(
-    () => [...teamMembers].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })),
+    () => [...(teamMembers ?? [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })),
     [teamMembers]
   );
+  const openCreateModal = () => setCreateModalOpen(true);
 
   const handleDeleteMember = async (id: string, name: string) => {
     const shouldDelete = window.confirm(`Remove ${name} from the team list?`);
@@ -63,57 +64,53 @@ const Team: React.FC = () => {
     }
   };
 
-  if (isLoading) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '400px' }}>
-        <CircularProgress />
-      </Box>
-    );
-  }
-
-  if (error) {
-    return (
-      <Box>
-        <Alert color="danger" variant="soft">
-          Failed to load team members. Please try again later.
-        </Alert>
-      </Box>
-    );
-  }
-
   return (
-    <Box>
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="space-between" sx={{ mb: 3 }}>
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Typography level="h2" sx={{ fontWeight: 'bold' }}>
-            Team Members
-          </Typography>
-          <ContextHelpButton helpId="admin/team" tooltipText="Team Help" />
-        </Stack>
-        <Button
-          startDecorator={<AddIcon />}
-          onClick={() => setCreateModalOpen(true)}
-          color="primary"
-          sx={{ minWidth: { xs: '100%', sm: 'auto' } }}
-          data-testid="create-team-member-btn"
-        >
-          Create Team Member
-        </Button>
-      </Stack>
-      <Typography level="body-md" sx={{ mb: 4, color: 'text.secondary' }}>
-        Manage the internal contact list for User Ops.
-      </Typography>
+    <Stack sx={{ gap: ADMIN_REGION_GAP, minWidth: 0 }} data-testid="admin-team-tab">
+      <AdminPageHeader
+        title="Team"
+        count={teamMembers?.length}
+        description="Internal contact list for User Ops."
+        actions={
+          <>
+            <ContextHelpButton helpId="admin/team" tooltipText="Team help" />
+            <Button
+              size="sm"
+              startDecorator={<AddIcon />}
+              onClick={openCreateModal}
+              data-testid="create-team-member-btn"
+            >
+              Create team member
+            </Button>
+          </>
+        }
+      />
 
       {deleteError && (
-        <Alert color="danger" variant="soft" sx={{ mb: 3 }} data-testid="team-member-delete-error">
+        <Alert color="danger" variant="soft" data-testid="team-member-delete-error">
           {deleteError}
         </Alert>
       )}
 
-      {sortedMembers.length === 0 ? (
-        <Alert color="neutral" variant="soft">
-          No team members found. Use the Create Team Member button to add someone new.
-        </Alert>
+      {isLoading ? (
+        <LoadingState label="Loading team members" testId="team-loading" />
+      ) : error && !teamMembers ? (
+        <ErrorState message="Could not load team members." onRetry={() => void refetch()} />
+      ) : sortedMembers.length === 0 ? (
+        <EmptyState
+          title="No team members yet"
+          description="Add a teammate's name and phone number so User Ops can reach them."
+          action={
+            <Button
+              size="sm"
+              variant="outlined"
+              startDecorator={<AddIcon />}
+              onClick={openCreateModal}
+              data-testid="team-empty-create-btn"
+            >
+              Create team member
+            </Button>
+          }
+        />
       ) : (
         <Grid container spacing={2}>
           {sortedMembers.map(member => (
@@ -226,7 +223,7 @@ const Team: React.FC = () => {
       {editingMember && (
         <EditTeamMemberModal member={editingMember} open={!!editingMember} onClose={() => setEditingMember(null)} />
       )}
-    </Box>
+    </Stack>
   );
 };
 
@@ -293,7 +290,7 @@ const CreateTeamMemberModal: React.FC<CreateTeamMemberModalProps> = ({ open, onC
   return (
     <Modal open={open} onClose={handleClose}>
       <ModalDialog sx={{ width: 500 }}>
-        <DialogTitle>Create Team Member</DialogTitle>
+        <DialogTitle>Create team member</DialogTitle>
         <DialogContent>Fill in the details to add the teammate to the internal contact list.</DialogContent>
         <form onSubmit={handleSubmit}>
           <Stack spacing={2}>
@@ -364,7 +361,7 @@ const CreateTeamMemberModal: React.FC<CreateTeamMemberModalProps> = ({ open, onC
                 Cancel
               </Button>
               <Button type="submit" loading={createMember.isPending} data-testid="team-member-submit-btn">
-                {createMember.isPending ? 'Creating...' : 'Create Team Member'}
+                {createMember.isPending ? 'Creating...' : 'Create team member'}
               </Button>
             </DialogActions>
           </Stack>
@@ -438,7 +435,7 @@ const EditTeamMemberModal: React.FC<EditTeamMemberModalProps> = ({ open, onClose
   return (
     <Modal open={open} onClose={handleClose}>
       <ModalDialog sx={{ width: 500 }}>
-        <DialogTitle>Edit Team Member</DialogTitle>
+        <DialogTitle>Edit team member</DialogTitle>
         <DialogContent>Update the details for this team member.</DialogContent>
         <form onSubmit={handleSubmit}>
           <Stack spacing={2}>
@@ -509,7 +506,7 @@ const EditTeamMemberModal: React.FC<EditTeamMemberModalProps> = ({ open, onClose
                 Cancel
               </Button>
               <Button type="submit" loading={updateMember.isPending} data-testid="team-member-edit-submit-btn">
-                {updateMember.isPending ? 'Updating...' : 'Update Team Member'}
+                {updateMember.isPending ? 'Updating...' : 'Update team member'}
               </Button>
             </DialogActions>
           </Stack>

@@ -37,9 +37,10 @@ const mockRequireStepUp = vi.fn();
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: (...args: unknown[]) => mockRequireStepUp(...args) }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    post: (handler: (...args: unknown[]) => unknown) => handler,
-  }),
+  baseApi: () => {
+    const chain = { use: () => chain, post: (handler: (...args: unknown[]) => unknown) => handler };
+    return chain;
+  },
 }));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({
@@ -294,6 +295,32 @@ describe('admin/create-user', () => {
       await expect(runHandler(req, makeRes())).rejects.toThrow(/signed-in session/);
       expect(mockRequireStepUp).not.toHaveBeenCalled();
       expect(mockCreateUser).not.toHaveBeenCalled();
+    });
+
+    it('refuses a settings:manage delegate creating an admin account before any write', async () => {
+      const req = {
+        ...makeReq({ ...base, isAdmin: true }),
+        user: { isAdmin: false, adminPermissions: ['settings:manage'] },
+      };
+      await expect(runHandler(req, makeRes())).rejects.toThrow('Only full administrators can grant full admin access');
+      expect(mockRequireStepUp).not.toHaveBeenCalled();
+      expect(mockCreateUser).not.toHaveBeenCalled();
+    });
+
+    it('refuses starting credits from a delegate without credits:adjust before any write', async () => {
+      const req = {
+        ...makeReq({ ...base, initialCredits: 50 }),
+        user: { isAdmin: false, adminPermissions: ['settings:manage'] },
+      };
+      await expect(runHandler(req, makeRes())).rejects.toThrow('Missing permission: credits:adjust');
+      expect(mockCreateUser).not.toHaveBeenCalled();
+    });
+
+    it('lets a settings:manage delegate create a non-admin account', async () => {
+      mockCreateUser.mockResolvedValue({ id: 'u4', email: 'new@example.com', username: 'new' });
+      const req = { ...makeReq(base), user: { isAdmin: false, adminPermissions: ['settings:manage'] } };
+      await runHandler(req, makeRes());
+      expect(mockCreateUser).toHaveBeenCalledOnce();
     });
 
     it.each([

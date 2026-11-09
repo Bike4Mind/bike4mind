@@ -18,6 +18,7 @@ import {
   encodeLedgerCursor,
   ledgerPageFilter,
 } from '@server/utils/adminCreditLedger';
+import { loadLedgerWriteOffs } from '@server/utils/ledgerWriteOffs';
 import { respond } from '@server/utils/respond';
 
 type LedgerRequestQuery = {
@@ -37,7 +38,8 @@ type LedgerRequestQuery = {
  * One keyset page of the user's credit ledger, newest first. `from` and `to` are inclusive UTC days.
  * `nextCursor` is opaque and null on the last page. Contiguous pages (no kind, model or source filter)
  * carry a running `balanceAfter` rebuilt from the user's current balance; otherwise only admin
- * adjustments carry the balance recorded when they were written.
+ * adjustments carry the balance recorded when they were written. A usage row whose shortfall was written
+ * off shows the charged credits plus writtenOffCredits, so the running balance matches the real one.
  */
 const handler = baseApi({ auth: 'jwtOnly' }).get(
   asyncHandler<{}, unknown, unknown, LedgerRequestQuery>(async (req, res) => {
@@ -56,7 +58,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
 
     // One snapshot for the balance and the page: a row landing between separate reads would shift
     // every balanceAfter on the page by its amount.
-    const { user, documents, hasMore, balanceAfterFirst } = await withTransaction(
+    const { user, documents, hasMore, balanceAfterFirst, writeOffs } = await withTransaction(
       async () => {
         const user = await userRepository.findById(userId);
         if (!user) throw new NotFoundError('User not found');
@@ -70,11 +72,12 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
         const hasMore = fetched.length > limit;
         const documents = hasMore ? fetched.slice(0, limit) : fetched;
 
+        const writeOffs = await loadLedgerWriteOffs(user.id);
         const balanceAfterFirst =
           contiguous && documents.length > 0
-            ? await balanceAfterFirstRow(user.id, user.currentCredits, documents[0], !after && !filter.to)
+            ? await balanceAfterFirstRow(user.id, user.currentCredits, documents[0], !after && !filter.to, writeOffs)
             : undefined;
-        return { user, documents, hasMore, balanceAfterFirst };
+        return { user, documents, hasMore, balanceAfterFirst, writeOffs };
       },
       { readConcern: { level: 'snapshot' } }
     );
@@ -83,6 +86,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
       balanceAfterFirst,
       userId: user.id,
       logger: req.logger,
+      writeOffs,
     });
 
     const last = documents[documents.length - 1];

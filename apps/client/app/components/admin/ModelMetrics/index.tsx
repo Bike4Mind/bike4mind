@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from 'react';
-import { Box, Typography, LinearProgress, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
+import { Button, Stack, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import DownloadIcon from '@mui/icons-material/Download';
 import dayjs from 'dayjs';
 
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
@@ -15,60 +17,67 @@ import { OverviewTab } from './components/OverviewTab';
 import { AnalyticsTab } from './components/AnalyticsTab';
 import { RawDataTab } from './components/RawDataTab';
 import { SpendTab } from './components/SpendTab';
+import { AdminPageHeader, EmptyState, ErrorState, LoadingState, UpdatingBar, useAdminListUrlState } from '../shared';
+import { ADMIN_REGION_GAP, adminTabStrip } from '../shared/adminStyles';
+import { MODEL_METRICS_SEARCH_KEYS, PERIOD_OPTIONS, resolvePeriod } from './modelMetricsSearch';
+
+// Row cap applied by pages/api/admin/model-metrics.ts (`.limit(500)`); at the cap the count is a floor, not a total.
+const SERVER_ROW_CAP = 500;
 
 const ModelMetricsTab: React.FC = () => {
-  // Applied filters state (used for API calls)
-  const [appliedFilters, setAppliedFilters] = useState<{
-    dateFrom?: string;
-    dateTo?: string;
-    userFilter?: string;
-    modelFilter?: string;
-    statusFilter?: string;
-  }>({});
+  const [urlState, updateUrlState] = useAdminListUrlState(MODEL_METRICS_SEARCH_KEYS);
+  // A user id identifies a person, so this one filter stays out of the URL.
+  const [userFilter, setUserFilter] = useState('');
+  const { period: urlPeriod = '', model = '', status = '' } = urlState.filters;
+  // A period outside the presets (hand-edited URL) is treated as unset.
+  const period = PERIOD_OPTIONS.some(option => option.value === urlPeriod) ? urlPeriod : '';
 
-  const { data: metrics = [], isLoading, recache } = useModelMetrics(appliedFilters);
+  // Resolved once per pick, not per render: a fresh `now` would change the query key every render.
+  const filters = useMemo(
+    () => ({
+      ...resolvePeriod(period, dayjs()),
+      modelFilter: model || undefined,
+      statusFilter: status || undefined,
+      userFilter: userFilter || undefined,
+    }),
+    [period, model, status, userFilter]
+  );
+  const hasFilters = Boolean(period || model || status || userFilter);
+
+  const {
+    data: metrics = [],
+    isLoading,
+    isFetching,
+    isPlaceholderData,
+    isError,
+    refetch,
+    recache,
+  } = useModelMetrics(filters);
   const { data: modelInfos = [] } = useModelInfo();
 
   const {
-    // Filter states
-    dateFrom,
-    dateTo,
-    userFilter,
-    modelFilter,
-    statusFilter,
-    setDateFrom,
-    setDateTo,
-    setUserFilter,
-    setModelFilter,
-    setStatusFilter,
-    // UI states
     simplifiedNames,
     setSimplifiedNames,
     activeTab,
     setActiveTab,
     showInfoModal,
     setShowInfoModal,
-    // Sort states
     sortField,
     sortDirection,
-    // Computed data
     filteredAndSortedMetrics,
-    // Helper functions
     handleSort,
-    clearFilters,
-    setDateRange,
   } = useModelMetricsState(metrics);
 
   // Narrowed to the fields the spend query keys on (statusFilter is not applied to
   // spend), so its react-query key stays stable across unrelated filter changes.
   const spendFilters = useMemo(
     () => ({
-      dateFrom: appliedFilters.dateFrom,
-      dateTo: appliedFilters.dateTo,
-      userFilter: appliedFilters.userFilter,
-      modelFilter: appliedFilters.modelFilter,
+      dateFrom: filters.dateFrom,
+      dateTo: filters.dateTo,
+      userFilter: filters.userFilter,
+      modelFilter: filters.modelFilter,
     }),
-    [appliedFilters]
+    [filters]
   );
 
   // Owned here (not inside SpendTab) so the shared Refresh button can bust the
@@ -94,137 +103,130 @@ const ModelMetricsTab: React.FC = () => {
     exportToCSV(filteredAndSortedMetrics, filename);
   };
 
-  const handleApplyFilters = () => {
-    setAppliedFilters({
-      dateFrom: dateFrom || undefined,
-      dateTo: dateTo || undefined,
-      userFilter: userFilter || undefined,
-      modelFilter: modelFilter || undefined,
-      statusFilter: statusFilter || undefined,
-    });
-  };
-
-  const handleClearFilters = () => {
-    clearFilters();
-    setAppliedFilters({});
+  const clearFilters = () => {
+    updateUrlState({ filters: { period: '', model: '', status: '' } });
+    setUserFilter('');
   };
 
   const chartData = processChartData(filteredAndSortedMetrics, modelInfos, simplifiedNames);
 
-  if (isLoading) {
-    return (
-      <Box sx={{ p: 2 }}>
-        <LinearProgress />
-        <Typography sx={{ mt: 2 }}>Loading model metrics...</Typography>
-      </Box>
-    );
-  }
+  // Shown in the panels that read model-metrics rows; Spend and Analytics have their own data.
+  const rowsState = (() => {
+    if (isError && !metrics.length) {
+      return (
+        <ErrorState message="Could not load model metrics." onRetry={() => void refetch()} retrying={isFetching} />
+      );
+    }
+    if (!metrics.length) {
+      return (
+        <EmptyState
+          title={hasFilters ? 'No model calls match these filters' : 'No model calls yet'}
+          action={
+            hasFilters ? (
+              <Button variant="outlined" onClick={clearFilters} data-testid="model-metrics-clear-filters-btn">
+                Clear filters
+              </Button>
+            ) : (
+              <Button variant="outlined" onClick={handleRefresh} data-testid="model-metrics-empty-refresh-btn">
+                Refresh
+              </Button>
+            )
+          }
+        />
+      );
+    }
+    return null;
+  })();
 
   return (
-    <Box sx={{ p: { xs: 0, sm: 2 } }}>
-      {/* Control Panel */}
-      <ControlPanel
-        metrics={metrics}
-        filteredMetrics={filteredAndSortedMetrics}
-        modelInfos={modelInfos}
-        dateFrom={dateFrom}
-        dateTo={dateTo}
-        userFilter={userFilter}
-        modelFilter={modelFilter}
-        statusFilter={statusFilter}
-        simplifiedNames={simplifiedNames}
-        setDateFrom={setDateFrom}
-        setDateTo={setDateTo}
-        setUserFilter={setUserFilter}
-        setModelFilter={setModelFilter}
-        setStatusFilter={setStatusFilter}
-        setSimplifiedNames={setSimplifiedNames}
-        onRefresh={handleRefresh}
-        onExportCSV={handleExportCSV}
-        onClearFilters={handleClearFilters}
-        onSetDateRange={setDateRange}
-        onApplyFilters={handleApplyFilters}
-        isLoading={isLoading}
+    <Stack gap={ADMIN_REGION_GAP}>
+      <AdminPageHeader
+        title="Model metrics"
+        count={
+          isLoading || (isError && !metrics.length) || metrics.length >= SERVER_ROW_CAP ? undefined : metrics.length
+        }
+        description="Per-call performance, token use and cost across models."
+        actions={
+          <>
+            <Button
+              variant="outlined"
+              color="neutral"
+              startDecorator={<RefreshIcon />}
+              onClick={handleRefresh}
+              data-testid="model-metrics-refresh-btn"
+            >
+              Refresh
+            </Button>
+            <Button
+              variant="outlined"
+              color="neutral"
+              startDecorator={<DownloadIcon />}
+              onClick={handleExportCSV}
+              disabled={!filteredAndSortedMetrics.length || isPlaceholderData}
+              data-testid="model-metrics-export-btn"
+            >
+              Export CSV
+            </Button>
+            <ContextHelpButton helpId="admin/metrics" tooltipText="Model metrics help" />
+          </>
+        }
       />
 
-      {/* Tabs Section */}
-      <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as ModelMetricsTabValue)}>
-        <Box
-          sx={{
-            display: 'flex',
-            flexDirection: { xs: 'column', sm: 'row' },
-            justifyContent: 'space-between',
-            alignItems: { xs: 'flex-start', sm: 'center' },
-            gap: 2,
-            mb: 1,
-          }}
-        >
-          <TabList sx={{ overflowX: 'auto', width: { xs: '100%', sm: 'auto' }, px: { xs: 1, sm: 0 } }}>
-            <Tab value="overview">
-              📊{' '}
-              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
-                {' '}
-                Overview
-              </Box>
-            </Tab>
-            <Tab value="analytics">
-              📈{' '}
-              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
-                {' '}
-                Analytics
-              </Box>
-            </Tab>
-            <Tab value="data">
-              📋{' '}
-              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
-                {' '}
-                Raw Data
-              </Box>
-            </Tab>
-            <Tab value="spend">
-              💰{' '}
-              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
-                {' '}
-                Spend
-              </Box>
-            </Tab>
+      <ControlPanel
+        metrics={metrics}
+        modelInfos={modelInfos}
+        state={urlState}
+        onChange={updateUrlState}
+        userFilter={userFilter}
+        onUserChange={setUserFilter}
+        simplifiedNames={simplifiedNames}
+        onSimplifiedNamesChange={setSimplifiedNames}
+      />
+
+      <UpdatingBar active={isFetching && !isLoading} />
+
+      {isLoading ? (
+        <LoadingState label="Loading model metrics" />
+      ) : (
+        <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as ModelMetricsTabValue)}>
+          <TabList sx={adminTabStrip}>
+            <Tab value="overview">Overview</Tab>
+            <Tab value="analytics">Analytics</Tab>
+            <Tab value="data">Raw data</Tab>
+            <Tab value="spend">Spend</Tab>
           </TabList>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: { xs: 1, sm: 0 } }}>
-            <Typography level="body-sm" sx={{ color: 'text.secondary', whiteSpace: 'nowrap' }}>
-              Showing {filteredAndSortedMetrics.length} of {metrics.length} records
-            </Typography>
-            <ContextHelpButton helpId="admin/metrics" tooltipText="Model Metrics Help" />
-          </Box>
-        </Box>
 
-        {/* Overview Tab */}
-        <TabPanel value="overview" sx={{ p: 1 }}>
-          <OverviewTab metrics={filteredAndSortedMetrics} chartData={chartData} />
-        </TabPanel>
+          {/* Overview Tab */}
+          <TabPanel value="overview" sx={{ p: 1 }}>
+            {rowsState ?? <OverviewTab metrics={filteredAndSortedMetrics} chartData={chartData} />}
+          </TabPanel>
 
-        {/* Analytics Tab */}
-        <TabPanel value="analytics" sx={{ p: 1 }}>
-          <AnalyticsTab filters={appliedFilters} />
-        </TabPanel>
+          {/* Analytics Tab */}
+          <TabPanel value="analytics" sx={{ p: 1 }}>
+            <AnalyticsTab filters={filters} />
+          </TabPanel>
 
-        {/* Raw Data Tab */}
-        <TabPanel value="data" sx={{ p: 1 }}>
-          <RawDataTab
-            metrics={filteredAndSortedMetrics}
-            modelInfos={modelInfos}
-            simplifiedNames={simplifiedNames}
-            sortField={sortField}
-            sortDirection={sortDirection}
-            onSort={handleSort}
-            onShowInfoModal={() => setShowInfoModal(true)}
-          />
-        </TabPanel>
+          {/* Raw Data Tab */}
+          <TabPanel value="data" sx={{ p: 1 }}>
+            {rowsState ?? (
+              <RawDataTab
+                metrics={filteredAndSortedMetrics}
+                modelInfos={modelInfos}
+                simplifiedNames={simplifiedNames}
+                sortField={sortField}
+                sortDirection={sortDirection}
+                onSort={handleSort}
+                onShowInfoModal={() => setShowInfoModal(true)}
+              />
+            )}
+          </TabPanel>
 
-        {/* Spend Tab */}
-        <TabPanel value="spend" sx={{ p: 1 }}>
-          <SpendTab data={spendData} isLoading={isSpendLoading} isError={isSpendError} />
-        </TabPanel>
-      </Tabs>
+          {/* Spend Tab */}
+          <TabPanel value="spend" sx={{ p: 1 }}>
+            <SpendTab data={spendData} isLoading={isSpendLoading} isError={isSpendError} />
+          </TabPanel>
+        </Tabs>
+      )}
 
       {/* Performance Metrics Info Modal */}
       <MetricsInfoModal
@@ -237,7 +239,7 @@ const ModelMetricsTab: React.FC = () => {
               (metric.performance.streamingPerformance.totalStreamTime ?? 0) > 0)
         )}
       />
-    </Box>
+    </Stack>
   );
 };
 

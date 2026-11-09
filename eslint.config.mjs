@@ -517,7 +517,6 @@ export default defineConfig([
           caughtErrors: 'none',
         },
       ],
-      '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/triple-slash-reference': [
         'error',
         {

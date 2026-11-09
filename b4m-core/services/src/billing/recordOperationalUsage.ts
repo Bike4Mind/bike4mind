@@ -11,6 +11,7 @@ import {
   IUsageEventRepository,
   IUserDocument,
   UsageEventFeature,
+  UsageEventOperation,
   UsagePriceStamp,
   usdToCreditsStochastic,
   type CompletionSource,
@@ -65,6 +66,8 @@ export interface RecordOperationalUsageParams {
   apiKeyId?: string;
   /** Provider stop reason of the underlying completion, e.g. `CompletionInfo.stopReason`. */
   finishReason?: string;
+  /** The background job that made the call, shown on the admin usage receipt. */
+  operation?: UsageEventOperation;
   /**
    * Skip the credit-deduction path entirely, regardless of the billOperationalUsage/
    * enforceCredits admin settings. For spend already governed by its own dedicated
@@ -246,6 +249,10 @@ export async function recordOperationalUsage(
     latencyMs: params.latencyMs,
     // Same origin as this call's ledger write above (params.source ?? 'system').
     source: params.source ?? 'system',
+    requestMeta:
+      params.operation || params.finishReason
+        ? { operation: params.operation, stopReason: params.finishReason?.slice(0, 64) }
+        : undefined,
   };
 
   await db.usageEvents

@@ -1,3 +1,4 @@
+import { OrchestrationSummary } from './OrchestrationSummary';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
@@ -41,6 +42,7 @@ import { useSimulatorView } from './useSimulatorView';
 import { readBrowserPaneOpen, writeBrowserPaneOpen } from './agentBrowser';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
+import { useLoop } from './LoopBar';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
 import type { ModelsInUse } from '../models/InstalledTab';
 import type { ComposerFill } from './composerInput';
@@ -344,6 +346,7 @@ export function ChatShell({
     [startSuggestion, markSessionStart]
   );
   const background = useBackgroundProcesses(activeId);
+  const loop = useLoop(activeId);
   const videoJobs = useVideoJobs(activeId);
   const skills = useSkills(activeId);
   const localMode = isLocalMode(auth);
@@ -910,7 +913,7 @@ export function ChatShell({
 
   /**
    * The session panel: a Code session with a folder after its first message. Until then the same
-   * controls are centered in the empty transcript, and a Chat session has nothing to put in it.
+   * controls are centered in the empty transcript. A loop also makes the panel available in Chat.
    *
    * Docked when it fits beside the reading column, and then its open flag is remembered; on a
    * narrower pane it folds into the header button and opens as a popover, which is never left open
@@ -918,8 +921,9 @@ export function ChatShell({
    */
   const panelProject =
     !opening && !initialCodeSetup && conversation.session?.mode === 'code' ? conversation.session.project : undefined;
+  const panelAvailable = !!panelProject || (!opening && !!loop);
   const panelDocked = threadRegionWidth === null || panelFitsBesideThread(threadRegionWidth);
-  const panelShown = !!panelProject && (panelDocked ? panelPrefs.open : panelPopoverOpen);
+  const panelShown = panelAvailable && (panelDocked ? panelPrefs.open : panelPopoverOpen);
   const panelSpace = panelShown && panelDocked ? SESSION_PANEL_SPACE : 0;
   const bindingErrorHidden =
     !!panelProject && !!conversation.project.error && (!panelShown || panelPrefs.collapsed.has('environment'));
@@ -1664,7 +1668,37 @@ export function ChatShell({
                   },
                 }}
               >
-                {panelProject && (
+                {loop && (!panelShown || panelPrefs.collapsed.has('background')) && (
+                  <Box
+                    role="status"
+                    data-testid="loop-header-status"
+                    sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}
+                  >
+                    <Button
+                      size="sm"
+                      variant="soft"
+                      color={loop.phase === 'paused' ? 'warning' : 'neutral'}
+                      onClick={() => {
+                        if (!panelShown) togglePanel();
+                        if (panelPrefs.collapsed.has('background')) panelPrefs.toggleSection('background');
+                      }}
+                      data-testid="loop-header-open-btn"
+                    >
+                      Loop {loop.phase}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="plain"
+                      color="neutral"
+                      aria-label="Stop loop"
+                      data-testid="loop-header-stop-btn"
+                      onClick={() => void window.b4m.chat.loopCommand(loop.sessionId, 'stop')}
+                    >
+                      Stop
+                    </Button>
+                  </Box>
+                )}
+                {panelAvailable && (
                   <Tooltip
                     size="sm"
                     variant="soft"
@@ -1771,7 +1805,7 @@ export function ChatShell({
               </ThreadDock>
             </Box>
 
-            {panelShown && panelProject && conversation.session && (
+            {panelShown && conversation.session && (
               <SessionPanel
                 // Keyed so an action error or an unfolded list does not follow the user to the next
                 // conversation.
@@ -1813,6 +1847,7 @@ export function ChatShell({
                 context={composerUsage}
                 plan={{ todos: plan, turnOpen }}
                 background={{
+                  loop,
                   processes: background.processes,
                   spawned,
                   onStopProcess: background.stop,
@@ -1990,6 +2025,16 @@ export function ChatShell({
             {showExampleQuests && (
               <Box sx={contentColumnSx}>
                 <ExampleQuestStrip onPick={pickExampleQuest} />
+              </Box>
+            )}
+
+            {delegating && conversation.session?.orchestrationPolicy && (
+              <Box sx={{ ...contentColumnSx, pb: 1 }}>
+                <OrchestrationSummary
+                  root={conversation.session.orchestrationPolicy}
+                  planner={conversation.session.model}
+                  models={catalog.models}
+                />
               </Box>
             )}
 

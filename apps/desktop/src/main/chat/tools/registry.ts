@@ -12,6 +12,8 @@ import {
   sessionSend,
   delegatedSpawnSchema,
   questComplete,
+  taskReport,
+  taskAssess,
   sessionSpawn,
   sessionSuggestionDismiss,
   sessionSuggestionUpdate,
@@ -149,6 +151,8 @@ const BY_NAME = new Map(
     ...HOST_TOOLS,
     ...SUGGESTION_TOOLS,
     questComplete,
+    taskReport,
+    taskAssess,
     ...BROWSER_TOOLS,
     screenCapture,
     ...SIMULATOR_TOOLS,
@@ -252,6 +256,8 @@ export function toolsForRequest(options: {
   suggestions?: boolean;
   /** Orchestrate is in effect, so session_spawn starts rather than suggests; see HostContext.delegates. */
   delegates?: boolean;
+  structuredTask?: boolean;
+  managedDelegation?: boolean;
   /**
    * Schemas contributed by the user's connected MCP servers, already namespaced and framed
    * (see chat/mcp/names.ts). They are appended rather than merged into a family above because
@@ -279,6 +285,8 @@ export function toolsForRequest(options: {
     ...(options.host ? HOST_TOOLS : []),
     ...(options.host && (options.suggestions ?? options.ask) ? SUGGESTION_TOOLS : []),
     ...(options.host && options.delegates ? [questComplete] : []),
+    ...(options.host && (options.delegates || options.managedDelegation) ? [taskAssess] : []),
+    ...(options.host && options.structuredTask ? [taskReport] : []),
     ...(options.browser ? BROWSER_TOOLS : []),
     ...(options.screen ? [screenCapture] : []),
     ...(options.simulator ? SIMULATOR_TOOLS : []),
@@ -293,7 +301,12 @@ export function toolsForRequest(options: {
   ];
   return [
     ...available.map(tool => ({
-      toolSchema: options.delegates && tool === sessionSpawn ? delegatedSpawnSchema : tool.schema,
+      toolSchema:
+        tool === sessionSpawn && options.delegates
+          ? delegatedSpawnSchema
+          : tool === sessionSpawn && options.managedDelegation
+            ? { ...tool.schema, parameters: delegatedSpawnSchema.parameters }
+            : tool.schema,
     })),
     ...(options.media && options.video?.length ? [{ toolSchema: generateVideoSchema(options.video) }] : []),
     ...(options.mcp ?? []).map(toolSchema => ({ toolSchema })),

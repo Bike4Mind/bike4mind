@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -6,6 +6,11 @@ import type { ReactNode } from 'react';
 import { UserProfileHeader } from './UserProfileHeader';
 import type { AdminUserProfile } from './userProfileModel';
 import { buildProfile } from './profileTestUtils';
+
+const mocks = vi.hoisted(() => ({
+  currentUser: { id: 'admin1', isAdmin: true } as { id: string; isAdmin: boolean; adminPermissions?: string[] },
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: mocks.currentUser }) }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -20,6 +25,10 @@ const renderHeader = (user: AdminUserProfile = buildProfile()) => {
 };
 
 describe('UserProfileHeader', () => {
+  beforeEach(() => {
+    mocks.currentUser = { id: 'admin1', isAdmin: true };
+  });
+
   it('shows identity, level, status and both dates', () => {
     renderHeader();
 
@@ -129,6 +138,61 @@ describe('UserProfileHeader', () => {
     fireEvent.click(await screen.findByTestId(`user-profile-menu-${action}-item`));
 
     expect(onAction).toHaveBeenCalledWith(action);
+  });
+
+  describe('deletion actions', () => {
+    const openMenu = async () => {
+      fireEvent.click(screen.getByTestId('user-profile-more-btn'));
+      return screen.findByTestId('user-profile-menu-delete-item');
+    };
+
+    it('disables delete and schedule deletion for a delegate without users:delete, naming the permission', async () => {
+      mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['support:read'] };
+      const { onAction } = renderHeader();
+
+      const item = await openMenu();
+      expect(item).toHaveAttribute('aria-disabled', 'true');
+      expect(screen.getByTestId('user-profile-menu-scheduleDeletion-item')).toHaveAttribute('aria-disabled', 'true');
+      expect(screen.getByTestId('user-profile-menu-delete-hint')).toHaveTextContent('Missing permission: users:delete');
+      fireEvent.click(item);
+      expect(onAction).not.toHaveBeenCalled();
+    });
+
+    it('disables cancel scheduled deletion for a delegate without users:delete', async () => {
+      mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['support:read'] };
+      renderHeader(
+        buildProfile({ deletion: { requestedAt: new Date(), scheduledFor: new Date(), source: 'self' } as never })
+      );
+
+      await openMenu();
+      expect(screen.getByTestId('user-profile-menu-cancelDeletion-item')).toHaveAttribute('aria-disabled', 'true');
+    });
+
+    it('lets a delegate with users:delete delete a non-admin account', async () => {
+      mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['users:delete'] };
+      const { onAction } = renderHeader();
+
+      fireEvent.click(await openMenu());
+      expect(onAction).toHaveBeenCalledWith('delete');
+      expect(screen.queryByTestId('user-profile-menu-delete-hint')).not.toBeInTheDocument();
+    });
+
+    it('keeps a delegate with users:delete off an account with admin access', async () => {
+      mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['users:delete'] };
+      renderHeader(buildProfile({ adminPermissions: ['support:read'] } as Partial<AdminUserProfile>));
+
+      expect(await openMenu()).toHaveAttribute('aria-disabled', 'true');
+      expect(screen.getByTestId('user-profile-menu-delete-hint')).toHaveTextContent(
+        'Only full administrators can act on accounts with admin access'
+      );
+    });
+
+    it('lets a full admin delete an account with admin access', async () => {
+      const { onAction } = renderHeader(buildProfile({ isAdmin: true }));
+
+      fireEvent.click(await openMenu());
+      expect(onAction).toHaveBeenCalledWith('delete');
+    });
   });
 
   it('the More menu opens the compliance record through onCompliance, not onAction', async () => {

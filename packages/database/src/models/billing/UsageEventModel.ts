@@ -33,6 +33,7 @@ import {
   IUsageSpendWithTokens,
   IUserMargin,
   USAGE_EVENT_FEATURES,
+  USAGE_EVENT_OPERATIONS,
   USAGE_EVENT_STATUSES,
   USAGE_FUNDING_SOURCES,
   USAGE_PRICE_SOURCES,
@@ -139,6 +140,34 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
           purchased: { type: Number, required: true },
           subscription: { type: Number, required: true },
           unknown: { type: Number, required: true },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
+    // Mirrors UsageEventRequestMeta: metadata only, never content.
+    requestMeta: {
+      type: new Schema(
+        {
+          stopReason: { type: String, required: false },
+          maxOutputTokens: { type: Number, required: false },
+          creditCapOutputTokens: { type: Number, required: false },
+          stoppedForCredits: { type: Boolean, required: false },
+          reasoningEffort: { type: String, required: false },
+          thinkingBudgetTokens: { type: Number, required: false },
+          toolCalls: {
+            type: [
+              new Schema(
+                { name: { type: String, required: true }, count: { type: Number, required: true } },
+                { _id: false }
+              ),
+            ],
+            required: false,
+            default: undefined,
+          },
+          attachmentCount: { type: Number, required: false },
+          attachmentBytes: { type: Number, required: false },
+          operation: { type: String, required: false, enum: [...USAGE_EVENT_OPERATIONS] },
         },
         { _id: false }
       ),
@@ -345,6 +374,8 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
             day: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
             provider: '$provider',
             model: '$model',
+            executedProvider: { $ifNull: ['$executedProvider', '$provider'] },
+            executedModel: { $ifNull: ['$executedModel', '$model'] },
           },
           requests: { $sum: 1 },
           cogsUsd: { $sum: '$costUsd' },
@@ -357,12 +388,14 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
           day: '$_id.day',
           provider: '$_id.provider',
           model: '$_id.model',
+          executedProvider: '$_id.executedProvider',
+          executedModel: '$_id.executedModel',
           requests: 1,
           cogsUsd: 1,
           creditsCharged: 1,
         },
       },
-      { $sort: { day: -1, provider: 1, model: 1 } },
+      { $sort: { day: -1, provider: 1, model: 1, executedProvider: 1, executedModel: 1 } },
     ]);
   }
 
@@ -410,7 +443,8 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
         $group: {
           _id: {
             month: { $dateToString: { format: '%Y-%m', date: '$createdAt', timezone: 'UTC' } },
-            provider: '$provider',
+            // Providers invoice the model that ran, which differs from the requested one when substituted.
+            provider: { $ifNull: ['$executedProvider', '$provider'] },
           },
           requests: { $sum: 1 },
           cogsUsd: { $sum: '$costUsd' },

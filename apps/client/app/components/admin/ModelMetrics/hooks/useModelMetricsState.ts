@@ -5,13 +5,6 @@ import { ModelMetric, SortField, SortDirection } from '../types';
 export type ModelMetricsTabValue = 'overview' | 'analytics' | 'data' | 'spend';
 
 export const useModelMetricsState = (metrics: ModelMetric[]) => {
-  // Filter states
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-  const [userFilter, setUserFilter] = useState('');
-  const [modelFilter, setModelFilter] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-
   // UI states
   const [simplifiedNames, setSimplifiedNames] = useState(true);
   const [activeTab, setActiveTab] = useState<ModelMetricsTabValue>('overview');
@@ -21,37 +14,9 @@ export const useModelMetricsState = (metrics: ModelMetric[]) => {
   const [sortField, setSortField] = useState<SortField>('timestamp');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
 
-  // Apply filters and sorting
+  // The server already applied the filters; only the order is decided here.
   const filteredAndSortedMetrics = useMemo(() => {
-    const filtered = metrics.filter(metric => {
-      // Date range filter
-      if (dateFrom) {
-        const fromDate = dayjs(dateFrom).startOf('day');
-        const metricDate = dayjs(metric.timestamp);
-        if (metricDate.isBefore(fromDate)) {
-          return false;
-        }
-      }
-
-      if (dateTo) {
-        const toDate = dayjs(dateTo).endOf('day');
-        const metricDate = dayjs(metric.timestamp);
-        if (metricDate.isAfter(toDate)) {
-          return false;
-        }
-      }
-
-      // User filter
-      if (userFilter && metric.session?.userId !== userFilter) return false;
-
-      // Model filter
-      if (modelFilter && metric.model?.name !== modelFilter) return false;
-
-      // Status filter
-      if (statusFilter && metric.status !== statusFilter) return false;
-
-      return true;
-    });
+    const filtered = [...metrics];
 
     // Apply sorting
     filtered.sort((a, b) => {
@@ -102,7 +67,7 @@ export const useModelMetricsState = (metrics: ModelMetric[]) => {
     });
 
     return filtered;
-  }, [metrics, dateFrom, dateTo, userFilter, modelFilter, statusFilter, sortField, sortDirection]);
+  }, [metrics, sortField, sortDirection]);
 
   // Helper functions
   const handleSort = (field: SortField) => {
@@ -114,34 +79,7 @@ export const useModelMetricsState = (metrics: ModelMetric[]) => {
     }
   };
 
-  const clearFilters = () => {
-    setDateFrom('');
-    setDateTo('');
-    setUserFilter('');
-    setModelFilter('');
-    setStatusFilter('');
-  };
-
-  const setDateRange = (days: number) => {
-    const today = dayjs();
-    const startDate = today.subtract(days, 'day');
-    setDateFrom(startDate.toISOString());
-    setDateTo(today.toISOString());
-  };
-
   return {
-    // Filter states
-    dateFrom,
-    dateTo,
-    userFilter,
-    modelFilter,
-    statusFilter,
-    setDateFrom,
-    setDateTo,
-    setUserFilter,
-    setModelFilter,
-    setStatusFilter,
-
     // UI states
     simplifiedNames,
     setSimplifiedNames,
@@ -161,7 +99,5 @@ export const useModelMetricsState = (metrics: ModelMetric[]) => {
 
     // Helper functions
     handleSort,
-    clearFilters,
-    setDateRange,
   };
 };

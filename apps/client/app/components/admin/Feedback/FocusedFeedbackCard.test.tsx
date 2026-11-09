@@ -64,6 +64,13 @@ describe('FocusedFeedbackCard', () => {
    * off a real record's `helpContext`. Dropping the render site is otherwise invisible - a help
    * report keeps rendering, just with no sign of which article it came from.
    */
+  it('shows the status label rather than the raw enum value', async () => {
+    mocks.getFeedbackByIdFromServer.mockResolvedValue(record({ status: FeedbackStatus.InProgress }));
+    renderCard();
+    expect(await screen.findByText('In progress')).toBeInTheDocument();
+    expect(screen.queryByText('InProgress')).toBeNull();
+  });
+
   it('renders the help context chip for a routed help report', async () => {
     mocks.getFeedbackByIdFromServer.mockResolvedValue(
       record({

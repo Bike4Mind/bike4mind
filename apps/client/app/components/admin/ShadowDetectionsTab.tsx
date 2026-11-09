@@ -619,7 +619,7 @@ export const ShadowDetectionsTab: React.FC = () => {
   return (
     <Stack
       spacing={2}
-      sx={{ bgcolor: 'admin.canvas', color: 'admin.ink', p: 2, borderRadius: 'md', minWidth: 0 }}
+      sx={{ bgcolor: 'admin.canvas', color: 'admin.ink', borderRadius: 'md', minWidth: 0 }}
       data-testid="admin-shadow-detections-tab"
     >
       <AdminPageHeader

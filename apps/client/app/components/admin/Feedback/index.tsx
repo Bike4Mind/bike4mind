@@ -1,62 +1,179 @@
 import React, { useEffect } from 'react';
 import {
-  Card,
-  Grid,
-  Sheet,
-  Stack,
-  FormControl,
+  Button,
   Chip,
-  LinearProgress,
-  Tooltip,
-  Checkbox,
-  Input,
-  Typography,
-  Box,
-  Select,
-  Option,
-  IconButton,
   Dropdown,
-  MenuButton,
+  IconButton,
+  ListDivider,
   Menu,
+  MenuButton,
   MenuItem,
+  Option,
+  Select,
+  Stack,
+  Typography,
 } from '@mui/joy';
-
-import { FeedbackStatus, FEEDBACK_SUBJECTS } from '@bike4mind/common';
-
-import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import DownloadIcon from '@mui/icons-material/Download';
-import FeedbackIcon from '@mui/icons-material/Feedback';
-import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import Papa from 'papaparse';
-import { CSV_FORMULA_PREFIX } from '@client/app/utils/csv';
-import PaginationControls from '@client/app/components/admin/Subscriptions/components/PaginationControls';
-import { relativeTimeFormat } from '@client/app/utils/dateUtils';
-
+import { toast } from 'sonner';
+import { useNavigate, useSearch } from '@tanstack/react-router';
+import { FEEDBACK_ID_PARAM, FEEDBACK_SUBJECTS } from '@bike4mind/common';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
-import { useIsMobile } from '@client/app/hooks/useIsMobile';
+import { CSV_FORMULA_PREFIX } from '@client/app/utils/csv';
+import { relativeTimeFormat } from '@client/app/utils/dateUtils';
+import { FEEDBACK_EXPORT_MAX_ROWS, getAllFeedbackForExport } from '@client/app/utils/feedbackAPICalls';
+import {
+  ActionDialog,
+  ADMIN_REASON_PRESETS,
+  AdminPageHeader,
+  AdminSearchInput,
+  DataTable,
+  EmptyState,
+  FilterChip,
+  StatusChip,
+  UpdatingBar,
+  type DataColumn,
+} from '../shared';
+import { ADMIN_REGION_GAP, adminFocus, adminFocusScope } from '../shared/adminStyles';
+import UserIdChip from '../Users/UserIdChip';
 import { useFeedbackOperations } from './hooks/useFeedbackOperations';
 import { useFeedbackFilters } from './hooks/useFeedbackFilters';
 import { useFeedbackPagination } from './hooks/useFeedbackPagination';
-import { getFeedbackDisplayContent } from './types';
-import { FEEDBACK_EXPORT_MAX_ROWS, getAllFeedbackForExport } from '@client/app/utils/feedbackAPICalls';
-import { toast } from 'sonner';
-import { useNavigate, useSearch } from '@tanstack/react-router';
-import { FEEDBACK_ID_PARAM } from '@bike4mind/common';
+import { getFeedbackDisplayContent, type IExtendedFeedbackDocument } from './types';
 import FocusedFeedbackCard from './FocusedFeedbackCard';
-import FeedbackRowLinks from './FeedbackRowLinks';
+import { copyFeedbackRecordLink, feedbackConversationPath } from './FeedbackRowLinks';
 import HelpContextChip from './HelpContextChip';
-import {
-  FEEDBACK_PAGE_SIZE_OPTIONS,
-  FEEDBACK_SUBJECT_ANY,
-  FEEDBACK_SUBJECT_LABELS,
-  FeedbackSubjectOption,
-  toSubjectFilter,
-} from './constants';
+import { FEEDBACK_STATUS_LABELS, FEEDBACK_STATUS_ORDER, FEEDBACK_SUBJECT_LABELS, toSubjectFilter } from './constants';
+import { checkedStatuses, toStatusFilters } from './feedbackTabSearch';
+
+type FeedbackRow = IExtendedFeedbackDocument;
+
+const STATUS_FILTER_OPTIONS = FEEDBACK_STATUS_ORDER.map(status => ({
+  value: status,
+  label: FEEDBACK_STATUS_LABELS[status],
+}));
+const SUBJECT_FILTER_OPTIONS = FEEDBACK_SUBJECTS.map(subject => ({
+  value: subject,
+  label: FEEDBACK_SUBJECT_LABELS[subject],
+}));
+
+const reporterName = (row: FeedbackRow) => row.username || row.userEmail || 'an unknown user';
+
+const formatCreatedAt = (createdAt: Date | string) =>
+  new Date(createdAt).toLocaleString('default', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+const CreatedCell = ({ row }: { row: FeedbackRow }) => (
+  <Stack gap={0.25} alignItems="flex-start">
+    <Typography level="body-sm">{formatCreatedAt(row.createdAt)}</Typography>
+    <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+      {relativeTimeFormat(new Date(row.createdAt))}
+    </Typography>
+    {row.tags && row.tags.length > 0 && (
+      <Stack direction="row" flexWrap="wrap" gap={0.5}>
+        {row.tags.map((tag, index) => (
+          <Chip key={`${tag}-${index}`} size="sm" variant="soft" color="neutral">
+            {tag}
+          </Chip>
+        ))}
+      </Stack>
+    )}
+  </Stack>
+);
+
+const ReporterCell = ({ row }: { row: FeedbackRow }) => {
+  const organization = row.organization && row.organization !== 'Unknown' ? row.organization : undefined;
+  return (
+    <Stack gap={0.25} alignItems="flex-start" sx={{ minWidth: 0 }}>
+      {organization && (
+        <Typography level="body-sm" fontWeight={600} noWrap title={organization} sx={{ maxWidth: '100%' }}>
+          {organization}
+        </Typography>
+      )}
+      {row.username && (
+        <Typography level="body-sm" noWrap title={row.username} sx={{ maxWidth: '100%' }}>
+          {row.username}
+        </Typography>
+      )}
+      {row.userEmail && (
+        <Typography level="body-xs" noWrap title={row.userEmail} sx={{ color: 'admin.inkMuted', maxWidth: '100%' }}>
+          {row.userEmail}
+        </Typography>
+      )}
+      {row.userId && <UserIdChip userId={row.userId} />}
+    </Stack>
+  );
+};
+
+const ContentCell = ({ row }: { row: FeedbackRow }) => (
+  <Stack gap={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
+    <HelpContextChip feedbackItem={row} />
+    {row.contentTruncated && (
+      <StatusChip tone="warn" label="Truncated" data-testid="feedback-content-truncated-badge" />
+    )}
+    <Typography
+      level="body-sm"
+      sx={{ maxWidth: '100%', maxHeight: 80, overflowY: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
+    >
+      {getFeedbackDisplayContent(row, '')}
+    </Typography>
+  </Stack>
+);
+
+const FeedbackRowMenu = ({ row, onDelete }: { row: FeedbackRow; onDelete: (row: FeedbackRow) => void }) => {
+  const conversationPath = feedbackConversationPath(row);
+  return (
+    <Dropdown>
+      <MenuButton
+        slots={{ root: IconButton }}
+        slotProps={{
+          root: {
+            size: 'sm',
+            variant: 'plain',
+            'aria-label': `Actions for the report from ${reporterName(row)}`,
+            sx: { ...adminFocus, color: 'admin.inkMuted' },
+          },
+        }}
+        data-testid={`feedback-row-actions-${row._id}`}
+      >
+        <MoreHorizIcon sx={{ fontSize: 18 }} />
+      </MenuButton>
+      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+        <MenuItem
+          onClick={() => void copyFeedbackRecordLink(row._id)}
+          data-testid={`feedback-row-copy-link-${row._id}`}
+        >
+          Copy link to this report
+        </MenuItem>
+        {conversationPath && (
+          <MenuItem
+            component="a"
+            href={conversationPath}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-testid={`feedback-row-open-conversation-${row._id}`}
+          >
+            {row.questId ? 'Open the conversation at this turn' : 'Open the conversation'}
+          </MenuItem>
+        )}
+        <ListDivider />
+        <MenuItem onClick={() => onDelete(row)} data-testid={`feedback-row-delete-${row._id}`}>
+          Delete feedback
+        </MenuItem>
+      </Menu>
+    </Dropdown>
+  );
+};
 
 const FeedbackTab: React.FC = () => {
-  const isMobile = useIsMobile();
   // Declaration order is the data flow: the page cursor and the filters are INPUTS to the server
   // query, not results of it. Filtering and paging both moved server-side, so nothing here slices
   // a local array any more.
@@ -78,10 +195,12 @@ const FeedbackTab: React.FC = () => {
     total,
     totalSettled,
     loading,
+    isError,
     refreshFeedback,
     handleStatusChange,
     handleDeleteFeedbackClick,
     confirmDeleteFeedback,
+    feedbackToDelete,
     openDeleteFeedbackModal,
     toggleDeleteFeedbackModal,
   } = useFeedbackOperations({ ...filterParams, page: currentPage, limit: itemsPerPage });
@@ -106,8 +225,6 @@ const FeedbackTab: React.FC = () => {
       replace: true,
     });
   };
-
-  const statusOptions = [FeedbackStatus.New, FeedbackStatus.InProgress, FeedbackStatus.Closed];
 
   // Pages through every match server-side. Exporting `currentFeedback` would silently emit one
   // page now that the list is paginated, which reads as a complete export of a much smaller
@@ -152,506 +269,221 @@ const FeedbackTab: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const getOrganizationDisplayLabel = () => {
-    const selected = filters.selectedOrganizations || [];
+  const selectedStatuses = checkedStatuses(filters.statusFilters);
+  const statusNarrowed = selectedStatuses.length < FEEDBACK_STATUS_ORDER.length;
+  // Every status checked narrows nothing, so the chip reads as unset. Clearing it, or unpicking its
+  // last status, checks them all again instead of leaving a filter that matches no report.
+  const setStatuses = (picked: string[]) => {
+    const next = FEEDBACK_STATUS_ORDER.filter(status => picked.includes(status));
+    setStatusFilters(toStatusFilters(next.length > 0 ? next : FEEDBACK_STATUS_ORDER));
+  };
+  // A selected organization stays pickable even if it has left the facet, so it can be unpicked.
+  const organizationOptions = [...new Set([...organizations, ...filters.selectedOrganizations])].map(name => ({
+    value: name,
+    label: name,
+  }));
 
-    if (selected.length === 0) {
-      return 'All Organizations';
-    }
-
-    if (selected.length === 1) {
-      return selected[0];
-    }
-
-    return `${selected.length} Selected`;
+  const hasFilters =
+    filters.searchTerm.trim() !== '' ||
+    statusNarrowed ||
+    filters.subject !== undefined ||
+    filters.selectedOrganizations.length > 0;
+  const clearFilters = () => {
+    setSearchTerm('');
+    setStatusFilters(toStatusFilters(FEEDBACK_STATUS_ORDER));
+    setSubject(undefined);
+    setSelectedOrganizations([]);
   };
 
-  const toggleOrganization = (orgName: string) => {
-    const currentSelection = filters.selectedOrganizations || [];
+  // `loading` also covers a refetch with rows on screen (keepPreviousData): those rows stay, under a bar.
+  const firstLoad = loading && currentFeedback.length === 0;
+  const rowToDelete = currentFeedback.find(row => row._id === feedbackToDelete);
 
-    if (orgName === 'all') {
-      setSelectedOrganizations([]);
-    } else {
-      if (currentSelection.includes(orgName)) {
-        setSelectedOrganizations(currentSelection.filter(org => org !== orgName));
-      } else {
-        setSelectedOrganizations([...currentSelection, orgName]);
-      }
-    }
-  };
+  const columns: DataColumn<FeedbackRow>[] = [
+    { id: 'createdAt', label: 'Created', sortable: true, width: '10rem', render: row => <CreatedCell row={row} /> },
+    { id: 'reporter', label: 'Reporter', width: '14rem', render: row => <ReporterCell row={row} /> },
+    { id: 'content', label: 'Feedback', render: row => <ContentCell row={row} /> },
+    {
+      id: 'status',
+      label: 'Status',
+      width: '9.5rem',
+      render: row => (
+        <Select
+          size="sm"
+          value={row.status}
+          onChange={(_, value) => void handleStatusChange(row, value)}
+          slotProps={{
+            button: {
+              'aria-label': `Status of the report from ${reporterName(row)}`,
+              'data-testid': `feedback-row-status-select-${row._id}`,
+            },
+          }}
+          sx={{ width: '100%', minWidth: 0 }}
+        >
+          {FEEDBACK_STATUS_ORDER.map(status => (
+            <Option key={status} value={status}>
+              {FEEDBACK_STATUS_LABELS[status]}
+            </Option>
+          ))}
+        </Select>
+      ),
+    },
+  ];
 
   return (
-    <Sheet sx={{ overflow: 'hidden', width: '100%' }}>
-      <Grid container>
-        <Grid xs={12}>
-          <Stack direction="column" justifyContent={'center'} spacing={1} sx={{ width: '100%' }}>
-            <Stack direction="column" spacing={1} sx={{ mb: 3, pt: 1 }}>
-              {/* Unified Control Panel */}
-              <Card>
-                <Stack spacing={1.5}>
-                  {/* Row 1: Search + Organizations side by side */}
-                  <Stack direction={{ xs: 'row', sm: 'row' }} spacing={1}>
-                    <FormControl sx={{ flex: 1 }}>
-                      <Typography level="title-sm" sx={{ fontWeight: 500, mb: 0.5 }}>
-                        Search
-                      </Typography>
-                      <Input
-                        startDecorator={<FeedbackIcon />}
-                        placeholder="Search feedback..."
-                        value={filters.searchTerm}
-                        onChange={e => setSearchTerm(e.target.value)}
-                      />
-                    </FormControl>
+    <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="admin-feedback-tab">
+      <AdminPageHeader
+        title="Feedback"
+        count={firstLoad ? undefined : total}
+        description="Reports and comments people send from the app, for triage."
+        actions={
+          <>
+            <ContextHelpButton helpId="admin/feedback" tooltipText="Feedback help" />
+            <Button
+              variant="plain"
+              size="sm"
+              startDecorator={<RefreshIcon sx={{ fontSize: 16 }} />}
+              disabled={loading}
+              onClick={() => void refreshFeedback()}
+              data-testid="feedback-refresh-btn"
+              sx={adminFocus}
+            >
+              Refresh
+            </Button>
+            <Button
+              variant="outlined"
+              size="sm"
+              startDecorator={<DownloadIcon sx={{ fontSize: 16 }} />}
+              disabled={loading || total === 0}
+              onClick={handleExportToCSV}
+              data-testid="feedback-export-csv-btn"
+              sx={adminFocus}
+            >
+              Export CSV
+            </Button>
+          </>
+        }
+      />
 
-                    <FormControl sx={{ flex: 1 }}>
-                      <Typography level="title-sm" sx={{ fontWeight: 500, mb: 0.5 }}>
-                        Organizations
-                      </Typography>
-                      <Dropdown>
-                        <MenuButton
-                          disabled={loading}
-                          endDecorator={<KeyboardArrowDownIcon />}
-                          sx={{ justifyContent: 'space-between', textAlign: 'left', fontWeight: 'normal' }}
-                        >
-                          <Box sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {getOrganizationDisplayLabel()}
-                          </Box>
-                        </MenuButton>
-                        <Menu sx={{ maxHeight: 300, overflowY: 'auto', minWidth: 200 }}>
-                          <MenuItem onClick={() => toggleOrganization('all')}>
-                            <Checkbox
-                              checked={filters.selectedOrganizations.length === 0}
-                              onChange={() => toggleOrganization('all')}
-                              sx={{ mr: 1 }}
-                            />
-                            All
-                          </MenuItem>
-                          {organizations.map(org => (
-                            <MenuItem key={org} onClick={() => toggleOrganization(org)}>
-                              <Checkbox
-                                checked={filters.selectedOrganizations.includes(org)}
-                                onChange={() => toggleOrganization(org)}
-                                sx={{ mr: 1 }}
-                              />
-                              {org}
-                            </MenuItem>
-                          ))}
-                        </Menu>
-                      </Dropdown>
-                    </FormControl>
-                  </Stack>
-
-                  {/* Row 2: Status filters + Action buttons */}
-                  <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
-                    <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center">
-                      {Object.entries(filters.statusFilters).map(([status, isChecked]) => (
-                        <Checkbox
-                          key={status}
-                          checked={isChecked}
-                          onChange={() => {
-                            setStatusFilters(currentFilters => ({
-                              ...currentFilters,
-                              [status as keyof typeof currentFilters]:
-                                !currentFilters[status as keyof typeof currentFilters],
-                            }));
-                          }}
-                          label={status}
-                          size="sm"
-                        />
-                      ))}
-
-                      {/* Single-select, because GET /api/feedback takes one subject or none -
-                          a checkbox group here would promise a multi-select the server cannot serve. */}
-                      <Select<FeedbackSubjectOption>
-                        value={filters.subject ?? FEEDBACK_SUBJECT_ANY}
-                        onChange={(_, newValue) => setSubject(toSubjectFilter(newValue))}
-                        size="sm"
-                        sx={{ minWidth: 170 }}
-                        // The combobox has no visible label of its own (it sits inline with the
-                        // status checkboxes rather than under a heading like the org dropdown), and
-                        // Joy drops a top-level aria-label - only the button slot reaches the DOM.
-                        slotProps={{
-                          button: {
-                            'aria-label': 'Filter by subject',
-                            'data-testid': 'feedback-subject-filter-select',
-                          },
-                        }}
-                      >
-                        <Option value={FEEDBACK_SUBJECT_ANY}>All Subjects</Option>
-                        {FEEDBACK_SUBJECTS.map(subject => (
-                          <Option key={subject} value={subject}>
-                            {FEEDBACK_SUBJECT_LABELS[subject]}
-                          </Option>
-                        ))}
-                      </Select>
-                    </Stack>
-
-                    <Stack direction="row" spacing={1} alignItems="center">
-                      <ContextHelpButton helpId="admin/feedback" tooltipText="Feedback Help" />
-                      <Tooltip title="Refresh">
-                        <IconButton disabled={loading} onClick={refreshFeedback} variant="outlined" size="sm">
-                          <RefreshIcon />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Export CSV">
-                        <IconButton
-                          disabled={loading || total === 0}
-                          onClick={handleExportToCSV}
-                          color="success"
-                          variant="outlined"
-                          size="sm"
-                        >
-                          <DownloadIcon />
-                        </IconButton>
-                      </Tooltip>
-                    </Stack>
-                  </Stack>
-                </Stack>
-              </Card>
-            </Stack>
-          </Stack>
-        </Grid>
-
-        {focusedFeedbackId && (
-          <Grid xs={12}>
-            <FocusedFeedbackCard feedbackId={focusedFeedbackId} onDismiss={dismissFocusedFeedback} />
-          </Grid>
-        )}
-
-        <Grid xs={12} mb={0.5} pb={0.7} sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
-          <PaginationControls
-            currentPage={currentPage}
-            onPageChange={handlePageChange}
-            totalPages={totalPages}
-            totalItems={total}
-            itemsPerPage={itemsPerPage}
-            onItemsPerPageChange={handleItemsPerPageChange}
-            pageLimitOptions={FEEDBACK_PAGE_SIZE_OPTIONS}
-          />
-        </Grid>
-
-        {loading && <LinearProgress size={'lg'} sx={{ marginX: '5px', width: '100%' }} />}
-
-        {openDeleteFeedbackModal && (
-          <ConfirmActionModal
-            title="Delete Feedback"
-            description="Are you sure you want to delete this feedback? This action cannot be undone."
-            onGoBackward={toggleDeleteFeedbackModal}
-            onGoForward={confirmDeleteFeedback}
-            disabledConfirm={loading}
+      <Stack
+        direction="row"
+        flexWrap="wrap"
+        alignItems="center"
+        gap={1}
+        sx={adminFocusScope}
+        data-testid="feedback-filter-bar"
+      >
+        <AdminSearchInput
+          value={filters.searchTerm}
+          onChange={setSearchTerm}
+          label="Search feedback"
+          data-testid="feedback-search-input"
+        />
+        <FilterChip
+          id="feedback-status"
+          label="Status"
+          multiple
+          value={statusNarrowed ? selectedStatuses : []}
+          options={STATUS_FILTER_OPTIONS}
+          onChange={setStatuses}
+        />
+        {/* Single-select, because GET /api/feedback takes one subject or none. */}
+        <FilterChip
+          id="feedback-subject"
+          label="Subject"
+          value={filters.subject}
+          options={SUBJECT_FILTER_OPTIONS}
+          onChange={value => setSubject(toSubjectFilter(value))}
+        />
+        {organizationOptions.length > 0 && (
+          <FilterChip
+            id="feedback-org"
+            label="Organization"
+            multiple
+            value={filters.selectedOrganizations}
+            options={organizationOptions}
+            onChange={setSelectedOrganizations}
           />
         )}
+      </Stack>
 
-        {!loading && (
-          <Grid xs={12} mt={0.5}>
-            <Sheet sx={{ width: '100%' }}>
-              {/* Scrollable Feedback Rows */}
-              <Sheet sx={{ overflowY: 'auto', maxHeight: '70vh', width: '100%' }}>
-                {/* Header Row - hidden on mobile */}
-                <Box
-                  sx={{
-                    mb: 1,
-                    position: 'sticky',
-                    top: 0,
-                    bgcolor: 'background.surface',
-                    zIndex: 1,
-                    overflowX: { xs: 'auto', sm: 'visible' },
-                    display: { xs: 'none', sm: 'block' },
-                  }}
-                >
-                  <Grid
-                    container
-                    xs={12}
-                    md={12}
-                    sm={12}
-                    sx={{ px: 0.5, py: 1, minWidth: { xs: '600px', sm: 'auto' } }}
+      {focusedFeedbackId && <FocusedFeedbackCard feedbackId={focusedFeedbackId} onDismiss={dismissFocusedFeedback} />}
+
+      <Stack gap={1} sx={{ minWidth: 0 }}>
+        <UpdatingBar active={loading && !firstLoad} testId="feedback-updating-bar" />
+        <DataTable
+          label="Feedback"
+          testId="feedback-table"
+          rows={currentFeedback}
+          columns={columns}
+          getRowId={row => row._id}
+          rowTestId={row => `feedback-row-${row._id}`}
+          loading={firstLoad}
+          error={isError ? 'Could not load feedback.' : undefined}
+          onRetry={() => void refreshFeedback()}
+          empty={
+            hasFilters ? (
+              <EmptyState
+                title="No feedback matches these filters"
+                action={
+                  <Button variant="outlined" onClick={clearFilters} data-testid="feedback-empty-clear-btn">
+                    Clear filters
+                  </Button>
+                }
+              />
+            ) : (
+              <EmptyState
+                title="No feedback yet"
+                description="Reports appear here as people send them."
+                action={
+                  <Button
+                    variant="outlined"
+                    onClick={() => void refreshFeedback()}
+                    data-testid="feedback-empty-refresh-btn"
                   >
-                    <Grid xs={2} display={'flex'}>
-                      <Typography
-                        sx={{
-                          color: 'primary',
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          '&:hover': { textDecoration: 'underline' },
-                        }}
-                        level="body-sm"
-                        onClick={toggleSortDirection}
-                      >
-                        Created At {filters.sortAscending ? '↑' : '↓'}
-                      </Typography>
-                    </Grid>
-                    <Grid xs={2.5}>
-                      <Typography sx={{ color: 'primary', fontWeight: 600 }} level="body-sm">
-                        Reporter
-                      </Typography>
-                    </Grid>
-                    <Grid xs={5.5}>
-                      <Typography sx={{ color: 'primary', fontWeight: 600 }} level="body-sm">
-                        Feedback
-                      </Typography>
-                    </Grid>
-                    <Grid xs={2}>
-                      <Typography sx={{ color: 'primary', fontWeight: 600 }} level="body-sm">
-                        Actions
-                      </Typography>
-                    </Grid>
-                  </Grid>
-                </Box>
-                {currentFeedback.map((feedbackItem, index) =>
-                  isMobile ? (
-                    <Card
-                      variant="outlined"
-                      key={feedbackItem._id}
-                      sx={{ mb: 1, bgcolor: index % 2 ? 'background.level1' : 'background.level2', p: 1.5 }}
-                    >
-                      <Stack spacing={1}>
-                        {/* Date + Actions row */}
-                        <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
-                          <Stack spacing={0.25}>
-                            <Typography level="body-xs">
-                              {new Date(feedbackItem.createdAt).toLocaleString('default', {
-                                year: 'numeric',
-                                month: 'short',
-                                day: 'numeric',
-                                hour: '2-digit',
-                                minute: '2-digit',
-                                hour12: true,
-                              })}
-                            </Typography>
-                            <Typography level="body-xs">
-                              {relativeTimeFormat(new Date(feedbackItem.createdAt))}
-                            </Typography>
-                            <Stack direction="row" flexWrap="wrap" gap={0.2}>
-                              {feedbackItem.tags?.map((tag, tagIndex) => (
-                                <Chip key={tagIndex} color="success" size="sm" sx={{ borderRadius: '10px' }}>
-                                  <Typography level="body-xs">{tag}</Typography>
-                                </Chip>
-                              ))}
-                            </Stack>
-                          </Stack>
-                          <Stack direction="row" spacing={0.5} alignItems="center">
-                            <Select
-                              value={feedbackItem.status}
-                              onChange={(_, newValue) => handleStatusChange(feedbackItem, newValue)}
-                              size="sm"
-                              sx={{ minWidth: '100px' }}
-                            >
-                              {statusOptions.map(status => (
-                                <Option key={status} value={status}>
-                                  {status}
-                                </Option>
-                              ))}
-                            </Select>
-                            <FeedbackRowLinks feedbackItem={feedbackItem} />
-                            <Tooltip title="Delete" color="danger">
-                              <IconButton
-                                size="sm"
-                                color="danger"
-                                onClick={() => handleDeleteFeedbackClick(feedbackItem)}
-                              >
-                                <DeleteForeverIcon />
-                              </IconButton>
-                            </Tooltip>
-                          </Stack>
-                        </Stack>
-                        {/* Reporter */}
-                        <Stack spacing={0.1} sx={{ wordWrap: 'break-word' }}>
-                          {feedbackItem.organization && feedbackItem.organization !== 'Unknown' && (
-                            <Typography fontWeight="600" level="body-sm">
-                              {feedbackItem.organization}
-                            </Typography>
-                          )}
-                          {feedbackItem.username && <Typography level="body-sm">{feedbackItem.username}</Typography>}
-                          {feedbackItem.userEmail && (
-                            <Typography level="body-xs" sx={{ fontStyle: 'italic' }}>
-                              {feedbackItem.userEmail}
-                            </Typography>
-                          )}
-                        </Stack>
-                        {/* Content */}
-                        <HelpContextChip feedbackItem={feedbackItem} />
-                        {feedbackItem.contentTruncated && (
-                          <Chip size="sm" color="warning" variant="soft" data-testid="feedback-content-truncated-badge">
-                            Truncated
-                          </Chip>
-                        )}
-                        <Typography
-                          level="body-sm"
-                          sx={{
-                            overflowY: 'auto',
-                            wordWrap: 'break-word',
-                            whiteSpace: 'pre-wrap',
-                            maxHeight: '100px',
-                            scrollbarWidth: 'thin',
-                          }}
-                        >
-                          {getFeedbackDisplayContent(feedbackItem, '')}
-                        </Typography>
-                      </Stack>
-                    </Card>
-                  ) : (
-                    <Card
-                      variant="outlined"
-                      key={feedbackItem._id}
-                      sx={{
-                        mb: 1,
-                        bgcolor: index % 2 ? 'background.level1' : 'background.level2',
-                        py: 1,
-                        px: 0.5,
-                        overflowX: { xs: 'auto', sm: 'visible' },
-                      }}
-                    >
-                      <Grid
-                        container
-                        xs={12}
-                        display={'flex'}
-                        spacing={1.5}
-                        sx={{ minWidth: { xs: '600px', sm: 'auto' } }}
-                      >
-                        <Grid xs={2} sx={{ maxWidth: '100%', overflow: 'hidden' }}>
-                          <Stack>
-                            <Stack
-                              direction="column"
-                              sx={{
-                                mb: '3px',
-                                gap: 0.2,
-                                flexWrap: 'wrap',
-                                maxWidth: '100%',
-                              }}
-                            >
-                              <Stack direction="column" sx={{ ml: 0.5, mb: 0.2, flexWrap: 'wrap', maxWidth: '100%' }}>
-                                <Typography level="body-xs">
-                                  {new Date(feedbackItem.createdAt).toLocaleString('default', {
-                                    year: 'numeric',
-                                    month: 'short',
-                                    day: 'numeric',
-                                    hour: '2-digit',
-                                    minute: '2-digit',
-                                    hour12: true,
-                                  })}
-                                </Typography>
-                                <Typography level="body-xs">
-                                  {relativeTimeFormat(new Date(feedbackItem.createdAt))}
-                                </Typography>
-                              </Stack>
-                              <Stack direction="row" sx={{ flexWrap: 'wrap', maxWidth: '100%', gap: 0.2 }}>
-                                {feedbackItem.tags &&
-                                  feedbackItem.tags.map((tag, tagIndex) => (
-                                    <Chip key={tagIndex} color="success" size="sm" sx={{ borderRadius: '10px' }}>
-                                      <Typography level="body-xs" sx={{ overflowX: 'hidden', width: 'auto' }}>
-                                        {tag}
-                                      </Typography>
-                                    </Chip>
-                                  ))}
-                              </Stack>
-                            </Stack>
-                          </Stack>
-                        </Grid>
-                        <Grid xs={2.5}>
-                          <Stack direction={'column'} sx={{ wordWrap: 'break-word' }}>
-                            {feedbackItem.organization && feedbackItem.organization !== 'Unknown' && (
-                              <Tooltip title="Company">
-                                <Typography fontWeight={'600'} level="body-sm">
-                                  {feedbackItem.organization}
-                                </Typography>
-                              </Tooltip>
-                            )}
-                            {feedbackItem.username && (
-                              <Tooltip title="User Name">
-                                <Typography level="body-sm">{feedbackItem.username}</Typography>
-                              </Tooltip>
-                            )}
-                            {feedbackItem.userEmail && (
-                              <Tooltip title={feedbackItem.userId}>
-                                <Typography level="body-xs" sx={{ fontStyle: 'italic' }}>
-                                  {feedbackItem.userEmail}
-                                </Typography>
-                              </Tooltip>
-                            )}
-                          </Stack>
-                        </Grid>
-                        <Grid xs={5.5}>
-                          <HelpContextChip feedbackItem={feedbackItem} />
-                          {feedbackItem.contentTruncated && (
-                            <Chip
-                              size="sm"
-                              color="warning"
-                              variant="soft"
-                              data-testid="feedback-content-truncated-badge"
-                              sx={{ mb: 0.5 }}
-                            >
-                              Truncated
-                            </Chip>
-                          )}
-                          <Typography
-                            level="body-sm"
-                            sx={{
-                              overflowY: 'auto',
-                              overflowX: 'hidden',
-                              wordWrap: 'break-word',
-                              whiteSpace: 'pre-wrap',
-                              maxHeight: '80px',
-                              '&::-webkit-scrollbar': {
-                                width: '1px',
-                                backgroundColor: 'background.level1',
-                              },
-                              '&::-webkit-scrollbar-thumb': {
-                                backgroundColor: 'neutral.400',
-                                borderRadius: '1px',
-                                '&:hover': {
-                                  backgroundColor: 'neutral.500',
-                                },
-                              },
-                              '&::-webkit-scrollbar-track': {
-                                backgroundColor: 'background.level1',
-                              },
-                              scrollbarWidth: 'thin',
-                              scrollbarColor: 'var(--joy-palette-neutral-400) var(--joy-palette-background-level1)',
-                            }}
-                          >
-                            {getFeedbackDisplayContent(feedbackItem, '')}
-                          </Typography>
-                        </Grid>
-                        <Grid xs={2}>
-                          <Stack direction={'row'} alignItems={'center'} display={'flex'}>
-                            <Select
-                              value={feedbackItem.status}
-                              onChange={(_, newValue) => {
-                                handleStatusChange(feedbackItem, newValue);
-                              }}
-                              size="sm"
-                              sx={{ minWidth: '115px' }}
-                            >
-                              {statusOptions.map(status => (
-                                <Option key={status} value={status}>
-                                  {status}
-                                </Option>
-                              ))}
-                            </Select>
-                            <FeedbackRowLinks feedbackItem={feedbackItem} />
-                            <Tooltip title="Delete" color="danger">
-                              <IconButton
-                                size="sm"
-                                color="danger"
-                                onClick={() => handleDeleteFeedbackClick(feedbackItem)}
-                              >
-                                <DeleteForeverIcon />
-                              </IconButton>
-                            </Tooltip>
-                          </Stack>
-                        </Grid>
-                      </Grid>
-                    </Card>
-                  )
-                )}
-              </Sheet>
-            </Sheet>
-          </Grid>
-        )}
-      </Grid>
-    </Sheet>
+                    Refresh
+                  </Button>
+                }
+              />
+            )
+          }
+          sort={{ columnId: 'createdAt', direction: filters.sortAscending ? 'asc' : 'desc' }}
+          onSortChange={() => toggleSortDirection()}
+          pagination={{
+            page: currentPage,
+            pageSize: itemsPerPage,
+            total,
+            onPageChange: handlePageChange,
+            onPageSizeChange: handleItemsPerPageChange,
+          }}
+          rowActions={row => <FeedbackRowMenu row={row} onDelete={handleDeleteFeedbackClick} />}
+          minWidth="56rem"
+          maxHeight="none"
+        />
+      </Stack>
+
+      <ActionDialog
+        open={openDeleteFeedbackModal}
+        onClose={toggleDeleteFeedbackModal}
+        title="Delete feedback"
+        description={
+          rowToDelete ? (
+            <>
+              Deletes the report from <strong>{reporterName(rowToDelete)}</strong>. This cannot be undone.
+            </>
+          ) : (
+            'Deletes this report. This cannot be undone.'
+          )
+        }
+        reasonPresets={ADMIN_REASON_PRESETS.feedbackDeletion}
+        // DELETE /api/feedback/:id/delete takes no reason, so the one picked here is neither sent nor stored.
+        reasonAudited={false}
+        confirmLabel="Delete feedback"
+        tone="danger"
+        onConfirm={() => confirmDeleteFeedback()}
+        data-testid="feedback-delete-dialog"
+      />
+    </Stack>
   );
 };
 
