@@ -207,6 +207,16 @@
       }
     },
     {
+      "modelId": "claude-sonnet-5",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 0.000002,
+          "output": 0.00001
+        }
+      }
+    },
+    {
       "modelId": "claude-sonnet-5-5",
       "unit": "per_token",
       "pricing": {
@@ -214,16 +224,6 @@
           "input": 0.000002,
           "output": 0.00001,
           "cache_read": 1.0000000000000001e-7
-        }
-      }
-    },
-    {
-      "modelId": "claude-sonnet-5",
-      "unit": "per_token",
-      "pricing": {
-        "1000000": {
-          "input": 0.000002,
-          "output": 0.00001
         }
       }
     },
